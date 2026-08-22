@@ -290,17 +290,14 @@ public sealed class ChatClientCredentialResolver : IDisposable
     }
 
     /// <summary>
-    /// Walks the credential precedence chain for ONE model definition: the NODE rungs (ProviderRef →
-    /// conventional Provider/{name} → legacy model-node fields) and then, only if those produced no
-    /// KEY, the deployment's own configuration for the model's provider. Returns <c>null</c> when
-    /// this definition yields no credential at all (so <see cref="Resolve"/> can try the next
-    /// same-id candidate).
+    /// Walks the credential precedence chain for ONE model definition — ProviderRef → conventional
+    /// <c>Provider/{name}</c> → legacy model-node fields. Returns <c>null</c> when this definition
+    /// yields no credential at all (so <see cref="Resolve"/> can try the next same-id candidate).
     ///
-    /// <para>The two halves merge PER FIELD, exactly as every factory merges them
-    /// (<c>endpoint = resolution.Endpoint ?? configuration.Endpoint</c>,
-    /// <c>apiKey = resolution.ApiKey ?? configuration.ApiKey</c>): an endpoint the node supplied
-    /// survives, and only the missing key is filled in from configuration. Merging whole
-    /// resolutions instead would let a config endpoint override an administered one.</para>
+    /// <para>Kept as a named seam even though it now delegates outright: this is where
+    /// MeshWeaver#1983's configuration rung merged in, and the deletion is the point — a deployment's
+    /// key reaches the node through <see cref="ProviderCredentialSeed"/>, so there is nothing left to
+    /// merge here and no second source to arbitrate.</para>
     /// </summary>
     private CredentialResolution? TryResolveForDefinition(IReadOnlyList<MeshNode> snapshot, ModelDefinition def)
         => TryResolveFromNodes(snapshot, def);
