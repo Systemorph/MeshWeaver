@@ -7,7 +7,7 @@ using MeshWeaver.PluginTester;
 
 using MeshWeaver.Compiler;
 // mw-plugin-test <repo-root> [--compile-timeout <seconds>] [--render-timeout <seconds>]
-//                            [--allow <file>] [--report <file>]
+//                            [--allow <file>] [--report <file>] [--seed <dir>]
 //                            [--bake-output <dir>] [--source-sha <sha>]
 //
 // The MeshWeaver.Plugins PR gate: imports each node-repo package of the checkout into a fresh
@@ -21,6 +21,12 @@ using MeshWeaver.Compiler;
 // <package>.zip per package + framework-mvid.txt) into <dir> — the artifact half of #1660 WS1:
 // the same compile that proves the content produces the bytes a consumer loads instead of
 // re-compiling. --source-sha records the synced commit in each bundle manifest.
+// --seed CONSUMES a bake instead of producing one (#1763): the bundles a `compile` run wrote are
+// adopted for every NodeType the gate installs, so what the gate renders and runs `Tests` on is
+// the assembly that ships. The directory is read and ADDRESS-CHECKED before the mesh boots, and
+// the run goes red if the bake was declared but not consumed — a gate that silently compiled the
+// tree itself passes identically to one that consumed the bake, so the shortfall has to be a
+// verdict rather than something nobody can observe.
 //
 // The one Task bridge lives HERE, at the console boundary — everything below Run() is reactive.
 
@@ -245,6 +251,7 @@ static async Task<int> RunGate(string[] args)
     string? reportPath = null;
     string? bakeOutput = null;
     string? sourceSha = null;
+    BakeSeed? seed = null;
 
     for (var i = 0; i < args.Length; i++)
     {
@@ -290,13 +297,30 @@ static async Task<int> RunGate(string[] args)
             case "--bake-output" when i + 1 < args.Length:
                 bakeOutput = args[++i];
                 break;
+            // 🚨 THE OTHER HALF OF THE SPLIT (#1763): the gate CONSUMES a bake instead of
+            // producing one. Read and address-checked BEFORE the mesh boots — a gate pointed at a
+            // bake it cannot consume compiles the tree itself and passes, which is
+            // indistinguishable from a gate that consumed it perfectly, so the failure has to be
+            // refused here rather than discovered never.
+            case "--seed" when i + 1 < args.Length:
+            {
+                var (readSeed, problem) = BakeSeed.Read(
+                    args[++i], MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid);
+                if (problem is not null)
+                {
+                    Console.Error.WriteLine($"mw-plugin-test: --seed — {problem}");
+                    return 2;
+                }
+                seed = readSeed;
+                break;
+            }
             case "--source-sha" when i + 1 < args.Length:
                 sourceSha = args[++i];
                 break;
             // A value-taking option as the LAST argument would otherwise fall through to the default
             // case as "Unknown argument" — a misleading message for a missing value.
             case "--compile-timeout" or "--render-timeout" or "--allow" or "--report"
-                or "--bake-output" or "--source-sha":
+                or "--bake-output" or "--seed" or "--source-sha":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
                 return 2;
             // Diagnostic: print the framework build identity this process resolves — the exact value
@@ -316,8 +340,8 @@ static async Task<int> RunGate(string[] args)
             case "--help" or "-h":
                 Console.WriteLine(
                     "usage: mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
-                    + "[--allow <file>] [--report <file>] [--bake-output <dir>] [--source-sha <sha>] "
-                    + "[--print-framework-identity]");
+                    + "[--allow <file>] [--report <file>] [--seed <dir>] [--bake-output <dir>] "
+                    + "[--source-sha <sha>] [--print-framework-identity]");
                 return 0;
             default:
                 if (args[i].StartsWith('-') || root is not null)
@@ -337,6 +361,7 @@ static async Task<int> RunGate(string[] args)
         RenderTimeout = renderTimeout,
         BakeOutputDirectory = bakeOutput,
         SourceSha = sourceSha,
+        Seed = seed,
     };
 
     Console.WriteLine($"mw-plugin-test: gating node repos under '{Path.GetFullPath(options.RepoRoot)}'");
