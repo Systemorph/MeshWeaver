@@ -208,6 +208,56 @@ for key, why in REQUIRED_CONFIG.items():
             f"than emitting an empty string.",
         )
 
+# ---------------------------------------------------------------------------
+# 9. A key whose consumer does NOT read it as a string must never render BLANK.
+#
+# 🚨 The mirror of 8, and the more dangerous half: 8 catches a key that reaches no container, this
+# catches one that reaches every container carrying a value that cannot be parsed. For a string,
+# blank and absent mean the same thing — that is why `default ""` is the file's usual idiom. For an
+# enum, an int or a bool they are opposites: ABSENT leaves the binder at the type's default, BLANK
+# throws, and the throw happens during DI activation rather than at config load, so it surfaces
+# somewhere else entirely.
+#
+# WebSearch__Provider did this to memex.systemorph.com on 2026-08-20. It binds to the enum
+# WebSearchProviderType (default None = auto-detect); the template emitted it with `default ""`;
+# "" is not a member, so WebSearchPlugin's constructor threw FormatException. Because
+# ChatClientAgentFactory resolves plugins with GetServices<IAgentPlugin>(), which activates the
+# whole array, that one plugin removed EVERY custom tool from EVERY agent — and the log blamed the
+# agent it was resolving at the time, not the plugin that threw. Two days, ~100 failures/24h, and
+# the two namespaces that still worked were simply the ones the chart had never rendered.
+#
+# The chart already knew the rule — OpenAICompatible__DiscoverModels carries a note saying
+# `default "false"`, never `default ""`, because Boolean.Parse fails on empty (issue #352) — and
+# the WebSearch block violated it forty lines further down. A rule stated in a comment is not a
+# gate; this is the gate.
+#
+# Absent is ACCEPTED here (that is the fix's whole point). Only a rendered-but-blank value fails.
+NEVER_BLANK_CONFIG = {
+    "WebSearch__Provider":
+        "binds to the enum WebSearchProviderType (WebSearchConfiguration.Provider). Its default, "
+        "None, means auto-detect, so LEAVING THE KEY OUT is correct for an instance with no web "
+        "search configured. An empty string is not a member of the enum and throws FormatException "
+        "while WebSearchPlugin is being constructed — which, via GetServices<IAgentPlugin>(), "
+        "removes every custom tool from every agent.",
+    "OpenAICompatible__DiscoverModels":
+        "read with GetValue<bool> — Boolean.Parse throws on an empty string and takes host startup "
+        "with it (issue #352). Emit \"false\", never \"\".",
+    "Anthropic__Order":
+        "read as an Int32 — empty fails the binder. Emit \"0\", never \"\".",
+    "AzureAIS__Order":
+        "read as an Int32 — empty fails the binder. Emit \"0\", never \"\".",
+}
+
+for key, why in NEVER_BLANK_CONFIG.items():
+    checks += 1
+    if key in cfg_data and not str(cfg_data[key]).strip():
+        finding(
+            f"'{key}' renders BLANK in memex-portal-config",
+            f"{why} Guard the line so the key is emitted only when a value is set "
+            f"({{{{- if .Values.config.memex_portal.{key} }}}}), or give it a PARSEABLE default — "
+            f"never `default \"\"`. Absent is fine here; blank is not.",
+        )
+
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:
     print(
