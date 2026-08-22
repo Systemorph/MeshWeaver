@@ -208,11 +208,19 @@ public static class PluginBundleEndpoints
                     return Results.Json(new { error = decline }, statusCode: StatusCodes.Status400BadRequest);
                 }
 
+                ModuleLandingOutcome outcome;
                 try
                 {
-                    // The floor gate and the same-identity trap-door hold HERE, at placement —
-                    // one owner for each rule. A refusal surfaces as the observable's error.
-                    await landing.LandModule(
+                    // 🚨 The SHELF landing, not the adopt one (2026-08-22): publishing stocks the
+                    // registry's warehouse, and a warehouse may carry modules for platforms NEWER
+                    // than itself. An above-floor upload therefore lands as HELD — bytes on the
+                    // shelf, served to consumers (whose own install path applies the floor
+                    // against THEIR platform), excluded from this instance's boot until a
+                    // platform update satisfies the floor — instead of the 409 that deadlocked
+                    // extracted modules against the very platform update that needed them
+                    // (rc6→rc7, 2026-08-22). Real refusals (the app-closure same-identity
+                    // trap-door, malformed names) still surface as the observable's error.
+                    outcome = await landing.ShelveModule(
                         accepted.Module, accepted.Files,
                         frameworkMvid: accepted.FrameworkMvid,
                         packagePath: accepted.PackagePath,
@@ -228,19 +236,32 @@ public static class PluginBundleEndpoints
                         statusCode: StatusCodes.Status409Conflict);
                 }
 
-                logger?.LogInformation(
-                    "Module publish: landed '{Module}' for {Plugin} ({Files} file(s), version {Version}, "
-                    + "floor {Floor}) — it serves from this registry and loads here on the next restart",
-                    accepted.Module, plugin, accepted.Files.Count,
-                    accepted.Version ?? "(unversioned)", accepted.MinMeshVersion ?? "(none)");
+                if (outcome.Held)
+                    logger?.LogInformation(
+                        "Module publish: SHELVED '{Module}' for {Plugin} ({Files} file(s), version "
+                        + "{Version}) — HELD from local activation ({Reason}); it serves from this "
+                        + "registry, and this instance loads it once its platform satisfies the floor",
+                        accepted.Module, plugin, accepted.Files.Count,
+                        accepted.Version ?? "(unversioned)", outcome.HoldReason);
+                else
+                    logger?.LogInformation(
+                        "Module publish: landed '{Module}' for {Plugin} ({Files} file(s), version {Version}, "
+                        + "floor {Floor}) — it serves from this registry and loads here on the next restart",
+                        accepted.Module, plugin, accepted.Files.Count,
+                        accepted.Version ?? "(unversioned)", accepted.MinMeshVersion ?? "(none)");
 
+                // held/holdReason let the publisher tell "shelved, will serve" apart from
+                // "activated here"; pendingRestart is honest for the held case — a restart of
+                // THIS instance would not load a held module, so nothing is pending on one.
                 return Results.Json(new
                 {
                     plugin,
                     module = accepted.Module,
                     version = accepted.Version,
                     files = accepted.Files.Count,
-                    pendingRestart = true,
+                    held = outcome.Held,
+                    holdReason = outcome.HoldReason,
+                    pendingRestart = !outcome.Held,
                 });
             })
             .AllowAnonymous();
@@ -671,9 +692,11 @@ public static class PluginBundleEndpoints
     /// <summary>
     /// Which of the installed packages' declared modules this instance can serve right now:
     /// plugin id → module assembly name, for exactly the entries whose bytes exist under
-    /// <c>modules/&lt;name&gt;/</c> and pass the platform-floor gate (<see cref="ModuleBundleSource"/>
-    /// — the same <see cref="ModulePlatformFloor"/> check boot applies, so a registry never serves
-    /// a landing its own boot skips). One activation-sidecar read for the whole index.
+    /// <c>modules/&lt;name&gt;/</c> and were not uninstalled (<see cref="ModuleBundleSource"/>).
+    /// A HELD landing — floor above THIS instance's platform, the registry-shelf state (2026-08-22) —
+    /// is listed too, deliberately: the index surfaces its <c>minMeshVersion</c> and each
+    /// consumer's own gate decides loadability THERE, before a byte travels. One
+    /// activation-sidecar read for the whole index.
     /// </summary>
     private static IObservable<IReadOnlyDictionary<string, string>> ServableModules(
         IMessageHub rootHub, IReadOnlyList<BundleEntry> packages)
@@ -687,8 +710,7 @@ public static class PluginBundleEndpoints
         return landing.GetActivation().Take(1)
             .Select(activation => (IReadOnlyDictionary<string, string>)declaring
                 .Where(p => ModuleBundleSource.Collect(
-                        landing.BaseDirectory, p.Module!, activation,
-                        ModulePlatformFloor.DeclineReason)
+                        landing.BaseDirectory, p.Module!, activation)
                     .DeclineReason is null)
                 .ToDictionary(p => p.PluginId, p => p.Module!, StringComparer.OrdinalIgnoreCase));
     }
@@ -919,9 +941,11 @@ public static class PluginBundleEndpoints
     /// <summary>
     /// The MODULE closure files this bundle carries (#1664) — the instance's own
     /// <c>modules/&lt;name&gt;/</c> bytes, resolved through <see cref="ModuleBundleSource"/> (which
-    /// refuses uninstalled and framework-stale landings). Empty for a package that declares no
-    /// module or whose bytes this instance cannot serve — the bundle then simply has no module
-    /// section, which a consumer reads as "nothing to land".
+    /// refuses uninstalled landings; a HELD landing — floor above this instance's platform, the
+    /// registry-shelf state, 2026-08-22 — is served, its floor riding the manifest for the CONSUMER's
+    /// gate). Empty for a package that declares no module or whose bytes this instance cannot
+    /// serve — the bundle then simply has no module section, which a consumer reads as "nothing
+    /// to land".
     /// </summary>
     private static IObservable<IReadOnlyList<string>> ModuleFiles(
         IMessageHub rootHub, BundleEntry package)
@@ -937,8 +961,7 @@ public static class PluginBundleEndpoints
             .Select(activation =>
             {
                 var (files, decline) = ModuleBundleSource.Collect(
-                    landing.BaseDirectory, package.Module!, activation,
-                    ModulePlatformFloor.DeclineReason);
+                    landing.BaseDirectory, package.Module!, activation);
                 if (decline is not null)
                     logger?.LogInformation(
                         "Plugin bundles: {Plugin} declares module '{Module}' but it is not served: {Reason}",
