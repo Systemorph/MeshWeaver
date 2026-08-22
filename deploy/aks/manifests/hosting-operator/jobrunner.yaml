@@ -5,19 +5,27 @@
 # so a second identity has to arrive as a mounted Secret — and that indirection is the point: this
 # capability can be removed by deleting one volume mount, without touching the portal's identity or
 # its self-update permissions.
+# 🚨 IN THE CONTROL PORTAL'S NAMESPACE — edit `memex` to yours. A pod can only mount Secrets from
+# its OWN namespace, so the original placement of this SA and its token in memex-ops was
+# unmountable by construction: the portal's volume mount could never resolve, and the failure
+# would have read as a missing token rather than a wrong namespace. The SA's HOME namespace is
+# irrelevant to its RIGHTS — those come from the RoleBinding in memex-ops below, which names this
+# SA as a foreign subject.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: hosting-jobrunner
-  namespace: memex-ops
+  namespace: memex
 ---
 # A long-lived token for it. Kubernetes ≥1.24 does not mint these automatically; this is the
 # supported way to ask for one, and it is why the Secret carries the annotation rather than data.
+# Same namespace as the SA (the token controller only fills a service-account-token Secret in the
+# SA's own namespace) — which is the portal's namespace, so the portal can mount it.
 apiVersion: v1
 kind: Secret
 metadata:
   name: hosting-jobrunner-token
-  namespace: memex-ops
+  namespace: memex
   annotations:
     kubernetes.io/service-account.name: hosting-jobrunner
 type: kubernetes.io/service-account-token
@@ -55,9 +63,12 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: meshweaver-hosting
 subjects:
+  # The FOREIGN subject: the SA lives in the portal's namespace (see above); a RoleBinding may
+  # name a subject from any namespace, which is what scopes portal-held credentials to jobs-only
+  # power HERE while staying mountable THERE.
   - kind: ServiceAccount
     name: hosting-jobrunner
-    namespace: memex-ops
+    namespace: memex
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
