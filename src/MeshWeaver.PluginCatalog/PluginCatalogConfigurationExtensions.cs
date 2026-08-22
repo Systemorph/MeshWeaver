@@ -4,6 +4,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -144,7 +145,22 @@ public static class PluginCatalogConfigurationExtensions
                 // completely that the lane can go dark while every surface looks like a healthy
                 // day; that is exactly what 2026-08-20 was. A plain singleton, process-scoped and
                 // bounded: a diagnostic, never a source of truth.
-                .AddSingleton<BundleAdoptionLedger>())
+                .AddSingleton<BundleAdoptionLedger>()
+                // 🚨 THE ENTITLEMENT ANCHOR (#1782 gap 2) — the registry's own catalog, read as the
+                // authority on which SOURCE carries which package. A local install record is a
+                // cache of that binding, and a cache miss must send the question upstream rather
+                // than answer "not entitled". Singleton because it keeps the last successful
+                // observation, which is what keeps a previously observed entitlement working while
+                // the registry is unreachable.
+                .AddSingleton(sp => new PackageOriginAnchor(
+                    sp.GetRequiredService<IMessageHub>(),
+                    sp.GetService<IConfiguration>() ?? new ConfigurationBuilder().Build(),
+                    sp.GetService<ILoggerFactory>()))
+                // …and the record that makes a degraded entitlement answer legible. Every refusal
+                // on the bundle routes is byte-identical on the wire (#1777), which is right for
+                // the caller and blind for the operator: "not granted" and "I could not reach the
+                // registry to find out" leave the same trace. Bounded, process-scoped diagnostic.
+                .AddSingleton<PackageEntitlementLedger>())
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();

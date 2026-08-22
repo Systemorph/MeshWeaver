@@ -1,3 +1,4 @@
+using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reflection;
@@ -81,6 +82,9 @@ internal static class NodeTypeCompilationHelpers
         // NodeType whose compile already terminally failed, so a broken type can never drive
         // the recompile storm that saturates this hub's single-threaded action block.
         var parkRegistry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
+        // The adoption interlock (#1763) — absent on a host that never composed AddGraph's
+        // registry, in which case the kickoff behaves exactly as it did before.
+        var adoptionRegistry = hub.ServiceProvider.GetService<NodeTypeAdoptionRegistry>();
         // The live build guards (#1664 step 11, #1707 slice 2) — the per-type dependency-record
         // resolver plus the legacy installed-module fingerprint — join HasUsableBuild /
         // HasStaleFrameworkBuild below so a module-only update re-drives the compile the same
@@ -330,6 +334,31 @@ internal static class NodeTypeCompilationHelpers
                     && string.IsNullOrWhiteSpace(def.HubConfiguration)
                     && (def.Sources is null || def.Sources.Count == 0)))
             .Take(1)
+            // 🚨 AN IN-FLIGHT ADOPTION WINS (#1763). Adopting a prebuilt assembly writes the
+            // NodeType's node, so PrebuiltAssemblySeeder.Seed ACTIVATES the very hub it is about to
+            // stamp — and this kickoff is armed by that activation. The seeder therefore started
+            // the Roslyn compile the adoption exists to avoid, and the compile re-stamped the type
+            // over the adopted build milliseconds later: install-time consumption saved nothing,
+            // and a gate consuming a bake ended up judging its own bytes instead of the ones that
+            // ship. Every log line said the adoption had worked, because it had.
+            //
+            // The kickoff DELAYS, it does not cancel: it waits for the reservation to clear and
+            // then re-evaluates (the Update below still refuses to move a non-null status), so a
+            // DECLINED adoption compiles exactly as before. The wait is bounded — a leaked
+            // reservation must cost a delay, never an unbuilt type.
+            .SelectMany(node =>
+                (adoptionRegistry?.WhenClear(hubPath) ?? Observable.Return(Unit.Default))
+                    .Timeout(NodeTypeAdoptionRegistry.ReservationWaitBudget)
+                    .Catch((TimeoutException _) =>
+                    {
+                        logger?.LogWarning(
+                            "First-build kickoff: {HubPath} waited {Budget}s for an in-flight "
+                            + "prebuilt adoption that never released its reservation — building "
+                            + "anyway (a stranded type is worse than a redundant compile)",
+                            hubPath, NodeTypeAdoptionRegistry.ReservationWaitBudget.TotalSeconds);
+                        return Observable.Return(Unit.Default);
+                    })
+                    .Select(_ => node))
             .Subscribe(node =>
             {
                 // Flip CompilationStatus directly to Pending. The watcher (above)
