@@ -2135,9 +2135,10 @@ public class AgentChatClient : IAgentChat
             // usable model AND no agent could be built" into a speaking round failure instead of a
             // raw provider error (#476).
             //
-            // 🚨 The deployment's OWN configured keys are no longer in that blind spot: the resolver
-            // reads {Section}:ApiKey for the model's provider (MeshWeaver#1965), so a model served by
-            // Anthropic__ApiKey now takes the early return above instead of being swapped away.
+            // 🚨 The deployment's OWN configured keys are no longer in that blind spot — but via
+            // the SEED, not a lookup here: ProviderCredentialSeed carries {Section}:ApiKey onto the
+            // ModelProvider node at boot (MeshWeaver#1982), so a model served by Anthropic__ApiKey
+            // resolves from the node and takes the early return above instead of being swapped away.
             modelFallbackExhausted = true;
             if (isRouter)
                 logger.LogWarning(

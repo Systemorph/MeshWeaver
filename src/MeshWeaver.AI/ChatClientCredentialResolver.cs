@@ -22,10 +22,12 @@ namespace MeshWeaver.AI;
 public record CredentialResolution(string? Endpoint, string? ApiKey, string Source)
 {
     /// <summary>
-    /// Sentinel result meaning no credential could be resolved ANYWHERE — neither on a
-    /// <c>ModelProvider</c> node nor in the deployment's configuration for the model's provider
-    /// section. Factories still apply their own <c>IOptions</c> fallback afterwards, but it now
-    /// resolves the same values this chain already looked at, so <c>Missing</c> means what it says.
+    /// Sentinel result meaning no credential could be resolved on any <c>ModelProvider</c> node —
+    /// and the node is the administered home for a provider's credential (MeshWeaver#1982), so this
+    /// is the platform's answer, full stop. A deployment that keys a provider in configuration has
+    /// that key SEEDED onto the node by <see cref="ProviderCredentialSeed"/> at boot; it is not read
+    /// again here. Factories still apply their own <c>IOptions</c> fallback afterwards — that is the
+    /// driver's business, not a source of truth this resolver arbitrates.
     /// </summary>
     public static readonly CredentialResolution Missing = new(null, null, "missing");
 }
@@ -56,31 +58,24 @@ public record CredentialResolution(string? Endpoint, string? ApiKey, string Sour
 ///         (<see cref="ModelDefinition.ApiKeySecretRef"/> /
 ///         <see cref="ModelDefinition.Endpoint"/>) — stamped per-model on
 ///         older catalog rollouts.</item>
-///   <item><b>The deployment's own configuration</b> — <c>{Section}:ApiKey</c> /
-///         <c>{Section}:Endpoint</c> of the <see cref="LanguageModelCatalogSource"/> whose
-///         <see cref="LanguageModelCatalogSource.ProviderName"/> the model declares. This is the
-///         SAME rung every factory already falls back to
-///         (<c>resolution.ApiKey ?? configuration.ApiKey</c>), read here so the resolver's
-///         verdict matches what actually runs — see the note below.</item>
-///   <item><see cref="CredentialResolution.Missing"/> — nothing anywhere serves this model.</item>
+///   <item><see cref="CredentialResolution.Missing"/> — no node serves this model.</item>
 /// </list>
 ///
-/// <para>🚨 <b>Why configuration is a rung and not "the caller's business".</b> The catalog seeder
-/// stamps <c>{Section}:ApiKey</c> onto the <c>ModelProvider</c> node <b>create-if-absent</b>: the
-/// first boot that creates the node copies the key, and no later boot revisits it. So a key added
-/// to the deployment's configuration AFTER the node exists reaches every factory and never reaches
-/// the node — and a resolver that reads only nodes then reports a model that runs perfectly as
-/// unusable. That is not cosmetic: <c>AgentChatClient.ApplyStaleModelFallback</c> treats
-/// "unusable" as "stale selection" and SILENTLY swaps the user's explicit pick for the deployment
-/// default (measured on <c>memex.systemorph.com</c> 2026-08-21 — every <c>claude-*</c> selection
-/// was served by another provider's factory, MeshWeaver#1965). The rung is merged PER FIELD, like
-/// the factories do it: a node-supplied endpoint still wins, only the missing key is filled in.</para>
+/// <para>🚨 <b>Every rung is a NODE, and that is the decision, not an omission.</b> A model
+/// provider's credential has ONE administered home — the <c>ModelProvider</c> node — and deployment
+/// configuration is a SEED into it, never a parallel live source (MeshWeaver#1982). One place to
+/// look, one place to rotate, and no way for an env key and a node key to disagree silently the way
+/// they did on 2026-08-21 (the OpenRouter 402: a funded key on the node, a stale one in Key
+/// Vault).</para>
 ///
-/// <para>Two deliberate limits on that rung. It is consulted ONLY when the node rungs produced no
-/// key — administered node data always wins. And it carries no
-/// <see cref="IsAllowedSharedAccess"/> gate, because a configuration value is the DEPLOYMENT's own
-/// credential, already present in every factory's <c>IOptions</c> binding: reading it here exposes
-/// nothing that was not already in the same process.</para>
+/// <para><b>What makes that safe</b> is that the seed is real. <see cref="ProviderCredentialSeed"/>
+/// runs on every boot of a DB-synced deployment and fills an EMPTY key on the provider node from
+/// <c>{Section}:ApiKey</c> — so a key configured after the node was created converges instead of
+/// being invisible forever. This resolver briefly carried that configuration as a fourth RUNG
+/// (MeshWeaver#1983) because the old create-if-absent seeder could not converge; the rung was the
+/// compensator, the seed is the cure, and keeping both would have re-created the two-sources-of-truth
+/// problem it was fixing. A model whose provider node has no key is now honestly unusable — and the
+/// remedy is a node edit or a boot, not an invisible env var.</para>
 ///
 /// <para>User-partition ModelProvider visibility: callers (notably
 /// <c>AgentChatClient</c>) invoke <see cref="WatchPartition"/> to widen the
@@ -308,31 +303,10 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// resolutions instead would let a config endpoint override an administered one.</para>
     /// </summary>
     private CredentialResolution? TryResolveForDefinition(IReadOnlyList<MeshNode> snapshot, ModelDefinition def)
-    {
-        var fromNodes = TryResolveFromNodes(snapshot, def);
-        // Administered node data always wins — configuration is consulted only for a MISSING key.
-        if (!string.IsNullOrEmpty(fromNodes?.ApiKey))
-            return fromNodes;
-
-        var fromConfig = TryResolveFromConfiguration(def.Provider);
-        if (fromConfig is null)
-            return fromNodes;
-
-        return fromNodes is null
-            ? fromConfig
-            : fromConfig with
-            {
-                Endpoint = fromNodes.Endpoint ?? fromConfig.Endpoint,
-                // Both rungs named, in the order they contributed: "which source answered" is the
-                // question an operator asks when a key is stale, and one tag cannot answer it.
-                Source = $"{fromNodes.Source}+{fromConfig.Source}",
-            };
-    }
+        => TryResolveFromNodes(snapshot, def);
 
     /// <summary>
-    /// The NODE rungs of the precedence chain — everything that lives as mesh data. Extracted from
-    /// <see cref="TryResolveForDefinition"/> so the configuration rung composes with it rather than
-    /// being wedged inside it.
+    /// The NODE rungs of the precedence chain — which, since MeshWeaver#1982, are ALL of it.
     /// </summary>
     private CredentialResolution? TryResolveFromNodes(IReadOnlyList<MeshNode> snapshot, ModelDefinition def)
     {
@@ -361,45 +335,6 @@ public sealed class ChatClientCredentialResolver : IDisposable
         if (!string.IsNullOrEmpty(def.ApiKeySecretRef) || !string.IsNullOrEmpty(def.Endpoint))
         {
             return new CredentialResolution(def.Endpoint, Decrypt(def.ApiKeySecretRef), "model-node");
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// The DEPLOYMENT rung: <c>{Section}:ApiKey</c> / <c>{Section}:Endpoint</c> of the registered
-    /// <see cref="LanguageModelCatalogSource"/> whose <see cref="LanguageModelCatalogSource.ProviderName"/>
-    /// matches <paramref name="providerName"/> — the very values each provider factory binds into its
-    /// own <c>IOptions&lt;...Configuration&gt;</c> and falls back to.
-    ///
-    /// <para>Returns <c>null</c> unless a non-empty KEY is configured: an endpoint on its own is what
-    /// every factory rejects with <c>"ApiKey is missing for model '…'"</c>, so a keyless config
-    /// section must not make a model look usable. The value is NOT
-    /// <see cref="Decrypt(string?)"/>-ed — a configuration value is plaintext by construction, unlike
-    /// a <c>ModelProvider</c> node's encrypted-at-rest key.</para>
-    /// </summary>
-    /// <param name="providerName">The model's declared <see cref="ModelDefinition.Provider"/>.</param>
-    /// <returns>The configured credential, or <c>null</c> when this deployment configures no key for it.</returns>
-    private CredentialResolution? TryResolveFromConfiguration(string? providerName)
-    {
-        if (string.IsNullOrEmpty(providerName)) return null;
-        var catalog = hub.ServiceProvider.GetService<LanguageModelCatalogOptions>();
-        var configuration = hub.ServiceProvider.GetService<IConfiguration>();
-        if (catalog is null || configuration is null) return null;
-
-        foreach (var source in catalog.Sources)
-        {
-            if (!string.Equals(source.ProviderName, providerName, StringComparison.OrdinalIgnoreCase))
-                continue;
-            // Plain key lookups, deliberately NOT GetSection(...).Get<T>(): binding is what throws on a
-            // malformed section (which is why BuiltInLanguageModelProvider guards its Models[] read),
-            // and there is nothing to guard — and therefore nothing to swallow — around an indexer.
-            var apiKey = configuration[$"{source.SectionName}:ApiKey"];
-            if (string.IsNullOrWhiteSpace(apiKey))
-                continue;
-            var endpoint = configuration[$"{source.SectionName}:Endpoint"];
-            return new CredentialResolution(
-                endpoint ?? source.DefaultEndpoint, apiKey, $"config:{source.SectionName}");
         }
 
         return null;
@@ -574,14 +509,15 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// the user (the <c>z-ai/glm-5.2</c> report). Requiring a key here means default/fallback selection
     /// only ever lands on a model that will actually run.
     ///
-    /// <para>🚨 <b>"A key" includes the DEPLOYMENT's configured key.</b> This doc used to claim the
-    /// opposite — that a model keyed only from the factory's config/IOptions fallback "already
-    /// resolves Missing today and was never eligible", written as a no-regression reassurance. That
-    /// claim WAS the defect: such a model runs perfectly, so declaring it unusable made
-    /// <c>AgentChatClient.ApplyStaleModelFallback</c> silently swap an explicit user selection for
-    /// the deployment default (MeshWeaver#1965, measured on memex.systemorph.com 2026-08-21).
-    /// <see cref="Resolve"/> walks that rung too now, so this predicate answers the question it
-    /// claims to answer: can a factory actually serve this model.</para>
+    /// <para>🚨 <b>"A key" means a key ON THE NODE, and a deployment's configured key IS one</b>
+    /// — <see cref="ProviderCredentialSeed"/> puts it there at boot. This doc once claimed a model
+    /// keyed only from the factory's config/IOptions fallback "already resolves Missing today and was
+    /// never eligible", written as a no-regression reassurance; that claim WAS the defect, because
+    /// such a model runs perfectly and declaring it unusable made
+    /// <c>AgentChatClient.ApplyStaleModelFallback</c> silently swap an explicit user selection for the
+    /// deployment default (MeshWeaver#1965, measured on memex.systemorph.com 2026-08-21). The cure is
+    /// the seed rather than a configuration rung here (MeshWeaver#1982): the predicate answers the
+    /// question it claims to answer, against the ONE administered source.</para>
     /// </summary>
     public bool HasUsableCredential(string? modelId)
         => !string.IsNullOrEmpty(modelId)
