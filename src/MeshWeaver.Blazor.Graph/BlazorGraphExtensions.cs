@@ -1,4 +1,3 @@
-using MeshWeaver.Blazor.Components;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
@@ -11,9 +10,13 @@ namespace MeshWeaver.Blazor.Graph;
 public static class BlazorGraphExtensions
 {
     /// <summary>
-    /// Adds the Graph Blazor views (MeshNodeEditorView, MeshNodeThumbnailView, MeshNodePickerView, …)
-    /// to the configuration. Also enables @ autocomplete for unified content references in markdown
-    /// editors.
+    /// Adds the Graph Blazor views — the full MeshNode surface set (editor, thumbnail, card,
+    /// collection, content/role editors, picker) — to the configuration. Also enables
+    /// @ autocomplete for unified content references in markdown editors. Every view registered
+    /// here now LIVES in this assembly: before the Group B extraction, four of these views were
+    /// registered from MeshWeaver.Blazor.Components (a foreign assembly) and MeshNodeCardControl
+    /// was double-registered, once here and once in the base registry — one registration, one
+    /// home, gated by ViewPackRegistrationGateTest.
     /// </summary>
     public static MessageHubConfiguration AddGraphViews(this MessageHubConfiguration configuration)
     {
@@ -24,6 +27,7 @@ public static class BlazorGraphExtensions
                 .WithView<MeshNodeEditorControl, MeshNodeEditorView>()
                 .WithView<MeshNodeThumbnailControl, MeshNodeThumbnailView>()
                 .WithView<MeshNodeCardControl, MeshNodeCardView>()
+                .WithView<MeshNodeCollectionControl, MeshNodeCollectionView>()
                 .WithView<MeshNodeContentEditorControl, MeshNodeContentEditorView>()
                 .WithView<MeshNodeRoleEditorControl, MeshNodeRoleEditorView>()
                 // The picker lives HERE (it is a Graph surface) but derives from the EntityViews

@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Blazor.EntityViews;
+using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -108,10 +109,12 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddBlazor()
-            // The entity form/edit views left the base registry for the EntityViews pack; this
-            // harness names EditorView / NumberFieldView<> / RadioGroupView<> by type, so it
-            // registers the pack the same way the portal does.
-            .ConfigureHub(config => config.AddEntityViews())
+            // The entity form/edit views left the base registry for the EntityViews pack, and the
+            // MeshNode surface views (card/collection/thumbnail/…) for the Graph pack; this
+            // harness names those views by type AND renders MeshSearchView, which reaches the card
+            // through DispatchView (registry resolution) — so it registers both packs the same way
+            // the portal does.
+            .ConfigureHub(config => config.AddEntityViews().AddGraphViews())
             .ConfigureServices(services => services
                 // The two ambient browser services every view assumes. Neither is exercised by a
                 // static render, but Blazor's [Inject] pipeline throws if they are unregistered.
@@ -712,6 +715,35 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
 
         html.Should().Contain("class=\"mesh-node-card\"");
         html.Should().Contain("style=\"cursor: pointer; width: 100%; display: block; box-sizing: border-box;\"");
+    }
+
+    /// <summary>
+    /// The search page (<c>MeshSearchView</c>, still in the base pack) renders its result cards
+    /// through <c>DispatchView</c> — registry resolution — since <c>MeshNodeCardView</c> moved to
+    /// the MeshWeaver.Blazor.Graph pack: the base pack can no longer name the component at compile
+    /// time. This pins the seam on THIS portal composition (the real <c>ILayoutClient</c> the
+    /// mesh's <c>AddBlazor()</c> + <c>AddGraphViews()</c> assembled, the exact instance
+    /// <c>DispatchView</c> consults — verified identical through <c>PortalApplication.Hub</c>):
+    /// a <c>MeshNodeCardControl</c> resolves to the pack's card view, so search results keep
+    /// their cards. The card MARKUP itself is pinned by the two <c>RenderAsync</c> card tests
+    /// above; the one-shot <c>HtmlRenderer</c> cannot drive <c>DispatchView</c>'s post-parameter
+    /// re-render, so the resolution is asserted at the registry rather than through a static
+    /// render. Non-vacuous: without <c>AddGraphViews</c> on this mesh, no map claims the control
+    /// and the fallback slot answers with <c>HtmlView</c>, failing the type assertion.
+    /// </summary>
+    [Fact]
+    public void MeshNodeCardControl_ResolvesThroughThePortalRegistry()
+    {
+        using var scope = Mesh.ServiceProvider.CreateScope();
+        var layoutClient = scope.ServiceProvider.GetRequiredService<MeshWeaver.Layout.Client.ILayoutClient>();
+
+        var descriptor = layoutClient.GetViewDescriptor(
+            new MeshNodeCardControl("Some/Node", Title: "Node"), null, "search-probe");
+
+        descriptor.Should().NotBeNull();
+        descriptor!.Type.Should().Be(typeof(MeshNodeCardView),
+            because: "the registry (AddGraphViews) must resolve MeshNodeCardControl to the pack's "
+                   + "MeshNodeCardView — this is exactly how MeshSearchView renders every result card now");
     }
 
     /// <summary>

@@ -336,6 +336,11 @@
 
     private RenderFragment RenderCard(MeshNode node) => __builder =>
     {
+        // The card renders through DispatchView (registry resolution), NOT a compile-time
+        // <MeshNodeCardView …/> reference: MeshNodeCardView lives in the MeshWeaver.Blazor.Graph
+        // view pack now, and the base pack cannot name a pack component without inverting the
+        // reference direction. Registry dispatch is also what keeps this honest — the search page
+        // renders whatever view the mesh's registered pack maps to MeshNodeCardControl.
         var cardControl = GetCardControl(node);
         var clickAddress = ViewModel?.ClickMessageAddress?.ToString();
         var drillArea = BoundDrillDownArea;
@@ -359,18 +364,18 @@
             @if (isPicker)
             {
                 <div style="cursor: pointer;" @onclick="() => OnNodeSelected.InvokeAsync(node)">
-                    <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                    <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
                 </div>
             }
             else if (!string.IsNullOrEmpty(clickAddress))
             {
                 <div style="cursor: pointer;" @onclick="() => PostClickMessage(node, clickAddress)">
-                    <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                    <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
                 </div>
             }
             else
             {
-                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
             }
 
             @if (showDrill)
@@ -791,7 +796,7 @@
         var cardControl = MeshNodeCardControl.FromNode(node, node.Path, BoundItemArea, true);
         <div class="mesh-nav-card-wrap">
             <a class="mesh-nav-card-link" href="/@node.Path" title="Open @(node.Name ?? node.Id)">
-                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"nav-{node.Path}")" />
+                <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"nav-{node.Path}")" />
             </a>
             @if (item.HasChildren)
             {

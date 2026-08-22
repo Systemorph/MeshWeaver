@@ -80,10 +80,11 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
     /// </summary>
     [Theory]
     [InlineData(typeof(MeshNodeEditorControl), typeof(MeshNodeEditorView))]
-    [InlineData(typeof(MeshNodeThumbnailControl), typeof(MeshWeaver.Blazor.Components.MeshNodeThumbnailView))]
-    [InlineData(typeof(MeshNodeCardControl), typeof(MeshWeaver.Blazor.Components.MeshNodeCardView))]
-    [InlineData(typeof(MeshNodeContentEditorControl), typeof(MeshWeaver.Blazor.Components.MeshNodeContentEditorView))]
-    [InlineData(typeof(MeshNodeRoleEditorControl), typeof(MeshWeaver.Blazor.Components.MeshNodeRoleEditorView))]
+    [InlineData(typeof(MeshNodeThumbnailControl), typeof(MeshNodeThumbnailView))]
+    [InlineData(typeof(MeshNodeCardControl), typeof(MeshNodeCardView))]
+    [InlineData(typeof(MeshNodeCollectionControl), typeof(MeshNodeCollectionView))]
+    [InlineData(typeof(MeshNodeContentEditorControl), typeof(MeshNodeContentEditorView))]
+    [InlineData(typeof(MeshNodeRoleEditorControl), typeof(MeshNodeRoleEditorView))]
     [InlineData(typeof(MeshNodePickerControl), typeof(MeshNodePickerView))]
     public void GraphPack_RegistersItsViews(Type controlType, Type viewType)
     {
@@ -181,6 +182,7 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
             _ when controlType == typeof(MeshNodeCardControl) => new MeshNodeCardControl("path"),
             _ when controlType == typeof(MeshNodeContentEditorControl) => new MeshNodeContentEditorControl("path"),
             _ when controlType == typeof(MeshNodeRoleEditorControl) => new MeshNodeRoleEditorControl("path", 0),
+            _ when controlType == typeof(MeshNodeCollectionControl) => new MeshNodeCollectionControl(),
             _ when controlType == typeof(MeshNodePickerControl) => new MeshNodePickerControl("/data"),
             _ when controlType == typeof(TextFieldControl) => new TextFieldControl("/data"),
             _ when controlType == typeof(TextAreaControl) => new TextAreaControl("/data"),
