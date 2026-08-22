@@ -37,12 +37,7 @@
          the packs itself rather than riding portal references that no longer exist. Safe here
          precisely because none of them is in MeshModulesClosureSubset above: nothing stages a
          modules/MeshWeaver.Blazor.*/ in this bin for a bin-root copy to shadow. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Analysis\MeshWeaver.Blazor.Analysis.csproj" />
     <!-- Same for MapProviderModuleTest, which pins the provider-swap contract on these two. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.AppleMaps\MeshWeaver.Blazor.AppleMaps.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.OpenStreetMap\MeshWeaver.Blazor.OpenStreetMap.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Radzen\MeshWeaver.Blazor.Radzen.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.GoogleMaps\MeshWeaver.Blazor.GoogleMaps.csproj" />
     <!-- Direct on purpose (#1644 step 2): these modules left Memex.Portal.Shared's closure
          (they ship via modules/), so the module-fold tests anchor the real DLLs themselves. -->
     <!-- MigrationRegistryTest runs the migration runner's own start-up guard (VerifyComplete) in

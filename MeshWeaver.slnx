@@ -38,12 +38,7 @@
     <Project Path="src/MeshWeaver.AI.Application/MeshWeaver.AI.Application.csproj" />
     <Project Path="src/MeshWeaver.AI/MeshWeaver.AI.csproj" />
     <Project Path="src/MeshWeaver.Application.Styles/MeshWeaver.Application.Styles.csproj" />
-    <Project Path="src/MeshWeaver.Blazor.Analysis/MeshWeaver.Blazor.Analysis.csproj" />
-    <Project Path="src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
-    <Project Path="src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
-    <Project Path="src/MeshWeaver.Blazor.AppleMaps/MeshWeaver.Blazor.AppleMaps.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Graph/MeshWeaver.Blazor.Graph.csproj" />
-    <Project Path="src/MeshWeaver.Blazor.OpenStreetMap/MeshWeaver.Blazor.OpenStreetMap.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Portal/MeshWeaver.Blazor.Portal.csproj" />
     <Project Path="src/MeshWeaver.Blazor/MeshWeaver.Blazor.csproj" />
     <Project Path="src/MeshWeaver.Cli/MeshWeaver.Cli.csproj" />
@@ -94,7 +89,6 @@
     <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
     <Project Path="src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
-    <Project Path="src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
     <Project Path="src/MeshWeaver.Speech.Contract/MeshWeaver.Speech.Contract.csproj" />
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
   </Folder>
@@ -128,8 +122,6 @@
     <Project Path="test/MeshWeaver.PluginCatalog.Test/MeshWeaver.PluginCatalog.Test.csproj" />
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Security.Test/MeshWeaver.Security.Test.csproj" />
-    <Project Path="test/MeshWeaver.Social.Test/MeshWeaver.Social.Test.csproj" />
-    <Project Path="test/MeshWeaver.Speech.Test/MeshWeaver.Speech.Test.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj" />
     <Project Path="test/MeshWeaver.GitSync.Test/MeshWeaver.GitSync.Test.csproj" />
@@ -159,6 +151,7 @@
     <Project Path="test/MeshWeaver.Reactive.Assertions.Test/MeshWeaver.Reactive.Assertions.Test.csproj" />
     <Project Path="test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" />
     <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
+    <Project Path="test/MeshWeaver.Social.Test/MeshWeaver.Social.Test.csproj" />
     <Project Path="test/MeshWeaver.MemexTemplate.Test/MeshWeaver.MemexTemplate.Test.csproj" />
     <Project Path="test/Memex.Portal.Shared.Test/Memex.Portal.Shared.Test.csproj" />
   </Folder>
