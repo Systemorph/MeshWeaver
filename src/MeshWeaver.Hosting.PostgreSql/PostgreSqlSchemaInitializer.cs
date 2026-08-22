@@ -309,8 +309,72 @@ public static class PostgreSqlSchemaInitializer
         // per-boot singleton; the in-script pg_advisory_xact_lock serializes across silos.
         if (string.Equals(options.Schema, "public", StringComparison.OrdinalIgnoreCase))
         {
-            await using var cmd = dataSource.CreateCommand(GetAuthMirrorSelfHealScript());
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            await RunAuthMirrorSelfHealAsync(dataSource, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>How many partition schemas one heal batch covers. Small enough that a batch is
+    /// never a long statement; large enough that a big mesh is a handful of round-trips.</summary>
+    private const int AuthMirrorHealBatchSize = 25;
+
+    /// <summary>Per-batch ceiling. Bounded work deserves a bounded, modest timeout — the point of
+    /// batching is that no single statement scales with the size of the mesh.</summary>
+    private const int BatchCommandTimeoutSeconds = 120;
+
+    /// <summary>
+    /// Installs the heal FUNCTION, then drives it to completion one bounded batch at a time.
+    ///
+    /// <para>🚨 <b>Why this is not one call.</b> The heal sweeps every partition schema, and it
+    /// used to do so inside a single <c>DO</c> block that the client waited on while holding
+    /// <c>pg_advisory_xact_lock</c> for the WHOLE sweep. Three things were wrong with that, and
+    /// only the first is a timeout:</para>
+    /// <list type="number">
+    /// <item>the client blocked on one statement whose duration scales with the size of the mesh,
+    /// so a big instance hit Npgsql's timeout and the migration CrashLoopBackOff'd — the same
+    /// image migrating a smaller instance fine (memex.meshweaver.cloud, 2026-08-22);</item>
+    /// <item>a timeout ABANDONS the client while the server keeps going, so the work is neither
+    /// finished nor cancelled and nothing knows which;</item>
+    /// <item>the global lock was held for the entire sweep, so every concurrently-booting silo
+    /// queued behind it — the contention grows with the very thing that made it slow.</item>
+    /// </list>
+    ///
+    /// <para>So the work is TRIGGERED in bounded batches and driven to completion: each call takes
+    /// the lock, heals at most <see cref="AuthMirrorHealBatchSize"/> schemas, commits (releasing
+    /// the lock), and returns its cursor. No statement is long, another silo can interleave, and a
+    /// dropped connection costs one batch instead of the sweep — the next call resumes at the
+    /// cursor because the work is idempotent per schema.</para>
+    /// </summary>
+    /// <remarks>
+    /// 🚨 <b>This — not <see cref="GetAuthMirrorSelfHealScript"/> — is the heal.</b> That method now
+    /// only DEFINES the batch function; executing it heals nothing. Anything that wants the sweep
+    /// (boot, a migration, a test) calls this, so there is one way to run it and no caller can
+    /// half-run it by executing the script alone.
+    /// </remarks>
+    public static async Task RunAuthMirrorSelfHealAsync(NpgsqlDataSource dataSource, CancellationToken ct = default)
+    {
+        await using (var install = dataSource.CreateCommand(GetAuthMirrorSelfHealScript()))
+        {
+            // Installing the function is plain DDL — short by construction.
+            install.CommandTimeout = BatchCommandTimeoutSeconds;
+            await install.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        string? after = null;
+        while (true)
+        {
+            await using var batch = dataSource.CreateCommand(
+                "SELECT public.mw_auth_mirror_heal_batch($1, $2)");
+            // Per BATCH, not per sweep: bounded work, so a bound that does not scale with the mesh.
+            batch.CommandTimeout = BatchCommandTimeoutSeconds;
+            batch.Parameters.AddWithValue(after is null ? DBNull.Value : after);
+            batch.Parameters.AddWithValue(AuthMirrorHealBatchSize);
+
+            var cursor = await batch.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            // NULL cursor ⇒ the slice after `after` was empty ⇒ every schema is healed.
+            if (cursor is null or DBNull)
+                return;
+
+            after = (string)cursor;
         }
     }
 
@@ -524,9 +588,11 @@ public static class PostgreSqlSchemaInitializer
     /// xact lock) — everything converges on restart rather than relying on one-time migrations.
     /// </summary>
     public static string GetAuthMirrorSelfHealScript() => $$"""
-        DO $auth_mirror_heal$
+        CREATE OR REPLACE FUNCTION public.mw_auth_mirror_heal_batch(p_after text, p_limit int)
+        RETURNS text AS $auth_mirror_heal$
         DECLARE
             s text;
+            last_schema text := NULL;
             -- The CURRENT trg_access_changed body (single-sourced from the C# constant the
             -- partition DDL also embeds). __mw_schema__ is replace()d per schema below;
             -- plain replace, NOT format() — the body carries its own %I/%L format specs.
@@ -555,7 +621,10 @@ public static class PostgreSqlSchemaInitializer
         $prfix$;
         BEGIN
             IF to_regclass('"auth".mesh_nodes') IS NULL THEN
-                RETURN;
+                -- No mirror yet ⇒ nothing to heal, and NULL tells the caller to stop looping.
+                -- (A bare RETURN was valid in the old DO block; in a function returning text it
+                -- is a syntax error — 42601, which surfaces as the whole fixture failing to init.)
+                RETURN NULL;
             END IF;
 
             -- Cross-partition group recompute lives HERE, on the global auth mirror — the single
@@ -582,6 +651,9 @@ public static class PostgreSqlSchemaInitializer
             -- releases with this transaction.
             PERFORM pg_advisory_xact_lock(hashtext('auth_mirror_self_heal'));
 
+            -- BOUNDED, ORDERED slice after the caller's cursor. The caller keeps calling with the
+            -- last name returned until this returns NULL, so no single statement is long and the
+            -- advisory lock above is held for ONE BATCH rather than the whole mesh.
             FOR s IN
                 SELECT t.table_schema
                 FROM information_schema.tables t
@@ -589,7 +661,11 @@ public static class PostgreSqlSchemaInitializer
                   AND t.table_schema NOT IN
                       ('information_schema','pg_catalog','pg_toast','public','admin','auth')
                   AND t.table_schema NOT LIKE '%\_versions'
+                  AND (p_after IS NULL OR t.table_schema > p_after)
+                ORDER BY t.table_schema
+                LIMIT p_limit
             LOOP
+                last_schema := s;
                 -- (a) Trigger present on every partition table (auth itself excluded above —
                 --     it is the mirror target, mirroring into itself would loop).
                 IF NOT EXISTS (
@@ -726,8 +802,9 @@ public static class PostgreSqlSchemaInitializer
             -- No matview rebuild here: the schema script (init step 3) rebuilds
             -- public.top_level_index on the same boot; doubling the DROP+CREATE
             -- (ACCESS EXCLUSIVE) only adds lock contention.
+            RETURN last_schema;   -- NULL ⇒ nothing left to heal
         END
-        $auth_mirror_heal$;
+        $auth_mirror_heal$ LANGUAGE plpgsql;
         """;
 
     /// <summary>

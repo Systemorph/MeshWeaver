@@ -215,9 +215,7 @@ public class AccessTriggerSchemaResolutionTests
 
         // HEAL: the per-boot self-heal replaces the function body (CREATE OR REPLACE keeps the
         // OID, so the existing trigger picks it up) and backfills via the schema-level rebuild.
-        await _fixture.DataSource.ExecuteNonQuery(
-            PostgreSqlSchemaInitializer.GetAuthMirrorSelfHealScript(), ct)
-            .Should().Within(60.Seconds()).Emit();
+        await PostgreSqlSchemaInitializer.RunAuthMirrorSelfHealAsync(_fixture.DataSource, ct);
 
         var uepAfter = await _fixture.DataSource.ScalarLong(
             $"SELECT count(*) FROM \"{schema}\".user_effective_permissions " +

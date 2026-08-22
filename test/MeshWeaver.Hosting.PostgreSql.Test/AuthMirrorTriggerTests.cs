@@ -257,10 +257,9 @@ public class AuthMirrorTriggerTests
             await ins2.ExecuteNonQueryAsync();
         await ExistsInAuthAsync("", "HealMe2").Run().Should().Within(30.Seconds()).Be(false);
 
-        // Heal — the exact script InitializeAsync runs at every boot.
-        await using (var heal = _fixture.DataSource.CreateCommand(
-            PostgreSqlSchemaInitializer.GetAuthMirrorSelfHealScript()))
-            await heal.ExecuteNonQueryAsync();
+        // Heal — the exact operation InitializeAsync runs at every boot. Not the script: that only
+        // defines the batch function now, and executing it alone heals nothing.
+        await PostgreSqlSchemaInitializer.RunAuthMirrorSelfHealAsync(_fixture.DataSource);
 
         // Both rows reconciled…
         await ExistsInAuthAsync("", "HealMe").Run().Should().Within(30.Seconds()).Be(true);

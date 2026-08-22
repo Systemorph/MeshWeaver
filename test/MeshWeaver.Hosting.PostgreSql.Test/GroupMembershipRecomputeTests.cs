@@ -340,9 +340,7 @@ public class GroupMembershipRecomputeTests
         {
             // HEAL (also the restore, so a failure above can't leave auth broken for other tests):
             // reinstalls the auth triggers AND backfills every schema via the schema-level rebuild.
-            await _fixture.DataSource.ExecuteNonQuery(
-                PostgreSqlSchemaInitializer.GetAuthMirrorSelfHealScript(), ct)
-                .Should().Within(60.Seconds()).Emit();
+            await PostgreSqlSchemaInitializer.RunAuthMirrorSelfHealAsync(_fixture.DataSource, ct);
         }
 
         await GrantsUntil(schema, erin, g => g > 0,
