@@ -12,6 +12,8 @@
 .navmenu.rail {
     overflow: hidden;
     transition: width 0.15s ease, min-width 0.15s ease;
+    /* The edge the rail collapses toward — without it the tree floats unanchored in the page. */
+    border-right: 1px solid var(--neutral-stroke-divider-rest, rgba(128, 128, 128, 0.25));
 }
 
 /* The collapse/expand control. Expanded it sits top-right of the rail, at the seam it collapses
@@ -21,15 +23,17 @@
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     padding: 0;
-    margin: 2px;
+    margin: 6px 6px 0 0;
     background: transparent;
     border: none;
     border-radius: 4px;
     cursor: pointer;
     align-self: flex-end;
+    /* Hint-colored at rest so the control doesn't compete with the index itself. */
+    color: var(--neutral-foreground-hint, var(--neutral-foreground-rest));
 }
 
     .navmenu-toggle:hover {
@@ -47,5 +51,6 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    padding: 4px;
+    padding: 4px 8px 8px 8px;
+    gap: 2px;
 }
