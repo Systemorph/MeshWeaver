@@ -168,13 +168,24 @@ public static class ThreadLayoutAreas
         SubscribeThreadVm(host, hubPath);
 
         // Static container — never rebuilt
-        return Controls.Stack
+        var chat = Controls.Stack
             .WithWidth("100%")
             .WithStyle("flex: 1; min-height: 0; display: flex; flex-direction: column;")
             .WithView(new ThreadChatControl()
                 .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)))
                 .WithShowFullHeader()
                 .WithStyle("flex: 1; min-height: 0; overflow: hidden;"));
+
+        // The multi-document shell: the VIEWER's thread rail stays beside the conversation, so
+        // navigating from the rail to a thread keeps the menu — the same shell the Threads app
+        // page renders around its composer. Viewer resolved from the circuit (a visitor without an
+        // identity gets the bare conversation). Still emitted ONCE — the shell is as static as the
+        // container it wraps.
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewerId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+        return string.IsNullOrEmpty(viewerId)
+            ? chat
+            : UserActivityLayoutAreas.BuildThreadsShell(viewerId, chat);
     }
 
     /// <summary>

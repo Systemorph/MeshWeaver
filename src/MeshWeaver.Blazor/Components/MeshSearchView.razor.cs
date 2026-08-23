@@ -1177,6 +1177,9 @@ public partial class MeshSearchView
     {
         get
         {
+            // The active SCOPE's item area wins (e.g. the home's Apps scope renders its records
+            // through AppTile); the control-level one is the scope-less fallback.
+            if (ActiveScopeTab?.ItemArea is { Length: > 0 } scoped) return scoped;
             if (ViewModel?.ItemArea is string s) return s;
             if (ViewModel?.ItemArea is JsonElement je && je.ValueKind == JsonValueKind.String)
                 return je.GetString();
