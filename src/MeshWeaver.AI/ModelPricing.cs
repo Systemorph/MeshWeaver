@@ -98,9 +98,13 @@ public static class ModelPricing
             // API rates. USD per 1M tokens (standard / non-cached). ⚠️ VERIFY against the Azure
             // AI Foundry rate card for the resource — region/contract rates can differ, and the
             // Flash / V3-0324 figures below are estimates pending confirmation.
-            ["DeepSeek-V4-Pro"] = new(1.75m, 3.48m, Usd),
-            ["DeepSeek-V3-0324"] = new(0.95m, 2.40m, Usd),   // deepseek-chat; deprecates 2026-07-24 — estimate
-            ["DeepSeek-V4-Flash"] = new(0.55m, 1.10m, Usd),  // cheapest tier — estimate
+            // 🚨 Cache reads are billed on their own meter at exactly 1/12 of input — NOT the
+            // Anthropic 0.1x the fallback would apply. Derived from Azure Cost Management over
+            // four independent days (cache ratios 33%–76%), identical to four decimals:
+            // V4-Pro 1.4274 → 0.11895 CHF/M. The USD figures here are those CHF rates at ~1.22.
+            ["DeepSeek-V4-Pro"] = new(1.75m, 3.48m, Usd) { CacheReadPerMillion = 1.75m / 12m },
+            ["DeepSeek-V3-0324"] = new(0.95m, 2.40m, Usd) { CacheReadPerMillion = 0.95m / 12m },   // deepseek-chat; deprecates 2026-07-24 — estimate
+            ["DeepSeek-V4-Flash"] = new(0.55m, 1.10m, Usd) { CacheReadPerMillion = 0.55m / 12m },  // cheapest tier — estimate
             // Moonshot Kimi K2.6 (preview on Azure AI Foundry).
             ["Kimi-K2.6"] = new(0.95m, 4.00m, Usd),
 
@@ -160,7 +164,11 @@ public static class ModelPricing
     public static ModelPriceRate? Resolve(string? modelId, ModelDefinition? node)
     {
         if (node is { InputPricePerMillionTokens: { } inPrice, OutputPricePerMillionTokens: { } outPrice })
-            return new ModelPriceRate(inPrice, outPrice, node.Currency ?? Usd);
+            return new ModelPriceRate(inPrice, outPrice, node.Currency ?? Usd)
+            {
+                CacheReadPerMillion = node.CacheReadPricePerMillionTokens,
+                CacheWritePerMillion = node.CacheWritePricePerMillionTokens,
+            };
         return Default(modelId);
     }
 }

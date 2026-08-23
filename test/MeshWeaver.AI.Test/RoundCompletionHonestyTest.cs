@@ -223,9 +223,17 @@ public class RoundCompletionHonestyTest(ITestOutputHelper output) : AITestBase(o
             IEnumerable<ChatMessage> messages, ChatOptions? options = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            // 🚨 Match the MARKER, not the whole message text. A round legitimately injects
+            // per-round context onto the user message — the non-streaming path always has, and
+            // since the prompt-cache fix the streaming path appends the clock there too (the
+            // volatile block must sit at the TAIL, outside the cached prefix). An exact
+            // `switch (wholeText)` therefore silently fell through to the healthy script, and the
+            // three honesty cases asserted against a round that had never been scripted to fail.
+            // The marker is the first line; everything after it is injected context.
             var script = messages
                 .Where(m => m.Role == ChatRole.User)
                 .Select(m => m.Text ?? string.Empty)
+                .Select(t => t.Split('\n')[0].Trim())
                 .LastOrDefault(t => t.StartsWith("script:", StringComparison.Ordinal))
                 ?? HealthyRoundPrompt;
 
