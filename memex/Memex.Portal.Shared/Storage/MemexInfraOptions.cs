@@ -50,7 +50,11 @@ public sealed record MeshPgStorageConfig
     public required string Name { get; init; }
 
     /// <summary>Connection string. May reference a secret (resolved out of the config-file value at load).
-    /// Contains <c>database.azure.com</c> ⇒ the Azure-Npgsql auth path; otherwise plain Npgsql.</summary>
+    /// Auth is selected by <c>MeshWeaver.Hosting.PostgreSql.AzurePostgres</c>: an Azure host
+    /// (<c>Host</c> ends in <c>.postgres.database.azure.com</c>) with NO password ⇒ the Entra-ID
+    /// token path; an Azure host WITH a password, or any non-Azure host ⇒ plain Npgsql. (Never a
+    /// substring match on the whole string — that both false-matches and ignores the password,
+    /// which crashes the portal when a token provider meets a password.)</summary>
     public required string ConnectionString { get; init; }
 
     /// <summary>Disabled entries are ignored by the reconciler (soft remove without deleting the entry).</summary>
