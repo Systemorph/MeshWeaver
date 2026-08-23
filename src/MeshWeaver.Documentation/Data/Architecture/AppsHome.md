@@ -58,8 +58,9 @@ compares what the viewer SHOULD have — the config-declared defaults
 (`Admin/HomeConfig.DefaultApps`) plus every install-manifest item with a live `installedPath`
 (`{owner}/_Install/{slug}`, read untyped by the manifest's own design) — against the records that
 exist, creates the missing ones fire-and-forget into the viewer's own partition, and HEALS records
-that still carry the generic icon or no `MainNode` target (name/icon come from the plugin cover
-node, fetched in ONE one-shot query off the render path). A config addition reaches every user's
+that still carry the generic icon or no `MainNode` target (the icon comes from the plugin cover
+node, fetched in ONE one-shot query off the render path; a name only fills when EMPTY — an existing
+name, possibly the owner's rename, is never overwritten). A config addition reaches every user's
 grid on their next home render; the Store's install flow writes and removes records directly
 (phase 2).
 
