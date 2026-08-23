@@ -64,5 +64,16 @@ public class HomePageRegionsTest(PortalFixture fixture)
         float pageW = doc.GetProperty("page").GetSingle();
         (catalogW / pageW).Should().BeGreaterThan(0.8f,
             $"the catalog should fill the home width, not shrink to content (catalog={catalogW:F0}px of {pageW:F0}px)");
+
+        // (c) The Apps scope renders the viewer's MATERIALIZED app records — the write-behind
+        // creates Store/Documentation/Threads records from the config defaults on first render,
+        // and each record paints through its AppTile area. This is the end-to-end proof that a
+        // user HAS apps (the "I don't have any apps" report) and that the records query returns
+        // fast enough to paint tiles inside the wait budget.
+        await page.Locator(".mesh-search-scope", new PageLocatorOptions { HasTextString = "Apps" }).First
+            .ClickAsync();
+        await page.GetByText("Threads", new() { Exact = true }).First
+            .WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
+        await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/home-apps.png", FullPage = true });
     }
 }
