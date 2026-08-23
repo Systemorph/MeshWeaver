@@ -73,9 +73,13 @@
         transform: rotate(90deg);
     }
 
-/* Children indent under their group; the child links are NavLink components, hence ::deep. */
+/* Children indent under their group, along a tree guide that runs down from the heading's icon —
+   the line is what makes three levels readable at a glance instead of a wall of rows. */
 .mw-nav-group-items {
     display: flex;
     flex-direction: column;
-    padding-left: 16px;
+    gap: 2px;
+    margin-left: 19px;
+    padding-left: 6px;
+    border-left: 1px solid var(--neutral-stroke-divider-rest, rgba(128, 128, 128, 0.25));
 }
