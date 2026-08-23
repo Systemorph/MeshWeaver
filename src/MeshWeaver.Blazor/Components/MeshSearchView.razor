@@ -218,7 +218,19 @@
                             : group.Items;
                         var hiddenCount = group.Items.Count - visibleItems.Count;
 
-                        @if (IsListMode)
+                        @if (IsIconsMode)
+                        {
+                            <div class="mesh-search-icons-grid">
+                                @foreach (var item in visibleItems)
+                                {
+                                    if (item is MeshNode node)
+                                    {
+                                        @RenderIconTile(node)
+                                    }
+                                }
+                            </div>
+                        }
+                        else if (IsListMode)
                         {
                             <div class="mesh-search-list">
                                 @foreach (var item in visibleItems)
@@ -432,6 +444,41 @@
                 @RenderDeleteAffordance(node)
             }
         </div>
+    };
+
+    /// <summary>
+    /// One tile of the phone-home ICON grid (Icons mode): a large rounded icon with the name
+    /// underneath, navigating to <see cref="TargetOf"/> — everything comes from the query ROW
+    /// (name/icon are result columns), never from the node's content or a per-result hub.
+    /// </summary>
+    private RenderFragment RenderIconTile(MeshNode node) => __builder =>
+    {
+        var imageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(node, includeThumbnail: false);
+        var title = node.Name ?? node.Path;
+        var isInlineSvg = imageUrl?.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase) == true;
+        var isEmoji = !string.IsNullOrEmpty(imageUrl) && !isInlineSvg && !imageUrl.Contains('/') && !imageUrl.StartsWith("data:");
+
+        <a class="mesh-search-icon-tile" href="/@TargetOf(node)" title="@title">
+            <div class="mesh-search-icon-box">
+                @if (isInlineSvg)
+                {
+                    @((MarkupString)imageUrl!)
+                }
+                else if (isEmoji)
+                {
+                    <span class="mesh-search-icon-emoji">@imageUrl</span>
+                }
+                else if (!string.IsNullOrEmpty(imageUrl))
+                {
+                    <img src="@imageUrl" alt="" />
+                }
+                else
+                {
+                    <span class="mesh-search-icon-initial">@(string.IsNullOrEmpty(title) ? "?" : title[..1].ToUpperInvariant())</span>
+                }
+            </div>
+            <div class="mesh-search-icon-label">@title</div>
+        </a>
     };
 
     /// <summary>The icon + title + description content of a List-mode row.</summary>

@@ -12,13 +12,14 @@ namespace MeshWeaver.Graph.Test;
 
 /// <summary>
 /// The home surface (<see cref="UserActivityLayoutAreas.BuildHome"/>) — ONE
-/// <see cref="MeshSearchControl"/> whose SCOPE TABS are the phone-home tabs: Shared with me (only
-/// with grants; store items and User roots excluded) · Pinned (only with pins) · Apps (the
-/// viewer's OWN <c>{owner}/_App</c> records — a SINGLE-PARTITION query, which is why it loads
-/// fast; records are materialized from config defaults + install manifests, and Threads is an
-/// ordinary record) · Spaces (catalog without store items) · All (everything, every depth). The
-/// scopes share one search bar by construction. <see cref="HomeStyle.Catalog"/> switches back to
-/// the legacy single list (covered by <see cref="HomeCatalogTest"/>).
+/// <see cref="MeshSearchControl"/> whose SCOPE TABS are the phone-home tabs: Pinned (only with
+/// pins) · Apps (the viewer's OWN <c>{owner}/_App</c> records — a SINGLE-PARTITION query, which is
+/// why it loads fast; records are materialized from config defaults + install manifests, Threads
+/// is an ordinary record, and the grid paints icon tiles straight from the query rows) · Spaces
+/// (catalog without store items) · All (everything, every depth). Shared with me is its OWN band
+/// below the search (only with grants; store items and User roots excluded). The scopes share one
+/// search bar by construction. <see cref="HomeStyle.Catalog"/> switches back to the legacy single
+/// list (covered by <see cref="HomeCatalogTest"/>).
 /// </summary>
 public class HomeTabsTest
 {
@@ -42,19 +43,29 @@ public class HomeTabsTest
     }
 
     [Fact]
-    public void Home_WithSharesAndPins_ScopeOrder()
+    public void Home_WithPins_PinnedScopeComesFirst()
     {
         var search = Search(UserActivityLayoutAreas.BuildHome(NodePath,
-            sharedTargets: ["OrgA/Module"], user: new User { PinnedPaths = ["Doc/GUI"] }));
+            user: new User { PinnedPaths = ["Doc/GUI"] }));
 
-        ScopeLabels(search).Should().Equal("Shared with me", "Pinned", "Apps", "Spaces", "All");
+        ScopeLabels(search).Should().Equal("Pinned", "Apps", "Spaces", "All");
+    }
+
+    [Fact]
+    public void Home_WithShares_SharedIsItsOwnBandBelowTheSearch_NotAScope()
+    {
+        // "shared with me can be separate section" — cross-partition invitations are a distinct
+        // kind of content, not another lens on the catalog.
+        var home = UserActivityLayoutAreas.BuildHome(NodePath, sharedTargets: ["OrgA/Module"]);
+
+        var stack = home.Should().BeOfType<StackControl>().Subject;
+        stack.Areas.Should().HaveCount(2, "the scoped search on top, the shared band below");
     }
 
     [Fact]
     public void Home_OneSharedSearchBar_DesktopOn()
     {
-        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath,
-            sharedTargets: ["OrgA/Module"]));
+        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath));
 
         search.ShowSearchBox.Should().Be(true);
         search.HiddenQuery!.ToString().Should().Be(search.ScopeTabs![0].Query);
@@ -72,17 +83,17 @@ public class HomeTabsTest
             .ScopeTabs.Should().BeNull("the legacy escape hatch is the scope-less catalog");
     }
 
-    // ── Shared-with-me scope ────────────────────────────────────────────────────────────────────
+    // ── Shared-with-me band ─────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Shared_ExcludesStoreItemsAndUserRoots_AndKeepsTheCompletenessFallback()
+    public void SharedBand_ExcludesStoreItemsAndUserRoots_AndKeepsTheCompletenessFallback()
     {
-        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath,
-            sharedTargets: ["OrgA/Module", "OrgB/Deck"]));
+        var shared = UserActivityLayoutAreas.BuildSharedBand(
+            ["OrgA/Module", "OrgB/Deck"], locale: null)!;
 
-        var shared = search.ScopeTabs![0];
-        shared.Label.Should().Be("Shared with me");
-        var legs = shared.Query.Split('\n');
+        shared.Title!.ToString().Should().Be("Shared with me");
+        shared.ShowSearchBox.Should().Be(false, "the band is a list, not a second search bar");
+        var legs = shared.HiddenQuery!.ToString()!.Split('\n');
         legs.Should().HaveCount(2, "the accessed leg alone would hide a never-opened share");
         legs[0].Should().Contain("source:accessed");
         legs[1].Should().NotContain("source:accessed");
@@ -96,7 +107,13 @@ public class HomeTabsTest
         }
     }
 
-    // ── Apps scope: the viewer's own records, single partition ──────────────────────────────────
+    [Fact]
+    public void SharedBand_WithoutGrants_IsAbsent()
+    {
+        UserActivityLayoutAreas.BuildSharedBand([], locale: null).Should().BeNull();
+    }
+
+    // ── Apps scope: the viewer's own records, single partition, icon grid ───────────────────────
 
     [Fact]
     public void Apps_QueriesTheViewersOwnRecords_SinglePartition()
@@ -108,13 +125,25 @@ public class HomeTabsTest
         var apps = search.ScopeTabs!.Single(t => t.Label == "Apps");
         apps.Query.Should().Contain($"path:{NodePath}/_App scope:children nodeType:InstalledApp");
         apps.Query.Should().NotContain(" OR ", "no path alternation — the records query is the bound");
-        apps.ItemArea.Should().Be(AppTileLayoutArea.AppTileArea,
-            "records render through their tile area, never as generic record cards");
         // Alphabetical default; source:accessed is meaningless on records, so that option sorts by
         // modified instead of hiding never-opened apps behind an INNER join.
         apps.SortOptions![0].Query.Should().Be(apps.Query);
         apps.Query.Should().Contain("sort:Name-asc");
         apps.SortOptions!.Select(o => o.Query).Should().OnlyContain(q => !q.Contains("source:accessed"));
+    }
+
+    [Fact]
+    public void Apps_RendersTheIconGridFromTheQueryRows_NavigatingToTheApp()
+    {
+        // "should load from mesh, icon should be the icon of the app, then it should render
+        // insta" — Icons mode paints tiles from the rows (no per-record hub, no content), and
+        // NavigateToMainNode makes a tile open the APP (the record's MainNode), not the record.
+        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath));
+
+        var apps = search.ScopeTabs!.Single(t => t.Label == "Apps");
+        apps.RenderMode.Should().Be(nameof(MeshSearchRenderMode.Icons));
+        apps.NavigateToMainNode.Should().Be(true);
+        apps.ItemArea.Should().BeNull("a per-record tile area meant one hub activation per result");
     }
 
     // ── Record materialization specs ────────────────────────────────────────────────────────────
@@ -148,46 +177,96 @@ public class HomeTabsTest
         specs.Single(s => s.Id == "Store").Source.Should().Be("default");
     }
 
-    // ── The tile ────────────────────────────────────────────────────────────────────────────────
+    // ── Record target + healing (pure) ──────────────────────────────────────────────────────────
 
-    private static MeshNode Record(string id, App content, string? name = null, string? icon = null) =>
+    private static MeshNode Record(string id, App content, string? name = null,
+        string? icon = null, string? mainNode = null) =>
         MeshNode.FromPath($"{NodePath}/_App/{id}") with
         {
             NodeType = AppNodeType.NodeType,
             Name = name ?? id,
             Icon = icon,
+            MainNode = mainNode ?? $"{NodePath}/_App/{id}",
             Content = content,
         };
 
     [Fact]
-    public void AppTile_NavigatesToThePluginOrOpenPath_NeverTheRecord()
+    public void AppTargetOf_PluginPathOrOwnerArea()
     {
-        var options = new JsonSerializerOptions();
-
-        var plugin = AppTileLayoutArea.BuildTile(
-                Record("Chess", new App { Plugin = "Chess" }, name: "Chess"),
-                $"{NodePath}/_App/Chess", options)
-            .Should().BeOfType<MeshNodeCardControl>().Subject;
-        plugin.NodePath.Should().Be("Chess", "the tile opens the APP, not the record");
-        plugin.Title.Should().Be("Chess");
-
-        var threads = AppTileLayoutArea.BuildTile(
-                Record("Chat", new App { OpenPath = $"{NodePath}/Chat" }, name: "Threads",
-                    icon: "/static/NodeTypeIcons/chat.svg"),
-                $"{NodePath}/_App/Chat", options)
-            .Should().BeOfType<MeshNodeCardControl>().Subject;
-        threads.NodePath.Should().Be($"{NodePath}/Chat");
-        threads.ImageUrl.Should().Be("/static/NodeTypeIcons/chat.svg");
+        UserActivityLayoutAreas.AppTargetOf(
+                new UserActivityLayoutAreas.AppRecordSpec("Chess", "Chess",
+                    UserActivityLayoutAreas.GenericAppIcon, "Chess", null, "install"))
+            .Should().Be("Chess");
+        UserActivityLayoutAreas.AppTargetOf(
+                new UserActivityLayoutAreas.AppRecordSpec("Chat", "Threads",
+                    "/static/NodeTypeIcons/chat.svg", null, $"{NodePath}/Chat", "default"))
+            .Should().Be($"{NodePath}/Chat");
     }
 
     [Fact]
-    public void AppTile_WithoutATarget_RendersInert()
+    public void NeedsHealing_TriggersOnDefaultMainNodeOrGenericIcon_NotOnAFinishedRecord()
     {
-        var tile = AppTileLayoutArea.BuildTile(
-                Record("Broken", new App()), $"{NodePath}/_App/Broken", new JsonSerializerOptions())
-            .Should().BeOfType<MeshNodeCardControl>().Subject;
+        var spec = new UserActivityLayoutAreas.AppRecordSpec(
+            "Chess", "Chess", UserActivityLayoutAreas.GenericAppIcon, "Chess", null, "install");
 
-        tile.DisableNavigation.Should().Be(true, "a record without a target must not navigate to itself");
+        // MainNode still the record's own path (the pre-Icons rounds never stamped a target).
+        UserActivityLayoutAreas.NeedsHealing(
+                Record("Chess", new App { Plugin = "Chess" }, icon: "/covers/chess.png"), spec)
+            .Should().BeTrue();
+        // Generic icon even with a target stamped.
+        UserActivityLayoutAreas.NeedsHealing(
+                Record("Chess", new App { Plugin = "Chess" },
+                    icon: UserActivityLayoutAreas.GenericAppIcon, mainNode: "Chess"), spec)
+            .Should().BeTrue();
+        // Finished: real icon, real target.
+        UserActivityLayoutAreas.NeedsHealing(
+                Record("Chess", new App { Plugin = "Chess" },
+                    icon: "/covers/chess.png", mainNode: "Chess"), spec)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void HealAppRecord_StampsTargetAndFace_TouchingOnlyWhatImproves()
+    {
+        var stale = Record("Chess", new App { Plugin = "Chess" },
+            icon: UserActivityLayoutAreas.GenericAppIcon);
+
+        var healed = UserActivityLayoutAreas.HealAppRecord(
+            stale, "Chess Trainer", "/covers/chess.png", "Chess");
+
+        healed.MainNode.Should().Be("Chess", "the tile must open the APP, not the record");
+        healed.Icon.Should().Be("/covers/chess.png");
+        healed.Name.Should().Be("Chess", "a non-empty name is never overwritten — the owner may have renamed it");
+    }
+
+    [Fact]
+    public void HealAppRecord_NothingToImprove_ReturnsTheSameInstance()
+    {
+        // The materializer skips the write entirely on an identity heal — an incurable record
+        // (cover has no icon either) must not cost a patch per home render.
+        var finished = Record("Chess", new App { Plugin = "Chess" },
+            icon: "/covers/chess.png", mainNode: "Chess");
+
+        UserActivityLayoutAreas.HealAppRecord(finished, "Chess", "/covers/chess.png", "Chess")
+            .Should().BeSameAs(finished);
+    }
+
+    [Fact]
+    public void ResolveAppFace_PrefersTheCover_FallsBackToTheSpec()
+    {
+        var spec = new UserActivityLayoutAreas.AppRecordSpec(
+            "Chess", "Chess", UserActivityLayoutAreas.GenericAppIcon, "Chess", null, "install");
+        var cover = MeshNode.FromPath("Chess") with { Name = "Chess Trainer", Icon = "/covers/chess.png" };
+
+        var withCover = UserActivityLayoutAreas.ResolveAppFace(spec,
+            new[] { cover }.ToDictionary(n => n.Path, StringComparer.OrdinalIgnoreCase));
+        withCover.Name.Should().Be("Chess Trainer");
+        withCover.Icon.Should().Be("/covers/chess.png");
+
+        var withoutCover = UserActivityLayoutAreas.ResolveAppFace(spec,
+            new System.Collections.Generic.Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase));
+        withoutCover.Name.Should().Be("Chess");
+        withoutCover.Icon.Should().Be(UserActivityLayoutAreas.GenericAppIcon);
     }
 
     // ── Install manifests → materialization input ───────────────────────────────────────────────

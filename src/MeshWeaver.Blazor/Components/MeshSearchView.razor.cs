@@ -203,6 +203,11 @@ public partial class MeshSearchView
     {
         get
         {
+            // The active SCOPE's render mode wins (e.g. the home's Apps scope renders the
+            // phone-home icon grid); the control-level mode is the scope-less fallback.
+            if (ActiveScopeTab?.RenderMode is { Length: > 0 } scopedMode
+                && Enum.TryParse<MeshSearchRenderMode>(scopedMode, true, out var scoped))
+                return scoped;
             switch (ViewModel?.RenderMode)
             {
                 case MeshSearchRenderMode mode:
@@ -243,9 +248,29 @@ public partial class MeshSearchView
 
     /// <summary>The combobox only toggles the non-grouped presentation (Flat/List) ↔ Grouped; the
     /// tree / navigator modes manage their own browse surface, so the selector is hidden there. List is
-    /// eligible so the global search page (which defaults to List) keeps its view-options bar.</summary>
+    /// eligible so the global search page (which defaults to List) keeps its view-options bar. The
+    /// Icons grid (a phone home screen) deliberately shows no view-options bar either.</summary>
     private bool SelectorEligible =>
         BoundRenderMode is MeshSearchRenderMode.Flat or MeshSearchRenderMode.List or MeshSearchRenderMode.Grouped;
+
+    /// <summary>Navigate a result to its <c>MainNode</c> instead of its own path — the active
+    /// scope's setting wins over the control-level one (default false).</summary>
+    private bool BoundNavigateToMainNode
+    {
+        get
+        {
+            if (ActiveScopeTab?.NavigateToMainNode is { } scoped) return scoped;
+            if (ViewModel?.NavigateToMainNode is bool b) return b;
+            if (ViewModel?.NavigateToMainNode is JsonElement je) return je.ValueKind == JsonValueKind.True;
+            return false;
+        }
+    }
+
+    /// <summary>The navigation target of one result row: its <c>MainNode</c> when
+    /// <see cref="BoundNavigateToMainNode"/> is on (and set), else its own path. This is also the
+    /// path the presentation screen filters on — the target is what a click would reveal.</summary>
+    private string TargetOf(MeshNode node) =>
+        BoundNavigateToMainNode && !string.IsNullOrEmpty(node.MainNode) ? node.MainNode : node.Path;
 
     /// <summary>
     /// The render mode after applying the combobox choice: None ⇒ the page's non-grouped presentation
@@ -269,6 +294,10 @@ public partial class MeshSearchView
 
     /// <summary>One-per-row list presentation (icon · title · description) for the global search page.</summary>
     private bool IsListMode => EffectiveRenderMode == MeshSearchRenderMode.List;
+
+    /// <summary>The phone-home icon grid (rounded icon, label beneath) — rendered entirely from
+    /// the query rows: no per-result content read, no per-result hub.</summary>
+    private bool IsIconsMode => EffectiveRenderMode == MeshSearchRenderMode.Icons;
 
     /// <summary>The fallback subtitle shown on a search row when the node has no description.</summary>
     private const string NoDescriptionPrompt = "Ask the agent to create a description.";
@@ -834,7 +863,7 @@ public partial class MeshSearchView
         // The presentation screen (#1803): display-only, per-viewer, and applied to what is
         // PAINTED — the query, the permissions and the nodes themselves are untouched, and this is
         // a no-op for every viewer whose mode is off.
-        visible = _screen.Filter(visible, n => n.Path);
+        visible = _screen.Filter(visible, TargetOf);
 
         _nodes = visible.ToList();
         ResolveDeletePermissions(_nodes);
@@ -1513,7 +1542,7 @@ public partial class MeshSearchView
         // The presentation screen (#1803) applies to the browse LEVEL — one funnel for every tree
         // level, lazily loaded or not. Display-only: the query above is unchanged, and the child
         // count of a folder that survives is still its real one.
-        nodes = _screen.Filter(nodes, n => n.Path).ToImmutableList();
+        nodes = _screen.Filter(nodes, TargetOf).ToImmutableList();
         if (nodes.Count == 0)
         {
             InvokeAsync(() =>
@@ -1635,7 +1664,7 @@ public partial class MeshSearchView
                         default:
                             return;
                     }
-                    var painted = _screen.Filter(resultNodes.Values, n => n.Path).ToImmutableList();
+                    var painted = _screen.Filter(resultNodes.Values, TargetOf).ToImmutableList();
                     var items = NamespaceTreeBuilder.Build(root, painted);
                     ResolveDeletePermissions(painted);
                     InvokeAsync(() =>
