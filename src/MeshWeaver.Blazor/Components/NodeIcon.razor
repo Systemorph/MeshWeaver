@@ -10,7 +10,9 @@
    is always something renderable and a caller can never re-create the broken case.
 
    This is the Blazor mirror of the React client's MeshIcon (clients/react/src/controls/MeshIcon.tsx),
-   which dispatches on the same classification — keep the two in step.
+   which dispatches on the same classification — keep the two in step. Its TYPED twin is
+   MeshIcon.razor (a parsed Domain.Icon, rendering real FluentIcon glyphs instead of resolving
+   names to shipped URLs) — keep the ARIA and sizing conventions in step with that one too.
 
    Sizing is INLINE (from Size), not from the caller's CSS class: this component's markup lives in its
    own CSS-isolation scope, so a scoped `.my-icon { width: … }` in the parent would not reach it. The

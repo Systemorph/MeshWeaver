@@ -78,6 +78,16 @@ public class MeshIconRenderingTest
     }
 
     [Fact]
+    public async Task DecorativeByDefault_HiddenFromAssistiveTech()
+    {
+        // Nav icons sit beside a text label; without aria-hidden a screen reader announces both.
+        var html = await RenderAsync("<svg viewBox='0 0 24 24'><path d='M0 0h24v24H0z'/></svg>");
+
+        Assert.Contains("aria-hidden=\"true\"", html);
+        Assert.DoesNotContain("role=\"img\"", html);
+    }
+
+    [Fact]
     public async Task UnknownFluentName_AndNull_RenderNothing_NeverThrow()
     {
         Assert.Equal(string.Empty, (await RenderAsync("NotARealIconName")).Trim());

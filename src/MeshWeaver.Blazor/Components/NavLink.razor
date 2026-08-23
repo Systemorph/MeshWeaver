@@ -9,14 +9,14 @@
 
 @if (IsInMenuContext)
 {
-    <a href="@Href" class="@MenuLinkClass" style="@Style" @onclick="OnClick">
+    <a href="@Href" class="@MenuLinkClass" style="@Style" aria-current="@AriaCurrent" @onclick="OnClick">
         <MeshIcon Value="@Icon" />
         <span>@Title</span>
     </a>
 }
 else
 {
-    <a href="@Href" class="@RailClass" style="@Style" title="@Title" @onclick="OnClick">
+    <a href="@Href" class="@RailClass" style="@Style" title="@Title" aria-current="@AriaCurrent" @onclick="OnClick">
         <span class="mw-nav-icon"><MeshIcon Value="@Icon" /></span>
         <span class="mw-nav-label">@Title</span>
     </a>
@@ -31,4 +31,10 @@ else
 
     /// <summary>The rail link's classes: base + active state + the author-declared <c>Class</c>.</summary>
     private string RailClass => $"mw-nav-link{(IsActive ? " active" : "")}{ClassSuffix}";
+
+    /// <summary>
+    /// The active entry announces its state to assistive tech, not only visually — Blazor drops
+    /// the attribute entirely when this is null.
+    /// </summary>
+    private string? AriaCurrent => IsActive ? "page" : null;
 }
