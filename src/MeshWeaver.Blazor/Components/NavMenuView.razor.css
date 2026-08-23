@@ -42,6 +42,9 @@
 
 .rail-collapsed .navmenu-toggle {
     align-self: center;
+    /* The expanded state's right margin would push the centered button 3px off-center
+       in the 44px strip. */
+    margin: 6px 0 0 0;
 }
 
 /* The item list: NavLink / NavGroup components stack vertically and scroll internally. */
