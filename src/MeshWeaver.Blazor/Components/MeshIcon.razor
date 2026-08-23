@@ -1,0 +1,41 @@
+@using MeshWeaver.Graph
+@using Icon = MeshWeaver.Domain.Icon
+
+@* TOTAL renderer for the one string a MeshNode.Icon legitimately holds in four shapes
+   (Domain.Icon.Parse): a Fluent icon name, an image URL / data URI, raw inline <svg> markup, or a
+   text glyph (emoji). Every consumer that renders a node icon goes through THIS component — the
+   nav rail, group headings, menu links — so no surface can support a subset of the forms again
+   (group headings silently dropped everything but Fluent names for months). Null renders nothing;
+   an unknown Fluent name renders nothing — never a throw, never a per-render log.
+
+   Inline SVG renders VERBATIM (sized via MeshNodeImageHelper.SizeInlineSvg), so a
+   stroke='currentColor' outline icon inherits the surrounding text color and is theme-correct by
+   construction; a URL icon is an <img> and must carry its own colors (the shipped
+   /static/NodeTypeIcons glyphs are self-colored tiles for exactly that reason). *@
+
+@if (FluentIcon is { } fluent)
+{
+    <FluentIcon Value="@fluent" Width="@($"{Size}px")" Style="fill: currentColor; flex-shrink: 0;" />
+}
+else if (Value is { Provider: Icon.UrlProvider } urlIcon)
+{
+    <img src="@urlIcon.Id" alt="" style="width: @(Size)px; height: @(Size)px; flex-shrink: 0; vertical-align: middle;" />
+}
+else if (Value is { Provider: Icon.InlineSvgProvider } svgIcon)
+{
+    <span style="display: inline-flex; flex-shrink: 0; vertical-align: middle;">@((MarkupString)MeshNodeImageHelper.SizeInlineSvg(svgIcon.Id, Size))</span>
+}
+else if (Value is { Provider: Icon.TextProvider } textIcon)
+{
+    <span style="font-size: @(Size - 4)px; line-height: @(Size)px; flex-shrink: 0; vertical-align: middle;">@textIcon.Id</span>
+}
+
+@code {
+    /// <summary>The icon to render, or null for nothing.</summary>
+    [Parameter] public Icon? Value { get; set; }
+
+    /// <summary>Rendered size in pixels (square).</summary>
+    [Parameter] public int Size { get; set; } = 20;
+
+    private Microsoft.FluentUI.AspNetCore.Components.Icon? FluentIcon => Value?.ToFluentIcon();
+}

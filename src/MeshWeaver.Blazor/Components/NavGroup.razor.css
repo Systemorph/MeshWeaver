@@ -1,0 +1,81 @@
+/* Group header — same metrics as .mw-nav-link (NavLink.razor.css); duplicated here because
+   scoped CSS cannot share rules across components. Keep the two in step. */
+.mw-nav-group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: 4px;
+    color: var(--neutral-foreground-rest);
+    text-decoration: none;
+    font-size: 14px;
+    line-height: 20px;
+    cursor: pointer;
+    width: 100%;
+    background: transparent;
+    border: none;
+    text-align: left;
+    font-family: inherit;
+}
+
+    .mw-nav-group-header:hover {
+        background-color: var(--neutral-fill-stealth-hover);
+        color: var(--neutral-foreground-rest);
+    }
+
+/* Heading-with-url variant: the label is a LINK, the chevron a separate toggle beside it. */
+.mw-nav-group-split {
+    display: flex;
+    align-items: stretch;
+}
+
+    .mw-nav-group-split .mw-nav-group-title {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .mw-nav-group-split .mw-nav-group-expander {
+        flex: 0 0 auto;
+        width: 28px;
+        justify-content: center;
+        padding: 5px 4px;
+    }
+
+.mw-nav-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 20px;
+    width: 20px;
+    height: 20px;
+}
+
+.mw-nav-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The expander glyph: always rendered, rotating to show state — a collapsed group visibly
+   offers its chevron instead of disappearing into a plain text line. */
+.mw-nav-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    color: var(--neutral-foreground-hint, var(--neutral-foreground-rest));
+    transition: transform 0.12s ease;
+}
+
+    .mw-nav-chevron.expanded {
+        transform: rotate(90deg);
+    }
+
+/* Children indent under their group; the child links are NavLink components, hence ::deep. */
+.mw-nav-group-items {
+    display: flex;
+    flex-direction: column;
+    padding-left: 16px;
+}
