@@ -1084,9 +1084,11 @@ public static class UserActivityLayoutAreas
     /// <summary>
     /// Write-behind materialization + HEALING of the viewer's app records. Creates the
     /// <c>{owner}/_App/{id}</c> node for every <see cref="AppRecordSpecs"/> entry that has no
-    /// record yet, and repairs existing records that still carry the generic icon, a fallback
-    /// name, or no navigation target (<see cref="MeshNode.MainNode"/> left at its own path) —
-    /// stamping real name/icon from the plugin COVER node where the specs can only guess.
+    /// record yet, and repairs existing records that still carry the generic icon, an EMPTY name,
+    /// or no navigation target (<see cref="MeshNode.MainNode"/> left at its own path) — stamping
+    /// the icon (and, only when empty, the name) from the plugin COVER node where the specs can
+    /// only guess. A non-empty name is never overwritten: the owner may have renamed the record,
+    /// and covers get their say at CREATE time.
     /// Fire-and-forget and idempotent: the caller invokes this ONLY after the records query has
     /// emitted its real first snapshot (never the null sentinel — acting on a synthetic empty list
     /// was the "Node already exists" create storm), <paramref name="attempted"/> (per home-area

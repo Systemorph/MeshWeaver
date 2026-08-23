@@ -18,4 +18,5 @@ replaces the old open-threads band on the default home page.
 
 Under the hood, the home no longer re-attempts creating app records that already exist on every
 visit — the storm that made the page feel sluggish — and existing records with placeholder icons
-heal themselves with the app's real name and icon.
+heal themselves with the app's real icon. Names you've given your apps stay exactly as you set
+them.
