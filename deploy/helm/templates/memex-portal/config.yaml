@@ -279,7 +279,12 @@ data:
   # values.aks.yaml and rendered by nothing (#1925) — SelfUpdate__MinRollInterval is the restart
   # BUDGET from #1780, which AGENTS.md documents as the fix for restart churn and which sat inert;
   # its predecessor SelfUpdate__PollInterval had the identical defect until #1778.
-  SelfUpdate__MinRollInterval: "{{ .Values.config.memex_portal.SelfUpdate__MinRollInterval }}"
+  # 🚨 …and the OPPOSITE defect bites too: this key binds to a TimeSpan, so rendering it as ""
+  # when an env's values do not define it ABORTS the host at startup (FormatException in the
+  # configuration binder → SIGABRT loop on the new RS while the old pods keep serving). That is
+  # exactly how the 2026-08-23 memex operator-enablement deploy wedged. A typed key needs a real
+  # default; "empty = inert" is only true for strings.
+  SelfUpdate__MinRollInterval: "{{ .Values.config.memex_portal.SelfUpdate__MinRollInterval | default "01:00:00" }}"
   WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 }}"
   # ---- OpenAI-compatible provider (self-hosted / local: Ollama, vLLM, LM Studio, …) ----
   # Generic OpenAI-wire endpoint. Set Endpoint + Models (+ ApiKey in secrets) to seed a
