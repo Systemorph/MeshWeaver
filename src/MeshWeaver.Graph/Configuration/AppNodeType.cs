@@ -1,4 +1,5 @@
 using MeshWeaver.Data;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -51,5 +52,9 @@ public static class AppNodeType
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<App>())
+            // The record's tile renderer (the home's Apps grid renders records, not cover nodes —
+            // that is what keeps the Apps query single-partition and fast).
+            .AddLayout(layout => layout
+                .WithView(AppTileLayoutArea.AppTileArea, AppTileLayoutArea.View))
     };
 }

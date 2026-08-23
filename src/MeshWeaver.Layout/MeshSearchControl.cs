@@ -83,6 +83,13 @@ public record MeshSearchScopeTab(string Label, string Query)
     /// while this scope is active (first = this scope's default). Null keeps the control-level set.
     /// </summary>
     public IReadOnlyList<MeshSearchSortOption>? SortOptions { get; init; }
+
+    /// <summary>
+    /// Per-item layout area used while this scope is active, REPLACING the control-level
+    /// <see cref="MeshSearchControl.ItemArea"/> (e.g. the home's Apps scope renders its
+    /// installed-app records through their <c>AppTile</c> area). Null keeps the control-level one.
+    /// </summary>
+    public string? ItemArea { get; init; }
 }
 
 /// <summary>

@@ -44,34 +44,34 @@ public static class ThreadRailItem
     {
         var title = node?.Name ?? (hubPath.Contains('/') ? hubPath[(hubPath.LastIndexOf('/') + 1)..] : hubPath);
 
-        var row = Controls.Stack
-            .WithStyle("position: relative; width: 100%; box-sizing: border-box;")
+        // Title and ✕ are SIBLINGS in one flex row — never an overlay. The previous
+        // absolutely-positioned ✕ sat on top of the full-width navigation button and its click
+        // reached the NAV surface instead of closing the thread (the "✕ navigates" bug); as a
+        // sibling, each button owns its own hit area unambiguously.
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("width: 100%; box-sizing: border-box; align-items: center; gap: 4px;")
             .WithView(Controls.Button(title)
                 .WithAppearance(Appearance.Stealth)
                 .WithNavigateToHref($"/{hubPath}")
-                .WithStyle("width: 100%; justify-content: flex-start; text-align: left; " +
-                           "padding: 8px 36px 8px 12px; overflow: hidden; " +
-                           "text-overflow: ellipsis; white-space: nowrap;"));
-
-        // ✕ overlaid INSIDE the row, top-right — an absolutely-positioned wrapper Stack, the same
-        // shape as the pinned card's unpin toggle (a position:absolute style on the button alone
-        // stays in flex flow). MarkThreadDone is the canonical, self-subscribing close: it refuses
-        // while a round is executing and logs its own failures.
-        var close = Controls.Stack
-            .WithStyle("position: absolute; top: 6px; right: 6px; z-index: 5;")
+                .WithStyle("flex: 1 1 auto; min-width: 0; justify-content: flex-start; " +
+                           "text-align: left; padding: 8px 8px 8px 12px; overflow: hidden; " +
+                           "text-overflow: ellipsis; white-space: nowrap;"))
+            // MarkThreadDone is the canonical, self-subscribing close: the thread leaves the rail
+            // reactively (the rail's query excludes Done) while staying searchable/reopenable. It
+            // refuses while a round is executing and logs its own failures.
             .WithView(Controls.Button("")
                 .WithIconStart(FluentIcons.Dismiss())
                 // Label = the button's aria-label/tooltip (ButtonView): the icon-only ✕ still
-                // needs an accessible, localized name for screen readers (Copilot review).
+                // needs an accessible, localized name for screen readers.
                 .WithLabel(LocalizationCatalog.Get("thread.close", locale))
                 .WithAppearance(Appearance.Stealth)
-                .WithStyle("min-width: 24px; width: 24px; height: 24px; padding: 0; border-radius: 50%;")
+                .WithStyle("flex: 0 0 auto; min-width: 24px; width: 24px; height: 24px; " +
+                           "padding: 0; border-radius: 50%;")
                 .WithClickAction(ctx =>
                 {
                     ctx.Host.Hub.MarkThreadDone(hubPath, done: true);
                     return Task.CompletedTask;
                 }));
-
-        return row.WithView(close);
     }
 }
