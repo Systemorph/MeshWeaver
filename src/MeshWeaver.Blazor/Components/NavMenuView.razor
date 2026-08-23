@@ -19,13 +19,11 @@
     }
     @if (Expanded || !Collapsible)
     {
-        <nav class="sitenav" aria-labelledby="main-menu">
-            <FluentNavMenu Id="main-menu"
-                           Title="@Access.Localize("menu.mainMenu")"
-                           CustomToggle="true"
-                           Expanded="true">
-                <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
-            </FluentNavMenu>
+        @* Our own list markup: the items are NavLink / NavGroup components, which render every
+           icon form a node can carry (see MeshIcon). The FluentNavMenu this used to wrap dropped
+           non-Fluent icons and owned the collapse in ways we then had to fight. *@
+        <nav class="sitenav" aria-label="@Access.Localize("menu.mainMenu")">
+            <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
         </nav>
     }
 </div>

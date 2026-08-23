@@ -40,42 +40,12 @@
     align-self: center;
 }
 
+/* The item list: NavLink / NavGroup components stack vertically and scroll internally. */
 .sitenav {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
-}
-
-/* Highlight the currently selected NavLink (set via NavLinkControl.WithIsActive)
-   so users see which menu item corresponds to the visible content. */
-.sitenav ::deep .fluent-nav-link.active,
-.sitenav ::deep a.fluent-nav-link.active {
-    background-color: var(--neutral-fill-stealth-hover);
-    color: var(--accent-foreground-rest);
-    font-weight: 600;
-    position: relative;
-}
-
-.sitenav ::deep .fluent-nav-link.active::before {
-    content: "";
-    position: absolute;
-    width: 3px;
-    height: 60%;
-    top: 20%;
-    left: 0;
-    background-color: var(--accent-fill-rest);
-    border-radius: 2px;
-}
-
-/* FluentUI caps every nav label at `width: calc(100% - 70px)` — a FIXED reserve for the
-   icon/chevron — so labels ellipsis-truncate while up to ~70px of empty space sits to their
-   right. It is most visible on the indented Settings sub-items ("Access Control" → "Access ...")
-   even though the panel is plainly wide enough (issue #356). Let the label flex-fill the REAL
-   remaining width instead of a hard-coded cap; `text-overflow: ellipsis` (inherited) then kicks
-   in only on genuine overflow. Specificity (.sitenav + scope-attr + .fluent-nav-text) beats
-   FluentUI's ([scope] .fluent-nav-text), so no !important is needed. */
-.sitenav ::deep .fluent-nav-text {
-    width: auto;
-    flex: 1 1 auto;
-    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
 }
