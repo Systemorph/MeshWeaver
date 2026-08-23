@@ -15,6 +15,15 @@ metadata:
     app.kubernetes.io/component: "memex-portal"
     app.kubernetes.io/instance: "{{ .Release.Name }}"
   annotations:
+    # 🚨 The OIDC callback (POST /signin-microsoft) answers with several large Set-Cookie
+    # headers — the chunked auth-session cookie plus correlation/nonce cookies — and for a
+    # user with a large claims set they exceed nginx's DEFAULT 4k proxy_buffer_size. nginx
+    # then refuses the portal's response with "upstream sent too big header" and the LOGIN
+    # answers 502 (memex.meshweaver.cloud, 2026-08-23 — deterministic per user, invisible
+    # on every other route). 16k holds the worst observed header set with headroom; these
+    # sit BEFORE the values block so an overlay can still override them deliberately.
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
     {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
