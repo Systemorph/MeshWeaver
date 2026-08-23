@@ -47,6 +47,18 @@ public static class AuthenticationBuilderExtensions
             // no-op there and the security-correct setting everywhere.
             options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
             options.NonceCookie.SecurePolicy = CookieSecurePolicy.Always;
+            // 🚨 EXPIRE the handshake cookies. Correlation/nonce cookies are written when a sign-in
+            // STARTS and deleted when the callback completes — so every ABANDONED login (user closes
+            // the tab, an error, a retry) leaves one behind permanently, ~400 bytes each. They
+            // accumulate in the browser until the Cookie header crosses the server's request-header
+            // limit (~10 KB here), at which point the connection is reset mid-flow and the user sees
+            // a 502 that no amount of retrying fixes — retrying makes it worse, because each attempt
+            // adds another. Observed in production 2026-08-23: a clean browser profile signed in on
+            // the first try while an accumulated profile failed against the same pods at the same
+            // second. A MaxAge lets the browser evict them on its own; the flow itself needs seconds,
+            // so fifteen minutes is generous and still self-healing.
+            options.CorrelationCookie.MaxAge = TimeSpan.FromMinutes(15);
+            options.NonceCookie.MaxAge = TimeSpan.FromMinutes(15);
             options.Scope.Add("openid");
             options.Scope.Add("profile");
             options.Scope.Add("email");
@@ -216,6 +228,8 @@ public static class AuthenticationBuilderExtensions
             // The form_post callback is a cross-site POST; same correlation-cookie
             // rationale as the Microsoft handler above.
             options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
+            // Same reason as above — an abandoned Apple sign-in must not leave a cookie forever.
+            options.CorrelationCookie.MaxAge = TimeSpan.FromMinutes(15);
             options.Events.OnRemoteFailure = context =>
             {
                 var logger = context.HttpContext.RequestServices
