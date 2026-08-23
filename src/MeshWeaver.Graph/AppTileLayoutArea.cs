@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -25,18 +26,19 @@ public static class AppTileLayoutArea
     /// <summary>Area name, consumed via <c>MeshSearchScopeTab.ItemArea</c>.</summary>
     public const string AppTileArea = "AppTile";
 
-    /// <summary>The tile renderer — runs on the record's own hub. The viewer's presentation screen
-    /// (#1803) filters HERE: the Apps query is generic (<c>{owner}/_App</c>), so no marked path can
-    /// reach a query string — the tile is where a marked app's name would otherwise be painted,
-    /// and a marked target renders nothing.</summary>
+    /// <summary>The tile renderer — runs on the record's own hub, reading the hub's OWN node via
+    /// the dedicated <see cref="MeshNodeReference"/> reducer (never a whole-collection scan). The
+    /// viewer's presentation screen (#1803) filters HERE: the Apps query is generic
+    /// (<c>{owner}/_App</c>), so no marked path can reach a query string — the tile is where a
+    /// marked app's name would otherwise be painted, and a marked target renders nothing.</summary>
     public static IObservable<UiControl?> View(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
         var options = host.Hub.JsonSerializerOptions;
-        return host.Workspace.GetStream<MeshNode>()!
+        var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+        return syncStream!
             .CombineLatest(host.ViewerScreen(),
-                (nodes, screen) => BuildTile(
-                    nodes?.FirstOrDefault(n => n.Path == hubPath), hubPath, options, screen))
+                (change, screen) => BuildTile(change.Value, hubPath, options, screen))
             .StartWith(BuildSkeleton(hubPath));
     }
 
