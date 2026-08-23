@@ -1148,8 +1148,15 @@ public static class MemexConfiguration
                 headers["Permissions-Policy"] =
                     "accelerometer=(), camera=(), geolocation=(), gyroscope=(), " +
                     "magnetometer=(), microphone=(), payment=(), usb=()";
-                if (!headers.ContainsKey("Content-Security-Policy"))
-                    headers["Content-Security-Policy"] =
+                // SET, never defer. Something earlier in the pipeline emits a bare
+                // `frame-ancestors 'self'` on HTML responses (API responses get the full
+                // policy), and a ContainsKey guard here silently yielded to it — so every
+                // page shipped an anti-clickjacking directive with no fetch-directive
+                // fallback (ZAP 10055) while /api/* was correctly covered. This callback is
+                // registered earliest, so it runs LAST and its value wins. The policy below
+                // is a strict superset: it includes frame-ancestors 'self', so nothing the
+                // shorter header expressed is lost.
+                headers["Content-Security-Policy"] =
                         "default-src 'self'; " +
                         "base-uri 'self'; " +
                         "object-src 'none'; " +
