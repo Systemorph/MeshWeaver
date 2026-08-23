@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
@@ -84,9 +85,21 @@ public class OAuthConnectController(
     /// <summary>
     /// RFC 7591 — Dynamic Client Registration.
     /// MCP clients (Claude Desktop, claude.ai Connectors) self-register here with their redirect URIs
-    /// before running the authorization flow. The mesh does not persist client registrations —
-    /// it issues a random <c>client_id</c> that the caller echoes back in <c>/authorize</c> and
-    /// <c>/token</c>; the code store validates client_id+redirect_uri consistency between those calls.
+    /// before running the authorization flow. The <c>client_id</c> is DERIVED DETERMINISTICALLY from the
+    /// client's own metadata (name + redirect URIs) and this deployment's origin, so a client that
+    /// re-registers — which MCP clients do on every reconnect — gets the SAME id back and is recognised
+    /// as the same application.
+    ///
+    /// <para>🚨 It used to be <c>RandomNumberGenerator</c>, and that is what made users re-consent on
+    /// every single connection: a fresh random id is, to the authorization server and to any consent
+    /// record keyed on it, a brand-new application. Nothing else changes — the id is still opaque to the
+    /// caller and echoed back in <c>/authorize</c> and <c>/token</c>, where the code store validates
+    /// client_id+redirect_uri consistency between the two calls.</para>
+    ///
+    /// <para>A <c>client_id</c> is public by construction in OAuth (these are PUBLIC clients:
+    /// <c>token_endpoint_auth_method=none</c>), so deriving rather than randomising it gives away
+    /// nothing — the flow's security rests on exact redirect_uri matching plus PKCE, both unchanged.
+    /// The origin is folded into the hash so ids are not shared across deployments.</para>
     /// </summary>
     [HttpPost("/register")]
     [AllowAnonymous]
@@ -111,8 +124,8 @@ public class OAuthConnectController(
             return BadRequest(new { error = "invalid_redirect_uri", error_description = "redirect_uris is required" });
         }
 
-        var clientId = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24))
-            .Replace("+", "-").Replace("/", "_").TrimEnd('=');
+        var clientId = DeriveClientId(
+            $"{Request.Scheme}://{Request.Host}", request.ClientName, request.RedirectUris);
 
         var response = new ClientRegistrationResponse
         {
@@ -125,8 +138,30 @@ public class OAuthConnectController(
             TokenEndpointAuthMethod = request.TokenEndpointAuthMethod ?? "none",
         };
 
-        logger.LogInformation("Issued OAuth client_id {ClientId} for {ClientName}", clientId, request.ClientName);
+        logger.LogInformation(
+            "Issued OAuth client_id {ClientId} for {ClientName} (derived — a re-registering client receives the same id)",
+            clientId, request.ClientName);
         return StatusCode(StatusCodes.Status201Created, response);
+    }
+
+    /// <summary>
+    /// Derives a stable <c>client_id</c> from the registering client's own metadata.
+    /// Redirect URIs are ordered before hashing so the id does not depend on the order the client
+    /// happened to list them in, and the deployment origin is included so the same client registering
+    /// against two portals receives two distinct ids.
+    /// </summary>
+    internal static string DeriveClientId(string origin, string? clientName, string[] redirectUris)
+    {
+        var canonical = string.Join(
+            "\n",
+            new[] { origin, clientName?.Trim() ?? string.Empty }
+                .Concat(redirectUris
+                    .Select(u => u?.Trim() ?? string.Empty)
+                    .OrderBy(u => u, StringComparer.Ordinal)));
+
+        var digest = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonical));
+        return Convert.ToBase64String(digest, 0, 24)
+            .Replace("+", "-").Replace("/", "_").TrimEnd('=');
     }
 
     /// <summary>
