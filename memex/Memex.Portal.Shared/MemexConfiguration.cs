@@ -278,6 +278,11 @@ public static class MemexConfiguration
         // server-side sync — the plugin registry pulling the plugins repo — logs on AS THE APP
         // (installation token), never with a user's personal credential.
         services.Configure<GitHubAppOptions>(builder.Configuration.GetSection("GitHub:App"));
+        // Framework-release broadcaster subscribers (FrameworkBroadcast:Subscribers) — the interim
+        // config source for who gets a repository_dispatch when the platform releases. Only the
+        // control instance carries a list; the durable home is the Hosting fleet's subscriber
+        // registry, which passes its set to FrameworkReleaseBroadcaster.Broadcast directly.
+        services.Configure<FrameworkBroadcastOptions>(builder.Configuration.GetSection("FrameworkBroadcast"));
         // (Course assets ride the MeshWeaver.Courses module — its attribute registers the
         // resolver and contributes GET /assets/{Space}/{path…} through MapMeshModuleEndpoints.
         // It reads the same GitHub App credentials configured above.)
