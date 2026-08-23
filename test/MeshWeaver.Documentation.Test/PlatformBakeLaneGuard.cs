@@ -268,6 +268,18 @@ public class PlatformBakeLaneGuard
     }
 
     /// <summary>
+    /// Keys a values file sets that reach the portal by a route OTHER than this configmap, and are
+    /// therefore legitimately unbound here. Named ONE BY ONE with the route — never a prefix, never
+    /// a whole-file exemption: an unexplained carve-out is how a guard stops being one.
+    ///
+    /// <para><c>Logging__LogLevel__Default</c> — memex-local applies verbose logging as a
+    /// DEPLOYMENT-config override after the helm release ("Applying verbose logging … as a
+    /// deployment-config override"), so it arrives as container env directly.</para>
+    /// </summary>
+    private static readonly HashSet<string> DeliveredOutOfBand =
+        new(StringComparer.Ordinal) { "Logging__LogLevel__Default" };
+
+    /// <summary>
     /// 🚨 The GENERAL form of the check above: <b>ANY</b> <c>config.memex_portal</c> key set in a
     /// values file this repo ships must be BOUND in the configmap template.
     ///
@@ -306,16 +318,24 @@ public class PlatformBakeLaneGuard
         var configMap = File.ReadAllText(Path.Combine(
             root, "deploy", "helm", "templates", "memex-portal", "config.yaml"));
 
+        // EVERY tracked file that becomes a values overlay — not only the three the chart is
+        // rendered with directly. values.deploy.example.yaml is copied to the overlay
+        // deploy/aks/scripts/deploy.sh passes, and values.local.yaml to the one memex-local
+        // generates for a new install; both carry config.memex_portal mappings, so an untemplated
+        // key added to either reaches no container in exactly the same way (Copilot review, #2104).
         var missing = new[]
             {
                 Path.Combine(root, "deploy", "helm", "values.yaml"),
                 Path.Combine(root, "deploy", "aks", "values.aks.yaml"),
+                Path.Combine(root, "deploy", "aks", "scripts", "values.deploy.example.yaml"),
                 Path.Combine(root, "deploy", "homebrew", "share", "values.local.defaults.yaml"),
+                Path.Combine(root, "deploy", "homebrew", "share", "values.local.yaml"),
             }
             .Where(File.Exists)
             .SelectMany(f => PortalConfigKeysOf(File.ReadAllLines(f))
                 .Select(key => (file: Path.GetFileName(f), key)))
             .Distinct()
+            .Where(x => !DeliveredOutOfBand.Contains(x.key))
             .Where(x => !IsWiredInConfigMap(configMap, x.key))
             .ToList();
 
@@ -378,9 +398,28 @@ public class PlatformBakeLaneGuard
     /// referencing alone would accept a Helm variable computed and never written out. Together
     /// they also accept the intermediate-variable shape, which the stricter one-line form rejects.
     /// </summary>
-    private static bool IsWiredInConfigMap(string configMap, string key) =>
-        Regex.IsMatch(configMap, $@"^\s{{2}}{Regex.Escape(key)}:\s", RegexOptions.Multiline)
-        && configMap.Contains($".Values.config.memex_portal.{key}", StringComparison.Ordinal);
+    private static bool IsWiredInConfigMap(string configMap, string key)
+    {
+        // 🚨 Judge EXECUTABLE template text only. Nine {{- /* … */}} blocks in that file name keys
+        // and their .Values paths in prose; one that writes its example line at the entries' own
+        // two-space indent satisfies BOTH halves below while templating nothing — verified by
+        // seeding exactly that shape, which this helper catches and the un-stripped form passes.
+        // "A check a comment can satisfy is not a check" (Copilot review, #2104).
+        var code = ExecutableTemplateOf(configMap);
+        return Regex.IsMatch(code, $@"^\s{{2}}{Regex.Escape(key)}:\s", RegexOptions.Multiline)
+            && code.Contains($".Values.config.memex_portal.{key}", StringComparison.Ordinal);
+    }
+
+    /// <summary>The template with its comments removed: Helm's own <c>{{/* … */}}</c> blocks —
+    /// which no '#'-stripping can reach — and YAML <c>#</c> lines.</summary>
+    private static string ExecutableTemplateOf(string template)
+    {
+        var withoutHelmComments = Regex.Replace(
+            template, @"\{\{-?\s*/\*.*?\*/\s*-?\}\}", "", RegexOptions.Singleline);
+        return string.Join("\n", withoutHelmComments
+            .Split('\n')
+            .Where(l => !l.TrimStart().StartsWith('#')));
+    }
 
     /// <summary>
     /// 🚨 <b>An armed readiness gate with no sweep behind it is a SILENT LIE.</b>
