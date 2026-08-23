@@ -1,31 +1,41 @@
 # The Apps Home
 
-The user home's catalog region is a **tabbed surface** — the phone-home model: what you see first
-is what you *use*, not everything the mesh can show you. The tabs, in order:
+The user home's catalog region is ONE search surface whose **scope tabs** are the phone-home tabs —
+what you see first is what you *use*, not everything the mesh can show you. The tabs, in order:
 
 | Tab | Present when | Contents | Default order |
 |---|---|---|---|
-| **Shared with me** | the caller has cross-partition grants | modules in OTHER partitions the caller was invited into (#385) | last accessed |
+| **Shared with me** | the caller has cross-partition grants | modules in OTHER partitions the caller was invited into (#385) — minus store items and `User` roots | last accessed |
 | **Pinned** | the caller has pins | the owner's content shortcuts (`User.PinnedPaths`) | last modified |
-| **Apps** | always | the platform's default apps ∪ the owner's installed apps — every app **exactly once** | alphabetical |
+| **Apps** | always | the viewer's OWN `{owner}/_App` records — every app exactly once | alphabetical |
 | **Spaces** | always | the catalog **without** store items | last accessed |
+| **All** | always | everything the viewer can read, at every depth | last accessed |
 
-Every listing tab offers the three sort options (last accessed · last modified · alphabetical).
-The whole surface is built by `UserActivityLayoutAreas.BuildHome` (`src/MeshWeaver.Graph`), pure and
-unit-tested (`HomeTabsTest`); the reactive shell is `CatalogAreaView`, which combines the config,
-the caller's grants, the installed-app records, and the owner node.
+Because the scopes live INSIDE one `MeshSearchControl` (`MeshSearchScopeTab`), the search bar is
+shared: the typed term survives tab switches and every tab is searchable — including All. The
+search input renders on desktop and hides on mobile (the chrome search covers phones); search box
+and the ordering controls share one header row. The whole surface is built by
+`UserActivityLayoutAreas.BuildHome` (`src/MeshWeaver.Graph`), pure and unit-tested
+(`HomeTabsTest`); the reactive shell is `CatalogAreaView`.
 
-## Installed apps — `{user}/_App/{appId}`, a REGULAR node
+## Installed apps — `{user}/_App/{appId}` records, the grid's ONLY data source
 
 One node per icon, nodeType **`InstalledApp`**, stored at `{user}/_App/{appId}` as an ordinary
 `mesh_nodes` row: deliberately **not a satellite** (no `IsSatelliteType`, no `SatelliteTableMapping`
-entry — an unmapped `_` segment routes to the partition table, and the `_` prefix already keeps it
-out of the search context). This is the same shape as `{user}/_Memex/AiSettings`.
+entry — an unmapped `_` segment routes to the partition table, and the `_` prefix keeps it out of
+the search context). This is the same shape as `{user}/_Memex/AiSettings`.
 
-The content record (`App`, `MeshWeaver.Mesh.Contract`) carries **presence and placement only** —
-the `Plugin` path (the app's identity, usually a Store cover), `Order`, an optional `OpenPath`
-override, and `Source`. Name, icon, and translations resolve **live** from the plugin node; tile
-state is derived at render time. Nothing is copied, so nothing can drift.
+**The record carries the tile.** The node's `Name`/`Icon` are the tile's display identity (stamped
+at materialization; the Store's install flow refreshes them on (re)install), and the `App` content
+carries the wiring — `Plugin` (the app's path) or `OpenPath` (an area on the viewer's own hub),
+plus `Order` and `Source`. The tile renders through the record's own **`AppTile`** area
+(`AppTileLayoutArea`): click opens the app, never the record.
+
+> 🚨 **Why records, not cover nodes.** The first grid queried the Store plugin COVER nodes via a
+> top-level path alternation (`path:(Store OR Doc OR …)`). A top-level path has no partition hint,
+> so that query fanned out across EVERY partition schema — a multi-second home load. The records
+> query names ONE partition (`path:{owner}/_App scope:children`) and paints instantly. When a tile
+> needs data of the target node, copy it onto the record at write time — never join at render time.
 
 > 🚨 **Why the nodeType is `InstalledApp`, not `App`.** A built-in NodeType's definition node claims
 > the TOP-LEVEL PATH of its name (`AddMeshNodes`), and `App`/`app` is a name real content uses. A
@@ -33,68 +43,67 @@ state is derived at render time. Nothing is copied, so nothing can drift.
 > routing loops, and refused installing any package named App (the static/durable claim collision,
 > #1209). Pick collision-improbable names for built-in NodeTypes.
 
-**Writers:** the Store's install flow creates the record when a viewer Gets/Adds an app; removing
-the icon deletes the node — never the entitlement. The platform's default apps are **not** written
-as nodes at all: they come from config at render time.
+**Materialization (write-behind).** No onboarding seeding: on home render, `EnsureAppRecords`
+compares what the viewer SHOULD have — the config-declared defaults
+(`Admin/HomeConfig.DefaultApps`) plus every install-manifest item with a live `installedPath`
+(`{owner}/_Install/{slug}`, read untyped by the manifest's own design) — against the records that
+exist, and creates the missing ones fire-and-forget into the viewer's own partition. A config
+addition reaches every user's grid on their next home render; the Store's install flow writes and
+removes records directly (phase 2).
+
+**Threads is an ordinary app.** The `~/Chat` config entry materializes as the record
+`{owner}/_App/Chat` (name *Threads*, `OpenPath = {owner}/Chat`) — a normal tile among the others,
+not a special dock. A `~/`-prefixed `DefaultApps` entry always means "an area on the viewer's own
+hub" rather than a node path.
 
 ## The config — `Admin/HomeConfig`
 
-The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reloading) drives the
-whole surface without an image roll:
+The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reloading):
 
-- **`Style`** — `Tabs` (the default) or `Catalog`, the escape hatch back to the legacy single flat
-  list (`BuildCatalog`).
-- **`DefaultApps`** — the paths every user's Apps tab starts with (shipped: `Store`, `Doc`,
-  `~/Chat`). A **render-time union** with the owner's `_App` records, deduped — no seeding, and an
-  admin's edit updates every open home live. An entry starting with **`~/`** declares an AREA on
-  the *viewer's own hub* instead of a node path (`~/Chat` → the Threads app at `/{owner}/Chat`),
-  rendered as a fixed "dock" tile ahead of the node grid (`BuildSystemAppTile`).
-  Until a list-capable edit-form field ships, `DefaultApps` is `[Browsable(false)]` on the generic
-  content editor — admins edit it on the node content directly (MCP `patch` on `Admin/HomeConfig`).
-- `Scope`, `Render`, `DefaultSort` — unchanged, applying to the Spaces tab (and the legacy list).
+- **`Style`** — `Tabs` (default) or `Catalog`, the escape hatch back to the legacy single flat list.
+- **`DefaultApps`** — the entries every user's Apps grid starts with (shipped: `Store`, `Doc`,
+  `~/Chat`), interpreted by the materializer above. Until a list-capable edit-form field ships it is
+  `[Browsable(false)]` on the generic content editor — admins edit the node content directly.
+- `Scope`, `Render`, `DefaultSort` — apply to the Spaces/All scopes (and the legacy list).
 
-**The dedup rule:** an app is represented exactly once. The Spaces tab excludes
-`-nodeType:Store/Plugin -nodeType:Store/Catalog` — anything living in the Store is reachable in
-the Store and (when installed) on the Apps tab, never listed twice. And no tab embeds its own
-search box: every client's chrome already carries the global search, and doubling it is the
-two-search-bars problem on the mobile clients.
-
-**The Store itself is an app.** Signed-in users reach it as the 🏪 tile (a config default), not a
-header anchor; only the anonymous header keeps a Store link — visitors have no home grid, and the
-storefront is the public sales surface.
+**The dedup rule:** an app is represented exactly once. The Spaces and Shared-with-me scopes exclude
+`-nodeType:Store/Plugin -nodeType:Store/Catalog`; Shared-with-me also excludes `-nodeType:User` — a
+grant that resolves to another user's home partition must not list that person's space as shared
+content. **The Store itself is an app** (a config default); only the anonymous header keeps a Store
+link.
 
 ## Sort semantics — why last-accessed is a two-leg union
 
 `source:accessed` is an **INNER join** on the caller's access log: a pure accessed-sorted query
-HIDES anything never opened — a fresh invitation, a never-launched app, the exact items those tabs
-exist to surface. The last-accessed sort option is therefore a newline-joined, path-keyed UNION:
-the accessed-ranked leg first, a plain leg as completeness fallback (the engine dedupes by path).
-Nothing is ever hidden by a sort.
+HIDES anything never opened. The last-accessed option on the Shared scope is therefore a
+newline-joined, path-keyed UNION — the accessed-ranked leg first, a plain leg as completeness
+fallback. On the Apps scope, `source:accessed` is meaningless for records, so that option sorts by
+last modified instead.
 
-## The Threads app
+## The Threads app — a multi-document shell
 
-`/{user}/Chat` (the ChatArea) is the **Threads app** — a vertical rail of the owner's open threads
-beside the node-less composer (`BuildThreadsApp`). Each rail row renders on the *thread's own hub*
-via the `RailItem` area (`ThreadRailItem`, `MeshWeaver.AI`): the title navigates to the thread, and
-an **✕ closes it** through the canonical `MarkThreadDone` — the rail's query excludes
+`/{user}/Chat` (the ChatArea) and EVERY thread's full page render the same
+**`BuildThreadsShell`**: a fixed 280px rail of the viewer's open threads beside the main pane
+(composer on the app page, the conversation on a thread page). Navigating from the rail to a thread
+is REAL navigation — and the destination renders the shell again, so the rail never collapses,
+exactly like switching documents in a multi-document window.
+
+Rail rows (`ThreadRailItem`, on each thread's own hub) are title + ✕ **siblings** — never an
+overlay: an absolutely-positioned ✕ over a full-width navigation button loses its clicks to the nav
+surface. The ✕ closes through the canonical `MarkThreadDone`; the rail's query excludes
 `content.status:Done`, so a closed thread leaves the list reactively while staying searchable and
 reopenable. Closing never deletes.
 
-Two render details that matter: the rail is `Flat + MaxColumns(1) + ItemArea` — the `List` render
-mode draws its own rows and **ignores** item areas, so the ✕ could never render there; and the
-icon-only ✕ carries `ButtonControl.Label` (the aria-label) with the localized `thread.close`.
+## Presentation mode (#1803)
 
-## What comes next
-
-Store integration lives in the MeshWeaver.Plugins repo (mesh-compiled — invisible to CI): the
-install flow writes the `InstalledApp` record after `WriteManifest`, an **Add** action covers
-open-only domain plugins, uninstall removes the tile, and `Tile`/`Setup` declarations on
-`PluginContent` decide which of the store's items surface as apps at all — the ~20 auto-installed
-platform capabilities never mint icons.
+The Shared and Pinned scope queries interpolate viewer paths, so the screen filters them BEFORE the
+query is built. The Apps records query is generic — no app path can reach a query string or URL —
+so the screen filters **at the tile**: `AppTileLayoutArea.BuildTile` renders nothing for a marked
+target. The Spaces/All queries stay untouched and filter where results are painted.
 
 ## See also
 
 - [Configurable Home & Space Pages](/Doc/GUI/ConfigurablePages) — the `Body` + `@@`-region model the home is built on
-- [Mesh Search & Catalogs](/Doc/GUI/MeshSearch) — the search control behind every tab
+- [Mesh Search & Catalogs](/Doc/GUI/MeshSearch) — the search control behind every scope
 - [Thread Operations](../ThreadOperations) — the canonical thread mutation surface (`MarkThreadDone` et al.)
 - [Localization](../Localization) — why every tab label and sort option resolves off `AccessContext.Locale`
