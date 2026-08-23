@@ -18,14 +18,14 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// </summary>
 public class AzurePostgresAuthSelectionTests
 {
-    private const string AzureHost = "memexaks-pg.postgres.database.azure.com";
+    private const string AzureHost = "memexaks-pg.postgres.database.azure.com"; // local-only-guard:allow — parse-only fixture, never connects
 
     // ---- IsAzureHost: a HOST test, never a whole-string substring match --------------------
 
     [Theory]
-    [InlineData("Host=memexaks-pg.postgres.database.azure.com;Database=memex;Username=app")]
-    [InlineData("Host=memexaks-pg.postgres.database.azure.com;Database=memex;Username=app;Password=secret")]
-    [InlineData("Host=MEMEXAKS-PG.POSTGRES.DATABASE.AZURE.COM;Database=memex")] // case-insensitive suffix
+    [InlineData("Host=memexaks-pg.postgres.database.azure.com;Database=memex;Username=app")] // local-only-guard:allow
+    [InlineData("Host=memexaks-pg.postgres.database.azure.com;Database=memex;Username=app;Password=secret")] // local-only-guard:allow
+    [InlineData("Host=MEMEXAKS-PG.POSTGRES.DATABASE.AZURE.COM;Database=memex")] // case-insensitive suffix; local-only-guard:allow
     public void AzureHost_IsRecognised(string connectionString)
         => Assert.True(AzurePostgres.IsAzureHost(connectionString));
 
@@ -41,7 +41,7 @@ public class AzurePostgresAuthSelectionTests
     {
         // The suffix appears in the DATABASE and PASSWORD but the HOST is local — the substring
         // bug matched this; the host test must not.
-        const string cs = "Host=localhost;Database=database.azure.com;Username=app;Password=pw.postgres.database.azure.com";
+        const string cs = "Host=localhost;Database=database.azure.com;Username=app;Password=pw.postgres.database.azure.com"; // local-only-guard:allow — suffix in DB/password, host is local
         Assert.False(AzurePostgres.IsAzureHost(cs));
         Assert.False(AzurePostgres.UsesManagedIdentityAuth(cs));
     }
