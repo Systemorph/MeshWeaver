@@ -50,10 +50,19 @@ public sealed class EaConsentController(
     private string CallbackUri => $"{Request.Scheme}://{Request.Host}/{BasePath}/{CallbackAction}";
 
     [HttpGet(ConnectAction)]
-    public IActionResult Connect([FromQuery] string? returnUrl = null)
+    public async Task<IActionResult> Connect(
+        [FromQuery] string? returnUrl = null, [FromQuery] bool force = false, CancellationToken ct = default)
     {
         if (!ea.IsConfigured) return BadRequest("The Executive Assistant Graph integration is not configured.");
-        if (string.IsNullOrEmpty(access.Context?.ObjectId)) return Unauthorized();
+        var userId = access.Context?.ObjectId;
+        if (string.IsNullOrEmpty(userId)) return Unauthorized();
+        // Already connected → nothing to consent: bounce straight back to the caller instead of
+        // forcing Microsoft's dialog (BuildConsentUrl carries prompt=consent) on a user whose
+        // grant is stored — visiting the connect link twice used to re-prompt every time and read
+        // as "my consent is not saved". ?force=true still runs the full consent deliberately
+        // (scope additions, credential rotation, a revoked grant the stored token hides).
+        if (!force && await ea.IsConnectedAsync(userId, ct))
+            return Redirect(string.IsNullOrEmpty(returnUrl) ? "/" : returnUrl);
         return Redirect(ea.BuildConsentUrl(Uri.EscapeDataString(returnUrl ?? "/"), CallbackUri));
     }
 
