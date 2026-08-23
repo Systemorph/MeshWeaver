@@ -201,7 +201,10 @@ public static class MarkdownOverviewLayoutArea
         return Controls.Splitter
             .WithStyle("height: auto; flex: 1 0 auto;")
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%"))
-            .WithView(nav, x => x.WithArea(NavigationArea)
+            // WithId, not WithArea: the addressable area path is {context}/{Id} — PrepareRendering
+            // OVERWRITES Area from Id, so naming Area here would leave the pane on an auto id and
+            // break every consumer addressing …/Navigation (Copilot on #2098).
+            .WithView(nav, x => x.WithId(NavigationArea)
                 .AddSkin(new SplitterPaneSkin().WithSize("260px").WithMin("180px").WithMax("480px").WithCollapsible(true)))
             .WithView(
                 Controls.Stack.WithStyle("min-width: 0; padding-left: 16px;").WithView(content),
