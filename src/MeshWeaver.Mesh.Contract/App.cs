@@ -7,14 +7,16 @@ namespace MeshWeaver.Mesh;
 /// A per-user <b>installed app</b> record — one node per icon on the owner's Apps grid, stored as a
 /// REGULAR mesh node (no satellite mapping, <c>mesh_nodes</c> table) at
 /// <c>{user}/_App/{appId}</c> (the same non-satellite dotfile shape as <c>{user}/_Memex/…</c>).
-/// The record captures <b>presence and placement only</b>: the app's identity is the
-/// <see cref="Plugin"/> node path, and everything display-worthy (name, icon, description,
-/// translations) resolves LIVE from that node — never copied here, so nothing can drift. Tile
-/// state (needs install / needs setup / open) is likewise derived at render time from the
-/// viewer's install manifests, never stored.
-/// <para>The Apps grid a user sees is the UNION of the platform's config-declared default apps
-/// (<c>Admin/HomeConfig.DefaultApps</c>) and the owner's own <c>App</c> nodes — so defaults need
-/// no seeding and an admin's config edit updates every home live.</para>
+/// The record's NODE carries the tile's display identity (<c>MeshNode.Name</c> /
+/// <c>MeshNode.Icon</c>, stamped at materialization) and this CONTENT carries the wiring — which
+/// app the tile opens. Rendering entirely from the record is deliberate: it makes the Apps grid a
+/// SINGLE-PARTITION query over <c>{owner}/_App</c> (the cover-node model it replaced resolved a
+/// top-level path alternation across every partition schema — a multi-second home load). The
+/// Store's install flow refreshes a record's name/icon when it (re)installs an app.
+/// <para>Records are MATERIALIZED write-behind on home render from the platform's config-declared
+/// default apps (<c>Admin/HomeConfig.DefaultApps</c>) and the viewer's Store install manifests —
+/// no onboarding seeding, and a config addition reaches every user's grid on their next home
+/// render.</para>
 /// </summary>
 public record App
 {
