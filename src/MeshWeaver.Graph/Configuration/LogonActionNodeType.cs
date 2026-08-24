@@ -60,6 +60,10 @@ public static class LogonActionNodeType
             // Mesh-scoped singleton: its lifetime IS the mesh's, so nothing survives disposal and
             // nothing bleeds between tests (Doc/Architecture/NoStaticState).
             .AddSingleton<LogonActionRunner>()
+            // Seeding the platform defaults ships with the framework because a user with no app
+            // records has no way to reach the Store — that is not deployment-specific, even though
+            // WHICH apps get seeded is (it comes from Admin/HomeConfig).
+            .AddSingleton<ILogonAction, SeedDefaultAppsLogonAction>()
             .AddSingleton<ILogonAction, AppIconAdoptionLogonAction>());
         return builder;
     }

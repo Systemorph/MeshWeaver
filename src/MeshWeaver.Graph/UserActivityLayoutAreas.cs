@@ -487,12 +487,12 @@ public static class UserActivityLayoutAreas
     /// (the caller's cross-partition grants, #385 — see <see cref="ObserveSharedTargets"/>)
     /// below. The admin-editable <c>Admin/HomeConfig</c> node drives the shape and can switch back
     /// to the legacy single-list catalog (<see cref="HomeStyle.Catalog"/>).
-    /// <para>🚨 The render path performs NO app writes. Everything install-shaped — creating a
-    /// record when an app is installed, removing it on uninstall, stamping its real name/icon and
-    /// refreshing them — belongs to the STORE, which owns the app lifecycle; core only reads what
-    /// the Store wrote. The one exception is <see cref="EnsureDefaultApps"/>: a viewer with ZERO
-    /// records would otherwise face an empty home with no way to reach the Store, so the platform
-    /// defaults are seeded ONCE, only for an empty grid, and never touched again.</para></summary>
+    /// <para>🚨 The render path performs NO app writes, with no exception. Everything install-shaped
+    /// — creating a record when an app is installed, removing it on uninstall, stamping its real
+    /// name/icon and refreshing them — belongs to the STORE, which owns the app lifecycle; core
+    /// only reads what the Store wrote. Seeding the platform defaults for a new user is a run-once
+    /// LOGON action (<c>SeedDefaultAppsLogonAction</c>), not an empty-grid trigger on render.
+    /// </para></summary>
     internal static IObservable<UiControl?> CatalogAreaView(LayoutAreaHost host, RenderingContext _)
     {
         var ownerId = OwnerIdOf(host.Hub.Address.ToString());
@@ -511,51 +511,23 @@ public static class UserActivityLayoutAreas
         // instantly. The Apps grid needs NOTHING here: the tiles are rendered from their own
         // single-partition query inside the search control.
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
-        var bootstrapped = false;
         return HomeConfigNodeType.Observe(host.Workspace, options)
             .CombineLatest(
                 ObserveSharedTargets(host, ownerId),
-                ObserveAppRecords(host, ownerId),
                 syncStream!.Select(change => change.Value.ContentAs<User>(options)).StartWith((User?)null),
                 screen,
-                (config, shared, records, user, viewerScreen) =>
-                {
-                    // Only ever fires for a viewer whose grid is EMPTY (never the null sentinel —
-                    // acting on a synthetic empty start is what fired ~20 doomed creates per
-                    // render, the "Node already exists" storm Loki showed AND the home lag).
-                    if (records is { Count: 0 } && !bootstrapped)
-                    {
-                        bootstrapped = true;
-                        EnsureDefaultApps(host, ownerId, config);
-                    }
-                    return (UiControl?)BuildHome(ownerId, config, shared, user, locale, viewerScreen);
-                });
+                // 🚨 The render path performs NO app writes at all now. Seeding the platform
+                // defaults used to happen HERE, gated on the viewer's grid coming back EMPTY —
+                // emptiness standing in for "this user has not been set up yet". That proxy was
+                // only valid while nothing else could write an app record, and the Store now writes
+                // one at install time: a user who acquires a package before first opening their
+                // home arrives with a non-empty grid, the seeding never fires, and they lose the
+                // defaults permanently — including the Store tile the seeding exists to guarantee.
+                // It is a run-once LOGON action now (SeedDefaultAppsLogonAction), which says what
+                // the proxy was reaching for: once per user because the ledger says so.
+                (config, shared, user, viewerScreen) =>
+                    (UiControl?)BuildHome(ownerId, config, shared, user, locale, viewerScreen));
     }
-
-    /// <summary>
-    /// The owner's <c>{owner}/_App/{appId}</c> records (see <see cref="AppNodeType"/>) — the ONE
-    /// read the home needs about apps, through the shared, per-user-RLS, empty-on-absent
-    /// <c>GetQuery</c> cache on the viewer's OWN partition. Row-only (no content on the wire): the
-    /// tiles are Name + Icon + <see cref="MeshNode.MainNode"/>, and the select list gates only the
-    /// content column — every other field always returns.
-    /// <para>Used ONLY to decide whether the grid is empty (the <see cref="EnsureDefaultApps"/>
-    /// bootstrap); the tiles themselves come from the search control's own query. Reading the
-    /// Store's install manifests here — the previous design — is gone: what a viewer has installed
-    /// is the STORE's business to record, not something the home re-derives on every render.</para>
-    /// </summary>
-    private static IObservable<IReadOnlyList<MeshNode>?> ObserveAppRecords(
-        LayoutAreaHost host, string ownerId) =>
-        host.Workspace
-            .GetQuery($"home-apps:{ownerId}",
-                $"path:{ownerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType} " +
-                "select:path,id,namespace,name,nodeType,icon")
-            .Select(nodes => (IReadOnlyList<MeshNode>?)nodes.ToList())
-            // 🚨 The sentinel is NULL, never [] — "not loaded yet" and "no records" MUST differ.
-            // The first shipped materializer synthesized an empty list, so every fresh home render
-            // fired ~20 doomed CreateNode calls against records that already existed ("Node
-            // already exists" storms in Loki, and THE home lag) before the real snapshot arrived.
-            // The bootstrap does nothing until this emits a real list.
-            .StartWith((IReadOnlyList<MeshNode>?)null);
 
     /// <summary>
     /// The cross-partition scopes the owner has been granted access to — an invited module living in
@@ -1074,37 +1046,6 @@ public static class UserActivityLayoutAreas
         return specs;
     }
 
-    /// <summary>
-    /// The home's ONLY app write, and it fires at most once per viewer: seed the platform default
-    /// records when the viewer's grid is EMPTY. Without it a brand-new (or never-onboarded) viewer
-    /// lands on a blank home with no icon to reach the Store by — a bootstrap, not a sync.
-    /// <para>🚨 Everything else about an app's record — creating it on install, deleting it on
-    /// uninstall, its real name and icon, refreshing them — is the STORE's, which owns the app
-    /// lifecycle and already writes the install manifest. Core reading manifests and back-filling
-    /// records made every home render a write path and put the Store's model in two places.</para>
-    /// <para>Fire-and-forget: a create that loses the race to an existing record is benign
-    /// (Debug), and the records query re-emits when the writes land.</para>
-    /// </summary>
-    private static void EnsureDefaultApps(LayoutAreaHost host, string ownerId, HomeConfig? config)
-    {
-        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
-        if (mesh is null || string.IsNullOrEmpty(ownerId))
-            return;
-        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.Graph.AppRecords");
-        foreach (var spec in AppRecordSpecs(config, ownerId))
-        {
-            var node = BuildAppRecord(ownerId, spec);
-            mesh.CreateNode(node).Subscribe(_ => { },
-                ex =>
-                {
-                    if (ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
-                        logger?.LogDebug("App record at {Path} already existed (benign race)", node.Path);
-                    else
-                        logger?.LogWarning(ex, "App record create failed at {Path}", node.Path);
-                });
-        }
-    }
 
     /// <summary>One default app record: the tile's whole identity lives on the NODE (Name, Icon,
     /// MainNode = the app it opens), so the grid paints from query rows alone. Pure, for tests.</summary>
