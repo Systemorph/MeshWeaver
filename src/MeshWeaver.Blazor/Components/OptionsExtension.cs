@@ -18,7 +18,16 @@ public static class OptionsExtension
     /// <param name="Icon">Optional icon identifier shown alongside the label.</param>
     public record Option(object? Item, string? Text, string? ItemString, Type ItemType, string? Icon = null);
 
-    internal static string? MapToString(object? instance, Type itemType) =>
+    /// <summary>
+    /// Maps a list item to the string the Fluent list components compare selections by — the
+    /// item's default value maps to the item TYPE's default string so an unset selection round-
+    /// trips. Public since the list views consuming it (RadioGroupView &amp; co.) moved to the
+    /// MeshWeaver.Blazor.EntityViews view pack.
+    /// </summary>
+    /// <param name="instance">The item to map, or null.</param>
+    /// <param name="itemType">The declared item type, used for the default-value fallback.</param>
+    /// <returns>The comparison string, or null for a reference-typed default.</returns>
+    public static string? MapToString(object? instance, Type itemType) =>
         instance == null || IsDefault((dynamic)instance)
             ? GetDefault(itemType)
             : instance!.ToString();

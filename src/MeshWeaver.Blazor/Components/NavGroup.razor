@@ -1,17 +1,58 @@
 @using Icon = MeshWeaver.Domain.Icon
 @inherits SkinnedView<NavGroupControl, NavGroupSkin, NavGroup>
 
-<FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()" Title="@Title" Class="@Class" Style="@Style" Expanded="@Expanded">
-    
-    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
+@* A collapsible group of the rail — OUR OWN markup (no FluentNavGroup): the wrapped component
+   rendered only Fluent icon NAMES, so a node icon (URL / inline SVG / emoji) silently vanished
+   from every group heading. Two shape rules, both from live defects:
 
-</FluentNavGroup>
+   - Groups toggle, links navigate — NEVER both on one control. A plain heading is one toggle
+     button; a heading with a Url is a link beside a separate chevron toggle, so clicking the
+     title can never collapse the index.
+   - The chevron is ALWAYS rendered, expanded or not — a collapsed group must visibly OFFER its
+     expander. *@
+
+<div class="mw-nav-group @Class" style="@Style">
+    @if (Href is null)
+    {
+        <button type="button" class="mw-nav-group-header" aria-expanded="@Expanded" @onclick="Toggle">
+            <span class="mw-nav-icon"><MeshIcon Value="@Icon" /></span>
+            <span class="mw-nav-label" title="@Title">@Title</span>
+            <span class="mw-nav-chevron @(Expanded ? "expanded" : null)">@Chevron</span>
+        </button>
+    }
+    else
+    {
+        <div class="mw-nav-group-split">
+            <a href="@Href" class="mw-nav-group-header mw-nav-group-title" title="@Title">
+                <span class="mw-nav-icon"><MeshIcon Value="@Icon" /></span>
+                <span class="mw-nav-label">@Title</span>
+            </a>
+            <button type="button" class="mw-nav-group-header mw-nav-group-expander"
+                    aria-expanded="@Expanded" aria-label="@Title" @onclick="Toggle">
+                <span class="mw-nav-chevron @(Expanded ? "expanded" : null)">@Chevron</span>
+            </button>
+        </div>
+    }
+    @if (Expanded)
+    {
+        <div class="mw-nav-group-items">
+            <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
+        </div>
+    }
+</div>
 
 @code{
     protected string? Title;
     protected string? Href;
     protected Icon? Icon;
     private bool Expanded;
+
+    private void Toggle() => Expanded = !Expanded;
+
+    private static readonly MarkupString Chevron = new(
+        "<svg viewBox=\"0 0 12 12\" width=\"12\" height=\"12\" aria-hidden=\"true\">"
+        + "<path d=\"M4.5 2.5 8 6l-3.5 3.5\" fill=\"none\" stroke=\"currentColor\""
+        + " stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>");
 
     protected override void BindData()
     {

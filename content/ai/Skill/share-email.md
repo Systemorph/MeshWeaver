@@ -68,8 +68,27 @@ Graph is the system of record and always current. **Do not ingest, sync or mirro
 
 All Graph calls go through `IIoPool` and return `IObservable<T>`; never `async`/`await` in hub or Blazor code, never `Observable.FromAsync`.
 
-# 5. Known limitation — state it honestly
+# 5. What each path does with embedded areas and raw HTML
 
-**Export to PDF and DOCX do NOT render embedded layout areas.** The document builder's Markdig pipeline omits the layout-area extension, so an `@@("area:…")` embed prints as **literal source text**; the pixel deck path prints it **blank**. Only the email/HTML path resolves areas. If a user needs a PDF of a document with embedded views, tell them this rather than letting them send a broken document.
+**Embedded layout areas DO render in a PDF export.** `DocumentBuilder` resolves them
+(`LayoutAreaComponentInfo` → `ResolveArea`), and an area that resolved to nothing carries a visible
+notice rather than disappearing. Verified 2026-08-23 on a document with five `@@("area:OgCard…")`
+embeds: every card printed with its title, description and link. This section previously claimed the
+opposite — that an embed prints as literal source text — which was true before the resolution pass
+existed and is not true now. Do not repeat it.
+
+**Raw HTML in the document body renders too, since MeshWeaver.Plugins#606.** Before that fix
+`DocumentBuilder` downgraded every `HtmlBlock` to a code block, so a document whose layout is raw
+HTML — hero bands, styled callouts, HTML tables, inline SVG — printed its own markup. If you meet
+that symptom, the deployment is running a module build older than #606, not hitting a design limit.
+
+**What genuinely does not survive a PDF**, and is worth saying to a user up front:
+
+- the **pixel deck path** prints an unresolved embed **blank**;
+- **anything resolved in the browser after first render** — a layout area is resolved server-side for
+  the export, so a view that only fills in from a live circuit has nothing to contribute;
+- the **email** path is the one that downgrades on purpose: `HtmlDowngrade` strips `svg` and `style`
+  because Outlook renders through the Word engine. So a document whose diagrams are inline SVG is
+  **better as a PDF** and worse as an email body — the opposite of what this section used to imply.
 
 Reference: [Sending Email](/Doc/Architecture/SendingEmail).

@@ -6,7 +6,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.FluentUI.AspNetCore.Components;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.EntityViews;
 
 /// <summary>
 /// Blazor view for the edit-form control. Binds a JSON data context from the layout

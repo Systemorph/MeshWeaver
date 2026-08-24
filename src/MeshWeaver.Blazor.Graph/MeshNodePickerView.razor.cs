@@ -2,6 +2,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
+using MeshWeaver.Blazor.Components;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
@@ -11,7 +12,7 @@ using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.Graph;
 
 /// <summary>
 /// Blazor view for <c>MeshNodePickerControl</c> — a combobox that lets the user search for and
