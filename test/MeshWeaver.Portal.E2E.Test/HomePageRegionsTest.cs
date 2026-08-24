@@ -39,8 +39,9 @@ public class HomePageRegionsTest(PortalFixture fixture)
         // (b) The catalog — embedded via @@("area/Catalog") — must fill the home width.
         //
         // The catalog region is ONE scoped search surface (UserActivityLayoutAreas.BuildHome): a
-        // MeshSearch whose SCOPE TABS (Shared with me · Pinned · Apps · Spaces · All — the first
-        // two only when present) render as the .mesh-search-scopes strip and share one search bar.
+        // MeshSearch whose SCOPE TABS (Pinned · Apps · Spaces · All — Pinned only when present;
+        // Shared with me is its own band below, only with cross-partition grants) render as the
+        // .mesh-search-scopes strip and share one search bar.
         // Wait (don't count): CountAsync doesn't wait, so a transient 0 before the strip renders
         // would flake this assertion.
         await page.Locator(".mesh-search-scopes").First
@@ -65,15 +66,18 @@ public class HomePageRegionsTest(PortalFixture fixture)
         (catalogW / pageW).Should().BeGreaterThan(0.8f,
             $"the catalog should fill the home width, not shrink to content (catalog={catalogW:F0}px of {pageW:F0}px)");
 
-        // (c) The Apps scope renders the viewer's MATERIALIZED app records — the write-behind
-        // creates Store/Documentation/Threads records from the config defaults on first render,
-        // and each record paints through its AppTile area. This is the end-to-end proof that a
-        // user HAS apps (the "I don't have any apps" report) and that the records query returns
-        // fast enough to paint tiles inside the wait budget.
+        // (c) The Apps scope renders the viewer's MATERIALIZED app records as the phone-home ICON
+        // grid — the write-behind creates Store/Documentation/Threads records from the config
+        // defaults on first render, and the Icons render paints each tile straight from the query
+        // row (no per-record hub). This is the end-to-end proof that a user HAS apps (the "I don't
+        // have any apps" report), that the records query paints inside the wait budget, and that
+        // the Threads tile links to the APP (/{user}/Chat — NavigateToMainNode), not the record.
         await page.Locator(".mesh-search-scope", new PageLocatorOptions { HasTextString = "Apps" }).First
             .ClickAsync();
-        await page.GetByText("Threads", new() { Exact = true }).First
-            .WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
+        var threadsTile = page.Locator(".mesh-search-icon-tile", new PageLocatorOptions { HasTextString = "Threads" }).First;
+        await threadsTile.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
+        (await threadsTile.GetAttributeAsync("href")).Should().EndWith($"/{fixture.UserId}/Chat",
+            "an app tile opens the APP, never the {user}/_App record");
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/home-apps.png", FullPage = true });
     }
 }

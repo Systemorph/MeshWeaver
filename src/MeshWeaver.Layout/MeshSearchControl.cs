@@ -49,7 +49,15 @@ public enum MeshSearchRenderMode
     /// (<c>scope:ancestors</c> above, <c>scope:nextLevel</c> below). Clicking a card or an
     /// ancestor re-roots the view there and recomputes both — "navigate → visualize → navigate".
     /// </summary>
-    GraphNavigator
+    GraphNavigator,
+
+    /// <summary>
+    /// A phone-home ICON grid: each result renders as a large rounded icon with its name
+    /// underneath — the home's Apps look. Rendered entirely from the query row (name/icon are
+    /// result columns), so no per-result content read or hub activation happens. Appended last:
+    /// enum members serialize by NAME, but the ordinal must stay stable for older rows.
+    /// </summary>
+    Icons
 }
 
 /// <summary>
@@ -86,10 +94,26 @@ public record MeshSearchScopeTab(string Label, string Query)
 
     /// <summary>
     /// Per-item layout area used while this scope is active, REPLACING the control-level
-    /// <see cref="MeshSearchControl.ItemArea"/> (e.g. the home's Apps scope renders its
-    /// installed-app records through their <c>AppTile</c> area). Null keeps the control-level one.
+    /// <see cref="MeshSearchControl.ItemArea"/>. Null keeps the control-level one. Prefer a
+    /// row-rendered mode (e.g. <see cref="MeshSearchRenderMode.Icons"/>) over an item area where
+    /// the row data suffices — an item area activates one hub PER RESULT.
     /// </summary>
     public string? ItemArea { get; init; }
+
+    /// <summary>
+    /// Render mode while this scope is active, REPLACING the control-level
+    /// <see cref="MeshSearchControl.RenderMode"/> (the enum member's NAME, e.g. <c>"Icons"</c> —
+    /// the home's Apps scope renders the phone-home icon grid this way). Null keeps the
+    /// control-level mode.
+    /// </summary>
+    public string? RenderMode { get; init; }
+
+    /// <summary>
+    /// When true, clicking a result of this scope navigates to the node's <c>MainNode</c> instead
+    /// of its own path — the home's Apps records point at the APP they represent this way, with no
+    /// content read. Null keeps the control-level <see cref="MeshSearchControl.NavigateToMainNode"/>.
+    /// </summary>
+    public bool? NavigateToMainNode { get; init; }
 }
 
 /// <summary>
@@ -176,6 +200,13 @@ public record MeshSearchControl()
     /// <see cref="HiddenQuery"/>, which should equal the first tab's query.
     /// </summary>
     public IReadOnlyList<MeshSearchScopeTab>? ScopeTabs { get; init; }
+
+    /// <summary>
+    /// When true, clicking a result navigates to the node's <c>MainNode</c> instead of its own
+    /// path (default false). A per-scope <see cref="MeshSearchScopeTab.NavigateToMainNode"/>
+    /// overrides this while its scope is active.
+    /// </summary>
+    public object? NavigateToMainNode { get; init; }
 
     /// <summary>
     /// Whether to exclude the base path node from results (default true).
