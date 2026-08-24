@@ -39,20 +39,6 @@ public enum ChatViewMode
 }
 
 /// <summary>
-/// Layout of the in-thread navigation menu (hierarchy + sub-threads + other open threads + context
-/// chip). Cycles <see cref="TopBar"/> → <see cref="LeftRail"/> → <see cref="Hidden"/>.
-/// </summary>
-public enum ThreadNavLayout
-{
-    /// <summary>A horizontal bar across the top of the thread.</summary>
-    TopBar,
-    /// <summary>A vertical rail down the left of the conversation.</summary>
-    LeftRail,
-    /// <summary>Collapsed — only a small reveal toggle shows.</summary>
-    Hidden
-}
-
-/// <summary>
 /// The full chat view for a single thread, bound to a <c>ThreadChatControl</c>. Renders the message
 /// list, the composer (agent/model/harness selection, attachments, context chips), sub-thread
 /// delegation headers, and per-round elapsed-time and token chips. Reactive throughout: it data-binds
@@ -395,13 +381,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private IDisposable? resumeSubscription;
     private bool resumeLoading;
 
-    // ─── In-thread navigation menu ───
-    // A navigation surface WITHIN the thread: the context chip, this thread's position in the
-    // hierarchy (ancestors → current → sub-threads), and the user's OTHER open threads across ALL
-    // partitions. Toggles between a horizontal top bar, a vertical left rail, and hidden; Option-Tab
-    // cycles through the other open threads. Both lists are live-bound to the synced Hub.GetQuery
-    // surface (same write-consistent, RLS-aware snapshot stream the Resume picker uses).
-    private ThreadNavLayout _navLayout = ThreadNavLayout.TopBar;
+    // ─── Threads side menu ───
+    // The agentic-app default navigation: a collapsible left rail with New chat, a filter box, the
+    // thread's position in the hierarchy (ancestors → current → sub-threads), and the user's open
+    // threads across ALL partitions — each row with its live activity status (evaluating / queued /
+    // awaiting input) and an ✕ that closes through the canonical MarkThreadDone. Option-Tab cycles
+    // the open threads. All lists are live-bound to the synced Hub.GetQuery surface (the same
+    // write-consistent, RLS-aware snapshot stream the Resume picker uses) — full thread nodes,
+    // content included, so the status derives from the typed thread content, never a projection.
+    private bool _navCollapsed;
+    private string? navFilter;
     private IReadOnlyList<MeshNode> myThreads = [];        // my open threads, all partitions
     private IDisposable? myThreadsSubscription;
     private IReadOnlyList<MeshNode> childThreads = [];     // sub-threads (delegations) of THIS thread
@@ -3070,9 +3059,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     // the visible sequence actually changes.
     private string? _myThreadsKey, _childThreadsKey, _resumeThreadsKey;
 
-    private static bool VisibleThreadListChanged(ref string? lastKey, IReadOnlyList<MeshNode> projected)
+    private static bool VisibleThreadListChanged(
+        ref string? lastKey, IReadOnlyList<MeshNode> projected, Func<MeshNode, string>? extraKey = null)
     {
-        var key = string.Join(";", projected.Select(n => n.Path + "|" + n.Name));
+        var key = string.Join(";", projected.Select(n =>
+            n.Path + "|" + n.Name + (extraKey is null ? "" : "|" + extraKey(n))));
         if (key == lastKey) return false;
         lastKey = key;
         return true;
@@ -3095,7 +3086,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                             && string.Equals(n.NodeType, ThreadNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
                         .OrderByDescending(n => n.LastModified)
                         .ToList();
-                    if (!VisibleThreadListChanged(ref _myThreadsKey, projected)) return;
+                    // The visible shape includes each row's ACTIVITY (evaluating / queued / awaiting):
+                    // a status flip must repaint the side menu, while the per-token content churn of
+                    // a streaming round (status steady at Executing) still dedups away. The probe is
+                    // deliberately the cheap one — this key is computed on every snapshot emission.
+                    if (!VisibleThreadListChanged(ref _myThreadsKey, projected, n =>
+                        {
+                            var (kind, queued) = NavActivityOf(n);
+                            return $"{kind}:{queued}";
+                        }))
+                        return;
                     myThreads = projected;
                     StateHasChanged();
                 }),
@@ -3199,21 +3199,63 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private IReadOnlyList<MeshNode> OtherOpenThreads() =>
         myThreads.Where(n => !string.Equals(n.Path, threadPath, StringComparison.OrdinalIgnoreCase)).ToList();
 
-    /// <summary>True when the in-thread navigation menu should render — the full-page thread view with
-    /// a real thread (never the side panel / new-chat composer).</summary>
-    private bool ShowThreadNav => ViewModel.ShowFullHeader && !string.IsNullOrEmpty(threadPath);
+    /// <summary>True when the threads side menu should render — every full-page thread view, plus
+    /// any surface that opts in via <see cref="ThreadChatControl.ShowThreadNav"/> (the node-less
+    /// Threads app page). Never the side panel / home composer.</summary>
+    private bool ShowThreadNav =>
+        ViewModel.ShowThreadNav || (ViewModel.ShowFullHeader && !string.IsNullOrEmpty(threadPath));
 
-    /// <summary>Cycles the nav-menu layout: TopBar → LeftRail → Hidden → TopBar.</summary>
-    private void CycleNavLayout()
+    /// <summary>Collapses / expands the threads side menu — the same affordance as the multi-part
+    /// doc-index rail: collapsed leaves only a small edge toggle.</summary>
+    private void ToggleNavCollapsed()
     {
-        _navLayout = _navLayout switch
-        {
-            ThreadNavLayout.TopBar => ThreadNavLayout.LeftRail,
-            ThreadNavLayout.LeftRail => ThreadNavLayout.Hidden,
-            _ => ThreadNavLayout.TopBar
-        };
+        _navCollapsed = !_navCollapsed;
         StateHasChanged();
     }
+
+    /// <summary>Filter-box input — narrows the side menu's thread list live (client-side over the
+    /// GetQuery snapshot; the global mesh search covers deeper, semantic lookups).</summary>
+    private void OnNavFilterChanged(string? value)
+    {
+        navFilter = value;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// The side menu's thread list: my open threads (minus the one being viewed — it has its own
+    /// "This thread" row), narrowed by the filter box against name and description.
+    /// </summary>
+    private IReadOnlyList<MeshNode> FilteredNavThreads()
+    {
+        var open = OtherOpenThreads();
+        if (string.IsNullOrWhiteSpace(navFilter))
+            return open;
+        return open
+            .Where(n => (n.Name?.Contains(navFilter, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (n.Description?.Contains(navFilter, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (n.Id?.Contains(navFilter, StringComparison.OrdinalIgnoreCase) ?? false))
+            .ToList();
+    }
+
+    /// <summary>Live activity of one side-menu row, derived from the thread node's content (the
+    /// GetQuery snapshot carries full content — see <see cref="ThreadQueries.ListProjection"/>).
+    /// The cheap probe overload: one whole-snapshot emission arrives per streamed token, so full
+    /// deserialization here would burn the circuit.</summary>
+    private (ThreadActivityKind Kind, int QueuedCount) NavActivityOf(MeshNode node) =>
+        ThreadActivity.Of(node.Content, Hub.JsonSerializerOptions);
+
+    /// <summary>Localized tooltip for a row's activity indicator.</summary>
+    private string ActivityTitle((ThreadActivityKind Kind, int QueuedCount) activity) => activity.Kind switch
+    {
+        ThreadActivityKind.Evaluating => Access.Localize("threads.statusEvaluating"),
+        ThreadActivityKind.Queued => Access.Localize("threads.statusQueued"),
+        _ => Access.Localize("threads.statusAwaiting")
+    };
+
+    /// <summary>Closes a thread from its side-menu row via the canonical <c>MarkThreadDone</c> mesh
+    /// operation — the row leaves the list reactively (the query excludes Done) while the thread
+    /// stays searchable and reopenable. Closing is never deleting.</summary>
+    private void CloseNavThread(string path) => Hub.MarkThreadDone(path, done: true);
 
     /// <summary>Opens a thread in the MAIN view (full-page navigation).</summary>
     private void NavigateToThread(string? path)
