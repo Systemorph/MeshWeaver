@@ -552,9 +552,11 @@ public static class UserActivityLayoutAreas
     private static IObservable<IReadOnlyList<MeshNode>?> ObserveAppRecords(
         LayoutAreaHost host, string ownerId) =>
         host.Workspace
-            // Full nodes (no select): the materializer needs Icon/MainNode/content for HEALING.
+            // Row-only (no content on the wire): healing reads Path/Name/Icon/MainNode, and the
+            // select list gates ONLY the content column — every other field always returns.
             .GetQuery($"home-apps:{ownerId}",
-                $"path:{ownerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType}")
+                $"path:{ownerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType} " +
+                "select:path,id,namespace,name,nodeType,icon")
             .Select(nodes => (IReadOnlyList<MeshNode>?)nodes.ToList())
             // 🚨 The sentinel is NULL, never [] — "not loaded yet" and "no records" MUST differ.
             // The first shipped materializer synthesized an empty list, so every fresh home render
@@ -1157,7 +1159,8 @@ public static class UserActivityLayoutAreas
             ? Observable.Return<IReadOnlyDictionary<string, MeshNode>>(
                 ImmutableDictionary<string, MeshNode>.Empty)
             : mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{string.Join("|", coverPaths)}"))
+                    // Row-only: the face is Name + Icon; the covers' content stays off the wire.
+                    $"path:{string.Join("|", coverPaths)} select:path,id,namespace,name,nodeType,icon"))
                 .Where(c => c.ChangeType == QueryChangeType.Initial)
                 .Select(c => (IReadOnlyDictionary<string, MeshNode>)c.Items
                     .Where(n => !string.IsNullOrEmpty(n.Path))
