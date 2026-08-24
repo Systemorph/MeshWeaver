@@ -54,7 +54,7 @@ A control is done when it renders on EVERY client, not when the Blazor view work
 3. React renderer in `clients/react/src/controls/` — the Blazor-parity ratchet
    (`clients/react/src/render/parity.test.ts`) turns the Clients workflow red until it exists;
    never alias or placeholder it.
-4. React Native `rnPack` entry (`clients/react-native/src/parity.test.ts` is its ratchet).
+4. React Native `rnPack` entry (`MeshWeaver.Plugins/app/react-native/src/parity.test.ts` is its ratchet).
 5. Optional MAUI `MauiViewRegistry.Register` entry.
 6. Every user-visible string: `host.Localize` key in BOTH
    `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json` AND mirrored into

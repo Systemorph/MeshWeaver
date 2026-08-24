@@ -3,7 +3,7 @@
 //
 // Three shells carried their own copy of `query-nodes`, `render-markdown`, `content/list` and
 // `upload`: clients/portal-next/src/client/live.ts, clients/portal/src/live.ts and
-// clients/react-native/src/liveOps.ts. Duplicating a fetch does not merely repeat code — it lets the
+// MeshWeaver.Plugins/app/react-native/src/liveOps.ts. Duplicating a fetch does not merely repeat code — it lets the
 // copies DRIFT in ways nobody chose, and they had:
 //
 //   * THE TOKEN. RN's three verbs carried no Authorization header at all — that IS #1474, and it is

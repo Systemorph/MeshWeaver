@@ -24,7 +24,7 @@ export interface PackExtension {
 
 /**
  * A DEPLOYMENT MODULE — the unit a deployment manifest injects (see
- * clients/react-native/deployment/). One object per module, deliberately open: `pack` is the slot
+ * MeshWeaver.Plugins/app/react-native/deployment/). One object per module, deliberately open: `pack` is the slot
  * implemented today; new client extension points (screens, menu items, speech providers) get their
  * own named slots here as the seams land, so a module's shape never has to break.
  */
