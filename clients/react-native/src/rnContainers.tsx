@@ -1,6 +1,6 @@
 // Container + media leaves the RN pack was missing: NamedArea, Commentable, Redirect, Dialog,
 // Native ports of clients/react/src/controls/{containers,display}.tsx. Video + SlideShow moved
-// to src/modules/media.tsx — the media DEPLOYMENT MODULE, the only expo-av Video touchpoint.
+// to src/modules/media.tsx — the media DEPLOYMENT MODULE, the only expo-video touchpoint.
 //
 // An UNREGISTERED container is the worst kind of gap: it renders the "Unsupported" fallback and its
 // child area DISAPPEARS, so a commentable node lost its whole body rather than just its comment

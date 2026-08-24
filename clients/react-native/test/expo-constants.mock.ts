@@ -1,4 +1,5 @@
-// Vitest stand-in for expo-constants: rnMeshLive/nativeHtml import ./connection (asset-URL
-// resolution against the current instance), which reads the configured portal URL off Constants at
-// module load. Tests run headless — the default localhost sidecar URL is all they need.
+// Vitest stand-in for expo-constants: code under test (./connection — asset-URL + portal
+// resolution) reads Constants at module load, and the REAL package — SDK 57 included — reads
+// `globalThis.expo.EventEmitter` at import, which only exists in a real Expo runtime. Headless
+// tests get the default localhost sidecar URL.
 export default { expoConfig: { extra: { portalUrl: "http://localhost:5250" } } };

@@ -8,7 +8,7 @@ import { useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useLocalize, useMentionModel, type MeshOps } from "@meshweaver/react/core";
 import { currentInstance } from "./connection";
-import { ExpoAvRecorder } from "./speech/expoRecorder";
+import { ExpoAudioRecorder } from "./speech/expoRecorder";
 import { SpeechTranscriptionClient } from "./speech/transcription";
 import { PushToTalkController, type SpeechFlowState } from "./speech/pushToTalk";
 
@@ -85,7 +85,7 @@ export function ComposerBar({ ops, threadPath, namespacePath, contextPath, onThr
     const inst = currentInstance();
     if (!inst.url || !ops) return null;
     return new PushToTalkController({
-      recorder: new ExpoAvRecorder(),
+      recorder: new ExpoAudioRecorder(),
       transcriber: new SpeechTranscriptionClient({ url: inst.url, token: inst.token || undefined }),
       submitter: ops,
       namespacePath: namespacePath ?? "",
