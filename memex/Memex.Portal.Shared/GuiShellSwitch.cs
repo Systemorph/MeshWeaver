@@ -94,6 +94,9 @@ public static class GuiShellSwitch
                     MaxAge = TimeSpan.FromDays(365),
                     HttpOnly = false,     // the shells may read it to render their switch affordance
                     SameSite = SameSiteMode.Lax,
+                    // Same policy as the frontend-selection cookie: Secure whenever the request
+                    // itself is HTTPS, so the preference never rides plain HTTP on a TLS site.
+                    Secure = context.Request.IsHttps,
                 });
             if (redirect is not null)
             {
