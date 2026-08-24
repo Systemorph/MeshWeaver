@@ -68,7 +68,7 @@ public static class CommentNodeType
         Name = "Comment",
         Icon = "/static/NodeTypeIcons/comment.svg",
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddCommentNodeViews()
             .AddMeshDataSource(source => source.WithContentType<Comment>())

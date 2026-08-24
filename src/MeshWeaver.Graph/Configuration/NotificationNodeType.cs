@@ -31,7 +31,7 @@ public static class NotificationNodeType
     {
         Name = "Notification",
         Icon = "/static/NodeTypeIcons/bell.svg",
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddNotificationViews()
             .AddMeshDataSource(source => source

@@ -350,8 +350,14 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             }
         }
 
-        var isSearch = string.Equals(context, "search", StringComparison.OrdinalIgnoreCase);
-        if (!isSearch && hasQualifier)
+        // Registration nodes — the in-memory type/module/partition declarations AddMeshNodes
+        // contributes — are not content. A surface that lists things for a person says so with
+        // `is:content` and is not handed them; that is a statement each surface makes on its own
+        // query, rather than a central list of context names that has to be kept in step with
+        // every surface that exists. Without it the home screen was handed every NodeType,
+        // ModuleDefinition, Partition and Role row alongside the user's actual spaces.
+        var isSearch = string.Equals(context, MeshContexts.Search, StringComparison.OrdinalIgnoreCase);
+        if (!isSearch && parsed.IsContent != true && hasQualifier)
         {
             foreach (var node in _configNodes)
             {

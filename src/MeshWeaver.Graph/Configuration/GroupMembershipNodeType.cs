@@ -32,7 +32,7 @@ public static class GroupMembershipNodeType
     {
         Name = "Group Membership",
         Icon = "/static/NodeTypeIcons/person.svg",
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddGroupMembershipViews()
             .AddMeshDataSource(source => source
