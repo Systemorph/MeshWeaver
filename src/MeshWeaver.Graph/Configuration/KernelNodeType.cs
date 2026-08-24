@@ -85,7 +85,7 @@ public static class KernelNodeType
     {
         Name = "Kernel Session",
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddKernelHandlers()
     };

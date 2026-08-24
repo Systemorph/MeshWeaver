@@ -144,7 +144,7 @@ public static class GitHubSyncConfiguration
             {
                 Name = "GitHub Credential",
                 IsSatelliteType = false,
-                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubCredential>()),
             },
@@ -152,7 +152,7 @@ public static class GitHubSyncConfiguration
             {
                 Name = "GitHub Sync Config",
                 IsSatelliteType = false,
-                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubSyncConfig>()),
             },
@@ -163,7 +163,7 @@ public static class GitHubSyncConfiguration
             {
                 Name = "Pull Request",
                 IsSatelliteType = true,
-                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubPullRequest>()),
             },
@@ -173,7 +173,7 @@ public static class GitHubSyncConfiguration
             {
                 Name = "GitHub Issue",
                 IsSatelliteType = true,
-                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubIssue>()),
             },
@@ -185,7 +185,7 @@ public static class GitHubSyncConfiguration
             {
                 Name = "Build Completion",
                 IsSatelliteType = true,
-                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<BuildCompletion>()),
             });

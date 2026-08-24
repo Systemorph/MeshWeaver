@@ -37,7 +37,7 @@ public static class RoleNodeType
     {
         Name = "Role",
         Icon = "/static/NodeTypeIcons/shield.svg",
-        ExcludeFromContext = new HashSet<string> { "search" },
+        ExcludeFromContext = new HashSet<string> { "search", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<Role>())

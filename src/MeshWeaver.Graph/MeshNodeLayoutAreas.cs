@@ -1017,7 +1017,10 @@ public static class MeshNodeLayoutAreas
         var search = Controls.MeshSearch
             .WithTitle(o.Title)
             // Exclude NodeType definitions — they belong to type admin, not the instance catalog.
-            .WithHiddenQuery($"namespace:{nodePath}{scope} is:main context:search -nodeType:NodeType")
+            // is:content, not context:search — this lists a node's children for a person to browse.
+            // It said "search" only to borrow that context's registration filtering, and then still
+            // needed `-nodeType:NodeType` on top because borrowing does not say what you mean.
+            .WithHiddenQuery($"namespace:{nodePath}{scope} is:main is:content")
             .WithVisibleQuery(o.SearchTerm ?? "")
             .WithNamespace(nodePath)
             .WithPlaceholder(o.Placeholder)

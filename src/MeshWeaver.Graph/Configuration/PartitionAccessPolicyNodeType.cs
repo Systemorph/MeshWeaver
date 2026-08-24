@@ -32,7 +32,7 @@ public static class PartitionAccessPolicyNodeType
     {
         Name = "Partition Access Policy",
         Icon = "/static/NodeTypeIcons/shield.svg",
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<PartitionAccessPolicy>())

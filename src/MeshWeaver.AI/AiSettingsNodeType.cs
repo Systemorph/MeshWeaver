@@ -57,7 +57,7 @@ public static class AiSettingsNodeType
         Name = "AI Settings",
         Icon = "/static/NodeTypeIcons/sparkle.svg",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<AiSettings>())

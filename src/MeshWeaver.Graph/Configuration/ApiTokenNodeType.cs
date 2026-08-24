@@ -65,7 +65,7 @@ public static class ApiTokenNodeType
         // MainNode = userId on each token row + the per-user-partition own-scope
         // shortcut in RlsNodeValidator to gate Create/Read.
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddApiTokenViews()
             .WithHandler<ValidateTokenRequest>(HandleValidateToken)

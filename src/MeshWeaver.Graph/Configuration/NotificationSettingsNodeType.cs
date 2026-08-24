@@ -40,7 +40,7 @@ public static class NotificationSettingsNodeType
         Name = "Notification Settings",
         Icon = "/static/NodeTypeIcons/bell.svg",
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<NotificationSettings>())
