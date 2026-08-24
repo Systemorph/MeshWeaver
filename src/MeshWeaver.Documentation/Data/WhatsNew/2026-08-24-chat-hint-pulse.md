@@ -1,6 +1,7 @@
 ---
 Name: Pages can point at the chat
-Category: What's New
+Category: Feature
+Order: -20260824
 Description: A link with ?hint=chat makes the header's chat button pulse for a few seconds — course pages use it to show newcomers where the conversation lives.
 Icon: Sparkle
 ---
