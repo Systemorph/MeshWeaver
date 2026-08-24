@@ -137,4 +137,9 @@ describe("sizeInlineSvg", () => {
     expect(root).not.toContain('width="24"');
     expect(root).not.toContain("height=24");
   });
+
+  it("preserves the self-closing slash when an unquoted size is the last attribute", () => {
+    const out = sizeInlineSvg(`<svg viewBox="0 0 24 24" width=24/>`, 32);
+    expect(out).toBe(`<svg width="32" height="32" viewBox="0 0 24 24"/>`);
+  });
 });

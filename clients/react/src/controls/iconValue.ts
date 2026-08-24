@@ -53,7 +53,9 @@ export function sizeInlineSvg(svg: string, size: number): string {
     const cleaned = attrs
       .replace(/\s(?:width|height)\s*=\s*"[^"]*"/gi, "")
       .replace(/\s(?:width|height)\s*=\s*'[^']*'/gi, "")
-      .replace(/\s(?:width|height)\s*=\s*[^\s>]+/gi, "");
+      // Stop before "/" too: in `<svg … width=24/>` the unquoted value must not swallow the
+      // self-closing slash (that would emit a never-closed root tag — malformed XML).
+      .replace(/\s(?:width|height)\s*=\s*[^\s>/]+/gi, "");
     return `<svg width="${size}" height="${size}"${cleaned}>`;
   });
 }
