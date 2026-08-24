@@ -10,6 +10,15 @@ export {
   type ControlComponent,
   type SkinComponent,
 } from "./render/registryContext.js";
+// Deployment-time pack composition: the JS bundles are static, so a DEPLOYMENT (not the running
+// app) is where client modules join — the manifest declares them, the build imports them, this
+// folds their leaves over the base pack.
+export {
+  composePacks,
+  composeDeployment,
+  type PackExtension,
+  type DeploymentModule,
+} from "./render/composePacks.js";
 export { ScopeProvider, useAreaState, useResolve, useBindingPointer, useEmit, useScope } from "./area/context.js";
 export { StaticAreaSource } from "./area/source.js";
 // Node-bound DataContexts (/$meshNode/…): the client twin of MeshNodeBindingExtensions. Exported so a

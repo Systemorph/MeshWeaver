@@ -1,0 +1,11 @@
+{
+  "$schema": "./deployment.schema.json",
+  "name": "Memex",
+  "portalUrl": "http://localhost:5250",
+  "branding": {
+    "displayName": "MeshWeaver",
+    "accent": "#0f6cbd",
+    "accentDark": "#4aa3e8"
+  },
+  "modules": []
+}

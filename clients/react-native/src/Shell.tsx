@@ -21,6 +21,7 @@ import { type NavTarget } from "./nav";
 import { CLIENT_MENUS, ClientScreen, type ClientDestination } from "./screens";
 import { loadInstances, currentInstance, instanceIdentity, onInstancesChanged, selectAndSignIn, setConnectStatus, type InstanceIdentity } from "./connection";
 import { useStyles, useTheme, type Palette } from "./theme";
+import { deployment } from "./deployment.generated";
 import { LeftMenuView } from "./leftMenu";
 
 const useSheet = () => useStyles(makeStyles);
@@ -142,7 +143,7 @@ function TopBar({ onNavigate, home, isMobile, onToggleMenu, onReconnect, onManag
       ) : null}
       <Pressable style={isMobile ? styles.brandMobile : styles.brand} onPress={() => onNavigate(home)}>
         <View style={styles.logo}><Text style={styles.logoMark}>◆</Text></View>
-        {isMobile ? null : <Text style={styles.brandText}>MeshWeaver</Text>}
+        {isMobile ? null : <Text style={styles.brandText}>{deployment.branding.displayName}</Text>}
       </Pressable>
       <InstanceSwitcher isMobile={isMobile} onReconnect={onReconnect} onManage={onManageInstances} />
       <View style={styles.searchWrap}>

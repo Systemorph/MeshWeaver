@@ -1,0 +1,11 @@
+{
+  "$schema": "../deployment.schema.json",
+  "name": "Acme",
+  "portalUrl": "https://acme.example",
+  "branding": {
+    "displayName": "Acme Portal",
+    "accent": "#7c3aed",
+    "accentDark": "#a78bfa"
+  },
+  "modules": ["./deployment/examples/acme-module"]
+}

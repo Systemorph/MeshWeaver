@@ -2,7 +2,7 @@
   "name": "meshweaver-mobile",
   "version": "0.1.0",
   "private": true,
-  "description": "MeshWeaver on React Native / Expo — the native leaf pack over @meshweaver/react/core. The MAUI peer.",
+  "description": "MeshWeaver on React Native / Expo \u2014 the native leaf pack over @meshweaver/react/core. The MAUI peer.",
   "main": "expo/AppEntry.js",
   "scripts": {
     "start": "expo start",
@@ -12,7 +12,13 @@
     "web:export": "expo export --platform web && node scripts/pwa-inject.mjs dist/index.html",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "gen:deployment": "node scripts/gen-deployment.mjs",
+    "prestart": "node scripts/gen-deployment.mjs",
+    "preios": "node scripts/gen-deployment.mjs",
+    "preandroid": "node scripts/gen-deployment.mjs",
+    "preweb": "node scripts/gen-deployment.mjs",
+    "preweb:export": "node scripts/gen-deployment.mjs"
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",
@@ -45,15 +51,15 @@
     "vitest": "^4.1.11"
   },
   "_overrides_note": [
-    "postcss: expo 52 → @expo/metro-config pins 8.4.49, below the 8.5.x patch line. This is the one",
+    "postcss: expo 52 \u2192 @expo/metro-config pins 8.4.49, below the 8.5.x patch line. This is the one",
     "advisory in the Expo tree that is BOTH reachable from what we build (the web export bundles CSS",
-    "through metro-config) and safe to force — same major, no API change.",
+    "through metro-config) and safe to force \u2014 same major, no API change.",
     "The rest of the Expo-toolchain advisories (tar, @xmldom/xmldom, uuid, brace-expansion) are NOT",
     "overridden on purpose: each patched version is a breaking major for its CJS consumer inside",
     "@expo/cli / native prebuild (brace-expansion@5 is ESM-only and minimatch requires() it; uuid@11",
-    "likewise breaks xcode's require; tar 6→7 and xmldom 0.7→0.9 are breaking API changes). They are",
+    "likewise breaks xcode's require; tar 6\u21927 and xmldom 0.7\u21920.9 are breaking API changes). They are",
     "reachable only from `expo prebuild` / `expo run:*`, not from the web export or the test run.",
-    "Forcing them would break the build to quiet a scanner — the real fix is the Expo SDK upgrade",
+    "Forcing them would break the build to quiet a scanner \u2014 the real fix is the Expo SDK upgrade",
     "(expo@57 + react-native@0.86), which is its own migration."
   ],
   "overrides": {
@@ -67,7 +73,7 @@
     "",
     "1. react 19 cannot install. react-native@0.76.5 hard-peers react ^18.2.0, so npm ci fails",
     "   ERESOLVE and BOTH RN jobs die before running a single check. Probed directly: pinning",
-    "   @types/react back to 18 does NOT help — npm still reports",
+    "   @types/react back to 18 does NOT help \u2014 npm still reports",
     "     Found: react@19.2.8 / peer react@^18.2.0 from react-native@0.76.5",
     "   so the blocker is the HARD react peer, not the peerOptional @types/react one that the CI",
     "   log surfaces first. --legacy-peer-deps / overrides would install a combination upstream",
@@ -81,13 +87,13 @@
     "   So typescript stays 5.x here until the Expo SDK upgrade. This is the same TS 7 removal",
     "   that forced clients/typescript off transpileModule onto amaro.",
     "",
-    "Moving forward is issue #1584: react-native 0.82 peers are exactly react ^19.1.1 — the Expo",
+    "Moving forward is issue #1584: react-native 0.82 peers are exactly react ^19.1.1 \u2014 the Expo",
     "SDK 52->57 upgrade, which also has to port expo-av. Do that deliberately, not by sweep.",
     "",
     "This note is now ENFORCED, not just documented: .github/dependabot.yml gives this directory",
     "its own npm update config whose `ignore` holds back exactly the majors listed above (expo*,",
     "@expo/*, react, react-dom, react-test-renderer, @types/react*, typescript). Before that split",
     "the sweep re-opened the same unmergeable PR every Monday (#1704 was the second). Lift those",
-    "holdbacks as PART of the #1584 migration — they and this note retire together."
+    "holdbacks as PART of the #1584 migration \u2014 they and this note retire together."
   ]
 }
