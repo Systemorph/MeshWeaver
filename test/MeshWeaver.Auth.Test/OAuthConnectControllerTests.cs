@@ -197,16 +197,36 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     }
 
     [Fact]
-    public void Register_EachCallReturnsUniqueClientId()
+    public void Register_ReRegistrationReturnsTheSameClientId()
     {
-        // Claude Desktop re-registers per install; we don't persist, but IDs must not collide.
+        // MCP clients re-register on EVERY reconnect. The client_id is derived from the client's
+        // own metadata (name + redirect URIs) plus this deployment's origin, so a re-registration
+        // is recognised as the SAME application — which is what lets a stored consent match
+        // instead of prompting the user again on every single connection. (It used to be random,
+        // and this test used to pin exactly the behaviour that caused the re-consent bug: every
+        // registration presenting as a brand-new app.)
         var req = new ClientRegistrationRequest { RedirectUris = ["https://claude.ai/callback"] };
         var controller = CreateController();
 
         var r1 = ((ObjectResult)controller.RegisterClient(req)!).Value as ClientRegistrationResponse;
         var r2 = ((ObjectResult)controller.RegisterClient(req)!).Value as ClientRegistrationResponse;
 
-        r1!.ClientId.Should().NotBe(r2!.ClientId);
+        r1!.ClientId.Should().Be(r2!.ClientId);
+    }
+
+    [Fact]
+    public void Register_DistinctClientsStillGetDistinctClientIds()
+    {
+        // Determinism must not cost collision-freedom: genuinely different clients (different
+        // redirect targets) keep distinct ids.
+        var controller = CreateController();
+
+        var a = ((ObjectResult)controller.RegisterClient(new ClientRegistrationRequest
+            { RedirectUris = ["https://claude.ai/callback"] })!).Value as ClientRegistrationResponse;
+        var b = ((ObjectResult)controller.RegisterClient(new ClientRegistrationRequest
+            { RedirectUris = ["https://other.example/cb"] })!).Value as ClientRegistrationResponse;
+
+        a!.ClientId.Should().NotBe(b!.ClientId);
     }
 
     [Fact]
