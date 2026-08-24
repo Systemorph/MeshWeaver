@@ -512,6 +512,7 @@ public static class UserActivityLayoutAreas
         // single-partition query inside the search control.
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
         var bootstrapped = false;
+        var iconsHealed = false;
         return HomeConfigNodeType.Observe(host.Workspace, options)
             .CombineLatest(
                 ObserveSharedTargets(host, ownerId),
@@ -527,6 +528,14 @@ public static class UserActivityLayoutAreas
                     {
                         bootstrapped = true;
                         EnsureDefaultApps(host, ownerId, config);
+                    }
+                    // Icons: adopt the APP's own icon for any record still wearing the generic
+                    // placeholder. Runs at most once per home area, only over the records that
+                    // actually look generic, and never on the paint path.
+                    else if (records is { Count: > 0 } && !iconsHealed)
+                    {
+                        iconsHealed = true;
+                        AdoptAppIcons(host, records);
                     }
                     return (UiControl?)BuildHome(ownerId, config, shared, user, locale, viewerScreen);
                 });
@@ -788,16 +797,19 @@ public static class UserActivityLayoutAreas
         // TWO SECTIONS, apps first: the icon grid you launch things from, then the content you
         // search through. They are different acts — one is "open my app", the other is "find that
         // thing" — and mixing them into one tab strip made the apps just another lens on a search.
-        var home = Controls.Stack
+        //
+        // 🚨 No separate "Shared with me" band any more. It existed because the catalog's scope
+        // queries cannot reach a module living in ANOTHER partition that the viewer was invited
+        // into (#385) — but that is a reason to put those items IN the list, not beside it. The
+        // grants are folded into All as an extra union leg (see BuildContentSection), so a shared
+        // module is simply content the viewer can reach, grouped by its type like everything else.
+        // Deleting the band without folding them in would have silently dropped every invitation.
+        return Controls.Stack
             .WithWidth("100%")
             .WithStyle("gap: 24px; width: 100%;")
             .WithView(BuildAppsBand(nodeOwnerId, locale))
-            .WithView(BuildContentSection(nodeOwnerId, config, user, locale, screen));
-
-        // Shared with me — cross-partition invitations, their own band under the content section.
-        // Present only when the caller actually has such grants.
-        var shared = BuildSharedBand(privacy.Retain(sharedTargets), locale);
-        return shared is null ? home : home.WithView(shared);
+            .WithView(BuildContentSection(
+                nodeOwnerId, config, user, locale, screen, privacy.Retain(sharedTargets)));
     }
 
     /// <summary>
@@ -812,13 +824,28 @@ public static class UserActivityLayoutAreas
     /// full subtree. Pure, for tests.</para>
     /// </summary>
     internal static MeshSearchControl BuildContentSection(
-        string nodeOwnerId, HomeConfig? config, User? user, string? locale, PresentationScreen? screen)
+        string nodeOwnerId, HomeConfig? config, User? user, string? locale, PresentationScreen? screen,
+        IReadOnlyList<string>? sharedTargets = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
         var privacy = screen ?? PresentationScreen.Off;
         var scopes = new List<MeshSearchScopeTab>();
 
-        // Pinned — the owner's shortcuts, kept as its own tab, present only when there are pins.
+        // All FIRST, and therefore the DEFAULT tab: the view activates the first scope, and the
+        // control-level fallback query is scopes[0] — so "everything I can reach" is what the home
+        // opens on. Pinned is the narrower, opt-in lens and follows it.
+        //
+        // Cross-partition invitations (#385) are an extra UNION LEG here rather than a band of
+        // their own: a module someone shared with you is content you can reach, and the scope
+        // queries structurally cannot see it (they walk the viewer's own partition and the roots).
+        // Folding it in is what let the separate "Shared with me" section go without losing it.
+        var sharedLeg = sharedTargets is { Count: > 0 }
+            ? "\n" + $"path:{string.Join("|", sharedTargets)} is:main -nodeType:User{SpacesDedupExclusions}"
+            : string.Empty;
+        scopes.Add(ContentScope("home.all", locale, cfg.DefaultSort,
+            (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions) + sharedLeg));
+
+        // Pinned — the owner's shortcuts, present only when there are pins.
         // 🚨 The pins are INTERPOLATED INTO the query string, so the presentation screen (#1803)
         // drops a marked one HERE, before the query exists — not only where its card is painted.
         // No ItemArea: the inline unpin overlay used to resolve an area on each pinned node's OWN
@@ -834,11 +861,6 @@ public static class UserActivityLayoutAreas
                     ? $"{pinnedBase} {suffix}\n{pinnedBase} {SortSuffixLastModified}"
                     : $"{pinnedBase} {suffix}"));
         }
-
-        // All — every top-level node the viewer can access (apps excluded; they have their own
-        // section). The ONE content category.
-        scopes.Add(ContentScope("home.all", locale, cfg.DefaultSort,
-            (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions)));
 
         // ONE list that FANS OUT by the node's own type — Spaces, Clients, Courses, … — with the
         // biggest group first (GroupByFrequency), so the page opens on what the viewer actually
@@ -860,8 +882,12 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(true)
             .WithCollapsibleSections(true)
             .WithMaxColumns(4)
-            .WithItemLimit(50)
-            .WithMaxRows(6)
+            // Fill the page. The home is where a viewer looks for something they can already see;
+            // a short list makes them search for what should have been on screen. 200 bounds the
+            // query, and MaxRows is a per-GROUP cap — with the type fan-out that sets the section's
+            // height rather than a hard total.
+            .WithItemLimit(200)
+            .WithMaxRows(24)
             .WithReactiveMode(true)
             .WithCreateHref("/create");
         return content;
@@ -1073,6 +1099,82 @@ public static class UserActivityLayoutAreas
                 });
         }
     }
+
+    /// <summary>
+    /// Adopts each app's OWN icon onto the records still wearing the generic placeholder.
+    ///
+    /// <para>An app record carries its icon so the grid can paint from query rows alone — but a
+    /// record seeded from config, or written by an install flow that had nothing better to hand,
+    /// gets the puzzle-piece placeholder. The app itself (the plugin cover the record points at
+    /// through <see cref="MeshNode.MainNode"/>) has the real icon, and a grid of identical
+    /// placeholders is unusable: the whole point of an icon grid is that you recognise the app
+    /// before you read the label.</para>
+    ///
+    /// <para>Bounded on purpose. It runs at most once per home area, ONLY over records whose icon
+    /// is missing or generic, and resolves them in ONE query rather than per tile — the cover
+    /// paths are a cross-schema alternation, which is exactly why this never belongs on the paint
+    /// path. Records that already carry a real icon cost nothing: no query, no write. A cover that
+    /// has no icon either is left alone rather than rewritten with the same placeholder, so the
+    /// pass converges instead of re-firing every render.</para>
+    ///
+    /// <para>Long term the STORE stamps the real icon when it writes the record and this becomes a
+    /// no-op; until then the home repairs what it renders, because a placeholder grid is a broken
+    /// feature no matter which side was supposed to fill it in.</para>
+    /// </summary>
+    private static void AdoptAppIcons(LayoutAreaHost host, IReadOnlyList<MeshNode> records)
+    {
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (mesh is null)
+            return;
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.AppRecords");
+
+        var needy = records
+            .Where(NeedsIcon)
+            .Where(r => !string.IsNullOrEmpty(r.MainNode)
+                        && !string.Equals(r.MainNode, r.Path, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (needy.Count == 0)
+            return;
+
+        var coverPaths = needy
+            .Select(r => r.MainNode!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{string.Join("|", coverPaths)} select:path,id,namespace,name,nodeType,icon"))
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Select(c => c.Items
+                .Where(n => !string.IsNullOrEmpty(n.Path) && !string.IsNullOrEmpty(n.Icon))
+                .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Icon!, StringComparer.OrdinalIgnoreCase))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Subscribe(
+                covers =>
+                {
+                    foreach (var record in needy)
+                    {
+                        if (!covers.TryGetValue(record.MainNode!, out var icon)
+                            || string.Equals(icon, GenericAppIcon, StringComparison.OrdinalIgnoreCase))
+                            continue;   // nothing better available — leave it, so this converges
+                        host.Workspace.GetMeshNodeStream(record.Path)
+                            .Update(cur => NeedsIcon(cur) ? cur with { Icon = icon } : cur)
+                            .Subscribe(_ => { },
+                                ex => logger?.LogWarning(ex,
+                                    "App icon adoption failed at {Path}", record.Path));
+                    }
+                },
+                ex => logger?.LogWarning(ex,
+                    "App icon lookup failed for {Count} record(s); keeping the placeholders",
+                    needy.Count));
+    }
+
+    /// <summary>True when a record has no icon, or still wears the generic placeholder.</summary>
+    internal static bool NeedsIcon(MeshNode record) =>
+        string.IsNullOrEmpty(record.Icon)
+        || string.Equals(record.Icon, GenericAppIcon, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>One default app record: the tile's whole identity lives on the NODE (Name, Icon,
     /// MainNode = the app it opens), so the grid paints from query rows alone. Pure, for tests.</summary>
