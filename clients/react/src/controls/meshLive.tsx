@@ -623,8 +623,10 @@ export function MeshNodeCollectionView({ control }: { control: UiControl }): Rea
     return () => {
       live = false;
     };
+    // JSON.stringify: an unambiguous identity for the query LIST — a bare join can collide
+    // (["a","bc"] vs ["ab","c"]) and leave stale results on a list change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ops, queries.join("")]);
+  }, [ops, JSON.stringify(queries)]);
 
   if (items == null) return <Spinner size="tiny" />;
   if (items.length === 0 && !showAdd)

@@ -521,7 +521,9 @@ const MeshNodeCollection: ControlComponent = ({ control }) => {
   const queries = (Array.isArray(control.queries) ? control.queries : []).map(s).filter(Boolean);
   const [items, setItems] = useState<MeshSearchResult[] | null>(null);
 
-  const key = queries.join("|");
+  // JSON.stringify: an unambiguous identity for the query LIST — a bare join can collide
+  // (["a","bc"] vs ["ab","c"]) and leave stale results on a list change.
+  const key = JSON.stringify(queries);
   useEffect(() => {
     if (!ops?.search || queries.length === 0) {
       setItems([]);

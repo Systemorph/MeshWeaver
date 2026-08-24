@@ -85,7 +85,9 @@ export function parseSortOptions(raw: unknown): MeshSearchSortOption[] {
 
 /** Parse the control's `scopeTabs` wire value. Serializer default-suppression means a false
  *  bool arrives ABSENT — only an explicit boolean is carried through, so the pack-level
- *  fallback (the control-level setting) still applies when a scope says nothing. */
+ *  fallback (the control-level setting) still applies when a scope says nothing. A tab without
+ *  a LABEL is dropped: the server contract makes Label positional-required, and the packs track
+ *  the active scope BY label — several ""-labelled tabs would make that selection ambiguous. */
 export function parseScopeTabs(raw: unknown): MeshSearchScope[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -101,7 +103,7 @@ export function parseScopeTabs(raw: unknown): MeshSearchScope[] {
         sortByAccess: r.sortByAccess === true,
       };
     })
-    .filter((t) => t.label.length > 0 || t.query.length > 0);
+    .filter((t) => t.label.length > 0);
 }
 
 /** Split a (possibly newline-joined UNION) hidden query into the individual queries to issue,
