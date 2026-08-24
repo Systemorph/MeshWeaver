@@ -1457,6 +1457,9 @@ public static class MemexConfiguration
             // base path. In k8s the ingress usually routes /next to the Next service before this
             // fires; locally (PORTAL_ORIGIN dev / e2e) this is what makes the portal origin usable
             // in a browser at all. APIs and assets are mapped ABOVE and never hit this fallback.
+            // Gated on the Next shell being ON: with BOTH shells off (a headless mesh API
+            // deployment) there is nothing to redirect to, and unmatched paths 404 naturally.
+            if (guiShells.Next)
             app.MapFallback("/{**path}", (HttpContext http) =>
             {
                 var accept = http.Request.Headers.Accept.ToString();
