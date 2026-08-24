@@ -41,7 +41,11 @@ public sealed class ProviderKeyProtector : IProviderKeyProtector
     /// OUT.</para>
     /// </summary>
     /// <param name="plaintext">The key to protect; null/empty is returned as-is.</param>
-    /// <returns>The encrypted stored form, or the original value when encryption is disabled or skipped.</returns>
+    /// <returns>The encrypted <c>enc:v1:</c> form, or the value unchanged when it is null/empty or
+    /// already tagged. There is no longer a "returns the original when encryption is disabled" case
+    /// — that WAS the plaintext-persistence defect; with no master key this throws.</returns>
+    /// <exception cref="InvalidOperationException">No master key is configured, so the key cannot be
+    /// stored without writing it in the clear.</exception>
     public string? Protect(string? plaintext)
     {
         if (string.IsNullOrEmpty(plaintext)) return plaintext;
