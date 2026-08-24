@@ -103,7 +103,7 @@ public static class UserNodeType
         Name = "User",
         Icon = "/static/NodeTypeIcons/person.svg",
         NodeType = NodeType,
-        ExcludeFromContext = new HashSet<string> { "search" },
+        ExcludeFromContext = new HashSet<string> { "search", "content" },
         // Post-v10 design: User nodes live at the ROOT namespace (path={userId}),
         // each user gets their own per-user partition. The previous design parked
         // them under namespace="User" — now superseded; setting an empty default

@@ -59,7 +59,7 @@ public static class HomeConfigNodeType
             NodeType = NodeType,
             State = MeshNodeState.Active,
             Content = new HomeConfig(),
-            ExcludeFromContext = new HashSet<string> { "search", "create" },
+            ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         });
         return builder;
     }
@@ -70,7 +70,7 @@ public static class HomeConfigNodeType
         Name = "Home Page",
         Icon = "/static/NodeTypeIcons/layout.svg",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddDefaultLayoutAreas()
             .AddMeshDataSource(source => source.WithContentType<HomeConfig>())
