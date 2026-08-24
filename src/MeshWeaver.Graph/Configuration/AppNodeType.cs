@@ -45,7 +45,10 @@ public static class AppNodeType
     /// <summary>MeshNode definition for <c>nodeType:InstalledApp</c>. No per-record layout area:
     /// the home's Apps grid paints its icon tiles straight from the query rows
     /// (<c>MeshSearchRenderMode.Icons</c>) — a per-record tile area meant one hub activation PER
-    /// RESULT, the exact load the record model exists to avoid.</summary>
+    /// RESULT, the exact load the record model exists to avoid.
+    /// <para>The record's hub adopts the app's own icon on INITIALIZATION (see
+    /// <see cref="AppIconAdoption"/>) — once per activation, on the hub that owns the node, and
+    /// never on anyone's render path.</para></summary>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Installed App",
@@ -55,5 +58,6 @@ public static class AppNodeType
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<App>())
+            .WithInitialization(AppIconAdoption.AdoptOnInit)
     };
 }
