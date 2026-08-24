@@ -1,21 +1,24 @@
 using System.Linq;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Presentation mode (issue #1803) on the SURFACES the issue names — the home's tabs (Shared with
-/// me, Pinned, Apps and the Spaces catalog, which is where the former Spaces / Last Read / Last
-/// Edited tabs live) and the node menu that marks them.
+/// Presentation mode (issue #1803) on the SURFACES the issue names — the home's viewer-scoped
+/// surfaces (the Apps section, the Content section's Pinned tab and its one All category, the
+/// Shared-with-me band) and the node menu that marks them.
 ///
-/// <para>Three of the tabs filter at the point the QUERY is built rather than only where a card is
-/// painted, and that is the interesting part: a pinned path, a shared-band target and an installed
-/// app path are all INTERPOLATED INTO the control's query string, which the view exposes in its
+/// <para>The Pinned tab and the Shared band filter at the point the QUERY is built rather than
+/// only where a card is painted, and that is the interesting part: a pinned path and a shared-band
+/// target are INTERPOLATED INTO the control's query string, which the view exposes in its
 /// search-options editor and carries in the <c>hq=</c> parameter of "open in search". A marked name
 /// reaching the address bar mid-presentation is the leak, whether or not a card for it is ever
-/// drawn.</para>
+/// drawn. The Apps records are the viewer's own — their query is generic, so they screen at paint,
+/// keyed by each tile's navigation target.</para>
 ///
 /// <para>The OG-card surface is NOT here: <c>MeshWeaver.OgCard</c> left the platform in #1975, so
 /// screening it is a follow-up in the repo that owns it now.</para>
@@ -86,104 +89,98 @@ public class PresentationSurfacesTest
             .Should().Contain("Acme");
     }
 
-    // ── The tabbed home: Shared with me, Pinned, Apps ──────────────────────────────────────────
+    // ── The home's sections: Apps, Content (Pinned + All), Shared with me ──────────────────────
 
-    private static string[] TabLabels(UiControl home) =>
-        home.Should().BeOfType<TabsControl>().Subject.Areas
-            .Select(a => a.Skins.OfType<TabSkin>().Single().Label!.ToString()!)
-            .ToArray();
+    private static string[] ScopeLabels(MeshSearchControl content) =>
+        content.ScopeTabs!.Select(t => t.Label).ToArray();
+
+    private static string ScopeQuery(MeshSearchControl content, string label) =>
+        content.ScopeTabs!.Single(t => t.Label == label).Query;
+
+    private static MeshSearchControl ContentOf(User? user, PresentationScreen? screen) =>
+        UserActivityLayoutAreas.BuildContentSection(Owner, null, user, null, screen);
 
     [Fact]
-    public void Home_ATabWhoseWholeContentIsMarked_Disappears()
+    public void Content_AScopeWhoseWholeContentIsMarked_Disappears()
     {
         var user = new User { PinnedPaths = ["Acme/Q3-Renewal"] };
 
-        // Off: both viewer-scoped tabs are there.
-        TabLabels(UserActivityLayoutAreas.BuildHome(
-                Owner, sharedTargets: ["Acme/Deals"], user: user))
-            .Should().Equal("Shared with me", "Pinned", "Apps", "Spaces");
+        // Off: the Pinned tab is there.
+        ScopeLabels(ContentOf(user, null)).Should().Equal("Pinned", "All");
 
-        // On, with Acme marked: everything in both of them is inside the marked space, so both tabs
-        // go — an empty tab labelled "Pinned" would itself say something.
-        TabLabels(UserActivityLayoutAreas.BuildHome(
-                Owner, sharedTargets: ["Acme/Deals"], user: user, screen: Active("Acme")))
-            .Should().Equal("Apps", "Spaces");
+        // On, with Acme marked: everything pinned is inside the marked space, so the tab goes — an
+        // empty tab labelled "Pinned" would itself say something.
+        ScopeLabels(ContentOf(user, Active("Acme"))).Should().Equal("All");
     }
 
     [Fact]
-    public void Home_ATabKeepsItsUnmarkedContent()
+    public void Content_AScopeKeepsItsUnmarkedContent()
     {
-        var home = UserActivityLayoutAreas.BuildHome(
-            Owner,
-            sharedTargets: ["Acme/Deals", "Northwind/Sales"],
-            user: new User { PinnedPaths = ["Acme", "Doc/Guide"] },
-            screen: Active("Acme"));
+        var content = ContentOf(new User { PinnedPaths = ["Acme", "Doc/Guide"] }, Active("Acme"));
 
-        TabLabels(home).Should().Equal("Shared with me", "Pinned", "Apps", "Spaces");
+        ScopeLabels(content).Should().Equal("Pinned", "All");
+        ScopeQuery(content, "Pinned").Should().NotContain("Acme").And.Contain("Doc/Guide");
+    }
+
+    [Fact]
+    public void Home_TheSharedBand_DisappearsWhenEveryTargetIsMarked()
+    {
+        // The band's targets are query-string content, so the screen applies BEFORE the query is
+        // built. Every target marked ⇒ no band at all: the home is back to its two sections.
+        UserActivityLayoutAreas.BuildHome(Owner, sharedTargets: ["Acme/Deals"])
+            .Should().BeOfType<StackControl>().Subject
+            .Areas.Should().HaveCount(3, "apps, content, shared");
+        UserActivityLayoutAreas.BuildHome(Owner, sharedTargets: ["Acme/Deals"], screen: Active("Acme"))
+            .Should().BeOfType<StackControl>().Subject
+            .Areas.Should().HaveCount(2, "apps and content only — the marked band is gone");
     }
 
     [Fact]
     public void SharedBand_DropsAMarkedTarget()
     {
         var painted = Active("Acme").Retain(["Acme/Deals", "Northwind/Sales"]);
-
         painted.Should().Equal("Northwind/Sales");
-        QueryOf(UserActivityLayoutAreas.BuildSharedWithMe(painted))
+
+        var band = UserActivityLayoutAreas.BuildSharedBand(painted, locale: null)!;
+        band.HiddenQuery!.ToString()
             .Should().NotContain("Acme").And.Contain("Northwind/Sales");
     }
 
     [Fact]
-    public void AppsTab_DropsAMarkedApp_BeforeItReachesTheQuery()
+    public void AppsBand_QueryNeverCarriesAppPaths()
     {
-        // An installed app's path is interpolated into `path:(…)`, so a marked one must never get
-        // that far.
-        var apps = UserActivityLayoutAreas.BuildApps(
-                Owner,
-                new HomeConfig { DefaultApps = ["Store"] },
-                installedApps: ["Chess", "Acme"],
-                locale: null,
-                screen: Active("Acme"))
-            .Should().BeOfType<MeshSearchControl>().Subject;
+        // The Apps band queries the viewer's OWN {owner}/_App records — a GENERIC query, so no
+        // app path (marked or not) can ever reach the query string / the `hq=` URL. The marked-app
+        // guarantee therefore lives at PAINT (below), where the tile's name would otherwise show.
+        var query = UserActivityLayoutAreas.BuildAppsBand(Owner, null).HiddenQuery!.ToString()!;
 
-        var query = apps.HiddenQuery!.ToString()!;
-        query.Should().Contain("Store").And.Contain("Chess");
         query.Should().NotContain("Acme");
+        query.Should().Contain($"path:{Owner}/_App");
     }
 
     [Fact]
-    public void AppsTab_LeavesSystemAreasAlone()
+    public void AppRecords_AreScreenedByTheirTargetAtPaint()
     {
-        // A "~/" entry is a system AREA, not a mesh path — it names no node, so there is nothing for
-        // the screen to match and it must pass through even while the mode is up. Asserted because
-        // the code only says it in a comment, and a comment is not a test.
-        // Marking the system area TOO (a viewer can type anything into their own profile) must not
-        // make it disappear, and marking the only real app must not take the dock with it.
-        var apps = UserActivityLayoutAreas.BuildApps(
-            Owner,
-            new HomeConfig { DefaultApps = ["~/Settings"] },
-            installedApps: ["Acme"],
-            locale: null,
-            screen: Active("Acme", "~/Settings"));
+        // Icons tiles paint straight from the query rows; the view's paint filter is keyed by the
+        // tile's navigation TARGET (the record's MainNode), so a marked app hides even though its
+        // RECORD path ({owner}/_App/…) is never itself marked.
+        var records = new[]
+        {
+            MeshNode.FromPath($"{Owner}/_App/Acme") with
+            {
+                NodeType = AppNodeType.NodeType, Name = "Acme", MainNode = "Acme",
+            },
+            MeshNode.FromPath($"{Owner}/_App/Northwind") with
+            {
+                NodeType = AppNodeType.NodeType, Name = "Northwind", MainNode = "Northwind",
+            },
+        };
 
-        // Every MESH path was screened away, so what is left is the system-area dock itself — a
-        // stack of tiles, not the "no apps" placeholder and not a query carrying the marked name.
-        apps.Should().BeOfType<StackControl>(
-            "the system area survives the screen; only the marked mesh app went");
-        apps.Should().NotBeOfType<MarkdownControl>();
-    }
-
-    [Fact]
-    public void AppsTab_IsUnchangedWhenTheModeIsOff()
-    {
-        var apps = UserActivityLayoutAreas.BuildApps(
-                Owner,
-                new HomeConfig { DefaultApps = ["Store"] },
-                installedApps: ["Acme"],
-                locale: null,
-                screen: PresentationScreen.For(false, ["Acme"]))
-            .Should().BeOfType<MeshSearchControl>().Subject;
-
-        apps.HiddenQuery!.ToString().Should().Contain("Acme");
+        Active("Acme").Filter(records, n => n.MainNode).Select(n => n.Name)
+            .Should().Equal("Northwind");
+        // Mode off (marks curated but not presenting): everything paints.
+        PresentationScreen.For(false, ["Acme"]).Filter(records, n => n.MainNode)
+            .Should().HaveCount(2);
     }
 
     // ── The legacy single-list catalog ─────────────────────────────────────────────────────────
@@ -221,7 +218,10 @@ public class PresentationSurfacesTest
         QueryOf(marked).Should().Be(QueryOf(plain));
         QueryOf(marked).Should().NotContain("Acme");
 
-        QueryOf(UserActivityLayoutAreas.BuildSpaces(Owner)).Should().NotContain("Acme");
+        // Same for the content section's one category: identical query with and without the screen.
+        var spacesMarked = ScopeQuery(ContentOf(null, Active("Acme")), "All");
+        var spacesPlain = ScopeQuery(ContentOf(null, null), "All");
+        spacesMarked.Should().Be(spacesPlain).And.NotContain("Acme");
     }
 
     // ── The marking affordance ─────────────────────────────────────────────────────────────────

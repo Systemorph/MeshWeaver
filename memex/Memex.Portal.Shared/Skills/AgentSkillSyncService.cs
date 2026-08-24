@@ -149,6 +149,10 @@ public sealed class AgentSkillSyncService(
     public static string ComposeWorkspaceInstructions(
         IEnumerable<MeshNode> skillNodes, JsonSerializerOptions jsonOptions)
     {
+        // 🌍 Deliberately NO locale: this catalog is written into the CLI harness's workspace
+        // instructions — it is MODEL-facing, not a person's picker — so it stays the authored
+        // English in every deployment. Localizing it would make what an agent can discover depend
+        // on the UI language of whoever happened to trigger the sync.
         var catalog = RenderSkillCatalog(SkillNodeType.ProjectSkills(skillNodes, jsonOptions));
         return string.IsNullOrEmpty(catalog)
             ? BaseInstructions()

@@ -15,6 +15,57 @@ public class AgentFileParserTest
 
     #region Parse Tests
 
+    /// <summary>
+    /// 🌍 A <c>translations:</c> block reaches the configuration and survives the sync-back —
+    /// Parse → Serialize → Parse. Without the serialize half, editing an agent in the mesh would
+    /// silently write its translations away, and the file would come back English-only with
+    /// nothing red (issue #1626).
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public void Parse_TranslationsBlock_ReachesTheConfiguration_AndRoundTrips()
+    {
+        var content =
+            "---\n" +
+            "nodeType: Agent\n" +
+            "name: Tutor\n" +
+            "description: Guides trainees through a course.\n" +
+            "translations:\n" +
+            "  de:\n" +
+            "    name: Tutor\n" +
+            "    description: Begleitet Lernende durch einen Kurs.\n" +
+            "---\n\n" +
+            "You are the course tutor.\n";
+
+        var node = _parser.Parse("/Agent/Tutor.md", content, "Agent/Tutor.md");
+        node.Should().NotBeNull();
+        var config = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        config.Translations.Should().NotBeNull();
+        config.Translations!["de"].Description.Should().Be("Begleitet Lernende durch einen Kurs.");
+
+        // 🚨 The MODEL-facing description is the delegation catalogue and stays the authored text —
+        // translating it would make agent routing depend on the viewer's UI language.
+        config.Description.Should().Be("Guides trainees through a course.");
+        // The system prompt (the body) is likewise untouched.
+        config.Instructions.Should().Be("You are the course tutor.");
+
+        var reparsed = _parser.Parse("/Agent/Tutor.md", _parser.Serialize(node), "Agent/Tutor.md");
+        reparsed.Should().NotBeNull();
+        var round = reparsed!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        round.Translations.Should().NotBeNull();
+        round.Translations!["de"].Name.Should().Be("Tutor");
+        round.Translations["de"].Description.Should().Be("Begleitet Lernende durch einen Kurs.");
+    }
+
+    /// <summary>An untranslated agent gains no empty <c>translations:</c> key on the way back out.</summary>
+    [Fact(Timeout = 20000)]
+    public void Serialize_UntranslatedAgent_WritesNoTranslationsKey()
+    {
+        var content = "---\nnodeType: Agent\nname: Plain\ndescription: Plain agent.\n---\n\nBody.\n";
+        var node = _parser.Parse("/Agent/Plain.md", content, "Agent/Plain.md");
+        node.Should().NotBeNull();
+        _parser.Serialize(node!).Should().NotContain("translations:");
+    }
+
     [Fact(Timeout = 20000)]
     public void ParseAsync_ValidAgentMarkdown_ReturnsAgentConfiguration()
     {

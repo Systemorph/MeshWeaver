@@ -1,0 +1,122 @@
+using System.Text.RegularExpressions;
+using MeshWeaver.Mesh.Services;
+
+namespace MeshWeaver.Mesh.Security;
+
+/// <summary>
+/// The ONE place the permission-deciding mesh queries are written — every read the security fold
+/// (<c>PermissionEvaluator</c>) makes to decide what a viewer may see.
+///
+/// <para>🚨 <b>In the security fold, "no result" and "not allowed" must never be the same value.</b>
+/// Several of these reads are GLOBAL by necessity — a <c>GroupMembership</c> lives under the group
+/// node, which may sit in a different partition than the grant that names the group, so the query
+/// carries no <c>path:</c> and no <c>namespace:</c>. On Postgres that is exactly the shape
+/// <c>PostgreSqlCrossSchemaQueryProvider</c> serves by UNION-ing every partition schema, ordering by
+/// <c>last_modified DESC</c> and clipping at a 50-row default page. A caller cannot tell a page from
+/// the whole set (<see cref="MeshQueryRequest.Complete"/>), and here the difference is a
+/// PERMISSION: a truncated membership list is indistinguishable from "this viewer is in no groups",
+/// so a group-derived permission simply vanishes and every surface gated on it disappears at once —
+/// with nothing logged and nothing failing (issue #2011).</para>
+///
+/// <para>It is worse than a lost grant in one direction that matters. A group-scoped <b>deny</b>
+/// (<c>AccessAssignment</c> with <c>Denied = true</c> whose subject is a group) is applied only to
+/// the viewers the membership read says are in that group — so the same truncation makes a
+/// revocation FAIL OPEN, leaving a viewer reading content the deny was written to take away.</para>
+///
+/// <para>The trigger is GROWTH, not a change: it fires the moment a mesh's <c>Role</c> or
+/// <c>GroupMembership</c> set outgrows a page, so it appears on the largest install first — the one
+/// where it is most expensive — and nobody will have touched anything.</para>
+///
+/// <para><b>Why a builder rather than a review rule.</b> Every query the fold issues goes through
+/// <see cref="Enumeration"/>, which stamps <see cref="MeshQueryRequest.CompleteQualifier"/> on it.
+/// A query string that never reaches this class is the only way back to the defect, and a query
+/// string that DOES reach it cannot come out truncatable — including one that arrives already
+/// carrying a limit, which is overwritten rather than honoured, because in this fold a page IS the
+/// bug.</para>
+/// </summary>
+public static class SecurityQueries
+{
+    /// <summary>The projection for reads whose CONTENT is folded (roles, memberships, grants, policies).</summary>
+    public const string ContentProjection = "select:path,id,namespace,name,nodeType,content";
+
+    /// <summary>The projection for reads that only need to know a node EXISTS at a path (gated nodes).</summary>
+    public const string IdentityProjection = "select:path,id,namespace,name,nodeType";
+
+    /// <summary>Node type of a custom role definition.</summary>
+    public const string RoleNodeType = "Role";
+
+    /// <summary>Node type of a group-membership record.</summary>
+    public const string GroupMembershipNodeType = "GroupMembership";
+
+    // A standalone `limit:<value>` qualifier — at the start of the query or after whitespace, so a
+    // `content.limit:3` filter or a free-text word ending in "limit:" is left alone.
+    private static readonly Regex LimitQualifier =
+        new(@"(?<=^|\s)limit:\S+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Stamps <paramref name="query"/> as an ENUMERATION — the read whose result the security fold
+    /// treats as the COMPLETE set. Idempotent, and total: a query that already states a limit has it
+    /// REPLACED, because a permission decision taken on a page is the defect this exists to prevent.
+    /// </summary>
+    /// <param name="query">The mesh query string.</param>
+    /// <returns>The same query, guaranteed to carry <see cref="MeshQueryRequest.CompleteQualifier"/>.</returns>
+    public static string Enumeration(string query)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        var trimmed = query.Trim();
+        return LimitQualifier.IsMatch(trimmed)
+            ? LimitQualifier.Replace(trimmed, MeshQueryRequest.CompleteQualifier, 1)
+            : $"{trimmed} {MeshQueryRequest.CompleteQualifier}";
+    }
+
+    /// <summary>
+    /// A GLOBAL (path-less) security read over every instance of <paramref name="nodeType"/> in the
+    /// mesh. Path-less on purpose — the subject and the grant that names it may live in different
+    /// partitions — and therefore always an enumeration.
+    /// </summary>
+    /// <param name="nodeType">The node type to enumerate.</param>
+    /// <param name="projection">The <c>select:</c> projection; content by default.</param>
+    /// <returns>The query string.</returns>
+    public static string Global(string nodeType, string projection = ContentProjection)
+        => Enumeration($"nodeType:{nodeType} scope:subtree {projection}");
+
+    /// <summary>Every custom <c>Role</c> definition in the mesh (<c>$security-roles</c>).</summary>
+    public static string Roles => Global(RoleNodeType);
+
+    /// <summary>Every <c>GroupMembership</c> record in the mesh (<c>$security-memberships</c>).</summary>
+    public static string Memberships => Global(GroupMembershipNodeType);
+
+    /// <summary>
+    /// Every instance of a type-declared subtree GATE (<c>$security-gated:{nodeType}</c>) — the set a
+    /// target path is matched against to find its nearest gated ancestor. Truncation here loses a
+    /// gate's declared PUBLIC surface rather than opening one (the gate only ever ORs Read in), so it
+    /// fails closed — but it is still a permission decided on a page, and it is pinned with the rest.
+    /// </summary>
+    /// <param name="nodeType">The gated node type.</param>
+    /// <returns>The query string.</returns>
+    public static string GatedNodes(string nodeType) => Global(nodeType, IdentityProjection);
+
+    /// <summary>
+    /// A security read anchored to one scope — the per-scope <c>AccessAssignment</c> and
+    /// <c>_Policy</c> walks. Anchored reads are normally served by a single partition's delegate, but
+    /// the ROOT scope's anchor (<c>_Access</c> / the empty namespace) resolves to no partition and
+    /// falls through to the same cross-schema fan-out, so these are stamped too.
+    /// </summary>
+    /// <param name="query">The anchored query string.</param>
+    /// <returns>The query string, stamped as an enumeration.</returns>
+    public static string Scoped(string query) => Enumeration(query);
+
+    /// <summary>
+    /// Every query shape this class produces, for the completeness test that pins them. A member
+    /// added without an entry here is not covered — which is why the test also asserts the fold's
+    /// own builders against <see cref="Enumeration"/>.
+    /// </summary>
+    public static IReadOnlyList<string> AllShapes =>
+    [
+        Roles,
+        Memberships,
+        GatedNodes("Store/Plugin"),
+        Scoped("namespace:_Access nodeType:AccessAssignment " + ContentProjection),
+        Scoped("namespace: id:_Policy nodeType:PartitionAccessPolicy " + ContentProjection),
+    ];
+}

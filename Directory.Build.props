@@ -66,11 +66,29 @@
          It also has to RESOLVE by the time anything pins content-sync to it: data-sync pulls
          content from the tag v$(PlatformVersion). v3.0.0-rc3 shipped 2026-08-16; v3.0.0-rc5
          shipped 2026-08-19 — and its tagged tree CANNOT BOOT (Modules:Assemblies still listed
-         the fourteen removed driver DLLs; fixed by #1901 after the tag). v3.0.0-rc6 is the line
-         NOW BUILDING: the first release whose tree boots, whose module bundles carry their own
+         the fourteen removed driver DLLs; fixed by #1901 after the tag). v3.0.0-rc6 shipped
+         2026-08-20: the first release whose tree boots, whose module bundles carry their own
          dependency closures (#1914/#1919/#1923), and whose platform has shed the module-only
-         Azure/OpenAI dependencies. Its tag is created only when rc6 is released — never tag it
-         early, the v*.*.* tag IS the trigger for the NuGet + image publish.
+         Azure/OpenAI dependencies.
+
+         v3.0.0-rc7 shipped 2026-08-22 — the release in which the optional GUI and voice
+         surfaces stop riding the app closure: all five Blazor view packs (#2018/#2021) and
+         Speech (#2028) ship under modules/<Name>/ and activate through Modules:Assemblies, with
+         their static web assets served from the module (#1724/#1987/#2017/#2020).
+
+         v3.0.0-rc8 is the line NOW BUILDING — the release that makes the extraction OPERABLE:
+         the registry shelf accepts modules for platforms newer than itself (the rc7 three-way
+         deadlock: image ships no modules → only the registry delivers them → the registry
+         refused to carry them until it updated → it could not update without them), CD goes RED
+         when a red main switches it off (#2069), the transient-probe dispose race is gone
+         (#2068), provisioning gets its inverse (Plugins #585), and the hosting operator is
+         enabled on the control instance. Its tag is created only when rc8 is released — never
+         tag it early, the v*.*.* tag IS the trigger for the NuGet + image publish.
+
+         🚨 BUMP THIS THE MOMENT A LINE IS TAGGED, in the same session. rc6 was released while
+         this property still read rc6, so every continuous build afterwards kept stamping a
+         version that was already published — the tag and the line it was cut from stopped being
+         distinguishable, which is precisely what the -ci.<n> suffix exists to prevent.
 
          🚨 rc4 was never tagged, and the gap is deliberate rather than a slip: the line built
          under that label all through the module extraction (#1882), so a v3.0.0-rc4 tag would
@@ -79,7 +97,7 @@
          it publishes are the ones the platform still builds. Do not "fill in" rc4 later: the
          version never shipped, and minting a tag for it now would publish that superseded
          content set for real. -->
-    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc6</PlatformVersion>
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc8</PlatformVersion>
   </PropertyGroup>
   <!-- Multi-arch container publish race fix (main-cd / release-images / edge-images pass
        -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"). The SDK's _PublishMultiArchContainers

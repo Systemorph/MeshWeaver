@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -101,15 +102,63 @@ public static class DataExtensions
     }
 
 
+    /// <summary>
+    /// Constructs the hub's <see cref="IWorkspace"/> — and therefore runs
+    /// <c>DataContext.Initialize</c>, which registers every mapped type with the hub's
+    /// <c>ITypeRegistry</c>. Stays a SYNCHRONOUS buildup action: a caller that resolves the hub can
+    /// read the registry the instant <c>Build</c> returns. Creates no hub (#1868).
+    /// </summary>
+    /// <param name="hub">The hub being initialized.</param>
+    private static void RegisterWorkspaceTypes(IMessageHub hub) => hub.GetWorkspace();
+
+    /// <summary>
+    /// Starts the workspace's data sources and opens its initialization gate — on the hub's INIT
+    /// TURN, never inside <c>Build</c>, because starting a data source opens streams and therefore
+    /// constructs hubs (#1868). See the call site.
+    ///
+    /// <para>A static method group, so <c>WithInitialization</c>'s delegate-identity idempotency
+    /// still collapses repeat registrations from composed configurators.</para>
+    /// </summary>
+    /// <param name="hub">The hub being initialized.</param>
+    /// <returns>An observable that completes once the sources are started and the gate is open.</returns>
+    private static IObservable<Unit> StartDataSourcesAndOpenGate(IMessageHub hub) =>
+        // Defer so the work happens at SUBSCRIBE time (the init turn), not when the observable is
+        // constructed — HandleInitialize builds the whole Concat chain up front.
+        Observable.Defer(() =>
+        {
+            var workspace = (Workspace)hub.GetWorkspace();
+            workspace.DataContext.InitializeDataSources();
+            workspace.OpenInitializationGate();
+            return Observable.Return(Unit.Default);
+        });
+
     private static MessageHubConfiguration GetDefaultConfiguration(MessageHubConfiguration config)
     {
         return config
-            .WithInitialization(h => h.GetWorkspace())
-            // Initialize workspace and open gate after hub is fully constructed (handlers registered)
-            .WithInitialization(h =>
-            {
-                ((Workspace)h.GetWorkspace()).OpenInitializationGate();
-            })
+            // 🚨 SPLIT BY WHAT EACH HALF DOES (#1868).
+            //
+            // The SYNCHRONOUS half stays in Build, because it must: constructing the workspace runs
+            // DataContext.Initialize, which REGISTERS EVERY MAPPED TYPE with the hub's
+            // ITypeRegistry, and a caller that resolves the hub can read that registry the instant
+            // Build returns (schema generation, content-discriminator validation — moving it broke
+            // SchemaValidationTest and AgentWriteFailureTests). Resolving the workspace itself
+            // creates no hub.
+            //
+            // The OBSERVABLE half is the part that CREATES THINGS: IDataSource.Initialize opens
+            // streams (HubDataSource eagerly calls GetStream → SynchronizationStream..ctor →
+            // GetHostedHub(sync/{clientId}, HostedHubCreation.Always)). Run as a synchronous buildup
+            // action that happened INSIDE MessageHubConfiguration.Build — 1,350 nested Builds per
+            // green MeshWeaver.FutuRe.Test run, all depth 2 — so a disposal racing this hub's
+            // creation raced a TREE of constructions rather than one frame, the shape behind the
+            // whole shutdown-race family (#645/#715/#967/#1573).
+            //
+            // The observable overload runs on the InitializeHubRequest turn, after Build has
+            // returned; BuildupActions are Concat-ed, so this still runs FIRST and still completes
+            // before the Initialize gate opens. Messages cannot overtake it — they defer behind
+            // that gate exactly as before. Same shape #774 applied to
+            // MeshDataSource.SubscribeToOwnDeletion.
+            .WithInitialization(RegisterWorkspaceTypes)
+            .WithInitialization(StartDataSourcesAndOpenGate)
             .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
             .WithServices(sc =>
             {

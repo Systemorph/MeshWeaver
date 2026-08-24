@@ -191,6 +191,50 @@ data:
   Instances__GrafanaBaseUrl: "{{ .Values.instancesAdmin.grafanaBaseUrl }}"
 {{- end }}
 {{- end }}
+{{- /* ---- Instance lifecycle operator (the Hosting plugin) — OFF unless declared ----
+
+  🚨 THESE KEYS WERE TEMPLATED BY NOTHING UNTIL NOW, and that is the whole reason this block exists.
+  The ConfigMap names every key explicitly and the Deployment's only env path is `envFrom` on it, so
+  a key no template mentions reaches NO container. memex's overlay declared
+  `Hosting__Operator__Enabled: "true"` under a "THE CONTROL INSTANCE, and only here" comment, and
+  the live ConfigMap carried zero `Hosting__*` keys — so HostingOperator.Resolve reported
+  "instance actions are disabled on this installation" on the one installation that is supposed to
+  run them. Exactly the `Modules__Root` defect (Memex#53), which is invariant 8 of
+  check-chart-invariants.
+
+  🚨 OFF BY DEFAULT, AND THAT IS A SECURITY PROPERTY, not a convenience. The identity this arms can
+  delete namespaces and drop databases across the fleet. An installation that does not declare
+  `hostingOperator.enabled` renders `false` and cannot be talked into provisioning anything. */}}
+  Hosting__Operator__Enabled: "{{ (.Values.hostingOperator).enabled | default "false" }}"
+{{- if (.Values.hostingOperator).enabled }}
+{{- if not (.Values.hostingOperator).image }}
+{{- fail "hostingOperator.enabled is true but hostingOperator.image is unset. The operator runs every lifecycle action as a Job from that image; without it HostingOperator.Resolve refuses with 'no operator image configured' and every action on this installation fails at the point of use rather than here. Set hostingOperator.image to the hosting-operator build this fleet runs." }}
+{{- end }}
+  # The ops namespace the Jobs run in, and the POWERFUL ServiceAccount they run as. Both are
+  # matched by NAME in the federated credential's subject (system:serviceaccount:<ns>:<sa>), so
+  # changing either here means changing it in manifests/hosting-operator/ and in backups.bicep.
+  Hosting__Operator__Namespace: "{{ (.Values.hostingOperator).namespace | default "memex-ops" }}"
+  Hosting__Operator__ServiceAccount: "{{ (.Values.hostingOperator).serviceAccount | default "hosting-operator" }}"
+  # The operator image IS the chart version it deploys (the chart is baked into it), so pin it like
+  # any other image and bump it deliberately.
+  Hosting__Operator__Image: "{{ .Values.hostingOperator.image }}"
+  # Deliberately NOT the pod's own projected token: a second identity has to arrive as a mounted
+  # Secret, and that indirection is the point — this capability is removed by deleting one volume
+  # mount, without touching the portal's identity or its self-update permissions. Mount it with
+  # .Values.extraVolumes / .Values.extraVolumeMounts.
+  Hosting__Operator__TokenFile: "{{ (.Values.hostingOperator).tokenFile | default "/var/run/secrets/hosting-operator/token" }}"
+  # Read with int.TryParse, which falls back to 3600 — but a PARSEABLE default is emitted anyway,
+  # per the rule stated at OpenAICompatible__DiscoverModels: `default ""` is safe only for strings.
+  Hosting__Operator__DeadlineSeconds: "{{ (.Values.hostingOperator).deadlineSeconds | default 3600 }}"
+{{- /* Named keys, not an indexed list: HostingOperator.ReadEnvironment turns a non-numeric child
+       key into `KEY=VALUE` itself, so the values file stays readable as a map. These reach every
+       operator Job as environment — AZ_RESOURCE_GROUP, AZ_PORTAL_IDENTITY, AZ_OIDC_ISSUER,
+       AZ_DNS_RESOURCE_GROUP, INGRESS_IP, PAYWALL_URL, VALUES_FILE, CATALOG_CONFIG. A step that
+       needs one and does not get it refuses BY NAME (hosting::need_env). */}}
+{{- range $key, $value := (.Values.hostingOperator).environment }}
+  Hosting__Operator__Environment__{{ $key }}: "{{ $value }}"
+{{- end }}
+{{- end }}
 {{- if (.Values.portalNext).enabled }}
   # ---- Next.js React frontend (FEATURE-FLAGGED — see .Values.portalNext) -----
   # Non-empty ReactAppUrl is what enables FrontendSelection: it shows the user
@@ -235,8 +279,46 @@ data:
   # values.aks.yaml and rendered by nothing (#1925) — SelfUpdate__MinRollInterval is the restart
   # BUDGET from #1780, which AGENTS.md documents as the fix for restart churn and which sat inert;
   # its predecessor SelfUpdate__PollInterval had the identical defect until #1778.
-  SelfUpdate__MinRollInterval: "{{ .Values.config.memex_portal.SelfUpdate__MinRollInterval }}"
+  # 🚨 …and the OPPOSITE defect bites too: this key binds to a TimeSpan, so rendering it as ""
+  # when an env's values do not define it ABORTS the host at startup (FormatException in the
+  # configuration binder → SIGABRT loop on the new RS while the old pods keep serving). That is
+  # exactly how the 2026-08-23 memex operator-enablement deploy wedged. A typed key needs a real
+  # default; "empty = inert" is only true for strings.
+  SelfUpdate__MinRollInterval: "{{ .Values.config.memex_portal.SelfUpdate__MinRollInterval | default "01:00:00" }}"
   WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 }}"
+  # The MODULES a deployment refuses to run without (MeshBuilderModuleActivation.RequiredKey).
+  # The image ships a baseline list in appsettings; a deployment OVERRIDES an entry by name here,
+  # and blanks one it cannot satisfy.
+  #
+  # 🚨 Un-templated, an override is silently dropped and the health check wins anyway — the #1925
+  # defect, third occurrence. Not cosmetic here: `required_modules` reports Unhealthy, /health
+  # answers 503, the startup probe never passes and the ROLLOUT TIMES OUT with the portal never
+  # serving. That is memex-local on 2026-08-23, once the Blazor view packs and Speech became
+  # modules (#1974/#2018/#2081/#2085): the image stopped shipping five DLLs its own Required list
+  # still named, and a laptop has no registry to land them from.
+  #
+  # 🚨 Written out INDEX BY INDEX, never a range: this ConfigMap's contract is that it names every
+  # key explicitly, and EveryConfigKeySetInAValuesFile_IsBoundInTheConfigMap enforces exactly that
+  # by looking for the key. A range renders correctly and is invisible to the guard — which is how
+  # the first draft of this block passed helm and failed the test, correctly.
+  #
+  # Each index is emitted only when a deployment sets it, so an install that overrides nothing
+  # keeps the image's own list rather than blanking entry 0.
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__0" }}
+  Modules__Required__0: "{{ .Values.config.memex_portal.Modules__Required__0 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__1" }}
+  Modules__Required__1: "{{ .Values.config.memex_portal.Modules__Required__1 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__2" }}
+  Modules__Required__2: "{{ .Values.config.memex_portal.Modules__Required__2 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__3" }}
+  Modules__Required__3: "{{ .Values.config.memex_portal.Modules__Required__3 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__4" }}
+  Modules__Required__4: "{{ .Values.config.memex_portal.Modules__Required__4 }}"
+  {{- end }}
   # ---- OpenAI-compatible provider (self-hosted / local: Ollama, vLLM, LM Studio, …) ----
   # Generic OpenAI-wire endpoint. Set Endpoint + Models (+ ApiKey in secrets) to seed a
   # provider + LanguageModel nodes pointing at any OpenAI-compatible gateway. Empty = inert.
@@ -283,15 +365,35 @@ data:
   AzureAIS__Endpoint: "{{ .Values.config.memex_portal.AzureAIS__Endpoint | default "" }}"
   AzureAIS__Order: "{{ .Values.config.memex_portal.AzureAIS__Order | default "0" }}"
   # ---- Agent web search (WebSearchPlugin) — optional --------------------------
-  # SearchWeb is advertised to agents ONLY when a provider is configured; with these empty the
+  # SearchWeb is advertised to agents ONLY when a provider is configured; with these unset the
   # tool is not offered at all (agents fall back to FetchWebPage on explicit URLs). The
   # deployment supplies the Google Programmable Search credentials (API key + Search-Engine id /
   # cx) — get them from the Google Cloud console + programmablesearchengine.google.com. Provider
-  # defaults to auto-detect ("" → Google when key+cx are set); set "Google" to force. Bing
+  # auto-detects when ABSENT (Google when key+cx are set); set "Google" to force. Bing
   # (WebSearch:Provider=Bing) is retired (API shut down 2025-08-11) and kept only for back-compat.
-  WebSearch__Provider: "{{ .Values.config.memex_portal.WebSearch__Provider | default "" }}"
-  WebSearch__Google__ApiKey: "{{ .Values.config.memex_portal.WebSearch__Google__ApiKey | default "" }}"
-  WebSearch__Google__Cx: "{{ .Values.config.memex_portal.WebSearch__Google__Cx | default "" }}"
+  #
+  # 🚨 EMITTED ONLY WHEN SET — for an enum, EMPTY IS NOT ABSENT, and the difference is an outage.
+  # WebSearch:Provider binds to WebSearchProviderType, whose default None means "auto-detect"; ""
+  # is not a member of it, so binding throws FormatException in WebSearchPlugin's constructor.
+  # ChatClientAgentFactory resolves plugins through GetServices<IAgentPlugin>(), which activates
+  # the WHOLE array — so ONE unconstructable plugin strips EVERY custom tool from EVERY agent, and
+  # the log names the wrong victim ("Plugin 'ExecutiveAssistant' failed to resolve … ->
+  # WebSearchPlugin"). memex.systemorph.com lost every agent tool exactly this way after its first
+  # chart-driven deploy (2026-08-20 → 2026-08-22, ~100 failures/24h); memex-cloud and atioz were
+  # unaffected only because no chart had ever rendered their ConfigMap. This is the same rule the
+  # OpenAICompatible__DiscoverModels note above states: `default ""` is safe ONLY for keys whose
+  # consumer reads them as strings. Guarded rather than `default "None"` so an instance that
+  # configures no web search renders no WebSearch keys at all — the shape the two healthy
+  # namespaces already run, and one that cannot be re-broken by a future rename of the enum member.
+  {{- if .Values.config.memex_portal.WebSearch__Provider }}
+  WebSearch__Provider: "{{ .Values.config.memex_portal.WebSearch__Provider }}"
+  {{- end }}
+  {{- if .Values.config.memex_portal.WebSearch__Google__ApiKey }}
+  WebSearch__Google__ApiKey: "{{ .Values.config.memex_portal.WebSearch__Google__ApiKey }}"
+  {{- end }}
+  {{- if .Values.config.memex_portal.WebSearch__Google__Cx }}
+  WebSearch__Google__Cx: "{{ .Values.config.memex_portal.WebSearch__Google__Cx }}"
+  {{- end }}
   # ---- Observability (OTLP collector) — optional ----------------------------
   OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_ENDPOINT | default "" }}"
   OTEL_EXPORTER_OTLP_PROTOCOL: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_PROTOCOL | default "" }}"

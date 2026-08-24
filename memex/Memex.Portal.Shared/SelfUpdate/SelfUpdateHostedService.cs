@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using System.Reactive.Disposables;
 using System.Collections.Immutable;
 using System.Reactive;
@@ -272,9 +273,24 @@ public class SelfUpdateHostedService : IHostedService
     /// record availability → (if armed) patch the workloads.</summary>
     private IObservable<Unit> RunOnce(UpdatePolicyContent policy) =>
         _http.Invoke(ct => _acr.ListTagsAsync(_options.PortalRepository, ct))
-            .Select(tags => VersionSelect.PickTarget(tags, policy.Policy, policy.RequireCiGreen))
-            .Where(target => !string.IsNullOrEmpty(target)
-                          && VersionSelect.IsNewer(target!, ShippedReleaseSeed.InstalledPlatformVersion))
+            // 🚨 The BEST ROLLABLE release, not merely the newest one. A target is only rollable if a
+            // sealed content bake exists for the identity that exact image resolves to, and picking
+            // the newest tag and stopping means one unbaked release freezes the instance FOREVER:
+            // it holds, the next platform build produces another unbaked tag, the bake publishes yet
+            // another identity, and the two never meet. memex sat on 3.0.0-rc6 held against
+            // 3.0.0-rc7.ci.4928 while three separate bakes published three other identities — every
+            // job green throughout, nothing to point at.
+            //
+            // So walk the candidates newest-first and take the first that the gate accepts. Still
+            // never backwards (IsNewer), still never into a boot storm (unsealed candidates are
+            // SKIPPED, not forced) — but a not-yet-baked head no longer blocks the releases behind
+            // it, and an instance always advances to the best release that can actually serve.
+            .Select(tags => VersionSelect
+                .PickTargets(tags, policy.Policy, policy.RequireCiGreen)
+                .Where(tag => VersionSelect.IsNewer(tag, ShippedReleaseSeed.InstalledPlatformVersion))
+                .ToArray())
+            .SelectMany(FirstRollable)
+            .Where(target => !string.IsNullOrEmpty(target))
             .SelectMany(target => RecordAvailable(target!)
                 // 🚨 BOOKKEEPING, NOT A GATE (#1020). RecordAvailable writes two cosmetic fields
                 // (LatestAvailableTag / CheckedAt) that drive the admin tab; the ROLL-FORWARD does not
@@ -319,20 +335,48 @@ public class SelfUpdateHostedService : IHostedService
     /// itself, and a gate that could not run at all resolves to a hold with its own reason rather
     /// than to an exception that kills the tick.</para>
     /// </summary>
+    /// <summary>
+    /// The newest candidate the availability gate accepts — or, when it accepts none, the newest
+    /// candidate anyway so the caller records the hold against the release an operator is actually
+    /// waiting for.
+    ///
+    /// <para>Sequential and LAZY by construction (<c>Concat</c> over a deferred enumerable): the
+    /// common case asks the gate exactly once, about the head. Only a held head costs a second
+    /// question, and only about the release below it.</para>
+    ///
+    /// <para>🚨 Returning the newest on total failure is deliberate, not a fallback that rolls
+    /// something unwanted: the caller re-gates whatever comes back, so an all-held list still ends
+    /// in a HOLD — with the newest tag's reason, which is the one that explains why the fleet is
+    /// not moving. Reporting the OLDEST candidate's reason instead would be true and useless.</para>
+    /// </summary>
+    private IObservable<string?> FirstRollable(string[] candidates)
+    {
+        if (candidates.Length == 0)
+            return Observable.Return<string?>(null);
+
+        var gate = ResolveAvailabilityGate();
+        // No gate wired: preserve today's behaviour exactly — the head, and GateThenApply reports
+        // the not-wired case itself.
+        if (gate is null)
+            return Observable.Return<string?>(candidates[0]);
+
+        return candidates
+            .Select(tag => Observable.Defer(() => gate.IsUpdatable(tag)
+                .Select(verdict => (tag, rollable: verdict.IsUpdatable))))
+            .Concat()
+            .FirstOrDefaultAsync(x => x.rollable)
+            .Select(x => x.tag ?? candidates[0])
+            // A gate that faults must not kill the tick: fall back to the head and let
+            // GateThenApply take the fail-safe hold it already knows how to take.
+            .Catch((Exception _) => Observable.Return<string?>(candidates[0]));
+    }
+
     private IObservable<Unit> GateThenApply(string target) =>
         Observable.Defer(() =>
         {
             var gate = ResolveAvailabilityGate();
             if (gate is null)
-                // No gate registered at all (a host that wires the poller without it). Say so once
-                // per tick rather than silently rolling as if it had passed.
-                return Observable.Defer(() =>
-                {
-                    _logger?.LogInformation(
-                        "[SelfUpdate] no release-availability gate is registered — rolling {Tag} "
-                        + "without checking whether its packages are available.", target);
-                    return Apply(target);
-                });
+                return GateNotWired(target);
 
             return gate.IsUpdatable(target)
                 .SelectMany(verdict =>
@@ -357,12 +401,103 @@ public class SelfUpdateHostedService : IHostedService
         });
 
     /// <summary>
+    /// 🚨 <b>No gate is registered on this host — so the roll HOLDS.</b>
+    ///
+    /// <para>This branch used to log at Information and roll anyway. That is the trap this whole
+    /// area keeps falling into: a gate that cannot run must never look like a gate that passed. The
+    /// gate answers "does every package this environment deploys have a usable artifact for the
+    /// target release"; a host with no gate registered has not answered it — it has failed to ask.
+    /// An unwired check is the absence of a verdict, not a passing one, and #1754's own rule says
+    /// "cannot determine" is not "clear to proceed".</para>
+    ///
+    /// <para>🚨 <b>But only where there is something to verify.</b> The hold is scoped by
+    /// <see cref="ReleaseAvailabilityService.NotApplicableReason"/>: on a deployment that consumes
+    /// no CI bakes a registered gate would itself answer
+    /// <see cref="UpdatabilityVerdict.NotEnforced"/>, so its ABSENCE is not an unanswered question
+    /// — it is the same answer arrived at from configuration. Failing closed on that state would
+    /// freeze an environment the gate was never going to protect, and would brick a first-ever
+    /// roll (the manual button honours the same verdict), which is the classic cost of a
+    /// fail-closed rule drawn one state too wide.</para>
+    ///
+    /// <para>It is a hold with all the properties that make a hold safe rather than a freeze: it is
+    /// recorded on the policy node so the Updates tab NAMES it, it is logged at Error (a wiring
+    /// defect nobody sees is how an environment sits un-updated for weeks), and it is re-evaluated
+    /// from scratch on every tick — registering the gate clears it with no manual un-sticking.</para>
+    ///
+    /// <para>The deliberate escape hatch is <see cref="SelfUpdateOptions.AllowUnverifiedRoll"/>:
+    /// set it in configuration, where it is visible, and the roll proceeds while saying so at
+    /// Warning on every tick. It can never waive a gate that DID run.</para>
+    /// </summary>
+    private IObservable<Unit> GateNotWired(string target) =>
+        Observable.Defer(() =>
+        {
+            // 🚨 "CANNOT VERIFY" AND "VERIFIED AS NOTHING TO VERIFY" ARE DIFFERENT STATES, and only
+            // the first may hold. This branch originally held on both, which swept in a case that
+            // is legitimately clear: a deployment that consumes no CI bakes already compiles its
+            // content at every boot, so a REGISTERED gate would have answered NotEnforced for it.
+            // The gate being absent on such a deployment tells you nothing new — holding on it
+            // would freeze an environment the gate was never going to protect, and (since the
+            // manual roll honours the same verdict) an install with no roll history could never
+            // take its first update at all.
+            //
+            // The applicability rule is read from CONFIGURATION through the gate's own static, so
+            // the answer here and the answer a registered gate would give cannot drift apart.
+            if (ReleaseAvailabilityService.NotApplicableReason(ResolveConfiguration())
+                is { } notApplicable)
+            {
+                _logger?.LogInformation(
+                    "[SelfUpdate] release-availability gate not enforced for {Tag}: {Reason} "
+                    + "(no gate is registered on this host either, which changes nothing here — "
+                    + "there is nothing for it to check against).",
+                    target, notApplicable);
+                // Clearing is unconditional, exactly as on the verdict path: a previous hold that
+                // no longer applies must disappear from the admin tab the moment it is resolved.
+                return RecordHold(target, null).Catch(HoldWriteFailed(target)).Concat(Apply(target));
+            }
+
+            if (_options.AllowUnverifiedRoll)
+            {
+                _logger?.LogWarning(
+                    "[SelfUpdate] rolling {Tag} UNVERIFIED — no release-availability gate is "
+                    + "registered on this host and '{Key}:{Property}' is set, so nothing checked "
+                    + "whether the packages this environment deploys have artifacts for it. Unset "
+                    + "that key to make the missing gate a hold again.",
+                    target, SelfUpdateOptions.SectionName, nameof(SelfUpdateOptions.AllowUnverifiedRoll));
+                return Apply(target);
+            }
+
+            var verdict = UpdatabilityVerdict.Unavailable(
+                "no release-availability gate is registered on this host, so nothing could check "
+                + "whether the packages this environment deploys have usable artifacts for this "
+                + $"release — that is a hold, not clearance to proceed. Register "
+                + $"{nameof(ReleaseAvailabilityService)} (it is wired by AddSelfUpdate), or set "
+                + $"'{SelfUpdateOptions.SectionName}:{nameof(SelfUpdateOptions.AllowUnverifiedRoll)}'"
+                + " to roll unverified on purpose.");
+
+            _logger?.LogError(
+                "[SelfUpdate] HOLDING update to {Tag} (staying on {Current}) — {Reason}",
+                target, ShippedReleaseSeed.InstalledPlatformVersion, verdict.HoldReason);
+
+            return RecordHold(target, verdict).Catch(HoldWriteFailed(target));
+        });
+
+    /// <summary>
     /// The release-availability gate, resolved from the mesh's services. Virtual: the third
     /// documented injection seam, so a test can pin what the poller DOES with a verdict without
     /// also staging an artifact store (the verdict itself is pinned against a real one elsewhere).
     /// </summary>
     protected virtual ReleaseAvailabilityService? ResolveAvailabilityGate() =>
         _hub.ServiceProvider.GetService<ReleaseAvailabilityService>();
+
+    /// <summary>
+    /// The host's configuration, resolved from the mesh's services. Virtual for the same reason
+    /// <see cref="ResolveAvailabilityGate"/> is: whether the release-availability gate APPLIES to
+    /// this deployment is read from configuration, so a test must be able to present a
+    /// bake-consuming deployment and a bake-free one without standing up two meshes for a one-key
+    /// difference.
+    /// </summary>
+    protected virtual IConfiguration? ResolveConfiguration() =>
+        _hub.ServiceProvider.GetService<IConfiguration>();
 
     private Func<Exception, IObservable<Unit>> HoldWriteFailed(string target) =>
         ex =>

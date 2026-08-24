@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# hosting-redirect suspend --namespace <ns> --host <fqdn> --target <url>
+# hosting-redirect restore --namespace <ns> --host <fqdn>
+#
+# Point a suspended instance's hostname at the paywall, and put it back on reactivation.
+#
+# 🚨 SUSPENSION IS REVERSIBLE, AND THAT IS THE WHOLE DESIGN. The PVCs, the database and the TLS
+# secret all stay; only the ingress backend moves. So this must not delete anything — it annotates
+# the EXISTING ingress and restores the annotation on the way back. An implementation that deleted
+# and re-created the ingress would drop the TLS reference and turn a reversible suspension into a
+# certificate re-issue for every reactivation.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-redirect"
+
+mode="${1:-}"
+case "$mode" in
+  suspend|restore) shift ;;
+  *) hosting::die "first argument must be 'suspend' or 'restore', got '${mode:-<none>}'" ;;
+esac
+
+namespace="" host="" target=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace) namespace="${2:-}"; shift 2 ;;
+    --host)      host="${2:-}";      shift 2 ;;
+    --target)    target="${2:-}";    shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::safe_name namespace "$namespace"
+[ -z "$host" ] || hosting::safe_host host "$host"
+
+# 🚨 Validate BEFORE touching the cluster. A pure check that sits behind an API call is a check
+# that does not run when the API is slow, absent or unauthorised — and it made the refusal for a
+# relative target come back as "no Ingress in n", naming the wrong problem entirely.
+if [ "$mode" = "suspend" ]; then
+  hosting::need_flag target "$target"
+  case "$target" in
+    https://*|http://*) ;;
+    *) hosting::die "redirect target '${target}' is not an absolute URL. It comes from \$PAYWALL_URL; a relative value produces an ingress that redirects to itself." ;;
+  esac
+fi
+
+ingress="${HOSTING_INGRESS:-memex-portal}"
+ANNOTATION="nginx.ingress.kubernetes.io/permanent-redirect"
+
+if ! kubectl -n "$namespace" get ingress "$ingress" >/dev/null 2>&1; then
+  # Find it rather than fail: ingress names have drifted across namespaces before (core #1917).
+  found="$(kubectl -n "$namespace" get ingress -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  [ -n "$found" ] || hosting::die "no Ingress in ${namespace} — nothing to redirect"
+  hosting::log "ingress '${ingress}' not found; using '${found}'"
+  ingress="$found"
+fi
+
+if [ "$mode" = "suspend" ]; then
+  hosting::log "redirecting ${host:-$namespace} → ${target}"
+  hosting::do kubectl -n "$namespace" annotate ingress "$ingress" --overwrite "${ANNOTATION}=${target}" \
+    || hosting::die "could not annotate ingress ${ingress} in ${namespace}"
+  hosting::say redirect suspended
+  exit 0
+fi
+
+hosting::log "removing the suspension redirect from ${ingress}"
+# The trailing '-' removes the annotation. Absent is fine — reactivation must be idempotent.
+hosting::do kubectl -n "$namespace" annotate ingress "$ingress" "${ANNOTATION}-" \
+  || hosting::log "no redirect annotation to remove (already restored)"
+hosting::say redirect restored

@@ -1031,6 +1031,10 @@ public static class MemexConfiguration
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
                 .AddChatViews()   // Register ThreadChatView
                 .AddUserProfileViews() // Register UserProfilePageView
+                // The entity form/edit renderers (MeshWeaver.Blazor.EntityViews) are a MODULE now:
+                // the DLL's EntityViewsViewPackModuleAttribute folds AddEntityViews() when it is
+                // listed under Modules:Assemblies, and Modules:Required gates a rollout that lost
+                // it. No compiled call here — see the csproj note beside the removed reference.
             )
             .AddBlazor(layoutClient => layoutClient
                 // 🚨 The portal hub is the per-user sub-hub that hosts the
@@ -1086,7 +1090,7 @@ public static class MemexConfiguration
         // Configure the HTTP request pipeline.
         if (!app.Environment.IsDevelopment())
         {
-            app.UseExceptionHandler("/Error", createScopeForErrors: true);
+            app.UseExceptionHandler(Pages.ErrorRoutes.Path, createScopeForErrors: true);
             // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
             app.UseHsts();
         }
@@ -1129,10 +1133,10 @@ public static class MemexConfiguration
         // 'self'). Tightening it further (per-response nonces, dropping 'unsafe-inline') is
         // a separate hardening pass, not this change.
         //
-        // The CSP ships as Content-Security-Policy-Report-Only FIRST: it cannot block a
-        // single request, so it is safe to enforce on the production registry immediately
-        // while any would-be violations surface in the browser console. A one-line follow-up
-        // renames the header to Content-Security-Policy to enforce it once it is proven quiet.
+        // The CSP is ENFORCED. It shipped Content-Security-Policy-Report-Only first (#1988);
+        // enforcing it here was validated by driving real Chrome over the live public pages
+        // against that Report-Only header and observing ZERO violations, so the enforced policy
+        // blocks nothing the app legitimately loads.
         app.Use((ctx, next) =>
         {
             var headers = ctx.Response.Headers;
@@ -1140,11 +1144,19 @@ public static class MemexConfiguration
             {
                 headers["X-Content-Type-Options"] = "nosniff";
                 headers["Cross-Origin-Resource-Policy"] = "same-site";
+                headers["Cross-Origin-Opener-Policy"] = "same-origin";
                 headers["Permissions-Policy"] =
                     "accelerometer=(), camera=(), geolocation=(), gyroscope=(), " +
                     "magnetometer=(), microphone=(), payment=(), usb=()";
-                if (!headers.ContainsKey("Content-Security-Policy-Report-Only"))
-                    headers["Content-Security-Policy-Report-Only"] =
+                // SET, never defer. Something earlier in the pipeline emits a bare
+                // `frame-ancestors 'self'` on HTML responses (API responses get the full
+                // policy), and a ContainsKey guard here silently yielded to it — so every
+                // page shipped an anti-clickjacking directive with no fetch-directive
+                // fallback (ZAP 10055) while /api/* was correctly covered. This callback is
+                // registered earliest, so it runs LAST and its value wins. The policy below
+                // is a strict superset: it includes frame-ancestors 'self', so nothing the
+                // shorter header expressed is lost.
+                headers["Content-Security-Policy"] =
                         "default-src 'self'; " +
                         "base-uri 'self'; " +
                         "object-src 'none'; " +
@@ -1198,7 +1210,25 @@ public static class MemexConfiguration
             return next();
         });
 
-        // Static files middleware must run before routing to serve _content/* paths from RCLs
+        app.UseRouting();
+
+        // 🚨 The static-file middleware runs AFTER UseRouting, and that ordering is the whole
+        // point: StaticFileMiddleware skips a request whose ENDPOINT has already been selected, so
+        // everything in the build-time static-asset manifest is answered by MapStaticAssets below
+        // — pre-compressed (brotli) off a per-encoding endpoint, fingerprinted, with
+        // `Cache-Control: immutable`. Registered before routing (as it was until 2026-08-24) this
+        // middleware short-circuits FIRST and serves those same files raw: measured on prod,
+        // `_framework/blazor.web.js` came back 200,645 bytes with NO content-encoding and NO
+        // cache-control, and `_content/MeshWeaver.Blazor/*.css` likewise — every asset at full
+        // size, revalidated on every load, while the pre-compressed copies sat unused in the
+        // image. The old comment here claimed the early registration was needed to serve RCL
+        // `_content/*` paths; it is not — those are IN the manifest, which is exactly why
+        // MeshModuleStaticAssetExtensions has to hand-roll its own encoding negotiation for the
+        // modules that are NOT.
+        //
+        // What still needs the middleware: anything with no endpoint — the React SPA under /app,
+        // and files that reach wwwroot outside the manifest. Those match no endpoint, so the
+        // middleware serves them exactly as before.
         app.UseStaticFiles();
 
         // …and the same for modules that ship via modules/<Name>/ rather than a ProjectReference,
@@ -1206,8 +1236,6 @@ public static class MemexConfiguration
         // host's own UseStaticFiles so the platform copy of any shared dependency answers first —
         // the module lane never shadows a platform asset.
         app.UseMeshModuleStaticAssets();
-
-        app.UseRouting();
 
         // gRPC-web middleware — lets browsers / React Native reach the mesh gRPC service
         // (Connect+Deliver split) without HTTP/2 bidi. Must sit between UseRouting and the

@@ -198,4 +198,25 @@ public class ReleaseAvailabilityTest
         Assert.False(string.IsNullOrEmpty(verdict.NotEnforcedReason));
         Assert.False(verdict.IsIndeterminate);
     }
+
+    /// <summary>
+    /// 🚨 The gate could not RUN — it is not wired in at all — is a HOLD, and is deliberately not
+    /// <see cref="UpdatabilityVerdict.NotEnforced"/>. That answer is the ONE stated applicability
+    /// exemption (a deployment consuming no CI bakes); reusing it for a wiring failure is how a
+    /// gate that cannot run comes to look like a gate that passed.
+    /// </summary>
+    [Fact]
+    public void Unavailable_IsAHold_AndReadsAsAnAvailabilityFailure_NotAnIncompatibility()
+    {
+        var verdict = UpdatabilityVerdict.Unavailable("no gate is registered on this host");
+
+        Assert.False(verdict.IsUpdatable);
+        Assert.False(string.IsNullOrEmpty(verdict.HoldReason));
+        // Indeterminate, so every surface that already separates "I could not look" from "I looked
+        // and it is incompatible" keeps doing so here without changing.
+        Assert.True(verdict.IsIndeterminate);
+        // NOT an applicability exemption: NotEnforcedReason is what makes a verdict updatable.
+        Assert.Null(verdict.NotEnforcedReason);
+        Assert.Single(verdict.Blockers);
+    }
 }

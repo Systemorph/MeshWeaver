@@ -18,6 +18,27 @@
 
 config:
   memex_portal:
+    # ---- The view packs are MODULES now, and a laptop cannot land them ---------
+    # MeshWeaver #1974/#2018/#2081/#2085 turned Radzen, Analysis, EntityViews,
+    # GoogleMaps and Speech into modules, so the image no longer ships the five
+    # DLLs its own Modules:Required list still names. The required_modules health
+    # check then reports Unhealthy, /health answers 503, the startup probe never
+    # passes, and `memex-local update` ends in "timed out waiting for the
+    # condition" with the portal never serving.
+    #
+    # 🚨 A laptop has no registry to land them from — memex-local IS the registry,
+    # serving the developer's Plugins checkout — so "install the packages" is not
+    # available here and blanking the requirement is the sanctioned other half of
+    # what the health check itself suggests. The AKS overlays blank the same five
+    # (Memex #87/#88/#94); there the modules do land, from the real registry.
+    #
+    # Cost, stated plainly: no Radzen charts, Analysis, EntityViews, GoogleMaps or
+    # Speech on a local instance until the local lane can land a module bundle.
+    Modules__Required__0: ""
+    Modules__Required__1: ""
+    Modules__Required__2: ""
+    Modules__Required__3: ""
+    Modules__Required__4: ""
     # ---- Store-installed modules land on the PERSISTENT volume ---------------
     # A module that ships in the image is not automatically ACTIVE: /mcp, the gRPC
     # endpoint and every other module route is mapped from `Modules:Assemblies`,

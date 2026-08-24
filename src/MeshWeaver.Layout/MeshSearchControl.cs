@@ -49,7 +49,15 @@ public enum MeshSearchRenderMode
     /// (<c>scope:ancestors</c> above, <c>scope:nextLevel</c> below). Clicking a card or an
     /// ancestor re-roots the view there and recomputes both — "navigate → visualize → navigate".
     /// </summary>
-    GraphNavigator
+    GraphNavigator,
+
+    /// <summary>
+    /// A phone-home ICON grid: each result renders as a large rounded icon with its name
+    /// underneath — the home's Apps look. Rendered entirely from the query row (name/icon are
+    /// result columns), so no per-result content read or hub activation happens. Appended last:
+    /// enum members serialize by NAME, but the ordinal must stay stable for older rows.
+    /// </summary>
+    Icons
 }
 
 /// <summary>
@@ -63,6 +71,64 @@ public enum MeshSearchRenderMode
 /// <param name="Label">The label shown in the "Sort by" dropdown.</param>
 /// <param name="Query">The full hidden query applied when this option is selected.</param>
 public record MeshSearchSortOption(string Label, string Query);
+
+/// <summary>
+/// One SCOPE tab of a search surface — a display <paramref name="Label"/> and the scope's hidden
+/// <paramref name="Query"/>, rendered as a tab strip above the search header. Switching scopes
+/// swaps only the hidden query (and, when <see cref="SortOptions"/> is set, the sort choices)
+/// while the typed search text and the rest of the component state STAY — the scopes deliberately
+/// SHARE one search bar, which is what lets a search term follow the user across tabs. The FIRST
+/// tab is the initially active scope and should match the control's
+/// <see cref="MeshSearchControl.HiddenQuery"/>, which also serves as the fallback for clients
+/// that don't render scopes.
+/// </summary>
+/// <param name="Label">The tab's display text.</param>
+/// <param name="Query">The scope's full hidden query.</param>
+public record MeshSearchScopeTab(string Label, string Query)
+{
+    /// <summary>
+    /// Sort choices that REPLACE the control-level <see cref="MeshSearchControl.SortOptions"/>
+    /// while this scope is active (first = this scope's default). Null keeps the control-level set.
+    /// </summary>
+    public IReadOnlyList<MeshSearchSortOption>? SortOptions { get; init; }
+
+    /// <summary>
+    /// Per-item layout area used while this scope is active, REPLACING the control-level
+    /// <see cref="MeshSearchControl.ItemArea"/>. Null keeps the control-level one. Prefer a
+    /// row-rendered mode (e.g. <see cref="MeshSearchRenderMode.Icons"/>) over an item area where
+    /// the row data suffices — an item area activates one hub PER RESULT.
+    /// </summary>
+    public string? ItemArea { get; init; }
+
+    /// <summary>
+    /// Render mode while this scope is active, REPLACING the control-level
+    /// <see cref="MeshSearchControl.RenderMode"/> (the enum member's NAME, e.g. <c>"Icons"</c> —
+    /// the home's Apps scope renders the phone-home icon grid this way). Null keeps the
+    /// control-level mode.
+    /// </summary>
+    public string? RenderMode { get; init; }
+
+    /// <summary>
+    /// When true, clicking a result of this scope navigates to the node's <c>MainNode</c> instead
+    /// of its own path — the home's Apps records point at the APP they represent this way, with no
+    /// content read. Null keeps the control-level <see cref="MeshSearchControl.NavigateToMainNode"/>.
+    /// </summary>
+    public bool? NavigateToMainNode { get; init; }
+
+    /// <summary>
+    /// Order this scope's results by when the VIEWER last opened each result's navigation target,
+    /// most recent first, with never-opened results keeping the query's own order behind them —
+    /// the phone-home rule: what you use most sits where your thumb is. Applied wherever results
+    /// are projected, so every render mode honours it, not just the icon grid.
+    /// <para>Applied at PAINT, not in the query, and deliberately: <c>source:accessed</c> is an
+    /// INNER JOIN on the access log keyed by the result's OWN path, so on the Apps grid it would
+    /// both hide every never-opened app AND match nothing (an app record's access is recorded
+    /// against the app it points at, never against the record). The view instead reads the
+    /// viewer's own <c>_UserActivity</c> satellites — one cheap single-partition query — and uses
+    /// them as a SORT KEY. Ordering arrives with that snapshot, after the tiles have painted.</para>
+    /// </summary>
+    public bool SortByAccess { get; init; }
+}
 
 /// <summary>
 /// A control that provides a configurable search with results displayed in a LayoutGrid.
@@ -139,6 +205,34 @@ public record MeshSearchControl()
     /// <see cref="HiddenQuery"/>. Null/empty ⇒ no sort dropdown (unchanged behaviour).
     /// </summary>
     public IReadOnlyList<MeshSearchSortOption>? SortOptions { get; init; }
+
+    /// <summary>
+    /// Scope tabs rendered as a strip above the search header (see
+    /// <see cref="MeshSearchScopeTab"/>): switching swaps the hidden query and (optionally) the
+    /// sort choices while the typed search text stays — the scopes SHARE one search bar. Null or
+    /// a single entry renders no strip. Clients without scope support fall back to
+    /// <see cref="HiddenQuery"/>, which should equal the first tab's query.
+    /// </summary>
+    public IReadOnlyList<MeshSearchScopeTab>? ScopeTabs { get; init; }
+
+    /// <summary>
+    /// In a grouped render, order the sections by SIZE (most items first) instead of
+    /// alphabetically — the home's content section fans out by node type with the type you have
+    /// most of at the top, so the page opens on what you actually work with rather than on
+    /// whatever happens to start with "A". Ties fall back to the label, so the order is stable.
+    /// </summary>
+    public object? GroupByFrequency { get; init; }
+
+    /// <summary>Sets <see cref="GroupByFrequency"/>.</summary>
+    public MeshSearchControl WithGroupByFrequency(bool value = true) =>
+        This with { GroupByFrequency = value };
+
+    /// <summary>
+    /// When true, clicking a result navigates to the node's <c>MainNode</c> instead of its own
+    /// path (default false). A per-scope <see cref="MeshSearchScopeTab.NavigateToMainNode"/>
+    /// overrides this while its scope is active.
+    /// </summary>
+    public object? NavigateToMainNode { get; init; }
 
     /// <summary>
     /// Whether to exclude the base path node from results (default true).
@@ -334,6 +428,11 @@ public record MeshSearchControl()
     /// <param name="options">The user-selectable sort choices; the first is the default and should match <see cref="HiddenQuery"/>.</param>
     public MeshSearchControl WithSortOptions(params MeshSearchSortOption[] options) =>
         this with { SortOptions = options };
+
+    /// <summary>Returns a copy with the scope-tab strip set (see <see cref="ScopeTabs"/>).</summary>
+    /// <param name="tabs">The scopes; the first is initially active and should match <see cref="HiddenQuery"/>.</param>
+    public MeshSearchControl WithScopeTabs(params MeshSearchScopeTab[] tabs) =>
+        this with { ScopeTabs = tabs };
 
     // Grid fluent methods
     /// <summary>Returns a copy with responsive grid column widths set per breakpoint (MUI grid units, 1–12).</summary>

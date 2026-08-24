@@ -1,56 +1,133 @@
 using System;
 using System.Linq;
+using System.Text.Json;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// The TABBED home surface (<see cref="UserActivityLayoutAreas.BuildHome"/>) — the phone-home model:
-/// <b>Shared with me</b> first (only with cross-partition grants, last-accessed ranking with a
-/// completeness fallback), then <b>Pinned</b> (only with pins), then <b>Apps</b> (config-declared
-/// default apps ∪ the owner's installed <c>App</c> records — every app exactly once), then
-/// <b>Spaces</b> (the catalog WITHOUT store items, so nothing is listed twice, and WITHOUT an
-/// embedded search box — the chrome search covers it). <see cref="HomeStyle.Catalog"/> switches
-/// back to the legacy single-list <see cref="UserActivityLayoutAreas.BuildCatalog"/> (covered by
-/// <see cref="HomeCatalogTest"/>).
+/// The home surface (<see cref="UserActivityLayoutAreas.BuildHome"/>) — ONE
+/// <see cref="MeshSearchControl"/> whose SCOPE TABS are the phone-home tabs: Pinned (only with
+/// pins) · Apps (the viewer's OWN <c>{owner}/_App</c> records — a SINGLE-PARTITION query, which is
+/// why it loads fast; records are materialized from config defaults + install manifests, Threads
+/// is an ordinary record, and the grid paints icon tiles straight from the query rows) · Spaces
+/// (catalog without store items) · All (everything, every depth). Shared with me is its OWN band
+/// below the search (only with grants; store items and User roots excluded). The scopes share one
+/// search bar by construction. <see cref="HomeStyle.Catalog"/> switches back to the legacy single
+/// list (covered by <see cref="HomeCatalogTest"/>).
 /// </summary>
 public class HomeTabsTest
 {
     private const string NodePath = "rbuergi";
 
-    private static string[] TabLabels(UiControl home) =>
-        home.Should().BeOfType<TabsControl>().Subject.Areas
-            .Select(a => a.Skins.OfType<TabSkin>().Single().Label!.ToString()!)
-            .ToArray();
+    private static MeshSearchControl Content(UiControl home, string? locale = null) =>
+        UserActivityLayoutAreas.BuildContentSection(NodePath, null, null, locale, null);
+
+    private static string[] ScopeLabels(MeshSearchControl search) =>
+        search.ScopeTabs!.Select(t => t.Label).ToArray();
+
+    // ── Structure: TWO sections, apps first ────────────────────────────────────────────────────
 
     [Fact]
-    public void Home_Default_IsTabbed_AppsThenSpaces()
+    public void Home_IsAppsThenContent_TwoSections()
     {
-        // No shares, no pins → exactly the two always-present tabs, Apps before Spaces.
+        // "separate content from apps in two section … apps first, then content": launching an app
+        // and searching for content are different acts, so they are different sections — not two
+        // lenses on one tab strip.
         var home = UserActivityLayoutAreas.BuildHome(NodePath);
 
-        TabLabels(home).Should().Equal("Apps", "Spaces");
+        var stack = home.Should().BeOfType<StackControl>().Subject;
+        stack.Areas.Should().HaveCount(2, "apps on top, content below");
     }
 
     [Fact]
-    public void Home_WithShares_SharedWithMeComesFirst()
+    public void Home_WithShares_AppendsTheSharedBandAsAThirdSection()
     {
+        // "shared with me can be separate section" — cross-partition invitations are a distinct
+        // kind of content, not another lens on the catalog.
         var home = UserActivityLayoutAreas.BuildHome(NodePath, sharedTargets: ["OrgA/Module"]);
 
-        TabLabels(home).Should().Equal("Shared with me", "Apps", "Spaces");
+        home.Should().BeOfType<StackControl>().Subject
+            .Areas.Should().HaveCount(3, "apps, content, then shared with me");
     }
 
     [Fact]
-    public void Home_WithPins_PinnedComesBeforeApps()
+    public void Content_NoPins_IsOneCategory_NoTabStrip()
     {
-        var home = UserActivityLayoutAreas.BuildHome(NodePath,
-            sharedTargets: ["OrgA/Module"], user: new User { PinnedPaths = ["Doc/GUI"] });
+        // "i am not sure if 'spaces' makes sense … it should just be all the top level nodes which
+        // we can access. make just one category." One scope ⇒ the view renders no strip at all.
+        var content = Content(UserActivityLayoutAreas.BuildHome(NodePath));
 
-        TabLabels(home).Should().Equal("Shared with me", "Pinned", "Apps", "Spaces");
+        ScopeLabels(content).Should().Equal("All");
+        content.HiddenQuery!.ToString().Should().Contain("is:main")
+            .And.Contain("-nodeType:Store/Plugin", "apps live in the Apps section, never twice");
+    }
+
+    [Fact]
+    public void Content_FansOutByNodeType_BiggestGroupFirst()
+    {
+        // "All and then fan out in different types, sorted by frequency … get the top level
+        // partition node type and bring category by this ⇒ then you get Spaces, Clients, …":
+        // the categories are whatever types the viewer's own top-level nodes have, not a taxonomy
+        // the home invents, and the type you have most of leads.
+        var content = Content(UserActivityLayoutAreas.BuildHome(NodePath));
+
+        content.RenderMode.Should().Be(MeshSearchRenderMode.Grouped);
+        content.Grouping!.GroupByProperty.Should().Be("NodeType");
+        content.GroupByFrequency.Should().Be(true);
+        content.Sections!.ShowCounts.Should().Be(true, "a frequency order is only readable with counts");
+    }
+
+    [Fact]
+    public void Content_WithPins_PinnedIsASeparateTab_First()
+    {
+        // "the pinned i would still keep … as separate tab if we have any".
+        var content = UserActivityLayoutAreas.BuildContentSection(
+            NodePath, null, new User { PinnedPaths = ["Doc/GUI"] }, null, null);
+
+        ScopeLabels(content).Should().Equal("Pinned", "All");
+        content.ScopeTabs![0].Query.Should().Contain("Doc/GUI");
+    }
+
+    [Fact]
+    public void Content_HasTheSearchBar_AppsDoesNot()
+    {
+        // The apps section is a LAUNCHER (no search box, no view options); content is where you
+        // search, and its scopes share that one bar.
+        var content = Content(UserActivityLayoutAreas.BuildHome(NodePath));
+        content.ShowSearchBox.Should().Be(true);
+        content.HiddenQuery!.ToString().Should().Be(content.ScopeTabs![0].Query);
+
+        UserActivityLayoutAreas.BuildAppsBand(NodePath, null).ShowSearchBox.Should().Be(false);
+    }
+
+    [Fact]
+    public void Home_RendersNothingThroughAForeignItemArea()
+    {
+        // 🚨 THE regression guard. A MeshSearch ItemArea resolves an area on the RESULT node's own
+        // hub — one hub activation per row, on a hub the home does not own. In the distributed
+        // portal that failed as "AppTile not found" (and the thread rail's `RailItem` had the same
+        // shape) while a monolith resolved it happily, so only a structural assertion catches it.
+        // Every home surface must paint from query ROWS.
+        var sections = new[]
+        {
+            UserActivityLayoutAreas.BuildAppsBand(NodePath, null),
+            UserActivityLayoutAreas.BuildContentSection(
+                NodePath, null, new User { PinnedPaths = ["Doc/GUI"] }, null, null),
+            UserActivityLayoutAreas.BuildSharedBand(["OrgA/Module"], null)!,
+        };
+
+        foreach (var section in sections)
+        {
+            section.ItemArea.Should().BeNull($"'{section.Title}' must render from query rows");
+            foreach (var scope in section.ScopeTabs ?? [])
+                scope.ItemArea.Should().BeNull($"scope '{scope.Label}' must render from query rows");
+        }
     }
 
     [Fact]
@@ -59,219 +136,133 @@ public class HomeTabsTest
         var home = UserActivityLayoutAreas.BuildHome(NodePath,
             new HomeConfig { Style = HomeStyle.Catalog });
 
-        home.Should().BeOfType<MeshSearchControl>("the legacy escape hatch is the tab-less catalog");
+        home.Should().BeOfType<MeshSearchControl>().Subject
+            .ScopeTabs.Should().BeNull("the legacy escape hatch is the scope-less catalog");
     }
 
-    // ── Apps tab ────────────────────────────────────────────────────────────────────────────────
+    // ── Shared-with-me band ─────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Apps_UnionsConfigDefaultsAndInstalled_EachAppExactlyOnce()
+    public void SharedBand_ExcludesStoreItemsAndUserRoots_AndKeepsTheCompletenessFallback()
     {
-        // Node-path union tested through the pure query core — "store" dedupes case-insensitively
-        // against the shipped default "Store", "Chess" appears once.
-        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
-        var apps = UserActivityLayoutAreas.BuildApps(
-                NodePath, noDock, installedApps: ["Chess", "store", "Chess"])
-            .Should().BeOfType<MeshSearchControl>().Subject;
+        var shared = UserActivityLayoutAreas.BuildSharedBand(
+            ["OrgA/Module", "OrgB/Deck"], locale: null)!;
 
-        var query = apps.HiddenQuery!.ToString()!;
-        query.Should().Contain("path:(Store OR Doc OR Chess)");
-        query.Should().NotContain("store OR");
-    }
-
-    [Fact]
-    public void Apps_ShippedDefaults_ComposeDockPlusGrid()
-    {
-        // Shipped DefaultApps include the ~/Chat Threads tile → dock tiles INLINE with the node
-        // grid, one horizontal band.
-        UserActivityLayoutAreas.BuildApps(NodePath, new HomeConfig(), installedApps: null)
-            .Should().BeOfType<StackControl>().Subject
-            .Areas.Should().HaveCount(2, "system-tile dock + the node-card grid, inline");
-    }
-
-    [Fact]
-    public void Apps_IsOneCompactBand()
-    {
-        // The Apps tab is a phone-dock band, not a grid of full-size cards: a 140px cell floor
-        // (below the control's 200px default) so a typical app set fits ONE row, wrapping only
-        // when it must. Deliberately NO MaxColumns: the React client renders MaxColumns as an
-        // EXACT column count and would squeeze cards to slivers.
-        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
-        var apps = UserActivityLayoutAreas.BuildApps(NodePath, noDock, installedApps: null)
-            .Should().BeOfType<MeshSearchControl>().Subject;
-
-        apps.MinItemWidth.Should().Be(140);
-        apps.Sections!.ItemLimit.Should().Be(24);
-        apps.MaxColumns.Should().BeNull();
-        apps.Grid!.Spacing.Should().Be(12);
-    }
-
-    [Fact]
-    public void Apps_BudgetOf24_BoundsTheQueryItself()
-    {
-        // 24 tiles TOTAL: with 30 configured paths and no dock entry, the grid's path alternation
-        // carries exactly 24 entries — the QUERY is bounded, not just the rendered list.
-        var many = new HomeConfig
-        {
-            DefaultApps = Enumerable.Range(1, 30).Select(i => $"P{i}").ToList(),
-        };
-        var apps = UserActivityLayoutAreas.BuildApps(NodePath, many, installedApps: null)
-            .Should().BeOfType<MeshSearchControl>().Subject;
-
-        var firstLeg = apps.HiddenQuery!.ToString()!.Split('\n')[0];
-        firstLeg.Split(" OR ").Should().HaveCount(24, "the AppBudget slice bounds the path alternation");
-        firstLeg.Should().NotContain("P25", "entries beyond the budget are dropped in config order");
-    }
-
-    [Fact]
-    public void Apps_BudgetOf24_CountsDockTiles()
-    {
-        // Dock entries count against the same budget: the slice happens BEFORE the dock/grid
-        // split, so a config of ~/Chat + 30 paths still yields one band of at most 24 tiles.
-        var many = new HomeConfig
-        {
-            DefaultApps = new[] { "~/Chat" }
-                .Concat(Enumerable.Range(1, 30).Select(i => $"P{i}"))
-                .ToList(),
-        };
-        var band = UserActivityLayoutAreas.BuildApps(NodePath, many, installedApps: null)
-            .Should().BeOfType<StackControl>().Subject;
-        band.Areas.Should().HaveCount(2, "dock + grid, inline");
-    }
-
-    [Theory]
-    [InlineData("~/Chat")]
-    [InlineData("~/Chat/")]   // extra slashes normalize — the known-tile lookup keys on the TRIMMED segment
-    public void Apps_SystemTile_ThreadsDockTile_TargetsTheViewersChatArea(string entry)
-    {
-        var tile = UserActivityLayoutAreas.BuildSystemAppTile(NodePath, entry);
-
-        tile.Should().NotBeNull();
-        tile!.NodePath.Should().Be($"{NodePath}/Chat", "the tile opens the viewer's own Threads app");
-        tile.Title.Should().Be("Threads");
-        tile.ImageUrl.Should().Be("/static/NodeTypeIcons/chat.svg");
-    }
-
-    [Fact]
-    public void Apps_SystemTile_UnknownAreaFallsBack_MalformedIsNull()
-    {
-        var unknown = UserActivityLayoutAreas.BuildSystemAppTile(NodePath, "~/Foo");
-        unknown!.Title.Should().Be("Foo");
-        unknown.ImageUrl.Should().Be("/static/NodeTypeIcons/puzzlepiece.svg");
-
-        UserActivityLayoutAreas.BuildSystemAppTile(NodePath, "~/").Should().BeNull();
-        UserActivityLayoutAreas.BuildSystemAppTile(NodePath, "Store").Should().BeNull();
-    }
-
-    [Fact]
-    public void Apps_DefaultOrderIsAlphabetical_AllThreeSortsOffered()
-    {
-        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
-        var apps = UserActivityLayoutAreas.BuildApps(NodePath, noDock, installedApps: null)
-            .Should().BeOfType<MeshSearchControl>().Subject;
-
-        apps.SortOptions![0].Label.Should().Be("Alphabetical");
-        apps.SortOptions![0].Query.Should().Be(apps.HiddenQuery!.ToString());
-        apps.HiddenQuery!.ToString().Should().Contain("sort:Name-asc");
-        apps.SortOptions!.Select(o => o.Label).OrderBy(l => l, StringComparer.Ordinal).Should()
-            .Equal("Alphabetical", "Last accessed", "Last modified");
-    }
-
-    [Fact]
-    public void Apps_LastAccessedSort_IsAUnionWithACompletenessFallback()
-    {
-        // source:accessed is an INNER join on the caller's access log — alone it would HIDE a
-        // never-opened app. The last-accessed option must therefore be a two-leg path-keyed union:
-        // accessed-ranked first, plain fallback second.
-        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
-        var apps = UserActivityLayoutAreas.BuildApps(NodePath, noDock, installedApps: null)
-            .Should().BeOfType<MeshSearchControl>().Subject;
-
-        var lastAccessed = apps.SortOptions!.Single(o => o.Label == "Last accessed").Query;
-        var legs = lastAccessed.Split('\n');
-        legs.Should().HaveCount(2);
+        shared.Title!.ToString().Should().Be("Shared with me");
+        shared.ShowSearchBox.Should().Be(false, "the band is a list, not a second search bar");
+        var legs = shared.HiddenQuery!.ToString()!.Split('\n');
+        legs.Should().HaveCount(2, "the accessed leg alone would hide a never-opened share");
         legs[0].Should().Contain("source:accessed");
         legs[1].Should().NotContain("source:accessed");
-        legs[1].Should().Contain("path:(");
-    }
-
-    [Fact]
-    public void Apps_NoAppsAnywhere_RendersAHint()
-    {
-        UserActivityLayoutAreas.BuildApps(NodePath, new HomeConfig { DefaultApps = [] }, installedApps: [])
-            .Should().BeOfType<MarkdownControl>("an empty Apps tab must explain itself, not render blank");
-    }
-
-    // ── Threads app (the /{user}/Chat page) ─────────────────────────────────────────────────────
-
-    [Fact]
-    public void ThreadsApp_IsARailPlusComposer()
-    {
-        UserActivityLayoutAreas.BuildThreadsApp(NodePath)
-            .Should().BeOfType<StackControl>().Subject
-            .Areas.Should().HaveCount(2, "the vertical thread rail + the composer pane");
-    }
-
-    [Fact]
-    public void ThreadsRail_ListsOpenThreads_RowsDelegateToTheRailItemArea()
-    {
-        var rail = UserActivityLayoutAreas.BuildThreadsRail(NodePath);
-
-        var query = rail.HiddenQuery!.ToString()!;
-        query.Should().Contain($"namespace:{NodePath}/*_Thread");
-        query.Should().Contain("nodeType:Thread");
-        query.Should().Contain("-content.status:Done", "closing a thread (✕ → MarkThreadDone) must remove it from the rail");
-        query.Should().Contain("sort:LastModified-desc");
-        // Flat + one column, NOT List: the List renderer ignores ItemArea, so the ✕ overlay would
-        // never render there — Flat is the ItemArea path the pinned grid proves.
-        rail.RenderMode.Should().Be(MeshSearchRenderMode.Flat);
-        rail.MaxColumns.Should().Be(1, "the rail is a vertical menu");
-        rail.ItemArea.Should().Be("RailItem", "each row renders via the thread hub's RailItem area (title + ✕)");
-        rail.ShowSearchBox.Should().Be(false);
-    }
-
-    // ── Spaces tab (dedup) ──────────────────────────────────────────────────────────────────────
-
-    [Fact]
-    public void Spaces_ExcludesStoreItems_TheDedupRule()
-    {
-        // An app is represented exactly once: plugin covers + the store root live on the Apps tab
-        // (or in the Store), so the Spaces tab filters them out of every sort option's query.
-        var spaces = UserActivityLayoutAreas.BuildSpaces(NodePath)
-            .Should().BeOfType<MeshSearchControl>().Subject;
-
-        foreach (var option in spaces.SortOptions!)
+        foreach (var leg in legs)
         {
-            option.Query.Should().Contain("-nodeType:Store/Plugin");
-            option.Query.Should().Contain("-nodeType:Store/Catalog");
+            leg.Should().Contain("path:OrgA/Module|OrgB/Deck");
+            leg.Should().Contain("-nodeType:Store/Plugin");
+            leg.Should().Contain("-nodeType:Store/Catalog");
+            leg.Should().Contain("-nodeType:User",
+                "a grant resolving to another user's home partition must not list that person's space as shared");
         }
     }
 
     [Fact]
-    public void Spaces_HasNoEmbeddedSearchBox()
+    public void SharedBand_WithoutGrants_IsAbsent()
     {
-        // Every client chrome already carries a global search; an embedded box would double it
-        // (the two-search-bars problem on the mobile clients).
-        UserActivityLayoutAreas.BuildSpaces(NodePath)
-            .Should().BeOfType<MeshSearchControl>().Subject
-            .ShowSearchBox.Should().Be(false);
+        UserActivityLayoutAreas.BuildSharedBand([], locale: null).Should().BeNull();
     }
 
-    // ── Shared-with-me tab ──────────────────────────────────────────────────────────────────────
+    // ── The Apps section: the viewer's own records, single partition, icon grid ────────────────
 
     [Fact]
-    public void SharedWithMe_DefaultsToLastAccessed_WithACompletenessFallback()
+    public void Apps_QueriesTheViewersOwnRecords_SinglePartition()
     {
-        var shared = UserActivityLayoutAreas.BuildSharedWithMe(["OrgA/Module", "OrgB/Deck"])
-            .Should().BeOfType<MeshSearchControl>().Subject;
+        // THE point of the record model: the old cover-path alternation fanned out across every
+        // partition schema (the multi-second home lag); the records query names ONE partition.
+        var apps = UserActivityLayoutAreas.BuildAppsBand(NodePath, null);
 
-        shared.SortOptions![0].Label.Should().Be("Last accessed");
-        var legs = shared.HiddenQuery!.ToString()!.Split('\n');
-        legs.Should().HaveCount(2, "the accessed leg alone would hide a share the caller never opened");
-        legs[0].Should().Contain("source:accessed");
-        legs[0].Should().Contain("path:OrgA/Module|OrgB/Deck");
-        legs[1].Should().NotContain("source:accessed");
-        legs[1].Should().Contain("path:OrgA/Module|OrgB/Deck");
+        var query = apps.HiddenQuery!.ToString()!;
+        query.Should().Contain($"path:{NodePath}/_App scope:children nodeType:InstalledApp");
+        query.Should().NotContain(" OR ", "no path alternation — the records query is the bound");
+        // 🚨 No source:accessed: it is an INNER JOIN keyed by the row's OWN path, so on records it
+        // would drop every never-opened app and match nothing anyway (opening an app records a
+        // visit to the APP, never to the record pointing at it).
+        query.Should().NotContain("source:accessed");
+    }
+
+    [Fact]
+    public void Apps_OrderMostRecentlyUsedFirst_AtPaint()
+    {
+        // "apps should be ordered by last accessed not by alphabet" — the phone-home rule, applied
+        // at PAINT from the viewer's own access log (see MeshSearchScopeTab.SortByAccess).
+        var scope = UserActivityLayoutAreas.BuildAppsBand(NodePath, null).ScopeTabs!.Single();
+
+        scope.SortByAccess.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Apps_RendersTheIconGridFromTheQueryRows_NavigatingToTheApp()
+    {
+        // "should load from mesh, icon should be the icon of the app, then it should render
+        // insta" — Icons mode paints tiles from the rows (no per-record hub, no content), and
+        // NavigateToMainNode makes a tile open the APP (the record's MainNode), not the record.
+        var apps = UserActivityLayoutAreas.BuildAppsBand(NodePath, null);
+
+        apps.RenderMode.Should().Be(MeshSearchRenderMode.Icons);
+        var scope = apps.ScopeTabs!.Single();
+        scope.RenderMode.Should().Be(nameof(MeshSearchRenderMode.Icons));
+        scope.NavigateToMainNode.Should().Be(true);
+        scope.ItemArea.Should().BeNull("a per-record tile area meant one hub activation per result");
+    }
+
+    // ── Default-app records: the platform BOOTSTRAP (everything else is the STORE's) ────────────
+
+    [Fact]
+    public void AppRecordSpecs_DefaultsCarryProductNamesAndIcons_ThreadsIsAnOrdinaryRecord()
+    {
+        var specs = UserActivityLayoutAreas.AppRecordSpecs(new HomeConfig(), NodePath);
+
+        specs.Select(s => s.Id).Should().Equal("Store", "Doc", "Chat");
+        specs.Single(s => s.Id == "Store").Name.Should().Be("Store");
+        specs.Single(s => s.Id == "Doc").Name.Should().Be("Documentation");
+        var threads = specs.Single(s => s.Id == "Chat");
+        threads.Name.Should().Be("Threads");
+        threads.Icon.Should().Be("/static/NodeTypeIcons/chat.svg");
+        threads.OpenPath.Should().Be($"{NodePath}/Chat", "the Threads record opens the viewer's own Chat area");
+        threads.Plugin.Should().BeNull();
+        threads.Target.Should().Be($"{NodePath}/Chat");
+    }
+
+    [Fact]
+    public void AppRecordSpecs_CoverTheDefaultsOnly_InstalledAppsBelongToTheStore()
+    {
+        // Core no longer reads the Store's install manifests: WHAT a viewer has installed is the
+        // Store's to record when it installs it. Only the platform defaults are seeded here — the
+        // bootstrap that keeps a brand-new home from being a blank screen with no way to the Store.
+        var specs = UserActivityLayoutAreas.AppRecordSpecs(
+            new HomeConfig { DefaultApps = ["Store", "Chess"] }, NodePath);
+
+        specs.Select(s => s.Id).Should().Equal("Store", "Chess");
+        specs.Should().OnlyContain(s => s.Source == "default");
+        var chess = specs.Single(s => s.Id == "Chess");
+        chess.Plugin.Should().Be("Chess");
+        chess.Target.Should().Be("Chess", "a tile opens the APP, never the record");
+        chess.Icon.Should().Be(UserActivityLayoutAreas.GenericAppIcon,
+            "core must not guess a third-party app's icon — the Store stamps the real one on install");
+    }
+
+    [Fact]
+    public void BuildAppRecord_PutsTheWholeTileOnTheNode()
+    {
+        // Name, Icon and MainNode live on the NODE, so the grid paints from query rows alone.
+        var spec = UserActivityLayoutAreas.AppRecordSpecs(new HomeConfig(), NodePath)
+            .Single(s => s.Id == "Store");
+
+        var node = UserActivityLayoutAreas.BuildAppRecord(NodePath, spec);
+
+        node.Path.Should().Be($"{NodePath}/_App/Store");
+        node.NodeType.Should().Be(AppNodeType.NodeType);
+        node.Name.Should().Be("Store");
+        node.Icon.Should().Be("/static/NodeTypeIcons/shopping-bag.svg");
+        node.MainNode.Should().Be("Store", "a tile opens the APP, never the record");
     }
 
     // ── Config ──────────────────────────────────────────────────────────────────────────────────

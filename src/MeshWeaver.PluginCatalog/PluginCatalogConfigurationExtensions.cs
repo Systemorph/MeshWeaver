@@ -4,6 +4,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -126,7 +127,40 @@ public static class PluginCatalogConfigurationExtensions
                 // fails with a denied-path error the publisher sees as HTTP 409. See ModuleRoot.
                 .AddSingleton(sp => new ModuleLandingService(
                     sp.GetService<ILogger<ModuleLandingService>>(),
-                    ModuleRoot.Resolve(sp.GetService<IConfiguration>()))))
+                    ModuleRoot.Resolve(sp.GetService<IConfiguration>())))
+                // The restart-as-activation READER (#1979): which landed modules are not loaded in
+                // THIS process. Registered beside the writer and rooted at the same resolved
+                // module root — a reader looking at a different directory than the writer is how
+                // "installed, and nothing happened" becomes unexplainable. A plain singleton: it
+                // starts nothing and writes nothing, so an instance that never asks pays nothing.
+                // 🚨 It is registered rather than merely constructible so a NodeType's layout area
+                // can resolve it from hub.ServiceProvider — the Store's install step is the
+                // surface where the missing last step is actually met.
+                .AddSingleton(sp => new PendingModuleActivations(
+                    ModuleRoot.Resolve(sp.GetService<IConfiguration>())))
+                // The COUNT that proves the distribution lane works (#1782 gap 4). Adoption's only
+                // evidence used to be a log line, and the most important miss — "the registry does
+                // not advertise this package for my lane" — had no line at all. With lazy
+                // compile-on-access replacing instance pre-bake (#1746), a miss is absorbed so
+                // completely that the lane can go dark while every surface looks like a healthy
+                // day; that is exactly what 2026-08-20 was. A plain singleton, process-scoped and
+                // bounded: a diagnostic, never a source of truth.
+                .AddSingleton<BundleAdoptionLedger>()
+                // 🚨 THE ENTITLEMENT ANCHOR (#1782 gap 2) — the registry's own catalog, read as the
+                // authority on which SOURCE carries which package. A local install record is a
+                // cache of that binding, and a cache miss must send the question upstream rather
+                // than answer "not entitled". Singleton because it keeps the last successful
+                // observation, which is what keeps a previously observed entitlement working while
+                // the registry is unreachable.
+                .AddSingleton(sp => new PackageOriginAnchor(
+                    sp.GetRequiredService<IMessageHub>(),
+                    sp.GetService<IConfiguration>() ?? new ConfigurationBuilder().Build(),
+                    sp.GetService<ILoggerFactory>()))
+                // …and the record that makes a degraded entitlement answer legible. Every refusal
+                // on the bundle routes is byte-identical on the wire (#1777), which is right for
+                // the caller and blind for the operator: "not granted" and "I could not reach the
+                // registry to find out" leave the same trace. Bounded, process-scoped diagnostic.
+                .AddSingleton<PackageEntitlementLedger>())
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();

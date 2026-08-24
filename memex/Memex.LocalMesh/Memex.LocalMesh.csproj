@@ -9,6 +9,7 @@
   <ItemGroup>
     <!-- The in-process (monolith) mesh + SQLite persistence — the same local-first stack the MAUI client
          runs in-process, here as a headless host so a JS client (React Native / web) can reach it over gRPC. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Sqlite\MeshWeaver.Hosting.Sqlite.csproj" />
     <!-- The gRPC bridge (bidi Open + gRPC-web Connect/Deliver split) the foreign-language clients use. -->
@@ -16,10 +17,21 @@
     <!-- Node types + content to render: Graph (sample data + node types) and the embedded Documentation. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
-    <!-- Centralized speech-to-text (the Whisper client) — bakes POST /api/speech/transcribe into the
-         local sidecar so the packaged shells (macOS/Windows/web) have voice input against a local
-         whisper.cpp server, exactly like the portal exposes it. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Speech\MeshWeaver.Speech.csproj" />
+    <!-- Speech-to-text is the CONTRACT only. POST /api/speech/transcribe resolves
+         ISpeechTranscriber optionally and answers 503 when nothing provides it, exactly as the
+         portal's endpoint does — so the sidecar compiles and runs whether or not voice is
+         installed. The Whisper client itself arrives as a MODULE (below). -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Speech.Contract\MeshWeaver.Speech.Contract.csproj" />
   </ItemGroup>
+
+  <!-- ═════════ Voice ships as a module, not as a reference ═════════
+       MeshWeaver.Speech lands in modules/MeshWeaver.Speech/ and is activated by
+       Modules:Assemblies in appsettings.json — the same lane and the same DLL identity the portals
+       use. A ProjectReference would put the Whisper client back in this app's own closure, which
+       is exactly the double-ship that kept it from being a module in the sense that matters: the
+       bits shipped either way and the switch controlled nothing.
+
+       MeshModulesClosureSubset narrows the shared lane to the one module this host wants, so no
+       publish+prune is hand-rolled here. -->
 
 </Project>

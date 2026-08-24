@@ -70,14 +70,13 @@ internal static class PermissionEvaluator
     /// </summary>
     internal const string AdminScope = "Admin";
 
-    private const string RoleNodeType = "Role";
     private const string RoleQueryId = "$security-roles";
 
     // Group access is resolved GLOBALLY — a group defined in one partition can be granted in
     // another (cross-partition licensing), so we read EVERY GroupMembership node (as System, like
     // the other $security-* queries) and expand the viewer's transitive group set in-memory. This
     // mirrors the Postgres rebuild, which reads memberships from the global auth mirror.
-    private const string GroupMembershipNodeType = "GroupMembership";
+    private const string GroupMembershipNodeType = SecurityQueries.GroupMembershipNodeType;
     private const string MembershipQueryId = "$security-memberships";
 
     // Per-gated-type cached query key prefix — one shared upstream subscription per gated node
@@ -702,15 +701,15 @@ internal static class PermissionEvaluator
         // search, and path/namespace select the same flat grant set under {scope}/_Access.
         var isAdminScope = key == AdminScope
             || key.StartsWith(AdminScope + "/", StringComparison.Ordinal);
-        var selfFilter = isAdminScope
-            ? $"path:{nsQuery} scope:children nodeType:{SecurityCollections.AccessAssignmentNodeType} select:path,id,namespace,name,nodeType,content"
-            : $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType} select:path,id,namespace,name,nodeType,content";
+        var selfFilter = SecurityQueries.Scoped(isAdminScope
+            ? $"path:{nsQuery} scope:children nodeType:{SecurityCollections.AccessAssignmentNodeType} {SecurityQueries.ContentProjection}"
+            : $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType} {SecurityQueries.ContentProjection}");
 
         // Self: narrow per-scope query against the singleton cache. Each
         // scope's stream is cached PROCESS-WIDE under the key
         // "$security-access:{scope}" — every hub in the process shares one
         // upstream subscription per scope.
-        var self = cache.GetQuery($"$security-access:{key}", hub.JsonSerializerOptions, selfFilter);
+        var self = SecurityQuery(cache, $"$security-access:{key}", hub.JsonSerializerOptions, selfFilter);
 
         // Parent: recursive reference to parent-scope cached observable.
         // Root scope folds in statics instead.
@@ -735,10 +734,12 @@ internal static class PermissionEvaluator
             ? "namespace: id:_Policy"
             : $"namespace:{key} id:_Policy";
 
-        var self = cache.GetQuery(
+        var self = SecurityQuery(
+            cache,
             $"$security-policy:{key}",
             hub.JsonSerializerOptions,
-            $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} select:path,id,namespace,name,nodeType,content");
+            SecurityQueries.Scoped(
+                $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} {SecurityQueries.ContentProjection}"));
 
         IObservable<ImmutableDictionary<string, PartitionAccessPolicy>> parentOrBase;
         if (string.IsNullOrEmpty(key))
@@ -795,9 +796,8 @@ internal static class PermissionEvaluator
 
         var options = hub.JsonSerializerOptions;
         var perType = gates
-            .Select(gate => cache
-                .GetQuery($"{GatedQueryPrefix}{gate.NodeType}", options,
-                    $"nodeType:{gate.NodeType} scope:subtree select:path,id,namespace,name,nodeType")
+            .Select(gate => SecurityQuery(cache, $"{GatedQueryPrefix}{gate.NodeType}", options,
+                    SecurityQueries.GatedNodes(gate.NodeType))
                 .StartWith(Array.Empty<MeshNode>()))
             .ToArray();
 
@@ -817,10 +817,27 @@ internal static class PermissionEvaluator
             });
     }
 
+    /// <summary>
+    /// The ONE seam through which the security fold reads the mesh — every permission-deciding
+    /// query, global or anchored, is built here.
+    ///
+    /// <para>🚨 It exists to make the completeness declaration structural rather than remembered.
+    /// <c>IMeshNodeStreamCache.GetQuery</c> takes query STRINGS and builds its own
+    /// <see cref="MeshQueryRequest"/>, so nothing in this fold can call
+    /// <see cref="MeshQueryRequest.Complete"/>; a query that merely states no limit is served by the
+    /// cross-schema fan-out as a 50-row PAGE, and the caller cannot tell. Routing every read through
+    /// <see cref="SecurityQueries.Enumeration"/> means a security query cannot be truncatable no
+    /// matter what string its author wrote — which is the point, because the failure it prevents is
+    /// silent: a truncated result reads exactly like "this grants nothing" (issue #2011).</para>
+    /// </summary>
+    private static IObservable<IEnumerable<MeshNode>> SecurityQuery(
+        IMeshNodeStreamCache cache, object queryId, JsonSerializerOptions options, string query)
+        => cache.GetQuery(queryId, options, SecurityQueries.Enumeration(query));
+
     private static IObservable<MeshNode[]> ObserveAllRoleNodes(IMessageHub hub)
     {
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        return cache.GetQuery(RoleQueryId, hub.JsonSerializerOptions, $"nodeType:{RoleNodeType} scope:subtree select:path,id,namespace,name,nodeType,content")
+        return SecurityQuery(cache, RoleQueryId, hub.JsonSerializerOptions, SecurityQueries.Roles)
             .Select(arr => arr.ToArray());
     }
 
@@ -832,8 +849,7 @@ internal static class PermissionEvaluator
     private static IObservable<IEnumerable<MeshNode>> ObserveAllMembershipNodes(IMessageHub hub)
     {
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        return cache.GetQuery(MembershipQueryId, hub.JsonSerializerOptions,
-            $"nodeType:{GroupMembershipNodeType} scope:subtree select:path,id,namespace,name,nodeType,content");
+        return SecurityQuery(cache, MembershipQueryId, hub.JsonSerializerOptions, SecurityQueries.Memberships);
     }
 
     #endregion

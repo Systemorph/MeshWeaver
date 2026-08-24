@@ -100,7 +100,7 @@ public class PendingLandingTest : IDisposable
         };
 
         var (files, decline) = ModuleBundleSource.Collect(
-            root, "MeshWeaver.Widget", activation, _ => null);
+            root, "MeshWeaver.Widget", activation);
 
         Assert.Null(decline);
         Assert.All(files, f => Assert.Contains("MeshWeaver.Widget@gen00001", f));
@@ -114,7 +114,7 @@ public class PendingLandingTest : IDisposable
         Write("MeshWeaver.Widget", "MeshWeaver.Widget.dll", "CURRENT");
 
         var (files, decline) = ModuleBundleSource.Collect(
-            root, "MeshWeaver.Widget", new ModuleActivationList(), _ => null);
+            root, "MeshWeaver.Widget", new ModuleActivationList());
 
         Assert.Null(decline);
         Assert.Equal("CURRENT", File.ReadAllText(files[0]));
