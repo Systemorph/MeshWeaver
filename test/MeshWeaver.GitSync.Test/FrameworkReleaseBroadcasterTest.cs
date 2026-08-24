@@ -93,10 +93,15 @@ public class FrameworkReleaseBroadcasterTest
     {
         var (pem, rsa) = NewKey();
         using var _ = rsa;
+        // ONE options instance for the token service AND the broadcaster — they are the same
+        // configuration in production (GitHubSyncConfiguration resolves the same IOptions), and a
+        // split here would let the broadcaster silently build dispatch URLs against the default
+        // base while the token service uses the configured one (the GHES case).
+        var appOptions = new GitHubAppOptions { ClientId = "Iv23liTest", PrivateKey = pem, InstallationId = 1 };
         var broadcaster = new FrameworkReleaseBroadcaster(
-            NewTokenService(new GitHubAppOptions { ClientId = "Iv23liTest", PrivateKey = pem, InstallationId = 1 }),
+            NewTokenService(appOptions),
             new IoPoolRegistry(),
-            Options.Create(new GitHubAppOptions()),
+            Options.Create(appOptions),
             Options.Create(new FrameworkBroadcastOptions()));
 
         var outcome = await broadcaster.Broadcast(Array.Empty<string>())
@@ -112,11 +117,18 @@ public class FrameworkReleaseBroadcasterTest
     {
         var (pem, rsa) = NewKey();
         using var _ = rsa;
-        var appOptions = new GitHubAppOptions { ClientId = "Iv23liTest", PrivateKey = pem, InstallationId = 42 };
+        // A NON-default ApiBaseUrl (the GHES shape): the broadcaster must build its dispatch URLs
+        // from the SAME options the token service authenticates against — a default-base URL here
+        // would mean a GHES deployment dispatches into the wrong GitHub.
+        var appOptions = new GitHubAppOptions
+        {
+            ClientId = "Iv23liTest", PrivateKey = pem, InstallationId = 42,
+            ApiBaseUrl = "https://ghes.example/api/v3",
+        };
 
         // Token endpoint → a valid installation token. Dispatches: repo "ok" → 204,
         // repo "gone" → 404, repo "boom" → the handler throws (network-class failure).
-        var dispatched = new List<string>();
+        var dispatched = new List<Uri>();
         var tokenHandler = new StubHandler(req =>
             req.RequestUri!.AbsolutePath.EndsWith("/access_tokens", StringComparison.Ordinal)
                 ? Json(HttpStatusCode.Created,
@@ -124,8 +136,8 @@ public class FrameworkReleaseBroadcasterTest
                 : throw new InvalidOperationException($"unexpected token call {req.RequestUri}"));
         var dispatchHandler = new StubHandler(req =>
         {
-            var path = req.RequestUri!.AbsolutePath;      // /repos/{owner}/{name}/dispatches
-            dispatched.Add(path);
+            dispatched.Add(req.RequestUri!);              // …/repos/{owner}/{name}/dispatches
+            var path = req.RequestUri!.AbsolutePath;
             if (path.Contains("/boom/", StringComparison.Ordinal))
                 throw new HttpRequestException("connection reset");
             return new HttpResponseMessage(
@@ -149,6 +161,10 @@ public class FrameworkReleaseBroadcasterTest
         Assert.Equal(3, dispatched.Count);
         Assert.Equal(1, outcome.Succeeded);
         Assert.Equal(2, outcome.Failed);
+
+        // Every dispatch was built against the CONFIGURED base (GHES parity), never the default.
+        Assert.All(dispatched, uri => Assert.StartsWith(
+            "https://ghes.example/api/v3/repos/Systemorph/", uri.AbsoluteUri, StringComparison.Ordinal));
 
         Assert.True(outcome.Results.Single(r => r.Repo == "Systemorph/ok").Ok);
         Assert.Contains("404", outcome.Results.Single(r => r.Repo == "Systemorph/gone").Error);
