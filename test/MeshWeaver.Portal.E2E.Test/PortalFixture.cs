@@ -13,16 +13,39 @@ namespace MeshWeaver.Portal.E2E;
 /// <list type="bullet">
 ///   <item><c>E2E_BASE_URL</c> — point at a portal you already started (recommended). e.g.
 ///     <c>https://localhost:7122</c> for the standalone monolith.</item>
-///   <item><c>E2E_LAUNCH=1</c> — launch <c>memex/Memex.Portal.Monolith</c> as a subprocess on
-///     <c>http://localhost:5099</c> and tear it down afterwards.</item>
+///   <item><c>E2E_LAUNCH=1</c> — launch <c>memex/Memex.Portal.Monolith</c> as a subprocess on a
+///     port DERIVED FROM THIS WORKTREE (<c>E2E_LAUNCH_PORT</c> overrides) and tear it down
+///     afterwards.</item>
 /// </list>
 /// <c>E2E_USER</c> (default <c>Roland</c>) is the DevLogin person id.
 /// </para>
+///
+/// <para>🚨 <b>The launch port is per-worktree, and deliberately.</b> It used to be a fixed
+/// <c>localhost:5099</c>, so two worktrees running E2E at once collided — and the collision was
+/// SILENT in the worst possible way: the second run found a portal already answering on that port,
+/// attached to it, and drove <b>another worktree's build</b>. Every assertion then measured code
+/// the run had not built (observed 2026-08-24: a home test failed against a sibling agent's portal
+/// still serving the previous layout). A test that can silently measure the wrong binary is worse
+/// than one that fails. Hashing the repo root into the port keeps concurrent worktrees apart.</para>
 /// </summary>
 public sealed class PortalFixture : IAsyncLifetime
 {
     private static readonly string User = Environment.GetEnvironmentVariable("E2E_USER") ?? "Roland";
-    private const string LaunchUrl = "http://localhost:5099";
+
+    /// <summary>The launch URL for THIS worktree: an explicit <c>E2E_LAUNCH_PORT</c>, else a port
+    /// derived from the repo root path so concurrent worktrees never share one.</summary>
+    private static string LaunchUrlFor(string repoRoot)
+    {
+        var configured = Environment.GetEnvironmentVariable("E2E_LAUNCH_PORT");
+        if (int.TryParse(configured, out var explicitPort) && explicitPort is > 0 and < 65536)
+            return $"http://localhost:{explicitPort}";
+        // Deterministic, stable across runs of the same worktree: FNV-1a over the repo root,
+        // mapped into the ephemeral-ish 5100–5599 band (5099 stays free for hand-started portals).
+        var hash = 2166136261u;
+        foreach (var c in repoRoot)
+            hash = (hash ^ c) * 16777619u;
+        return $"http://localhost:{5100 + (int)(hash % 500)}";
+    }
 
     private IPlaywright? _playwright;
     private IBrowser? _browser;
@@ -69,11 +92,29 @@ public sealed class PortalFixture : IAsyncLifetime
 
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
-            baseUrl = LaunchUrl;
-            _portalProcess = TryLaunchPortal(baseUrl);
-            if (_portalProcess is null)
+            var root = FindRepoRoot();
+            if (root is null)
             {
                 SkipReason = "E2E_LAUNCH=1 but the monolith could not be started (repo root not found).";
+                return;
+            }
+            baseUrl = LaunchUrlFor(root);
+            // 🚨 Refuse to drive a portal this run did not start. Something already listening on
+            // THIS worktree's port is a stale portal from an earlier run (or, before the port was
+            // per-worktree, a sibling worktree's build) — attaching to it would silently test the
+            // wrong binary, which is exactly the failure this guard exists to make loud.
+            if (await WaitForPortalAsync(baseUrl, TimeSpan.FromSeconds(2)))
+            {
+                SkipReason =
+                    $"A portal is ALREADY listening on {baseUrl} — this run would have driven a binary " +
+                    "it did not build. Stop that process (or set E2E_BASE_URL to target it deliberately, " +
+                    "or E2E_LAUNCH_PORT to pick another port).";
+                return;
+            }
+            _portalProcess = TryLaunchPortal(baseUrl, root);
+            if (_portalProcess is null)
+            {
+                SkipReason = "E2E_LAUNCH=1 but the monolith could not be started.";
                 return;
             }
         }
@@ -291,12 +332,8 @@ public sealed class PortalFixture : IAsyncLifetime
             throw new InvalidOperationException($"Patching '{path}' failed ({resp.Status}): {body}");
     }
 
-    private static Process? TryLaunchPortal(string url)
+    private static Process? TryLaunchPortal(string url, string root)
     {
-        var root = FindRepoRoot();
-        if (root is null)
-            return null;
-
         var psi = new ProcessStartInfo("dotnet",
             "run --project memex/Memex.Portal.Monolith --no-launch-profile")
         {

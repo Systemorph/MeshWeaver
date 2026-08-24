@@ -114,6 +114,20 @@ public record MeshSearchScopeTab(string Label, string Query)
     /// content read. Null keeps the control-level <see cref="MeshSearchControl.NavigateToMainNode"/>.
     /// </summary>
     public bool? NavigateToMainNode { get; init; }
+
+    /// <summary>
+    /// Order this scope's results by when the VIEWER last opened each result's navigation target,
+    /// most recent first, with never-opened results keeping the query's own order behind them —
+    /// the phone-home rule: what you use most sits where your thumb is. Applied wherever results
+    /// are projected, so every render mode honours it, not just the icon grid.
+    /// <para>Applied at PAINT, not in the query, and deliberately: <c>source:accessed</c> is an
+    /// INNER JOIN on the access log keyed by the result's OWN path, so on the Apps grid it would
+    /// both hide every never-opened app AND match nothing (an app record's access is recorded
+    /// against the app it points at, never against the record). The view instead reads the
+    /// viewer's own <c>_UserActivity</c> satellites — one cheap single-partition query — and uses
+    /// them as a SORT KEY. Ordering arrives with that snapshot, after the tiles have painted.</para>
+    /// </summary>
+    public bool SortByAccess { get; init; }
 }
 
 /// <summary>
@@ -200,6 +214,18 @@ public record MeshSearchControl()
     /// <see cref="HiddenQuery"/>, which should equal the first tab's query.
     /// </summary>
     public IReadOnlyList<MeshSearchScopeTab>? ScopeTabs { get; init; }
+
+    /// <summary>
+    /// In a grouped render, order the sections by SIZE (most items first) instead of
+    /// alphabetically — the home's content section fans out by node type with the type you have
+    /// most of at the top, so the page opens on what you actually work with rather than on
+    /// whatever happens to start with "A". Ties fall back to the label, so the order is stable.
+    /// </summary>
+    public object? GroupByFrequency { get; init; }
+
+    /// <summary>Sets <see cref="GroupByFrequency"/>.</summary>
+    public MeshSearchControl WithGroupByFrequency(bool value = true) =>
+        This with { GroupByFrequency = value };
 
     /// <summary>
     /// When true, clicking a result navigates to the node's <c>MainNode</c> instead of its own

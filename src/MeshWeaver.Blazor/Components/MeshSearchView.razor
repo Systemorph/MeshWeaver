@@ -221,12 +221,11 @@
                         @if (IsIconsMode)
                         {
                             <div class="mesh-search-icons-grid">
-                                @foreach (var item in visibleItems)
+                                @* Order is applied in ApplyResults (so every render mode honours
+                                   SortByAccess); the tiles just paint what they are given. *@
+                                @foreach (var node in visibleItems.OfType<MeshNode>())
                                 {
-                                    if (item is MeshNode node)
-                                    {
-                                        @RenderIconTile(node)
-                                    }
+                                    @RenderIconTile(node)
                                 }
                             </div>
                         }

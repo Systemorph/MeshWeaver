@@ -299,6 +299,117 @@ public partial class MeshSearchView
     /// the query rows: no per-result content read, no per-result hub.</summary>
     private bool IsIconsMode => EffectiveRenderMode == MeshSearchRenderMode.Icons;
 
+    // ----- "Most recently used first" (MeshSearchScopeTab.SortByAccess) -----
+    // The viewer's own access log, keyed the way it is STORED: a UserActivity node per visited
+    // path at {viewer}/_UserActivity/{path with '/' → '_'}. That mangling is one-way, so we never
+    // reverse it — we mangle each tile's TARGET the same way and look it up. One cheap
+    // single-partition query, subscribed only by a scope that asked for this ordering.
+    private IDisposable? _accessOrderSubscription;
+    private ImmutableDictionary<string, DateTimeOffset> _accessOrder = ImmutableDictionary<string, DateTimeOffset>.Empty;
+    private string? _accessOrderViewer;
+
+    /// <summary>Order this scope's results by the viewer's last access of each result's target
+    /// (the active scope's opt-in; the home's Apps grid sets it).</summary>
+    private bool BoundSortByAccess => ActiveScopeTab?.SortByAccess ?? false;
+
+    /// <summary>Order grouped sections by SIZE instead of alphabetically — the home's content
+    /// section fans out by node type with the biggest type first.</summary>
+    private bool BoundGroupByFrequency
+    {
+        get
+        {
+            if (ViewModel?.GroupByFrequency is bool b) return b;
+            if (ViewModel?.GroupByFrequency is JsonElement je) return je.ValueKind == JsonValueKind.True;
+            return false;
+        }
+    }
+
+    /// <summary>The activity id the access log stores a visit to <paramref name="path"/> under.</summary>
+    private static string AccessKeyOf(string path) => path.Replace('/', '_');
+
+    /// <summary>
+    /// Results in paint order: most-recently-opened first when the scope asked for it, with
+    /// never-opened results keeping the query's own order BEHIND them (never dropped — that is
+    /// exactly what a `source:accessed` INNER JOIN would have done to a freshly installed app).
+    /// A stable sort, so the query's order survives inside each group.
+    /// </summary>
+    private IReadOnlyList<MeshNode> PaintOrdered(IReadOnlyList<MeshNode> nodes)
+    {
+        if (!BoundSortByAccess || _accessOrder.IsEmpty || nodes.Count < 2)
+            return nodes;
+        return nodes
+            .OrderByDescending(n =>
+                _accessOrder.TryGetValue(AccessKeyOf(TargetOf(n)), out var at) ? at : DateTimeOffset.MinValue)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Subscribes the viewer's access log when the active scope sorts by it. Deliberately a
+    /// SECOND pass: the tiles paint from their own query the moment it lands, and this re-orders
+    /// them when the log arrives — the ordering is never allowed to gate the first paint.
+    /// </summary>
+    private void SubscribeToAccessOrder()
+    {
+        var viewer = BoundSortByAccess ? Access.ViewerId() : null;
+        if (string.IsNullOrEmpty(viewer))
+        {
+            _accessOrderSubscription?.Dispose();
+            _accessOrderSubscription = null;
+            _accessOrderViewer = null;
+            _accessOrder = ImmutableDictionary<string, DateTimeOffset>.Empty;
+            return;
+        }
+        if (string.Equals(viewer, _accessOrderViewer, StringComparison.OrdinalIgnoreCase))
+            return;   // already watching this viewer's log
+        _accessOrderViewer = viewer;
+        _accessOrderSubscription?.Dispose();
+        _accessOrderSubscription = MeshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{viewer}/_UserActivity nodeType:UserActivity " +
+                "select:path,id,namespace,name,nodeType,lastModified sort:LastModified-desc limit:500"))
+            // 🚨 FOLD the change feed — never rebuild from change.Items. Only Initial/Reset carry a
+            // full snapshot; Added/Updated/Removed carry ONLY the rows that changed, so rebuilding
+            // would replace the whole lookup with the one row that just moved and mis-order every
+            // tile from the first update onwards. Same Scan shape as ObserveSharedTargets.
+            .Scan(ImmutableDictionary<string, DateTimeOffset>.Empty, (map, change) =>
+            {
+                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                    return change.Items
+                        .Where(n => !string.IsNullOrEmpty(n.Id))
+                        .GroupBy(n => n.Id!, StringComparer.OrdinalIgnoreCase)
+                        .ToImmutableDictionary(g => g.Key, g => g.First().LastModified,
+                            StringComparer.OrdinalIgnoreCase);
+                foreach (var node in change.Items)
+                {
+                    if (string.IsNullOrEmpty(node.Id))
+                        continue;
+                    map = change.ChangeType switch
+                    {
+                        QueryChangeType.Added or QueryChangeType.Updated =>
+                            map.SetItem(node.Id!, node.LastModified),
+                        QueryChangeType.Removed => map.Remove(node.Id!),
+                        _ => map,
+                    };
+                }
+                return map;
+            })
+            .Subscribe(
+                next => InvokeAsync(() =>
+                {
+                    if (next.Count == _accessOrder.Count && next.All(kv =>
+                            _accessOrder.TryGetValue(kv.Key, out var at) && at == kv.Value))
+                        return;
+                    _accessOrder = next;
+                    // Re-PROJECT, not just re-render: the order is applied where results are
+                    // projected (ApplyResults), so a bare StateHasChanged would repaint the
+                    // previous order. Same re-projection the screen subscription uses.
+                    ReprojectForScreen();
+                }),
+                ex => MeshHub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.MeshSearchView")
+                    .LogWarning(ex, "Access-order stream ended for {Viewer}; keeping query order", viewer));
+    }
+
     /// <summary>The fallback subtitle shown on a search row when the node has no description.</summary>
     private const string NoDescriptionPrompt = "Ask the agent to create a description.";
 
@@ -714,6 +825,9 @@ public partial class MeshSearchView
         _isLoading = true;
         StateHasChanged();
         SubscribeToResultStream();
+        // Second pass, never a gate: the tiles paint from the query above; this re-orders them
+        // when the viewer's access log lands (and is a no-op for every scope that didn't ask).
+        SubscribeToAccessOrder();
     }
 
     // ReactiveMode and the default (one-shot-style) mode are now the SAME storm-resistant
@@ -865,7 +979,9 @@ public partial class MeshSearchView
         // a no-op for every viewer whose mode is off.
         visible = _screen.Filter(visible, TargetOf);
 
-        _nodes = visible.ToList();
+        // Most-recently-used first when the scope asked for it — applied HERE, so every render
+        // mode (icons, flat, list, grouped) honours it, not just the grid that first needed it.
+        _nodes = PaintOrdered(visible.ToList()).ToList();
         ResolveDeletePermissions(_nodes);
 
         if (ViewModel != null)
@@ -951,13 +1067,19 @@ public partial class MeshSearchView
                     Items = limitedItems.Cast<object>().ToList(),
                     TotalCount = items.Count
                 };
-            })
-            .OrderBy(g => g.Label)
-            .ToList();
+            });
+
+        // BY FREQUENCY when asked (the home's content section): the type you have most of leads,
+        // so the page opens on what you actually work with instead of whatever starts with "A".
+        // Ties fall back to the label so the order is stable across renders.
+        groups = BoundGroupByFrequency
+            ? groups.OrderByDescending(g => g.TotalCount).ThenBy(g => g.Label)
+            : groups.OrderBy(g => g.Label);
+        var orderedGroups = groups.ToList();
 
         return new GroupedSearchResult
         {
-            Groups = groups,
+            Groups = orderedGroups,
             TotalItems = sortedNodes.Count
         };
     }
@@ -2186,6 +2308,7 @@ public partial class MeshSearchView
     public override ValueTask DisposeAsync()
     {
         _screenSubscription?.Dispose();
+        _accessOrderSubscription?.Dispose();
         _reactiveSubscription?.Dispose();
         DisposeTreeSubscriptions();
         _navSubscription?.Dispose();
