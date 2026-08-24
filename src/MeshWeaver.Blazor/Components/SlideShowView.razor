@@ -1,0 +1,133 @@
+@using Microsoft.AspNetCore.Components
+@using Microsoft.JSInterop
+@inherits BlazorView<SlideShowControl, SlideShowView>
+@inject NavigationManager NavigationManager
+
+@* Two modes. FRAMES: every slide is pre-rendered below and swapped client-side (no navigation,
+   no server round trip); only Esc leaves the page. HREF (legacy, no frames): the driver renders
+   no chrome and every key navigates to its href. *@
+
+@if (ViewModel?.Frames is { Count: > 0 } frames)
+{
+    var start = System.Math.Clamp(ViewModel.StartIndex, 0, frames.Count - 1);
+    <div class="mw-slideshow" id="mw-slideshow-root">
+        @for (var i = 0; i < frames.Count; i++)
+        {
+            var frame = frames[i];
+            var background = string.IsNullOrWhiteSpace(frame.Background) ? "var(--ae-bg)" : frame.Background;
+            <section class="mw-frame @(i == start ? "active" : null)" data-frame-index="@i">
+                <div class="mw-frame-stage" style="background: @background;">
+                    @((MarkupString)frame.Html)
+                </div>
+            </section>
+        }
+        <div class="mw-frame-counter" id="mw-frame-counter">@(start + 1) / @frames.Count</div>
+    </div>
+    <style>
+        /* Mirrors the slide stage contract (ThemeTokens + present-mode sizing) — keep in sync
+           with SlideLayoutAreas.BuildStage / BuildPresentRoot so client-swapped frames are
+           pixel-identical to server-rendered ones. */
+        .mw-slideshow {
+            --ae-bg: linear-gradient(135deg, #0b1d3a 0%, #3b1d6e 100%);
+            --ae-bg-solid: #0b1d3a;
+            --ae-fg: #f4f7ff;
+            --ae-muted: #9db8ff;
+            --ae-accent: #3b82f6;
+            --ae-accent2: #818cf8;
+            position: relative; width: 100%; height: 100%; min-height: 100vh;
+            box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+            padding: 1.5vmin; background: var(--ae-bg-solid); cursor: pointer;
+        }
+        .mw-frame { display: none; width: min(100%, calc((100vh - 3vmin) * 16 / 9)); }
+        .mw-frame.active { display: block; }
+        .mw-frame-stage {
+            aspect-ratio: 16 / 9; box-sizing: border-box;
+            display: flex; flex-direction: column; justify-content: center; overflow: hidden;
+            border-radius: 6px; box-shadow: 0 10px 44px rgba(0, 0, 0, 0.45); padding: 3.2% 6%;
+            font-size: clamp(16px, 2.2vw, 34px); line-height: 1.4; color: var(--ae-fg);
+        }
+        .mw-frame-counter {
+            position: absolute; right: 2vmin; bottom: 2vmin; padding: 4px 12px;
+            border-radius: 999px; background: rgba(0, 0, 0, 0.35); color: var(--ae-fg);
+            font-size: 13px; font-variant-numeric: tabular-nums; opacity: 0.8; pointer-events: none;
+        }
+    </style>
+}
+
+@code {
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<SlideShowView>? _selfRef;
+
+    /// <inheritdoc />
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await base.OnAfterRenderAsync(firstRender);
+        if (!firstRender)
+            return;
+        try
+        {
+            _module = await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", "./_content/MeshWeaver.Blazor/Components/SlideShowView.razor.js");
+            _selfRef = DotNetObjectReference.Create(this);
+            var frames = ViewModel?.Frames;
+            // register() replaces any prior driver: a single document-level keydown
+            // listener always dispatches to the most recently rendered SlideShowView,
+            // so re-rendering the Present area never stacks listeners. In frames mode the
+            // options switch the driver to client-side swapping — every key except Esc is
+            // handled entirely in the browser.
+            await _module.InvokeVoidAsync("register", _selfRef, frames is { Count: > 0 }
+                ? new
+                {
+                    frameCount = frames.Count,
+                    startIndex = System.Math.Clamp(ViewModel!.StartIndex, 0, frames.Count - 1),
+                    urlTemplate = ViewModel.UrlTemplate,
+                }
+                : null);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
+        {
+            // Circuit disconnected during initialization — nothing to wire.
+        }
+    }
+
+    /// <summary>
+    /// Invoked from JS for actions that leave the page. In href mode that is every key; in
+    /// frames mode only <c>exit</c> arrives here (all slide swapping stays in the browser).
+    /// A null href is a no-op.
+    /// </summary>
+    /// <param name="action">One of <c>next</c>, <c>prev</c>, <c>first</c>, <c>last</c>, <c>exit</c>.</param>
+    [JSInvokable]
+    public void OnPresentKey(string action)
+    {
+        var href = action switch
+        {
+            "next" => ViewModel?.NextHref,
+            "prev" => ViewModel?.PreviousHref,
+            "first" => ViewModel?.FirstHref,
+            "last" => ViewModel?.LastHref,
+            "exit" => ViewModel?.ExitHref,
+            _ => null
+        };
+        if (!string.IsNullOrEmpty(href))
+            NavigationManager.NavigateTo(href);
+    }
+
+    /// <inheritdoc />
+    public override async ValueTask DisposeAsync()
+    {
+        if (_module is not null && _selfRef is not null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("unregister", _selfRef);
+                await _module.DisposeAsync();
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
+            {
+                // Circuit already gone — the listener dies with the page.
+            }
+        }
+        _selfRef?.Dispose();
+        await base.DisposeAsync();
+    }
+}
