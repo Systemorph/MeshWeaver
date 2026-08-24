@@ -859,12 +859,12 @@ public static class UserActivityLayoutAreas
         scopes.Add(ContentScope("home.mine", locale, cfg.DefaultSort,
             (_, suffix) => $"namespace:{nodeOwnerId} is:main is:content{SpacesDedupExclusions} {suffix}"));
 
-        // Shared — the cross-partition invitations (#385), which All folds in as a union leg. As a
-        // TAB it answers the different question ("what did someone give me?"), so it is worth its
-        // own place; but only when there is something in it, since the query is a path list and an
-        // empty list matches nothing at all.
+        // Spaces — the cross-partition invitations (#385), which All folds in as a union leg. As a
+        // TAB it answers a different question, and "Spaces" is what those things ARE from the
+        // viewer's side: the workspaces they can reach but do not own. Present only when there is
+        // something in it, since the query is a path list and an empty list matches nothing at all.
         if (sharedTargets is { Count: > 0 })
-            scopes.Add(ContentScope("home.sharedWithMe", locale, HomeCatalogSort.LastModified,
+            scopes.Add(ContentScope("home.spaces", locale, HomeCatalogSort.LastModified,
                 (_, suffix) =>
                     $"path:{string.Join("|", sharedTargets)} is:main is:content -nodeType:User{SpacesDedupExclusions} {suffix}"));
 
