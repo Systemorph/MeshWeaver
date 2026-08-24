@@ -221,12 +221,11 @@
                         @if (IsIconsMode)
                         {
                             <div class="mesh-search-icons-grid">
-                                @foreach (var item in visibleItems)
+                                @* PaintOrdered: most-recently-opened first when the scope asked for
+                                   it (the phone-home rule), query order otherwise. *@
+                                @foreach (var node in PaintOrdered(visibleItems.OfType<MeshNode>().ToList()))
                                 {
-                                    if (item is MeshNode node)
-                                    {
-                                        @RenderIconTile(node)
-                                    }
+                                    @RenderIconTile(node)
                                 }
                             </div>
                         }

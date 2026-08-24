@@ -299,6 +299,81 @@ public partial class MeshSearchView
     /// the query rows: no per-result content read, no per-result hub.</summary>
     private bool IsIconsMode => EffectiveRenderMode == MeshSearchRenderMode.Icons;
 
+    // ----- "Most recently used first" (MeshSearchScopeTab.SortByAccess) -----
+    // The viewer's own access log, keyed the way it is STORED: a UserActivity node per visited
+    // path at {viewer}/_UserActivity/{path with '/' → '_'}. That mangling is one-way, so we never
+    // reverse it — we mangle each tile's TARGET the same way and look it up. One cheap
+    // single-partition query, subscribed only by a scope that asked for this ordering.
+    private IDisposable? _accessOrderSubscription;
+    private ImmutableDictionary<string, DateTimeOffset> _accessOrder = ImmutableDictionary<string, DateTimeOffset>.Empty;
+    private string? _accessOrderViewer;
+
+    /// <summary>Order this scope's results by the viewer's last access of each result's target
+    /// (the active scope's opt-in; the home's Apps grid sets it).</summary>
+    private bool BoundSortByAccess => ActiveScopeTab?.SortByAccess ?? false;
+
+    /// <summary>The activity id the access log stores a visit to <paramref name="path"/> under.</summary>
+    private static string AccessKeyOf(string path) => path.Replace('/', '_');
+
+    /// <summary>
+    /// Results in paint order: most-recently-opened first when the scope asked for it, with
+    /// never-opened results keeping the query's own order BEHIND them (never dropped — that is
+    /// exactly what a `source:accessed` INNER JOIN would have done to a freshly installed app).
+    /// A stable sort, so the query's order survives inside each group.
+    /// </summary>
+    private IReadOnlyList<MeshNode> PaintOrdered(IReadOnlyList<MeshNode> nodes)
+    {
+        if (!BoundSortByAccess || _accessOrder.IsEmpty || nodes.Count < 2)
+            return nodes;
+        return nodes
+            .OrderByDescending(n =>
+                _accessOrder.TryGetValue(AccessKeyOf(TargetOf(n)), out var at) ? at : DateTimeOffset.MinValue)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Subscribes the viewer's access log when the active scope sorts by it. Deliberately a
+    /// SECOND pass: the tiles paint from their own query the moment it lands, and this re-orders
+    /// them when the log arrives — the ordering is never allowed to gate the first paint.
+    /// </summary>
+    private void SubscribeToAccessOrder()
+    {
+        var viewer = BoundSortByAccess ? Access.ViewerId() : null;
+        if (string.IsNullOrEmpty(viewer))
+        {
+            _accessOrderSubscription?.Dispose();
+            _accessOrderSubscription = null;
+            _accessOrderViewer = null;
+            _accessOrder = ImmutableDictionary<string, DateTimeOffset>.Empty;
+            return;
+        }
+        if (string.Equals(viewer, _accessOrderViewer, StringComparison.OrdinalIgnoreCase))
+            return;   // already watching this viewer's log
+        _accessOrderViewer = viewer;
+        _accessOrderSubscription?.Dispose();
+        _accessOrderSubscription = MeshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{viewer}/_UserActivity nodeType:UserActivity " +
+                "select:path,id,namespace,name,nodeType,lastModified sort:LastModified-desc limit:500"))
+            .Subscribe(
+                change => InvokeAsync(() =>
+                {
+                    var map = ImmutableDictionary.CreateBuilder<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var node in change.Items)
+                        if (!string.IsNullOrEmpty(node.Id))
+                            map[node.Id] = node.LastModified;
+                    var next = map.ToImmutable();
+                    if (next.Count == _accessOrder.Count && next.All(kv =>
+                            _accessOrder.TryGetValue(kv.Key, out var at) && at == kv.Value))
+                        return;
+                    _accessOrder = next;
+                    StateHasChanged();
+                }),
+                ex => MeshHub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.MeshSearchView")
+                    .LogWarning(ex, "Access-order stream ended for {Viewer}; keeping query order", viewer));
+    }
+
     /// <summary>The fallback subtitle shown on a search row when the node has no description.</summary>
     private const string NoDescriptionPrompt = "Ask the agent to create a description.";
 
@@ -714,6 +789,9 @@ public partial class MeshSearchView
         _isLoading = true;
         StateHasChanged();
         SubscribeToResultStream();
+        // Second pass, never a gate: the tiles paint from the query above; this re-orders them
+        // when the viewer's access log lands (and is a no-op for every scope that didn't ask).
+        SubscribeToAccessOrder();
     }
 
     // ReactiveMode and the default (one-shot-style) mode are now the SAME storm-resistant
@@ -2186,6 +2264,7 @@ public partial class MeshSearchView
     public override ValueTask DisposeAsync()
     {
         _screenSubscription?.Dispose();
+        _accessOrderSubscription?.Dispose();
         _reactiveSubscription?.Dispose();
         DisposeTreeSubscriptions();
         _navSubscription?.Dispose();
