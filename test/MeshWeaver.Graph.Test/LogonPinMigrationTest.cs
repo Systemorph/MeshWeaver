@@ -125,6 +125,31 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 60000)]
+    public async Task Only_exact_path_matches_are_pinned_never_descendants()
+    {
+        // 🚨 The risk the SINGLE alternation query introduces. `path:a|b|c` is a match expression,
+        // so a row for a DESCENDANT of a declared target comes back in the same result set. Reading
+        // "the query returned something" as "the target exists" would pin a path that does not — the
+        // dangling tile the existence check exists to prevent, arrived at from the other direction.
+        // The intersection is therefore on EXACT path equality, and this pins that.
+        const string user = "pinuser-descendants";
+        await CreateCourseAsync("AgenticPrimer");
+        await CreateChildAsync("AgenticPrimer", "Introduction");
+        await CreateUserAsync(user, new User { PinnedPaths = DocPins });
+
+        var action = Migration("docs-to-courses", DocPins, CoursePins);
+        var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
+
+        await RunAsync(runner, IdentityFor(user), action);
+        var profile = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(action.Id));
+
+        profile.PinnedPaths.Should().Equal(new[] { "AgenticPrimer" },
+            "only the declared path itself counts — a child of it is not the target, and the two "
+            + "absent courses are still absent");
+        profile.PinnedPaths.Should().NotContain("AgenticPrimer/Introduction");
+    }
+
+    [Fact(Timeout = 60000)]
     public async Task A_declaration_NODE_in_the_admin_partition_is_discovered_and_run()
     {
         // The deployment-specific route end to end: no code, no image roll — an admin creates a
@@ -222,6 +247,19 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
             // top-level partitions installed from the Store — so Space is also the realistic shape.
             NodeType = "Space",
             Name = path,
+            State = MeshNodeState.Active,
+        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+    }
+
+    /// <summary>A child node inside an existing course partition — used to prove a descendant row
+    /// never stands in for its ancestor in the alternation query's result set.</summary>
+    private async Task CreateChildAsync(string parent, string id)
+    {
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await mesh.CreateNode(MeshNode.FromPath($"{parent}/{id}") with
+        {
+            NodeType = "Markdown",
+            Name = id,
             State = MeshNodeState.Active,
         }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
     }

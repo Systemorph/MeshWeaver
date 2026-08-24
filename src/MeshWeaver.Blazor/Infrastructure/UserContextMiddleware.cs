@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
@@ -338,11 +339,12 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     /// as <c>system-security</c> and not as a hub. The Blazor circuit handler was the obvious
     /// alternative and is worse — it fires per TAB and misses the API surface entirely.</para>
     ///
-    /// <para>Fire-and-forget and fully bounded on the runner's side (it carries its own timeout and
-    /// swallows its own faults): authentication must never wait on a migration, and a mesh that
-    /// cannot answer must cost a missed migration rather than a failed login. The subscription's
-    /// error arm is the last resort for a SYNCHRONOUS composition fault, which is why it is a
-    /// logged Warning and not a rethrow on a timer thread.</para>
+    /// <para><b>Subscribe and return — never <c>await</c>.</b> This is the `/async` rule-1a shape for
+    /// a <c>Task</c>-returning signature that is not ours (ASP.NET middleware): hang the work off the
+    /// signal and let the request continue. Authentication must never wait on a migration, and a mesh
+    /// that cannot answer must cost a missed migration rather than a failed login. The pipeline is
+    /// bounded and self-terminating on the runner's side (its own <c>Timeout</c> + <c>Catch</c>), so
+    /// the subscription always completes and roots nothing.</para>
     /// </summary>
     private void RunLogonActions(AccessContext userContext, IMessageHub hub)
     {
@@ -352,13 +354,25 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         if (runner is null)
             return;
 
+        // 🚨 Stream faults are handled FLUENTLY (`/async` rule 1b), not by a try/catch around
+        // Subscribe: a fault travelling through the stream arrives later, usually on another thread,
+        // and sails straight past a catch block. Observable.Empty means "this did not happen" — the
+        // right recovery here, because the OnNext arm must not run for a run that failed.
+        //
+        // The try/catch below covers ONLY the genuinely SYNCHRONOUS throw from the Subscribe call
+        // itself (composing the pipeline, resolving a service inside it). It does NOT cover the
+        // stream — the .Catch above does — and it is here because a throw on the authentication
+        // path would 500 the request.
         try
         {
             runner.RunFor(userContext)
-                .Subscribe(
-                    _ => { },
-                    ex => logger.LogWarning(ex,
-                        "Logon actions failed for {ObjectId}", userContext.ObjectId));
+                .Catch<Unit, Exception>(ex =>
+                {
+                    logger.LogWarning(ex,
+                        "Logon actions failed for {ObjectId}", userContext.ObjectId);
+                    return Observable.Empty<Unit>();
+                })
+                .Subscribe(_ => { });
         }
         catch (Exception ex)
         {
