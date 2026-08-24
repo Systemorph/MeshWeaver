@@ -21,7 +21,7 @@ export async function loadAndTypeset(element) {
 
         // Create script element
         const script = document.createElement('script');
-        script.src = '_content/MeshWeaver.Blazor.Views/lib/mathjax/tex-svg.js'; // vendored, pinned 3.2.2
+        script.src = '_content/MeshWeaver.Blazor/lib/mathjax/tex-svg.js'; // vendored, pinned 3.2.2
         script.id = 'mathjax-script';
 
         // Wait for script to load

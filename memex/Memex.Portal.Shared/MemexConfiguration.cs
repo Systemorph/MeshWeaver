@@ -7,7 +7,6 @@ using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Hosting.Grpc;
 using MeshWeaver.Blazor.Pages;
@@ -371,7 +370,6 @@ public static class MemexConfiguration
         services.AddSingleton(new MeshWeaver.Hosting.Blazor.PageRouteRegistry(
             typeof(Routes).Assembly,
             typeof(MeshWeaver.Blazor.Pages.ApplicationPage).Assembly,
-            typeof(MeshWeaver.Blazor.Graph.MeshNodeEditorView).Assembly,
             typeof(MeshWeaver.Blazor.Portal.Pages.CreateNode).Assembly));
 
         // Data protection: set application name here, but key persistence is deployment-specific.
@@ -1056,7 +1054,10 @@ public static class MemexConfiguration
                 // pattern; formerly the Features:UiPacks flags). Registration order stopped being
                 // load-bearing with the fallback-slot seam, so an absent pack simply leaves its
                 // controls to the fallback.
-                .AddGraphViews()  // Also enables @ autocomplete in markdown editors
+                // The Graph node views (MeshWeaver.Blazor.Graph) are a MODULE now: its
+                // GraphViewsViewPackModuleAttribute folds AddGraphViews() when the DLL is listed
+                // under Modules:Assemblies; the bits ship via the modules/<Name> lane. No compiled
+                // call here — the EntityViews shape.
                 .AddChatViews()   // Register ThreadChatView
                 .AddUserProfileViews() // Register UserProfilePageView
                 // The entity form/edit renderers (MeshWeaver.Blazor.EntityViews) are a MODULE now:
@@ -1528,8 +1529,7 @@ public static class MemexConfiguration
     public static RazorComponentsEndpointConventionBuilder AddMeshViews(
         this RazorComponentsEndpointConventionBuilder builder)
         => builder.AddAdditionalAssemblies(
-                typeof(ApplicationPage).Assembly,              // MeshWeaver.Blazor (includes ApplicationPage with catch-all route)
-                typeof(MeshNodeEditorView).Assembly            // MeshWeaver.Blazor.Graph
+                typeof(ApplicationPage).Assembly               // MeshWeaver.Blazor (includes ApplicationPage with catch-all route)
             )
             .ExcludeStaticAssetPaths();
 }

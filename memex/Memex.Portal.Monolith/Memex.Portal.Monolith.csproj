@@ -37,6 +37,18 @@
     <ProjectReference Include="..\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
   </ItemGroup>
 
+  <!-- 🚨 DEBUG ONLY — dev usability, not the shipping shape. The Blazor view packs left the app
+       closure (#2169 Phase B): the image ships them via the modules/<Name> closure lane and
+       activates them through Modules:Assemblies. A DEV `dotnet run` performs no publish, so
+       without these references the dev bin has no view packs at all and EVERY control renders as
+       escaped-HTML fallback — an unusable portal. Debug-conditioned ships-the-bits keeps local
+       dev whole; Release (the published Monolith and the Distributed image) takes the module
+       lane, where the publish-time app-root refusal stays armed on Distributed. -->
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Views\MeshWeaver.Blazor.Views.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Graph\MeshWeaver.Blazor.Graph.csproj" />
+  </ItemGroup>
+
   <Import Project="..\MeshModulesPublish.targets" />
 
 </Project>
