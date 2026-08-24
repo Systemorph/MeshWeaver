@@ -17,6 +17,8 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Messaging;
+using System.Collections.Generic;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -37,7 +39,19 @@ public class ModelProviderServiceTest : AITestBase
     protected override bool ShareMeshAcrossTests => false;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        // 🚨 A master key is REQUIRED for any test that stores a provider key. Protect() fails
+        // closed when none is configured (it used to pass the plaintext straight through, which is
+        // how a live key ended up in cleartext in production). These tests call CreateProvider /
+        // RotateKey with real key material, so without this they would be asserting on the very
+        // behaviour that was removed.
         => base.ConfigureMesh(builder)
+            .ConfigureServices(services => services.AddSingleton<IConfiguration>(
+                new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Ai:KeyProtection:MasterKey"] = "test-master-key-provider-service-do-not-use",
+                    })
+                    .Build()))
             // Register the Anthropic catalog source so ModelProviderService.CreateProvider
             // can look up its DefaultModelIds — the service auto-creates one
             // LanguageModel child per default id.
@@ -98,7 +112,12 @@ public class ModelProviderServiceTest : AITestBase
 
         var cfg = result.ProviderNode.Content.Should().BeOfType<ModelProviderConfiguration>().Which;
         cfg.Provider.Should().Be("Anthropic");
-        cfg.ApiKey.Should().Be("sk-ant-TEST-1234");
+        // 🚨 Asserts the SECURITY property, not the old leak. This used to be
+        // `.Should().Be("sk-ant-TEST-1234")` — i.e. it asserted the key was stored in the
+        // clear, so it would have PASSED on the plaintext passthrough that put a live key
+        // into production node content. At rest the value must be enc:-tagged ciphertext.
+        cfg.ApiKey.Should().StartWith("enc:v1:");
+        cfg.ApiKey.Should().NotContain("sk-ant-TEST-1234");
         cfg.Label.Should().Be("Roland's test key");
 
         result.ModelNodes.Should().NotBeEmpty();
@@ -189,9 +208,13 @@ public class ModelProviderServiceTest : AITestBase
         ok.Should().BeTrue();
 
         var updated = await Workspace.GetMeshNodeStream(path)
-            .Should().Within(10.Seconds()).Match(n => (n.Content as ModelProviderConfiguration)?.ApiKey == "sk-new");
+            .Should().Within(10.Seconds()).Match(n =>
+                (n.Content as ModelProviderConfiguration)?.ApiKey is { } k
+                && k.StartsWith("enc:v1:") && !k.Contains("sk-new"));
         var cfg = updated.Content.Should().BeOfType<ModelProviderConfiguration>().Which;
-        cfg.ApiKey.Should().Be("sk-new");
+        // Rotation must land the NEW key, still encrypted — never the literal.
+        cfg.ApiKey.Should().StartWith("enc:v1:");
+        cfg.ApiKey.Should().NotContain("sk-new");
         cfg.Label.Should().Be("L", "RotateKey must not clobber other fields");
     }
 
