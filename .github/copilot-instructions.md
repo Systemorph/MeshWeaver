@@ -25,6 +25,14 @@ never behind an `await`. A genuinely async leaf (database, blob, HTTP, Roslyn, `
 synchronous file IO) goes through `IIoPool`: `pool.Invoke(ct => …Async(ct))`,
 `pool.InvokeBlocking(ct => …)`, or `pool.Run(...)` for the promise-cached one-shot.
 
+**External code that only offers an async API is not an exception — it is the case the rule is for.**
+A third-party SDK, an HTTP client, a database driver, Roslyn, a `Process` — none of them can be
+rewritten to return `IObservable<T>`, and that is precisely why they must be *run somewhere that
+owns the async*: either **inside an Activity** (an operation with inputs, progress and an outcome —
+see `ActivityControlPlane.md`) or **through `IIoPool`**. Awaiting such a call directly from a hub
+handler, a layout area, a grain turn or a Blazor component is the defect, no matter that the library
+gave you no synchronous overload. Flag it and name the boundary it should have crossed.
+
 **The only places `await` is legitimate — do not report these:**
 
 - **Inside `IoPool` itself** (`src/MeshWeaver.Mesh.Contract/Threading/IoPool.cs`). It *is* the
