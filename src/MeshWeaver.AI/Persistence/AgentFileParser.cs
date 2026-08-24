@@ -1,13 +1,14 @@
-﻿using System.Text;
+using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
-using MeshWeaver.AI;
+using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
-namespace MeshWeaver.Hosting.Persistence.Parsers;
+namespace MeshWeaver.AI.Persistence;
 
 /// <summary>
 /// Parses .md files with YAML front matter containing nodeType: Agent into MeshNode objects with AgentConfiguration content.

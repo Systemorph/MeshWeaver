@@ -28,7 +28,6 @@
     <!-- ShippedPrebuiltBundles reads the image's prebuilt/ bundle zips with BundleReader — the
          one shared bundle codec, so the boot consumer cannot drift from the CI producer. -->
     <ProjectReference Include="..\MeshWeaver.Plugin.Packaging\MeshWeaver.Plugin.Packaging.csproj" />
-    <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
   </ItemGroup>
