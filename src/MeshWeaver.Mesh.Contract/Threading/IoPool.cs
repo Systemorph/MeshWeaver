@@ -135,11 +135,35 @@ public sealed class IoPool : IIoPool, IDisposable
             }
             finally
             {
-                Interlocked.Decrement(ref _inFlight);
-                TryFinishDisposal();
-                _gate.Release();
+                // 🚨 RELEASE THE PERMIT FIRST. TryFinishDisposal disposes _gate the moment the
+                // last leaf's decrement takes _inFlight to zero — so with the decrement first,
+                // THIS leaf disposed the gate and then called Release() on it, throwing
+                // ObjectDisposedException out of its own finally. Not a cross-thread race: the
+                // last leaf to unwind during a dispose does it to itself, every time (issue
+                // #2135, seen in prod as a failed `Comments` area render on memex-cloud).
+                //
+                // Releasing first is safe for the drain guarantee: Drain joins by re-acquiring
+                // every permit, and once Release has run the only work left in this finally is
+                // two interlocked ops — no user code, no ALC code — so "no pool thread is still
+                // running the leaf" remains true at the moment Drain observes the permit.
+                ReleaseGateThenFinish();
             }
         }).SubscribeOn(TaskPoolScheduler.Default);
+
+    /// <summary>
+    /// The exit path every gated leaf shares: hand the permit back while the gate is still alive,
+    /// then account for the leaf and let disposal complete if it was the last one.
+    ///
+    /// <para>Extracted so the ordering exists in ONE place. It was duplicated at three call sites
+    /// and wrong at all three, which is what made <see cref="Dispose"/>'s careful "release the
+    /// resources on the last leaf's way out" design throw on that very last leaf.</para>
+    /// </summary>
+    private void ReleaseGateThenFinish()
+    {
+        _gate.Release();
+        Interlocked.Decrement(ref _inFlight);
+        TryFinishDisposal();
+    }
 
     /// <summary>
     /// Streams an async-enumerable I/O leaf off the calling scheduler under the pool's concurrency gate.
@@ -165,9 +189,7 @@ public sealed class IoPool : IIoPool, IDisposable
             }
             finally
             {
-                Interlocked.Decrement(ref _inFlight);
-                TryFinishDisposal();
-                _gate.Release();
+                ReleaseGateThenFinish();
             }
         }).SubscribeOn(TaskPoolScheduler.Default);
 
@@ -270,9 +292,7 @@ public sealed class IoPool : IIoPool, IDisposable
                     }
                     finally
                     {
-                        Interlocked.Decrement(ref _inFlight);
-                TryFinishDisposal();
-                        _gate.Release();
+                        ReleaseGateThenFinish();
                     }
                     return System.Reactive.Unit.Default;
                 })
