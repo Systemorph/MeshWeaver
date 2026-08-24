@@ -1383,7 +1383,7 @@ jobs:
     # the runner's own core file dies with the VM, so without this a segfault is unanalyzable.
     - name: "Upload gate crash dumps"
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: plugins-gate-dumps
         path: /tmp/gate-dumps/
