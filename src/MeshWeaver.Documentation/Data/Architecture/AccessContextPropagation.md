@@ -587,3 +587,4 @@ If step 3 had stamped `ImpersonateAsHub(Hub.Address)` instead of carrying `user`
 - @../AccessControl — `IsPortalIdentity` and the per-NodeType access-rule pattern used to sanction hub-shaped principals.
 - @../../GUI/DataBinding — Blazor views can receive `OnError(UnauthorizedAccessException)` from `IMeshNodeStreamCache.GetStream` when a user's access is revoked.
 - @../ActivityControlPlane — operations as scripts: `RequestedX` triggers and status-machine semantics; cross-references this doc for the security model.
+- @../LogonActions — per-user work at logon, and the worked case for "thread the identity through rather than impersonate": the actions touch the user's own nodes, so they run as that user via `RunAs(identity, …)` — never `Observable.Using(ImpersonateAsSystem, …)`, whose store and restore land on different threads.

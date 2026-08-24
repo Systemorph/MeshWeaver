@@ -590,6 +590,29 @@ This is the unification of three rules we used to write separately:
 2. **Reads**: `workspace.GetMeshNodeStream(path)` / `Hub.GetMeshNodeStream(path)` — server-side AND Blazor, backed by the process-wide [IMeshNodeStreamCache](src/MeshWeaver.Hosting/MeshNodeStreamCache.cs) (one shared handle per path; see [GUI Data Binding](src/MeshWeaver.Documentation/Data/GUI/DataBinding.md)). `GetRemoteStream<MeshNode, …>` is framework plumbing — never use it for a node by path. Never `meshService.QueryAsync(path:X)` for a single node's content (stale by design).
 3. **Delete the request type.** If you find yourself writing `class XxxRequest` to mutate a thread / message / NodeType, stop. Add a `RequestedXxx` field to the node's content and watch it from the owning hub.
 
+### Per-user work at logon — a `LogonAction`, never a SQL backfill
+
+**When an EXISTING user needs something a new user gets, declare a logon action — do NOT write an
+`IMigration` that loops partition schemas patching `mesh_nodes`.** `INodePostCreationHandler` fires
+once at account creation and can never fire again, which is why `V29_PinDocsForExistingUsers` and
+`V33_SeedChatInputForExistingUsers` exist; those raw `UPDATE`s bypass the workspace cache, run once
+per DEPLOYMENT rather than per user, and only someone shipping a `DbVersion` bump can write one.
+
+- **Two modes.** `RunOnce` (a migration; ledger = `User.CompletedLogonActions[id]`, durable and
+  replicated) or `EveryLogon` (a repair that must keep catching new work — and which MUST carry a
+  cheap "nothing to do" check, or it is a per-logon storm).
+- **Idempotency is the effect and the ledger entry in ONE `stream.Update` patch** on the user's
+  profile, with the ledger check *inside* the lambda so a rebased patch re-reads it and no-ops.
+- **It runs as the USER** — `access.RunAs(identity, …)`. 🚨 Never
+  `Observable.Using(() => access.ImpersonateAsSystem(), …)`: store and restore land on different
+  threads and the subscriber stays latched (a ratchet-guard test fails the build at any new site).
+- **Deployment-specific work is DATA** — a `LogonAction` node at `Admin/_LogonAction/{id}`. Zero
+  action nodes ship, and pin targets are existence-checked, so a portal without the content pins
+  nothing instead of writing a dangling path.
+
+Full reference: [LogonActions.md](src/MeshWeaver.Documentation/Data/Architecture/LogonActions.md) ·
+[`/logon-action` skill](content/ai/Skill/logon-action.md).
+
 Sanctioned exceptions (NOT for state mutations):
 - `CreateNodeRequest` / `DeleteNodeRequest` / `MoveNodeRequest` — node-lifecycle on the mesh hub. These route, they don't mutate node content.
 - Transient queries that don't belong on any node (e.g. autocomplete completions).
