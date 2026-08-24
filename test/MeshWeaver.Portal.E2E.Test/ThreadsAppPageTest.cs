@@ -64,10 +64,9 @@ public class ThreadsAppPageTest(PortalFixture fixture)
 
         // The thread page: URL under the user's _Thread partition, the user's bubble rendered,
         // the side menu still present (the default view when working with threads).
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(45);
-        while (DateTime.UtcNow < deadline
-               && !page.Url.Contains("_Thread", StringComparison.OrdinalIgnoreCase))
-            await Task.Delay(250);
+        await page.WaitForURLAsync(
+            url => url.Contains("_Thread", StringComparison.OrdinalIgnoreCase),
+            new PageWaitForURLOptions { Timeout = 45_000 });
         page.Url.Should().Contain("_Thread",
             "sending the first message starts a real thread and opens it full-screen");
 
