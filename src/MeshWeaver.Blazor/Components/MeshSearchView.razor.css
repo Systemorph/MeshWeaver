@@ -116,7 +116,12 @@
     border-radius: 16px;
 }
 
-.mesh-search-icon-box svg {
+/* ::deep is load-bearing, not decoration. A node's icon is injected as a raw MarkupString, so
+   Blazor's CSS isolation never stamps its scope attribute onto that <svg> — an unscoped
+   `.mesh-search-icon-box svg` matches NOTHING, and an icon authored with width="24" height="24"
+   on its root tag then renders at 24px inside a 64px tile. That was the whole "icons render tiny"
+   report; the row icon below always had ::deep, which is why only the grid was affected. */
+.mesh-search-icon-box ::deep svg {
     width: 36px;
     height: 36px;
 }

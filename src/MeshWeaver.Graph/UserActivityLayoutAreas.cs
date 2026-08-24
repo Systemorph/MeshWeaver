@@ -980,8 +980,38 @@ public static class UserActivityLayoutAreas
         {
             ["Store"] = ("Store", "/static/NodeTypeIcons/shopping-bag.svg"),
             ["Doc"] = ("Documentation", "/static/NodeTypeIcons/book.svg"),
-            ["~/" + ChatArea] = ("Threads", "/static/NodeTypeIcons/chat.svg"),
+            ["~/" + ChatArea] = ("Threads", ThreadsIcon),
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The Threads tile's artwork — full-bleed, so it reads as a product icon rather than a small
+    /// grey glyph floating in a box, which is what <c>chat.svg</c> looked like next to the Store's.
+    ///
+    /// <para>Three constraints it is built to, all learned the hard way:</para>
+    /// <list type="bullet">
+    /// <item><b>No <c>width</c>/<c>height</c> on the root tag.</b> Those render at literal pixels
+    /// inside the tile — an authored <c>width="24"</c> is a 24px icon in a 64px box, which was the
+    /// whole "icons render tiny" report. viewBox only; the surface decides the size.</item>
+    /// <item><b>Attribute styling only — no <c>&lt;style&gt;</c>, no <c>class</c>.</b> React Native
+    /// renders neither, so a class-driven fill is invisible on the phone and fine on the web.</item>
+    /// <item><b>A gradient needs a unique id.</b> Several inline SVGs land in one document, and a
+    /// duplicated <c>linearGradient</c> id means the first one wins for everybody.</item>
+    /// </list>
+    /// </summary>
+    internal const string ThreadsIcon =
+        "<svg viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'>"
+        + "<defs><linearGradient id='mw-threads-grad' x1='0%' y1='0%' x2='100%' y2='100%'>"
+        + "<stop offset='0%' stop-color='#4f46e5'/><stop offset='100%' stop-color='#0ea5e9'/>"
+        + "</linearGradient></defs>"
+        + "<rect width='48' height='48' rx='10' fill='url(#mw-threads-grad)'/>"
+        + "<path d='M11 18a5 5 0 0 1 5-5h11a5 5 0 0 1 5 5v5a5 5 0 0 1-5 5h-8l-6 4v-4a5 5 0 0 1-2-4z' "
+        + "fill='#ffffff' fill-opacity='0.95'/>"
+        + "<path d='M23 27a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v3a5 5 0 0 1-5 5v3l-5-3h-1a5 5 0 0 1-5-5z' "
+        + "fill='#c7d2fe' fill-opacity='0.92'/>"
+        + "<circle cx='18' cy='20' r='1.6' fill='#4f46e5'/>"
+        + "<circle cx='23' cy='20' r='1.6' fill='#4f46e5'/>"
+        + "<circle cx='28' cy='20' r='1.6' fill='#4f46e5'/>"
+        + "</svg>";
 
     internal const string GenericAppIcon = "/static/NodeTypeIcons/puzzlepiece.svg";
 

@@ -461,7 +461,12 @@
             <div class="mesh-search-icon-box">
                 @if (isInlineSvg)
                 {
-                    @((MarkupString)imageUrl!)
+                    @* Size forced ON the element, not just in CSS. An authored icon may carry
+                       width/height on its root tag, and the injected style wins over both those
+                       attributes and any author inline style (duplicate attribute: first wins).
+                       The stylesheet rule is the primary fix; this stops the next authored icon
+                       with a fixed size from silently regressing the grid. *@
+                    @((MarkupString)MeshNodeImageHelper.SizeInlineSvg(imageUrl!, 36))
                 }
                 else if (isEmoji)
                 {
@@ -493,7 +498,7 @@
         <div class="mesh-search-row-icon">
             @if (isInlineSvg)
             {
-                @((MarkupString)imageUrl!)
+                @((MarkupString)MeshNodeImageHelper.SizeInlineSvg(imageUrl!, 22))
             }
             else if (isEmoji)
             {
