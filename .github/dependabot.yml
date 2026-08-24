@@ -59,11 +59,24 @@ updates:
   # /clients/react, /clients/portal-next and /clients/portal — which take them fine. Splitting the
   # directory out is what makes the holdback surgical.
   #
-  # This exact PR has now been opened and rejected twice (most recently #1704, 2026-08-17), each
-  # time dying in `npm ci` before a single check ran, and each time costing a full CI cycle + a
-  # Copilot review. The reasoning is recorded in clients/react-native/package.json's
-  # `_npm_major_holdback_note`; the forward path is issue #1584 (Expo SDK 52→57, RN ~0.82,
-  # expo-av → expo-audio/expo-video). Delete these holdbacks as PART of that migration, not before.
+  # That PR was opened and rejected twice (most recently #1704, 2026-08-17), each time dying in
+  # `npm ci` before a single check ran. #1584 then did the migration deliberately — Expo SDK 52→57,
+  # react-native 0.76.5→0.86.2, react 18→19, expo-av → expo-audio/expo-video — so the holdbacks
+  # that existed only because of the SDK 52 pin are GONE below, each re-measured on SDK 57 rather
+  # than assumed:
+  #
+  #   - typescript: RETIRED. The blocker was @expo/cli SDK 52 reading tsconfig through the classic
+  #     TS compiler API that TS 7 deleted. SDK 57's CLI does not — `expo export --platform web`
+  #     runs clean on a cold Metro cache under typescript 7.0.2, so this package is on 7 with the
+  #     rest of the client tree.
+  #   - react / react-dom / react-test-renderer / @types/react*: RETIRED AS A VERSION PIN, kept as
+  #     a COUPLING. RN 0.76.5's hard `react ^18.2.0` peer is gone (0.86.2 peers `react ^19.2.3`),
+  #     but react's major here is still whatever react-native peers, so it stays grouped with the
+  #     SDK jump rather than arriving on its own — see the react-native entry.
+  #
+  # What is NOT retired is the reason this config exists at all: react-native, react-native-web and
+  # the expo/@expo majors move as ONE coordinated SDK jump. Lift those with the NEXT SDK migration,
+  # the same way, not by a sweep.
   - package-ecosystem: npm
     directory: "/clients/react-native"
     schedule:
@@ -81,22 +94,24 @@ updates:
         update-types: [major]
     ignore:
       # react-native's 0.x "minors" are breaking platform jumps coupled to the Expo SDK
-      # (0.76→0.86 requires React 19): the first wave's group PR broke npm ci on exactly this.
-      # RN (and react-native-web, which tracks it) upgrade DELIBERATELY with the Expo SDK.
+      # (0.76→0.86 required React 19 and the removal of expo-av): the first wave's group PR broke
+      # npm ci on exactly this. RN (and react-native-web, which tracks it) upgrade DELIBERATELY
+      # with the Expo SDK.
       - dependency-name: react-native
       - dependency-name: react-native-web
-      # The Expo SDK moves as one unit with react-native — bumping expo 52→57 against RN 0.76.5
-      # is unresolvable. expo-av in particular is REMOVED in SDK 57 (expo-audio/expo-video), so
-      # this is a port, not a version bump.
+      # The Expo SDK moves as one unit with react-native, and a major carries package REMOVALS,
+      # not just versions — SDK 57 deleted expo-av outright, which was a port of two call sites
+      # (expo-audio for capture, expo-video for the Video leaf), not a version bump. #1584.
       - dependency-name: expo
         update-types: [version-update:semver-major]
       - dependency-name: "expo-*"
         update-types: [version-update:semver-major]
       - dependency-name: "@expo/*"
         update-types: [version-update:semver-major]
-      # react-native@0.76.5 hard-peers react ^18.2.0, so a react 19 major fails `npm ci` outright.
-      # Probed directly: pinning @types/react back does NOT help — the blocker is the hard `react`
-      # peer, not the peerOptional @types/react one the CI log happens to surface first.
+      # react's major here is dictated by whatever react-native peers (0.86.2 → `react ^19.2.3`),
+      # so it arrives WITH the SDK jump above or not at all. The 0.76.5-era failure — a hard
+      # `react ^18.2.0` peer that broke `npm ci` before any check ran — is fixed, but the coupling
+      # that produced it is structural and outlives any one version.
       - dependency-name: react
         update-types: [version-update:semver-major]
       - dependency-name: react-dom
@@ -106,12 +121,6 @@ updates:
       - dependency-name: "@types/react"
         update-types: [version-update:semver-major]
       - dependency-name: "@types/react-test-renderer"
-        update-types: [version-update:semver-major]
-      # TypeScript 7 deleted the classic compiler API (and transpileModule) that @expo/cli SDK 52
-      # uses to read tsconfig, so `expo export` dies with
-      #   TypeError: Cannot read properties of undefined (reading 'getCurrentDirectory')
-      # Same removal that forced clients/typescript off transpileModule onto amaro.
-      - dependency-name: typescript
         update-types: [version-update:semver-major]
 
   # Python SDK.

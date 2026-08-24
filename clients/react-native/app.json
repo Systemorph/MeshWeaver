@@ -26,9 +26,10 @@
       "expo-asset",
       "expo-font",
       [
-        "expo-av",
+        "expo-audio",
         {
-          "microphonePermission": "Memex records the microphone for speech-to-text (transcribed on the centralized Whisper service, not on this device)."
+          "microphonePermission": "Memex records the microphone for speech-to-text (transcribed on the centralized Whisper service, not on this device).",
+          "enableBackgroundPlayback": false
         }
       ]
     ],

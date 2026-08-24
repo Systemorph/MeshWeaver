@@ -75,6 +75,14 @@ export function fakeMeshTransport(opts: FakeMeshOptions = {}) {
             case "EchoRequest":
               respond(out, d, { $type: "EchoResponse", text: d.message.text });
               break;
+            case "AutocompleteRequest":
+              // The @-mention surface (DataExtensions.HandleAutocompleteRequest) — echoes a
+              // suggestion derived from the query so tests can assert the round-trip + target.
+              respond(out, d, {
+                $type: "AutocompleteResponse",
+                items: [{ label: `hit:${d.message.query}`, insertText: `@/${d.message.query}`, path: String(d.message.query) }],
+              });
+              break;
             // No QueryRequest responder — the REAL server has no such handler (issue #1473), and
             // faking one here is exactly how Mesh.search shipped posting into the void. Search is
             // REST (`/api/mesh/query-nodes`); tests exercise it via an injected fetch.

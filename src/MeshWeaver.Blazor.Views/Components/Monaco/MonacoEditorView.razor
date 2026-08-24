@@ -1,0 +1,983 @@
+@using Microsoft.FluentUI.AspNetCore.Components
+@using Microsoft.Extensions.Logging
+@using System.Reactive.Linq
+@inject IJSRuntime JSRuntime
+@inject ILogger<MonacoEditorView> Logger
+
+<div class="@ContainerClass" style="@ContainerStyleAttribute">
+    @* 🚨 Do NOT wire OnDidChangeModelContent (or any other BlazorMonaco editor-event
+       callback) here. BlazorMonaco registers those through its ASYNC SetEventListeners
+       in OnAfterRenderAsync(firstRender); when the editor is mid-teardown/recreate that
+       awaited JS interop throws JSException "Couldn't find the editor with id …" straight
+       out of the render lifecycle, which tears down the whole Blazor circuit (the chat
+       input "Connection disconnected" blocker). We wire onDidChangeModelContent
+       SYNCHRONOUSLY on the editor instance in our own JS module (initEditor) instead and
+       push the value to HandleContentChanged — no async event-listener race, no
+       editor.GetValue() round-trip. See Doc/Architecture/AsynchronousCalls.md. *@
+    @* Render the editor ONLY after Monaco's async AMD bundle has loaded. BlazorMonaco's
+       StandaloneCodeEditor calls monaco.editor.create on first render; doing that before
+       the 3.6MB bundle finishes crashes the circuit. Gating per-editor (instead of hard-
+       gating Blazor.start on Monaco in App.razor) lets the circuit go interactive
+       immediately — the Safari "empty page while Monaco loads/stalls" fix. *@
+    @if (monacoReady)
+    {
+        <StandaloneCodeEditor @ref="editor"
+                              Id="@EditorId"
+                              ConstructionOptions="GetEditorOptions"
+                              OnDidInit="OnEditorInit"
+                              CssClass="monaco-editor-view" />
+    }
+</div>
+
+@code {
+    private StandaloneCodeEditor? editor;
+    private string EditorId = $"monaco-editor-{Guid.NewGuid():N}";
+    private bool monacoReady = false;
+    private bool isInitialized = false;
+    private IJSObjectReference? jsModule;
+    private DotNetObjectReference<MonacoEditorView>? dotNetRef;
+    private bool isDarkMode = false;
+    private bool completionProviderRegistered = false;
+    private int lastCompletionItemCount = 0;
+    private string? lastSetValue; // Track last value set to editor to detect external changes
+
+    // 🚨 External-echo clobber guard. A data-bound Value can arrive on a re-render WHILE the user is
+    // mid-edit — a live node-stream echo behind MarkdownEditorView, or a lagging MessageText round-trip
+    // behind the chat composer. Reconciling it into the editor via SetValue then WIPES the in-progress
+    // keystrokes and resets the cursor: the "typing / backspace / arrows do nothing" report. Two
+    // complementary suppressors (the single userIsTyping flag was removed in 9084b7ad5 and this
+    // regressed):
+    //   • userIsTyping  — set on every content change; suppresses the ONE reconcile that the keystroke
+    //                     itself triggers (synchronous echo on the same render), then re-arms.
+    //   • editorHasFocus — the user owns the buffer whenever the editor is focused, so suppress EVERY
+    //                     external reconcile then. Covers ASYNC stream echoes that land on their own
+    //                     render cycle (the Markdown case). Legitimate programmatic pushes never use
+    //                     this reconcile path — they go through SetValueAsync / SetValueSuppressTracking
+    //                     (which set lastSetValue) — so suppressing while focused blocks nothing real.
+    private bool userIsTyping;
+    private bool editorHasFocus;
+
+    [CascadingParameter(Name = "ThemeMode")]
+    public DesignThemeModes Mode { get; set; }
+
+    [Parameter]
+    public string? Value { get; set; }
+
+    [Parameter]
+    public EventCallback<string> ValueChanged { get; set; }
+
+    [Parameter]
+    public EventCallback OnSubmit { get; set; }
+
+    [Parameter]
+    public EventCallback OnBlur { get; set; }
+
+    /// <summary>
+    /// Fires after the Monaco editor is fully initialized (JS module loaded, editor ready).
+    /// </summary>
+    [Parameter]
+    public EventCallback OnEditorReady { get; set; }
+
+    [Parameter]
+    public bool IsDisabled { get; set; }
+
+    [Parameter]
+    public string Placeholder { get; set; } = "Type your message...";
+
+    [Parameter]
+    public string Language { get; set; } = "plaintext";
+
+    [Parameter]
+    public string Height { get; set; } = "80px";
+
+    [Parameter]
+    public string MaxHeight { get; set; } = "200px";
+
+    [Parameter]
+    public CompletionProviderConfig? CompletionProvider { get; set; }
+
+    /// <summary>
+    /// Optional reactive callback for server-side completion with fuzzy scoring.
+    /// When provided, this is invoked instead of using static <see cref="CompletionProvider"/>
+    /// items. The callback returns an <see cref="IObservable{T}"/> that emits a fresh
+    /// snapshot of the top-N completions whenever a new item arrives — the editor
+    /// pushes each snapshot to the suggest widget so the UI never blocks waiting for
+    /// the full result set.
+    /// </summary>
+    [Parameter]
+    public Func<string, IObservable<IReadOnlyList<CompletionItem>>>? CompletionCallback { get; set; }
+
+    /// <summary>
+    /// Optional POSITION-BASED code completions (Roslyn over the mesh language service) —
+    /// distinct from <see cref="CompletionCallback"/>, whose trigger-token model matches a
+    /// typed <c>@</c>-reference query and cannot express "complete C# at line/column". Called
+    /// with the full in-flight buffer and the caret (LSP convention, 0-based — converted from
+    /// Monaco's 1-based positions at the boundary); the emitted entries feed Monaco's suggest
+    /// widget, which filters and ranks client-side against the current word.
+    /// </summary>
+    [Parameter]
+    public Func<CodeCompletionRequest, IObservable<IReadOnlyList<MeshWeaver.Mesh.Services.LanguageServer.CompletionEntry>>>? CodeCompletionCallback { get; set; }
+
+    /// <summary>
+    /// Optional reactive callback that supplies live diagnostics (squiggles) for the
+    /// current editor content. Called with the editor's full text on every debounced
+    /// content change. Each emission is converted to Monaco markers and rendered via
+    /// <c>monaco.editor.setModelMarkers</c>. The callback typically wraps
+    /// <c>IMeshLanguageService.CheckSpeculative</c> — see Stage-3 LSP wiring.
+    /// <see cref="DiagnosticSourcePath"/> filters emissions to diagnostics whose
+    /// location matches the file currently in the editor; null = show all.
+    /// </summary>
+    [Parameter]
+    public Func<string, IObservable<IReadOnlyList<MeshWeaver.Mesh.Services.LanguageServer.DiagnosticInfo>>>? DiagnosticsCallback { get; set; }
+
+    /// <summary>
+    /// When <see cref="DiagnosticsCallback"/> is set, restrict surfaced diagnostics to
+    /// those whose <c>SourcePath</c> matches this value. Suppresses noise from sibling
+    /// source files in the same compilation. Null = show all diagnostics regardless.
+    /// </summary>
+    [Parameter]
+    public string? DiagnosticSourcePath { get; set; }
+
+    /// <summary>
+    /// Show line numbers in the editor. Default is false (chat-style input).
+    /// </summary>
+    [Parameter]
+    public bool ShowLineNumbers { get; set; } = false;
+
+    /// <summary>
+    /// Show a border around the editor. Default is false.
+    /// </summary>
+    [Parameter]
+    public bool ShowBorder { get; set; } = false;
+
+    /// <summary>
+    /// Enable code editing mode. When true, Enter inserts a new line instead of submitting.
+    /// Default is false (chat input mode where Enter submits).
+    /// </summary>
+    [Parameter]
+    public bool CodeEditMode { get; set; } = false;
+
+    /// <summary>
+    /// When true, the editor container grows with its content — from <see cref="Height"/>
+    /// (the minimum) up to <see cref="MaxHeight"/>, then scrolls internally. Driven by
+    /// Monaco's <c>onDidContentSizeChange</c> in the JS module. Default is false: the
+    /// container keeps the fixed <see cref="Height"/> (existing consumers unaffected).
+    /// </summary>
+    [Parameter]
+    public bool AutoGrow { get; set; } = false;
+
+    /// <summary>
+    /// CSS class(es) the HOSTING control view declared, appended to the container's own class list.
+    /// This component has no <c>UiControl</c> of its own; a control view that renders nothing but a
+    /// <c>MonacoEditorView</c> (<c>CodeEditorView</c>) forwards its bound <c>Class</c> here rather than
+    /// wrapping the editor in a new box — the forwarding rule from #1288/#1297. Null ⇒ nothing appended,
+    /// so the emitted class list is byte-identical to what it was before.
+    /// </summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    /// <summary>
+    /// Inline style the HOSTING control view declared, appended AFTER <see cref="ContainerStyle"/> so a
+    /// declared height/max-height overrides the editor's own geometry instead of losing to it. Null ⇒
+    /// nothing appended. See <see cref="Class"/> for why the declaration lands here.
+    /// </summary>
+    [Parameter]
+    public string? Style { get; set; }
+
+    // 🚨 Composed here rather than inline in the attribute: `class="… @(ShowBorder ? "…" : "")@(Class…)"`
+    // does not parse (CS1073 — Razor cannot follow a quoted ternary with a second expression block).
+    // With no Class the emitted value is byte-identical to what it was before, trailing space and all.
+    private string ContainerClass =>
+        string.IsNullOrWhiteSpace(Class)
+            ? $"monaco-editor-container {(ShowBorder ? "with-border" : "")}"
+            : $"monaco-editor-container {(ShowBorder ? "with-border " : "")}{Class}";
+
+    // The forwarded Style goes LAST so a declared height beats the container's own — the ordering rule
+    // from #1297. Empty when nothing was declared, so the attribute is unchanged for every other caller.
+    private string ContainerStyleAttribute =>
+        string.IsNullOrWhiteSpace(Style) ? ContainerStyle : ContainerStyle + " " + Style;
+
+    private string ContainerStyle => AutoGrow
+        // Auto-grow: JS drives the height from the content size; CSS clamps the range.
+        // 🚨 The explicit initial height is LOAD-BEARING (issue #199): the inner
+        // .monaco-editor-view is pinned to `height: 100% !important`, so with an
+        // auto-height container the whole chain resolves to 0 until the first
+        // debounced onDidContentSizeChange lands — Monaco's hit-target collapses to
+        // ~one text line while the box still LOOKS like an input, and clicks land on
+        // whatever focusable ancestor sits behind it (the #188 dead-keyboard
+        // regression). Geometry must never depend on a JS event: start at Height,
+        // let the JS grow-write overwrite the inline value from there.
+        ? $"height: {Height}; max-height: {MaxHeight}; min-height: {Height};"
+        : $"height: {Height}; max-height: {MaxHeight}; min-height: 40px;";
+
+    private string GetMonacoTheme() => isDarkMode ? "vs-dark" : "vs";
+
+    private StandaloneEditorConstructionOptions GetEditorOptions(StandaloneCodeEditor ed)
+    {
+        return new StandaloneEditorConstructionOptions
+        {
+            Value = Value ?? "",
+            Language = Language,
+            Theme = GetMonacoTheme(),
+            AutomaticLayout = true,
+            LineNumbers = ShowLineNumbers ? "on" : "off",
+            Minimap = new EditorMinimapOptions { Enabled = false },
+            ScrollBeyondLastLine = false,
+            WordWrap = "on",
+            WrappingIndent = "none",
+            FontSize = 14,
+            LineHeight = 20,
+            Padding = new EditorPaddingOptions { Top = 8, Bottom = 8 },
+            RenderLineHighlight = "none",
+            OverviewRulerLanes = 0,
+            HideCursorInOverviewRuler = true,
+            Scrollbar = new EditorScrollbarOptions
+            {
+                Vertical = "hidden",
+                Horizontal = "hidden",
+                HandleMouseWheel = true
+            },
+            QuickSuggestions = CodeEditMode
+                ? new QuickSuggestionsOptions { Other = "on", Comments = "off", Strings = "on" }
+                : new QuickSuggestionsOptions { Other = "off", Comments = "off", Strings = "off" },
+            WordBasedSuggestions = CodeEditMode,
+            SuggestOnTriggerCharacters = true,
+            AcceptSuggestionOnEnter = "on",
+            TabCompletion = "on",
+            FixedOverflowWidgets = true,
+            ReadOnly = IsDisabled,
+            // Hide various UI elements
+            Folding = false,
+            GlyphMargin = false,
+            LineDecorationsWidth = ShowLineNumbers ? 10 : 0,
+            LineNumbersMinChars = ShowLineNumbers ? 3 : 0,
+            RenderWhitespace = "none",
+            Contextmenu = false
+        };
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        isDarkMode = await IsDarkModeAsync();
+    }
+
+    private async Task<bool> IsDarkModeAsync()
+    {
+        return Mode switch
+        {
+            DesignThemeModes.Dark => true,
+            DesignThemeModes.Light => false,
+            _ => await GetSystemDarkModeAsync()
+        };
+    }
+
+    private async Task<bool> GetSystemDarkModeAsync()
+    {
+        try
+        {
+            // Use getEffectiveTheme which considers both user preference and system settings
+            var theme = await JSRuntime.InvokeAsync<string>("themeHandler.getEffectiveTheme");
+            return theme == "dark";
+        }
+        catch (JSException)
+        {
+            // JS not available yet (prerendering) or themeHandler not loaded - default to light mode
+            return false;
+        }
+    }
+
+    private async Task OnEditorInit()
+    {
+        Logger.LogDebug("OnEditorInit called. CompletionProvider={HasProvider}, Items={ItemCount}",
+            CompletionProvider != null, CompletionProvider?.Items?.Count ?? 0);
+        isInitialized = true;
+        lastSetValue = Value ?? ""; // Track initial value
+        dotNetRef = DotNetObjectReference.Create(this);
+
+        // Custom JS module for placeholder and agent completion — already imported in
+        // OnAfterRenderAsync(firstRender) to gate on Monaco readiness; reuse it if present.
+        jsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>("import",
+            "./_content/MeshWeaver.Blazor.Views/Components/Monaco/MonacoEditorView.razor.js");
+
+        if (jsModule != null)
+        {
+            await jsModule.InvokeVoidAsync("initEditor", EditorId, Placeholder, dotNetRef, CodeEditMode, ShowLineNumbers, AutoGrow);
+
+            // Register completion provider if configured
+            await TryRegisterCompletionProvider();
+
+            // Position-based code completions (the Roslyn path) — independent of the
+            // trigger-token provider above; a code editor may carry both.
+            if (CodeCompletionCallback != null)
+            {
+                await jsModule.InvokeVoidAsync("registerCodeCompletionProvider", EditorId,
+                    new { language = Language });
+            }
+
+            // Enable LSP-style live diagnostics if the consumer wired a callback.
+            // JS side debounces onDidChangeModelContent and invokes back to RequestDiagnostics.
+            if (DiagnosticsCallback != null)
+            {
+                await jsModule.InvokeVoidAsync("enableDiagnostics", EditorId, dotNetRef);
+            }
+        }
+
+        // Notify parent that editor is fully ready
+        await OnEditorReady.InvokeAsync();
+    }
+
+    private async Task TryRegisterCompletionProvider()
+    {
+        if (jsModule == null)
+            return;
+
+        // Check if async mode should be used
+        var useAsync = CompletionCallback != null;
+        var currentItemCount = CompletionProvider?.Items?.Count ?? 0;
+
+        // For async mode, we always register (the callback handles everything)
+        // For sync mode, we need items
+        if (!useAsync && currentItemCount == 0)
+        {
+            Logger.LogDebug("Skipping completion provider registration - no items and no async callback");
+            return;
+        }
+
+        // Skip if already registered - don't re-register as it disrupts in-flight completions
+        if (completionProviderRegistered)
+        {
+            // Only re-register for sync mode if item count changed
+            if (useAsync || currentItemCount == lastCompletionItemCount)
+            {
+                Logger.LogDebug("Skipping completion provider registration - already registered");
+                return;
+            }
+        }
+
+        var triggerCharacters = CompletionProvider?.TriggerCharacters ?? ["@"];
+
+        if (useAsync)
+        {
+            // Async mode - pass minimal config, JS will call back to C#
+            var config = new
+            {
+                triggerCharacters = triggerCharacters,
+                useAsync = true,
+                items = Array.Empty<object>(),
+                language = Language
+            };
+            Logger.LogDebug("Registering async completion provider for language '{Language}' with triggers: {Triggers}",
+                Language, string.Join(",", triggerCharacters));
+            await jsModule.InvokeVoidAsync("registerCompletionProvider", EditorId, config);
+        }
+        else if (CompletionProvider != null)
+        {
+            // Sync mode - pass all items
+            var config = new
+            {
+                triggerCharacters = triggerCharacters,
+                useAsync = false,
+                items = CompletionProvider.Items.Select(i => new
+                {
+                    label = i.Label,
+                    insertText = i.InsertText ?? i.Label,
+                    description = i.Description ?? "",
+                    detail = i.Detail ?? "",
+                    category = i.Category ?? ""
+                }).ToArray(),
+                language = Language
+            };
+            Logger.LogDebug("Registering sync completion provider for language '{Language}' with {ItemCount} items, triggers: {Triggers}",
+                Language, config.items.Length, string.Join(",", triggerCharacters));
+            await jsModule.InvokeVoidAsync("registerCompletionProvider", EditorId, config);
+        }
+
+        completionProviderRegistered = true;
+        lastCompletionItemCount = currentItemCount;
+    }
+
+    /// <summary>
+    /// Content-change callback, invoked SYNCHRONOUSLY from our JS module's
+    /// <c>onDidChangeModelContent</c> handler (see MonacoEditorView.razor.js → initEditor)
+    /// with the editor's current text. Replaces the BlazorMonaco <c>OnDidChangeModelContent</c>
+    /// Razor callback whose async <c>SetEventListeners</c> registration raced the editor
+    /// lifecycle and tore down the circuit. JS already has the value, so there is no
+    /// <c>editor.GetValue()</c> round-trip here.
+    /// </summary>
+    [JSInvokable]
+    public async Task HandleContentChanged(string? value)
+    {
+        value ??= string.Empty;
+        // The user just edited: mark active typing so the reconcile in OnAfterRenderAsync
+        // (triggered by the ValueChanged round-trip below) can't overwrite this keystroke
+        // with a lagging data-bound echo. Set synchronously here — this JS invoke carries
+        // the edit, so it beats the async focus event on the very first keystroke.
+        userIsTyping = true;
+        if (value != Value)
+        {
+            Value = value;
+            lastSetValue = value; // Track user-typed value
+            await ValueChanged.InvokeAsync(value);
+        }
+    }
+
+    [JSInvokable]
+    public async Task HandleSubmit()
+    {
+        await OnSubmit.InvokeAsync();
+    }
+
+    [JSInvokable]
+    public async Task HandleBlur()
+    {
+        await OnBlur.InvokeAsync();
+    }
+
+    /// <summary>
+    /// Tracks Monaco text focus (from the JS module's onDidFocusEditorText / onDidBlurEditorText
+    /// listeners). While the editor is focused the user owns the buffer, so
+    /// <see cref="OnAfterRenderAsync"/> must not reconcile an external/echoed <see cref="Value"/>
+    /// into it — that would wipe the in-progress edit and reset the cursor.
+    /// </summary>
+    [JSInvokable]
+    public void HandleFocusChanged(bool focused) => editorHasFocus = focused;
+
+    /// <summary>
+    /// Fires when the user accepts a completion suggestion.
+    /// The parameter is the path of the accepted item.
+    /// </summary>
+    [Parameter]
+    public EventCallback<string> OnCompletionAccepted { get; set; }
+
+    /// <summary>
+    /// Called from JavaScript when a completion item is accepted via the command mechanism.
+    /// </summary>
+    [JSInvokable]
+    public async Task HandleCompletionAccepted(string path)
+    {
+        if (OnCompletionAccepted.HasDelegate)
+            await OnCompletionAccepted.InvokeAsync(path);
+    }
+
+    // Per-editor completion state machine: one subscription per query, every pushed snapshot
+    // stamped with the query it answers (the key the JS pending-buffer consume matches on —
+    // issue #542). Created lazily on the first suggest request; the lambdas re-read
+    // CompletionCallback / jsModule at invoke time so parameter/lifecycle updates flow.
+    private MonacoCompletionSession? _completionSession;
+
+    /// <summary>
+    /// JSInvokable method called from JavaScript to get async completions.
+    /// Subscribes to the configured observable callback; returns the current snapshot
+    /// synchronously and pushes subsequent snapshots via <see cref="PushCompletionUpdateAsync"/>
+    /// so the suggest widget streams in results as they arrive. Every push carries the query
+    /// the snapshot answers so the JS provider consumes it only for the matching trigger token
+    /// (see <see cref="MonacoCompletionSession"/>).
+    /// </summary>
+    [JSInvokable]
+    public Task<object[]> GetAsyncCompletions(string query)
+    {
+        if (CompletionCallback == null)
+            return Task.FromResult(Array.Empty<object>());
+
+        _completionSession ??= new MonacoCompletionSession(
+            q => CompletionCallback!(q),
+            (q, items) =>
+            {
+                // Fire-and-forget: order is preserved by JS event loop. We can't
+                // await here — Subscribe handlers must stay synchronous.
+                if (jsModule != null)
+                    _ = PushCompletionUpdateAsync(q, items);
+            },
+            (q, ex) => Logger.LogError(ex, "Error getting async completions for query: {Query}", q));
+
+        return Task.FromResult(MapCompletionsToJs(_completionSession.GetCompletions(query)));
+    }
+
+    /// <summary>
+    /// Called from the JS code-completion provider on every suggest request: the full buffer
+    /// plus Monaco's 1-based caret, answered with LSP-shaped entries. Bounded — a language
+    /// service that stalls yields an empty list after the timeout instead of hanging the
+    /// suggest widget; errors are logged and swallowed the same way (suggest must never throw
+    /// into the circuit).
+    /// </summary>
+    [JSInvokable]
+    public async Task<object[]> GetCodeCompletions(string? text, int lineNumber, int column)
+    {
+        if (CodeCompletionCallback == null)
+            return [];
+        try
+        {
+            var request = new CodeCompletionRequest(
+                text ?? string.Empty, Math.Max(0, lineNumber - 1), Math.Max(0, column - 1));
+            var entries = await CodeCompletionCallback(request)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .FirstOrDefaultAsync();
+            if (entries is not { Count: > 0 })
+                return [];
+            return entries.Select(e => (object)new
+            {
+                label = e.Label,
+                insertText = e.InsertText,
+                kind = (int)e.Kind,
+                detail = e.Detail ?? "",
+                documentation = e.Documentation ?? "",
+                sortText = e.SortText ?? "",
+                preselect = e.Preselect,
+            }).ToArray();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Code completions failed for editor {EditorId}", EditorId);
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Optional callback invoked when the user ACCEPTS a code completion — carries the chosen
+    /// label, its LSP kind, and the word that had been typed. Backs the per-user suggest memory.
+    /// </summary>
+    [Parameter]
+    public Action<string, int, string>? CodeCompletionAccepted { get; set; }
+
+    /// <summary>Called from JS once Monaco has inserted an accepted code completion.</summary>
+    [JSInvokable]
+    public void HandleCodeCompletionAccepted(string? label, int kind, string? typed)
+    {
+        if (!string.IsNullOrEmpty(label))
+            CodeCompletionAccepted?.Invoke(label!, kind, typed ?? string.Empty);
+    }
+
+    private static object[] MapCompletionsToJs(IReadOnlyList<CompletionItem> items)
+        => items.Select(i => (object)new
+        {
+            label = i.Label,
+            insertText = i.InsertText ?? i.Label,
+            description = i.Description ?? "",
+            detail = i.Detail ?? "",
+            category = i.Category ?? "",
+            path = i.Path ?? "",
+            iconUrl = i.IconUrl ?? "",
+            sortKey = i.SortKey ?? ""
+        }).ToArray();
+
+    // Latest active subscription to the diagnostics callback. Disposed on the next
+    // RequestDiagnostics call (each keystroke window starts a fresh subscription) and
+    // on component disposal so we never leak an observable across editor lifecycles.
+    private IDisposable? _activeDiagnosticsSub;
+
+    /// <summary>
+    /// JSInvokable: the JS module's debounced onDidChangeModelContent listener calls
+    /// this with the current editor text. We invoke the consumer's
+    /// <see cref="DiagnosticsCallback"/>, take the first emission, optionally filter
+    /// to <see cref="DiagnosticSourcePath"/>, and push results to JS as Monaco markers.
+    /// </summary>
+    [JSInvokable]
+    public Task RequestDiagnostics(string currentText)
+    {
+        if (DiagnosticsCallback == null || jsModule == null)
+            return Task.CompletedTask;
+
+        _activeDiagnosticsSub?.Dispose();
+        try
+        {
+            _activeDiagnosticsSub = DiagnosticsCallback(currentText ?? string.Empty)
+                .Take(1)
+                .Subscribe(
+                    diagnostics =>
+                    {
+                        var filtered = DiagnosticSourcePath is null
+                            ? diagnostics
+                            : diagnostics.Where(d => d.Location?.SourcePath == DiagnosticSourcePath).ToList();
+                        var payload = filtered.Select(d => new
+                        {
+                            severity = (int)d.Severity,
+                            message = d.Message,
+                            id = d.Id,
+                            startLine = d.Location?.Range.Start.Line ?? 0,
+                            startCharacter = d.Location?.Range.Start.Character ?? 0,
+                            endLine = d.Location?.Range.End.Line ?? 0,
+                            endCharacter = d.Location?.Range.End.Character ?? 0,
+                        }).ToArray();
+                        // Fire-and-forget — JS event-loop preserves order; we don't block the
+                        // Subscribe handler. Errors during push surface in the JS console.
+                        if (jsModule != null)
+                            _ = jsModule.InvokeVoidAsync("pushDiagnostics", EditorId, payload).AsTask();
+                    },
+                    ex => Logger.LogError(ex, "Diagnostics callback failed for editor {EditorId}", EditorId));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error subscribing to diagnostics callback for editor {EditorId}", EditorId);
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Pushes updated completion items to the editor and re-triggers the suggest widget.
+    /// Used for progressive streaming: fast local results first, remote results merge in later.
+    /// <paramref name="query"/> is the query the items answer; the JS side keys its pending
+    /// buffer on it so a snapshot is never served for a different trigger token (issue #542).
+    /// </summary>
+    public async Task PushCompletionUpdateAsync(string query, CompletionItem[] items)
+    {
+        if (jsModule == null)
+            return;
+
+        var mapped = items.Select(i => new
+        {
+            label = i.Label,
+            insertText = i.InsertText ?? i.Label,
+            description = i.Description ?? "",
+            detail = i.Detail ?? "",
+            category = i.Category ?? "",
+            path = i.Path ?? "",
+            iconUrl = i.IconUrl ?? "",
+            sortKey = i.SortKey ?? ""
+        }).ToArray<object>();
+
+        await jsModule.InvokeVoidAsync("pushCompletionUpdate", EditorId, query, mapped);
+    }
+
+    public async ValueTask<string> GetValueAsync()
+    {
+        if (editor != null)
+        {
+            return await editor.GetValue();
+        }
+        return string.Empty;
+    }
+
+    public async Task SetValueAsync(string value)
+    {
+        if (editor != null)
+        {
+            await editor.SetValue(value);
+            Value = value;
+            lastSetValue = value;
+        }
+    }
+
+    /// <summary>
+    /// Sets the editor value while suppressing the track changes handler.
+    /// Use this for programmatic content updates (e.g., accept/reject annotations)
+    /// to prevent the track changes handler from re-wrapping the change in markers.
+    /// </summary>
+    public async Task SetValueSuppressTrackingAsync(string value)
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("setValueSuppressTracking", EditorId, value);
+                Value = value;
+                lastSetValue = value;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error setting value with tracking suppression, falling back to normal SetValue");
+                await SetValueAsync(value);
+            }
+        }
+        else if (editor != null)
+        {
+            await editor.SetValue(value);
+            Value = value;
+            lastSetValue = value;
+        }
+    }
+
+    public async Task ClearAsync()
+    {
+        await SetValueAsync(string.Empty);
+    }
+
+    public async Task FocusAsync()
+    {
+        if (isInitialized)
+        {
+            try
+            {
+                // Authoritative focus via JS: editor.Focus() alone can be a no-op on Safari when
+                // Monaco's internal focus tracker is stale-true after the real <textarea.inputarea>
+                // lost DOM focus during a re-render storm — so clicking back into the composer left
+                // the caret blinking but keystrokes dead until a reload. focusEditor force-focuses the
+                // real inputarea. Falls back to editor.Focus() if the JS module isn't ready.
+                if (jsModule != null)
+                    await jsModule.InvokeVoidAsync("focusEditor", EditorId);
+                else if (editor != null)
+                    await editor.Focus();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error focusing editor - may not be fully initialized");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Triggers the autocomplete/suggest popup programmatically.
+    /// </summary>
+    public async Task TriggerSuggestAsync()
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("triggerSuggest", EditorId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error triggering suggest - may not be fully initialized");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sets the cursor position to the end of the content.
+    /// </summary>
+    public async Task SetCursorToEndAsync()
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("setCursorToEnd", EditorId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error setting cursor position - may not be fully initialized");
+            }
+        }
+    }
+
+    public async Task SetReadOnlyAsync(bool readOnly)
+    {
+        if (editor != null && isInitialized)
+        {
+            try
+            {
+                await editor.UpdateOptions(new EditorUpdateOptions { ReadOnly = readOnly });
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error setting read-only state - editor may not be fully initialized");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Updates annotation decorations (track changes highlighting) in the editor.
+    /// Accepts pre-computed ranges mapped to clean content offsets.
+    /// </summary>
+    public async Task UpdateAnnotationDecorationsAsync(object[]? ranges = null)
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("updateAnnotationDecorations", EditorId, ranges);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error updating annotation decorations");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Enables or disables track changes mode in the editor.
+    /// When enabled, edits are wrapped in annotation markers (insert/delete).
+    /// </summary>
+    public async Task SetTrackChangesModeAsync(bool enabled, string? author = null)
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("setTrackChangesMode", EditorId, enabled, author ?? "");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error setting track changes mode");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Callback fired when user selects "Add Comment" from the editor context menu.
+    /// The callback receives the start and end character offsets of the selection.
+    /// </summary>
+    [Parameter]
+    public EventCallback<(int Start, int End)> OnCommentRequested { get; set; }
+
+    /// <summary>
+    /// Registers the "Add Comment" context menu action in Monaco.
+    /// Must be called after editor is initialized.
+    /// </summary>
+    public async Task RegisterCommentActionAsync()
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                dotNetRef ??= DotNetObjectReference.Create(this);
+                await jsModule.InvokeVoidAsync("registerCommentAction", EditorId, dotNetRef, "OnCommentActionInvoked");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error registering comment action");
+            }
+        }
+    }
+
+    [JSInvokable("OnCommentActionInvoked")]
+    public async Task OnCommentActionInvoked(int startOffset, int endOffset)
+    {
+        if (OnCommentRequested.HasDelegate)
+        {
+            await OnCommentRequested.InvokeAsync((startOffset, endOffset));
+        }
+    }
+
+    /// <summary>
+    /// Navigates the editor cursor to a specific annotation marker by ID.
+    /// Returns the line number if found, or 0 if not found.
+    /// </summary>
+    public async Task<int> NavigateToAnnotationAsync(string markerId)
+    {
+        if (jsModule != null && isInitialized)
+        {
+            try
+            {
+                return await jsModule.InvokeAsync<int>("navigateToAnnotation", EditorId, markerId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error navigating to annotation");
+            }
+        }
+        return 0;
+    }
+
+    private bool pendingParameterUpdate = false;
+
+    protected override Task OnParametersSetAsync()
+    {
+        // Mark that we need to update the editor on next render
+        // JS interop is only safe in OnAfterRenderAsync
+        if (isInitialized)
+        {
+            pendingParameterUpdate = true;
+        }
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !monacoReady)
+        {
+            // Import the JS module up front (it used to be deferred to OnEditorInit) so we
+            // can await Monaco readiness BEFORE <StandaloneCodeEditor> renders. Until Monaco's
+            // async AMD bundle is loaded, rendering the editor would crash the circuit. The
+            // circuit itself is no longer gated on Monaco (App.razor starts Blazor immediately),
+            // so a slow/stalled Monaco load leaves only this editor on a placeholder — never the
+            // whole page blank (the Safari empty-page fix).
+            try
+            {
+                jsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>("import",
+                    "./_content/MeshWeaver.Blazor.Views/Components/Monaco/MonacoEditorView.razor.js");
+                monacoReady = await jsModule.InvokeAsync<bool>("waitForMonaco");
+            }
+            catch (JSException ex)
+            {
+                // No host-provided window.monacoReady (or interop unavailable): fall back to the
+                // legacy assumption that Monaco is present and render the editor anyway.
+                Logger.LogDebug(ex, "waitForMonaco unavailable; rendering editor without the readiness gate");
+                monacoReady = true;
+            }
+            StateHasChanged();
+            return;
+        }
+
+        if (!pendingParameterUpdate || !isInitialized || editor == null || jsModule == null)
+        {
+            return;
+        }
+
+        pendingParameterUpdate = false;
+
+        try
+        {
+            // Check if dark mode changed
+            var newDarkMode = await IsDarkModeAsync();
+            var themeChanged = newDarkMode != isDarkMode;
+            isDarkMode = newDarkMode;
+
+            // Update read-only state and theme
+            await editor.UpdateOptions(new EditorUpdateOptions
+            {
+                ReadOnly = IsDisabled,
+                Theme = themeChanged ? GetMonacoTheme() : null
+            });
+
+            // Reconcile a genuine EXTERNAL Value change into the editor — but NEVER while the user
+            // owns the buffer (actively typing, or simply focused). Reconciling mid-edit wiped the
+            // in-progress keystrokes and reset the cursor (the "typing / backspace / arrows do
+            // nothing" report). Legitimate programmatic pushes use SetValueAsync, not this path.
+            // The C# userIsTyping / editorHasFocus flags are a fast-path pre-filter, but they are
+            // updated through ASYNC JS→.NET events that can lag or be dropped under a re-render storm
+            // (Safari) — a stale-false editorHasFocus here would wipe live keystrokes. So the actual
+            // write goes through reconcileValue, which re-checks Monaco's hasTextFocus() ATOMICALLY
+            // with setValue in JS (the ground truth at write-time) and refuses to touch a focused
+            // editor. It returns true when the editor is reconciled (now holds currentValue — written
+            // or already equal), and false only when it REFUSED because focused (or not ready); so we
+            // advance lastSetValue on true, and a refusal leaves it stale for the next unfocused render.
+            var currentValue = Value ?? "";
+            if (currentValue != lastSetValue && !userIsTyping && !editorHasFocus)
+            {
+                Logger.LogDebug("Value changed externally from '{OldValue}' to '{NewValue}'",
+                    lastSetValue?.Substring(0, Math.Min(50, lastSetValue?.Length ?? 0)),
+                    currentValue.Substring(0, Math.Min(50, currentValue.Length)));
+                var reconciled = await jsModule.InvokeAsync<bool>("reconcileValue", EditorId, currentValue);
+                if (reconciled)
+                    lastSetValue = currentValue;
+            }
+            // Re-arm: the keystroke-triggered render has passed, so a later genuine external change
+            // can reconcile again (while unfocused). editorHasFocus stays authoritative until blur.
+            userIsTyping = false;
+
+            // Try to register completion provider (will skip if already registered with same items)
+            await TryRegisterCompletionProvider();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Error in OnAfterRenderAsync - editor may not be fully initialized");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _activeDiagnosticsSub?.Dispose();
+        _completionSession?.Dispose();
+        if (jsModule != null)
+        {
+            try
+            {
+                await jsModule.InvokeVoidAsync("dispose", EditorId);
+                await jsModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Circuit already disconnected — JS interop during teardown is expected to fail and
+                // there is nothing to clean up client-side. Swallow so it never escapes as an
+                // "Unhandled exception in circuit" (the disposeAsync at :772 used to be outside the try).
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Error disposing Monaco editor JS module");
+            }
+        }
+        dotNetRef?.Dispose();
+    }
+}

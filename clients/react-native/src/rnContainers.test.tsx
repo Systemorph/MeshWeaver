@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import React from "react";
 import TestRenderer, { type ReactTestRendererJSON } from "react-test-renderer";
 import { RegistryProvider, ScopeProvider, RenderArea, StaticAreaSource, type AreaTree } from "@meshweaver/react/core";
-import { rnPack } from "./rnPack";
+import { fullPack } from "./modules/standard";
 
 // The container + media leaves. The regression these pin: an UNREGISTERED container renders the
 // "Unsupported" fallback and its child area DISAPPEARS — a commentable node would lose its whole
@@ -14,7 +14,7 @@ function renderTree(tree: AreaTree): Json {
   let r!: TestRenderer.ReactTestRenderer;
   TestRenderer.act(() => {
     r = TestRenderer.create(
-      <RegistryProvider pack={rnPack}>
+      <RegistryProvider pack={fullPack}>
         <ScopeProvider source={new StaticAreaSource(tree)} area="main">
           <RenderArea areaKey="main" />
         </ScopeProvider>
@@ -136,8 +136,75 @@ describe("Video", () => {
     const j = renderTree({ areas: { main: { $type: "Video", src: "https://cdn/x.mp4", title: "Clip" } } });
     const vids = byType(j, "Video");
     expect(vids).toHaveLength(1);
-    expect(vids[0].props.source).toEqual({ uri: "https://cdn/x.mp4" });
-    expect(vids[0].props.useNativeControls).toBe(true);
+    // expo-video moved the source off the VIEW onto the PLAYER — pinning it here is what proves
+    // the port handed the URI to the right object rather than dropping it (a VideoView with no
+    // player renders a black box and throws nothing).
+    expect(vids[0].props.player.source).toBe("https://cdn/x.mp4");
+    expect(vids[0].props.nativeControls).toBe(true);
+    expect(vids[0].props.contentFit).toBe("contain");
+    expect(vids[0].props.accessibilityLabel).toBe("Clip");
+  });
+
+  it("shows the poster over the surface until playback starts, without eating the play tap", () => {
+    const j = renderTree({
+      areas: { main: { $type: "Video", src: "https://cdn/x.mp4", poster: "https://cdn/p.jpg" } },
+    });
+    // expo-video has NO posterSource/usePoster, so VideoControl.Poster is an overlay Image.
+    const posters = byType(j, "Image").filter((n) => n.props.source?.uri === "https://cdn/p.jpg");
+    expect(posters).toHaveLength(1);
+    // …and the overlay must be transparent to touches, or it eats the native play button.
+    expect(byType(j, "View").some((n) => n.props.pointerEvents === "none")).toBe(true);
+  });
+
+  it("clears the poster once the player reports it is playing", () => {
+    let r!: TestRenderer.ReactTestRenderer;
+    TestRenderer.act(() => {
+      r = TestRenderer.create(
+        <RegistryProvider pack={fullPack}>
+          <ScopeProvider
+            source={
+              new StaticAreaSource({
+                areas: { main: { $type: "Video", src: "https://cdn/x.mp4", poster: "https://cdn/p.jpg" } },
+              })
+            }
+            area="main"
+          >
+            <RenderArea areaKey="main" />
+          </ScopeProvider>
+        </RegistryProvider>,
+      );
+    });
+    const player = byType(r.toJSON() as Json, "Video")[0].props.player;
+    expect(byType(r.toJSON() as Json, "Image")).toHaveLength(1);
+    TestRenderer.act(() => player.emit("playingChange", { isPlaying: true }));
+    expect(byType(r.toJSON() as Json, "Image")).toHaveLength(0);
+  });
+
+  it("brings the poster back when the Src changes after the first video played", () => {
+    const tree = (src: string): AreaTree => ({
+      areas: { main: { $type: "Video", src, poster: "https://cdn/p.jpg" } },
+    });
+    const render = (src: string) => (
+      <RegistryProvider pack={fullPack}>
+        <ScopeProvider source={new StaticAreaSource(tree(src))} area="main">
+          <RenderArea areaKey="main" />
+        </ScopeProvider>
+      </RegistryProvider>
+    );
+    let r!: TestRenderer.ReactTestRenderer;
+    TestRenderer.act(() => { r = TestRenderer.create(render("https://cdn/a.mp4")); });
+    TestRenderer.act(() => byType(r.toJSON() as Json, "Video")[0].props.player.emit("playingChange", { isPlaying: true }));
+    expect(byType(r.toJSON() as Json, "Image")).toHaveLength(0);
+    // A new Src is a NEW player, so the poster is owed again — `started` must not be sticky.
+    TestRenderer.act(() => { r.update(render("https://cdn/b.mp4")); });
+    expect(byType(r.toJSON() as Json, "Video")[0].props.player.source).toBe("https://cdn/b.mp4");
+    expect(byType(r.toJSON() as Json, "Image")).toHaveLength(1);
+  });
+
+  it("renders no poster when the control carries none", () => {
+    const j = renderTree({ areas: { main: { $type: "Video", src: "https://cdn/x.mp4" } } });
+    expect(byType(j, "Video")).toHaveLength(1);
+    expect(byType(j, "Image")).toHaveLength(0);
   });
 
   it("renders an openable card for an embed (there is no native iframe)", () => {

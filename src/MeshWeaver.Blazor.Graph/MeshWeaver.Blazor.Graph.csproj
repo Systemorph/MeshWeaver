@@ -21,6 +21,9 @@
              (FormComponentBase & co.) live in the base pack for exactly this reason:
              MeshNodePickerView inherits them from MeshWeaver.Blazor.Components. -->
         <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+    <!-- Markdown/Monaco/editor components moved to the default-views pack; this module
+         composes them directly (module-to-module compile edge, same as the EntityViews base ref). -->
+    <ProjectReference Include="..\MeshWeaver.Blazor.Views\MeshWeaver.Blazor.Views.csproj" />
         <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
         <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />

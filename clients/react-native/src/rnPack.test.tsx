@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import React from "react";
 import TestRenderer, { type ReactTestRendererJSON } from "react-test-renderer";
 import { RegistryProvider, ScopeProvider, RenderArea, StaticAreaSource } from "@meshweaver/react/core";
-import { rnPack } from "./rnPack";
+import { fullPack } from "./modules/standard";
 import { sampleArea } from "./sample";
 
 // Render the sample area through the RN leaf pack + the shared renderer core, headless. Proves the app
@@ -15,7 +15,7 @@ function render(): Json {
   let root!: TestRenderer.ReactTestRenderer;
   TestRenderer.act(() => {
     root = TestRenderer.create(
-      <RegistryProvider pack={rnPack}>
+      <RegistryProvider pack={fullPack}>
         <ScopeProvider source={new StaticAreaSource(sampleArea)} area="main">
           <RenderArea areaKey="main" />
         </ScopeProvider>

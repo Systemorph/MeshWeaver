@@ -16,6 +16,7 @@ namespace MeshWeaver.Mesh;
 /// <param name="Context">Context for visibility filtering (from context: qualifier)</param>
 /// <param name="IsMain">When true, filters to main nodes only (MainNode is null or equals Path)</param>
 /// <param name="Paths">Multi-value path filter from <c>path:a|b|c</c> alternation. When set, backends should push down <c>WHERE path IN (...)</c>. <see cref="Path"/> is also set to the first value for back-compat with consumers that don't know about multi-path.</param>
+/// <param name="IsContent">From <c>is:content</c> — the caller is listing CONTENT, so REGISTRATION nodes are not wanted: the in-memory type definitions, module definitions and partition declarations that <c>AddMeshNodes</c> contributes exist so the platform knows a type exists, and are what a create menu or an autocomplete offers, not something a person browses. A surface that lists things for a human says so on its own query rather than being enumerated in a central list of context names somewhere else.</param>
 public record ParsedQuery(
     QueryNode? Filter,
     string? TextSearch,
@@ -27,7 +28,8 @@ public record ParsedQuery(
     IReadOnlyList<string>? Select = null,
     string? Context = null,
     bool? IsMain = null,
-    IReadOnlyList<string>? Paths = null
+    IReadOnlyList<string>? Paths = null,
+    bool? IsContent = null
 )
 {
     /// <summary>

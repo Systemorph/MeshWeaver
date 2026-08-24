@@ -392,7 +392,12 @@ public static class PersistenceExtensions
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
     {
-        services.AddSingleton<IStorageAdapter>(new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier));
+        // Factory, not an eager instance: module-contributed parsers (the AI module's agent
+        // parser) can only be resolved from the provider, and without them every `.md` carrying
+        // `nodeType: Agent` degrades to a plain Markdown node with no error anywhere.
+        services.AddSingleton<IStorageAdapter>(sp => new FileSystemStorageAdapter(
+            baseDirectory, writeOptionsModifier,
+            contributedParsers: sp.GetServices<Parsers.IFileFormatParser>()));
 
         // Register common services and wrapper services
         return services.AddCoreAndWrapperServices();

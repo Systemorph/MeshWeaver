@@ -63,7 +63,10 @@ public static class ViewModelExtensions
     }
 
 
-    internal static string GetArea(this NamedAreaControl control)
+    /// <summary>The area name a <see cref="NamedAreaControl"/> points at, never null. Public so
+    /// view packs (MeshWeaver.Blazor.Views and friends) can resolve container children the same
+    /// way the base machinery does.</summary>
+    public static string GetArea(this NamedAreaControl control)
         => control.Area?.ToString() ?? string.Empty;
 
     /// <summary>

@@ -106,11 +106,12 @@ public class PresentationSurfacesTest
         var user = new User { PinnedPaths = ["Acme/Q3-Renewal"] };
 
         // Off: the Pinned tab is there.
-        ScopeLabels(ContentOf(user, null)).Should().Equal("Pinned", "All");
+        ScopeLabels(ContentOf(user, null)).Should().Equal("All", "Pinned", "Mine");
 
         // On, with Acme marked: everything pinned is inside the marked space, so the tab goes — an
-        // empty tab labelled "Pinned" would itself say something.
-        ScopeLabels(ContentOf(user, Active("Acme"))).Should().Equal("All");
+        // empty tab labelled "Pinned" would itself say something. Mine is unaffected: it is scoped
+        // to the viewer's own partition, not to the marked one.
+        ScopeLabels(ContentOf(user, Active("Acme"))).Should().Equal("All", "Mine");
     }
 
     [Fact]
@@ -118,21 +119,23 @@ public class PresentationSurfacesTest
     {
         var content = ContentOf(new User { PinnedPaths = ["Acme", "Doc/Guide"] }, Active("Acme"));
 
-        ScopeLabels(content).Should().Equal("Pinned", "All");
+        ScopeLabels(content).Should().Equal("All", "Pinned", "Mine");
         ScopeQuery(content, "Pinned").Should().NotContain("Acme").And.Contain("Doc/Guide");
     }
 
     [Fact]
-    public void Home_TheSharedBand_DisappearsWhenEveryTargetIsMarked()
+    public void SharedGrants_AreScreenedBeforeTheyReachTheAllQuery()
     {
-        // The band's targets are query-string content, so the screen applies BEFORE the query is
-        // built. Every target marked ⇒ no band at all: the home is back to its two sections.
-        UserActivityLayoutAreas.BuildHome(Owner, sharedTargets: ["Acme/Deals"])
-            .Should().BeOfType<StackControl>().Subject
-            .Areas.Should().HaveCount(3, "apps, content, shared");
-        UserActivityLayoutAreas.BuildHome(Owner, sharedTargets: ["Acme/Deals"], screen: Active("Acme"))
-            .Should().BeOfType<StackControl>().Subject
-            .Areas.Should().HaveCount(2, "apps and content only — the marked band is gone");
+        // The grants are now a union leg of All rather than their own band, so the screen still
+        // has to apply BEFORE the query is built: a marked target must not reach the query string
+        // (and therefore the options editor and the `hq=` URL) at all.
+        var marked = UserActivityLayoutAreas.BuildContentSection(
+            Owner, null, null, null, Active("Acme"),
+            Active("Acme").Retain(["Acme/Deals", "Northwind/Sales"]));
+
+        var all = marked.ScopeTabs!.Single(t => t.Label == "All").Query;
+        all.Should().NotContain("Acme");
+        all.Should().Contain("Northwind/Sales");
     }
 
     [Fact]

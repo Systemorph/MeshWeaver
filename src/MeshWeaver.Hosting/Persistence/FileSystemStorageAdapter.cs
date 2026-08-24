@@ -19,7 +19,14 @@ public class FileSystemStorageAdapter : IStorageAdapter
 {
     private readonly string _baseDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
-    private readonly FileFormatParserRegistry _parserRegistry = new();
+    // 🚨 Contributed parsers reach this adapter or agents silently degrade. The agent file format
+    // ships with MeshWeaver.AI, not with core hosting, and MarkdownFileParser accepts every `.md`
+    // — so without the contribution an `.md` carrying `nodeType: Agent` still parses, still claims
+    // to be an Agent, and merely loses its AgentConfiguration: an agent-shaped node that cannot
+    // act, with no exception and no log line. This adapter backs the FILE-SYSTEM mesh, which is
+    // what the dev monolith and every local e2e run on, so a miss here is invisible in CI and
+    // obvious to whoever runs the portal.
+    private readonly FileFormatParserRegistry _parserRegistry;
     // I/O leaves (Read / Write / FindBestPrefixMatch / SavePartitionObjects) are
     // bridged to IObservable through this pool — never via a bare
     // Observable.FromAsync, which deadlocks under a blocking subscriber. See
@@ -61,8 +68,10 @@ public class FileSystemStorageAdapter : IStorageAdapter
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
         IoPoolRegistry? ioPoolRegistry = null,
-        Microsoft.Extensions.Logging.ILogger? logger = null)
+        Microsoft.Extensions.Logging.ILogger? logger = null,
+        IEnumerable<Parsers.IFileFormatParser>? contributedParsers = null)
     {
+        _parserRegistry = new FileFormatParserRegistry(contributedParsers: contributedParsers);
         _baseDirectory = baseDirectory;
         _writeOptionsModifier = writeOptionsModifier;
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;

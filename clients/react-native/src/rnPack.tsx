@@ -7,6 +7,7 @@ import { View, Text, TextInput, Pressable, Switch, ScrollView, ActivityIndicator
 import { SvgXml } from "react-native-svg";
 import { marked } from "marked";
 import { NativeHtml } from "./nativeHtml";
+import { IconGlyph } from "./rnIcon";
 import {
   ControlRenderer,
   RenderArea,
@@ -35,10 +36,6 @@ import {
 import { parseHref, useNavigate } from "./nav";
 import { rnSkins } from "./rnSkins";
 import { rnContainerControls } from "./rnContainers";
-import { rnLiveControls } from "./rnMeshLive";
-import { rnDataControls } from "./rnData";
-import { rnDocumentControls } from "./rnDocuments";
-import { rnAnalysisControls } from "./rnAnalysis";
 
 // Binding helpers (useField/useOptions/str) come from the shared core — the RN pack used to carry
 // its own copies before the core exported them.
@@ -65,18 +62,27 @@ function Children({ control }: { control: any }) {
 // ── skins (layout) ──────────────────────────────────────────────────────────
 const stack: SkinComponent = ({ skin, control }) => {
   const horizontal = s(skin.orientation).toLowerCase() === "horizontal";
+  const emit = useEmit();
+  const { area } = useScope();
+  const layout = {
+    flexDirection: horizontal ? ("row" as const) : ("column" as const),
+    // Row: WRAP (a toolbar of node actions overflows a phone otherwise) and size children to their
+    // content height (default `stretch` blew buttons up to fill the row). Column: keep `stretch` so
+    // children fill the width (cards, text, the doc body).
+    flexWrap: horizontal ? ("wrap" as const) : ("nowrap" as const),
+    alignItems: horizontal ? ("flex-start" as const) : ("stretch" as const),
+    gap: (skin.verticalGap ?? skin.horizontalGap ?? 8) as number,
+  };
+  // A CLICKABLE stack posts the ClickedEvent, exactly as Blazor's LayoutStack does — the Store's
+  // category tiles are this shape (isClickable + cursor:pointer) and were inert cards without it.
+  if (control.isClickable)
+    return (
+      <Pressable accessibilityRole="button" style={layout} onPress={() => emit({ kind: "click", area })}>
+        <Children control={control} />
+      </Pressable>
+    );
   return (
-    <View
-      style={{
-        flexDirection: horizontal ? "row" : "column",
-        // Row: WRAP (a toolbar of node actions overflows a phone otherwise) and size children to their
-        // content height (default `stretch` blew buttons up to fill the row). Column: keep `stretch` so
-        // children fill the width (cards, text, the doc body).
-        flexWrap: horizontal ? "wrap" : "nowrap",
-        alignItems: horizontal ? "flex-start" : "stretch",
-        gap: (skin.verticalGap ?? skin.horizontalGap ?? 8) as number,
-      }}
-    >
+    <View style={layout}>
       <Children control={control} />
     </View>
   );
@@ -233,8 +239,12 @@ function InteractiveMarkdown({ markdown, nodePath }: { markdown: string; nodePat
   }, [markdown, nodePath]);
 
   if (!segments) return <ActivityIndicator />;
+  // A real vertical gap BETWEEN segments — markdown text, area embeds, code cells. Flush embeds
+  // read as one undifferentiated block (the user home's composer sat directly on the Apps band);
+  // the gap only applies at segment boundaries, so a plain doc page's single html chunk is
+  // unaffected. Blazor gets the equivalent from its stylesheet margins.
   return (
-    <>
+    <View style={{ gap: 20 }}>
       {segments.map((seg, i) => {
         if (seg.kind === "html") return <NativeHtml key={i} html={seg.html} />;
         if (seg.kind === "area") {
@@ -248,7 +258,7 @@ function InteractiveMarkdown({ markdown, nodePath }: { markdown: string; nodePat
         }
         return null; // mermaidHtml — not rendered natively (yet)
       })}
-    </>
+    </View>
   );
 }
 
@@ -570,19 +580,9 @@ const Spacer: ControlComponent = () => <View style={{ flex: 1 }} />;
 // native) shows a neutral chip. The DECISION lives in the core; only the leaves are native.
 const Icon: ControlComponent = ({ control }) => {
   const v = useResolve(control.icon ?? control.data);
-  const classified = classifyIcon(v as never);
-  switch (classified.kind) {
-    case "svg":
-      return <SvgXml xml={classified.text} width={20} height={20} />;
-    case "url":
-      return <Image source={{ uri: classified.text }} style={{ width: 20, height: 20, resizeMode: "contain" }} />;
-    case "emoji":
-      return <Text style={styles.body}>{classified.text}</Text>;
-    case "fluent":
-      return <Text style={styles.body}>▨</Text>;
-    default:
-      return null;
-  }
+  // One shared glyph (rnIcon): resolves relative URLs against the instance and routes .svg
+  // through react-native-svg — RN's Image decodes neither, which left the colorful node icons blank.
+  return <IconGlyph icon={s(v)} />;
 };
 
 // ── mesh display controls (native twins of controls/mesh.tsx) ──────────────────────────────────────
@@ -603,19 +603,6 @@ const UserProfile: ControlComponent = ({ control }) => {
     <View style={styles.userRow}>
       <View style={styles.avatar}><Text style={styles.avatarText}>{initial}</Text></View>
       <Text style={styles.body}>{name}</Text>
-    </View>
-  );
-};
-
-const ThreadMessageBubble: ControlComponent = ({ control }) => {
-  const role = s(useResolve(control.role)) || "user";
-  const mine = /user/i.test(role);
-  const text = s(useResolve(control.message)) || s(useResolve(control.data));
-  return (
-    <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start" }}>
-      <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
-        <Text style={styles.body}>{text}</Text>
-      </View>
     </View>
   );
 };
@@ -727,19 +714,15 @@ export const rnPack: LeafPack = {
     // mesh display controls
     MeshNodePicker,
     UserProfile,
-    ThreadMessageBubble,
     MeshNodeCard,
     LayoutAreaDefinition: LayoutAreaDefinitionCard,
-    // NamedArea / Commentable / Redirect / Dialog / Video / SlideShow
+    // NamedArea / Commentable / Redirect / Dialog — core plumbing every deployment needs
     ...rnContainerControls,
-    // ThreadChat / MeshSearch / MeshNodeCollection / Appearance / MeshNodeContentEditor
-    ...rnLiveControls,
-    // PivotGrid / Chart
-    ...rnDataControls,
-    // DocumentSource / ExportDocument / NodeExport / NodeImport / FileBrowser
-    ...rnDocumentControls,
-    // KpiStrip / Tower / ComparisonBars — placed from the shared geometry, not a native re-derivation
-    ...rnAnalysisControls,
+    // 🧩 NOTHING domain-shaped past this point. Threads, mesh browse, node editing, data,
+    // documents, analysis and media are DEPLOYMENT MODULES (src/modules/*) — the manifest
+    // (deployment/*.json) decides which of them a deployment's bundle carries, and
+    // composeDeployment folds them over this core at App start. Same shape as Blazor, where each
+    // module registers its own views: the core pack is the platform, not the product.
   },
   fallback,
 };
@@ -807,9 +790,6 @@ const styles = StyleSheet.create({
   userRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   avatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#0f6cbd", alignItems: "center", justifyContent: "center" },
   avatarText: { color: "white", fontSize: 12, fontWeight: "700" },
-  bubble: { maxWidth: "78%", paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12 },
-  bubbleMine: { backgroundColor: "#cfe4fa" },
-  bubbleTheirs: { backgroundColor: "#f0f0f0" },
   nodeCard: { flexDirection: "row", alignItems: "center", gap: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: "#e1e1e1", backgroundColor: "white" },
   nodeCardIcon: { width: 48, height: 48, borderRadius: 6, backgroundColor: "#cfe4fa", alignItems: "center", justifyContent: "center" },
   nodeCardIconText: { fontSize: 22, fontWeight: "600", color: "#0f6cbd" },

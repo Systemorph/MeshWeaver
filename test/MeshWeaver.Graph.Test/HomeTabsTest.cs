@@ -46,25 +46,35 @@ public class HomeTabsTest
     }
 
     [Fact]
-    public void Home_WithShares_AppendsTheSharedBandAsAThirdSection()
+    public void Home_WithShares_StaysTwoSections_AndFoldsThemIntoAll()
     {
-        // "shared with me can be separate section" — cross-partition invitations are a distinct
-        // kind of content, not another lens on the catalog.
+        // "Shared with me is not required" — but the items are. Cross-partition invitations
+        // (#385) are unreachable by the scope queries, so dropping the band without folding them
+        // into All would have silently lost every invitation.
         var home = UserActivityLayoutAreas.BuildHome(NodePath, sharedTargets: ["OrgA/Module"]);
 
         home.Should().BeOfType<StackControl>().Subject
-            .Areas.Should().HaveCount(3, "apps, content, then shared with me");
+            .Areas.Should().HaveCount(2, "apps and content — no separate shared band any more");
+
+        var all = UserActivityLayoutAreas
+            .BuildContentSection(NodePath, null, null, null, null, ["OrgA/Module"])
+            .ScopeTabs!.Single(t => t.Label == "All");
+        all.Query.Should().Contain("path:OrgA/Module",
+            "a shared module is content the viewer can reach — it belongs IN the list");
     }
 
     [Fact]
-    public void Content_NoPins_IsOneCategory_NoTabStrip()
+    public void Content_NoPins_LeadsWithAll_AndKeepsMine()
     {
-        // "i am not sure if 'spaces' makes sense … it should just be all the top level nodes which
-        // we can access. make just one category." One scope ⇒ the view renders no strip at all.
+        // "tabs below: as discussed, include All, then Pinned, Mine, Shared". Pinned and Shared are
+        // conditional — a pin list with no pins and a path union with no paths both match nothing,
+        // so an always-present tab would be an always-empty one. Mine is unconditional: your own
+        // space is the one tab that is never empty for you.
         var content = Content(UserActivityLayoutAreas.BuildHome(NodePath));
 
-        ScopeLabels(content).Should().Equal("All");
+        ScopeLabels(content).Should().Equal("All", "Mine");
         content.HiddenQuery!.ToString().Should().Contain("is:main")
+            .And.Contain("is:content", "the home lists content; it is not the search box")
             .And.Contain("-nodeType:Store/Plugin", "apps live in the Apps section, never twice");
     }
 
@@ -84,14 +94,18 @@ public class HomeTabsTest
     }
 
     [Fact]
-    public void Content_WithPins_PinnedIsASeparateTab_First()
+    public void Content_WithPins_AllLeads_PinnedFollows()
     {
         // "the pinned i would still keep … as separate tab if we have any".
         var content = UserActivityLayoutAreas.BuildContentSection(
             NodePath, null, new User { PinnedPaths = ["Doc/GUI"] }, null, null);
 
-        ScopeLabels(content).Should().Equal("Pinned", "All");
-        content.ScopeTabs![0].Query.Should().Contain("Doc/GUI");
+        // "put All first and default tab": the view activates scopes[0], so All leads and the
+        // narrower lenses follow it, in the order asked for — Pinned, Mine, then Shared.
+        ScopeLabels(content).Should().Equal("All", "Pinned", "Mine");
+        content.ScopeTabs![1].Query.Should().Contain("Doc/GUI");
+        content.HiddenQuery!.ToString().Should().Be(content.ScopeTabs![0].Query,
+            "the control-level fallback IS the default tab's query");
     }
 
     [Fact]

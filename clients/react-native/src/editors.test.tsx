@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import React from "react";
 import TestRenderer, { type ReactTestRendererJSON } from "react-test-renderer";
 import { RegistryProvider, ScopeProvider, RenderArea, StaticAreaSource, type AreaTree } from "@meshweaver/react/core";
-import { rnPack } from "./rnPack";
+import { fullPack } from "./modules/standard";
 
 // Headless proof that EVERY editor the RN leaf pack adds actually renders to native components AND
 // resolves its /data binding — the runtime counterpart to `tsc`. Mirrors rnPack.test.tsx's harness.
@@ -61,7 +61,7 @@ function render(): Json {
   let root!: TestRenderer.ReactTestRenderer;
   TestRenderer.act(() => {
     root = TestRenderer.create(
-      <RegistryProvider pack={rnPack}>
+      <RegistryProvider pack={fullPack}>
         <ScopeProvider source={new StaticAreaSource(tree)} area="main">
           <RenderArea areaKey="main" />
         </ScopeProvider>

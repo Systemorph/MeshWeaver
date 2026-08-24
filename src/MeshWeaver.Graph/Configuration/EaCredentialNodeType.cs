@@ -29,7 +29,7 @@ public static class EaCredentialNodeType
     {
         Name = "EA Credential",
         Icon = "/static/NodeTypeIcons/key.svg",
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<EaCredential>())

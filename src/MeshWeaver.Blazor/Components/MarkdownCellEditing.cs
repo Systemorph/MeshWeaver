@@ -1,7 +1,7 @@
 namespace MeshWeaver.Blazor.Components;
 
 /// <summary>
-/// What a markdown view hands <see cref="MarkdownHtmlRenderer"/> to make its executable cells
+/// What a markdown view hands <c>MarkdownHtmlRenderer</c> (MeshWeaver.Blazor.Views) to make its executable cells
 /// EDITABLE (#1636) — the fence workbench's counterpart of the Code node's inline cell editor.
 ///
 /// <para>🚨 <b>Its presence IS the permission decision.</b> A view supplies this object only when the

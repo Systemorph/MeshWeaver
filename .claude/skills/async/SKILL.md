@@ -64,6 +64,60 @@ workspace.GetMeshNodeStream(path)
 
 Tests are the *only* place `await …FirstAsync().ToTask()` is acceptable.
 
+### Rule 1a — A `Task`-returning override you must implement: subscribe, return `Task.CompletedTask`
+
+Some signatures are not ours — `Grain.OnDeactivateAsync`/`OnActivateAsync`, `IHostedService`,
+ASP.NET middleware. The rule is not "await is fine here": it is **do not await, hang the work off
+the signal, and return a completed Task**. A grain turn is a single-threaded scheduler, so awaiting
+inside it parks the very scheduler the thing you are waiting for may need in order to finish.
+
+```csharp
+// ❌ parks the grain turn, and races a timer to decide whether the work happened
+var done = hub.DisposalCompleted.FirstOrDefaultAsync().ToTask(ct);
+if (await Task.WhenAny(done, Task.Delay(TimeSpan.FromSeconds(5))) == done)
+    loadContext.Unload();          // …and if the timer won? unload anyway? that is the bug
+
+// ✅ subscribe; the turn returns immediately and the work belongs to the signal
+hub.DisposalCompleted
+    .Take(1)                                   // unsubscribes on first emission — no rooted subscription
+    .Catch<Unit, Exception>(ex => { logger.LogError(ex, "…"); return Observable.Empty<Unit>(); })
+    .Subscribe(_ => UnloadContextIfSafe());
+return Task.CompletedTask;
+```
+
+**This deletes a whole class of bug, not just the deadlock.** With a timer race you must answer
+"what if the wait expired?", and the tempting answer — do it anyway — is exactly how a collectible
+`AssemblyLoadContext` gets unloaded out from under live code (`MessageHubGrain`; CI run
+32713409169 caught it as a dedicated thread faulting on its first managed call, JIT-compiling a
+dynamic method whose allocator was already gone). With a subscription there is no timer and no
+branch: the callback runs when the signal says so, or it never runs — and "never runs" means the
+resource is simply retained. Prefer retaining memory over acting on a guess.
+
+`Take(1)` matters: a subscription that never completes roots whatever the callback closes over
+(the discarded-timer-roots-the-hub defect).
+
+### Rule 1b — Handle stream faults FLUENTLY, never with `try`/`catch` around `Subscribe`
+
+A `try`/`catch` wrapped around a subscription only sees a throw from the *synchronous* subscribe
+call. A fault travelling through the stream arrives later, usually on another thread, and sails
+straight past it — so the `catch` you wrote to make the code safe never runs.
+
+```csharp
+// ❌ catches almost nothing that actually goes wrong
+try { stream.Subscribe(x => Handle(x)); } catch (Exception ex) { logger.LogError(ex, "…"); }
+
+// ✅ the fault is part of the stream, so handle it in the stream
+stream
+    .Catch<T, Exception>(ex => { logger.LogError(ex, "…"); return Observable.Empty<T>(); })
+    .Subscribe(x => Handle(x));
+```
+
+Choose the recovery deliberately: `Observable.Empty<T>()` means "this did not happen" — downstream
+`OnNext` never runs, which is what you want when the callback performs an irreversible action —
+while `Observable.Return(fallback)` means "carry on with a default". Keep a `try`/`catch` only for
+genuinely synchronous work sitting beside the chain, and say so in a comment, so the next reader
+does not believe it covers the stream.
+
 > Reading a single node's content? Use the synced stream (`GetMeshNodeStream(path)`), not
 > `QueryAsync` (eventually consistent → stale after writes) and not a blocking await. See
 > SyncedMeshNodeQueries.md.

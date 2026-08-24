@@ -1388,39 +1388,41 @@ jobs:
   # "Subscribe to new releases of any dependency and rebuild": dependency bumps INSIDE a repo are
   # already covered by the commit-scoped framework identity (a Dependabot merge is a commit ⇒ a
   # new identity ⇒ a fresh CI bake). The cross-REPO edge — this platform releasing while the node
-  # repos (Plugins, Education, Reinsurance, SocialMedia) sit unchanged — is closed here: one
-  # repository_dispatch per subscriber, which their CI receives with
+  # repos (Plugins, Education, Reinsurance, SocialMedia) sit unchanged — is closed BY MEMEX'S
+  # BROADCAST (see the block below): one repository_dispatch per subscriber, which their CI
+  # receives with
   #   on: repository_dispatch: { types: [meshweaver-framework-released] }
   # and answers by re-running its gate + bake + publish against the new framework identity.
   # REPORTER-CLASS like notify-platform-update: a lost dispatch costs one delayed rebake wave
-  # (the next release re-notifies) and can never hide a defect — unconfigured stays a loud
-  # NOTICE, never a red.
+  # (the next release re-notifies, and the schedule poll is the standing fallback) and can never
+  # hide a defect.
   #
   # 🚨 Provisioning note (#1755): a subscriber whose own upstreams are not yet published EXITS
   # without building and is re-woken by its upstream's `meshweaver-upstream-published` event, so
-  # ────────────────── NO DEPENDENT DISPATCH: the wave is PULLED, not pushed ──────────────────
-  # There is deliberately no job here that tells the node repos a release happened.
+  # ────────────────── NO DEPENDENT DISPATCH *FROM HERE*: memex broadcasts (2026-08-23) ──────────
+  # There is deliberately no job here that dispatches to the node repos, and there never will be —
+  # but the wave is now BROADCAST, not only pulled. The broadcast happens ONE HOP AWAY, in memex,
+  # and this workflow already feeds it: the `notify-platform-update` job below signs a POST telling
+  # the registry mesh "a new platform build exists". memex, on that fact, fans a
+  # `repository_dispatch` (`meshweaver-framework-released`) out to every subscriber repo, whose CI
+  # answers with `on: repository_dispatch: { types: [meshweaver-framework-released] }` and re-bakes
+  # against the new framework in SECONDS instead of up to a schedule interval.
   #
-  # There used to be (`notify-dependents`), and its own comment called it TRANSITIONAL — "an
-  # ADDRESSED notification where the design calls for a BROADCAST … a publisher must not know its
-  # dependents". It needed `BAKE_SUBSCRIBER_REPOS` (a hand-maintained second copy of a graph memex
-  # already holds) plus a GitHub App credential with write access to every satellite. It was never
-  # provisioned, so for its whole life it printed "NOT CONFIGURED" and did nothing — while the
-  # fleet quietly stayed a release behind, which is exactly the silent failure the comment warned
-  # a missing entry would cause.
-  #
-  # 🚨 It is not coming back, and adding a token is not the fix. A release is a FACT about the
-  # registry — memex.meshweaver.cloud publishes the released image, and that is the one source of
-  # truth. Each node repo's scheduled run reads it and bakes for the identity it finds
-  # (`Resolve the bake target` in each repo's ci.yml, on the `schedule` trigger). Pull, not push:
-  #   • no credential — the platform needs no write access to any satellite, and no person's PAT
-  #     is in the loop;
-  #   • no list — a new repo participates by having the schedule, not by being named here;
-  #   • no silent gap — a repo that stops baking shows up as an instance HELD on its own
-  #     UpdatePolicy, naming the bundles and the identity, instead of nothing anywhere.
-  #
-  # The cost is latency: up to one schedule interval (twice hourly) instead of seconds. That is
-  # the right trade for removing a cross-repo write credential from the release path.
+  # 🚨 Why the broadcast lives in memex and NOT here — it resolves the two objections that kept the
+  # old GitHub→GitHub `notify-dependents` job (which needed `BAKE_SUBSCRIBER_REPOS` + a satellite
+  # write credential, was never provisioned, and printed "NOT CONFIGURED" for its whole life):
+  #   • no credential in the release path — the PLATFORM still holds no write access to any
+  #     satellite and no PAT. memex does the fan-out with the GitHub App it ALREADY holds for
+  #     GitSync (`FrameworkReleaseBroadcaster`, `src/MeshWeaver.GitSync`); the release only signs a
+  #     POST to memex, exactly like every other `notify-*` job here.
+  #   • no hand-maintained list here — the subscriber set lives in the Hosting fleet registry ON
+  #     memex ("register a new repo in Hosting"), the graph memex already owns; nothing is named in
+  #     this file.
+  # Pull stays the fallback: each repo's `schedule` run still reads the registry
+  # (`Resolve the bake target` in each ci.yml) and bakes for the identity it finds, so a lost
+  # dispatch costs at most one delayed rebake wave and a repo that stops baking still shows up as an
+  # instance HELD on its own UpdatePolicy. REPORTER-CLASS: the broadcast makes the wave prompt; the
+  # poll makes it guaranteed.
 
   # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (optional) ──────────────────
   # After the release is ARMED (promote's last PUT), tell the registry instance's mesh that a new

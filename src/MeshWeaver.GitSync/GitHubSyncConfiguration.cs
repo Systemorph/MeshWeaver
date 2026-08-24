@@ -41,6 +41,18 @@ public static class GitHubSyncConfiguration
             sp.GetRequiredService<IoPoolRegistry>(),
             sp.GetRequiredService<IOptions<GitHubAppOptions>>(),
             sp.GetService<ILogger<GitHubAppTokenService>>()));
+        // Framework-release broadcaster (memex is the broadcast hub): fans a platform release out
+        // to the node-repo satellites as repository_dispatch, authenticated with the App above.
+        // The subscriber set is INJECTED by the caller (the Hosting registry) or read from the
+        // FrameworkBroadcast config section as the interim fallback. Inert unless the App is
+        // configured, so registering it everywhere is safe — only the control instance has a list.
+        services.AddOptions<FrameworkBroadcastOptions>();
+        services.AddSingleton(sp => new FrameworkReleaseBroadcaster(
+            sp.GetRequiredService<GitHubAppTokenService>(),
+            sp.GetRequiredService<IoPoolRegistry>(),
+            sp.GetRequiredService<IOptions<GitHubAppOptions>>(),
+            sp.GetRequiredService<IOptions<FrameworkBroadcastOptions>>(),
+            sp.GetService<ILogger<FrameworkReleaseBroadcaster>>()));
         // The production repo client: BULK transfer (push/fetch) over the git protocol — REST
         // paid one request PER FILE, so one big-repo sync exhausted the GitHub App installation's
         // hourly budget — with refs/PRs/issues remaining on the Octokit REST client it wraps.
@@ -132,7 +144,7 @@ public static class GitHubSyncConfiguration
             {
                 Name = "GitHub Credential",
                 IsSatelliteType = false,
-                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubCredential>()),
             },
@@ -140,7 +152,7 @@ public static class GitHubSyncConfiguration
             {
                 Name = "GitHub Sync Config",
                 IsSatelliteType = false,
-                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubSyncConfig>()),
             },
@@ -151,7 +163,7 @@ public static class GitHubSyncConfiguration
             {
                 Name = "Pull Request",
                 IsSatelliteType = true,
-                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubPullRequest>()),
             },
@@ -161,7 +173,7 @@ public static class GitHubSyncConfiguration
             {
                 Name = "GitHub Issue",
                 IsSatelliteType = true,
-                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<GitHubIssue>()),
             },
@@ -173,7 +185,7 @@ public static class GitHubSyncConfiguration
             {
                 Name = "Build Completion",
                 IsSatelliteType = true,
-                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<BuildCompletion>()),
             });

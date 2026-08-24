@@ -1,4 +1,5 @@
 using System.Reflection;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -51,9 +52,15 @@ public static class PartitionConfigurationExtensions
     {
         builder.ConfigureServices(services =>
         {
-            services.AddSingleton<IPartitionStorageProvider>(
+            // 🚨 Resolved from the provider, not constructed eagerly, so module-contributed
+            // parsers reach the embedded content. The AI module registers the agent parser this
+            // way; an eagerly-built provider would see only the built-ins, and every embedded
+            // `.md` carrying `nodeType: Agent` would be parsed by the catch-all Markdown parser
+            // into a plain Markdown node — no exception, no log, the agent simply gone.
+            services.AddSingleton<IPartitionStorageProvider>(sp =>
                 new EmbeddedResourcePartitionStorageProvider(
-                    @namespace, assembly, resourcePrefix, description, contexts: contexts));
+                    @namespace, assembly, resourcePrefix, description, contexts: contexts,
+                    contributedParsers: sp.GetServices<IFileFormatParser>()));
             return services;
         });
         return builder;
