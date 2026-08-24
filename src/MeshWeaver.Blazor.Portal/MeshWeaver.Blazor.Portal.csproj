@@ -17,7 +17,9 @@
     <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
     <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <!-- Centralized speech-to-text: the composer's mic dictates via the DI ISpeechTranscriber. -->
-    <ProjectReference Include="..\MeshWeaver.Speech\MeshWeaver.Speech.csproj" />
+    <!-- ThreadChatView resolves ISpeechTranscriber OPTIONALLY (the mic hides when absent), so this
+         needs the CONTRACT only — the Whisper client arrives as a module. -->
+    <ProjectReference Include="..\MeshWeaver.Speech.Contract\MeshWeaver.Speech.Contract.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

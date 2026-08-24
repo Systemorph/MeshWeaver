@@ -1,0 +1,157 @@
+name: Hosting Operator
+
+# The operator scripts are the executable half of instance lifecycle — they create namespaces,
+# drop databases and delete DNS records — and nothing in CI opened them until now.
+#
+# 🚨 WHAT THIS GATE CAN AND CANNOT PROVE, stated here so a green tick is not read as more than it is.
+# These scripts drive az/kubectl/helm/psql against a live Azure estate; a runner has none of those,
+# and mocking them would only assert that the mocks agree with themselves. So this proves the layer
+# where the dangerous bugs actually live — argument handling, the REFUSALS that stand in front of
+# every destructive act, the ::hosting:: contract the mesh parses, and run.sh's ordering — and it
+# proves the image still builds. Whether `az network dns record-set a add-record` behaves as
+# expected is settled by the first real provision, which is why the rollout is staged.
+#
+# 🛡️ NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is in this
+# repository. There is no secret, no cluster and no registry, so there is no condition under which
+# this may decline to run and still render a tick: no `continue-on-error`, no input-shaped `if:`,
+# and no path filter (a path filter turns "unrelated PR" into a skipped run, which is the same grey
+# tick from the other side).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    name: Operator scripts (shellcheck + behaviour)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # shellcheck ships on hosted runners, which is exactly why it is asserted rather than assumed:
+      # a dependency satisfied by luck of the runner image breaks on an image bump, as a "command
+      # not found" unrelated to the code being gated.
+      - name: Assert the tools this gate needs
+        run: |
+          set -euo pipefail
+          missing=()
+          command -v shellcheck >/dev/null 2>&1 || missing+=("shellcheck — apt-get install shellcheck")
+          command -v bash       >/dev/null 2>&1 || missing+=("bash")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the operator gate cannot run — provide:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          shellcheck --version
+
+      # 🚨 The regression guard for the trap that kept these scripts out of the repo entirely:
+      # .gitignore's `/deploy/**/bin/` (build output) also matched THIS bin/, so `git add` on them
+      # exited 0 and did nothing. The Dockerfile shipped COPYing a directory git refused to track.
+      # A checkout is the only place that can prove the re-include still holds.
+      - name: The operator scripts are actually TRACKED
+        run: |
+          set -euo pipefail
+          tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
+          if [ "$tracked" -lt 16 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 16 (14 commands + run.sh + _common.sh)."
+            echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
+            git check-ignore -v deploy/aks/operator/bin/run.sh || true
+            exit 1
+          fi
+          # Executability is part of the contract: the Dockerfile chmods, but run.sh is the Job's
+          # ENTRYPOINT and a non-executable command is a CrashLoop, not a warning.
+          nonexec=$(git ls-files -s deploy/aks/operator/bin/hosting-* deploy/aks/operator/bin/run.sh | awk '$1 != "100755"' | wc -l | tr -d ' ')
+          [ "$nonexec" -eq 0 ] || { echo "::error::${nonexec} operator command(s) are not committed executable (mode 100755)"; exit 1; }
+          echo "${tracked} files tracked, all commands executable"
+
+      - name: Every script parses
+        run: |
+          set -euo pipefail
+          cd deploy/aks/operator/bin
+          for f in _common.sh run.sh hosting-*; do
+            bash -n "$f" || { echo "::error::${f} is not valid bash"; exit 1; }
+          done
+          echo "all $(ls _common.sh run.sh hosting-* | wc -l) scripts parse"
+
+      - name: shellcheck
+        run: shellcheck -S warning deploy/aks/operator/bin/_common.sh deploy/aks/operator/bin/run.sh deploy/aks/operator/bin/hosting-*
+
+      # 🚨 Every hosting-* command the mesh's plan can emit must EXIST. A plan step naming a script
+      # nobody wrote fails inside a Job, halfway through a lifecycle action, as "command not found"
+      # — which for a teardown means after the quiesce and possibly after the backup.
+      - name: Every command the plan can emit exists
+        run: |
+          set -euo pipefail
+          plan_src=$(mktemp)
+          # The plan lives in the Hosting plugin repo; the command names it emits are also listed
+          # here so this repo can gate them without a cross-repo checkout. Keep in step with
+          # MeshWeaver.Plugins/Hosting/InstanceAction/Source/InstanceActionPlan.cs.
+          cat > "$plan_src" <<'EOF'
+          hosting-backup
+          hosting-deploy
+          hosting-dns
+          hosting-export
+          hosting-federate
+          hosting-kv-ensure
+          hosting-kv-purge
+          hosting-redirect
+          hosting-restore
+          hosting-tls
+          hosting-verify
+          hosting-verify-backup
+          hosting-verify-catalog
+          hosting-verify-restore
+          EOF
+          missing=()
+          while read -r cmd; do
+            cmd="$(echo "$cmd" | tr -d '[:space:]')"
+            [ -n "$cmd" ] || continue
+            [ -x "deploy/aks/operator/bin/${cmd}" ] || missing+=("$cmd")
+          done < "$plan_src"
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the plan can emit commands this image does not carry: ${missing[*]}"
+            echo "::error::A missing one fails INSIDE a running lifecycle Job — for a teardown, after the quiesce."
+            exit 1
+          fi
+          echo "all 14 commands present and executable"
+
+      - name: Behaviour tests
+        run: deploy/aks/operator/test/run-tests.sh
+
+  image:
+    name: Operator image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Build only — nothing is pushed from a pull request. The point is that the Dockerfile and its
+      # build context stay in step: the context is `deploy/` (not the operator directory) because
+      # the image carries the CHART as well as the scripts, and that is easy to break silently.
+      - name: Build
+        run: docker build -f deploy/aks/operator/Dockerfile -t hosting-operator:ci deploy/
+
+      - name: The image carries the scripts AND the chart
+        run: |
+          set -euo pipefail
+          # A chart-less image would deploy nothing and an image without run.sh cannot start; both
+          # are build-context mistakes that only surface during a real provision.
+          docker run --rm --entrypoint /bin/bash hosting-operator:ci -c '
+            set -e
+            test -x /opt/hosting/bin/run.sh          || { echo "run.sh missing"; exit 1; }
+            test -f /opt/hosting/chart/Chart.yaml    || { echo "chart missing — build context must be deploy/"; exit 1; }
+            command -v hosting-deploy >/dev/null     || { echo "hosting-* not on PATH"; exit 1; }
+            command -v helm kubectl az pg_dump >/dev/null || { echo "a required tool is missing"; exit 1; }
+            echo "image carries: $(ls /opt/hosting/bin/hosting-* | wc -l) commands + chart $(grep ^version /opt/hosting/chart/Chart.yaml)"
+          '
+
+      # Stronger than running them on the runner: this is the bash, the coreutils and the PATH the
+      # scripts will actually execute under in a lifecycle Job.
+      - name: Behaviour tests, inside the image
+        run: |
+          docker run --rm -v "$PWD/deploy/aks/operator/test:/opt/hosting/test:ro" \
+            --entrypoint /bin/bash hosting-operator:ci -c 'cd /opt/hosting && bash test/run-tests.sh'

@@ -57,7 +57,10 @@ public sealed class SqliteVectorMeshQuery : IMeshQueryProvider
         if (typeof(T) != typeof(MeshNode) || _embedder is null || string.IsNullOrWhiteSpace(parsed.TextSearch))
             return EmptyInitial<T>(parsed);
 
-        var topK = request.Limit ?? parsed.Limit ?? 50;
+        // A vector search always needs a real k, so MeshQueryRequest.NoLimit (non-positive) takes
+        // the same default as "no cap stated" rather than an impossible k.
+        var topK = request.Limit is > 0 ? request.Limit.Value
+            : parsed.Limit is > 0 ? parsed.Limit.Value : 50;
         // Embed the query (I/O leaf on the pool), then rank the stored vectors by cosine. A failed
         // embed → null → empty contribution, so lexical search still serves.
         return _ioPool.Invoke(ct => EmbedSafe(parsed.TextSearch!, ct))

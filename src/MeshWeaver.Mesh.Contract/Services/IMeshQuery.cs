@@ -218,6 +218,20 @@ public record MeshQueryRequest
     public MeshQueryRequest Complete() => this with { Limit = NoLimit };
 
     /// <summary>
+    /// The QUERY-STRING form of <see cref="Complete"/> — <c>limit:all</c>, which the parser maps to
+    /// <see cref="NoLimit"/>.
+    ///
+    /// <para>🚨 Needed because not every read can reach a <see cref="MeshQueryRequest"/>. The
+    /// process-wide synced-query surface (<c>IMeshNodeStreamCache.GetQuery</c> →
+    /// <c>SyncedQueryMeshNodes</c>) takes query STRINGS and builds the request itself, so a caller
+    /// there has no <c>Complete()</c> to call and the absence of a limit silently becomes the
+    /// cross-schema fan-out's 50-row page. Spelling it <c>all</c> rather than <c>-1</c> is
+    /// deliberate: a bare negative number in a query string reads as a typo and invites a tidy-up
+    /// that reintroduces the truncation, which is exactly the class of defect this guards.</para>
+    /// </summary>
+    public const string CompleteQualifier = "limit:all";
+
+    /// <summary>
     /// Context for visibility filtering. When set, nodes with this context
     /// in their ExcludeFromContext are excluded from results.
     /// Parsed context: qualifier in query string is used as fallback.

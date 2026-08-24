@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Mesh;
 
 namespace MeshWeaver.AI;
 
@@ -16,7 +17,7 @@ namespace MeshWeaver.AI;
 /// <see cref="Description"/> is kept because the agent runtime feeds it to the model as
 /// delegation metadata where only the detached configuration is in hand.)</para>
 /// </summary>
-public record AgentConfiguration
+public record AgentConfiguration : ILocalizedNodeText
 {
     /// <summary>
     /// Unique identifier for this agent. Equals the owning <see cref="MeshWeaver.Mesh.MeshNode.Id"/>
@@ -98,6 +99,22 @@ public record AgentConfiguration
     public string? ModelTier { get; init; }
 
     /// <summary>
+    /// Per-language overrides of the owning node's USER-VISIBLE display metadata (name /
+    /// description / category), keyed by BCP-47 tag — e.g. <c>de</c>. Rendered through
+    /// <see cref="NodeTextTranslations"/>, which resolves the tag exactly like the string catalog
+    /// and the <c>[Translation]</c> attributes do, so the three cannot disagree.
+    ///
+    /// <para>🚨 This localizes what the PICKER shows, and nothing else. In particular it must never
+    /// be applied to <see cref="Description"/> on this record or to <see cref="Instructions"/>:
+    /// those are the delegation catalogue and the system prompt — text a MODEL reads to decide
+    /// which agent to pick and how to behave — so translating them changes behaviour rather than
+    /// presentation. The agent's runtime identity (<see cref="Id"/>, and the paths delegations and
+    /// hand-offs name) is likewise untouched, so localizing a label can never re-point a
+    /// delegation.</para>
+    /// </summary>
+    public IReadOnlyDictionary<string, LocalizedNodeText>? Translations { get; init; }
+
+    /// <summary>
     /// Optional list of additional plugins this agent should load.
     /// Standard plugins (Chat, Mesh, LayoutArea, Data) are always loaded.
     /// Additional plugins are resolved by name from DI-registered IAgentPlugin services.
@@ -109,8 +126,13 @@ public record AgentConfiguration
     /// single turn. Maps directly onto
     /// <c>Microsoft.Extensions.AI.FunctionInvokingChatClient.MaximumIterationsPerRequest</c>
     /// (wired in <see cref="ChatClientAgentFactory"/>). When <c>null</c> (the default) the
-    /// Microsoft.Extensions.AI default applies — high enough that a high-volume agent can
-    /// issue hundreds of tool calls in one round before it engages. Set a small value
+    /// Microsoft.Extensions.AI default applies, which is <b>40</b> — a plain <c>int</c>, measured
+    /// against Microsoft.Extensions.AI 10.8.3, NOT unbounded and not "hundreds" as this comment
+    /// claimed until 2026-08-23. That wrong number matters: it makes an expensive round look
+    /// like a runaway loop, when 40 iterations over a large document is simply what the cap
+    /// already allows (~40 × ~40k context ≈ the 1.6M prompt tokens/round measured in production).
+    /// The lever on THAT cost is prompt caching, not a lower cap — see
+    /// <c>AgentChatClient.BuildVolatileRoundContext</c>. Set a small value
     /// (e.g. 20–30) for such agents to force natural break points: on reaching the cap the
     /// framework strips tools on the final iteration (its
     /// <c>PrepareOptionsForLastIteration</c> path) so the model returns a graceful final

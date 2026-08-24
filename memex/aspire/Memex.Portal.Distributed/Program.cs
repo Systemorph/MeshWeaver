@@ -143,7 +143,12 @@ else
 // Single shared pool for all partition queries (schema-qualified SQL).
 // Pool size must handle parallel fan-out across all schemas.
 var connectionString = builder.Configuration.GetConnectionString("memex") ?? "";
-if (connectionString.Contains("database.azure.com"))
+// Select the Entra-ID token path ONLY for an Azure host with NO password. A fully-qualified Azure
+// host reached with username+password must take the plain Npgsql path — AddAzureNpgsqlDataSource
+// wires a token password provider, and Npgsql throws NotSupportedException on connect when a
+// password is ALSO present, which SIGABRTs the portal via PostgreSqlChangeListener. (Was a
+// substring match on the whole string, which both false-matches and ignores the password.)
+if (AzurePostgres.UsesManagedIdentityAuth(connectionString))
     builder.AddAzureNpgsqlDataSource("memex",
         configureDataSourceBuilder: dsb =>
         {
@@ -158,6 +163,10 @@ else
             dsb.UseVector();
             dsb.ConnectionStringBuilder.MaxPoolSize = 50;
             dsb.ConnectionStringBuilder.ConnectionIdleLifetime = 30;
+            // Azure Flexible Server requires SSL; enforce it on the password path too so a config
+            // string without an explicit SslMode still connects (28000: no pg_hba.conf entry …).
+            if (AzurePostgres.IsAzureHost(connectionString))
+                dsb.ConnectionStringBuilder.SslMode = SslMode.Require;
         });
 
 // Disable dev login in the distributed deployment by default (prod-safety): a real
@@ -259,6 +268,43 @@ var configurePubSubStore = useAdoNetClustering
     }))
     : null;
 
+// How the PARTITIONED persistence provider (and the change listener it spins up via the same
+// hook — see PostgreSqlPartitionStorageProvider.CreateChangeListenerDataSource) authenticates.
+// The Entra-ID token provider is wired ONLY for an Azure host with NO password; wiring it when a
+// password is present throws NotSupportedException on connect and SIGABRTs the portal. On any
+// Azure host, SSL is forced (Flexible Server requires it) whichever auth path we take.
+Action<NpgsqlDataSourceBuilder>? configurePersistenceDataSource;
+if (AzurePostgres.UsesManagedIdentityAuth(connectionString))
+    configurePersistenceDataSource = dsb =>
+    {
+        dsb.ConnectionStringBuilder.SslMode = SslMode.Require;
+        // In an AKS pod only the SERVER-SIDE credentials exist (Environment, Workload Identity,
+        // Managed Identity). Excluding the dev-machine credentials stops DefaultAzureCredential
+        // from probing — and dumping a ~30-line CredentialUnavailableException stack trace for —
+        // Azure CLI / PowerShell / azd / Visual Studio on every token acquisition (the
+        // credential-chain log noise on the portal pods). The credential that actually succeeds
+        // (Workload/Managed Identity) is unchanged.
+        var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
+        {
+            ExcludeAzureCliCredential = true,
+            ExcludeAzurePowerShellCredential = true,
+            ExcludeAzureDeveloperCliCredential = true,
+            ExcludeVisualStudioCredential = true,
+            ExcludeInteractiveBrowserCredential = true,
+        });
+        dsb.UsePeriodicPasswordProvider(async (_, ct) =>
+        {
+            var token = await credential.GetTokenAsync(
+                new Azure.Core.TokenRequestContext(["https://ossrdbms-aad.database.windows.net/.default"]), ct);
+            return token.Token;
+        }, TimeSpan.FromMinutes(4), TimeSpan.FromSeconds(10));
+    };
+else if (AzurePostgres.IsAzureHost(connectionString))
+    // Azure host reached with a password: no token provider (it would throw), but still force SSL.
+    configurePersistenceDataSource = dsb => dsb.ConnectionStringBuilder.SslMode = SslMode.Require;
+else
+    configurePersistenceDataSource = null;
+
 var address = AddressExtensions.CreateMeshAddress();
 builder.UseOrleansMeshServer(address, silo =>
     {
@@ -319,32 +365,7 @@ builder.UseOrleansMeshServer(address, silo =>
     )
     .ConfigureServices(services => services
         .AddPartitionedPostgreSqlPersistence(
-            configureDataSource: connectionString.Contains("database.azure.com")
-                ? dsb =>
-                {
-                    // In an AKS pod only the SERVER-SIDE credentials exist (Environment,
-                    // Workload Identity, Managed Identity). Excluding the dev-machine
-                    // credentials stops DefaultAzureCredential from probing — and dumping a
-                    // ~30-line CredentialUnavailableException stack trace for — Azure CLI /
-                    // PowerShell / azd / Visual Studio on every token acquisition (the
-                    // credential-chain log noise on the portal pods). The credential that
-                    // actually succeeds (Workload/Managed Identity) is unchanged.
-                    var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
-                    {
-                        ExcludeAzureCliCredential = true,
-                        ExcludeAzurePowerShellCredential = true,
-                        ExcludeAzureDeveloperCliCredential = true,
-                        ExcludeVisualStudioCredential = true,
-                        ExcludeInteractiveBrowserCredential = true,
-                    });
-                    dsb.UsePeriodicPasswordProvider(async (_, ct) =>
-                    {
-                        var token = await credential.GetTokenAsync(
-                            new Azure.Core.TokenRequestContext(["https://ossrdbms-aad.database.windows.net/.default"]), ct);
-                        return token.Token;
-                    }, TimeSpan.FromMinutes(4), TimeSpan.FromSeconds(10));
-                }
-                : null))
+            configureDataSource: configurePersistenceDataSource))
     .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
     .ConfigureMemexPortal(builder.Configuration)
     // 🚨 Register the "storage" SOURCE collection at mesh level — the backing store that every
@@ -403,6 +424,25 @@ builder.Services.AddHealthChecks()
         "pending_module_activation",
         new Memex.Portal.Distributed.PendingModuleActivationHealthCheck(
             MeshWeaver.PluginCatalog.ModuleRoot.Resolve(builder.Configuration)));
+
+// Is this instance ADOPTING the assemblies the registry is meant to serve it, or quietly compiling
+// them itself (#1782 gap 4)? With instance-level pre-bake giving way to lazy compile-on-access, a
+// fetch miss is absorbed so completely that the whole distribution lane can go dark while every
+// surface looks like a healthy day (2026-08-20). DEGRADED on a miss, never Unhealthy: compiling is
+// correct behaviour, and failing readiness would turn a distribution regression into an outage.
+builder.Services.AddHealthChecks()
+    // 🚨 Unhealthy when a declared-required module is missing, so a rollout that would silently
+    // drop a feature STALLS and the pods that still have it keep serving. Inert unless the
+    // deployment declares Modules:Required.
+    .AddCheck("required_modules",
+        new Memex.Portal.Distributed.RequiredModulesHealthCheck(builder.Configuration))
+    .AddCheck<Memex.Portal.Distributed.BundleAdoptionHealthCheck>("bundle_adoption")
+    // 🚨 The other half of the same blindness (#1782 gap 2). Adoption's miss is invisible because
+    // a lazy compile absorbs it; an entitlement answer's degradation is invisible because every
+    // refusal is byte-identical on the wire by design. DEGRADED, never Unhealthy: serving a
+    // previously observed entitlement while the registry is unreachable is the CORRECT answer, and
+    // failing readiness over it would turn a brief registry outage into one of ours.
+    .AddCheck<Memex.Portal.Distributed.EntitlementAnchorHealthCheck>("entitlement_anchor");
 
 // The same shape, one dependency further out: DbVersionGate proves the MESH database is
 // migrated; this proves the ORLEANS database is provisioned. They are different databases,

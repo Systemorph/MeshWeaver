@@ -57,6 +57,13 @@ public record NodeNavigation(string Title, IReadOnlyList<NodeNavigationEntry> En
     /// are on is a dead control.
     /// </summary>
     public string? TitlePath { get; init; }
+
+    /// <summary>
+    /// Optional icon for the heading — typically the indexed root's own icon (resolve it with
+    /// <c>MeshNodeImageHelper.ResolveNodeIcon</c> so a node without one still reads as its type).
+    /// Null renders a plain text heading.
+    /// </summary>
+    public string? Icon { get; init; }
 }
 
 /// <summary>

@@ -72,15 +72,6 @@ public static class UserActivityLayoutAreas
     /// <summary>Link to the doc page that explains the configurable Body-page + <c>@@</c>-region model.</summary>
     internal const string ConfigGuideLink = "/Doc/GUI/ConfigurablePages";
 
-    /// <summary>
-    /// The per-thread rail-row item area consumed by the Threads app's vertical rail — registered
-    /// on every THREAD hub (MeshWeaver.AI, <c>ThreadNodeType.RailItemArea</c> /
-    /// <c>ThreadRailItem.View</c>: title + ✕-close overlay). Referenced here by NAME only: item
-    /// areas resolve on the result node's own hub at render time, so Graph carries no AI
-    /// dependency for it.
-    /// </summary>
-    internal const string ThreadRailItemArea = "RailItem";
-
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
 
@@ -264,10 +255,12 @@ public static class UserActivityLayoutAreas
     /// <summary>
     /// The default home page shown until the owner authors their own <see cref="User.Body"/> — a
     /// "Welcome back" heading on top, then the chat composer (start a thread right away) and the home
-    /// regions embedded as <c>@@("area/…")</c> blocks (the same mechanism as the Space welcome's
+    /// catalog embedded as <c>@@("area/…")</c> blocks (the same mechanism as the Space welcome's
     /// <c>@@("area/Search")</c>), and a small "it's configurable" note at the bottom linking to the
-    /// config guide. This is the single source of truth for "the default", shared by the render path
-    /// and the unit tests.
+    /// config guide. No open-threads band: the THREADS APP (an ordinary <c>{owner}/_App</c> record
+    /// on the Apps grid, opening <c>/{owner}/Chat</c>) replaced it — the <c>area/Threads</c> area
+    /// stays registered so authored bodies embedding it keep working. This is the single source of
+    /// truth for "the default", shared by the render path and the unit tests.
     /// </summary>
     internal static string UserWelcomeMarkdown(string ownerName) =>
         $$"""
@@ -276,8 +269,6 @@ public static class UserActivityLayoutAreas
         @@("area/Composer")
 
         @@("area/Catalog")
-
-        @@("area/Threads")
 
         _This home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
         """;
@@ -491,12 +482,17 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>The catalog region — the TABBED home surface (see <see cref="BuildHome"/>):
-    /// <b>Shared with me</b> (the caller's cross-partition grants, #385 — see
-    /// <see cref="ObserveSharedTargets"/>) · <b>Pinned</b> · <b>Apps</b> (the config-declared
-    /// default apps ∪ the owner's installed <c>App</c> records — see
-    /// <see cref="ObserveInstalledApps"/>) · <b>Spaces</b> (the deduplicated catalog). The
-    /// admin-editable <c>Admin/HomeConfig</c> node drives the shape and can switch back to the
-    /// legacy single-list catalog (<see cref="HomeStyle.Catalog"/>).</summary>
+    /// <b>Pinned</b> · <b>Apps</b> (the viewer's OWN <c>{owner}/_App</c> records — a pure READ) ·
+    /// <b>Spaces</b> (the deduplicated catalog) · <b>All</b>, with the <b>Shared with me</b> band
+    /// (the caller's cross-partition grants, #385 — see <see cref="ObserveSharedTargets"/>)
+    /// below. The admin-editable <c>Admin/HomeConfig</c> node drives the shape and can switch back
+    /// to the legacy single-list catalog (<see cref="HomeStyle.Catalog"/>).
+    /// <para>🚨 The render path performs NO app writes. Everything install-shaped — creating a
+    /// record when an app is installed, removing it on uninstall, stamping its real name/icon and
+    /// refreshing them — belongs to the STORE, which owns the app lifecycle; core only reads what
+    /// the Store wrote. The one exception is <see cref="EnsureDefaultApps"/>: a viewer with ZERO
+    /// records would otherwise face an empty home with no way to reach the Store, so the platform
+    /// defaults are seeded ONCE, only for an empty grid, and never touched again.</para></summary>
     internal static IObservable<UiControl?> CatalogAreaView(LayoutAreaHost host, RenderingContext _)
     {
         var ownerId = OwnerIdOf(host.Hub.Address.ToString());
@@ -511,41 +507,55 @@ public static class UserActivityLayoutAreas
         // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
         // node reactively (shipped defaults when absent), so an admin's edit updates every open home
         // LIVE — no code change, no image roll. Combined with the caller's cross-partition grants
-        // (#385), the owner's installed-app records, and the owner node (pins). Every leg starts
-        // with a value so the home paints instantly.
+        // (#385) and the owner node (pins). Every leg starts with a value so the home paints
+        // instantly. The Apps grid needs NOTHING here: the tiles are rendered from their own
+        // single-partition query inside the search control.
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+        var bootstrapped = false;
         return HomeConfigNodeType.Observe(host.Workspace, options)
             .CombineLatest(
                 ObserveSharedTargets(host, ownerId),
-                ObserveInstalledApps(host, ownerId, options),
+                ObserveAppRecords(host, ownerId),
                 syncStream!.Select(change => change.Value.ContentAs<User>(options)).StartWith((User?)null),
                 screen,
-                (config, shared, installedApps, user, viewerScreen) =>
-                    (UiControl?)BuildHome(ownerId, config, shared, installedApps, user, locale, viewerScreen));
+                (config, shared, records, user, viewerScreen) =>
+                {
+                    // Only ever fires for a viewer whose grid is EMPTY (never the null sentinel —
+                    // acting on a synthetic empty start is what fired ~20 doomed creates per
+                    // render, the "Node already exists" storm Loki showed AND the home lag).
+                    if (records is { Count: 0 } && !bootstrapped)
+                    {
+                        bootstrapped = true;
+                        EnsureDefaultApps(host, ownerId, config);
+                    }
+                    return (UiControl?)BuildHome(ownerId, config, shared, user, locale, viewerScreen);
+                });
     }
 
     /// <summary>
-    /// The owner's installed-app records — the <c>{owner}/_App/{appId}</c> nodes (see
-    /// <see cref="AppNodeType"/>), projected to their <see cref="App.Plugin"/> paths, ordered by
-    /// <see cref="App.Order"/>. Read via the shared, per-user-RLS, empty-on-absent <c>GetQuery</c>
-    /// cache (never a point-read that could NotFound-storm), starting empty so the home paints
-    /// instantly and installs land reactively.
+    /// The owner's <c>{owner}/_App/{appId}</c> records (see <see cref="AppNodeType"/>) — the ONE
+    /// read the home needs about apps, through the shared, per-user-RLS, empty-on-absent
+    /// <c>GetQuery</c> cache on the viewer's OWN partition. Row-only (no content on the wire): the
+    /// tiles are Name + Icon + <see cref="MeshNode.MainNode"/>, and the select list gates only the
+    /// content column — every other field always returns.
+    /// <para>Used ONLY to decide whether the grid is empty (the <see cref="EnsureDefaultApps"/>
+    /// bootstrap); the tiles themselves come from the search control's own query. Reading the
+    /// Store's install manifests here — the previous design — is gone: what a viewer has installed
+    /// is the STORE's business to record, not something the home re-derives on every render.</para>
     /// </summary>
-    private static IObservable<IReadOnlyList<string>> ObserveInstalledApps(
-        LayoutAreaHost host, string ownerId, JsonSerializerOptions options) =>
+    private static IObservable<IReadOnlyList<MeshNode>?> ObserveAppRecords(
+        LayoutAreaHost host, string ownerId) =>
         host.Workspace
             .GetQuery($"home-apps:{ownerId}",
                 $"path:{ownerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType} " +
-                "select:path,id,namespace,name,nodeType,content")
-            .Select(nodes => (IReadOnlyList<string>)nodes
-                .Select(n => n.ContentAs<App>(options))
-                .Where(app => !string.IsNullOrWhiteSpace(app?.Plugin))
-                .OrderBy(app => app!.Order)
-                .Select(app => app!.Plugin.Trim('/'))
-                .Where(p => p.Length > 0)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList())
-            .StartWith((IReadOnlyList<string>)[]);
+                "select:path,id,namespace,name,nodeType,icon")
+            .Select(nodes => (IReadOnlyList<MeshNode>?)nodes.ToList())
+            // 🚨 The sentinel is NULL, never [] — "not loaded yet" and "no records" MUST differ.
+            // The first shipped materializer synthesized an empty list, so every fresh home render
+            // fired ~20 doomed CreateNode calls against records that already existed ("Node
+            // already exists" storms in Loki, and THE home lag) before the real snapshot arrived.
+            // The bootstrap does nothing until this emits a real list.
+            .StartWith((IReadOnlyList<MeshNode>?)null);
 
     /// <summary>
     /// The cross-partition scopes the owner has been granted access to — an invited module living in
@@ -634,60 +644,42 @@ public static class UserActivityLayoutAreas
         => Observable.Return<UiControl?>(new ThreadChatControl().WithHideEmptyState(true));
 
     /// <summary>
-    /// The THREADS APP page (<c>/{user}/Chat</c>, the ChatArea) — the GitHub-Copilot-style shape:
-    /// a vertical RAIL of the owner's open threads on the left (each row rendered by the thread
-    /// hub's <see cref="ThreadRailItemArea"/>: title + ✕ that closes the thread via the canonical
-    /// <c>MarkThreadDone</c>, so it leaves the rail but stays searchable), and the node-less chat
-    /// composer on the right — sending starts a proper thread via <c>StartThread</c> and opens it
-    /// full-screen. Pure composition of existing pieces; see <see cref="BuildThreadsApp"/>.
+    /// The THREADS APP page (<c>/{user}/Chat</c>, the ChatArea) — the agentic-app default view:
+    /// the chat surface with its collapsible THREADS side menu (new chat · searchable list of the
+    /// viewer's open threads with live evaluating/queued/awaiting status, all <c>GetQuery</c>-bound
+    /// inside the Blazor chat view) beside the node-less composer. Sending starts a proper thread
+    /// via <c>StartThread</c> and opens it full-screen — where the same side menu renders again,
+    /// so the navigation never collapses. See <see cref="BuildThreadsApp"/>.
     /// </summary>
     internal static IObservable<UiControl?> ThreadsAppView(LayoutAreaHost host, RenderingContext _)
-        => Observable.Return<UiControl?>(BuildThreadsApp(OwnerIdOf(host.Hub.Address.ToString())));
+        => Observable.Return<UiControl?>(BuildThreadsApp());
 
     /// <summary>
-    /// The Threads-app composition — pure (no hub) so the shape is unit-testable: a horizontal
-    /// stack of (rail, composer). The rail is the SAME open-threads query as the home band
-    /// (<c>-content.status:Done</c>, newest first) rendered as a single-column list whose rows
-    /// delegate to <see cref="ThreadRailItemArea"/>; closing a thread removes it reactively (the
-    /// query excludes Done). <c>flex-wrap</c> lets the composer drop below the rail on narrow
-    /// (mobile) widths.
+    /// The Threads-app composition — pure (no hub) so the shape is unit-testable: ONE
+    /// <see cref="ThreadChatControl"/> in compact (node-less) mode with the threads side menu
+    /// turned on. The thread list, its live status (evaluating / queued / awaiting input), the
+    /// search box, and the collapse behaviour are all NATIVE to the chat view and bound through
+    /// the synced <c>GetQuery</c> cache — full thread nodes, content included. 🚨 Never
+    /// reintroduce a search-result <c>ItemArea</c> rail here: rows that delegated to a
+    /// <c>RailItem</c> area on each THREAD's own hub activated one hub PER RESULT and resolved
+    /// an area on a hub this page does not own — "area cannot be found" in the distributed
+    /// portal while passing in a monolith (the AppTile failure shape). And never stretch the
+    /// composer: the old shell's <c>height: 100%</c> turned the compact input into a
+    /// viewport-height empty box.
     /// </summary>
-    internal static UiControl BuildThreadsApp(string nodeOwnerId)
-    {
-        var rail = Controls.Stack
-            .WithStyle("flex: 0 1 320px; min-width: 240px; box-sizing: border-box;")
-            .WithView(BuildThreadsRail(nodeOwnerId));
-
-        var composer = Controls.Stack
-            .WithStyle("flex: 1 1 480px; min-width: 320px;")
-            .WithView(new ThreadChatControl().WithHideEmptyState(true));
-
-        return Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
+    internal static UiControl BuildThreadsApp() =>
+        Controls.Stack
             .WithWidth("100%")
-            .WithStyle("gap: 16px; width: 100%; align-items: stretch; flex-wrap: wrap;")
-            .WithView(rail)
-            .WithView(composer);
-    }
+            .WithStyle("flex: 1; min-height: 0; display: flex; flex-direction: column;")
+            .WithView(ThreadsAppComposer());
 
-    /// <summary>The Threads-app rail list: the owner's open threads (never Done, newest first) as a
-    /// single-column list whose rows delegate to the thread hub's <see cref="ThreadRailItemArea"/>.
-    /// Flat render + MaxColumns(1), NOT <see cref="MeshSearchRenderMode.List"/>: the List renderer
-    /// draws its own icon·title·description rows and IGNORES <c>ItemArea</c>, so the ✕ overlay
-    /// would never render there — Flat is the ItemArea path the pinned grid already proves.</summary>
-    internal static MeshSearchControl BuildThreadsRail(string nodeOwnerId) =>
-        Controls.MeshSearch
-            .WithHiddenQuery(
-                $"namespace:{nodeOwnerId}/*_Thread nodeType:Thread -content.status:Done sort:LastModified-desc")
-            .WithShowSearchBox(false)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithMaxColumns(1)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithItemArea(ThreadRailItemArea)
-            .WithItemLimit(50)
-            .WithReactiveMode(true);
+    /// <summary>The one control on the Threads app page — the node-less compact composer with the
+    /// threads side menu on. Factored out so the shape is directly assertable.</summary>
+    internal static ThreadChatControl ThreadsAppComposer() =>
+        new ThreadChatControl()
+            .WithHideEmptyState(true)
+            .WithShowThreadNav()
+            .WithStyle("flex: 1; min-height: 0; overflow: hidden;");
 
     /// <summary>
     /// The owner's OPEN threads — their own partition only (<c>{owner}/*_Thread</c>, no cross-partition
@@ -761,249 +753,350 @@ public static class UserActivityLayoutAreas
     };
 
     /// <summary>
-    /// The home surface — a TABBED page (the phone-home model): <b>Shared with me</b> first (only
-    /// when the caller has cross-partition grants; last-accessed ranking), then <b>Pinned</b> (the
-    /// owner's content shortcuts, only when any), then <b>Apps</b> (the platform default apps ∪ the
-    /// owner's installed apps — every app EXACTLY ONCE), then <b>Spaces</b> (the catalog WITHOUT
-    /// store items, so nothing is listed twice). <see cref="HomeStyle.Catalog"/> switches back to
-    /// the legacy single-list <see cref="BuildCatalog"/>. Pure (no hub) so the shape is
-    /// unit-testable without standing up a hub.
+    /// The home surface — ONE search control whose SCOPE TABS are the phone-home tabs:
+    /// <b>Pinned</b> (only with pins) · <b>Apps</b> (the viewer's OWN <c>{owner}/_App</c> RECORDS,
+    /// materialized from config defaults + install manifests — a single-partition query, so it
+    /// loads fast, with Threads a NORMAL app record like every other — rendered as the phone-home
+    /// ICON grid straight from the query rows) · <b>Spaces</b> (the catalog without store items) ·
+    /// <b>All</b> (everything the viewer can read, at every depth). Because the scopes live INSIDE
+    /// one <see cref="MeshSearchControl"/>, the search bar is shared: the typed term survives tab
+    /// switches and every tab is searchable — including All. The search input renders on desktop
+    /// and hides on mobile (the view's responsive rule). <b>Shared with me</b> is its OWN titled
+    /// band BELOW the search surface (only with cross-partition grants; store items excluded — the
+    /// auto-entitlement grants made every plugin partition read as "shared", but an app belongs on
+    /// Apps). <see cref="HomeStyle.Catalog"/> switches back to the legacy single-list
+    /// <see cref="BuildCatalog"/>. Pure (no hub) so the shape is unit-testable without standing up
+    /// a hub.
     /// </summary>
     internal static UiControl BuildHome(
         string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
-        IReadOnlyList<string>? installedApps = null, User? user = null, string? locale = null,
+        User? user = null, string? locale = null,
         PresentationScreen? screen = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
-        // 🚨 The viewer's presentation screen (#1803) is applied to the Shared-with-me, Pinned and
-        // Apps tabs HERE, before their queries are built — not only where the resulting cards are
-        // painted. Each of those three interpolates the viewer's PATHS into the control's query
-        // string, which the search view exposes in its options editor and carries in the `hq=`
-        // parameter of "open in search". A marked name reaching the address bar mid-presentation is
-        // the leak, whether or not a card for it is ever drawn. The Spaces tab's query is generic,
-        // so it is filtered where its results are painted and left untouched here.
+        // 🚨 The viewer's presentation screen (#1803) is applied to the Shared-with-me band and the
+        // Pinned scope HERE, before their queries are built — not only where the resulting cards
+        // are painted. Both interpolate the viewer's PATHS into the control's query string, which
+        // the search view exposes in its options editor and carries in the `hq=` parameter of
+        // "open in search". A marked name reaching the address bar mid-presentation is the leak,
+        // whether or not a card for it is ever drawn. The Apps records are the viewer's own
+        // (filtered where painted, like Spaces/All whose queries are generic).
         var privacy = screen ?? PresentationScreen.Off;
         if (cfg.Style == HomeStyle.Catalog)
             return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy);
 
-        var visibleShared = privacy.Retain(sharedTargets);
-        var tabs = Controls.Tabs.WithSkin(skin => skin.WithWidth("100%"));
-        if (visibleShared.Count > 0)
-            tabs = tabs.WithView(BuildSharedWithMe(visibleShared, locale),
-                skin => skin.WithLabel(LocalizationCatalog.Get("home.sharedWithMe", locale)));
-        var pinned = BuildPinnedItems(user, withTitle: false, screen: privacy);
-        if (pinned is not null)
-            tabs = tabs.WithView(pinned,
-                skin => skin.WithLabel(LocalizationCatalog.Get("home.pinned", locale)));
-        tabs = tabs.WithView(BuildApps(nodeOwnerId, cfg, installedApps, locale, privacy),
-            skin => skin.WithLabel(LocalizationCatalog.Get("home.apps", locale)));
-        tabs = tabs.WithView(BuildSpaces(nodeOwnerId, cfg, locale),
-            skin => skin.WithLabel(LocalizationCatalog.Get("home.spaces", locale)));
-        return tabs;
+        // TWO SECTIONS, apps first: the icon grid you launch things from, then the content you
+        // search through. They are different acts — one is "open my app", the other is "find that
+        // thing" — and mixing them into one tab strip made the apps just another lens on a search.
+        var home = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 24px; width: 100%;")
+            .WithView(BuildAppsBand(nodeOwnerId, locale))
+            .WithView(BuildContentSection(nodeOwnerId, config, user, locale, screen));
+
+        // Shared with me — cross-partition invitations, their own band under the content section.
+        // Present only when the caller actually has such grants.
+        var shared = BuildSharedBand(privacy.Retain(sharedTargets), locale);
+        return shared is null ? home : home.WithView(shared);
     }
 
     /// <summary>
-    /// The "Shared with me" tab — modules in OTHER partitions the caller was specifically invited
-    /// into (#385), which a scope query can't reach. Default order = last accessed. Because
-    /// <c>source:accessed</c> is an INNER join on the caller's access log, that leg alone would
-    /// HIDE a share the caller never opened — the exact fresh-invitation case this tab exists for —
-    /// so the last-accessed option is a path-keyed UNION (newline-joined, deduped by the engine):
-    /// the accessed-ranked leg first, then the plain list as completeness fallback. Nothing is ever
-    /// hidden; the other sorts are single-leg.
+    /// The <b>Content</b> section — ONE category of content plus, when the viewer has any, a
+    /// <b>Pinned</b> tab. The category is simply <b>All</b>: every top-level node the viewer can
+    /// reach. "Spaces" never described anything real (the list is just what you have access to),
+    /// and slicing one list into three tabs was navigation the reader had to think about before
+    /// they could look at anything.
+    /// <para>Store items are excluded — those are apps, and an app appears exactly once, up in the
+    /// Apps section. The sort dropdown offers last accessed / last modified / alphabetical, and the
+    /// search box searches the active tab. <see cref="HomeConfig.Scope"/> can widen the list to the
+    /// full subtree. Pure, for tests.</para>
     /// </summary>
-    internal static UiControl BuildSharedWithMe(IReadOnlyList<string> sharedTargets, string? locale = null)
+    internal static MeshSearchControl BuildContentSection(
+        string nodeOwnerId, HomeConfig? config, User? user, string? locale, PresentationScreen? screen)
     {
-        var pathList = string.Join("|", sharedTargets);
-        var baseQuery = $"path:{pathList} is:main";
-        string Query(HomeCatalogSort sort, string suffix) =>
-            sort == HomeCatalogSort.LastAccessed
-                ? $"{baseQuery} {suffix}\n{baseQuery} {SortSuffixLastModified}"
-                : $"{baseQuery} {suffix}";
-        var sortOptions = CatalogSorts
-            .OrderByDescending(s => s.Sort == HomeCatalogSort.LastAccessed)
-            .Select(s => new MeshSearchSortOption(
-                LocalizationCatalog.Get(s.LabelKey, locale), Query(s.Sort, s.Suffix)))
-            .ToArray();
-        return Controls.MeshSearch
-            .WithHiddenQuery(sortOptions[0].Query)
-            .WithSortOptions(sortOptions)
-            .WithShowSearchBox(false)
+        var cfg = config ?? HomeConfigNodeType.Defaults;
+        var privacy = screen ?? PresentationScreen.Off;
+        var scopes = new List<MeshSearchScopeTab>();
+
+        // Pinned — the owner's shortcuts, kept as its own tab, present only when there are pins.
+        // 🚨 The pins are INTERPOLATED INTO the query string, so the presentation screen (#1803)
+        // drops a marked one HERE, before the query exists — not only where its card is painted.
+        // No ItemArea: the inline unpin overlay used to resolve an area on each pinned node's OWN
+        // hub, the per-result foreign-area shape that failed in the distributed portal. Unpinning
+        // lives in the node menu, and the card comes from the query row.
+        var pins = privacy.Retain(user?.PinnedPaths);
+        if (pins.Count > 0)
+        {
+            var pinnedBase = $"path:({string.Join(" OR ", pins)})";
+            scopes.Add(ContentScope("home.pinned", locale, HomeCatalogSort.LastModified,
+                (sort, suffix) => sort == HomeCatalogSort.LastAccessed
+                    // source:accessed is an INNER JOIN — alone it would hide a never-opened pin.
+                    ? $"{pinnedBase} {suffix}\n{pinnedBase} {SortSuffixLastModified}"
+                    : $"{pinnedBase} {suffix}"));
+        }
+
+        // All — every top-level node the viewer can access (apps excluded; they have their own
+        // section). The ONE content category.
+        scopes.Add(ContentScope("home.all", locale, cfg.DefaultSort,
+            (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions)));
+
+        // ONE list that FANS OUT by the node's own type — Spaces, Clients, Courses, … — with the
+        // biggest group first (GroupByFrequency), so the page opens on what the viewer actually
+        // works with. That is what "Spaces" was reaching for and failing to say: the categories
+        // are not a fixed taxonomy the home invents, they are whatever types the viewer's
+        // top-level nodes happen to have.
+        var content = Controls.MeshSearch
+            .WithTitle(LocalizationCatalog.Get("home.content", locale))
+            .WithScopeTabs(scopes.ToArray())
+            // Fallback for clients without scope support (react renders these): the first scope.
+            .WithHiddenQuery(scopes[0].Query)
+            .WithSortOptions([.. scopes[0].SortOptions!])
+            .WithShowSearchBox(true)
             .WithViewOptions(true)
             .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Grouped)
+            .WithGroupBy("NodeType")
+            .WithGroupByFrequency()
+            .WithSectionCounts(true)
+            .WithCollapsibleSections(true)
+            .WithMaxColumns(4)
+            .WithItemLimit(50)
+            .WithMaxRows(6)
+            .WithReactiveMode(true)
+            .WithCreateHref("/create");
+        return content;
+    }
+
+    /// <summary>
+    /// The <b>Apps</b> section — the phone-home ICON grid over the viewer's OWN
+    /// <c>{owner}/_App</c> records. A SINGLE-PARTITION query (which is why it loads fast — the old
+    /// cover-path alternation fanned out across every partition schema, the multi-second home lag)
+    /// painted ENTIRELY from the query rows: record Name/Icon, no per-tile hub, no content read.
+    /// <c>NavigateToMainNode</c> makes a tile open the APP it points at, never the record.
+    /// <para>ORDER: most recently used first, like a phone (<c>SortByAccess</c>, applied at paint
+    /// from the viewer's own access log). NOT <c>source:accessed</c> — that is an INNER JOIN keyed
+    /// by the row's own path, so it would drop every never-opened app AND match nothing anyway,
+    /// since opening an app records a visit to the APP, never to the record pointing at it.</para>
+    /// <para>No search box and no view options: this is a launcher, not a search surface — the
+    /// content section below is where you search. Pure, exposed for tests.</para>
+    /// </summary>
+    internal static MeshSearchControl BuildAppsBand(string nodeOwnerId, string? locale)
+    {
+        var appsQuery =
+            $"path:{nodeOwnerId}/{AppNodeType.UserNamespace} scope:children " +
+            $"nodeType:{AppNodeType.NodeType} {SortSuffixAlphabetical}";
+        return Controls.MeshSearch
+            .WithTitle(LocalizationCatalog.Get("home.apps", locale))
+            .WithHiddenQuery(appsQuery)
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(false)
+            .WithRenderMode(MeshSearchRenderMode.Icons)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithItemLimit(50)
+            .WithReactiveMode(true)
+            with
+            {
+                NavigateToMainNode = true,
+                // One scope, so the grid's own paint order is the phone order. The scope carries it
+                // because SortByAccess/RenderMode are per-scope settings the view reads there.
+                ScopeTabs =
+                [
+                    new MeshSearchScopeTab(LocalizationCatalog.Get("home.apps", locale), appsQuery)
+                    {
+                        RenderMode = nameof(MeshSearchRenderMode.Icons),
+                        NavigateToMainNode = true,
+                        SortByAccess = true,
+                    },
+                ],
+            };
+    }
+
+    /// <summary>
+    /// The <b>Shared with me</b> band — #385: modules in OTHER partitions the caller was invited
+    /// into, unreachable by the catalog's scope queries. <c>null</c> when the caller has no such
+    /// grants (the band simply isn't there). <c>source:accessed</c> is an INNER join on the
+    /// caller's access log, so the query is a path-keyed UNION with a plain completeness fallback
+    /// (a fresh, never-opened invitation must not hide). Store items are EXCLUDED — the silent
+    /// per-viewer entitlement grants (StandardPacks) made every plugin partition read as "shared
+    /// with me", but an app belongs on Apps, exactly once. USER roots are excluded too — a grant
+    /// resolving to another user's home partition must not list that person's space as "shared"
+    /// content. Pure, exposed for tests.
+    /// </summary>
+    internal static MeshSearchControl? BuildSharedBand(
+        IReadOnlyList<string> visibleShared, string? locale)
+    {
+        if (visibleShared.Count == 0)
+            return null;
+        var sharedBase = $"path:{string.Join("|", visibleShared)} is:main -nodeType:User{SpacesDedupExclusions}";
+        return Controls.MeshSearch
+            .WithTitle(LocalizationCatalog.Get("home.sharedWithMe", locale))
+            .WithHiddenQuery($"{sharedBase} {SortSuffixLastAccessed}\n{sharedBase} {SortSuffixLastModified}")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(false)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
             .WithMaxColumns(4)
             .WithItemLimit(50)
-            .WithMaxRows(6)
+            .WithMaxRows(2)
             .WithReactiveMode(true);
     }
 
-    /// <summary>
-    /// System-app declarations: a <see cref="HomeConfig.DefaultApps"/> entry starting with
-    /// <c>~/</c> is not a node path but an AREA on the viewer's own hub (<c>~/Chat</c> →
-    /// <c>/{owner}/Chat</c>), rendered as a fixed "dock" tile ahead of the node grid. The map
-    /// gives known areas their product name + icon; an unknown <c>~/X</c> falls back to the
-    /// segment name and the generic app icon. Labels here are deliberately GLOSSARY terms
-    /// (Thread/Threads stay English in every locale), so no localization key is involved.
-    /// Immutable constant lookup, never written at runtime.
-    /// </summary>
-    private static readonly ImmutableDictionary<string, (string Label, string Icon)> SystemAppTiles =
-        new Dictionary<string, (string Label, string Icon)>
+    /// <summary>One content tab: localized label + the three catalog sorts (default first), each
+    /// option's full query produced by <paramref name="query"/>(sort, suffix).</summary>
+    private static MeshSearchScopeTab ContentScope(
+        string labelKey, string? locale, HomeCatalogSort defaultSort,
+        Func<HomeCatalogSort, string, string> query)
+    {
+        var sorts = CatalogSorts
+            .OrderByDescending(s => s.Sort == defaultSort)
+            .Select(s => new MeshSearchSortOption(
+                LocalizationCatalog.Get(s.LabelKey, locale), query(s.Sort, s.Suffix)))
+            .ToArray();
+        return new MeshSearchScopeTab(LocalizationCatalog.Get(labelKey, locale), sorts[0].Query)
         {
+            SortOptions = sorts,
+        };
+    }
+
+    /// <summary>
+    /// Product name + icon for the PLATFORM DEFAULT apps (<see cref="HomeConfig.DefaultApps"/>): a
+    /// <c>~/</c> entry is not a node path but an AREA on the viewer's own hub (<c>~/Chat</c> → the
+    /// Threads app at <c>/{owner}/Chat</c>); anything not listed falls back to its path leaf + the
+    /// generic app icon. Names here are deliberately GLOSSARY/product terms (Store, Documentation,
+    /// Threads — English in every locale), so no localization key is involved. Immutable constant
+    /// lookup, never written at runtime.
+    /// <para>This table covers the DEFAULTS only, and deliberately so: every other app's name and
+    /// icon are written by the STORE when the app is installed. Core does not know, and must not
+    /// guess, what a third-party app is called.</para>
+    /// </summary>
+    private static readonly ImmutableDictionary<string, (string Name, string Icon)> KnownApps =
+        new Dictionary<string, (string Name, string Icon)>
+        {
+            ["Store"] = ("Store", "/static/NodeTypeIcons/shopping-bag.svg"),
+            ["Doc"] = ("Documentation", "/static/NodeTypeIcons/book.svg"),
             ["~/" + ChatArea] = ("Threads", "/static/NodeTypeIcons/chat.svg"),
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
+    internal const string GenericAppIcon = "/static/NodeTypeIcons/puzzlepiece.svg";
+
+    private static string LeafOf(string path) =>
+        path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
+
+    /// <summary>The blueprint of one platform-default app record.</summary>
+    internal sealed record AppRecordSpec(
+        string Id, string Name, string Icon, string? Plugin, string? OpenPath, string Source)
+    {
+        /// <summary>The record's navigation target — the app's path, or the owner-hub area path
+        /// for a <c>~/</c> app. Stamped as the record's <see cref="MeshNode.MainNode"/> so an icon
+        /// tile navigates STRAIGHT to the app with nothing else to read.</summary>
+        public string? Target => Plugin is { Length: > 0 } ? Plugin : OpenPath;
+    }
+
     /// <summary>
-    /// The Apps tab — one icon per app, each app EXACTLY ONCE: the platform's config-declared
-    /// default apps (<see cref="HomeConfig.DefaultApps"/> — e.g. <c>Store</c>, which replaces the
-    /// old hard-coded header entry, <c>Doc</c>, and the <c>~/Chat</c> Threads app) unioned with
-    /// the owner's installed-app records (<c>{owner}/_App</c>, written by the Store's install
-    /// flow), deduped. <c>~/</c>-prefixed entries render as fixed system tiles (a phone's dock)
-    /// ahead of the reactive node-card grid, whose icons' name/image resolve live from each node.
-    /// Default order alphabetical; the last-accessed option uses the same union-with-fallback
-    /// shape as <see cref="BuildSharedWithMe"/> so a never-opened app still shows.
-    /// <para>Rendered as ONE COMPACT BAND, not a grid of full-size cards: dock tiles and the node
-    /// grid sit inline (horizontal, wrapping) with a 140px cell floor
-    /// (<see cref="MeshSearchControl.MinItemWidth"/>), so a typical app set fits a single row —
-    /// and the tab is capped at 24 items (the phone-home scale, per design).</para>
+    /// The PLATFORM DEFAULT app records (<see cref="HomeConfig.DefaultApps"/>; a <c>~/</c> entry is
+    /// an AREA on the viewer's own hub, e.g. <c>~/Chat</c> → the Threads app, an ORDINARY record
+    /// like every other app), deduped by record id (a path's <c>/</c> becomes <c>-</c>).
+    /// <see cref="KnownApps"/> gives them their product name + icon. Pure, exposed for tests.
+    /// <para>Installed apps are NOT here: the Store writes their records when it installs them.</para>
     /// </summary>
-    internal static UiControl BuildApps(
-        string nodeOwnerId, HomeConfig? config, IReadOnlyList<string>? installedApps,
-        string? locale = null, PresentationScreen? screen = null)
+    internal static IReadOnlyList<AppRecordSpec> AppRecordSpecs(HomeConfig? config, string ownerId)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
-        // An installed app's path goes straight into the `path:(…)` query below, so a marked one is
-        // dropped HERE — see the note in BuildHome for why the query string is itself a surface.
-        // A "~/" entry is a system AREA, not a mesh path: it names no node, so there is nothing for
-        // the screen to match and it is passed through untouched.
-        var entries = (screen ?? PresentationScreen.Off)
-            .Filter(
-                (cfg.DefaultApps ?? [])
-                    .Concat(installedApps ?? [])
-                    .Where(p => !string.IsNullOrWhiteSpace(p))
-                    .Select(p => p.StartsWith("~/", StringComparison.Ordinal) ? p : p.Trim('/'))
-                    .Where(p => p.Length > 0)
-                    .Distinct(StringComparer.OrdinalIgnoreCase),
-                p => p.StartsWith("~/", StringComparison.Ordinal) ? null : p)
-            .ToList();
-        // The phone-home budget: at most 24 tiles TOTAL — dock AND grid together — sliced BEFORE
-        // the dock/grid split, so dock tiles count against the budget and the path query itself is
-        // bounded (the grid's ItemLimit below is only a belt-and-braces render cap).
-        const int AppBudget = 24;
-        if (entries.Count > AppBudget)
-            entries = entries.Take(AppBudget).ToList();
-        var systemAreas = entries.Where(p => p.StartsWith("~/", StringComparison.Ordinal)).ToList();
-        var paths = entries.Where(p => !p.StartsWith("~/", StringComparison.Ordinal)).ToList();
-        if (systemAreas.Count == 0 && paths.Count == 0)
-            return Controls.Markdown(LocalizationCatalog.Get("home.noApps", locale));
-
-        UiControl? dock = null;
-        if (systemAreas.Count > 0)
+        var specs = new List<AppRecordSpec>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in cfg.DefaultApps ?? [])
         {
-            // Compact dock tiles sized to match the grid's 140px cell floor, so system and node
-            // tiles read as ONE row.
-            var tiles = Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("gap: 12px; flex-wrap: wrap; flex: 0 1 auto;");
-            foreach (var area in systemAreas)
+            if (string.IsNullOrWhiteSpace(raw))
+                continue;
+            if (raw.StartsWith("~/", StringComparison.Ordinal))
             {
-                var tile = BuildSystemAppTile(nodeOwnerId, area);
-                if (tile is null)
+                var segment = raw[2..].Trim('/');
+                if (segment.Length == 0)
                     continue;
-                tiles = tiles.WithView(Controls.Stack
-                    .WithStyle("flex: 0 1 170px; min-width: 140px;")
-                    .WithView(tile));
+                var id = segment.Replace('/', '-');
+                if (!seen.Add(id))
+                    continue;
+                var (name, icon) = KnownApps.TryGetValue("~/" + segment, out var known)
+                    ? known
+                    : (segment, GenericAppIcon);
+                specs.Add(new AppRecordSpec(id, name, icon,
+                    Plugin: null, OpenPath: $"{ownerId}/{segment}", Source: "default"));
             }
-            dock = tiles;
+            else
+            {
+                var path = raw.Trim('/');
+                if (path.Length == 0)
+                    continue;
+                var id = path.Replace('/', '-');
+                if (!seen.Add(id))
+                    continue;
+                var (name, icon) = KnownApps.TryGetValue(path, out var known)
+                    ? known
+                    : (LeafOf(path), GenericAppIcon);
+                specs.Add(new AppRecordSpec(id, name, icon,
+                    Plugin: path, OpenPath: null, Source: "default"));
+            }
         }
-
-        if (paths.Count == 0)
-            return dock ?? Controls.Markdown(LocalizationCatalog.Get("home.noApps", locale));
-
-        var baseQuery = BuildAppsBaseQuery(paths);
-        string Query(HomeCatalogSort sort, string suffix) =>
-            sort == HomeCatalogSort.LastAccessed
-                ? $"{baseQuery} {suffix}\n{baseQuery} {SortSuffixAlphabetical}"
-                : $"{baseQuery} {suffix}";
-        var sortOptions = CatalogSorts
-            .OrderByDescending(s => s.Sort == HomeCatalogSort.Alphabetical)
-            .Select(s => new MeshSearchSortOption(
-                LocalizationCatalog.Get(s.LabelKey, locale), Query(s.Sort, s.Suffix)))
-            .ToArray();
-        var grid = Controls.MeshSearch
-            .WithHiddenQuery(sortOptions[0].Query)
-            .WithSortOptions(sortOptions)
-            .WithShowSearchBox(false)
-            .WithViewOptions(true)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            // A compact band: 140px cell floor (instead of the default 200) so a typical app set
-            // fits a single row, wrapping only when it must. Deliberately NO MaxColumns — the
-            // React client renders MaxColumns as an EXACT column count (24 columns would squeeze
-            // cards to ~40px there), while no-MaxColumns keeps every client's own responsive
-            // default. The real 24-item bound is the AppBudget slice above.
-            .WithMinItemWidth(140)
-            .WithGridSpacing(12)
-            .WithItemLimit(24)
-            .WithReactiveMode(true);
-
-        if (dock is null)
-            return grid;
-        // Dock tiles INLINE with the grid — one continuous band. The grid wrapper shrinks to the
-        // 140px cell floor so a phone-width tab (~375px) still fits dock tile + grid side by side
-        // instead of wrapping the whole grid below the dock.
-        return Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithWidth("100%")
-            .WithStyle("gap: 12px; width: 100%; flex-wrap: wrap; align-items: flex-start;")
-            .WithView(dock)
-            .WithView(Controls.Stack
-                .WithStyle("flex: 1 1 280px; min-width: 140px;")
-                .WithView(grid));
+        return specs;
     }
-
-    /// <summary>Pure query core of the Apps grid, exposed for tests.</summary>
-    internal static string BuildAppsBaseQuery(IReadOnlyList<string> paths) =>
-        $"path:({string.Join(" OR ", paths)})";
 
     /// <summary>
-    /// One system-app "dock" tile for a <c>~/</c> entry (<see cref="SystemAppTiles"/>): a static
-    /// card whose identity is an AREA on the viewer's own hub, not a node — no hub resolves it, so
-    /// the title/icon are baked here and the click navigates to <c>/{owner}/{area}</c>. Returns
-    /// null for a malformed entry (<c>~/</c> with no segment).
+    /// The home's ONLY app write, and it fires at most once per viewer: seed the platform default
+    /// records when the viewer's grid is EMPTY. Without it a brand-new (or never-onboarded) viewer
+    /// lands on a blank home with no icon to reach the Store by — a bootstrap, not a sync.
+    /// <para>🚨 Everything else about an app's record — creating it on install, deleting it on
+    /// uninstall, its real name and icon, refreshing them — is the STORE's, which owns the app
+    /// lifecycle and already writes the install manifest. Core reading manifests and back-filling
+    /// records made every home render a write path and put the Store's model in two places.</para>
+    /// <para>Fire-and-forget: a create that loses the race to an existing record is benign
+    /// (Debug), and the records query re-emits when the writes land.</para>
     /// </summary>
-    internal static MeshNodeCardControl? BuildSystemAppTile(string nodeOwnerId, string entry)
+    private static void EnsureDefaultApps(LayoutAreaHost host, string ownerId, HomeConfig? config)
     {
-        if (!entry.StartsWith("~/", StringComparison.Ordinal))
-            return null;
-        var segment = entry[2..].Trim('/');
-        if (segment.Length == 0)
-            return null;
-        // Look up by the NORMALIZED key, not the raw entry: a config value like "~/Chat/" must
-        // still resolve the known Threads tile instead of silently falling back to the generic
-        // icon/label (Copilot review, PR #1993).
-        var (label, icon) = SystemAppTiles.TryGetValue("~/" + segment, out var known)
-            ? known
-            : (segment, "/static/NodeTypeIcons/puzzlepiece.svg");
-        return new MeshNodeCardControl($"{nodeOwnerId}/{segment}", Title: label, ImageUrl: icon);
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (mesh is null || string.IsNullOrEmpty(ownerId))
+            return;
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.AppRecords");
+        foreach (var spec in AppRecordSpecs(config, ownerId))
+        {
+            var node = BuildAppRecord(ownerId, spec);
+            mesh.CreateNode(node).Subscribe(_ => { },
+                ex =>
+                {
+                    if (ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                        logger?.LogDebug("App record at {Path} already existed (benign race)", node.Path);
+                    else
+                        logger?.LogWarning(ex, "App record create failed at {Path}", node.Path);
+                });
+        }
     }
 
-    /// <summary>Dedup for the Spaces tab: anything living in the Store (and therefore representable
-    /// as an installed app — plugin covers, the store root) is EXCLUDED, so an app appears exactly
-    /// once, on the Apps tab. Only non-redundant items survive: the user's own spaces, shared
-    /// workspaces, and their top-level home items.</summary>
-    private const string SpacesDedupExclusions = " -nodeType:Store/Plugin -nodeType:Store/Catalog";
+    /// <summary>One default app record: the tile's whole identity lives on the NODE (Name, Icon,
+    /// MainNode = the app it opens), so the grid paints from query rows alone. Pure, for tests.</summary>
+    internal static MeshNode BuildAppRecord(string ownerId, AppRecordSpec spec) =>
+        new(spec.Id, $"{ownerId}/{AppNodeType.UserNamespace}")
+        {
+            NodeType = AppNodeType.NodeType,
+            Name = spec.Name,
+            Icon = spec.Icon,
+            MainNode = spec.Target ?? $"{ownerId}/{AppNodeType.UserNamespace}/{spec.Id}",
+            State = MeshNodeState.Active,
+            Content = new App
+            {
+                Plugin = spec.Plugin ?? "",
+                OpenPath = spec.OpenPath,
+                Source = spec.Source,
+            },
+        };
 
-    /// <summary>The Spaces tab — the catalog list WITHOUT store items
-    /// (<see cref="SpacesDedupExclusions"/>) and WITHOUT an embedded search box: every client
-    /// already carries a global search in its chrome, and doubling it inside the tab is exactly the
-    /// two-search-bars problem on the mobile clients.</summary>
-    internal static UiControl BuildSpaces(string nodeOwnerId, HomeConfig? config = null, string? locale = null)
-        => BuildCatalogList(nodeOwnerId, config ?? HomeConfigNodeType.Defaults, SpacesDedupExclusions, locale)
-            .WithShowSearchBox(false);
+    /// <summary>Dedup for the Spaces and Shared-with-me scopes: anything living in the Store (and
+    /// therefore representable as an installed app — plugin covers, the store root) is EXCLUDED,
+    /// so an app appears exactly once, on the Apps scope. Only non-redundant items survive: the
+    /// user's own spaces, shared workspaces, and their top-level home items.</summary>
+    private const string SpacesDedupExclusions = " -nodeType:Store/Plugin -nodeType:Store/Catalog";
 
     /// <summary>
     /// The LEGACY catalog region (<see cref="HomeStyle.Catalog"/>) — ONE tab-less list, whose shape

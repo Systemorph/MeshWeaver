@@ -256,21 +256,71 @@ download every installed package's bundle, paid courses included, while this ver
 otherwise. An instance key is issued to every registered installation: it is identity, never
 entitlement.
 
-The authorization is `PluginGrantEntry` matched against the **install record's `Source`** — the
-registry source the package was installed from — exactly as `/api/plugins` scopes its listing and
-`InstallByDefault` scopes its selection. Consequences worth knowing:
+The authorization is `PluginGrantEntry` matched against a `(source, package)` pair, exactly as
+`/api/plugins` scopes its listing and `InstallByDefault` scopes its selection. Consequences worth
+knowing:
 
 - **The index is scoped too.** An ungranted package is not listed, so a caller cannot learn it is
   installed here. That is what makes the download refusal non-informative.
 - **A refusal is byte-identical to "no such bundle"** — same status, same empty body, same headers.
   Bundle URLs are fully predictable, so a distinguishable refusal is an inventory oracle over the
-  whole catalogue; `/api/content` closed the same hole in #587. WHICH of the three it was (unknown
-  package, unknown version, ungranted) goes to the **log**, never the response.
-- **An unstamped `Source` is servable to nobody.** It matches no grant entry, and "cannot determine"
-  is a refusal. `PluginBundleClient` reads the resulting 404 as "no prebuilt bundle — will compile",
-  so the cost is a compile, never a failed install. The stamp is carried forward across re-installs
-  (`PackageInstaller.SeedSource`): an update rebuilt from a source-less catalog entry must not erase
-  the field the check reads, or the lane goes dark silently.
+  whole catalogue; `/api/content` closed the same hole in #587. WHICH of the refusals it was goes to
+  the **log**, never the response.
+
+### The entitlement anchor is the REGISTRY (#1782 gap 2)
+
+The `source` half of that pair used to come from the **install record** and from nowhere else. Two
+things followed, and both were wrong:
+
+1. a package this instance had not itself installed had **no binding at all**, so it could not be
+   served however plainly its content sat here — which is the permanent state of a registry that
+   provisions its packages as Spaces (memex-cloud never runs the catalog install, so it has no
+   install records);
+2. "I cannot tell which source this is from" was answered as **"you are not entitled to it"** — a
+   check whose inability to answer is indistinguishable from a negative answer, applied to the most
+   expensive thing it could be applied to: a purchase, read as no purchase.
+
+So the anchor is the registry's own catalog — the same `PackageSources` listing `/api/plugins`
+serves — and the install record is what it always was, a **cache** of that binding:
+
+```
+anchor:   the entitlement record at the registry
+local:    install record = cache
+absent:   "ask upstream" — never "not entitled"
+```
+
+`PackageEntitlementAnchor.Resolve` is the whole rule, pure, with **three** outcomes:
+
+| the binding comes from | outcome |
+|---|---|
+| the **registry** carries the package | `Granted` / `Denied`, `Anchor = Registry` — authoritative, and it overrides a disagreeing cache |
+| only a **local observation** does (an install record's stamped source, a published module's declared path) | `Granted` / `Denied`, `Anchor = Cache` |
+| **nothing** binds it, and the registry answered in full | `Denied` — its silence about a package IS an observation |
+| **nothing** binds it, and the registry could not be asked | 🚨 `Indeterminate` — **UNKNOWN, not a denial** |
+
+The third state withholds the bytes like a denial does; it differs in what it **claims**. An
+instance being unable to ask is not a customer failing to buy, and the difference is recorded
+(`PackageEntitlementLedger`) and surfaced (`entitlement_anchor` health check, **Degraded** — never
+Unhealthy, because serving a previously observed entitlement while the registry is down is the
+*correct* answer, and failing readiness over it would turn a brief registry outage into one of
+ours).
+
+**#1777 is untouched.** The grant match is the same `AuthenticatedInstance.Allows`, no source is
+ever invented, and the route still has exactly two wire outcomes — the bytes, or the one
+byte-identical `NoSuchBundle()`. If anything it tightens: a published module's *self-declared*
+package path used to be believed outright and is now overridden by the registry's binding whenever
+the registry carries the package.
+
+- **Air-gapped is a stated answer, not a silent one.** An instance with no configured sources is
+  `Unconfigured` — an authority on nothing, deliberately not "the registry carries no such package".
+  Its cached bindings still serve; anything it has never observed is `Indeterminate` and says so.
+- **An unstamped `Source` no longer fails dark.** A record written before the field existed simply
+  carries no cached binding, so the anchor answers for it. Stamping it still matters
+  (`PackageInstaller.SeedSource` carries it forward across re-installs) because it is what keeps the
+  answer working when the registry is *not* reachable.
+- **A snapshot window is not an entitlement term.** The anchor reuses an authoritative listing for
+  60s (`PluginCatalog:AnchorFreshnessSeconds`); its expiry triggers a *read*, never a refusal.
+  Entitlements remain eternal.
 
 **The portal serves the bytes rather than handing out storage access.** `BlobAssemblyStore` is
 already the durable transport — one blob per `(nodeTypePath, version)`, hydrated into a process-local

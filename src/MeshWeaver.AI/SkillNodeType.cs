@@ -106,8 +106,18 @@ public static class SkillNodeType
     /// the slash word from <see cref="MeshNode.Id"/> and help text from <see cref="MeshNode.Description"/>;
     /// the spec is the typed (or JsonElement-fallback) <see cref="SkillDefinition"/> content.
     /// </summary>
+    /// <param name="snapshot">The mesh-node snapshot to project.</param>
+    /// <param name="jsonOptions">Serializer options used to type each node's content.</param>
+    /// <param name="locale">
+    /// 🌍 The viewer's language, resolved ONCE on the render turn (<c>host.ViewerLocale()</c> /
+    /// <c>accessService.ViewerLocale()</c>) and passed down. Null = the authored (English) text.
+    /// It is an ARGUMENT rather than an ambient read for the same reason the display-time seam is:
+    /// <c>AccessContext.Locale</c> rides an AsyncLocal that does not survive a scheduler hop, so a
+    /// list filled on a later emission would silently resolve to English while the page around it
+    /// rendered German — and two call sites resolving separately can disagree on the same page.
+    /// </param>
     public static IReadOnlyList<SkillInfo> ProjectSkills(
-        IEnumerable<MeshNode> snapshot, JsonSerializerOptions jsonOptions)
+        IEnumerable<MeshNode> snapshot, JsonSerializerOptions jsonOptions, string? locale = null)
     {
         var byId = new Dictionary<string, SkillInfo>(StringComparer.OrdinalIgnoreCase);
         foreach (var node in snapshot)
@@ -121,11 +131,14 @@ public static class SkillNodeType
             // nothing logged. Identical defect to ToAgentDisplayInfo's, same package.
             var def = node.ContentAs<SkillDefinition>(jsonOptions);
             if (def is null) continue;
+            // 🌍 The translation is read off the TYPED definition, not off node.Content — the node
+            // may carry the as-written DOM, and the fold above already resolved it.
+            var text = NodeTextTranslations.For(def, locale);
             byId[node.Id] = new SkillInfo
             {
-                Id = node.Id,
-                Name = node.Name,
-                Description = node.Description,
+                Id = node.Id,   // 🚨 the slash word — an invocation token, never localized
+                Name = Localized(text?.Name, node.Name),
+                Description = Localized(text?.Description, node.Description),
                 Path = node.Path,
                 Definition = def,
             };
@@ -133,6 +146,9 @@ public static class SkillNodeType
         return byId.Values.OrderBy(s => s.Id, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    /// <summary>Per-FIELD fallback: a translation that sets only one field keeps the authored rest.</summary>
+    private static string? Localized(string? translated, string? authored)
+        => string.IsNullOrWhiteSpace(translated) ? authored : translated;
 }
 
 /// <summary>
@@ -140,7 +156,7 @@ public static class SkillNodeType
 /// an instruction (<see cref="Instructions"/>). The skill's NAME and DESCRIPTION come from the owning
 /// <see cref="MeshWeaver.Mesh.MeshNode"/>.
 /// </summary>
-public record SkillDefinition
+public record SkillDefinition : ILocalizedNodeText
 {
     /// <summary>
     /// INSTRUCTION skill — the <c>SKILL.md</c> body (markdown). Surfaced to the CLI harnesses + the
@@ -178,6 +194,20 @@ public record SkillDefinition
     /// <c>/agent</c> + <c>/model</c>. A skill is a value + a picker + a status chip — one concept.
     /// </summary>
     public string? Harness { get; init; }
+
+    /// <summary>
+    /// Per-language overrides of this skill's USER-VISIBLE display metadata (name / description /
+    /// category), keyed by BCP-47 tag — e.g. <c>de</c>. Rendered through
+    /// <see cref="NodeTextTranslations"/>, which resolves the tag exactly like the string catalog
+    /// and the <c>[Translation]</c> attributes do, so the three cannot disagree.
+    ///
+    /// <para>🚨 Display text ONLY — never <see cref="Instructions"/>. The body is the skill's
+    /// PROCEDURE, read by a model, and translating prompt text changes behaviour rather than
+    /// presentation. The slash word is excluded for a harder reason: a skill is invoked by its node
+    /// <b>Id</b> (<c>/space</c>), so it is a wire token, not a label — which is why localizing this
+    /// record can never change what a slash command resolves to.</para>
+    /// </summary>
+    public IReadOnlyDictionary<string, LocalizedNodeText>? Translations { get; init; }
 }
 
 /// <summary>

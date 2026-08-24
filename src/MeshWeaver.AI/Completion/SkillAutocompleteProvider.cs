@@ -45,6 +45,11 @@ public class SkillAutocompleteProvider : IAutocompleteProvider
         // subscription isn't shared across identities.
         var accessService = _serviceProvider.GetService<AccessService>();
         var userHome = AgentPickerProjection.ResolveUserHome(accessService);
+        // 🌍 Resolve the viewer's language HERE, on the request turn, and carry it into the
+        // projection below. Reading it inside the .Select would read an AsyncLocal that the
+        // synced-query scheduler hop has already cleared — the same capture rule the identity above
+        // follows, and the same one the display-time seam documents.
+        var locale = accessService.ViewerLocale();
         // The user's SKILL SOURCES are configurable (AiSettings.SkillQueries — one query row per
         // source, defaulting to global/space/type/user; installing a skill package appends its row).
         // Observe the settings and Switch to the resolved query set; the cache id carries the
@@ -55,7 +60,7 @@ public class SkillAutocompleteProvider : IAutocompleteProvider
                 workspace, hub,
                 $"skill-autocomplete|{contextPath}|{userHome}|{QueryKey(queries)}", queries))
             .Switch()
-            .Select(snapshot => BuildItems(snapshot, hub));
+            .Select(snapshot => BuildItems(snapshot, hub, locale));
     }
 
     /// <summary>Stable in-process key for a resolved query set — distinct source sets must not share a
@@ -75,11 +80,20 @@ public class SkillAutocompleteProvider : IAutocompleteProvider
     internal static string[] BuildQueries(AccessService? accessService, string? contextPath)
         => SkillNodeType.SkillQueries(contextPath, AgentPickerProjection.ResolveUserHome(accessService));
 
-    private static IReadOnlyCollection<AutocompleteItem> BuildItems(IEnumerable<MeshNode> snapshot, IMessageHub? hub)
+    /// <param name="snapshot">The skill nodes to offer.</param>
+    /// <param name="hub">The hub whose serializer options type each node's content.</param>
+    /// <param name="locale">
+    /// 🌍 The viewer's language, captured on the REQUEST turn by the caller. Not read here: this
+    /// method runs on a synced-query emission where <c>AccessContext.Locale</c>'s AsyncLocal is
+    /// already gone, so an ambient read would silently serve English to a German viewer.
+    /// </param>
+    private static IReadOnlyCollection<AutocompleteItem> BuildItems(
+        IEnumerable<MeshNode> snapshot, IMessageHub? hub, string? locale)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var items = new List<AutocompleteItem>();
-        foreach (var skill in SkillNodeType.ProjectSkills(snapshot, hub?.JsonSerializerOptions ?? EmptyJsonOptions))
+        foreach (var skill in SkillNodeType.ProjectSkills(
+                     snapshot, hub?.JsonSerializerOptions ?? EmptyJsonOptions, locale))
             if (seen.Add(skill.Id))
                 items.Add(Item(skill.Id, skill.Description));
         return items;

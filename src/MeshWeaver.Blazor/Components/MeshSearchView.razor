@@ -7,44 +7,65 @@
 @inject AccessService Access
 
 <div class="mesh-search-container@(ClassSuffix)" style="@Style">
-    @if (BoundShowSearchBox || !string.IsNullOrEmpty(BoundTitle) || ShowCreateButton)
+    @if (HasScopeTabs)
     {
-        <div class="mesh-search-box">
-            <div class="mesh-search-box-inner">
-                @if (!string.IsNullOrEmpty(BoundTitle))
-                {
-                    <div class="mesh-search-title">@BoundTitle</div>
-                }
-                @if (BoundShowSearchBox)
-                {
-                    <div class="mesh-search-box-input">
-                        <MonacoEditorView @ref="monacoEditor"
-                                          Value="@_currentValue"
-                                          ValueChanged="@OnValueChanged"
-                                          OnSubmit="HandleSearch"
-                                          Placeholder="@BoundPlaceholder"
-                                          Height="38px"
-                                          MaxHeight="38px"
-                                          ShowBorder="true"
-                                          CodeEditMode="false"
-                                          CompletionCallback="@GetCompletions" />
+        <div class="mesh-search-scopes" role="tablist">
+            @for (var i = 0; i < BoundScopeTabs.Count; i++)
+            {
+                var idx = i;
+                <button type="button" role="tab" aria-selected="@(idx == ActiveScopeIndex)"
+                        class="mesh-search-scope@(idx == ActiveScopeIndex ? " mesh-search-scope-active" : "")"
+                        @onclick="() => SelectScope(idx)">@BoundScopeTabs[idx].Label</button>
+            }
+        </div>
+    }
+    @* ONE header row on desktop: the search box and the view-options bar share it (wrapping on
+       narrow widths). The search input itself is DESKTOP-only — mesh-search-mobile-hide hides
+       input + Search + query-gear under the mobile breakpoint while title/create/view-options stay. *@
+    @if (BoundShowSearchBox || !string.IsNullOrEmpty(BoundTitle) || ShowCreateButton || (BoundShowViewOptions && SelectorEligible))
+    {
+        <div class="mesh-search-header">
+            @if (BoundShowSearchBox || !string.IsNullOrEmpty(BoundTitle) || ShowCreateButton)
+            {
+                <div class="mesh-search-box">
+                    <div class="mesh-search-box-inner">
+                        @if (!string.IsNullOrEmpty(BoundTitle))
+                        {
+                            <div class="mesh-search-title">@BoundTitle</div>
+                        }
+                        @if (BoundShowSearchBox)
+                        {
+                            <div class="mesh-search-box-input mesh-search-mobile-hide">
+                                <MonacoEditorView @ref="monacoEditor"
+                                                  Value="@_currentValue"
+                                                  ValueChanged="@OnValueChanged"
+                                                  OnSubmit="HandleSearch"
+                                                  Placeholder="@BoundPlaceholder"
+                                                  Height="38px"
+                                                  MaxHeight="38px"
+                                                  ShowBorder="true"
+                                                  CodeEditMode="false"
+                                                  CompletionCallback="@GetCompletions" />
+                            </div>
+                            <button type="button" class="mesh-search-button mesh-search-mobile-hide" @onclick="HandleSearch">
+                                Search
+                            </button>
+                            <button type="button" class="mesh-search-options-button mesh-search-mobile-hide" @onclick="ToggleSearchOptions"
+                                    title="@Access.Localize("search.options")">
+                                <FluentIcon Value="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size16.Settings())" />
+                            </button>
+                        }
+                        @if (ShowCreateButton)
+                        {
+                            <button type="button" class="mesh-search-create-button" @onclick="HandleCreateClick"
+                                    title="@Access.Localize("search.createNew")">
+                                +
+                            </button>
+                        }
                     </div>
-                    <button type="button" class="mesh-search-button" @onclick="HandleSearch">
-                        Search
-                    </button>
-                    <button type="button" class="mesh-search-options-button" @onclick="ToggleSearchOptions"
-                            title="@Access.Localize("search.options")">
-                        <FluentIcon Value="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size16.Settings())" />
-                    </button>
-                }
-                @if (ShowCreateButton)
-                {
-                    <button type="button" class="mesh-search-create-button" @onclick="HandleCreateClick"
-                            title="@Access.Localize("search.createNew")">
-                        +
-                    </button>
-                }
-            </div>
+                </div>
+            }
+            @RenderViewBar()
         </div>
     }
 
@@ -59,53 +80,6 @@
                       @bind="_editableHiddenQuery" @bind:event="oninput" />
             <div class="mesh-search-options-actions">
                 <button type="button" class="mesh-search-button" @onclick="ApplySearchOptions">@Access.Localize("common.apply")</button>
-            </div>
-        </div>
-    }
-
-    @if (BoundShowViewOptions && SelectorEligible)
-    {
-        <div class="mesh-search-viewbar">
-            <label class="mesh-search-viewbar-field">
-                <span class="mesh-search-viewbar-label">@Access.Localize("search.groupBy")</span>
-                <select class="mesh-search-groupby" @bind="GroupBySelection">
-                    @foreach (var opt in GroupByOptions)
-                    {
-                        <option value="@opt.Value">@opt.Label</option>
-                    }
-                </select>
-            </label>
-            @if (HasSortOptions)
-            {
-                <label class="mesh-search-viewbar-field">
-                    <span class="mesh-search-viewbar-label">@Access.Localize("search.sortBy")</span>
-                    <select class="mesh-search-sortby" @bind="SortBySelection">
-                        @foreach (var opt in BoundSortOptions)
-                        {
-                            <option value="@opt.Label">@opt.Label</option>
-                        }
-                    </select>
-                </label>
-            }
-            <div class="mesh-search-viewbar-spacer"></div>
-            <div class="mesh-search-viewbar-menu-wrap">
-                <button type="button" class="mesh-search-viewbar-menu-btn" title="@Access.Localize("search.displayOptions")"
-                        @onclick="ToggleViewMenu">
-                    <FluentIcon Value="@(new Icons.Regular.Size16.Options())" />
-                </button>
-                @if (_showViewMenu)
-                {
-                    <div class="mesh-search-viewbar-menu">
-                        <label class="mesh-search-viewbar-toggle">
-                            <input type="checkbox" checked="@BoundShowSearchBox" @onchange="ToggleShowSearchBox" />
-                            <span>@Access.Localize("search.searchBar")</span>
-                        </label>
-                        <label class="mesh-search-viewbar-toggle">
-                            <input type="checkbox" checked="@EffectiveShowCounts" @onchange="ToggleShowCounts" />
-                            <span>@Access.Localize("search.sectionCounts")</span>
-                        </label>
-                    </div>
-                }
             </div>
         </div>
     }
@@ -244,7 +218,18 @@
                             : group.Items;
                         var hiddenCount = group.Items.Count - visibleItems.Count;
 
-                        @if (IsListMode)
+                        @if (IsIconsMode)
+                        {
+                            <div class="mesh-search-icons-grid">
+                                @* Order is applied in ApplyResults (so every render mode honours
+                                   SortByAccess); the tiles just paint what they are given. *@
+                                @foreach (var node in visibleItems.OfType<MeshNode>())
+                                {
+                                    @RenderIconTile(node)
+                                }
+                            </div>
+                        }
+                        else if (IsListMode)
                         {
                             <div class="mesh-search-list">
                                 @foreach (var item in visibleItems)
@@ -305,8 +290,68 @@
 </div>
 
 @code {
+    /// <summary>
+    /// The discreet view-options bar (Group by · Sort by · display menu) — rendered INSIDE the
+    /// shared header row so search box and ordering sit on ONE line on desktop (wrapping below
+    /// it on narrow widths). Self-guarded: emits nothing when view options are off.
+    /// </summary>
+    private RenderFragment RenderViewBar() => __builder =>
+    {
+        @if (BoundShowViewOptions && SelectorEligible)
+        {
+            <div class="mesh-search-viewbar">
+                <label class="mesh-search-viewbar-field">
+                    <span class="mesh-search-viewbar-label">@Access.Localize("search.groupBy")</span>
+                    <select class="mesh-search-groupby" @bind="GroupBySelection">
+                        @foreach (var opt in GroupByOptions)
+                        {
+                            <option value="@opt.Value">@opt.Label</option>
+                        }
+                    </select>
+                </label>
+                @if (HasSortOptions)
+                {
+                    <label class="mesh-search-viewbar-field">
+                        <span class="mesh-search-viewbar-label">@Access.Localize("search.sortBy")</span>
+                        <select class="mesh-search-sortby" @bind="SortBySelection">
+                            @foreach (var opt in BoundSortOptions)
+                            {
+                                <option value="@opt.Label">@opt.Label</option>
+                            }
+                        </select>
+                    </label>
+                }
+                <div class="mesh-search-viewbar-spacer"></div>
+                <div class="mesh-search-viewbar-menu-wrap">
+                    <button type="button" class="mesh-search-viewbar-menu-btn" title="@Access.Localize("search.displayOptions")"
+                            @onclick="ToggleViewMenu">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Options())" />
+                    </button>
+                    @if (_showViewMenu)
+                    {
+                        <div class="mesh-search-viewbar-menu">
+                            <label class="mesh-search-viewbar-toggle">
+                                <input type="checkbox" checked="@BoundShowSearchBox" @onchange="ToggleShowSearchBox" />
+                                <span>@Access.Localize("search.searchBar")</span>
+                            </label>
+                            <label class="mesh-search-viewbar-toggle">
+                                <input type="checkbox" checked="@EffectiveShowCounts" @onchange="ToggleShowCounts" />
+                                <span>@Access.Localize("search.sectionCounts")</span>
+                            </label>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    };
+
     private RenderFragment RenderCard(MeshNode node) => __builder =>
     {
+        // The card renders through DispatchView (registry resolution), NOT a compile-time
+        // <MeshNodeCardView …/> reference: MeshNodeCardView lives in the MeshWeaver.Blazor.Graph
+        // view pack now, and the base pack cannot name a pack component without inverting the
+        // reference direction. Registry dispatch is also what keeps this honest — the search page
+        // renders whatever view the mesh's registered pack maps to MeshNodeCardControl.
         var cardControl = GetCardControl(node);
         var clickAddress = ViewModel?.ClickMessageAddress?.ToString();
         var drillArea = BoundDrillDownArea;
@@ -330,18 +375,18 @@
             @if (isPicker)
             {
                 <div style="cursor: pointer;" @onclick="() => OnNodeSelected.InvokeAsync(node)">
-                    <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                    <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
                 </div>
             }
             else if (!string.IsNullOrEmpty(clickAddress))
             {
                 <div style="cursor: pointer;" @onclick="() => PostClickMessage(node, clickAddress)">
-                    <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                    <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
                 </div>
             }
             else
             {
-                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
             }
 
             @if (showDrill)
@@ -398,6 +443,41 @@
                 @RenderDeleteAffordance(node)
             }
         </div>
+    };
+
+    /// <summary>
+    /// One tile of the phone-home ICON grid (Icons mode): a large rounded icon with the name
+    /// underneath, navigating to <see cref="TargetOf"/> — everything comes from the query ROW
+    /// (name/icon are result columns), never from the node's content or a per-result hub.
+    /// </summary>
+    private RenderFragment RenderIconTile(MeshNode node) => __builder =>
+    {
+        var imageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(node, includeThumbnail: false);
+        var title = node.Name ?? node.Path;
+        var isInlineSvg = imageUrl?.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase) == true;
+        var isEmoji = !string.IsNullOrEmpty(imageUrl) && !isInlineSvg && !imageUrl.Contains('/') && !imageUrl.StartsWith("data:");
+
+        <a class="mesh-search-icon-tile" href="/@TargetOf(node)" title="@title">
+            <div class="mesh-search-icon-box">
+                @if (isInlineSvg)
+                {
+                    @((MarkupString)imageUrl!)
+                }
+                else if (isEmoji)
+                {
+                    <span class="mesh-search-icon-emoji">@imageUrl</span>
+                }
+                else if (!string.IsNullOrEmpty(imageUrl))
+                {
+                    <img src="@imageUrl" alt="" />
+                }
+                else
+                {
+                    <span class="mesh-search-icon-initial">@(string.IsNullOrEmpty(title) ? "?" : title[..1].ToUpperInvariant())</span>
+                }
+            </div>
+            <div class="mesh-search-icon-label">@title</div>
+        </a>
     };
 
     /// <summary>The icon + title + description content of a List-mode row.</summary>
@@ -762,7 +842,7 @@
         var cardControl = MeshNodeCardControl.FromNode(node, node.Path, BoundItemArea, true);
         <div class="mesh-nav-card-wrap">
             <a class="mesh-nav-card-link" href="/@node.Path" title="Open @(node.Name ?? node.Id)">
-                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"nav-{node.Path}")" />
+                <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"nav-{node.Path}")" />
             </a>
             @if (item.HasChildren)
             {

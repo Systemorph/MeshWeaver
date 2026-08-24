@@ -71,6 +71,46 @@ public static class VersionSelect
             .FirstOrDefault();
     }
 
+    /// <summary>
+    /// Every eligible tag under <paramref name="policy"/>, NEWEST FIRST — the same filtering as
+    /// <see cref="PickTarget"/>, which is simply this sequence's first element.
+    ///
+    /// <para>🚨 <b>Why the caller needs the whole ordered list and not just the best one.</b> A
+    /// target is only rollable if a sealed content bake exists for the framework identity that
+    /// exact image resolves to. Picking the newest tag and stopping means one unbaked release
+    /// freezes the instance FOREVER: it holds, the next platform build produces another unbaked
+    /// tag, the bake publishes yet another identity, and the two never meet. That is not
+    /// hypothetical — memex sat on 3.0.0-rc6 held against 3.0.0-rc7.ci.4928 while three separate
+    /// bakes published three other identities, every job green throughout.</para>
+    ///
+    /// <para>Walking the list newest-first and taking the first SEALED one converts that deadlock
+    /// into ordinary progress: the instance always advances to the best release that can actually
+    /// serve, and a not-yet-baked newer build simply waits its turn instead of blocking the ones
+    /// behind it. It never rolls backwards — the caller still requires the target to be newer than
+    /// what is installed — and it never rolls into a boot storm, because unsealed candidates are
+    /// skipped rather than forced.</para>
+    /// </summary>
+    public static IReadOnlyList<string> PickTargets(
+        IEnumerable<string> tags, UpdatePolicyKind policy, bool requireCiGreen = true)
+    {
+        if (policy == UpdatePolicyKind.None)
+            return [];
+
+        var parsed = tags
+            .Where(t => !RuntimeIdentifierSuffix.IsMatch(t))
+            .Where(t => PlatformVersionTag.IsMatch(t))
+            .Select(t => (tag: t, ver: NuGetVersion.TryParse(t, out var v) ? v : null))
+            .Where(x => x.ver is not null)
+            .Select(x => (x.tag, ver: x.ver!));
+
+        if (policy == UpdatePolicyKind.Stable)
+            parsed = parsed.Where(x => !x.ver.IsPrerelease);
+        if (requireCiGreen)
+            parsed = parsed.Where(x => !IsEdge(x.ver));
+
+        return [.. parsed.OrderByDescending(x => x.ver).Select(x => x.tag)];
+    }
+
     /// <summary>An UNVERIFIED edge/pre-merge build — identified by an <c>edge</c> SemVer pre-release
     /// label (e.g. <c>3.0.0-edge.51</c>). Verified CD builds use <c>-ci.&lt;n&gt;</c> or a clean release,
     /// never <c>edge</c>.</summary>

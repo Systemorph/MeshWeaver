@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# hosting-tls --namespace <ns> --host <fqdn>
+#
+# Make sure the namespace holds a usable TLS secret for its host, and WAIT for it.
+#
+# 🚨 A certificate is ISSUED ASYNCHRONOUSLY. cert-manager creates the Certificate immediately and
+# the Secret minutes later, so a step that returns as soon as the object exists reports success over
+# an ingress still serving another host's default certificate — which is what a browser shows the
+# first visitor. This waits for the Secret to carry an actual key pair, and fails if it never does.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-tls"
+
+namespace="" host="" timeout="${HOSTING_TLS_TIMEOUT:-600}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace) namespace="${2:-}"; shift 2 ;;
+    --host)      host="${2:-}";      shift 2 ;;
+    --timeout)   timeout="${2:-}";   shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::need_flag host "$host"
+hosting::safe_name namespace "$namespace"
+hosting::safe_host host "$host"
+
+secret="${HOSTING_TLS_SECRET:-${namespace}-tls}"
+issuer="${HOSTING_TLS_ISSUER:-letsencrypt-prod}"
+
+ready() {
+  local tls_crt
+  tls_crt="$(kubectl -n "$namespace" get secret "$secret" -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)"
+  [ -n "$tls_crt" ]
+}
+
+if ready; then
+  hosting::log "TLS secret ${secret} already carries a certificate — keeping it"
+  hosting::say tls kept
+  exit 0
+fi
+
+hosting::log "requesting a certificate for ${host} (issuer ${issuer}, secret ${secret})"
+if hosting::dry; then
+  echo "  DRY-RUN would create Certificate ${secret} in ${namespace} and wait up to ${timeout}s"
+  hosting::say tls dry-run
+  exit 0
+fi
+
+kubectl apply -f - <<YAML || hosting::die "could not create the Certificate for ${host}"
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ${secret}
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/managed-by: meshweaver-hosting
+spec:
+  secretName: ${secret}
+  dnsNames:
+    - ${host}
+  issuerRef:
+    name: ${issuer}
+    kind: ClusterIssuer
+YAML
+
+deadline=$(( $(date +%s) + timeout ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  if ready; then
+    hosting::log "certificate issued into ${secret}"
+    hosting::say tls issued
+    exit 0
+  fi
+  sleep 10
+done
+
+# Name what to look at. A cert that never issues is almost always DNS not yet resolving to the
+# ingress, and the Certificate's own events say so.
+reason="$(kubectl -n "$namespace" describe certificate "$secret" 2>/dev/null | tail -20 || true)"
+hosting::die "no certificate in ${secret} after ${timeout}s. Until one exists the ingress serves ANOTHER host's default certificate, so this is a failure rather than something to proceed past. Most often the A record has not propagated to the issuer's resolver yet. Certificate events:
+${reason}"

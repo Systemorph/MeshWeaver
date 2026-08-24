@@ -364,12 +364,16 @@ public static class AgentPickerProjection
         // upstream by id, so a settings change MUST mint a new id or the old subscription serves
         // stale queries forever.
         var workspace = hub.GetWorkspace();
+        // 🌍 Capture the viewer's language HERE, on the subscribing turn, exactly as the identity is
+        // captured — the projection below runs on synced-query emissions where AccessContext's
+        // AsyncLocal is already gone, so an ambient read there resolves to English at random.
+        var locale = hub.ServiceProvider.GetService<AccessService>().ViewerLocale();
         return AiSettingsNodeType.ObserveAgentQueries(workspace, hub, hub.ServiceProvider, userPath, spacePath)
             .Select(queries => ObserveSnapshot(workspace, hub,
                 $"{AgentsQueryId}|u={userPath ?? ""}|s={spacePath ?? ""}|q={Fingerprint(queries)}",
                 queries))
             .Switch()
-            .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions));
+            .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions, locale));
     }
 
     /// <summary>Deterministic short fingerprint of a resolved query set, for cache-keying the
@@ -633,8 +637,14 @@ public static class AgentPickerProjection
     /// when the receiving hub's typed registry doesn't have
     /// <see cref="AgentConfiguration"/> wired up; sorts by Order then Name.
     /// </summary>
+    /// <param name="snapshot">The mesh-node snapshot to project.</param>
+    /// <param name="jsonOptions">Serializer options used to type each node's content.</param>
+    /// <param name="locale">
+    /// 🌍 The viewer's language, resolved ONCE on the render turn and passed down — see
+    /// <see cref="ToAgentDisplayInfo"/> for why it is an argument and not an ambient read.
+    /// </param>
     public static IReadOnlyList<AgentDisplayInfo> ProjectAgents(
-        IEnumerable<MeshNode> snapshot, JsonSerializerOptions jsonOptions)
+        IEnumerable<MeshNode> snapshot, JsonSerializerOptions jsonOptions, string? locale = null)
     {
         var byPath = new Dictionary<string, AgentDisplayInfo>(StringComparer.Ordinal);
         foreach (var node in snapshot)
@@ -643,7 +653,7 @@ public static class AgentPickerProjection
             if (!string.Equals(node.NodeType, AgentNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            var info = ToAgentDisplayInfo(node, jsonOptions);
+            var info = ToAgentDisplayInfo(node, jsonOptions, locale);
             if (info != null)
                 byPath[node.Path] = info;
         }
@@ -723,25 +733,46 @@ public static class AgentPickerProjection
     /// handles typed, JsonElement, JsonNode, and a same-named type from another dynamic
     /// assembly.</para>
     /// </summary>
+    /// <param name="node">The agent node.</param>
+    /// <param name="jsonOptions">Serializer options used to type the node's content.</param>
+    /// <param name="locale">
+    /// 🌍 The viewer's language, resolved ONCE on the render turn (<c>host.ViewerLocale()</c> /
+    /// <c>accessService.ViewerLocale()</c>) and passed down. Null = the authored (English) text.
+    /// It is an ARGUMENT rather than an ambient read for the same reason the display-time seam is:
+    /// <c>AccessContext.Locale</c> rides an AsyncLocal that does not survive a scheduler hop, and
+    /// this projection runs on a synced-query emission, off the caller's own call tree.
+    /// </param>
     public static AgentDisplayInfo? ToAgentDisplayInfo(
-        MeshNode node, JsonSerializerOptions jsonOptions)
+        MeshNode node, JsonSerializerOptions jsonOptions, string? locale = null)
     {
         var config = node.ContentAs<AgentConfiguration>(jsonOptions);
         if (config == null) return null;
         // Display metadata is sourced from the MeshNode (the single source of truth);
         // only agent-specific bits (CustomIconSvg, the config itself) come from Content.
+        //
+        // 🌍 …and the DISPLAY half of it is localized. The translation is read off the TYPED
+        // configuration, not off node.Content, because the node may carry the as-written DOM and
+        // ContentAs above already resolved it. Note what is NOT localized: config.Description is
+        // the delegation catalogue the MODEL reads, so it stays the authored text even when the
+        // node's own description is translated — a German picker label must not change which agent
+        // the model routes to.
+        var text = NodeTextTranslations.For(config, locale);
         return new AgentDisplayInfo
         {
-            Name = node.Name ?? config.Id,
+            Name = Localized(text?.Name, node.Name) ?? config.Id,
             Path = node.Path,
-            Description = node.Description ?? config.Description ?? "",
-            GroupName = node.Category,
+            Description = Localized(text?.Description, node.Description) ?? config.Description ?? "",
+            GroupName = Localized(text?.Category, node.Category),
             Order = node.Order ?? 0,
             Icon = node.Icon,
             CustomIconSvg = config.CustomIconSvg,
             AgentConfiguration = config,
         };
     }
+
+    /// <summary>Per-FIELD fallback: a translation that sets only one field keeps the authored rest.</summary>
+    private static string? Localized(string? translated, string? authored)
+        => string.IsNullOrWhiteSpace(translated) ? authored : translated;
 
     /// <summary>
     /// Single MeshNode → ModelInfo projection. Reads content through

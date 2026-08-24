@@ -302,7 +302,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 if (string.IsNullOrEmpty(vectorUserId) || vectorUserId == WellKnownUsers.System)
                     vectorUserId = null;
                 var vectorNamespace = parsedQuery.Path ?? request.DefaultPath;
-                var topK = parsedQuery.Limit ?? request.Limit ?? 50;
+                // Positive(): a vector search always needs a real k, and NoLimit (non-positive)
+                // is "no cap stated" — which for an ANN ranking is the same thing as stating
+                // nothing, so it takes the same default rather than an impossible k.
+                var topK = Positive(parsedQuery.Limit) ?? Positive(request.Limit) ?? 50;
                 // Strip the text part from the filter so VectorSearchAsync's
                 // WHERE clause has the structured predicates only.
                 var structuralFilter = parsedQuery with { TextSearch = null };
@@ -363,7 +366,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                     ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
                     : node);
                 count++;
-                if (parsedQuery.Limit.HasValue && count >= parsedQuery.Limit.Value)
+                // Positive(): non-positive is MeshQueryRequest.NoLimit — "every match" — NOT
+                // "stop after zero rows". `count >= -1` is true on the first row, so reading the
+                // raw value here made a Complete() read return ONE row, silently.
+                if (Positive(parsedQuery.Limit) is { } cap && count >= cap)
                     return rows;
             }
             return rows;
@@ -390,7 +396,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 : node);
 
             countOrig++;
-            if (parsedQuery.Limit.HasValue && countOrig >= parsedQuery.Limit.Value)
+            // Positive(): see above — NoLimit must not read as a cap of -1.
+            if (Positive(parsedQuery.Limit) is { } capOrig && countOrig >= capOrig)
                 return rows;
         }
 

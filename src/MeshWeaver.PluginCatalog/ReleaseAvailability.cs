@@ -250,6 +250,26 @@ public sealed record UpdatabilityVerdict(
     public static UpdatabilityVerdict NotEnforced(string reason) =>
         new(true, [], null, reason);
 
+    /// <summary>
+    /// 🚨 The gate could not RUN — it is not wired into this host at all.
+    ///
+    /// <para>This is a HOLD, and it is deliberately not <see cref="NotEnforced"/>. That answer
+    /// exists for the one stated applicability exemption (a deployment consuming no CI bakes);
+    /// reusing it for a wiring failure is the trap this repo has been bitten by repeatedly — an
+    /// <c>if: vars.X != ''</c> that skips green, a health check reporting Healthy while the bake
+    /// is <c>NotStarted</c>. A gate that cannot run must never look like a gate that passed, and
+    /// "the service is not registered" is the purest possible case of cannot-run: there is no
+    /// verdict at all, only the absence of one.</para>
+    ///
+    /// <para>It reports as <see cref="IsIndeterminate"/> — an availability failure to FIX, never
+    /// a compatibility verdict about the release — so the surfaces that already distinguish the
+    /// two do so here without changing.</para>
+    /// </summary>
+    public static UpdatabilityVerdict Unavailable(string reason) =>
+        new(false,
+            [new PackageAvailability("(gate)", PackageAvailabilityKind.Indeterminate, reason)],
+            reason);
+
     /// <summary>The packages that block the roll.</summary>
     public IEnumerable<PackageAvailability> Blockers => Packages.Where(p => !p.IsAvailable);
 

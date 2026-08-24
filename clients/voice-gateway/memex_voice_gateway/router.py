@@ -106,6 +106,7 @@ _DEFAULT_PHRASES = {
     "radio_on": "Here comes {station}. Say stop to end it.",
     "song_hint": "I cannot play single songs yet — but here comes {station}.",
     "no_stations": "No radio stations are set up yet — add them under Voice, Station in the portal.",
+    "playing_song": "Here comes {title} by {artist}.",
 }
 
 async def load_stations(client, namespace: str) -> dict[str, tuple[str, str]]:
@@ -169,6 +170,7 @@ class BrainRouter:
             n for n, b in brains.items() if hasattr(b, "delegate")}
         self._home = home     # HomeAssistant client, when configured
         self.player: object = None   # async url -> None; the satellite's media player
+        self.music: object = None    # MusicAssistant client, when a token is configured
         # Spoken key → (display name, stream url), loaded from {user}/Voice/Station nodes.
         self.stations: dict[str, tuple[str, str]] = {}
         # Agent name → the portal that HOSTS it (a portal entry's "agents" list): the
@@ -282,6 +284,31 @@ class BrainRouter:
         self._context = entry
         self._changed()
         return entry
+
+    async def _play_named(self, request: str) -> str | None:
+        """Resolve a spoken song wish through Music Assistant and play it on the first MA
+        player. None = could not resolve/play → the caller falls back to radio + the
+        honest sentence, never to silence or an invented promise."""
+        import logging
+        try:
+            query = re.sub(r".*?\b(?:heißen|heissen|namens|called|titled)\b", "", request,
+                           flags=re.IGNORECASE).strip(" .!?,") or request
+            results = await self.music.search(query)  # type: ignore[attr-defined]
+            tracks = (results or {}).get("tracks") or []
+            if not tracks:
+                return None
+            track = tracks[0]
+            players = await self.music.players()  # type: ignore[attr-defined]
+            available = [p for p in players if p.get("available", True)]
+            if not available:
+                return None
+            await self.music.play(track["uri"], available[0]["player_id"])  # type: ignore[attr-defined]
+            artist = ((track.get("artists") or [{}])[0]).get("name", "")
+            title = track.get("name", "")
+            return self._phrases["playing_song"].format(title=title, artist=artist)
+        except Exception:
+            logging.getLogger(__name__).warning("music assistant play failed", exc_info=True)
+            return None
 
     def _match_station(self, lowered: str) -> str | None:
         """Best station for an utterance by token overlap — 'radio' itself never decides."""
@@ -463,10 +490,16 @@ class BrainRouter:
         key = self._match_station(lowered)
         if (key or "radio" in lowered or _MUSIC.search(stripped)) \
                 and self.player is not None:
-            if not self.stations:
-                return self._phrases["no_stations"]
             named_song = key is None and re.search(
                 r"\b(?:lied|song)\b", lowered) and len(stripped) > 25
+            # A NAMED song goes to Music Assistant when it is connected — THEIR tooling
+            # (Spotify / Apple Music providers) resolves and streams it.
+            if named_song and self.music is not None:
+                spoken = await self._play_named(stripped)
+                if spoken is not None:
+                    return spoken
+            if not self.stations:
+                return self._phrases["no_stations"]
             name, url = self.stations[key or next(iter(self.stations))]
             try:
                 await self.player(url)  # type: ignore[operator]
@@ -537,3 +570,5 @@ class BrainRouter:
             await brain.close()
         if self._home is not None:
             await self._home.close()  # type: ignore[attr-defined]
+        if self.music is not None:
+            await self.music.close()  # type: ignore[attr-defined]

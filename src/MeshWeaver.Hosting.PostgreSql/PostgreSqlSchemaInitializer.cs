@@ -9,13 +9,49 @@ namespace MeshWeaver.Hosting.PostgreSql;
 public static class PostgreSqlSchemaInitializer
 {
     /// <summary>
+    /// How long a schema-initialization command may run, in seconds.
+    ///
+    /// <para>🚨 <b>Npgsql's default is 30s, and that is a REQUEST-path number.</b> Nothing in this
+    /// class is on a request path: it is boot-time DDL and, in one case, a sweep over EVERY
+    /// partition schema in the database (the auth-mirror self-heal probes triggers and reconciles
+    /// rows for all of them). That work scales with the size of the instance, so the default turns
+    /// "this deployment is large" into a timeout.</para>
+    ///
+    /// <para>It did exactly that on memex.meshweaver.cloud (2026-08-22): the migration
+    /// CrashLoopBackOff'd with <c>Npgsql.NpgsqlException: Exception while reading from stream ---&gt;
+    /// TimeoutException</c> from the self-heal, the portal's new pods never became ready, and the
+    /// roll stalled at 1/5 — while the SAME image migrated a smaller instance fine. The database
+    /// was healthy throughout; the old pods kept serving. A migration that cannot finish is not a
+    /// slow migration, it is a deployment that cannot happen at all, and the failure names Npgsql
+    /// rather than "your instance is big".</para>
+    ///
+    /// <para>Ten minutes is chosen to be far above any healthy sweep while still bounded: a
+    /// migration wedged on a lock must eventually fail rather than hang a rollout forever. This is
+    /// not a substitute for making the sweep cheaper — it is the difference between a large
+    /// instance deploying and not deploying.</para>
+    /// </summary>
+    private const int MaintenanceCommandTimeoutSeconds = 600;
+
+    /// <summary>
+    /// A command for boot-time schema work, with <see cref="MaintenanceCommandTimeoutSeconds"/>
+    /// applied. Use this for every DDL/sweep statement here so none of them inherits the
+    /// request-path default.
+    /// </summary>
+    private static NpgsqlCommand CreateMaintenanceCommand(this NpgsqlDataSource dataSource, string sql)
+    {
+        var command = dataSource.CreateCommand(sql);
+        command.CommandTimeout = MaintenanceCommandTimeoutSeconds;
+        return command;
+    }
+
+    /// <summary>
     /// Creates the partition_access table in the public schema.
     /// This table maps users to partition schemas they can access, populated by
     /// rebuild_user_effective_permissions() trigger in each partition schema.
     /// </summary>
     public static async Task InitializePartitionAccessTableAsync(NpgsqlDataSource dataSource, CancellationToken ct = default)
     {
-        await using var cmd = dataSource.CreateCommand("""
+        await using var cmd = dataSource.CreateMaintenanceCommand("""
             CREATE TABLE IF NOT EXISTS public.partition_access (
                 user_id    TEXT NOT NULL,
                 partition  TEXT NOT NULL,
@@ -220,7 +256,7 @@ public static class PostgreSqlSchemaInitializer
     {
         // Step 1: Create the vector extension using plain SQL (no vector parameters).
         // Even if UseVector() can't find the type yet, plain SQL commands work fine.
-        await using (var cmd = dataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector"))
+        await using (var cmd = dataSource.CreateMaintenanceCommand("CREATE EXTENSION IF NOT EXISTS vector"))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -238,13 +274,13 @@ public static class PostgreSqlSchemaInitializer
         // only by the V27 *repair* migration — which MigrationRunner SKIPS on fresh DBs — so
         // fresh deployments never installed the trigger and `auth` stayed empty. Creating it
         // here (always-run path) makes the guard pass on every DB, fresh or not.
-        await using (var cmd = dataSource.CreateCommand(GetAuthMirrorFunctionScript()))
+        await using (var cmd = dataSource.CreateMaintenanceCommand(GetAuthMirrorFunctionScript()))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         // Step 3: Run the full schema script (tables, indexes, triggers).
-        await using (var cmd = dataSource.CreateCommand(GetSchemaScript(options)))
+        await using (var cmd = dataSource.CreateMaintenanceCommand(GetSchemaScript(options)))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -254,7 +290,7 @@ public static class PostgreSqlSchemaInitializer
         // keeps it idempotent and in sync on every init (runtime bootstrap + the test
         // fixture both run InitializeAsync against public, so both DBs get the proc).
         // Routed to by PostgreSqlPartitionStorageProvider.EnsureSchemaAsync.
-        await using (var cmd = dataSource.CreateCommand(GetEnsurePartitionSchemaProcScript(options.VectorDimensions)))
+        await using (var cmd = dataSource.CreateMaintenanceCommand(GetEnsurePartitionSchemaProcScript(options.VectorDimensions)))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -283,7 +319,7 @@ public static class PostgreSqlSchemaInitializer
         // PUBLIC-INIT ONLY, same as step 5 — per-schema data sources must not provision auth.
         if (string.Equals(options.Schema, "public", StringComparison.OrdinalIgnoreCase))
         {
-            await using var cmd = dataSource.CreateCommand("SELECT public.ensure_partition_schema('auth')");
+            await using var cmd = dataSource.CreateMaintenanceCommand("SELECT public.ensure_partition_schema('auth')");
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
@@ -309,7 +345,7 @@ public static class PostgreSqlSchemaInitializer
         // per-boot singleton; the in-script pg_advisory_xact_lock serializes across silos.
         if (string.Equals(options.Schema, "public", StringComparison.OrdinalIgnoreCase))
         {
-            await using var cmd = dataSource.CreateCommand(GetAuthMirrorSelfHealScript());
+            await using var cmd = dataSource.CreateMaintenanceCommand(GetAuthMirrorSelfHealScript());
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }
@@ -971,7 +1007,7 @@ public static class PostgreSqlSchemaInitializer
             await conn.ReloadTypesAsync().ConfigureAwait(false);
         }
 
-        await using (var cmd = schemaDataSource.CreateCommand(GetUnversionedSchemaScript(options)))
+        await using (var cmd = schemaDataSource.CreateMaintenanceCommand(GetUnversionedSchemaScript(options)))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -990,7 +1026,7 @@ public static class PostgreSqlSchemaInitializer
         CancellationToken ct = default)
     {
         // Step 1: Create the vector extension using plain SQL
-        await using (var cmd = baseDataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector"))
+        await using (var cmd = baseDataSource.CreateMaintenanceCommand("CREATE EXTENSION IF NOT EXISTS vector"))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -1002,13 +1038,13 @@ public static class PostgreSqlSchemaInitializer
         }
 
         // Step 3: Create versions schema tables (mesh_node_history)
-        await using (var cmd = versionsDataSource.CreateCommand(GetVersionsSchemaScript()))
+        await using (var cmd = versionsDataSource.CreateMaintenanceCommand(GetVersionsSchemaScript()))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         // Step 4: Create mesh schema tables + cross-schema trigger
-        await using (var cmd = schemaDataSource.CreateCommand(GetMeshSchemaScript(options, versionsSchema)))
+        await using (var cmd = schemaDataSource.CreateMaintenanceCommand(GetMeshSchemaScript(options, versionsSchema)))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -1027,7 +1063,7 @@ public static class PostgreSqlSchemaInitializer
         var dim = options.VectorDimensions;
         foreach (var tableName in tableNames.Distinct())
         {
-            await using var cmd = schemaDataSource.CreateCommand(GetSatelliteTableScript(tableName, dim));
+            await using var cmd = schemaDataSource.CreateMaintenanceCommand(GetSatelliteTableScript(tableName, dim));
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }

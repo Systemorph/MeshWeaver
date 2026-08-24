@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# hosting-verify-backup --store-uri <uri>
+#
+# THE ONLY THING THAT EMITS verified=true, and only after reading the archive back.
+#
+# 🚨 WHY A SEPARATE STEP. `pg_dump` exiting zero proves it ran, not that the bytes landed. A
+# truncated upload, a half-written blob and an empty database all produce a successful backup step.
+# Everything destructive in the plan — dropping a database, deleting a namespace — sits behind THIS
+# step, so it must actually download the archive and parse a non-zero number of table entries out
+# of its table of contents. Anything it cannot read is NOT verified, and silence is never a claim.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-verify-backup"
+
+store_uri=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --store-uri) store_uri="${2:-}"; shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag store-uri "$store_uri"
+
+if hosting::dry; then
+  echo "  DRY-RUN would download ${store_uri} and parse its table of contents"
+  hosting::say verify dry-run
+  exit 0
+fi
+
+archive="/tmp/verify.dump"
+rm -f "$archive"
+
+hosting::log "downloading ${store_uri}"
+az storage blob download --blob-url "$store_uri" --file "$archive" --auth-mode login --output none \
+  || hosting::die "could not download ${store_uri}. An archive that cannot be read back is not a backup, so this REFUSES rather than letting the plan proceed to anything destructive."
+
+size="$(wc -c < "$archive" | tr -d ' ')"
+hosting::say size "$size"
+[ "$size" -gt 0 ] || hosting::die "the downloaded archive is ZERO BYTES"
+
+sha="$(sha256sum "$archive" | cut -d' ' -f1)"
+hosting::say sha256 "$sha"
+
+# pg_restore --list reads the custom-format table of contents without touching a database.
+toc="$(pg_restore --list "$archive" 2>/dev/null)" \
+  || hosting::die "pg_restore could not read a table of contents from the archive (${size} bytes). It is truncated or not a custom-format dump — either way it will not restore."
+
+tables="$(printf '%s\n' "$toc" | grep -c ' TABLE DATA ' || true)"
+hosting::say tables "$tables"
+hosting::log "table-of-contents entries with data: ${tables}"
+
+if [ "${tables:-0}" -lt 1 ]; then
+  rm -f "$archive"
+  hosting::die "the archive parses but contains NO table data. That is what an empty or wrong database dumps to, and restoring it would produce an instance with no content — refusing to report it as verified."
+fi
+
+rm -f "$archive"
+hosting::log "archive verified: ${size} bytes, ${tables} table(s), sha256 ${sha}"
+hosting::say verified true

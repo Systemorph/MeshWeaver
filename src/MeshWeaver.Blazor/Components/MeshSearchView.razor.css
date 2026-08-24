@@ -2,9 +2,146 @@
     width: 100%;
 }
 
+/* ----- Scope tabs: one shared search bar across scopes ----- */
+.mesh-search-scopes {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    margin-bottom: 12px;
+    overflow-x: auto;
+}
+
+.mesh-search-scope {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--neutral-foreground-rest);
+    white-space: nowrap;
+}
+
+.mesh-search-scope:hover {
+    color: var(--accent-fill-rest, #0078d4);
+}
+
+.mesh-search-scope-active {
+    border-bottom-color: var(--accent-fill-rest, #0078d4);
+    color: var(--accent-fill-rest, #0078d4);
+    font-weight: 600;
+}
+
+/* ----- Header: search box + view-options bar share ONE row on desktop, wrap when narrow ----- */
+.mesh-search-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.mesh-search-header .mesh-search-box {
+    flex: 1 1 320px;
+    min-width: 240px;
+    width: auto;
+    margin-bottom: 12px;
+}
+
+.mesh-search-header .mesh-search-viewbar {
+    flex: 0 0 auto;
+    margin-left: auto;
+    margin-bottom: 12px;
+}
+
+/* The search input is DESKTOP-only: under the mobile breakpoint the input, Search button and
+   query-gear hide (the chrome search covers mobile), while title/create/view-options stay. */
+@media (max-width: 640px) {
+    .mesh-search-mobile-hide {
+        display: none !important;
+    }
+
+    .mesh-search-header .mesh-search-box {
+        flex: 0 1 auto;
+        min-width: 0;
+    }
+}
+
 .mesh-search-box {
     margin-bottom: 16px;
     width: 100%;
+}
+
+/* ----- Icons mode: the phone-home grid (rounded icon, label beneath) ----- */
+.mesh-search-icons-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 16px 8px;
+    width: 100%;
+    padding: 8px 0;
+}
+
+.mesh-search-icon-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 4px;
+    border-radius: 12px;
+    text-decoration: none;
+    color: var(--neutral-foreground-rest);
+    cursor: pointer;
+}
+
+.mesh-search-icon-tile:hover {
+    background: var(--neutral-fill-hover, rgba(128, 128, 128, 0.08));
+}
+
+.mesh-search-icon-box {
+    width: 64px;
+    height: 64px;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--neutral-fill-rest, rgba(128, 128, 128, 0.08));
+    border: 1px solid var(--neutral-stroke-rest, rgba(128, 128, 128, 0.2));
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.mesh-search-icon-box img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 16px;
+}
+
+.mesh-search-icon-box svg {
+    width: 36px;
+    height: 36px;
+}
+
+.mesh-search-icon-emoji {
+    font-size: 34px;
+    line-height: 1;
+}
+
+.mesh-search-icon-initial {
+    font-size: 26px;
+    font-weight: 600;
+    opacity: 0.7;
+}
+
+.mesh-search-icon-label {
+    font-size: 12px;
+    line-height: 1.25;
+    text-align: center;
+    max-width: 100%;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    word-break: break-word;
 }
 
 .mesh-search-box-inner {

@@ -23,9 +23,11 @@ namespace MeshWeaver.AI.Plugins;
 /// with <c>.SubscribeOn(TaskPoolScheduler.Default)</c> (NEVER
 /// <c>Observable.FromAsync</c>, which is forbidden outside <c>IoPool</c>) so they never
 /// occupy the hub scheduler, and restores go through <c>IMeshService.UpdateNode</c>
-/// which is already reactive (<c>IObservable&lt;MeshNode&gt;</c>). A
-/// <see cref="TaskCompletionSource{T}"/> bridges the off-hub completions back to the
-/// caller. See <c>Doc/Architecture/AsynchronousCalls</c>.
+/// which is already reactive (<c>IObservable&lt;MeshNode&gt;</c>).
+/// <see cref="ToolTask.Bridge{T}"/> bridges the off-hub completions back to the caller —
+/// every terminal settles (value, error, EMPTY completion) and the round's cancellation token
+/// is observed, so a parked read cannot hold an <c>IoPoolNames.Ai</c> gate permit through
+/// teardown (#1956). See <c>Doc/Architecture/AsynchronousCalls</c>.
 /// </summary>
 public class VersionPlugin(IMessageHub hub)
 {
@@ -107,18 +109,21 @@ public class VersionPlugin(IMessageHub hub)
     /// version number, modification date, who changed it, name and node type.
     /// </summary>
     /// <param name="path">Path to the node (e.g. <c>OrgA/my-doc</c>).</param>
+    /// <param name="cancellationToken">The round's token — cancelling it unwinds the tool call and
+    /// disposes the version read. Bound automatically by <c>AIFunctionFactory</c>; never part of
+    /// the tool's JSON schema.</param>
     /// <returns>A task resolving to JSON of the versions, or a human-readable message when none exist or version history is unavailable.</returns>
     [Description("Lists all available versions of a node, ordered newest first. Returns version number, date, who changed it, and node name.")]
     public Task<string> GetVersions(
-        [Description("Path to the node (e.g., 'OrgA/my-doc')")] string path)
+        [Description("Path to the node (e.g., 'OrgA/my-doc')")] string path,
+        CancellationToken cancellationToken = default)
     {
         if (versionQuery == null)
             return Task.FromResult("Error: Version history is not available in this environment.");
 
         logger.LogInformation("GetVersions called for path={Path}", path);
 
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        GateOnRead(path)
+        var pipeline = GateOnRead(path)
             .SelectMany(canRead =>
             {
                 if (!canRead)
@@ -143,17 +148,23 @@ public class VersionPlugin(IMessageHub hub)
                     })
                     .ToList();
             })
-            .SubscribeOn(TaskPoolScheduler.Default)
-            .Subscribe(
-                versions => tcs.TrySetResult(versions.Count == 0
-                    ? $"No version history found for '{path}'."
-                    : JsonSerializer.Serialize(versions, hub.JsonSerializerOptions)),
-                ex =>
-                {
-                    logger.LogWarning(ex, "Error getting versions for {Path}", path);
-                    tcs.TrySetResult($"Error: {ex.Message}");
-                });
-        return tcs.Task;
+            .SubscribeOn(TaskPoolScheduler.Default);
+
+        return ToolTask.Bridge(
+            pipeline,
+            cancellationToken,
+            versions => versions.Count == 0
+                ? $"No version history found for '{path}'."
+                : JsonSerializer.Serialize(versions, hub.JsonSerializerOptions),
+            ex =>
+            {
+                logger.LogWarning(ex, "Error getting versions for {Path}", path);
+                return $"Error: {ex.Message}";
+            },
+            // An empty completion — a permission evaluator or a version store that completes
+            // without answering — reads as absence, exactly like a deny. Silence would park the
+            // round instead.
+            () => $"No version history found for '{path}'.");
     }
 
     /// <summary>
@@ -161,19 +172,21 @@ public class VersionPlugin(IMessageHub hub)
     /// </summary>
     /// <param name="path">Path to the node.</param>
     /// <param name="version">Version number to retrieve.</param>
+    /// <param name="cancellationToken">The round's token — cancelling it unwinds the tool call and
+    /// disposes the version read.</param>
     /// <returns>A task resolving to the serialized node JSON, or a message when the version is not found.</returns>
     [Description("Retrieves the full node content at a specific version number.")]
     public Task<string> GetVersion(
         [Description("Path to the node")] string path,
-        [Description("Version number to retrieve")] long version)
+        [Description("Version number to retrieve")] long version,
+        CancellationToken cancellationToken = default)
     {
         if (versionQuery == null)
             return Task.FromResult("Error: Version history is not available in this environment.");
 
         logger.LogInformation("GetVersion called for path={Path}, version={Version}", path, version);
 
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        GateOnRead(path)
+        var pipeline = GateOnRead(path)
             .SelectMany(canRead =>
             {
                 if (!canRead)
@@ -186,17 +199,20 @@ public class VersionPlugin(IMessageHub hub)
                 }
                 return versionQuery.GetVersion(path, version, hub.JsonSerializerOptions);
             })
-            .SubscribeOn(TaskPoolScheduler.Default)
-            .Subscribe(
-                node => tcs.TrySetResult(node == null
-                    ? $"Version {version} not found for '{path}'."
-                    : JsonSerializer.Serialize(node, hub.JsonSerializerOptions)),
-                ex =>
-                {
-                    logger.LogWarning(ex, "Error getting version {Version} for {Path}", version, path);
-                    tcs.TrySetResult($"Error: {ex.Message}");
-                });
-        return tcs.Task;
+            .SubscribeOn(TaskPoolScheduler.Default);
+
+        return ToolTask.Bridge(
+            pipeline,
+            cancellationToken,
+            node => node == null
+                ? $"Version {version} not found for '{path}'."
+                : JsonSerializer.Serialize(node, hub.JsonSerializerOptions),
+            ex =>
+            {
+                logger.LogWarning(ex, "Error getting version {Version} for {Path}", version, path);
+                return $"Error: {ex.Message}";
+            },
+            () => $"Version {version} not found for '{path}'.");
     }
 
     /// <summary>
@@ -205,19 +221,21 @@ public class VersionPlugin(IMessageHub hub)
     /// </summary>
     /// <param name="path">Path to the node.</param>
     /// <param name="version">Version number to restore to.</param>
+    /// <param name="cancellationToken">The round's token — cancelling it unwinds the tool call and
+    /// disposes the read/restore pipeline.</param>
     /// <returns>A task resolving to a status message reporting the restored and new version numbers.</returns>
     [Description("Restores a node to a specific version number. The historical state becomes the latest version.")]
     public Task<string> RestoreVersion(
         [Description("Path to the node")] string path,
-        [Description("Version number to restore to")] long version)
+        [Description("Version number to restore to")] long version,
+        CancellationToken cancellationToken = default)
     {
         if (versionQuery == null)
             return Task.FromResult("Error: Version history is not available in this environment.");
 
         logger.LogInformation("RestoreVersion called for path={Path}, version={Version}", path, version);
 
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        GateOnRead(path)
+        var pipeline = GateOnRead(path)
             .SelectMany(canRead =>
             {
                 if (!canRead)
@@ -237,17 +255,20 @@ public class VersionPlugin(IMessageHub hub)
                     return Observable.Return<(MeshNode? restored, long requestedVersion)>((null, version));
                 return meshService.UpdateNode(historicalNode with { Version = 0 })
                     .Select(updated => (restored: (MeshNode?)updated, requestedVersion: version));
-            })
-            .Subscribe(
-                result => tcs.TrySetResult(result.restored == null
-                    ? $"Version {result.requestedVersion} not found for '{path}'."
-                    : $"Restored '{path}' to version {result.requestedVersion}. New version: {result.restored.Version}."),
-                ex =>
-                {
-                    logger.LogWarning(ex, "Error restoring version {Version} for {Path}", version, path);
-                    tcs.TrySetResult($"Error: {ex.Message}");
-                });
-        return tcs.Task;
+            });
+
+        return ToolTask.Bridge(
+            pipeline,
+            cancellationToken,
+            result => result.restored == null
+                ? $"Version {result.requestedVersion} not found for '{path}'."
+                : $"Restored '{path}' to version {result.requestedVersion}. New version: {result.restored.Version}.",
+            ex =>
+            {
+                logger.LogWarning(ex, "Error restoring version {Version} for {Path}", version, path);
+                return $"Error: {ex.Message}";
+            },
+            () => $"Version {version} not found for '{path}'.");
     }
 
     /// <summary>
@@ -256,11 +277,14 @@ public class VersionPlugin(IMessageHub hub)
     /// </summary>
     /// <param name="path">Path to the node.</param>
     /// <param name="timestamp">ISO 8601 timestamp to restore to (e.g. <c>2026-03-25T14:30:00Z</c>).</param>
+    /// <param name="cancellationToken">The round's token — cancelling it unwinds the tool call and
+    /// disposes the read/restore pipeline.</param>
     /// <returns>A task resolving to a status message, or an error when the timestamp is invalid or no matching version exists.</returns>
     [Description("Restores a node to its state at a specific point in time. Finds the latest version before the given timestamp.")]
     public Task<string> RestoreFromPointInTime(
         [Description("Path to the node")] string path,
-        [Description("ISO 8601 timestamp to restore to (e.g., '2026-03-25T14:30:00Z')")] string timestamp)
+        [Description("ISO 8601 timestamp to restore to (e.g., '2026-03-25T14:30:00Z')")] string timestamp,
+        CancellationToken cancellationToken = default)
     {
         if (versionQuery == null)
             return Task.FromResult("Error: Version history is not available in this environment.");
@@ -270,8 +294,7 @@ public class VersionPlugin(IMessageHub hub)
         if (!DateTimeOffset.TryParse(timestamp, out var targetTime))
             return Task.FromResult($"Error: Invalid timestamp '{timestamp}'. Use ISO 8601 format (e.g., '2026-03-25T14:30:00Z').");
 
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        GateOnRead(path)
+        var pipeline = GateOnRead(path)
             .SelectMany(canRead =>
             {
                 if (!canRead)
@@ -299,26 +322,27 @@ public class VersionPlugin(IMessageHub hub)
                         return meshService.UpdateNode(historicalNode with { Version = 0 })
                             .Select(updated => (restored: (MeshNode?)updated, target: (MeshNodeVersion?)targetVersion));
                     });
-            })
-            .Subscribe(
-                result =>
-                {
-                    if (result.target == null)
-                        tcs.TrySetResult($"No version found for '{path}' at or before {timestamp}.");
-                    else if (result.restored == null)
-                        tcs.TrySetResult($"Could not retrieve version {result.target.Version} for '{path}'.");
-                    else
-                        tcs.TrySetResult(
-                            $"Restored '{path}' to version {result.target.Version} " +
-                            $"(from {result.target.LastModified.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}). " +
-                            $"New version: {result.restored.Version}.");
-                },
-                ex =>
-                {
-                    logger.LogWarning(ex, "Error restoring from point in time for {Path}", path);
-                    tcs.TrySetResult($"Error: {ex.Message}");
-                });
-        return tcs.Task;
+            });
+
+        return ToolTask.Bridge(
+            pipeline,
+            cancellationToken,
+            result =>
+            {
+                if (result.target == null)
+                    return $"No version found for '{path}' at or before {timestamp}.";
+                if (result.restored == null)
+                    return $"Could not retrieve version {result.target.Version} for '{path}'.";
+                return $"Restored '{path}' to version {result.target.Version} " +
+                       $"(from {result.target.LastModified.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}). " +
+                       $"New version: {result.restored.Version}.";
+            },
+            ex =>
+            {
+                logger.LogWarning(ex, "Error restoring from point in time for {Path}", path);
+                return $"Error: {ex.Message}";
+            },
+            () => $"No version found for '{path}' at or before {timestamp}.");
     }
 
     /// <summary>

@@ -27,43 +27,50 @@ public static class SkillTool
                 return Task.FromResult("Provide the skill's path — find skills with `search nodeType:Skill`.");
 
             // Authoritative single-node read (GetMeshNodeStream, not QueryAsync — the query index lags).
-            var tcs = new TaskCompletionSource<string>();
-            hub.GetMeshNodeStream(skillPath.Trim())
-                .Where(n => n is not null)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .Subscribe(
-                    node =>
-                    {
-                        var def = DefinitionOf(node!, hub.JsonSerializerOptions);
-                        var instructions = def?.Instructions;
-                        if (string.IsNullOrWhiteSpace(instructions))
-                        {
-                            tcs.TrySetResult($"Skill '{skillPath}' has no instructions to load.");
-                            return;
-                        }
+            //
+            // 🚨 The three terminals go through ToolTask.Bridge. Before #1956 this was a bare
+            // TaskCompletionSource with a 2-arg Subscribe, so the EMPTY-completion terminal was
+            // missing: a .Where(...)-filtered stream that completes without ever passing the filter
+            // (MeshNodeStreamCache completes its per-path subjects on eviction and on dispose)
+            // reached neither arm, and the task stayed pending forever. Timeout does not cover that
+            // — it passes an empty OnCompleted straight through. Nor was the token observed, so
+            // Stop could not end a load_skill parked on a hub that never activates.
+            return ToolTask.Bridge(
+                hub.GetMeshNodeStream(skillPath.Trim())
+                    .Where(n => n is not null)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(10)),
+                cancellationToken,
+                node => Answer(node!),
+                ex => $"Could not load skill '{skillPath}': {ex.Message}",
+                // An absent skill node is a CORRECT outcome, and the honest answer is that it is
+                // absent — the agent can then search for the right path instead of waiting.
+                () => $"Skill '{skillPath}' was not found — find skills with `search nodeType:Skill`.");
 
-                        // LaunchesSubThread: run the skill in its OWN sub-thread to keep the work out of
-                        // the main context, via the generic StartThread launcher (mainNode = this thread).
-                        var execCtx = chat.ExecutionContext;
-                        if (def!.LaunchesSubThread && execCtx is not null)
-                        {
-                            hub.StartThread(
-                                execCtx.ContextPath ?? execCtx.ThreadPath,
-                                instructions!,
-                                contextPath: execCtx.ContextPath,
-                                createdBy: execCtx.UserAccessContext?.ObjectId,
-                                mainNode: execCtx.ThreadPath);
-                            tcs.TrySetResult(
-                                $"Launched skill '{node!.Name ?? skillPath}' in a sub-thread to run in isolation. " +
-                                "Its result appears inline when it completes — continue with other work.");
-                            return;
-                        }
+            string Answer(MeshNode node)
+            {
+                var def = DefinitionOf(node, hub.JsonSerializerOptions);
+                var instructions = def?.Instructions;
+                if (string.IsNullOrWhiteSpace(instructions))
+                    return $"Skill '{skillPath}' has no instructions to load.";
 
-                        tcs.TrySetResult(instructions!);
-                    },
-                    ex => tcs.TrySetResult($"Could not load skill '{skillPath}': {ex.Message}"));
-            return tcs.Task;
+                // LaunchesSubThread: run the skill in its OWN sub-thread to keep the work out of
+                // the main context, via the generic StartThread launcher (mainNode = this thread).
+                var execCtx = chat.ExecutionContext;
+                if (def!.LaunchesSubThread && execCtx is not null)
+                {
+                    hub.StartThread(
+                        execCtx.ContextPath ?? execCtx.ThreadPath,
+                        instructions!,
+                        contextPath: execCtx.ContextPath,
+                        createdBy: execCtx.UserAccessContext?.ObjectId,
+                        mainNode: execCtx.ThreadPath);
+                    return $"Launched skill '{node.Name ?? skillPath}' in a sub-thread to run in isolation. " +
+                           "Its result appears inline when it completes — continue with other work.";
+                }
+
+                return instructions!;
+            }
         }
 
         return AIFunctionFactory.Create(

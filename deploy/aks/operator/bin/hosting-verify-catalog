@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# hosting-verify-catalog --namespace <ns> --expect-mounts <n> --expect-packages <n>
+#
+# Did the plugin catalog wiring actually take?
+#
+# 🚨 THE FAILURE THIS EXISTS FOR reads as a healthy instance: green pods, a working sign-in, and an
+# EMPTY STORE. No probe notices, because nothing errored — a registry mount that did not arrive is
+# indistinguishable from an instance that was never meant to have one, unless something states the
+# expectation. The mesh knows the expected counts (it composed the config), so it passes them here.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-verify-catalog"
+
+namespace="" expect_mounts="" expect_packages=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace)       namespace="${2:-}";       shift 2 ;;
+    --expect-mounts)   expect_mounts="${2:-}";   shift 2 ;;
+    --expect-packages) expect_packages="${2:-}"; shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::safe_name namespace "$namespace"
+expect_mounts="${expect_mounts:-0}"
+expect_packages="${expect_packages:-0}"
+
+if hosting::dry; then
+  echo "  DRY-RUN would assert ${expect_mounts} mount(s) and ${expect_packages} package pattern(s) in ${namespace}"
+  hosting::say catalog dry-run
+  exit 0
+fi
+
+cm="$(kubectl -n "$namespace" get cm memex-portal-config -o json 2>/dev/null)" \
+  || hosting::die "no memex-portal-config ConfigMap in ${namespace} — the release did not render one, so nothing configured the catalog"
+
+# One key per mount: PluginCatalog__Registries__<i>__Name.
+mounts="$(printf '%s' "$cm" | grep -o '"PluginCatalog__Registries__[0-9]*__Name"' | sort -u | wc -l | tr -d ' ')"
+packages="$(printf '%s' "$cm" | grep -o '"PluginCatalog__InstallByDefault__[0-9]*"' | sort -u | wc -l | tr -d ' ')"
+
+hosting::log "mounts   found ${mounts}, expected ${expect_mounts}"
+hosting::log "packages found ${packages}, expected ${expect_packages}"
+hosting::say catalog_mounts "$mounts"
+hosting::say catalog_packages "$packages"
+
+problems=()
+[ "$mounts"   -ge "$expect_mounts" ]   || problems+=("only ${mounts} of ${expect_mounts} registry mount(s) reached the ConfigMap")
+[ "$packages" -ge "$expect_packages" ] || problems+=("only ${packages} of ${expect_packages} pre-install pattern(s) reached the ConfigMap")
+
+if [ ${#problems[@]} -gt 0 ]; then
+  hosting::die "$(IFS='; '; echo "${problems[*]}"). This instance would come up green with an empty Store and nothing in any log explaining why — which is exactly the outcome this check exists to refuse. The catalog config is composed by the mesh (InstanceSpec) and layered by hosting-deploy as a values file; if it is missing here, that file did not reach the release."
+fi
+
+hosting::log "catalog wiring verified"

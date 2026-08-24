@@ -38,14 +38,13 @@ public class HomePageRegionsTest(PortalFixture fixture)
 
         // (b) The catalog — embedded via @@("area/Catalog") — must fill the home width.
         //
-        // The catalog region is the TABBED home (UserActivityLayoutAreas.BuildHome): a TabsControl
-        // (Shared with me · Pinned · Apps · Spaces — the first two only when present) rendering
-        // <fluent-tabs>, whose active panel holds a MeshSearch (<div class="mesh-search-container">).
-        // The default e2e user has the onboarding-seeded pins and no shares, so the active first
-        // tab is Pinned — a MeshSearch either way.
-        // Wait (don't count): CountAsync doesn't wait, so a transient 0 before the tabs render
+        // The catalog region is TWO sections (UserActivityLayoutAreas.BuildHome): the Apps icon
+        // grid on top, then the Content search whose SCOPE TABS (Pinned · Spaces · All — Pinned
+        // only when present) render as the .mesh-search-scopes strip and share one search bar.
+        // Shared with me is a third band, only with cross-partition grants.
+        // Wait (don't count): CountAsync doesn't wait, so a transient 0 before the strip renders
         // would flake this assertion.
-        await page.Locator("fluent-tabs").First
+        await page.Locator(".mesh-search-scopes").First
             .WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
         var catalog = page.Locator(".mesh-search-container").First;
         await catalog.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
@@ -66,5 +65,26 @@ public class HomePageRegionsTest(PortalFixture fixture)
         float pageW = doc.GetProperty("page").GetSingle();
         (catalogW / pageW).Should().BeGreaterThan(0.8f,
             $"the catalog should fill the home width, not shrink to content (catalog={catalogW:F0}px of {pageW:F0}px)");
+
+        // (c) The Apps SECTION is its own band ABOVE the content search — no tab click needed —
+        // and renders the viewer's app records as the phone-home ICON grid, painted straight from
+        // the query rows (no per-record hub). End-to-end proof that a user HAS apps (the "I don't
+        // have any apps" report), that the records query paints inside the wait budget, and that a
+        // tile links to the APP (/{user}/Chat — NavigateToMainNode), not to the record.
+        var threadsTile = page.Locator(".mesh-search-icon-tile", new PageLocatorOptions { HasTextString = "Threads" }).First;
+        await threadsTile.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
+        (await threadsTile.GetAttributeAsync("href")).Should().EndWith($"/{fixture.UserId}/Chat",
+            "an app tile opens the APP, never the {user}/_App record");
+        await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/home-apps.png", FullPage = true });
+
+        // (d) 🚨 THE regression the unit guard mirrors: nothing on the home may render through a
+        // layout area on ANOTHER node's hub. A MeshSearch ItemArea does exactly that — one hub
+        // activation per row, resolved on a hub this page does not own — and in the distributed
+        // portal it failed as an unresolvable area ("AppTile not found") while a monolith resolved
+        // it happily. A rendered page is the only place that shows up, so assert it HERE: no
+        // area-not-found placeholder, and no failed-render card, anywhere on the home.
+        var renderErrors = await page.Locator(
+                "text=/cannot be found|failed to render|Object reference not set/i").CountAsync();
+        renderErrors.Should().Be(0, "the home must not render any area-resolution or view failure");
     }
 }

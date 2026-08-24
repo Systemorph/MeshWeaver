@@ -1,69 +1,40 @@
-@using MeshWeaver.Graph
 @inherits NavItemView<NavLinkControl, NavLink>
+
+@* Two renderings, one control. In a dropdown menu (IsInMenuContext, cascaded by MenuItemView) the
+   link is a styled menu item. Everywhere else — the nav rail above all — it is OUR OWN anchor:
+   icon slot + ellipsis label + active accent. The FluentNavLink this used to wrap rendered node
+   icons unreliably (its label slot is built for text and a Fluent icon parameter), which is why
+   the rail's icons kept "not coming"; owning the markup makes every icon form deterministic
+   through MeshIcon. *@
 
 @if (IsInMenuContext)
 {
-    <a href="@Href" class="@MenuLinkClass" style="@Style" @onclick="OnClick">
-        @if (ResolvedFluentIcon is not null)
-        {
-            <FluentIcon Value="@ResolvedFluentIcon" Width="20px" Style="fill: var(--accent-fill-rest); flex-shrink: 0;" />
-        }
-        else
-        {
-            @RawIcon
-        }
+    <a href="@Href" class="@MenuLinkClass" style="@Style" aria-current="@AriaCurrent" @onclick="OnClick">
+        <MeshIcon Value="@Icon" />
         <span>@Title</span>
     </a>
 }
 else
 {
-    <FluentNavLink Href="@Href" Icon="@ResolvedFluentIcon" OnClick="@OnClick"
-                   Class="@NavLinkClass" Style="@Style">@RawIcon@Title</FluentNavLink>
+    <a href="@Href" class="@RailClass" style="@Style" title="@Title" aria-current="@AriaCurrent" @onclick="OnClick">
+        <span class="mw-nav-icon"><MeshIcon Value="@Icon" /></span>
+        <span class="mw-nav-label">@Title</span>
+    </a>
 }
 
 @code {
-    private Microsoft.FluentUI.AspNetCore.Components.Icon? ResolvedFluentIcon => Icon?.ToFluentIcon();
-
     /// <summary>
     /// The menu-context link's own classes plus the author-declared <c>Class</c>. Composed here because
     /// Razor cannot parse two adjacent explicit expressions in one attribute value.
     /// </summary>
     private string MenuLinkClass => $"menu-item-link{(IsActive ? " active" : "")}{ClassSuffix}";
 
-    /// <summary>
-    /// The nav-menu variant's class. The active-state token used to be the WHOLE value, so a declared
-    /// class was overwritten by it (and by the <c>null</c> in the inactive case). Both tokens are now
-    /// joined — and the result stays <c>null</c>, not <c>""</c>, when there is nothing to say, so an
-    /// inactive unstyled link emits no class attribute exactly as before.
-    /// </summary>
-    private string? NavLinkClass
-    {
-        get
-        {
-            var joined = string.Join(" ", new[] { IsActive ? "active" : null, Class }
-                .Where(token => !string.IsNullOrWhiteSpace(token)));
-            return string.IsNullOrEmpty(joined) ? null : joined;
-        }
-    }
+    /// <summary>The rail link's classes: base + active state + the author-declared <c>Class</c>.</summary>
+    private string RailClass => $"mw-nav-link{(IsActive ? " active" : "")}{ClassSuffix}";
 
-    // A MeshNode.Icon travels as a raw string and Icon.Parse classifies it (see Domain.Icon):
-    // Fluent names render through the FluentIcon slot above; the other forms render here with the
-    // SAME mechanism the node cards/thumbnails use — an image URL / data URI as <img>, inline
-    // <svg> markup verbatim (sized via MeshNodeImageHelper.SizeInlineSvg), and a text glyph
-    // (emoji) as text. Anything else renders nothing — never a throw, never a per-render log.
-    private RenderFragment RawIcon => __builder =>
-    {
-        if (Icon is { Provider: MeshWeaver.Domain.Icon.UrlProvider } urlIcon)
-        {
-            <img src="@urlIcon.Id" alt="" style="width: 20px; height: 20px; flex-shrink: 0; vertical-align: middle;" />
-        }
-        else if (Icon is { Provider: MeshWeaver.Domain.Icon.InlineSvgProvider } svgIcon)
-        {
-            <span style="display: inline-flex; flex-shrink: 0; vertical-align: middle;">@((MarkupString)MeshNodeImageHelper.SizeInlineSvg(svgIcon.Id, 20))</span>
-        }
-        else if (Icon is { Provider: MeshWeaver.Domain.Icon.TextProvider } textIcon)
-        {
-            <span style="font-size: 16px; flex-shrink: 0; vertical-align: middle;">@textIcon.Id</span>
-        }
-    };
+    /// <summary>
+    /// The active entry announces its state to assistive tech, not only visually — Blazor drops
+    /// the attribute entirely when this is null.
+    /// </summary>
+    private string? AriaCurrent => IsActive ? "page" : null;
 }

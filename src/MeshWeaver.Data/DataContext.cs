@@ -304,7 +304,47 @@ public sealed record DataContext : IDisposable
         logger.LogDebug("DataContext: DataSourcesByCollection has {Count} entries: {Collections}",
             DataSourcesByCollection.Count, string.Join(", ", DataSourcesByCollection.Keys));
 
-        // Initialize each data source
+        logger.LogDebug("DataContext configuration complete for {Address}, waiting for InitializeDataSources", Hub.Address);
+    }
+
+    /// <summary>
+    /// Starts each data source — the half of initialization that CREATES THINGS, split out of
+    /// <see cref="Initialize"/> so it can run OFF the hub's <c>Build</c> (#1868).
+    ///
+    /// <para>🚨 The split is the point, and it is not cosmetic. <see cref="Initialize"/> is pure
+    /// configuration — resolve the data sources, build the type sources, and REGISTER THEIR TYPES
+    /// with the hub's <c>ITypeRegistry</c> — and it must keep running inside <c>Build</c>, because a
+    /// caller that resolves the hub can read <c>TypeRegistry</c> the instant <c>Build</c> returns
+    /// (schema generation, content-discriminator validation). This method is the other half:
+    /// <c>IDataSource.Initialize</c> opens streams (<c>HubDataSource</c> eagerly calls
+    /// <c>GetStream</c> → <c>SynchronizationStream..ctor</c> → <c>GetHostedHub(sync/…)</c>), so
+    /// running it inside <c>Build</c> is what made every data-enabled hub construct a sub-hub
+    /// inside its own construction.</para>
+    ///
+    /// <para>Idempotent: a second call is a no-op, so a configurator that registers the observable
+    /// init twice cannot double-start the sources.</para>
+    /// </summary>
+    public void InitializeDataSources()
+    {
+        if (dataSourcesInitialized)
+            return;
+        dataSourcesInitialized = true;
+
+        // 🚨 A transient probe hub never STARTS its sources. It is built purely so the registry
+        // maps written by Initialize (inside Build) can be read, and it is disposed in the same
+        // breath — so the eager GetStream here (a sync/ sub-hub per source, on the init turn)
+        // races that dispose, and when dispose wins HostedHubsCollection logs its "Rejecting
+        // hosted hub creation … during disposal" warning: the exact line ProbeHubCostTest pins
+        // as a teardown fault, flaking CI red twice on 2026-08-22 and switching CD off both
+        // times. Lazy stream creation on a real request is untouched. See TransientNodeProbe.
+        if (Hub.Configuration.Get<TransientNodeProbe>() is { StartDataSources: false })
+        {
+            logger.LogDebug(
+                "DataContext: {Address} is a transient node probe — not starting its {Count} data "
+                + "sources (streams stay lazy)", Hub.Address, DataSourcesById.Count);
+            return;
+        }
+
         foreach (var dataSource in DataSourcesById.Values)
         {
             dataSource.Initialize();
@@ -312,8 +352,10 @@ public sealed record DataContext : IDisposable
             initialized.Add(dataSource.Reference);
         }
 
-        logger.LogDebug("DataContext initialization setup complete for {Address}, waiting for OpenInitializationGate", Hub.Address);
+        logger.LogDebug("DataContext data sources started for {Address}, waiting for OpenInitializationGate", Hub.Address);
     }
+
+    private bool dataSourcesInitialized;
 
     /// <summary>
     /// Identifies a data source in a diagnostic: its id plus the implementation type, which

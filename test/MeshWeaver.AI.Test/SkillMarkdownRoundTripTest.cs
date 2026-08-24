@@ -53,6 +53,80 @@ public class SkillMarkdownRoundTripTest
             Assert.Equal(od.Action?.Title, rd.Action?.Title);
             Assert.Equal(od.Action?.ContentPath, rd.Action?.ContentPath);
             Assert.Equal(od.Action?.Provider, rd.Action?.Provider);
+            AssertTranslationsEqual(od, rd, id);
+        }
+    }
+
+    /// <summary>
+    /// A hand-authored <c>translations:</c> block survives Parse → Serialize → Parse. Without this
+    /// the sync-back would silently DROP every translation the moment a skill was edited in the
+    /// mesh: the file would come back English-only, the guard would go green (an English-only pack
+    /// requires nothing), and only the German viewer would notice.
+    /// </summary>
+    [Fact]
+    public void ATranslatedSkill_RoundTrips_Lossless()
+    {
+        const string Authored =
+            "---\n" +
+            "nodeType: Skill\n" +
+            "name: /space\n" +
+            "description: Create a Space end-to-end.\n" +
+            "translations:\n" +
+            "  de:\n" +
+            "    name: /space\n" +
+            "    description: Legt einen Space vollständig an.\n" +
+            "---\n\n" +
+            "The procedure stays in one language.\n";
+
+        var parsed = SkillMarkdown.Parse(Authored, "space");
+        Assert.NotNull(parsed);
+        var def = Assert.IsType<SkillDefinition>(parsed!.Content);
+        Assert.NotNull(def.Translations);
+        Assert.Equal("Legt einen Space vollständig an.", def.Translations!["de"].Description);
+
+        var serialized = SkillMarkdown.Serialize(parsed);
+        Assert.Contains("translations:", serialized);
+
+        var reparsed = SkillMarkdown.Parse(serialized, "space");
+        Assert.NotNull(reparsed);
+        var rdef = Assert.IsType<SkillDefinition>(reparsed!.Content);
+        AssertTranslationsEqual(def, rdef, "space");
+
+        // The BODY is the skill's procedure — model-facing — and the translation block never
+        // touches it.
+        Assert.Equal(def.Instructions, rdef.Instructions);
+    }
+
+    /// <summary>
+    /// The inverse: an untranslated skill must come back with NO <c>translations:</c> key, so the
+    /// round-trip of the shipped files stays byte-comparable rather than gaining an empty block.
+    /// </summary>
+    [Fact]
+    public void AnUntranslatedSkill_SerializesWithoutATranslationsKey()
+    {
+        var parsed = SkillMarkdown.Parse(
+            "---\nnodeType: Skill\ndescription: Plain.\n---\n\nBody.\n", "plain");
+        Assert.NotNull(parsed);
+        Assert.Null(((SkillDefinition)parsed!.Content!).Translations);
+        Assert.DoesNotContain("translations:", SkillMarkdown.Serialize(parsed));
+    }
+
+    private static void AssertTranslationsEqual(SkillDefinition expected, SkillDefinition actual, string id)
+    {
+        if (expected.Translations is null)
+        {
+            Assert.True(actual.Translations is null, $"{id}: translations appeared out of nowhere");
+            return;
+        }
+        Assert.NotNull(actual.Translations);
+        Assert.Equal(
+            expected.Translations.Keys.OrderBy(k => k, System.StringComparer.Ordinal),
+            actual.Translations!.Keys.OrderBy(k => k, System.StringComparer.Ordinal));
+        foreach (var (tag, text) in expected.Translations)
+        {
+            Assert.Equal(text.Name, actual.Translations[tag].Name);
+            Assert.Equal(text.Description, actual.Translations[tag].Description);
+            Assert.Equal(text.Category, actual.Translations[tag].Category);
         }
     }
 

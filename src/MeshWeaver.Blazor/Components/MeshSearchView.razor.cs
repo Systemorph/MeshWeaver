@@ -141,7 +141,8 @@ public partial class MeshSearchView
 
     // Basic properties
     private string? BoundTitle => ViewModel?.Title?.ToString();
-    private string BoundHiddenQuery => _overriddenHiddenQuery ?? ViewModel?.HiddenQuery?.ToString() ?? "";
+    private string BoundHiddenQuery =>
+        _overriddenHiddenQuery ?? ActiveScopeTab?.Query ?? ViewModel?.HiddenQuery?.ToString() ?? "";
     private string BoundVisibleQuery => ViewModel?.VisibleQuery?.ToString() ?? "";
     private string BoundPlaceholder => ViewModel?.Placeholder?.ToString() ?? "Search...";
     private string BoundNamespace => ViewModel?.Namespace?.ToString() ?? "";
@@ -202,6 +203,11 @@ public partial class MeshSearchView
     {
         get
         {
+            // The active SCOPE's render mode wins (e.g. the home's Apps scope renders the
+            // phone-home icon grid); the control-level mode is the scope-less fallback.
+            if (ActiveScopeTab?.RenderMode is { Length: > 0 } scopedMode
+                && Enum.TryParse<MeshSearchRenderMode>(scopedMode, true, out var scoped))
+                return scoped;
             switch (ViewModel?.RenderMode)
             {
                 case MeshSearchRenderMode mode:
@@ -242,9 +248,29 @@ public partial class MeshSearchView
 
     /// <summary>The combobox only toggles the non-grouped presentation (Flat/List) ↔ Grouped; the
     /// tree / navigator modes manage their own browse surface, so the selector is hidden there. List is
-    /// eligible so the global search page (which defaults to List) keeps its view-options bar.</summary>
+    /// eligible so the global search page (which defaults to List) keeps its view-options bar. The
+    /// Icons grid (a phone home screen) deliberately shows no view-options bar either.</summary>
     private bool SelectorEligible =>
         BoundRenderMode is MeshSearchRenderMode.Flat or MeshSearchRenderMode.List or MeshSearchRenderMode.Grouped;
+
+    /// <summary>Navigate a result to its <c>MainNode</c> instead of its own path — the active
+    /// scope's setting wins over the control-level one (default false).</summary>
+    private bool BoundNavigateToMainNode
+    {
+        get
+        {
+            if (ActiveScopeTab?.NavigateToMainNode is { } scoped) return scoped;
+            if (ViewModel?.NavigateToMainNode is bool b) return b;
+            if (ViewModel?.NavigateToMainNode is JsonElement je) return je.ValueKind == JsonValueKind.True;
+            return false;
+        }
+    }
+
+    /// <summary>The navigation target of one result row: its <c>MainNode</c> when
+    /// <see cref="BoundNavigateToMainNode"/> is on (and set), else its own path. This is also the
+    /// path the presentation screen filters on — the target is what a click would reveal.</summary>
+    private string TargetOf(MeshNode node) =>
+        BoundNavigateToMainNode && !string.IsNullOrEmpty(node.MainNode) ? node.MainNode : node.Path;
 
     /// <summary>
     /// The render mode after applying the combobox choice: None ⇒ the page's non-grouped presentation
@@ -268,6 +294,121 @@ public partial class MeshSearchView
 
     /// <summary>One-per-row list presentation (icon · title · description) for the global search page.</summary>
     private bool IsListMode => EffectiveRenderMode == MeshSearchRenderMode.List;
+
+    /// <summary>The phone-home icon grid (rounded icon, label beneath) — rendered entirely from
+    /// the query rows: no per-result content read, no per-result hub.</summary>
+    private bool IsIconsMode => EffectiveRenderMode == MeshSearchRenderMode.Icons;
+
+    // ----- "Most recently used first" (MeshSearchScopeTab.SortByAccess) -----
+    // The viewer's own access log, keyed the way it is STORED: a UserActivity node per visited
+    // path at {viewer}/_UserActivity/{path with '/' → '_'}. That mangling is one-way, so we never
+    // reverse it — we mangle each tile's TARGET the same way and look it up. One cheap
+    // single-partition query, subscribed only by a scope that asked for this ordering.
+    private IDisposable? _accessOrderSubscription;
+    private ImmutableDictionary<string, DateTimeOffset> _accessOrder = ImmutableDictionary<string, DateTimeOffset>.Empty;
+    private string? _accessOrderViewer;
+
+    /// <summary>Order this scope's results by the viewer's last access of each result's target
+    /// (the active scope's opt-in; the home's Apps grid sets it).</summary>
+    private bool BoundSortByAccess => ActiveScopeTab?.SortByAccess ?? false;
+
+    /// <summary>Order grouped sections by SIZE instead of alphabetically — the home's content
+    /// section fans out by node type with the biggest type first.</summary>
+    private bool BoundGroupByFrequency
+    {
+        get
+        {
+            if (ViewModel?.GroupByFrequency is bool b) return b;
+            if (ViewModel?.GroupByFrequency is JsonElement je) return je.ValueKind == JsonValueKind.True;
+            return false;
+        }
+    }
+
+    /// <summary>The activity id the access log stores a visit to <paramref name="path"/> under.</summary>
+    private static string AccessKeyOf(string path) => path.Replace('/', '_');
+
+    /// <summary>
+    /// Results in paint order: most-recently-opened first when the scope asked for it, with
+    /// never-opened results keeping the query's own order BEHIND them (never dropped — that is
+    /// exactly what a `source:accessed` INNER JOIN would have done to a freshly installed app).
+    /// A stable sort, so the query's order survives inside each group.
+    /// </summary>
+    private IReadOnlyList<MeshNode> PaintOrdered(IReadOnlyList<MeshNode> nodes)
+    {
+        if (!BoundSortByAccess || _accessOrder.IsEmpty || nodes.Count < 2)
+            return nodes;
+        return nodes
+            .OrderByDescending(n =>
+                _accessOrder.TryGetValue(AccessKeyOf(TargetOf(n)), out var at) ? at : DateTimeOffset.MinValue)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Subscribes the viewer's access log when the active scope sorts by it. Deliberately a
+    /// SECOND pass: the tiles paint from their own query the moment it lands, and this re-orders
+    /// them when the log arrives — the ordering is never allowed to gate the first paint.
+    /// </summary>
+    private void SubscribeToAccessOrder()
+    {
+        var viewer = BoundSortByAccess ? Access.ViewerId() : null;
+        if (string.IsNullOrEmpty(viewer))
+        {
+            _accessOrderSubscription?.Dispose();
+            _accessOrderSubscription = null;
+            _accessOrderViewer = null;
+            _accessOrder = ImmutableDictionary<string, DateTimeOffset>.Empty;
+            return;
+        }
+        if (string.Equals(viewer, _accessOrderViewer, StringComparison.OrdinalIgnoreCase))
+            return;   // already watching this viewer's log
+        _accessOrderViewer = viewer;
+        _accessOrderSubscription?.Dispose();
+        _accessOrderSubscription = MeshQuery
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{viewer}/_UserActivity nodeType:UserActivity " +
+                "select:path,id,namespace,name,nodeType,lastModified sort:LastModified-desc limit:500"))
+            // 🚨 FOLD the change feed — never rebuild from change.Items. Only Initial/Reset carry a
+            // full snapshot; Added/Updated/Removed carry ONLY the rows that changed, so rebuilding
+            // would replace the whole lookup with the one row that just moved and mis-order every
+            // tile from the first update onwards. Same Scan shape as ObserveSharedTargets.
+            .Scan(ImmutableDictionary<string, DateTimeOffset>.Empty, (map, change) =>
+            {
+                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                    return change.Items
+                        .Where(n => !string.IsNullOrEmpty(n.Id))
+                        .GroupBy(n => n.Id!, StringComparer.OrdinalIgnoreCase)
+                        .ToImmutableDictionary(g => g.Key, g => g.First().LastModified,
+                            StringComparer.OrdinalIgnoreCase);
+                foreach (var node in change.Items)
+                {
+                    if (string.IsNullOrEmpty(node.Id))
+                        continue;
+                    map = change.ChangeType switch
+                    {
+                        QueryChangeType.Added or QueryChangeType.Updated =>
+                            map.SetItem(node.Id!, node.LastModified),
+                        QueryChangeType.Removed => map.Remove(node.Id!),
+                        _ => map,
+                    };
+                }
+                return map;
+            })
+            .Subscribe(
+                next => InvokeAsync(() =>
+                {
+                    if (next.Count == _accessOrder.Count && next.All(kv =>
+                            _accessOrder.TryGetValue(kv.Key, out var at) && at == kv.Value))
+                        return;
+                    _accessOrder = next;
+                    // Re-PROJECT, not just re-render: the order is applied where results are
+                    // projected (ApplyResults), so a bare StateHasChanged would repaint the
+                    // previous order. Same re-projection the screen subscription uses.
+                    ReprojectForScreen();
+                }),
+                ex => MeshHub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.MeshSearchView")
+                    .LogWarning(ex, "Access-order stream ended for {Viewer}; keeping query order", viewer));
+    }
 
     /// <summary>The fallback subtitle shown on a search row when the node has no description.</summary>
     private const string NoDescriptionPrompt = "Ask the agent to create a description.";
@@ -305,12 +446,74 @@ public partial class MeshSearchView
         }
     }
 
+    // ----- Scope tabs (one shared search bar across scopes) -----
+    // The active tab is tracked by its LABEL, not an index: the scope list is REACTIVE (a scope
+    // like Shared-with-me appears/disappears as grants, pins or the presentation screen change),
+    // so a bare index could silently re-point at a DIFFERENT scope on a list change. The label
+    // re-resolves against the current list on every read; a vanished label clamps to the first
+    // tab. Scope switching swaps ONLY the hidden query (and the sort set) while the typed search
+    // text and every other bit of component state stay — that is the whole point: a search term
+    // follows the user across the tabs because they are ONE component.
+    private string? _activeScopeLabel;
+
+    /// <summary>The scope tabs supplied by the control (empty ⇒ no strip).</summary>
+    private IReadOnlyList<MeshSearchScopeTab> BoundScopeTabs => ViewModel?.ScopeTabs ?? [];
+
+    /// <summary>Render the scope strip only for two or more scopes.</summary>
+    private bool HasScopeTabs => BoundScopeTabs.Count > 1;
+
+    /// <summary>The active tab's index, re-resolved from the label against the CURRENT list —
+    /// clamped to the first tab when the label is unset or its scope vanished.</summary>
+    private int ActiveScopeIndex
+    {
+        get
+        {
+            var tabs = BoundScopeTabs;
+            if (tabs.Count == 0 || _activeScopeLabel is null)
+                return 0;
+            for (var i = 0; i < tabs.Count; i++)
+                if (tabs[i].Label == _activeScopeLabel)
+                    return i;
+            return 0;
+        }
+    }
+
+    /// <summary>The active scope, when scopes are declared.</summary>
+    private MeshSearchScopeTab? ActiveScopeTab =>
+        BoundScopeTabs.Count > 0 ? BoundScopeTabs[ActiveScopeIndex] : null;
+
+    /// <summary>
+    /// Activates a scope tab: swap the base hidden query to the scope's, reset the sort choice to
+    /// the scope's own default, and re-query — keeping the search text (<c>_currentValue</c>)
+    /// untouched, exactly like a sort switch.
+    /// </summary>
+    private void SelectScope(int index)
+    {
+        if (index == ActiveScopeIndex || index < 0 || index >= BoundScopeTabs.Count)
+            return;
+        _activeScopeLabel = BoundScopeTabs[index].Label;
+        _viewSortLabel = null;                     // back to the scope's default (first) sort
+        _overriddenHiddenQuery = null;             // the scope query IS the new base
+        _lastBoundHiddenQuery = BoundHiddenQuery;  // keep OnParametersSet from re-triggering
+        _collapsedGroups.Clear();
+        if (IsPrecomputedMode)
+            return;
+        if (IsNamespaceTreeMode)
+            ResetTree();
+        else if (IsGraphNavigatorMode)
+            ResetGraphNavigator();
+        else
+            LoadResults();
+    }
+
     // ----- Sort-by dropdown (view-options) -----
     // The selected option's Label. null ⇒ the default (first) option.
     private string? _viewSortLabel;
 
-    /// <summary>The user-selectable sort choices supplied by the control (empty ⇒ no Sort-by dropdown).</summary>
-    private IReadOnlyList<MeshSearchSortOption> BoundSortOptions => ViewModel?.SortOptions ?? [];
+    /// <summary>The user-selectable sort choices supplied by the control (empty ⇒ no Sort-by dropdown).
+    /// An active scope's own sort set REPLACES the control-level one.</summary>
+    private IReadOnlyList<MeshSearchSortOption> BoundSortOptions =>
+        ActiveScopeTab?.SortOptions ?? ViewModel?.SortOptions ?? [];
 
     /// <summary>Render the Sort-by dropdown only when the control declares options.</summary>
     private bool HasSortOptions => BoundSortOptions.Count > 0;
@@ -622,6 +825,9 @@ public partial class MeshSearchView
         _isLoading = true;
         StateHasChanged();
         SubscribeToResultStream();
+        // Second pass, never a gate: the tiles paint from the query above; this re-orders them
+        // when the viewer's access log lands (and is a no-op for every scope that didn't ask).
+        SubscribeToAccessOrder();
     }
 
     // ReactiveMode and the default (one-shot-style) mode are now the SAME storm-resistant
@@ -771,9 +977,11 @@ public partial class MeshSearchView
         // The presentation screen (#1803): display-only, per-viewer, and applied to what is
         // PAINTED — the query, the permissions and the nodes themselves are untouched, and this is
         // a no-op for every viewer whose mode is off.
-        visible = _screen.Filter(visible, n => n.Path);
+        visible = _screen.Filter(visible, TargetOf);
 
-        _nodes = visible.ToList();
+        // Most-recently-used first when the scope asked for it — applied HERE, so every render
+        // mode (icons, flat, list, grouped) honours it, not just the grid that first needed it.
+        _nodes = PaintOrdered(visible.ToList()).ToList();
         ResolveDeletePermissions(_nodes);
 
         if (ViewModel != null)
@@ -859,13 +1067,19 @@ public partial class MeshSearchView
                     Items = limitedItems.Cast<object>().ToList(),
                     TotalCount = items.Count
                 };
-            })
-            .OrderBy(g => g.Label)
-            .ToList();
+            });
+
+        // BY FREQUENCY when asked (the home's content section): the type you have most of leads,
+        // so the page opens on what you actually work with instead of whatever starts with "A".
+        // Ties fall back to the label so the order is stable across renders.
+        groups = BoundGroupByFrequency
+            ? groups.OrderByDescending(g => g.TotalCount).ThenBy(g => g.Label)
+            : groups.OrderBy(g => g.Label);
+        var orderedGroups = groups.ToList();
 
         return new GroupedSearchResult
         {
-            Groups = groups,
+            Groups = orderedGroups,
             TotalItems = sortedNodes.Count
         };
     }
@@ -1016,6 +1230,25 @@ public partial class MeshSearchView
     }
 
     /// <summary>
+    /// Row-only projection for surfaces painted entirely from the query rows — the two-iteration
+    /// load's FIRST iteration: everything EXCEPT <c>content</c> ships (the select list gates ONLY
+    /// the content column; every other MeshNode field — MainNode included — always returns), so
+    /// the grid paints as fast as the rows arrive. The SECOND iteration is the reactive
+    /// subscription itself: row updates (a healed icon, a new record) stream in and re-paint.
+    /// Content is only ever consumed by group-by-over-content-properties, and the Icons grid never
+    /// offers the group-by selector (<see cref="SelectorEligible"/>), so nothing can miss it.
+    /// </summary>
+    private const string RowOnlySelect =
+        "select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified";
+
+    /// <summary>Applies <see cref="RowOnlySelect"/> in Icons mode unless the authored query
+    /// already carries its own projection.</summary>
+    private string WithRowProjection(string query) =>
+        IsIconsMode && !query.Contains("select:", StringComparison.OrdinalIgnoreCase)
+            ? $"{query} {RowOnlySelect}"
+            : query;
+
+    /// <summary>
     /// Builds the query request for the main result stream. A hidden query may declare a UNION of
     /// sub-queries, one per LINE (e.g. the home catalog's first-level index — "partition roots the user
     /// can read" on one line, "the user's home direct children" on another). Each sub-query is combined
@@ -1028,11 +1261,11 @@ public partial class MeshSearchView
         var subQueries = BoundHiddenQuery
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (subQueries.Length <= 1)
-            return MeshQueryRequest.FromQuery(BuildFullQuery());
+            return MeshQueryRequest.FromQuery(WithRowProjection(BuildFullQuery()));
 
         var visible = string.IsNullOrWhiteSpace(_currentValue) ? null : _currentValue.Trim();
         var unioned = subQueries
-            .Select(q => visible is null ? q : $"{q} {visible}")
+            .Select(q => WithRowProjection(visible is null ? q : $"{q} {visible}"))
             .ToArray();
         return MeshQueryRequest.FromQueries(unioned);
     }
@@ -1114,6 +1347,9 @@ public partial class MeshSearchView
     {
         get
         {
+            // The active SCOPE's item area wins (e.g. the home's Apps scope renders its records
+            // through AppTile); the control-level one is the scope-less fallback.
+            if (ActiveScopeTab?.ItemArea is { Length: > 0 } scoped) return scoped;
             if (ViewModel?.ItemArea is string s) return s;
             if (ViewModel?.ItemArea is JsonElement je && je.ValueKind == JsonValueKind.String)
                 return je.GetString();
@@ -1447,7 +1683,7 @@ public partial class MeshSearchView
         // The presentation screen (#1803) applies to the browse LEVEL — one funnel for every tree
         // level, lazily loaded or not. Display-only: the query above is unchanged, and the child
         // count of a folder that survives is still its real one.
-        nodes = _screen.Filter(nodes, n => n.Path).ToImmutableList();
+        nodes = _screen.Filter(nodes, TargetOf).ToImmutableList();
         if (nodes.Count == 0)
         {
             InvokeAsync(() =>
@@ -1569,7 +1805,7 @@ public partial class MeshSearchView
                         default:
                             return;
                     }
-                    var painted = _screen.Filter(resultNodes.Values, n => n.Path).ToImmutableList();
+                    var painted = _screen.Filter(resultNodes.Values, TargetOf).ToImmutableList();
                     var items = NamespaceTreeBuilder.Build(root, painted);
                     ResolveDeletePermissions(painted);
                     InvokeAsync(() =>
@@ -1913,14 +2149,12 @@ public partial class MeshSearchView
             return;
         }
 
+        // A refused delete is USER-FACING, never a silent no-op: the server is the authority (the
+        // trash affordance is convenience), so its refusal must reach the viewer. SurfaceError is
+        // the canonical surface — modal via PortalErrorSink + inline + Error log.
         _affordanceSubscriptions.Add(MeshQuery.DeleteNode(path).Subscribe(
             _ => { },
-            ex =>
-            {
-                var logger = MeshHub.ServiceProvider.GetService<ILoggerFactory>()
-                    ?.CreateLogger("MeshWeaver.MeshSearchView");
-                logger?.LogWarning(ex, "MeshSearchView delete failed: {Path}", path);
-            }));
+            ex => SurfaceError(ex, $"Deleting '{path}'")));
 
         if (string.Equals(_keyboardSelectedPath, path, StringComparison.OrdinalIgnoreCase))
             _keyboardSelectedPath = null;
@@ -2074,6 +2308,7 @@ public partial class MeshSearchView
     public override ValueTask DisposeAsync()
     {
         _screenSubscription?.Dispose();
+        _accessOrderSubscription?.Dispose();
         _reactiveSubscription?.Dispose();
         DisposeTreeSubscriptions();
         _navSubscription?.Dispose();
