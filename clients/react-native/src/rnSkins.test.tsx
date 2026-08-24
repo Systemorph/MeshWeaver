@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import React from "react";
 import TestRenderer, { type ReactTestRendererJSON } from "react-test-renderer";
 import { RegistryProvider, ScopeProvider, RenderArea, StaticAreaSource, type AreaTree } from "@meshweaver/react/core";
-import { rnPack } from "./rnPack";
+import { fullPack } from "./modules/standard";
 import { gridItemSpan, paneSpec, tabLabel } from "./rnSkins";
 
 // The thirteen skins the RN pack was missing. Two levels of proof: the pure sizing/label decisions
@@ -15,7 +15,7 @@ function renderTree(tree: AreaTree, root = "main"): Json {
   let r!: TestRenderer.ReactTestRenderer;
   TestRenderer.act(() => {
     r = TestRenderer.create(
-      <RegistryProvider pack={rnPack}>
+      <RegistryProvider pack={fullPack}>
         <ScopeProvider source={new StaticAreaSource(tree)} area={root}>
           <RenderArea areaKey={root} />
         </ScopeProvider>

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { rnPack, rnPlaceholderControlTypes } from "./rnPack";
+import { fullPack } from "./modules/standard";
 
 // Feature-parity guard for the React Native leaf pack — the RN twin of the web pack's
 // clients/react/src/render/parity.test.ts.
@@ -77,33 +78,33 @@ describe("React Native ↔ Blazor control parity", () => {
   });
 
   it("the RN pack registers every Blazor leaf control $type", () => {
-    const missing = BLAZOR_LEAF_CONTROLS.filter((t) => !(t in rnPack.controls));
+    const missing = BLAZOR_LEAF_CONTROLS.filter((t) => !(t in fullPack.controls));
     expect(missing, `Missing Blazor controls in the RN pack: ${missing.join(", ")}`).toEqual([]);
   });
 
   it("the RN pack registers every Blazor skin $type", () => {
-    const missing = BLAZOR_SKINS.filter((t) => !(t in rnPack.skins) && !SKINS_HANDLED_BY_PARENT.includes(t));
+    const missing = BLAZOR_SKINS.filter((t) => !(t in fullPack.skins) && !SKINS_HANDLED_BY_PARENT.includes(t));
     expect(missing, `Missing Blazor skins in the RN pack: ${missing.join(", ")}`).toEqual([]);
   });
 
   it("also covers the controls dispatched by the external view packs", () => {
-    const missing = EXTERNALLY_PACKED_CONTROLS.filter((t) => !(t in rnPack.controls));
+    const missing = EXTERNALLY_PACKED_CONTROLS.filter((t) => !(t in fullPack.controls));
     expect(missing, `Missing externally-packed controls: ${missing.join(", ")}`).toEqual([]);
   });
 
   it("also covers the skins dispatched by the external view packs", () => {
-    const missing = EXTERNALLY_PACKED_SKINS.filter((t) => !(t in rnPack.skins));
+    const missing = EXTERNALLY_PACKED_SKINS.filter((t) => !(t in fullPack.skins));
     expect(missing, `Missing externally-packed skins: ${missing.join(", ")}`).toEqual([]);
   });
 
   it("registered controls are React components (functions), not accidental values", () => {
     const all = [...BLAZOR_LEAF_CONTROLS, ...EXTERNALLY_PACKED_CONTROLS];
-    const bad = all.filter((t) => t in rnPack.controls && typeof rnPack.controls[t] !== "function");
+    const bad = all.filter((t) => t in fullPack.controls && typeof fullPack.controls[t] !== "function");
     expect(bad, `Non-component control entries: ${bad.join(", ")}`).toEqual([]);
   });
 
   it("registered skins are React components (functions), not accidental values", () => {
-    const bad = BLAZOR_SKINS.filter((t) => t in rnPack.skins && typeof rnPack.skins[t] !== "function");
+    const bad = BLAZOR_SKINS.filter((t) => t in fullPack.skins && typeof fullPack.skins[t] !== "function");
     expect(bad, `Non-component skin entries: ${bad.join(", ")}`).toEqual([]);
   });
 
@@ -122,12 +123,12 @@ describe("React Native ↔ Blazor control parity", () => {
   // how a "port" silently becomes a stub — DataGrid standing in for PivotGrid renders numbers with
   // no aggregation, and nothing fails.
   it("no control regresses to an alias of another", () => {
-    expect(rnPack.controls.PivotGrid).not.toBe(rnPack.controls.DataGrid);
-    expect(rnPack.controls.MeshNodeCollection).not.toBe(rnPack.controls.Catalog);
-    expect(rnPack.controls.MeshSearch).not.toBe(rnPack.controls.SearchBox);
-    expect(rnPack.controls.DiffEditor).not.toBe(rnPack.controls.CodeEditor);
-    expect(rnPack.controls.NodeImport).not.toBe(rnPack.controls.NodeExport);
-    expect(rnPack.controls.Video).not.toBe(rnPack.controls.SlideShow);
+    expect(fullPack.controls.PivotGrid).not.toBe(fullPack.controls.DataGrid);
+    expect(fullPack.controls.MeshNodeCollection).not.toBe(fullPack.controls.Catalog);
+    expect(fullPack.controls.MeshSearch).not.toBe(fullPack.controls.SearchBox);
+    expect(fullPack.controls.DiffEditor).not.toBe(fullPack.controls.CodeEditor);
+    expect(fullPack.controls.NodeImport).not.toBe(fullPack.controls.NodeExport);
+    expect(fullPack.controls.Video).not.toBe(fullPack.controls.SlideShow);
     // CodeEditor/Editor and MarkdownEditor/CollaborativeMarkdown intentionally share views (same
     // wire contract), matching the web pack.
   });

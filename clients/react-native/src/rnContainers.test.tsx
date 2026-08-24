@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import React from "react";
 import TestRenderer, { type ReactTestRendererJSON } from "react-test-renderer";
 import { RegistryProvider, ScopeProvider, RenderArea, StaticAreaSource, type AreaTree } from "@meshweaver/react/core";
-import { rnPack } from "./rnPack";
+import { fullPack } from "./modules/standard";
 
 // The container + media leaves. The regression these pin: an UNREGISTERED container renders the
 // "Unsupported" fallback and its child area DISAPPEARS — a commentable node would lose its whole
@@ -14,7 +14,7 @@ function renderTree(tree: AreaTree): Json {
   let r!: TestRenderer.ReactTestRenderer;
   TestRenderer.act(() => {
     r = TestRenderer.create(
-      <RegistryProvider pack={rnPack}>
+      <RegistryProvider pack={fullPack}>
         <ScopeProvider source={new StaticAreaSource(tree)} area="main">
           <RenderArea areaKey="main" />
         </ScopeProvider>

@@ -24,18 +24,23 @@ export interface Palette {
   inputBg: string;
 }
 
+// The ACCENT is the deployment's (deployment/*.json → branding.accent/accentDark) — a client
+// portal's app carries its brand color without a code change; everything else stays the shared
+// chrome palette.
+import { deploymentBranding } from "./deploymentBranding.generated";
+
 const LIGHT: Palette = {
   appBg: "#ffffff", topbarBg: "#faf9f8", surface: "#ffffff", border: "#e3e3e3",
   sidebarBg: "#f5f5f7", rightBg: "#faf9f8", text: "#242424", textSubtle: "#616161",
-  textMuted: "#8a8a8a", accent: "#0f6cbd", onAccent: "#ffffff", navHover: "#ececee",
-  navActiveBg: "#e1ebf7", navActiveText: "#0f6cbd", inputBg: "#ffffff",
+  textMuted: "#8a8a8a", accent: deploymentBranding.accent, onAccent: "#ffffff", navHover: "#ececee",
+  navActiveBg: "#e1ebf7", navActiveText: deploymentBranding.accent, inputBg: "#ffffff",
 };
 
 const DARK: Palette = {
   appBg: "#1b1a19", topbarBg: "#252423", surface: "#2d2c2b", border: "#3b3a39",
   sidebarBg: "#201f1e", rightBg: "#252423", text: "#f3f2f1", textSubtle: "#c8c6c4",
-  textMuted: "#979593", accent: "#4aa3e8", onAccent: "#ffffff", navHover: "#323130",
-  navActiveBg: "#2b3a4a", navActiveText: "#6cb8f0", inputBg: "#1b1a19",
+  textMuted: "#979593", accent: deploymentBranding.accentDark, onAccent: "#ffffff", navHover: "#323130",
+  navActiveBg: "#2b3a4a", navActiveText: deploymentBranding.accentDark, inputBg: "#1b1a19",
 };
 
 interface ThemeCtx {
