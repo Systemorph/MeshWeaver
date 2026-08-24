@@ -482,6 +482,30 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
     // passthrough when not registered or no master key is configured.
     private string? Protect(string? plaintext)
     {
+        // Null/empty is not a key — keyless providers (Copilot, local Claude Code CLI) carry none.
+        if (string.IsNullOrEmpty(plaintext))
+            return plaintext;
+
+        // 🚨 Guard on the MASTER KEY, not on the protector. IProviderKeyProtector is registered
+        // unconditionally (TryAddSingleton in LanguageModelNodeType), so `protector is null` was a
+        // DEAD branch and this method silently persisted raw keys whenever no master key was
+        // configured — which is how a live OpenRouter key ended up in cleartext in production node
+        // content (found 2026-08-24, readable by anyone with read on that namespace).
+        //
+        // The check belongs HERE and not in ProviderKeyProtector.Protect(): the seeding path
+        // (ProviderCredentialSeeder) deliberately relies on that passthrough so it can detect the
+        // unprotected case and report ProviderSeedOutcome.RefusedUnprotected — a structured,
+        // observable refusal. Throwing down there would turn its graceful refusal into an
+        // exception. This is the INTERACTIVE write path, which has no such outcome to return, so
+        // refusing loudly is the right shape for it.
+        if (hub.ServiceProvider.GetService<IMasterKeyProvider>()?.GetMasterKey() is null)
+            throw new InvalidOperationException(
+                "Refusing to store a provider API key: no master key is configured "
+                + $"({ConfigMasterKeyProvider.ConfigKey}), so the key would be persisted in PLAINTEXT "
+                + "in node content. Configure the master key for this deployment, or reference the "
+                + "credential from the host's secret store instead of storing a literal "
+                + "(ModelDefinition.ApiKeySecretRef, or the provider's {section}:ApiKey config).");
+
         var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
         return protector is null ? plaintext : protector.Protect(plaintext);
     }
