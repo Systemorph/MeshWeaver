@@ -30,6 +30,24 @@ public record CredentialResolution(string? Endpoint, string? ApiKey, string Sour
     /// driver's business, not a source of truth this resolver arbitrates.
     /// </summary>
     public static readonly CredentialResolution Missing = new(null, null, "missing");
+
+    /// <summary>
+    /// 🚨 The printed form NEVER echoes the key. A record's generated <c>ToString</c> prints every
+    /// positional member, and this record travels through diagnostics — assertion-failure messages
+    /// quote the last emission, structured logs interpolate whole values — so the default would put
+    /// a live credential into test output and log storage. A key that has been echoed is a key that
+    /// must be rotated. <c>ApiKey</c> renders as <c>[redacted]</c> when present and stays empty when
+    /// absent, which keeps the one diagnostic distinction that matters (key vs. no key) readable.
+    /// </summary>
+    /// <param name="builder">The builder the generated <c>ToString</c> assembles the members into.</param>
+    /// <returns>Always <c>true</c> (members were printed).</returns>
+    protected virtual bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("Endpoint = ").Append(Endpoint);
+        builder.Append(", ApiKey = ").Append(string.IsNullOrEmpty(ApiKey) ? string.Empty : "[redacted]");
+        builder.Append(", Source = ").Append(Source);
+        return true;
+    }
 }
 
 /// <summary>
@@ -552,7 +570,17 @@ public sealed class ChatClientCredentialResolver : IDisposable
     /// <see cref="ModelProviderConfiguration.AuthMethod"/> that says WHICH env var to set, and the
     /// optional gateway base URL. All fields null when the user hasn't connected.
     /// </summary>
-    public sealed record HarnessCredential(string? Token, string? AuthMethod, string? BaseUrl);
+    public sealed record HarnessCredential(string? Token, string? AuthMethod, string? BaseUrl)
+    {
+        // 🚨 Same rule as CredentialResolution: the printed form never echoes the token.
+        private bool PrintMembers(System.Text.StringBuilder builder)
+        {
+            builder.Append("Token = ").Append(string.IsNullOrEmpty(Token) ? string.Empty : "[redacted]");
+            builder.Append(", AuthMethod = ").Append(AuthMethod);
+            builder.Append(", BaseUrl = ").Append(BaseUrl);
+            return true;
+        }
+    }
 
     /// <summary>
     /// Method-aware companion to <see cref="ResolveConnectToken"/>: resolves the token AND its

@@ -317,8 +317,11 @@ public static class ProviderCredentialSeed
                 logger?.LogWarning(ex,
                     "[ProviderCredentialSeed] {Path}: could not seed the API key from section '{Section}'.",
                     path, section);
+                // 🚨 Only the exception TYPE goes on the result: an exception MESSAGE can carry
+                // serialized values — including the key this seed was writing — and Detail is
+                // documented never to. The full exception is in the log line above.
                 return Observable.Return(new ProviderCredentialSeedResult(
-                    path, section, ProviderSeedOutcome.WriteFailed, ex.Message));
+                    path, section, ProviderSeedOutcome.WriteFailed, ex.GetType().Name));
             });
     }
 

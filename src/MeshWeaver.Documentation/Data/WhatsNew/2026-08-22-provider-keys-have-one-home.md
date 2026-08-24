@@ -1,6 +1,6 @@
 ---
 Name: A provider key has one home
-Category: Improvement
+Category: Fix
 Description: An API key set in a deployment's configuration now lands on the provider's entry under Settings ▸ Language Models — encrypted — instead of living somewhere only the servers could see.
 Icon: Key
 Order: -20260822
