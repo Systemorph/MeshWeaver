@@ -161,7 +161,7 @@ the binding's pointer (optimistically applied, exactly as the live stream echoes
 | **Web / Vite** | Fluent (shipped) | none | demo + 11 vitest tests, screenshot |
 | **Next.js** | Fluent (shipped) | `"use client"` + Fluent SSR (~10 lines) | guide (`clients/react/docs/nextjs.md`) |
 | **Electron (desktop)** | Fluent (shipped) | a `BrowserWindow` (shipped) | `clients/react/electron/main.cjs` |
-| **React Native / Expo (the MAUI peer)** | **RN pack (shipped)** | Expo project + gRPC-web transport (both **shipped**) | `MeshWeaver.Plugins app/react-native` (+ `src/live.ts`), typechecks + **7 headless render tests** |
+| **React Native / Expo (the MAUI peer)** | **RN pack (shipped)** | Expo project + gRPC-web transport (both **shipped**) | `MeshWeaver.Plugins/app/react-native` (+ `src/live.ts`), typechecks + **7 headless render tests** |
 | **Browser / RN live transport** | n/a (transport) | none | **`@meshweaver/client-web`** (`clients/grpc-web`), typechecks + builds |
 | **Portal example** | Fluent (shipped) | an app shell (shipped) | `clients/portal`, builds, screenshot |
 
@@ -170,7 +170,7 @@ Next.js is the *easiest* target (React-on-the-web → same package, same Fluent 
 **gRPC-web split** (`Connect`+`Deliver`) — `@grpc/grpc-js` is Node-only and gRPC-web can't do the bidi
 `Open`. Both halves are shipped: the server (`MeshGrpcService.Connect`/`Deliver`, tested) AND the client —
 **`@meshweaver/client-web`** (`clients/grpc-web`), a `MeshConnectionLike` over Connect-ES that drops straight
-into `GrpcAreaSource`. The RN app wires it via `MeshWeaver.Plugins app/react-native/src/live.ts`. Node, Electron-main, and
+into `GrpcAreaSource`. The RN app wires it via `MeshWeaver.Plugins/app/react-native/src/live.ts`. Node, Electron-main, and
 Next.js-server use the bidi `Open` directly via `@meshweaver/client`.
 
 ---

@@ -83,7 +83,7 @@ import { GrpcAreaSource } from "@meshweaver/react/core";
 const mesh = await connect(url, { token });
 const source = new GrpcAreaSource(mesh, "@app/Home", { area: "main" });
 await source.start();            // folds the live stream into {areas,data}
-// <RenderArea> against `source` — see MeshWeaver.Plugins app/react-native/src/live.ts
+// <RenderArea> against `source` — see MeshWeaver.Plugins/app/react-native/src/live.ts
 ```
 
 ## Security

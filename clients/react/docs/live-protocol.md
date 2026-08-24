@@ -136,7 +136,7 @@ await source.start();                                        // folds the stream
 // hand `source` to <ScopeProvider source={source} area="Overview"> … <RenderArea areaKey="Overview" />
 ```
 
-`MeshWeaver.Plugins app/react-native/src/live.ts` wraps exactly this as `createLiveSource(opts)`.
+`MeshWeaver.Plugins/app/react-native/src/live.ts` wraps exactly this as `createLiveSource(opts)`.
 
 ## Files
 
