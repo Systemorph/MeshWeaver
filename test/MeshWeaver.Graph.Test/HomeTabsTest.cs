@@ -46,14 +46,21 @@ public class HomeTabsTest
     }
 
     [Fact]
-    public void Home_WithShares_AppendsTheSharedBandAsAThirdSection()
+    public void Home_WithShares_StaysTwoSections_AndFoldsThemIntoAll()
     {
-        // "shared with me can be separate section" — cross-partition invitations are a distinct
-        // kind of content, not another lens on the catalog.
+        // "Shared with me is not required" — but the items are. Cross-partition invitations
+        // (#385) are unreachable by the scope queries, so dropping the band without folding them
+        // into All would have silently lost every invitation.
         var home = UserActivityLayoutAreas.BuildHome(NodePath, sharedTargets: ["OrgA/Module"]);
 
         home.Should().BeOfType<StackControl>().Subject
-            .Areas.Should().HaveCount(3, "apps, content, then shared with me");
+            .Areas.Should().HaveCount(2, "apps and content — no separate shared band any more");
+
+        var all = UserActivityLayoutAreas
+            .BuildContentSection(NodePath, null, null, null, null, ["OrgA/Module"])
+            .ScopeTabs!.Single(t => t.Label == "All");
+        all.Query.Should().Contain("path:OrgA/Module",
+            "a shared module is content the viewer can reach — it belongs IN the list");
     }
 
     [Fact]
@@ -84,14 +91,18 @@ public class HomeTabsTest
     }
 
     [Fact]
-    public void Content_WithPins_PinnedIsASeparateTab_First()
+    public void Content_WithPins_AllLeads_PinnedFollows()
     {
         // "the pinned i would still keep … as separate tab if we have any".
         var content = UserActivityLayoutAreas.BuildContentSection(
             NodePath, null, new User { PinnedPaths = ["Doc/GUI"] }, null, null);
 
-        ScopeLabels(content).Should().Equal("Pinned", "All");
-        content.ScopeTabs![0].Query.Should().Contain("Doc/GUI");
+        // "put All first and default tab": the view activates scopes[0], so All leads and Pinned
+        // is the narrower lens behind it.
+        ScopeLabels(content).Should().Equal("All", "Pinned");
+        content.ScopeTabs![1].Query.Should().Contain("Doc/GUI");
+        content.HiddenQuery!.ToString().Should().Be(content.ScopeTabs![0].Query,
+            "the control-level fallback IS the default tab's query");
     }
 
     [Fact]
