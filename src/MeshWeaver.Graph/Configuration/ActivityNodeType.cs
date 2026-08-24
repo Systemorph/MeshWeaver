@@ -50,7 +50,7 @@ public static class ActivityNodeType
     {
         Name = "Activity",
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         // Activity hubs host the kernel directly: SubmitCodeRequest etc. land here,
         // run inside this hub's action block, and write progress to the same
         // ActivityLog node via DataChangeRequest.Update on the local workspace.

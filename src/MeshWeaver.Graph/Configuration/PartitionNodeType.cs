@@ -62,7 +62,7 @@ public static class PartitionNodeType
         Name = "Partition",
         NodeType = NodeType,
         Icon = "/static/NodeTypeIcons/database.svg",
-        ExcludeFromContext = new HashSet<string> { "create", "search" },
+        ExcludeFromContext = new HashSet<string> { "create", "search", "content" },
         Content = new NodeTypeDefinition { DefaultNamespace = Namespace },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
