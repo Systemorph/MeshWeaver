@@ -98,7 +98,7 @@ A new control is not done when the Blazor view renders. The definition of done:
    ratchet is what keeps "renders everywhere" true. React-side patterns:
    [React](/Doc/GUI/React) · [React Custom Controls](/Doc/GUI/ReactCustomControls).
 5. **The React Native pack**: the `rnPack` entry plus its own parity test
-   (`clients/react-native/src/parity.test.ts`). RN consumes the shared renderer core, so most
+   (`MeshWeaver.Plugins app/react-native/src/parity.test.ts`). RN consumes the shared renderer core, so most
    controls are a thin mapping; native-feeling leaves (HTML, editors) have RN-specific views.
 6. **MAUI** (optional but cheap): a `MauiViewRegistry.Register<XControl, XView>()` entry — see
    [MAUI Data Binding](/Doc/GUI/DataBindingMaui).

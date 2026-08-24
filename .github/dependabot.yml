@@ -23,7 +23,7 @@ updates:
         update-types: [minor, patch]
 
   # JS clients — one update config over the web workspaces; grouped the same way.
-  # 🚨 /clients/react-native is NOT here: it rides the Expo SDK and needs holdbacks that must not
+  # 🚨 The RN app moved to MeshWeaver.Plugins/app/react-native (#2169): its Expo-coordinated
   # suppress the same packages everywhere else. It has its own config below.
   - package-ecosystem: npm
     directories:
@@ -77,53 +77,7 @@ updates:
   # What is NOT retired is the reason this config exists at all: react-native, react-native-web and
   # the expo/@expo majors move as ONE coordinated SDK jump. Lift those with the NEXT SDK migration,
   # the same way, not by a sweep.
-  - package-ecosystem: npm
-    directory: "/clients/react-native"
-    schedule:
-      interval: weekly
-      day: monday
-      time: "05:30"
-      timezone: Europe/Zurich
-    open-pull-requests-limit: 5
-    groups:
-      npm-minor-patch:
-        applies-to: version-updates
-        update-types: [minor, patch]
-      npm-major:
-        applies-to: version-updates
-        update-types: [major]
-    ignore:
-      # react-native's 0.x "minors" are breaking platform jumps coupled to the Expo SDK
-      # (0.76→0.86 required React 19 and the removal of expo-av): the first wave's group PR broke
-      # npm ci on exactly this. RN (and react-native-web, which tracks it) upgrade DELIBERATELY
-      # with the Expo SDK.
-      - dependency-name: react-native
-      - dependency-name: react-native-web
-      # The Expo SDK moves as one unit with react-native, and a major carries package REMOVALS,
-      # not just versions — SDK 57 deleted expo-av outright, which was a port of two call sites
-      # (expo-audio for capture, expo-video for the Video leaf), not a version bump. #1584.
-      - dependency-name: expo
-        update-types: [version-update:semver-major]
-      - dependency-name: "expo-*"
-        update-types: [version-update:semver-major]
-      - dependency-name: "@expo/*"
-        update-types: [version-update:semver-major]
-      # react's major here is dictated by whatever react-native peers (0.86.2 → `react ^19.2.3`),
-      # so it arrives WITH the SDK jump above or not at all. The 0.76.5-era failure — a hard
-      # `react ^18.2.0` peer that broke `npm ci` before any check ran — is fixed, but the coupling
-      # that produced it is structural and outlives any one version.
-      - dependency-name: react
-        update-types: [version-update:semver-major]
-      - dependency-name: react-dom
-        update-types: [version-update:semver-major]
-      - dependency-name: react-test-renderer
-        update-types: [version-update:semver-major]
-      - dependency-name: "@types/react"
-        update-types: [version-update:semver-major]
-      - dependency-name: "@types/react-test-renderer"
-        update-types: [version-update:semver-major]
 
-  # Python SDK.
   - package-ecosystem: pip
     directory: "/clients/python"
     schedule:

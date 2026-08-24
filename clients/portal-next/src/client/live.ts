@@ -124,7 +124,7 @@ export async function connectLive(baseUrl: string = window.location.origin): Pro
   const mesh = Mesh.from(connection);
   const userId = (nodePath ?? "").split("/")[0] ?? "";
   // The four shared /api/mesh verbs come from ONE implementation (#1497) — the copies in this file,
-  // clients/portal/src/live.ts and clients/react-native/src/liveOps.ts had drifted on the token, the
+  // clients/portal/src/live.ts and MeshWeaver.Plugins app/react-native/src/liveOps.ts had drifted on the token, the
   // error convention and the base-URL composition. Verbs genuinely local to this shell (deleteNode,
   // transcribe, autocomplete) stay below.
   const rest = new MeshRest({ baseUrl, token: rawToken });
