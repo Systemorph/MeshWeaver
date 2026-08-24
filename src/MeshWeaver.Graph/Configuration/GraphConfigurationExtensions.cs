@@ -77,6 +77,9 @@ public static class GraphConfigurationExtensions
                 .AddHomeTabType()
                 .AddHomeConfigType()
                 .AddAppType()
+                // Per-user work at logon — the sibling of INodePostCreationHandler for users who
+                // already exist. See Doc/Architecture/LogonActions.
+                .AddLogonActionType()
                 .AddKernel()
                 .AddApiTokenType()
                 .AddLicenseType()
