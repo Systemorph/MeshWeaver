@@ -106,11 +106,12 @@ public class PresentationSurfacesTest
         var user = new User { PinnedPaths = ["Acme/Q3-Renewal"] };
 
         // Off: the Pinned tab is there.
-        ScopeLabels(ContentOf(user, null)).Should().Equal("All", "Pinned");
+        ScopeLabels(ContentOf(user, null)).Should().Equal("All", "Pinned", "Mine");
 
         // On, with Acme marked: everything pinned is inside the marked space, so the tab goes — an
-        // empty tab labelled "Pinned" would itself say something.
-        ScopeLabels(ContentOf(user, Active("Acme"))).Should().Equal("All");
+        // empty tab labelled "Pinned" would itself say something. Mine is unaffected: it is scoped
+        // to the viewer's own partition, not to the marked one.
+        ScopeLabels(ContentOf(user, Active("Acme"))).Should().Equal("All", "Mine");
     }
 
     [Fact]
@@ -118,7 +119,7 @@ public class PresentationSurfacesTest
     {
         var content = ContentOf(new User { PinnedPaths = ["Acme", "Doc/Guide"] }, Active("Acme"));
 
-        ScopeLabels(content).Should().Equal("All", "Pinned");
+        ScopeLabels(content).Should().Equal("All", "Pinned", "Mine");
         ScopeQuery(content, "Pinned").Should().NotContain("Acme").And.Contain("Doc/Guide");
     }
 

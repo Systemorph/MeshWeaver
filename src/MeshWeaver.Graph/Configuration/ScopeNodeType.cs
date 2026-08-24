@@ -42,7 +42,7 @@ public static class ScopeNodeType
         Name = "Scope",
         Icon = "/static/NodeTypeIcons/code.svg",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<CodeConfiguration>())
