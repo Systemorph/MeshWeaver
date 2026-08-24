@@ -49,6 +49,12 @@ public record SlideShowControl()
     /// Every slide of the deck, pre-rendered — non-empty switches the control into frames mode:
     /// the view renders all of them and swaps client-side, so advancing a slide costs no server
     /// round trip at all.
+    /// <para>Frames mode is a progressive enhancement of the wire contract: clients that do not
+    /// (yet) implement it — the React and React Native drivers are href-only — ignore this
+    /// payload, so a producer emitting frames SHOULD keep populating the href fields alongside
+    /// them. Frames-capable clients ignore the hrefs for slide swapping (only
+    /// <see cref="ExitHref"/> navigates); href-only clients keep presenting exactly as before.
+    /// </para>
     /// </summary>
     public ImmutableList<SlideFrame>? Frames { get; init; }
 

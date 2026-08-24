@@ -40,8 +40,8 @@ public class SlideShowControlTest(ITestOutputHelper output) : HubTestBase(output
 
         back.Frames.Should().NotBeNull();
         back.Frames!.Should().HaveCount(2);
-        back.Frames[0].Should().Be(new SlideFrame("<h1>One</h1>", "linear-gradient(135deg,#0b1020,#4c1d95)"));
-        back.Frames[1].Should().Be(new SlideFrame("<h1>Two</h1>", null));
+        back.Frames![0].Should().Be(new SlideFrame("<h1>One</h1>", "linear-gradient(135deg,#0b1020,#4c1d95)"));
+        back.Frames![1].Should().Be(new SlideFrame("<h1>Two</h1>", null));
         back.StartIndex.Should().Be(1);
         back.UrlTemplate.Should().Be("/MyDeck/Present?i={0}");
         back.ExitHref.Should().Be("/MyDeck");
