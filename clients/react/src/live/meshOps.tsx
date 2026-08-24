@@ -40,6 +40,14 @@ export interface ThreadSubmitOptions {
 }
 
 export interface MeshOps {
+  /**
+   * Optional viewing user's mesh id (their home partition) — hosts that know who is signed in
+   * expose it (the web portals learn it from the token mint's nodePath; the RN shell from its
+   * configured partition). Feeds viewer-scoped reads like the home Apps grid's
+   * most-recently-used ordering ({viewer}/_UserActivity — MeshSearchScopeTab.SortByAccess);
+   * absent → those orderings quietly keep the query's own order (no crash, no guess).
+   */
+  userId?: string;
   /** Subscribe to a node's live state — yields on every change (initial state, then updates). */
   watch(path: string): AsyncIterable<MeshNodeState>;
   /**

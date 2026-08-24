@@ -72,6 +72,154 @@ describe("MeshSearch — query-backed results (Blazor MeshSearchView parity)", (
   });
 });
 
+describe("MeshSearch — the home design (scope tabs, Icons grid, SortByAccess, grouped sections)", () => {
+  const appRows = [
+    { path: "u1/_App/alpha", id: "alpha", name: "Alpha", nodeType: "InstalledApp", mainNode: "store/Alpha", icon: "🅰" },
+    { path: "u1/_App/beta", id: "beta", name: "Beta", nodeType: "InstalledApp", mainNode: "store/Beta", icon: "🅱" },
+  ];
+
+  it("renders the scope-tab strip for 2+ tabs; switching swaps the query while the term stays", async () => {
+    const search = vi.fn(async (query: string) =>
+      query.startsWith("nodeType:Pin") ? [nodes[0]] : query.startsWith("nodeType:All") ? [nodes[1]] : [],
+    );
+    const ops = { ...fakeOps([]), search } as unknown as MeshOps;
+    view(
+      {
+        $type: "MeshSearch",
+        hiddenQuery: "nodeType:All",
+        visibleQuery: "laptop",
+        scopeTabs: [
+          { label: "All", query: "nodeType:All" },
+          { label: "Pinned", query: "nodeType:Pin" },
+        ],
+      },
+      ops,
+    );
+    expect(await screen.findByText("Second story")).toBeTruthy();
+    // The strip renders both tabs; the first is active.
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((el) => el.textContent)).toEqual(["All", "Pinned"]);
+    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(tabs[1]);
+    expect(await screen.findByText("First story")).toBeTruthy();
+    // The scope's query replaced the base — with the typed term still appended (shared search bar).
+    await waitFor(() => expect(search).toHaveBeenCalledWith("nodeType:Pin laptop", undefined));
+  });
+
+  it("a SINGLE scope tab renders no strip but still applies its settings (Icons + NavigateToMainNode + row-only select)", async () => {
+    const search = vi.fn(async () => appRows);
+    const ops = { ...fakeOps([]), search } as unknown as MeshOps;
+    view(
+      {
+        $type: "MeshSearch",
+        hiddenQuery: "path:u1/_App scope:children nodeType:InstalledApp",
+        showSearchBox: false,
+        scopeTabs: [
+          {
+            label: "Apps",
+            query: "path:u1/_App scope:children nodeType:InstalledApp",
+            renderMode: "Icons",
+            navigateToMainNode: true,
+          },
+        ],
+      },
+      ops,
+    );
+    expect(await screen.findByText("Alpha")).toBeTruthy();
+    expect(screen.queryByRole("tab")).toBeNull(); // one tab ⇒ no strip
+    // Row-only: the icon grid must never pull content over the wire.
+    expect(search).toHaveBeenCalledWith(
+      "path:u1/_App scope:children nodeType:InstalledApp select:path,id,namespace,name,nodeType,icon,mainNode",
+      undefined,
+    );
+    // A tile navigates to the row's mainNode (the APP), never the record.
+    expect(screen.getByText("Alpha").closest("a")?.getAttribute("href")).toBe("/store/Alpha");
+  });
+
+  it("SortByAccess orders most-recently-used first from the viewer's access log, keeping never-opened items", async () => {
+    const search = vi.fn(async (query: string) =>
+      query.includes("_UserActivity")
+        ? [{ id: "store_Beta", lastModified: "2026-08-20T10:00:00Z", path: "u1/_UserActivity/store_Beta", nodeType: "UserActivity" }]
+        : appRows,
+    );
+    const ops = { ...fakeOps([]), search, userId: "u1" } as unknown as MeshOps;
+    view(
+      {
+        $type: "MeshSearch",
+        hiddenQuery: "path:u1/_App scope:children nodeType:InstalledApp",
+        showSearchBox: false,
+        scopeTabs: [
+          {
+            label: "Apps",
+            query: "path:u1/_App scope:children nodeType:InstalledApp",
+            renderMode: "Icons",
+            navigateToMainNode: true,
+            sortByAccess: true,
+          },
+        ],
+      },
+      ops,
+    );
+    // Beta was opened (its TARGET store/Beta is in the access log, mangled '/'→'_'); Alpha never —
+    // Beta leads, Alpha stays (a source:accessed INNER JOIN would have dropped it).
+    await waitFor(() => {
+      const labels = screen
+        .getAllByText(/Alpha|Beta/)
+        .map((el) => el.textContent)
+        .filter((t): t is string => t === "Alpha" || t === "Beta");
+      expect(labels).toEqual(["Beta", "Alpha"]);
+    });
+    expect(search).toHaveBeenCalledWith(
+      "namespace:u1/_UserActivity nodeType:UserActivity select:path,id,namespace,name,nodeType,lastModified sort:LastModified-desc limit:500",
+      undefined,
+      500,
+    );
+  });
+
+  it("Grouped mode buckets by nodeType with counts, biggest group first under groupByFrequency", async () => {
+    const rows = [
+      { path: "a/1", name: "One", nodeType: "Story" },
+      { path: "a/2", name: "Two", nodeType: "Space" },
+      { path: "a/3", name: "Three", nodeType: "Space" },
+    ];
+    const ops = fakeOps(rows);
+    view(
+      {
+        $type: "MeshSearch",
+        hiddenQuery: "is:main",
+        renderMode: "Grouped",
+        groupByFrequency: true,
+        showSearchBox: false,
+        grouping: { groupByProperty: "NodeType" },
+      },
+      ops,
+    );
+    expect(await screen.findByText("Space (2)")).toBeTruthy();
+    expect(screen.getByText("Story (1)")).toBeTruthy();
+    // Biggest group leads.
+    const headers = screen.getAllByText(/\(\d\)$/).map((el) => el.textContent);
+    expect(headers).toEqual(["Space (2)", "Story (1)"]);
+  });
+
+  it("a newline-joined UNION hidden query issues each leg separately and merges deduped", async () => {
+    const search = vi.fn(async (query: string) =>
+      query.startsWith("namespace: ") || query === "namespace:"
+        ? [{ path: "Doc", name: "DocRoot", nodeType: "Group" }, { path: "Both", name: "BothFirst", nodeType: "Group" }]
+        : [{ path: "u1/x", name: "OwnItem", nodeType: "Group" }, { path: "Both", name: "BothDup", nodeType: "Group" }],
+    );
+    const ops = { ...fakeOps([]), search } as unknown as MeshOps;
+    view(
+      { $type: "MeshSearch", hiddenQuery: "namespace: is:main\nnamespace:u1 is:main", showSearchBox: false },
+      ops,
+    );
+    expect(await screen.findByText("DocRoot")).toBeTruthy();
+    expect(screen.getByText("OwnItem")).toBeTruthy();
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(screen.getAllByText("BothFirst")).toHaveLength(1); // deduped by path, first leg wins
+    expect(screen.queryByText("BothDup")).toBeNull();
+  });
+});
+
 describe("MeshNodeCollection — compact cards from queries (Blazor MeshNodeCollectionView parity)", () => {
   it("runs all queries, merges by path, and renders avatar cards (name + type) linking to the node", async () => {
     const byQuery = {
