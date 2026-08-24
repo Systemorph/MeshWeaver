@@ -39,7 +39,32 @@ public sealed class ModelStaticRepoSource(BuiltInLanguageModelProvider provider)
     // unreadable (the Harness wedge — OrleansHarnessPartitionPublicReadTest). Every node the provider
     // emits is already under the "Provider" partition, so no cross-partition filtering is needed.
     public IReadOnlyList<MeshNode> EnumerateSourceNodes() =>
-        provider.GetStaticNodes().ToArray();
+        provider.GetStaticNodes().Select(StripApiKey).ToArray();
+
+    /// <summary>
+    /// 🚨 The IMPORT never persists a configured API key. <see cref="BuiltInLanguageModelProvider"/>
+    /// stamps <c>{Section}:ApiKey</c> onto the emitted <c>ModelProvider</c> content because on the
+    /// IN-MEMORY path that projection IS the served node and is re-read from configuration on every
+    /// read. On THIS path the same content is written to Postgres, where two things go wrong at once:
+    ///
+    /// <list type="bullet">
+    ///   <item>the value would be persisted as PLAINTEXT — the static source has no protector, and
+    ///         it cannot acquire one: <see cref="IProviderKeyProtector.Protect"/> uses a fresh nonce
+    ///         per call, so the emitted content — and with it this <see cref="Versioned"/>=false
+    ///         source's content FINGERPRINT — would change on every enumeration and the catalog would
+    ///         re-import in a loop (the 2026-06-25 Provider write storm);</item>
+    ///   <item>it would be written create-if-absent and never revisited, which is exactly the
+    ///         one-shot seam MeshWeaver#1982 removes.</item>
+    /// </list>
+    ///
+    /// <para>So the key is stripped here and written by <see cref="ProviderCredentialSeed"/> instead:
+    /// once, encrypted, converging, and refusing outright when no master key is configured. Endpoint,
+    /// label, icon and the model list still ride the import — none of them is a credential.</para>
+    /// </summary>
+    private static MeshNode StripApiKey(MeshNode node) =>
+        node.Content is ModelProviderConfiguration { ApiKey: not null and not "" } cfg
+            ? node with { Content = cfg with { ApiKey = null } }
+            : node;
 
     /// <inheritdoc />
     public MeshNode? PartitionRoot => new(ModelProviderNodeType.RootNamespace)
