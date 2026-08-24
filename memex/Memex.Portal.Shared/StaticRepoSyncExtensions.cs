@@ -178,7 +178,12 @@ internal sealed class ProviderCredentialSeedHostedService(
             .SelectMany(_ => ProviderCredentialSeed.Run(hub, logger))
             .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
             .Subscribe(
-                r => logger?.LogInformation(
+                // Debug, not Information: ProviderCredentialSeed.Run already logs every outcome at
+                // its own level (Info for Seeded, Error for RefusedUnprotected, Warning for
+                // NodeAbsent, Debug otherwise) — a second Information line per provider per boot is
+                // duplicate log volume, not information. This trace line only correlates the results
+                // with THIS hosted service when debugging boot ordering.
+                r => logger?.LogDebug(
                     "[ProviderCredentialSeed] {Path}: {Outcome} (configuration section '{Section}').",
                     r.ProviderPath, r.Outcome, r.Section),
                 ex => logger?.LogWarning(ex, "[ProviderCredentialSeed] seed run failed."));
