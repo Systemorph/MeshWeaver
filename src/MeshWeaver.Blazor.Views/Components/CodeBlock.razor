@@ -22,7 +22,7 @@
             if (firstRender)
             {
                 jsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import",
-                "./_content/MeshWeaver.Blazor/Components/CodeBlock.razor.js");
+                "./_content/MeshWeaver.Blazor.Views/Components/CodeBlock.razor.js");
             }
 
             if (jsModule is not null && !string.IsNullOrEmpty(Html))

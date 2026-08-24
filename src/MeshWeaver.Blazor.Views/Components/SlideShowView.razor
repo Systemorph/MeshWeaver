@@ -19,7 +19,7 @@
         try
         {
             _module = await JSRuntime.InvokeAsync<IJSObjectReference>(
-                "import", "./_content/MeshWeaver.Blazor/Components/SlideShowView.razor.js");
+                "import", "./_content/MeshWeaver.Blazor.Views/Components/SlideShowView.razor.js");
             _selfRef = DotNetObjectReference.Create(this);
             // register() replaces any prior driver: a single document-level keydown
             // listener always dispatches to the most recently rendered SlideShowView,
