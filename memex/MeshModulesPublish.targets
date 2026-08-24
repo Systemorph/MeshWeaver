@@ -65,6 +65,7 @@
          see src/MeshWeaver.Social/README.md. -->
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Grpc/MeshWeaver.Hosting.Grpc.csproj" />
 
+
     <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2). -->
     <!-- Social: flipped once the portal stopped compiling against it for the ApiCredential
          type (the module registers that itself now). Its closure ships here. -->
@@ -122,6 +123,15 @@
          Graph:Storage during boot. Shipping the bits costs image size in every deployment;
          ACTIVATION stays the deployment's Modules:Assemblies choice, and no memex portal lists
          them (they all run PostgreSQL). -->
+    <!-- The Blazor VIEW packs (#2169 Phase B): out of the app closure, shipped as modules and
+         activated via Modules:Assemblies. CLOSURE lane on purpose — a view pack carries STATIC WEB
+         ASSETS (scoped css bundle, collocated .razor.js), and only the standalone-publish closure
+         layout lays its wwwroot out for the module static-asset middleware (#1724); the DLL prune
+         still drops everything the app closure already provides (BlazorMonaco, FluentUI, the base
+         pack). Dev note: the MONOLITH keeps Debug ships-the-bits references to these two (see its
+         csproj) — a dev tree without them renders every control as escaped HTML. -->
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Views/MeshWeaver.Blazor.Views.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Graph/MeshWeaver.Blazor.Graph.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Snowflake/MeshWeaver.Hosting.Snowflake.csproj" />
