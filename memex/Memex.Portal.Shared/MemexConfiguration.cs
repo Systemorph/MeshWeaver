@@ -1218,7 +1218,25 @@ public static class MemexConfiguration
             return next();
         });
 
-        // Static files middleware must run before routing to serve _content/* paths from RCLs
+        app.UseRouting();
+
+        // 🚨 The static-file middleware runs AFTER UseRouting, and that ordering is the whole
+        // point: StaticFileMiddleware skips a request whose ENDPOINT has already been selected, so
+        // everything in the build-time static-asset manifest is answered by MapStaticAssets below
+        // — pre-compressed (brotli) off a per-encoding endpoint, fingerprinted, with
+        // `Cache-Control: immutable`. Registered before routing (as it was until 2026-08-24) this
+        // middleware short-circuits FIRST and serves those same files raw: measured on prod,
+        // `_framework/blazor.web.js` came back 200,645 bytes with NO content-encoding and NO
+        // cache-control, and `_content/MeshWeaver.Blazor/*.css` likewise — every asset at full
+        // size, revalidated on every load, while the pre-compressed copies sat unused in the
+        // image. The old comment here claimed the early registration was needed to serve RCL
+        // `_content/*` paths; it is not — those are IN the manifest, which is exactly why
+        // MeshModuleStaticAssetExtensions has to hand-roll its own encoding negotiation for the
+        // modules that are NOT.
+        //
+        // What still needs the middleware: anything with no endpoint — the React SPA under /app,
+        // and files that reach wwwroot outside the manifest. Those match no endpoint, so the
+        // middleware serves them exactly as before.
         app.UseStaticFiles();
 
         // …and the same for modules that ship via modules/<Name>/ rather than a ProjectReference,
@@ -1226,8 +1244,6 @@ public static class MemexConfiguration
         // host's own UseStaticFiles so the platform copy of any shared dependency answers first —
         // the module lane never shadows a platform asset.
         app.UseMeshModuleStaticAssets();
-
-        app.UseRouting();
 
         // gRPC-web middleware — lets browsers / React Native reach the mesh gRPC service
         // (Connect+Deliver split) without HTTP/2 bidi. Must sit between UseRouting and the

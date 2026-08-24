@@ -26,8 +26,9 @@ public static class SchemaInitialization
         ILogger logger)
     {
         // Azure-only: grant CREATE on database to azure_pg_admin so managed identities
-        // (portal, migration) can create per-organization schemas at runtime.
-        if (connectionString.Contains("database.azure.com"))
+        // (portal, migration) can create per-organization schemas at runtime. A HOST fact
+        // (the azure_pg_admin role exists only on Azure), independent of the auth mechanism.
+        if (AzurePostgres.IsAzureHost(connectionString))
         {
             var dbName = new NpgsqlConnectionStringBuilder(connectionString).Database;
             await using var grantCmd = dataSource.CreateCommand(

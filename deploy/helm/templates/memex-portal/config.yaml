@@ -286,6 +286,39 @@ data:
   # default; "empty = inert" is only true for strings.
   SelfUpdate__MinRollInterval: "{{ .Values.config.memex_portal.SelfUpdate__MinRollInterval | default "01:00:00" }}"
   WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 }}"
+  # The MODULES a deployment refuses to run without (MeshBuilderModuleActivation.RequiredKey).
+  # The image ships a baseline list in appsettings; a deployment OVERRIDES an entry by name here,
+  # and blanks one it cannot satisfy.
+  #
+  # 🚨 Un-templated, an override is silently dropped and the health check wins anyway — the #1925
+  # defect, third occurrence. Not cosmetic here: `required_modules` reports Unhealthy, /health
+  # answers 503, the startup probe never passes and the ROLLOUT TIMES OUT with the portal never
+  # serving. That is memex-local on 2026-08-23, once the Blazor view packs and Speech became
+  # modules (#1974/#2018/#2081/#2085): the image stopped shipping five DLLs its own Required list
+  # still named, and a laptop has no registry to land them from.
+  #
+  # 🚨 Written out INDEX BY INDEX, never a range: this ConfigMap's contract is that it names every
+  # key explicitly, and EveryConfigKeySetInAValuesFile_IsBoundInTheConfigMap enforces exactly that
+  # by looking for the key. A range renders correctly and is invisible to the guard — which is how
+  # the first draft of this block passed helm and failed the test, correctly.
+  #
+  # Each index is emitted only when a deployment sets it, so an install that overrides nothing
+  # keeps the image's own list rather than blanking entry 0.
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__0" }}
+  Modules__Required__0: "{{ .Values.config.memex_portal.Modules__Required__0 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__1" }}
+  Modules__Required__1: "{{ .Values.config.memex_portal.Modules__Required__1 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__2" }}
+  Modules__Required__2: "{{ .Values.config.memex_portal.Modules__Required__2 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__3" }}
+  Modules__Required__3: "{{ .Values.config.memex_portal.Modules__Required__3 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__4" }}
+  Modules__Required__4: "{{ .Values.config.memex_portal.Modules__Required__4 }}"
+  {{- end }}
   # ---- OpenAI-compatible provider (self-hosted / local: Ollama, vLLM, LM Studio, …) ----
   # Generic OpenAI-wire endpoint. Set Endpoint + Models (+ ApiKey in secrets) to seed a
   # provider + LanguageModel nodes pointing at any OpenAI-compatible gateway. Empty = inert.

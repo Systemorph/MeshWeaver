@@ -126,8 +126,13 @@ public record AgentConfiguration : ILocalizedNodeText
     /// single turn. Maps directly onto
     /// <c>Microsoft.Extensions.AI.FunctionInvokingChatClient.MaximumIterationsPerRequest</c>
     /// (wired in <see cref="ChatClientAgentFactory"/>). When <c>null</c> (the default) the
-    /// Microsoft.Extensions.AI default applies — high enough that a high-volume agent can
-    /// issue hundreds of tool calls in one round before it engages. Set a small value
+    /// Microsoft.Extensions.AI default applies, which is <b>40</b> — a plain <c>int</c>, measured
+    /// against Microsoft.Extensions.AI 10.8.3, NOT unbounded and not "hundreds" as this comment
+    /// claimed until 2026-08-23. That wrong number matters: it makes an expensive round look
+    /// like a runaway loop, when 40 iterations over a large document is simply what the cap
+    /// already allows (~40 × ~40k context ≈ the 1.6M prompt tokens/round measured in production).
+    /// The lever on THAT cost is prompt caching, not a lower cap — see
+    /// <c>AgentChatClient.BuildVolatileRoundContext</c>. Set a small value
     /// (e.g. 20–30) for such agents to force natural break points: on reaching the cap the
     /// framework strips tools on the final iteration (its
     /// <c>PrepareOptionsForLastIteration</c> path) so the model returns a graceful final
