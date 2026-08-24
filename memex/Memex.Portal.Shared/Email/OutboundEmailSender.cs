@@ -85,7 +85,9 @@ public sealed class OutboundEmailSender(
             // Resolve a fresh PortalApplication in its own scope now that the mesh is up — the
             // instance DI built at host-construction time may have captured a not-yet-ready hub.
             scope = rootServices.CreateScope();
-            var hub = scope.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
+            // Portal hub when the Blazor shell registered one; the mesh root hub otherwise.
+            var hub = scope.ServiceProvider.GetService<PortalApplication>()?.Hub
+                      ?? scope.ServiceProvider.GetRequiredService<IMessageHub>();
             var sp = hub.ServiceProvider;
             var query = sp.GetRequiredService<IMeshQueryCore>();
             var meshService = sp.GetRequiredService<IMeshService>();
