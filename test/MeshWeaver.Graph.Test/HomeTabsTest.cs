@@ -125,11 +125,23 @@ public class HomeTabsTest
         var apps = search.ScopeTabs!.Single(t => t.Label == "Apps");
         apps.Query.Should().Contain($"path:{NodePath}/_App scope:children nodeType:InstalledApp");
         apps.Query.Should().NotContain(" OR ", "no path alternation — the records query is the bound");
-        // Alphabetical default; source:accessed is meaningless on records, so that option sorts by
-        // modified instead of hiding never-opened apps behind an INNER join.
         apps.SortOptions![0].Query.Should().Be(apps.Query);
-        apps.Query.Should().Contain("sort:Name-asc");
+        // 🚨 No source:accessed on ANY option: it is an INNER JOIN keyed by the row's OWN path, so
+        // on records it would drop every never-opened app and match nothing anyway (opening an app
+        // records a visit to the APP, never to the record pointing at it).
         apps.SortOptions!.Select(o => o.Query).Should().OnlyContain(q => !q.Contains("source:accessed"));
+    }
+
+    [Fact]
+    public void Apps_OrderMostRecentlyUsedFirst_AtPaint()
+    {
+        // "apps should be ordered by last accessed not by alphabet" — the phone-home rule, applied
+        // at PAINT from the viewer's own access log (see MeshSearchScopeTab.SortByAccess).
+        var apps = Search(UserActivityLayoutAreas.BuildHome(NodePath))
+            .ScopeTabs!.Single(t => t.Label == "Apps");
+
+        apps.SortByAccess.Should().BeTrue();
+        apps.SortOptions![0].Label.Should().Be("Last accessed", "the default order is most-recently-used");
     }
 
     [Fact]
@@ -146,12 +158,12 @@ public class HomeTabsTest
         apps.ItemArea.Should().BeNull("a per-record tile area meant one hub activation per result");
     }
 
-    // ── Record materialization specs ────────────────────────────────────────────────────────────
+    // ── Default-app records: the platform BOOTSTRAP (everything else is the STORE's) ────────────
 
     [Fact]
     public void AppRecordSpecs_DefaultsCarryProductNamesAndIcons_ThreadsIsAnOrdinaryRecord()
     {
-        var specs = UserActivityLayoutAreas.AppRecordSpecs(new HomeConfig(), NodePath, manifestItems: null);
+        var specs = UserActivityLayoutAreas.AppRecordSpecs(new HomeConfig(), NodePath);
 
         specs.Select(s => s.Id).Should().Equal("Store", "Doc", "Chat");
         specs.Single(s => s.Id == "Store").Name.Should().Be("Store");
@@ -161,144 +173,41 @@ public class HomeTabsTest
         threads.Icon.Should().Be("/static/NodeTypeIcons/chat.svg");
         threads.OpenPath.Should().Be($"{NodePath}/Chat", "the Threads record opens the viewer's own Chat area");
         threads.Plugin.Should().BeNull();
+        threads.Target.Should().Be($"{NodePath}/Chat");
     }
 
     [Fact]
-    public void AppRecordSpecs_ManifestItemsAppend_DedupedAgainstDefaults()
+    public void AppRecordSpecs_CoverTheDefaultsOnly_InstalledAppsBelongToTheStore()
     {
+        // Core no longer reads the Store's install manifests: WHAT a viewer has installed is the
+        // Store's to record when it installs it. Only the platform defaults are seeded here — the
+        // bootstrap that keeps a brand-new home from being a blank screen with no way to the Store.
         var specs = UserActivityLayoutAreas.AppRecordSpecs(
-            new HomeConfig(), NodePath, manifestItems: ["Chess", "Store", "Chess"]);
+            new HomeConfig { DefaultApps = ["Store", "Chess"] }, NodePath);
 
-        specs.Select(s => s.Id).Should().Equal("Store", "Doc", "Chat", "Chess");
+        specs.Select(s => s.Id).Should().Equal("Store", "Chess");
+        specs.Should().OnlyContain(s => s.Source == "default");
         var chess = specs.Single(s => s.Id == "Chess");
-        chess.Source.Should().Be("install");
         chess.Plugin.Should().Be("Chess");
-        // The pre-existing default keeps its product identity — the manifest doesn't re-add it.
-        specs.Single(s => s.Id == "Store").Source.Should().Be("default");
-    }
-
-    // ── Record target + healing (pure) ──────────────────────────────────────────────────────────
-
-    private static MeshNode Record(string id, App content, string? name = null,
-        string? icon = null, string? mainNode = null) =>
-        MeshNode.FromPath($"{NodePath}/_App/{id}") with
-        {
-            NodeType = AppNodeType.NodeType,
-            Name = name ?? id,
-            Icon = icon,
-            MainNode = mainNode ?? $"{NodePath}/_App/{id}",
-            Content = content,
-        };
-
-    [Fact]
-    public void AppTargetOf_PluginPathOrOwnerArea()
-    {
-        UserActivityLayoutAreas.AppTargetOf(
-                new UserActivityLayoutAreas.AppRecordSpec("Chess", "Chess",
-                    UserActivityLayoutAreas.GenericAppIcon, "Chess", null, "install"))
-            .Should().Be("Chess");
-        UserActivityLayoutAreas.AppTargetOf(
-                new UserActivityLayoutAreas.AppRecordSpec("Chat", "Threads",
-                    "/static/NodeTypeIcons/chat.svg", null, $"{NodePath}/Chat", "default"))
-            .Should().Be($"{NodePath}/Chat");
+        chess.Target.Should().Be("Chess", "a tile opens the APP, never the record");
+        chess.Icon.Should().Be(UserActivityLayoutAreas.GenericAppIcon,
+            "core must not guess a third-party app's icon — the Store stamps the real one on install");
     }
 
     [Fact]
-    public void NeedsHealing_TriggersOnDefaultMainNodeOrGenericIcon_NotOnAFinishedRecord()
+    public void BuildAppRecord_PutsTheWholeTileOnTheNode()
     {
-        var spec = new UserActivityLayoutAreas.AppRecordSpec(
-            "Chess", "Chess", UserActivityLayoutAreas.GenericAppIcon, "Chess", null, "install");
+        // Name, Icon and MainNode live on the NODE, so the grid paints from query rows alone.
+        var spec = UserActivityLayoutAreas.AppRecordSpecs(new HomeConfig(), NodePath)
+            .Single(s => s.Id == "Store");
 
-        // MainNode still the record's own path (the pre-Icons rounds never stamped a target).
-        UserActivityLayoutAreas.NeedsHealing(
-                Record("Chess", new App { Plugin = "Chess" }, icon: "/covers/chess.png"), spec)
-            .Should().BeTrue();
-        // Generic icon even with a target stamped.
-        UserActivityLayoutAreas.NeedsHealing(
-                Record("Chess", new App { Plugin = "Chess" },
-                    icon: UserActivityLayoutAreas.GenericAppIcon, mainNode: "Chess"), spec)
-            .Should().BeTrue();
-        // Finished: real icon, real target.
-        UserActivityLayoutAreas.NeedsHealing(
-                Record("Chess", new App { Plugin = "Chess" },
-                    icon: "/covers/chess.png", mainNode: "Chess"), spec)
-            .Should().BeFalse();
-    }
+        var node = UserActivityLayoutAreas.BuildAppRecord(NodePath, spec);
 
-    [Fact]
-    public void HealAppRecord_StampsTargetAndFace_TouchingOnlyWhatImproves()
-    {
-        var stale = Record("Chess", new App { Plugin = "Chess" },
-            icon: UserActivityLayoutAreas.GenericAppIcon);
-
-        var healed = UserActivityLayoutAreas.HealAppRecord(
-            stale, "Chess Trainer", "/covers/chess.png", "Chess");
-
-        healed.MainNode.Should().Be("Chess", "the tile must open the APP, not the record");
-        healed.Icon.Should().Be("/covers/chess.png");
-        healed.Name.Should().Be("Chess", "a non-empty name is never overwritten — the owner may have renamed it");
-    }
-
-    [Fact]
-    public void HealAppRecord_NothingToImprove_ReturnsTheSameInstance()
-    {
-        // The materializer skips the write entirely on an identity heal — an incurable record
-        // (cover has no icon either) must not cost a patch per home render.
-        var finished = Record("Chess", new App { Plugin = "Chess" },
-            icon: "/covers/chess.png", mainNode: "Chess");
-
-        UserActivityLayoutAreas.HealAppRecord(finished, "Chess", "/covers/chess.png", "Chess")
-            .Should().BeSameAs(finished);
-    }
-
-    [Fact]
-    public void ResolveAppFace_PrefersTheCover_FallsBackToTheSpec()
-    {
-        var spec = new UserActivityLayoutAreas.AppRecordSpec(
-            "Chess", "Chess", UserActivityLayoutAreas.GenericAppIcon, "Chess", null, "install");
-        var cover = MeshNode.FromPath("Chess") with { Name = "Chess Trainer", Icon = "/covers/chess.png" };
-
-        var withCover = UserActivityLayoutAreas.ResolveAppFace(spec,
-            new[] { cover }.ToDictionary(n => n.Path, StringComparer.OrdinalIgnoreCase));
-        withCover.Name.Should().Be("Chess Trainer");
-        withCover.Icon.Should().Be("/covers/chess.png");
-
-        var withoutCover = UserActivityLayoutAreas.ResolveAppFace(spec,
-            new System.Collections.Generic.Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase));
-        withoutCover.Name.Should().Be("Chess");
-        withoutCover.Icon.Should().Be(UserActivityLayoutAreas.GenericAppIcon);
-    }
-
-    // ── Install manifests → materialization input ───────────────────────────────────────────────
-
-    [Fact]
-    public void InstalledItemsOf_YieldsOnlyItemsWithALiveInstall()
-    {
-        var manifest = JsonSerializer.SerializeToElement(new
-        {
-            repo = "https://github.com/Systemorph/MeshWeaver.Plugins",
-            items = new object[]
-            {
-                new { item = "Chess", installedPath = "rbuergi/Chess", installedAt = "2026-08-01" },
-                new { item = "Publish", installedPath = (string?)null },        // un-installed: keeps entitlement only
-                new { item = (string?)null, installedPath = "rbuergi/Ghost" },  // malformed: no item id
-                new { item = "Training/", installedPath = "rbuergi/Training" }, // normalizes
-            },
-        });
-
-        UserActivityLayoutAreas.InstalledItemsOf(manifest, new JsonSerializerOptions())
-            .Should().Equal("Chess", "Training");
-    }
-
-    [Fact]
-    public void InstalledItemsOf_ToleratesGarbage()
-    {
-        var options = new JsonSerializerOptions();
-        UserActivityLayoutAreas.InstalledItemsOf(null, options).Should().BeEmpty();
-        UserActivityLayoutAreas.InstalledItemsOf(JsonSerializer.SerializeToElement(42), options).Should().BeEmpty();
-        UserActivityLayoutAreas.InstalledItemsOf(
-                JsonSerializer.SerializeToElement(new { items = "nope" }), options)
-            .Should().BeEmpty();
+        node.Path.Should().Be($"{NodePath}/_App/Store");
+        node.NodeType.Should().Be(AppNodeType.NodeType);
+        node.Name.Should().Be("Store");
+        node.Icon.Should().Be("/static/NodeTypeIcons/shopping-bag.svg");
+        node.MainNode.Should().Be("Store", "a tile opens the APP, never the record");
     }
 
     // ── Config ──────────────────────────────────────────────────────────────────────────────────
