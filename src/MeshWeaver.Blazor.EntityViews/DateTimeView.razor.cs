@@ -5,7 +5,7 @@ using DayFormat = Microsoft.FluentUI.AspNetCore.Components.DayFormat;
 using FluentInputAppearance = Microsoft.FluentUI.AspNetCore.Components.FluentInputAppearance;
 using HorizontalPosition = Microsoft.FluentUI.AspNetCore.Components.HorizontalPosition;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.EntityViews;
 
 /// <summary>
 /// Blazor view for the date/time picker control. Binds appearance, calendar view mode,

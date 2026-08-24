@@ -184,19 +184,31 @@ public static class MarkdownOverviewLayoutArea
         // A module that OWNS this page supplied the whole index — rendered by the shared rail, whose
         // shape is pinned by SuppliedNavigationRail's tests. Nothing supplied → core's default list
         // of the node's own children, unchanged, so docs and spaces are untouched by this.
+        // The nav renders NON-collapsible: the Splitter below owns both resize and collapse.
         var nav = supplied is { Entries.Count: > 0 }
             ? SuppliedNavigationRail.Render(
-                SuppliedNavigationRail.Plan(supplied, host.Hub.Address.ToString()))
+                SuppliedNavigationRail.Plan(supplied, host.Hub.Address.ToString()), collapsible: false)
             : Controls.NavMenu
-                .WithSkin(s => s.WithWidth(240).WithCollapsible(true))
+                .WithSkin(s => s.WithCollapsible(false))
                 .WithNavGroup(BuildChildrenGroup(host, node, subNodes));
 
-        return Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithWidth("100%")
-            .WithStyle("gap: 24px; align-items: flex-start;")
-            .WithView(nav, NavigationArea)
-            .WithView(Controls.Stack.WithStyle("flex: 1; min-width: 0;").WithView(content));
+        // A SPLITTER, not a Stack — the same idiom as the Settings pages, and for the same reason:
+        // the divider is a real, draggable resize handle (FluentMultiSplitter, client-side), and
+        // its collapse arrow replaces the rail's own toggle. A fixed-width Stack answered "the
+        // index is page-wide" but not "let me choose how wide" (user report 2026-08-23). Styles
+        // mirror SettingsLayoutArea: the splitter takes its content height and the page scrolls
+        // as a whole.
+        return Controls.Splitter
+            .WithStyle("height: auto; flex: 1 0 auto;")
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%"))
+            // WithId, not WithArea: the addressable area path is {context}/{Id} — PrepareRendering
+            // OVERWRITES Area from Id, so naming Area here would leave the pane on an auto id and
+            // break every consumer addressing …/Navigation (Copilot on #2098).
+            .WithView(nav, x => x.WithId(NavigationArea)
+                .AddSkin(new SplitterPaneSkin().WithSize("260px").WithMin("180px").WithMax("480px").WithCollapsible(true)))
+            .WithView(
+                Controls.Stack.WithStyle("min-width: 0; padding-left: 16px;").WithView(content),
+                skin => skin.WithSize("*"));
     }
 
     // Core's default: the node's own children, one flat list.
@@ -205,6 +217,10 @@ public static class MarkdownOverviewLayoutArea
     {
         var group = new NavGroupControl(node?.Name ?? host.Localize("nav.contents"))
             .WithSkin(s => s.WithExpanded(true));
+        // The heading shows the DOCUMENT's icon, same resolution as its children below — without it
+        // the doc title was the one line of the index with no icon.
+        if (MeshNodeImageHelper.ResolveNodeIcon(node) is { } groupIcon)
+            group = group.WithIcon(groupIcon);
         foreach (var child in subNodes)
         {
             var href = $"/{child.Path}";

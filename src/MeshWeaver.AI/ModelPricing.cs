@@ -98,9 +98,13 @@ public static class ModelPricing
             // API rates. USD per 1M tokens (standard / non-cached). ⚠️ VERIFY against the Azure
             // AI Foundry rate card for the resource — region/contract rates can differ, and the
             // Flash / V3-0324 figures below are estimates pending confirmation.
-            ["DeepSeek-V4-Pro"] = new(1.75m, 3.48m, Usd),
-            ["DeepSeek-V3-0324"] = new(0.95m, 2.40m, Usd),   // deepseek-chat; deprecates 2026-07-24 — estimate
-            ["DeepSeek-V4-Flash"] = new(0.55m, 1.10m, Usd),  // cheapest tier — estimate
+            // 🚨 Cache reads are billed on their own meter at exactly 1/12 of input — NOT the
+            // Anthropic 0.1x the fallback would apply. Derived from Azure Cost Management over
+            // four independent days (cache ratios 33%–76%), identical to four decimals:
+            // V4-Pro 1.4274 → 0.11895 CHF/M. The USD figures here are those CHF rates at ~1.22.
+            ["DeepSeek-V4-Pro"] = new(1.75m, 3.48m, Usd) { CacheReadPerMillion = 1.75m / 12m },
+            ["DeepSeek-V3-0324"] = new(0.95m, 2.40m, Usd) { CacheReadPerMillion = 0.95m / 12m },   // deepseek-chat; deprecates 2026-07-24 — estimate
+            ["DeepSeek-V4-Flash"] = new(0.55m, 1.10m, Usd) { CacheReadPerMillion = 0.55m / 12m },  // cheapest tier — estimate
             // Moonshot Kimi K2.6 (preview on Azure AI Foundry).
             ["Kimi-K2.6"] = new(0.95m, 4.00m, Usd),
 
@@ -110,6 +114,20 @@ public static class ModelPricing
             // Rates as published by the OpenRouter model API, 2026-08.
             ["z-ai/glm-5.2"] = new(0.6286m, 1.9756m, Usd),
             ["moonshotai/kimi-k3"] = new(3.00m, 15.00m, Usd),
+            // The converged frontier catalog fronted through the single funded OpenRouter key
+            // (no per-provider credentials): GLM 5.3, GPT-5, Gemini 3, Claude 5, DeepSeek, Grok,
+            // Qwen. Rates as published by the OpenRouter model API, 2026-08 (per 1M tokens,
+            // standard / non-cached). Same backstop caveat as above — the node price wins.
+            ["z-ai/glm-5.3"] = new(1.4m, 4.4m, Usd),
+            ["openai/gpt-5.2"] = new(1.75m, 14.0m, Usd),
+            ["openai/gpt-5-mini"] = new(0.25m, 2.0m, Usd),
+            ["google/gemini-3.1-pro-preview"] = new(2.0m, 12.0m, Usd),
+            ["google/gemini-3.7-flash"] = new(0.375m, 1.875m, Usd),
+            ["anthropic/claude-opus-5"] = new(5.0m, 25.0m, Usd),
+            ["anthropic/claude-sonnet-5"] = new(2.0m, 10.0m, Usd),
+            ["deepseek/deepseek-v4-pro"] = new(0.5262m, 1.0524m, Usd),
+            ["x-ai/grok-4.6"] = new(2.0m, 6.0m, Usd),
+            ["qwen/qwen3-max"] = new(0.78m, 3.9m, Usd),
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -160,7 +178,11 @@ public static class ModelPricing
     public static ModelPriceRate? Resolve(string? modelId, ModelDefinition? node)
     {
         if (node is { InputPricePerMillionTokens: { } inPrice, OutputPricePerMillionTokens: { } outPrice })
-            return new ModelPriceRate(inPrice, outPrice, node.Currency ?? Usd);
+            return new ModelPriceRate(inPrice, outPrice, node.Currency ?? Usd)
+            {
+                CacheReadPerMillion = node.CacheReadPricePerMillionTokens,
+                CacheWritePerMillion = node.CacheWritePricePerMillionTokens,
+            };
         return Default(modelId);
     }
 }

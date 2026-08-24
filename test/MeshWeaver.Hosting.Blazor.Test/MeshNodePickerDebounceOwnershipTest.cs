@@ -6,6 +6,7 @@ using System.Reactive.Disposables;
 using System.Reflection;
 using System.Threading.Tasks;
 using MeshWeaver.Blazor.Components;
+using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Layout;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging.Abstractions;

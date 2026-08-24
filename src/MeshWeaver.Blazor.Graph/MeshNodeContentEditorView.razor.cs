@@ -6,7 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.Graph;
 
 /// <summary>
 /// Code-behind for <see cref="MeshNodeContentEditorView"/> — the GUI-client, cache-bound editor

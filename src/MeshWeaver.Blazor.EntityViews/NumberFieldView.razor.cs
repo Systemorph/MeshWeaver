@@ -1,6 +1,6 @@
 ﻿using Microsoft.FluentUI.AspNetCore.Components;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.EntityViews;
 
 /// <summary>
 /// Blazor form component for editing numeric values using a Fluent UI number field.

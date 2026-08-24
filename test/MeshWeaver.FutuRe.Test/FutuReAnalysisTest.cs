@@ -928,14 +928,16 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Should().Within(30.Seconds())
             .Match(x => x is not null);
 
-        var stack = control.Should().BeOfType<StackControl>().Subject;
-        Output.WriteLine($"Stack has {stack.Areas?.Count} areas");
+        control.Should().BeAssignableTo<IContainerControl>(
+            "the Overview root is a container — a plain Stack without sub-nodes, or the resizable "
+            + "side-menu SPLITTER when sub-nodes render (MarkdownOverviewLayoutArea.BuildWithSubNodeNav)");
+        Output.WriteLine($"{control!.GetType().Name} has {((IContainerControl)control).Areas?.Count} areas");
 
-        // Find the markdown body control ANYWHERE in the Overview control tree. A node WITH sub-nodes
-        // renders the collapsible side-menu wrapper (MarkdownOverviewLayoutArea.BuildWithSubNodeNav),
-        // which nests the body inside a content column — so it may be a direct child (no sub-nodes) or
-        // a grandchild (side menu present). The Overview body is a CollaborativeMarkdownControl (value
-        // in `Value`); legacy areas may still produce MarkdownControl (`Markdown`). Accept either.
+        // Find the markdown body control ANYWHERE in the Overview control tree, walking EVERY
+        // container kind — the wrapper changed from Stack to Splitter once (for drag-resize) and a
+        // walk pinned to one container type reported the body missing when it was merely re-parented.
+        // The Overview body is a CollaborativeMarkdownControl (value in `Value`); legacy areas may
+        // still produce MarkdownControl (`Markdown`). Accept either.
         async Task<string?> FindMarkdown(UiControl? c)
         {
             switch (c)
@@ -944,8 +946,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                     return mc.Markdown?.ToString();
                 case CollaborativeMarkdownControl cmc:
                     return cmc.Value?.ToString();
-                case StackControl sc:
-                    foreach (var area in sc.Areas ?? [])
+                case IContainerControl cc:
+                    foreach (var area in cc.Areas ?? [])
                     {
                         var childKey = area.Area?.ToString();
                         if (string.IsNullOrEmpty(childKey)) continue;
@@ -962,7 +964,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             }
         }
 
-        var markdown = await FindMarkdown(stack);
+        var markdown = await FindMarkdown(control);
 
         markdown.Should().NotBeNullOrEmpty(
             "Overview should contain a markdown body control (MarkdownControl or CollaborativeMarkdownControl), " +

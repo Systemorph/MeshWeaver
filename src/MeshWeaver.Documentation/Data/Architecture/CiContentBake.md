@@ -198,6 +198,52 @@ Three consequences worth carrying:
   independent top-level declarations does not affect what is emitted, which is why the old lane's
   non-determinism was survivable.
 
+## 🚨 An in-mesh build is the ABSOLUTE FALLBACK — if a pod is sweeping, the bundles are missing
+
+A portal should never compile content at boot. It should ADOPT files CI already produced. When you
+see a pod stuck on
+
+```
+Health check nodetype_bake: 'NodeType bake in progress — enumerating dynamic NodeTypes'
+```
+
+that is not the system working slowly. It is the fallback, and it means **no bundle matched this
+image's framework identity**. Treat it as a missing artifact, never as "boots are slow here".
+
+### Where the files actually come from (measured on memex, 2026-08-22)
+
+There are two adoption sources, and only one of them is real today:
+
+| Source | State |
+|---|---|
+| `prebuilt/` **inside the image** (`ShippedPrebuiltBundles`) | **EMPTY** — `ls /app/prebuilt` returned 0 files on the running portal |
+| the published store on the shared volume, `/data/prebuilt-bundles/<identity>/` | **101 identities present** |
+
+So the store is the only lane that feeds adoption. A pod adopts iff its own identity is one of those
+directories — and when it is not, it sweeps.
+
+### Why the identity can be missing even though bakes are green
+
+The bake follows releases and the pin governs gates — that separation is right and has been in place
+since 2026-08-18. What it does not fix on a busy trunk:
+
+🚨 **`MW_TEST_IMAGE` is `mw-plugin-test:latest`, a MOVING tag.** The bake resolves it at run time;
+the instance later rolls to the newest *portal* tag. On a trunk that builds every few minutes those
+are different commits, so the bake seals identity A while the instance wants identity B. Three bakes
+in one morning published `s429a849…`, `s14290dce…` and `se78f65ed…` while memex held for
+`se3bf749…` — every job green throughout.
+
+The half that makes this converge is the CONSUMER: an instance must roll to the newest release that
+is actually baked, not the newest release that exists. Newest-only selection can never win the race,
+because the newest tag is always the one least likely to be baked yet.
+
+### Checking it, in order
+
+1. `ls /app/prebuilt` on the pod — if empty, the image lane contributes nothing (it does not today).
+2. `ls /data/prebuilt-bundles | wc -l` — the store; then whether THIS image's identity is among them.
+3. The bake job's `bake published: identity=…` versus the instance's `heldReason` identity. Different
+   values are the whole bug.
+
 ### Byte-equality IS reachable — through adoption, not through recompilation
 
 Two independent compiles of the same content still cannot be byte-equal, and that is not only the
@@ -893,6 +939,11 @@ When this is missing you do not see a red gate. You see:
 
 Every one of those reads as "the bake is broken". The bake is fine. Nothing invited it.
 
+See also [Release Availability Gates](/Doc/Architecture/ReleaseGates) → "How a fleet goes
+stale while every check is green" — the instance-side half of the same defect, and why the
+dispatch was REMOVED rather than provisioned: a publisher must not know its readers, and the
+credential to tell them is not worth holding.
+
 **Measured in production, 2026-08-17** — for satellite content the lane is not a design any more,
 it is observed behaviour. On `memex` running `3.0.0-rc4.ci.4049` (identity
 `s377941f549f721e01ac764e0fb8db84a`), boot
@@ -928,10 +979,10 @@ types. The satellites escape it precisely because they bake INSIDE the image.
   `mw-plugin-test` run; its content moves with the platform commit it is baking, so a
   content-diff baseline is a different question from the node repos' one.
 - **The cross-repo rebuild cascade is a separate axis.** `narrow-by-affected` answers "which of
-  THIS repo's modules changed". "Which repos must rebuild, in what order, when an upstream
-  publishes" is the `upstream-sources` gate plus `dependent-repos`, and it is still dormant in
-  practice for this repo's dependents: `DEPENDENT_DISPATCH_TOKEN` is unprovisioned, so Plugins
-  declares no `dependent-repos` and Education/Reinsurance are woken only by their own schedule.
+  THIS repo's modules changed". "Which repos must rebuild, when an upstream publishes" is the
+  `upstream-sources` gate plus each repo's own **`schedule`** — there is no dispatch and no
+  dependent list. A repo missing the schedule never rebuilds for a release, and the only symptom is
+  an instance HELD on bundles from that repo's source.
 - **An arm64 install adopts nothing the amd64 lane publishes** — the two architectures of one image
   resolve different identities (see the identity rule above). Local arm64 installs compile at boot
   as they always have; nothing may paper over this by publishing the same bundles twice.

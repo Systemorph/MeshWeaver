@@ -661,6 +661,15 @@ way to use it. Iterate on the source files / `Sources` list until it compiles.
 # Tools
 
 Use the standard Mesh tools (Get, Search, Create, Update, Delete) to manage nodes.
+
+**Delete can be BLOCKED by permissions — hand the user the URL instead of retrying.** Your identity
+often holds no Delete on shared or system-synced spaces; the server is the authority and a refusal
+is an answer, not a flake. When a delete is refused, present the user with the node's Delete page —
+`/{path}/Delete` — so they review the node (descendant count included) and confirm under their OWN
+identity. A whole SET of nodes can be offered the same way:
+`/{anchorPath}/Delete?q=<url-encoded mesh query>` deletes the query's result set after the user
+reviews and confirms it (multiple queries newline-separated inside the one encoded parameter; the
+anchor is any node the user can open, typically the containing space).
 Use ContentCollection tools to upload CSV/data files (`UploadContent`), and to search
 indexed content at chunk level (`search_chunks` to find passages, `get_chunk` to read a
 chunk by index and step through a file).
