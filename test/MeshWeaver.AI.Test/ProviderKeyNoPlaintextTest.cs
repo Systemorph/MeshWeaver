@@ -17,12 +17,16 @@ namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// The counterpart to <see cref="ProviderKeyEncryptionTest"/>, which pins the happy path WITH a
-/// master key. This one pins the case that actually shipped a plaintext credential: NO master key,
-/// therefore no <see cref="IProviderKeyProtector"/>.
+/// master key. This one pins the case that actually shipped a plaintext credential: the
+/// <see cref="IProviderKeyProtector"/> IS registered — it always is — but no master key is
+/// configured, so it has nothing to encrypt with and <c>Protect</c> refuses.
+///
+/// <para>Being precise about that matters, because "no protector" suggests the fix is to register
+/// one, and it is not: the fix is to configure the master key.</para>
 ///
 /// <para>The old behaviour was a silent passthrough — the raw key was persisted into node content
 /// and nothing failed, so the encryption test stayed green while production stored cleartext.
-/// Storing a provider key must FAIL CLOSED instead: a missing protector is a configuration fault,
+/// Storing a provider key must FAIL CLOSED instead: a missing master key is a configuration fault,
 /// not a fallback.</para>
 ///
 /// <para>Note the deliberate asymmetry, which this fixture is also the guard for: writes refuse,
@@ -60,7 +64,7 @@ public class ProviderKeyNoPlaintextTest : AITestBase
     }
 
     [Fact]
-    public async Task WithoutAProtector_StoringAKey_IsRefused_NotSilentlyStoredInPlaintext()
+    public async Task WithoutAMasterKey_StoringAKey_IsRefused_NotSilentlyStoredInPlaintext()
     {
         var owner = $"user-{Guid.NewGuid():N}";
         const string secret = "sk-ant-PLAINTEXT-MUST-NEVER-PERSIST";
@@ -80,11 +84,12 @@ public class ProviderKeyNoPlaintextTest : AITestBase
     }
 
     [Fact]
-    public void AKeylessProvider_IsStillAllowed_WithoutAProtector()
+    public void AKeylessProvider_IsStillAllowed_WithoutAMasterKey()
     {
         // Keyless providers (GitHub Copilot, local Claude Code CLI) legitimately carry no key.
-        // Refusing those would break them, so null/empty must stay a valid write.
+        // Refusing those would break them, so null/empty must stay a valid write — Protect returns
+        // null/empty unchanged before it ever looks for a master key.
         var service = Mesh.ServiceProvider.GetRequiredService<ModelProviderService>();
-        Assert.NotNull(service);   // constructing the service must not require a protector
+        Assert.NotNull(service);   // constructing the service must not require a master key
     }
 }
