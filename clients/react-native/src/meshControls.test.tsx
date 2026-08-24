@@ -3,7 +3,7 @@ import React from "react";
 import TestRenderer, { type ReactTestRendererJSON } from "react-test-renderer";
 import { RegistryProvider, ScopeProvider, RenderArea, StaticAreaSource, localize, type AreaTree } from "@meshweaver/react/core";
 
-import { rnPack } from "./rnPack";
+import { fullPack } from "./modules/standard";
 
 // Assert against the CATALOG, not a literal — that also pins that these strings are localized.
 const en = (key: string) => localize(key, "en");
@@ -39,7 +39,7 @@ function render(): Json {
   let root!: TestRenderer.ReactTestRenderer;
   TestRenderer.act(() => {
     root = TestRenderer.create(
-      <RegistryProvider pack={rnPack}>
+      <RegistryProvider pack={fullPack}>
         <ScopeProvider source={new StaticAreaSource(tree)} area="main">
           <RenderArea areaKey="main" />
         </ScopeProvider>

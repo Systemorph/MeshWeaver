@@ -13,7 +13,9 @@ import {
   type MeshOps,
 } from "@meshweaver/react/core";
 import { Mesh } from "@meshweaver/client-web";
+import { composeDeployment } from "@meshweaver/react/core";
 import { rnPack } from "./src/rnPack";
+import { deployment } from "./src/deployment.generated";
 import { sampleArea } from "./src/sample";
 import { createLiveSource } from "./src/live";
 import { buildMeshOps } from "./src/liveOps";
@@ -77,6 +79,11 @@ export default function App() {
     </ThemeProvider>
   );
 }
+
+// The DEPLOYMENT's pack: the base RN pack + whatever client modules this deployment's manifest
+// injected (deployment/*.json → scripts/gen-deployment.mjs → static imports). Composed ONCE at
+// module scope — the set is a build-time fact, never app state.
+const deploymentPack = composeDeployment(rnPack, deployment.modules);
 
 function AppInner() {
   const { palette } = useTheme();
@@ -227,7 +234,7 @@ function AppInner() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: palette.appBg }}>
       <StatusBar />
-      <RegistryProvider pack={rnPack}>
+      <RegistryProvider pack={deploymentPack}>
        <MeshOpsProvider ops={meshOps}>
         <EmbeddedAreaProvider factory={embedFactory}>
           <NavContext.Provider value={navigate}>

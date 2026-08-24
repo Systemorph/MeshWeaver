@@ -12,7 +12,13 @@
     "web:export": "expo export --platform web && node scripts/pwa-inject.mjs dist/index.html",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "gen:deployment": "node scripts/gen-deployment.mjs",
+    "prestart": "node scripts/gen-deployment.mjs",
+    "preios": "node scripts/gen-deployment.mjs",
+    "preandroid": "node scripts/gen-deployment.mjs",
+    "preweb": "node scripts/gen-deployment.mjs",
+    "preweb:export": "node scripts/gen-deployment.mjs"
   },
   "dependencies": {
     "@expo/metro-runtime": "~57.0.12",
