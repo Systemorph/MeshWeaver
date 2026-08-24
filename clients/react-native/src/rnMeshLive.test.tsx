@@ -488,3 +488,40 @@ describe("MeshSearch home design", () => {
     expect(headers).toEqual(["Space (2)", "Story (1)"]);
   });
 });
+
+// ---- ResultIcon: mesh-relative SVG urls on a device ------------------------------------------
+
+describe("ResultIcon url handling (the icons-not-showing defect)", () => {
+  it("resolves a mesh-relative .svg icon against the instance and renders it via SvgUri", async () => {
+    // The row shape prod actually serves: /static/… node icons are SVG at a RELATIVE path. RN's
+    // Image renders nothing for both reasons (no origin; no svg decoder) — the tile must resolve
+    // the URL against the current instance and route it through react-native-svg.
+    const rows = [{ path: "u1/_App/doc", id: "doc", name: "Documentation", nodeType: "InstalledApp",
+                    mainNode: "Doc", icon: "/static/NodeTypeIcons/book.svg" }];
+    const search = vi.fn(async () => rows);
+    let r!: TestRenderer.ReactTestRenderer;
+    await TestRenderer.act(async () => {
+      r = TestRenderer.create(
+        <NavContext.Provider value={() => {}}>
+          <RegistryProvider pack={rnPack}>
+            <MeshOpsProvider ops={fakeOps({ search })}>
+              <ScopeProvider
+                source={new StaticAreaSource({ areas: { main: {
+                  $type: "MeshSearch", hiddenQuery: "nodeType:InstalledApp",
+                  showSearchBox: false, renderMode: "Icons",
+                } as never } })}
+                area="main"
+              >
+                <RenderArea areaKey="main" />
+              </ScopeProvider>
+            </MeshOpsProvider>
+          </RegistryProvider>
+        </NavContext.Provider>,
+      );
+    });
+    await TestRenderer.act(async () => { await new Promise((res) => setTimeout(res, 300)); });
+    const uris = r.root.findAll((n) => n.type === ("SvgUri" as never)).map((n) => n.props.uri);
+    // Absolute (the mock instance's sidecar origin) — never the bare relative path RN cannot fetch.
+    expect(uris).toContain("http://localhost:5250/static/NodeTypeIcons/book.svg");
+  });
+});

@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, ActivityIndicator, Image, StyleSheet } from "react-native";
-import { SvgXml } from "react-native-svg";
+import { SvgUri, SvgXml } from "react-native-svg";
 import {
   accessLogQuery,
   buildGroups,
@@ -35,6 +35,7 @@ import {
   type MeshSearchScope,
 } from "@meshweaver/react/core";
 import { useNavigate } from "./nav";
+import { resolveAssetUrl } from "./connection";
 import { useTheme } from "./theme";
 
 const s = str;
@@ -301,7 +302,9 @@ const ThreadChat: ControlComponent = ({ control }) => {
           style={[styles.sendButton, (!text.trim() || sending) && styles.sendButtonDisabled]}
           onPress={send}
         >
-          <Text style={styles.sendButtonText}>{sending ? "…" : t("common.send")}</Text>
+          {/* A glyph, not the word — universal, compact on a phone; the localized "Send"
+              survives as the accessibilityLabel above (the i18n icon+tooltip rule). */}
+          <Text style={styles.sendButtonText}>{sending ? "…" : "➤"}</Text>
         </Pressable>
       </View>
     </View>
@@ -323,8 +326,20 @@ function ResultIcon({ node, size, radius }: { node: MeshSearchResult; size: numb
           <SvgXml xml={classified.text} width={Math.round(size * 0.6)} height={Math.round(size * 0.6)} />
         </View>
       );
-    case "url":
-      return <Image source={{ uri: classified.text }} style={{ ...box, resizeMode: "cover" }} />;
+    case "url": {
+      // Two native traps the web pack never sees: a mesh-RELATIVE url ("/static/…") has no origin
+      // to resolve against on a device (RN Image silently renders nothing), and RN's Image cannot
+      // decode SVG — which is what nearly every node icon is. Resolve against the current instance
+      // and route .svg through react-native-svg, exactly as the doc renderer's <img> leaf does.
+      const url = resolveAssetUrl(classified.text);
+      if (/\.svg(\?|#|$)/i.test(url))
+        return (
+          <View style={box}>
+            <SvgUri uri={url} width={Math.round(size * 0.6)} height={Math.round(size * 0.6)} />
+          </View>
+        );
+      return <Image source={{ uri: url }} style={{ ...box, resizeMode: "cover" }} />;
+    }
     case "emoji":
       return (
         <View style={box}>
@@ -692,7 +707,7 @@ const styles = StyleSheet.create({
   executingRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   composerRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
   composerInput: { flex: 1, borderWidth: 1, borderColor: "#ccc", borderRadius: 6, padding: 8, fontSize: 14, maxHeight: 120 },
-  sendButton: { backgroundColor: "#0f6cbd", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 6 },
+  sendButton: { backgroundColor: "#0f6cbd", width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   sendButtonDisabled: { backgroundColor: "#a0a0a0" },
   sendButtonText: { color: "white", fontWeight: "600" },
   // search / collection

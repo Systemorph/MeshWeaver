@@ -171,3 +171,62 @@ describe("composition rules", () => {
     ]);
   });
 });
+
+// 🚨 THE DEFAULT PATH — the one every shell actually runs, and the one no test above touches.
+// Each case here injects a fetch, so `this` never mattered and a receiver bug could not show. In a
+// browser it does: `fetch` is a Web IDL operation that must be called with the global as `this`, so
+// holding it bare on the instance and calling `this.doFetch(...)` threw "Illegal invocation" —
+// markdown pages rendered their raw source and the file browser read empty, on every shell at once.
+describe("the uninjected fetch — called with the GLOBAL as its receiver", () => {
+  /** Stand in for the browser's Web IDL check: reject any receiver that is not the global. */
+  function globalFetchStub() {
+    const seen: unknown[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = function (this: unknown, url: string | URL | Request) {
+      seen.push(this);
+      if (this !== undefined && this !== globalThis)
+        throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+      return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify({ html: "<p>ok</p>", results: [], items: [] }) } as Response);
+    } as typeof globalThis.fetch;
+    return { seen, restore: () => { globalThis.fetch = original; } };
+  }
+
+  it("renderMarkdown resolves when no fetch is injected", async () => {
+    const { seen, restore } = globalFetchStub();
+    try {
+      const rest = new MeshRest({ baseUrl: "https://portal.example", token: "mw_tok" });
+      await expect(rest.renderMarkdown("### hi")).resolves.toMatchObject({ html: "<p>ok</p>" });
+      expect(seen.every((r) => r === undefined || r === globalThis)).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  // The review asked after the EXPLICIT injection of the global fetch: `supplied(input, init)` is a
+  // plain call, so `this` is undefined — which Web IDL invocation coerces to the global object (the
+  // very reason `(i, o) => globalThis.fetch(i, o)` is safe). The defect was a DEFINED wrong
+  // receiver (the MeshRest instance via `this.doFetch`), never an undefined one. Pinned here so the
+  // distinction is a test, not an argument.
+  it("an explicitly injected global fetch keeps a legal receiver too", async () => {
+    const { seen, restore } = globalFetchStub();
+    try {
+      const rest = new MeshRest({ baseUrl: "https://portal.example", token: "mw_tok", fetch: globalThis.fetch });
+      await expect(rest.renderMarkdown("### hi")).resolves.toMatchObject({ html: "<p>ok</p>" });
+      expect(seen.every((r) => r === undefined || r === globalThis)).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("every verb goes through the same receiver-safe call", async () => {
+    const { restore } = globalFetchStub();
+    try {
+      const rest = new MeshRest({ baseUrl: "https://portal.example", token: "mw_tok" });
+      await expect(rest.queryNodes("nodeType:Story")).resolves.toEqual([]);
+      await expect(rest.listContent("acme/Docs")).resolves.toMatchObject({ items: [] });
+      await expect(rest.uploadContent("acme/Docs/a.txt", new Blob(["x"]), "a.txt")).resolves.toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+});

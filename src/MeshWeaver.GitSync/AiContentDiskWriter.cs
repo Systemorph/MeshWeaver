@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.AI;
+using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
