@@ -13,8 +13,9 @@ namespace MeshWeaver.Mesh;
 /// .AddMeshNodes(new MeshNode("PluginRegistryCredential") { Name = "…" }
 ///     .HideFrom(MeshContexts.Search, MeshContexts.Create, MeshContexts.Content))
 ///
-/// // In a deployment's final config (Systemorph/Memex), for something shipped by someone else:
-/// .HideFromContent("Hosting", "Store/Plugin")
+/// // In a deployment's final config (Systemorph/Memex), for something shipped by someone else —
+/// // one call per node, on the node:
+/// .AddMeshNodes(new MeshNode("Store/Plugin") { Name = "Plugin" }.HideFromContent())
 /// </code>
 ///
 /// <para>On a NodeType DEFINITION node the mark covers every instance of that type — one line hides
