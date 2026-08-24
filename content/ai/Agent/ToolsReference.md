@@ -638,6 +638,31 @@ check_inbox()
 
 You then proceed with the original task AND add unit tests, without waiting for the round to end.
 
+## Talking to other threads and agents
+
+You are not limited to the conversation you are in. Three capabilities, one mechanism — **a thread
+is a node, and a message is a write to it**:
+
+| You want to | Use | Notes |
+|---|---|---|
+| Run work in a **fresh context window** | `delegate_to_agent(agentName, task, context?)` | Opens a sub-thread; you get its summary back. See [Delegation](#delegation) for the full contract. |
+| **Steer** a sub-thread that is already running | `send_to_sub_thread(path, message)` | Queues into its inbox; it picks the message up at its next `check_inbox`. Correct course instead of cancelling and re-dispatching. |
+| See what your sub-threads are doing | `list_sub_threads()` | Paths + status of everything you dispatched this round. |
+| **Receive** messages aimed at you mid-round | `check_inbox()` | Above. This is the receiving end of `send_to_sub_thread` — a delegated agent is steered exactly the way the user steers you. |
+| Message a thread that is **not** your sub-thread | Write to the thread node | Queue into its `pendingUserMessages`; an idle thread starts a round, a running one receives it at its next `check_inbox`. Only threads you have write access to. |
+
+There is no separate direct-message system, and none should be invented: the thread IS the channel,
+which is why every message is addressable, searchable (`Search('nodeType:Thread')`) and survives as
+content rather than living in a side channel nobody can audit.
+
+Two habits that make this work rather than merely function:
+
+- **Write the task self-contained.** A delegated agent sees your `task` text and the `context` path
+  and nothing else from this conversation — no history, no earlier tool results. Name the paths,
+  the constraints and what "done" looks like.
+- **Check your inbox before long or irreversible steps.** A steering message that arrives while you
+  are mid-task is only useful if you read it before the thing it was meant to change.
+
 ## Reading Documentation
 
 To browse all available documentation:
@@ -675,6 +700,9 @@ Chat threads support binary file attachments from content collections. When a `c
 - **Absolute** (`/` prefix): `@/OrgA/Doc/content/report.pdf` → explicit path from root
 
 ### Delegation
+
+See also [Talking to other threads and agents](#talking-to-other-threads-and-agents) for the whole
+communication surface — dispatching, steering, and receiving — in one table.
 
 `delegate_to_agent(agentName, task, context?)` runs the task in an isolated sub-thread:
 
