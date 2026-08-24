@@ -64,6 +64,9 @@ public static class LogonActionNodeType
             // records has no way to reach the Store — that is not deployment-specific, even though
             // WHICH apps get seeded is (it comes from Admin/HomeConfig).
             .AddSingleton<ILogonAction, SeedDefaultAppsLogonAction>()
+            // Disjoint from the adoption below: that one fills a record with NO icon, this one
+            // moves a record OFF an icon core shipped and has since replaced.
+            .AddSingleton<ILogonAction, DefaultAppIconRefreshLogonAction>()
             .AddSingleton<ILogonAction, AppIconAdoptionLogonAction>());
         return builder;
     }
