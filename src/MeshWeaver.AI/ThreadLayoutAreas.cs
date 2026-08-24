@@ -58,10 +58,7 @@ public static class ThreadLayoutAreas
                 // copied onto the thread at creation), same wiring as the composer node's area.
                 .WithView(ThreadComposerView.SelectorsArea, ThreadComposerView.ComposerSelectors)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
-                .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog)
-                // One compact row of the Threads-app vertical rail (title + ✕ close overlay);
-                // consumed as MeshSearch.ItemArea by the user hub's Threads app page.
-                .WithView(ThreadNodeType.RailItemArea, ThreadRailItem.View));
+                .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
 
     /// <summary>
     /// Side panel menu items (New Chat, History, Full Screen). Static set — emitted once.
@@ -167,25 +164,19 @@ public static class ThreadLayoutAreas
         // thread state for the Blazor view.
         SubscribeThreadVm(host, hubPath);
 
-        // Static container — never rebuilt
-        var chat = Controls.Stack
+        // Static container — never rebuilt. The conversation is the whole page: thread
+        // navigation (ancestors, my other open threads, new chat) is rendered NATIVELY by the
+        // Blazor chat view's thread-nav bar, so no extra shell wraps the chat here. (The old MDI
+        // rail shell delegated every rail row to a RailItem area on that THREAD's own hub — one hub
+        // activation per row, resolving an area on a hub this page does not own, which fails in
+        // the distributed portal. Never reintroduce it.)
+        return Controls.Stack
             .WithWidth("100%")
             .WithStyle("flex: 1; min-height: 0; display: flex; flex-direction: column;")
             .WithView(new ThreadChatControl()
                 .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)))
                 .WithShowFullHeader()
                 .WithStyle("flex: 1; min-height: 0; overflow: hidden;"));
-
-        // The multi-document shell: the VIEWER's thread rail stays beside the conversation, so
-        // navigating from the rail to a thread keeps the menu — the same shell the Threads app
-        // page renders around its composer. Viewer resolved from the circuit (a visitor without an
-        // identity gets the bare conversation). Still emitted ONCE — the shell is as static as the
-        // container it wraps.
-        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-        var viewerId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-        return string.IsNullOrEmpty(viewerId)
-            ? chat
-            : UserActivityLayoutAreas.BuildThreadsShell(viewerId, chat);
     }
 
     /// <summary>
