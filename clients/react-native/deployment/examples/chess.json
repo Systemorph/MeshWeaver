@@ -1,0 +1,19 @@
+{
+  "$schema": "../deployment.schema.json",
+  "name": "Chess",
+  "branding": {
+    "displayName": "MeshWeaver Chess",
+    "accent": "#b08a5a",
+    "accentDark": "#eed8b0"
+  },
+  "modules": [
+    "./src/modules/threads",
+    "./src/modules/meshBrowse",
+    "./src/modules/nodeEditing",
+    "./src/modules/data",
+    "./src/modules/documents",
+    "./src/modules/analysis",
+    "./src/modules/media",
+    "plugin:MeshWeaver.Plugins/Chess/gui/rn/chess"
+  ]
+}
