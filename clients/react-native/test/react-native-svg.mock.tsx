@@ -4,3 +4,4 @@
 import React from "react";
 
 export const SvgXml = ({ xml, ...props }: any) => React.createElement("SvgXml", { xml, ...props });
+export const SvgUri = ({ uri, ...props }: any) => React.createElement("SvgUri", { uri, ...props });

@@ -29,7 +29,7 @@ public static class TeamsConversationNodeType
     {
         Name = "Teams Conversation",
         Icon = "/static/NodeTypeIcons/chat.svg",
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<TeamsConversation>())

@@ -47,7 +47,7 @@ public static class VUserNodeType
         Name = "Virtual User",
         Icon = "/static/NodeTypeIcons/person.svg",
         NodeType = NodeType,
-        ExcludeFromContext = new HashSet<string> { "search" },
+        ExcludeFromContext = new HashSet<string> { "search", "content" },
         Content = new NodeTypeDefinition { DefaultNamespace = "VUser", RestrictedToNamespaces = ["VUser"] },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source

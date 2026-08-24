@@ -112,7 +112,7 @@ public static class TokenUsageNodeType
     {
         Name = "Token Usage",
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<TokenUsage>())

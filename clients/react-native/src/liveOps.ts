@@ -7,6 +7,7 @@
 // parser; the Markdown leaf hydrates its HTML with the shared splitRenderedHtml — no bespoke parser.
 import { Mesh, MeshRest, type MeshWebConnection } from "@meshweaver/client-web";
 import type {
+  AutocompleteSuggestion,
   ContentListing,
   DocumentDownload,
   DocumentExportOptions,
@@ -157,7 +158,15 @@ async function* watchNode(mesh: Mesh, path: string): AsyncIterable<MeshNodeState
  * Build the RN MeshOps from a live connection. `partition` anchors the interactive-markdown kernel
  * activity (the viewer's home partition — CHAT.namespacePath on the anonymous sidecar).
  */
-export function buildMeshOps(connection: MeshWebConnection, baseUrl: string, partition: string, token = ""): MeshOps {
+export function buildMeshOps(
+  connection: MeshWebConnection,
+  baseUrl: string,
+  partition: string | (() => string),
+  token = "",
+): MeshOps {
+  // The viewer's partition may resolve AFTER connect (a signed-in remote's identity arrives via
+  // whoami) — accept a thunk so the kernel anchor and the autocomplete target read it at CALL time.
+  const partitionOf = typeof partition === "function" ? partition : () => partition;
   // The REST reach-back (search + the helpers below) carries the instance's Bearer token; empty
   // = the anonymous sidecar. Without it every REST op 401'd against a remote portal (#1474).
   const mesh = Mesh.from(connection, "mesh/main", { url: baseUrl, token: token || undefined });
@@ -170,7 +179,10 @@ export function buildMeshOps(connection: MeshWebConnection, baseUrl: string, par
   return {
     // The viewer's partition doubles as their mesh id — viewer-scoped reads (the home Apps
     // grid's most-recently-used ordering over {viewer}/_UserActivity) resolve it from here.
-    userId: partition,
+    // A getter: it must track the thunk (a remote's identity resolves after connect).
+    get userId() {
+      return partitionOf();
+    },
     watch: (path: string) => watchNode(mesh, path),
     startThread: (namespacePath: string, userText: string, opts?: ThreadSubmitOptions) =>
       mesh.startThread(namespacePath, userText, opts),
@@ -179,8 +191,13 @@ export function buildMeshOps(connection: MeshWebConnection, baseUrl: string, par
     patch: (path: string, fields: Record<string, unknown>) => mesh.patch(path, fields),
     search: (query: string, basePath?: string, limit?: number) =>
       mesh.search(query, basePath, limit).catch(() => [] as Record<string, unknown>[]),
+    // @-mention autocomplete — the ONE shared implementation (Mesh.autocomplete: the wire
+    // AutocompleteRequest at the viewer's home hub). `partition` IS that hub: the device user on
+    // the local sidecar, the signed-in viewer's own partition against a portal.
+    autocomplete: (query: string, contextPath?: string) =>
+      mesh.autocomplete(partitionOf(), query, contextPath) as Promise<AutocompleteSuggestion[]>,
     renderMarkdown: (markdown: string, nodePath?: string) => rest.renderMarkdown(markdown, nodePath),
-    startMarkdownKernel: (cells: MarkdownCellSubmission[]) => startMarkdownKernel(connection, mesh, partition, cells),
+    startMarkdownKernel: (cells: MarkdownCellSubmission[]) => startMarkdownKernel(connection, mesh, partitionOf(), cells),
     getNode: (path: string) => mesh.get(path).then((n) => n.raw as Record<string, unknown>).catch(() => null),
     createNode: (node: Record<string, unknown>) => mesh.create(node).then(() => undefined),
     // The file-browser and document-export ops. These are plain REST / mesh-request calls with no

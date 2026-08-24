@@ -74,7 +74,7 @@ public static class MeshWeaverInstanceNodeType
         // Regular content type, like ApiToken: MainNode = the owning userId on each instance row
         // plus the per-user-partition own-scope shortcut in RlsNodeValidator gates Create/Read.
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<MeshWeaverInstance>()
@@ -87,7 +87,7 @@ public static class MeshWeaverInstanceNodeType
     {
         Name = "Registration Key",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<RegistrationKey>()
@@ -101,7 +101,7 @@ public static class MeshWeaverInstanceNodeType
     {
         Name = "Plugin Grant",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<PluginGrant>())

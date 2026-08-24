@@ -196,7 +196,7 @@ public static class ModelProviderNodeType
         IsSatelliteType = false,
         // Creatable: an admin can author a ModelProvider node directly in a space
         // (e.g. Systemorph/Provider/AzureFoundry). Still hidden from search.
-        ExcludeFromContext = new HashSet<string> { "search" },
+        ExcludeFromContext = new HashSet<string> { "search", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<ModelProviderConfiguration>())
@@ -215,7 +215,7 @@ public static class ModelProviderNodeType
     {
         Name = "Model Provider Selection",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<ModelProviderSelection>())

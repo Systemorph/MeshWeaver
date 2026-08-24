@@ -49,7 +49,7 @@ public static class EventSubscriptionNodeType
     {
         Name = "Event Subscription",
         Icon = "/static/NodeTypeIcons/clock.svg",
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<EventSubscription>())

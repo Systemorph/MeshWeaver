@@ -51,7 +51,7 @@ public static class ScheduledActionNodeType
     {
         Name = "Scheduled Action",
         Icon = "/static/NodeTypeIcons/clock.svg",
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<ScheduledAction>())

@@ -46,6 +46,11 @@ public class FileSystemStorageAdapterFactory : IStorageAdapterFactory
         // A real logger so the change feed can surface a subscriber that throws during fan-out —
         // a null logger restores exactly the silent-failure mode IsolatedChangeFeed exists to kill.
         var logger = serviceProvider.GetService<ILoggerFactory>()?.CreateLogger<FileSystemStorageAdapter>();
-        return new FileSystemStorageAdapter(basePath, writeOptionsModifier, logger: logger);
+        // Module-contributed parsers (the AI module's agent parser) — resolved here because this
+        // factory is the DI-aware construction site. Without them an `.md` carrying
+        // `nodeType: Agent` parses as plain Markdown on every file-system-backed mesh, silently.
+        return new FileSystemStorageAdapter(
+            basePath, writeOptionsModifier, logger: logger,
+            contributedParsers: serviceProvider.GetServices<Parsers.IFileFormatParser>());
     }
 }
