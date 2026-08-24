@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
 using Npgsql;
@@ -219,7 +220,7 @@ public class AuthMirrorTriggerTests
     }
 
     /// <summary>
-    /// The auth mirror SELF-HEALS: <c>GetAuthMirrorSelfHealScript</c> (run by
+    /// The auth mirror SELF-HEALS: <c>RunAuthMirrorSelfHealAsync</c> (run by
     /// <c>InitializeAsync</c> step 5 on every boot) re-installs a dropped partition trigger and
     /// reconciles rows that were missed while the trigger/function was broken. Pins the durable
     /// fix for the 2026-07 "spaces invisible in the catalog" incident: damage the mirror both
@@ -257,10 +258,9 @@ public class AuthMirrorTriggerTests
             await ins2.ExecuteNonQueryAsync();
         await ExistsInAuthAsync("", "HealMe2").Run().Should().Within(30.Seconds()).Be(false);
 
-        // Heal — the exact script InitializeAsync runs at every boot.
-        await using (var heal = _fixture.DataSource.CreateCommand(
-            PostgreSqlSchemaInitializer.GetAuthMirrorSelfHealScript()))
-            await heal.ExecuteNonQueryAsync();
+        // Heal — the exact operation InitializeAsync runs at every boot. Not the script: that only
+        // defines the batch function now, and executing it alone heals nothing.
+        await PostgreSqlSchemaInitializer.RunAuthMirrorSelfHealAsync(_fixture.DataSource);
 
         // Both rows reconciled…
         await ExistsInAuthAsync("", "HealMe").Run().Should().Within(30.Seconds()).Be(true);
@@ -271,6 +271,92 @@ public class AuthMirrorTriggerTests
             """INSERT INTO "healtest".mesh_nodes (namespace, id, name, node_type, state) VALUES ('', 'HealMe3', 'Healed Live', 'Space', 2) ON CONFLICT (namespace, id) DO NOTHING"""))
             await ins3.ExecuteNonQueryAsync();
         await ExistsInAuthAsync("", "HealMe3").Run().Should().Within(30.Seconds()).Be(true);
+    }
+
+    /// <summary>
+    /// The heal is BATCHED (<c>AuthMirrorHealBatchSize</c> = 25 schemas per call) and this test
+    /// crosses that boundary for real: it provisions 26 partition schemas named
+    /// <c>zzheal00..zzheal25</c> — consecutive in the global schema sort, so whatever else the
+    /// fixture container has accumulated, exactly one 25-multiple batch boundary falls BETWEEN
+    /// two of them (26 consecutive positions cover every residue mod 25), putting the first and
+    /// last in different batches. It damages the mirror on the first, a middle, and the last
+    /// schema, drives <see cref="PostgreSqlSchemaInitializer.RunAuthMirrorSelfHealAsync"/>, and
+    /// asserts all three converged — so a regression that returns the wrong <c>last_schema</c>,
+    /// skips past the cursor, or stops after the first batch heals only a prefix and goes RED
+    /// here instead of staying green. The direct <c>mw_auth_mirror_heal_batch</c> call at the end
+    /// pins the cursor contract itself: a batch returns the LAST schema it touched.
+    /// </summary>
+    [Fact(Timeout = 240000)]
+    public async Task SelfHeal_HealsSchemasOnBothSidesOfTheBatchBoundary()
+    {
+        await _fixture.CleanData().Should().Within(60.Seconds()).Emit();
+        await EnsureMirrorInstalledAsync().Run().Should().Within(60.Seconds()).Emit();
+
+        var schemas = Enumerable.Range(0, 26).Select(i => $"zzheal{i:00}").ToArray();
+        try
+        {
+            foreach (var schema in schemas)
+            {
+                await using var proc = _fixture.DataSource.CreateCommand(
+                    "SELECT public.ensure_partition_schema($1)");
+                proc.Parameters.AddWithValue(schema);
+                await proc.ExecuteNonQueryAsync();
+            }
+
+            // Damage the first, a middle, and the last of the 26: drop the mirror trigger, then
+            // write a Space root while it is absent — the row cannot mirror until the heal both
+            // reinstalls the trigger AND reconciles the missed row.
+            var damaged = new[] { schemas[0], schemas[12], schemas[^1] };
+            foreach (var schema in damaged)
+            {
+                await using (var drop = _fixture.DataSource.CreateCommand(
+                    $"""DROP TRIGGER IF EXISTS mesh_node_mirror_access_objects ON "{schema}".mesh_nodes"""))
+                    await drop.ExecuteNonQueryAsync();
+                await using (var ins = _fixture.DataSource.CreateCommand(
+                    $"""INSERT INTO "{schema}".mesh_nodes (namespace, id, name, node_type, state) VALUES ('', 'Boundary-{schema}', '{schema}', 'Space', 2) ON CONFLICT (namespace, id) DO NOTHING"""))
+                    await ins.ExecuteNonQueryAsync();
+                await ExistsInAuthAsync("", $"Boundary-{schema}").Run()
+                    .Should().Within(30.Seconds()).Be(false);
+            }
+
+            // The production driver: batches of 25, so ≥26 eligible schemas force ≥2 batches.
+            await PostgreSqlSchemaInitializer.RunAuthMirrorSelfHealAsync(_fixture.DataSource);
+
+            // Both sides of the boundary (and the middle) reconciled…
+            foreach (var schema in damaged)
+                await ExistsInAuthAsync("", $"Boundary-{schema}").Run()
+                    .Should().Within(30.Seconds()).Be(true);
+
+            // …and the LAST schema's trigger is live again: a fresh write mirrors on its own. If
+            // the sweep had healed only the first batch, this write would never reach auth.
+            await using (var ins = _fixture.DataSource.CreateCommand(
+                $"""INSERT INTO "{schemas[^1]}".mesh_nodes (namespace, id, name, node_type, state) VALUES ('', 'Boundary-Live', 'Live', 'Space', 2) ON CONFLICT (namespace, id) DO NOTHING"""))
+                await ins.ExecuteNonQueryAsync();
+            await ExistsInAuthAsync("", "Boundary-Live").Run()
+                .Should().Within(30.Seconds()).Be(true);
+
+            // Cursor contract, pinned directly on the function the driver loops over: a batch
+            // returns the LAST schema of its slice. Nothing else in this container can sort
+            // strictly between two zzhealNN names, so after 'zzheal12' a 2-schema batch is
+            // exactly {zzheal13, zzheal14}.
+            await using var batch = _fixture.DataSource.CreateCommand(
+                "SELECT public.mw_auth_mirror_heal_batch($1, $2)");
+            batch.Parameters.AddWithValue("zzheal12");
+            batch.Parameters.AddWithValue(2);
+            Assert.Equal("zzheal14", await batch.ExecuteScalarAsync() as string);
+        }
+        finally
+        {
+            // Drop what we provisioned: 26 leftover schemas would otherwise tax every later
+            // test's CleanData for the rest of the container's life (#977). One schema per
+            // command keeps the per-transaction lock footprint constant, as the fixture does.
+            foreach (var schema in schemas)
+            {
+                await using var drop = _fixture.DataSource.CreateCommand(
+                    $"""DROP SCHEMA IF EXISTS "{schema}" CASCADE""");
+                await drop.ExecuteNonQueryAsync();
+            }
+        }
     }
 
     [Fact]

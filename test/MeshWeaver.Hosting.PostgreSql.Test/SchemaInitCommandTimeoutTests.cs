@@ -34,8 +34,11 @@ public class SchemaInitCommandTimeoutTests
         var source = ReadInitializerSource();
 
         // The helper itself is the one legitimate raw CreateCommand — it is what applies the timeout.
+        // Its bound is the maintenance default unless the CALLER supplies one (the batched heal
+        // passes a modest per-batch ceiling; bounded work must not borrow the whole-sweep bound).
         var helperBody = Between(source, "private static NpgsqlCommand CreateMaintenanceCommand", "\n    }");
-        Assert.Contains("CommandTimeout = MaintenanceCommandTimeoutSeconds", helperBody, StringComparison.Ordinal);
+        Assert.Contains("int timeoutSeconds = MaintenanceCommandTimeoutSeconds", helperBody, StringComparison.Ordinal);
+        Assert.Contains("CommandTimeout = timeoutSeconds", helperBody, StringComparison.Ordinal);
         Assert.Contains("dataSource.CreateCommand(sql)", helperBody, StringComparison.Ordinal);
 
         // …and it must not call itself. A regex-driven rewrite once turned this into infinite
