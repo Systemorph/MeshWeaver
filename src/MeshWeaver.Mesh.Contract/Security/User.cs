@@ -53,6 +53,24 @@ public record User : AccessObject
     public IReadOnlyList<string> PinnedPaths { get; init; } = [];
 
     /// <summary>
+    /// The run-once ledger for logon actions: action id → when it ran for THIS user. A
+    /// <c>LogonActionMode.RunOnce</c> action whose id is a key here never runs again, on any
+    /// replica, after any restart — the ledger is part of the durable profile, not process state.
+    ///
+    /// <para>🚨 A <b>dictionary keyed by action id</b>, deliberately, and not a list. Cross-hub
+    /// <c>stream.Update</c> ships an RFC 7396 merge patch, under which a dict <c>SetItem</c> is
+    /// merge-safe (two writers adding different keys both land) while a list append is not (the
+    /// patch is the whole list, so the last write silently drops the first). See
+    /// <c>Doc/Architecture/RequestViaStreamUpdate</c> → "Cross-Hub Patch Semantics".</para>
+    ///
+    /// <para>The value is the timestamp rather than a bare marker so "did this user get the
+    /// migration, and when" is answerable from the profile alone — the question an operator
+    /// actually asks. See <c>Doc/Architecture/LogonActions</c>.</para>
+    /// </summary>
+    public IReadOnlyDictionary<string, DateTimeOffset> CompletedLogonActions { get; init; }
+        = new Dictionary<string, DateTimeOffset>();
+
+    /// <summary>
     /// The node paths this user marked "hide in presentation mode" (issue #1803) — their PERSONAL
     /// privacy screen, stored here beside <see cref="PinnedPaths"/> for exactly the same reason:
     /// it is a preference of the VIEWER, never a property of the shared node. Disguising a node's

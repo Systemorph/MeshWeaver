@@ -95,6 +95,12 @@ This is safe only when the patch is **idempotent under merge** — applying it t
 
 > **Design rule:** Cross-hub mutations should be a single `stream.Update(...)` on the target node. The owning hub's action-block serialisation guarantees race-free merge; RFC 7396 patch semantics ensure you touch only the fields you intend to change.
 
+**A worked consequence.** [Logon Actions](/Doc/Architecture/LogonActions) builds its whole
+idempotency guarantee on the two rules above: the run-once ledger is a **dictionary** keyed by action
+id (merge-safe `SetItem`, never a list append), and the action's effect plus its ledger entry go into
+**one** patch on the user's profile — so two concurrent logons cannot apply a migration twice, and no
+restart can land between "it happened" and "we recorded it".
+
 **The thread refactor as the canonical example.** The full resubmit/delete-from/record-failure flow once posted bespoke trigger messages, then briefly used intent-field payloads (`RequestedResubmit`, `RequestedDeleteFromMessageId`, `PendingFailures`) consumed by per-operation watchers. Today, the **full mutation is inline** inside the hub extension method's `stream.Update` lambda — truncate `Messages`, re-queue `PendingUserMessages`, etc., all in one patch. See [ThreadOperations.md](/Doc/Architecture/ThreadOperations) for the public API (`hub.ResubmitMessage`, `hub.DeleteFromMessage`, `hub.RecordSubmissionFailure`).
 
 ---
