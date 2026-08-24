@@ -42,7 +42,10 @@ public static class AppNodeType
         return builder;
     }
 
-    /// <summary>MeshNode definition for <c>nodeType:InstalledApp</c>.</summary>
+    /// <summary>MeshNode definition for <c>nodeType:InstalledApp</c>. No per-record layout area:
+    /// the home's Apps grid paints its icon tiles straight from the query rows
+    /// (<c>MeshSearchRenderMode.Icons</c>) — a per-record tile area meant one hub activation PER
+    /// RESULT, the exact load the record model exists to avoid.</summary>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Installed App",
@@ -52,9 +55,5 @@ public static class AppNodeType
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<App>())
-            // The record's tile renderer (the home's Apps grid renders records, not cover nodes —
-            // that is what keeps the Apps query single-partition and fast).
-            .AddLayout(layout => layout
-                .WithView(AppTileLayoutArea.AppTileArea, AppTileLayoutArea.View))
     };
 }

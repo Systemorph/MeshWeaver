@@ -264,10 +264,12 @@ public static class UserActivityLayoutAreas
     /// <summary>
     /// The default home page shown until the owner authors their own <see cref="User.Body"/> — a
     /// "Welcome back" heading on top, then the chat composer (start a thread right away) and the home
-    /// regions embedded as <c>@@("area/…")</c> blocks (the same mechanism as the Space welcome's
+    /// catalog embedded as <c>@@("area/…")</c> blocks (the same mechanism as the Space welcome's
     /// <c>@@("area/Search")</c>), and a small "it's configurable" note at the bottom linking to the
-    /// config guide. This is the single source of truth for "the default", shared by the render path
-    /// and the unit tests.
+    /// config guide. No open-threads band: the THREADS APP (an ordinary <c>{owner}/_App</c> record
+    /// on the Apps grid, opening <c>/{owner}/Chat</c>) replaced it — the <c>area/Threads</c> area
+    /// stays registered so authored bodies embedding it keep working. This is the single source of
+    /// truth for "the default", shared by the render path and the unit tests.
     /// </summary>
     internal static string UserWelcomeMarkdown(string ownerName) =>
         $$"""
@@ -276,8 +278,6 @@ public static class UserActivityLayoutAreas
         @@("area/Composer")
 
         @@("area/Catalog")
-
-        @@("area/Threads")
 
         _This home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
         """;
@@ -515,24 +515,26 @@ public static class UserActivityLayoutAreas
         // (#385), the owner's installed-app records, and the owner node (pins). Every leg starts
         // with a value so the home paints instantly.
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
-        // Write-behind app-record MATERIALIZATION: the Apps grid renders ONLY the viewer's own
-        // {owner}/_App records (a fast SINGLE-PARTITION query — the old cover-path alternation
-        // fanned out across every partition schema, the multi-second home lag). Whatever the
-        // config defaults and the Store's install manifests say the viewer HAS but no record
-        // exists for yet is created here, fire-and-forget and idempotent: the per-area `attempted`
-        // set guards re-entry while a create is in flight, and the records query re-emits when a
-        // create lands.
+        // Write-behind app-record MATERIALIZATION + HEALING: the Apps grid renders ONLY the
+        // viewer's own {owner}/_App records (a fast SINGLE-PARTITION query). EnsureAppRecords
+        // creates what the config defaults + install manifests say is missing, and repairs
+        // records that carry the generic icon or no navigation target — but ONLY once the records
+        // query has emitted its REAL first snapshot (null sentinel until then): acting on the
+        // synthetic empty start fired ~20 doomed creates per render, the "Node already exists"
+        // storm Loki showed AND the home lag. The per-area `attempted` set guards re-entry while
+        // a write is in flight.
         var attempted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         return HomeConfigNodeType.Observe(host.Workspace, options)
             .CombineLatest(
                 ObserveSharedTargets(host, ownerId),
-                ObserveAppRecordIds(host, ownerId),
+                ObserveAppRecords(host, ownerId),
                 ObserveManifestItems(host, ownerId, options),
                 syncStream!.Select(change => change.Value.ContentAs<User>(options)).StartWith((User?)null),
                 screen,
-                (config, shared, recordIds, manifestItems, user, viewerScreen) =>
+                (config, shared, records, manifestItems, user, viewerScreen) =>
                 {
-                    EnsureAppRecords(host, ownerId, config, manifestItems, recordIds, attempted);
+                    if (records is not null)
+                        EnsureAppRecords(host, ownerId, config, manifestItems, records, attempted);
                     return (UiControl?)BuildHome(ownerId, config, shared, user, locale, viewerScreen);
                 });
     }
@@ -547,17 +549,19 @@ public static class UserActivityLayoutAreas
     /// go via the shared, per-user-RLS, empty-on-absent <c>GetQuery</c> cache on the viewer's OWN
     /// partition, starting empty so the home paints instantly.
     /// </summary>
-    private static IObservable<IReadOnlyList<string>> ObserveAppRecordIds(
+    private static IObservable<IReadOnlyList<MeshNode>?> ObserveAppRecords(
         LayoutAreaHost host, string ownerId) =>
         host.Workspace
+            // Full nodes (no select): the materializer needs Icon/MainNode/content for HEALING.
             .GetQuery($"home-apps:{ownerId}",
-                $"path:{ownerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType} " +
-                "select:path,id,namespace,name,nodeType")
-            .Select(nodes => (IReadOnlyList<string>)nodes
-                .Select(n => n.Id)
-                .Where(id => !string.IsNullOrEmpty(id))
-                .ToList())
-            .StartWith((IReadOnlyList<string>)[]);
+                $"path:{ownerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType}")
+            .Select(nodes => (IReadOnlyList<MeshNode>?)nodes.ToList())
+            // 🚨 The sentinel is NULL, never [] — "not loaded yet" and "no records" MUST differ.
+            // The first shipped materializer synthesized an empty list, so every fresh home render
+            // fired ~20 doomed CreateNode calls against records that already existed ("Node
+            // already exists" storms in Loki, and THE home lag) before the real snapshot arrived.
+            // EnsureAppRecords does nothing until this emits a real list.
+            .StartWith((IReadOnlyList<MeshNode>?)null);
 
     private static IObservable<IReadOnlyList<string>> ObserveManifestItems(
         LayoutAreaHost host, string ownerId, JsonSerializerOptions options) =>
@@ -836,18 +840,19 @@ public static class UserActivityLayoutAreas
 
     /// <summary>
     /// The home surface — ONE search control whose SCOPE TABS are the phone-home tabs:
-    /// <b>Shared with me</b> (only with cross-partition grants; store items excluded — the
-    /// auto-entitlement grants made every plugin partition read as "shared", but an app belongs on
-    /// Apps) · <b>Pinned</b> (only with pins) · <b>Apps</b> (the viewer's OWN
-    /// <c>{owner}/_App</c> RECORDS, materialized from config defaults + install manifests — a
-    /// single-partition query, so it loads fast, with Threads a NORMAL app record like every
-    /// other) · <b>Spaces</b> (the catalog without store items) · <b>All</b>
-    /// (everything the viewer can read, at every depth). Because the scopes live INSIDE one
-    /// <see cref="MeshSearchControl"/>, the search bar is shared: the typed term survives tab
+    /// <b>Pinned</b> (only with pins) · <b>Apps</b> (the viewer's OWN <c>{owner}/_App</c> RECORDS,
+    /// materialized from config defaults + install manifests — a single-partition query, so it
+    /// loads fast, with Threads a NORMAL app record like every other — rendered as the phone-home
+    /// ICON grid straight from the query rows) · <b>Spaces</b> (the catalog without store items) ·
+    /// <b>All</b> (everything the viewer can read, at every depth). Because the scopes live INSIDE
+    /// one <see cref="MeshSearchControl"/>, the search bar is shared: the typed term survives tab
     /// switches and every tab is searchable — including All. The search input renders on desktop
-    /// and hides on mobile (the view's responsive rule). <see cref="HomeStyle.Catalog"/> switches
-    /// back to the legacy single-list <see cref="BuildCatalog"/>. Pure (no hub) so the shape is
-    /// unit-testable without standing up a hub.
+    /// and hides on mobile (the view's responsive rule). <b>Shared with me</b> is its OWN titled
+    /// band BELOW the search surface (only with cross-partition grants; store items excluded — the
+    /// auto-entitlement grants made every plugin partition read as "shared", but an app belongs on
+    /// Apps). <see cref="HomeStyle.Catalog"/> switches back to the legacy single-list
+    /// <see cref="BuildCatalog"/>. Pure (no hub) so the shape is unit-testable without standing up
+    /// a hub.
     /// </summary>
     internal static UiControl BuildHome(
         string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
@@ -855,37 +860,20 @@ public static class UserActivityLayoutAreas
         PresentationScreen? screen = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
-        // 🚨 The viewer's presentation screen (#1803) is applied to the Shared-with-me, Pinned and
-        // Apps scopes HERE, before their queries are built — not only where the resulting cards are
-        // painted. Each of those three interpolates the viewer's PATHS into the control's query
-        // string, which the search view exposes in its options editor and carries in the `hq=`
-        // parameter of "open in search". A marked name reaching the address bar mid-presentation is
-        // the leak, whether or not a card for it is ever drawn. The Spaces/All queries are generic,
-        // so they are filtered where their results are painted and left untouched here.
+        // 🚨 The viewer's presentation screen (#1803) is applied to the Shared-with-me band and the
+        // Pinned scope HERE, before their queries are built — not only where the resulting cards
+        // are painted. Both interpolate the viewer's PATHS into the control's query string, which
+        // the search view exposes in its options editor and carries in the `hq=` parameter of
+        // "open in search". A marked name reaching the address bar mid-presentation is the leak,
+        // whether or not a card for it is ever drawn. The Apps records are the viewer's own
+        // (filtered where painted, like Spaces/All whose queries are generic).
         var privacy = screen ?? PresentationScreen.Off;
         if (cfg.Style == HomeStyle.Catalog)
             return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy);
 
         var scopes = new List<MeshSearchScopeTab>();
 
-        // Shared with me — #385. source:accessed is an INNER join on the caller's access log, so
-        // the last-accessed option is a path-keyed UNION with a plain completeness fallback (a
-        // fresh, never-opened invitation must not hide). Store items are EXCLUDED: the silent
-        // per-viewer entitlement grants (StandardPacks) made every plugin partition read as
-        // "shared with me", but an app is represented on the Apps scope, exactly once. USER roots
-        // are excluded too — a grant that resolves to another user's home partition must not list
-        // that person's space as "shared" content.
-        var visibleShared = privacy.Retain(sharedTargets);
-        if (visibleShared.Count > 0)
-        {
-            var sharedBase = $"path:{string.Join("|", visibleShared)} is:main -nodeType:User{SpacesDedupExclusions}";
-            scopes.Add(HomeScope("home.sharedWithMe", locale, HomeCatalogSort.LastAccessed,
-                (sort, suffix) => sort == HomeCatalogSort.LastAccessed
-                    ? $"{sharedBase} {suffix}\n{sharedBase} {SortSuffixLastModified}"
-                    : $"{sharedBase} {suffix}"));
-        }
-
-        // Pinned — the owner's content shortcuts, same union-with-fallback for last accessed.
+        // Pinned — the owner's content shortcuts, union-with-fallback for last accessed.
         var pins = privacy.Retain(user?.PinnedPaths);
         if (pins.Count > 0)
         {
@@ -900,16 +888,22 @@ public static class UserActivityLayoutAreas
         // ({owner}/_App), which is why it loads fast — the old cover-path alternation fanned out
         // across every partition schema (the multi-second home lag). Records are materialized
         // write-behind from config defaults + install manifests (see CatalogAreaView) — Threads is
-        // an ordinary record like every other app — and each renders through its AppTile area
-        // (name/icon from the record; click opens the app; the presentation screen filters at the
-        // tile). `source:accessed` is meaningless on records, so that option sorts by modified.
+        // an ordinary record like every other app. Icons render: the phone-home grid painted
+        // ENTIRELY from the query rows (record Name/Icon; no per-tile hub, no content load — the
+        // per-record AppTile area cost one hub PER RESULT), and NavigateToMainNode makes a tile
+        // open the APP (the record's MainNode target), not the record node. `source:accessed` is
+        // meaningless on records, so that option sorts by modified.
         var appsBase =
             $"path:{nodeOwnerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType}";
         scopes.Add(HomeScope("home.apps", locale, HomeCatalogSort.Alphabetical,
                 (sort, suffix) => sort == HomeCatalogSort.LastAccessed
                     ? $"{appsBase} {SortSuffixLastModified}"
                     : $"{appsBase} {suffix}")
-            with { ItemArea = AppTileLayoutArea.AppTileArea });
+            with
+            {
+                RenderMode = nameof(MeshSearchRenderMode.Icons),
+                NavigateToMainNode = true,
+            });
 
         // Spaces — the deduplicated catalog (an app never appears twice).
         scopes.Add(HomeScope("home.spaces", locale, cfg.DefaultSort,
@@ -937,7 +931,49 @@ public static class UserActivityLayoutAreas
             .WithCreateHref("/create");
         if (cfg.Render == HomeCatalogRender.Grouped)
             search = search.WithSectionCounts(true).WithCollapsibleSections(true);
-        return search;
+
+        // Shared with me is its OWN titled band below the scoped search (not a scope tab) —
+        // cross-partition invitations are a distinct kind of content, not another lens on the
+        // catalog. Present only when the caller actually has such grants.
+        var shared = BuildSharedBand(privacy.Retain(sharedTargets), locale);
+        if (shared is null)
+            return search;
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 24px; width: 100%;")
+            .WithView(search)
+            .WithView(shared);
+    }
+
+    /// <summary>
+    /// The <b>Shared with me</b> band — #385: modules in OTHER partitions the caller was invited
+    /// into, unreachable by the catalog's scope queries. <c>null</c> when the caller has no such
+    /// grants (the band simply isn't there). <c>source:accessed</c> is an INNER join on the
+    /// caller's access log, so the query is a path-keyed UNION with a plain completeness fallback
+    /// (a fresh, never-opened invitation must not hide). Store items are EXCLUDED — the silent
+    /// per-viewer entitlement grants (StandardPacks) made every plugin partition read as "shared
+    /// with me", but an app belongs on Apps, exactly once. USER roots are excluded too — a grant
+    /// resolving to another user's home partition must not list that person's space as "shared"
+    /// content. Pure, exposed for tests.
+    /// </summary>
+    internal static MeshSearchControl? BuildSharedBand(
+        IReadOnlyList<string> visibleShared, string? locale)
+    {
+        if (visibleShared.Count == 0)
+            return null;
+        var sharedBase = $"path:{string.Join("|", visibleShared)} is:main -nodeType:User{SpacesDedupExclusions}";
+        return Controls.MeshSearch
+            .WithTitle(LocalizationCatalog.Get("home.sharedWithMe", locale))
+            .WithHiddenQuery($"{sharedBase} {SortSuffixLastAccessed}\n{sharedBase} {SortSuffixLastModified}")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(false)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithItemLimit(50)
+            .WithMaxRows(2)
+            .WithReactiveMode(true);
     }
 
     /// <summary>One home scope tab: localized label + the three catalog sorts (default first),
@@ -974,7 +1010,7 @@ public static class UserActivityLayoutAreas
             ["~/" + ChatArea] = ("Threads", "/static/NodeTypeIcons/chat.svg"),
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
-    private const string GenericAppIcon = "/static/NodeTypeIcons/puzzlepiece.svg";
+    internal const string GenericAppIcon = "/static/NodeTypeIcons/puzzlepiece.svg";
 
     private static string LeafOf(string path) =>
         path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
@@ -1046,16 +1082,23 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Write-behind materialization of the viewer's app records: creates the
+    /// Write-behind materialization + HEALING of the viewer's app records. Creates the
     /// <c>{owner}/_App/{id}</c> node for every <see cref="AppRecordSpecs"/> entry that has no
-    /// record yet. Fire-and-forget and idempotent — <paramref name="attempted"/> (per home-area
-    /// instance) guards re-entry while a create is in flight, and a create that loses a race to an
-    /// existing record just logs. Writes land in the viewer's OWN partition under the viewer's own
+    /// record yet, and repairs existing records that still carry the generic icon, an EMPTY name,
+    /// or no navigation target (<see cref="MeshNode.MainNode"/> left at its own path) — stamping
+    /// the icon (and, only when empty, the name) from the plugin COVER node where the specs can
+    /// only guess. A non-empty name is never overwritten: the owner may have renamed the record,
+    /// and covers get their say at CREATE time.
+    /// Fire-and-forget and idempotent: the caller invokes this ONLY after the records query has
+    /// emitted its real first snapshot (never the null sentinel — acting on a synthetic empty list
+    /// was the "Node already exists" create storm), <paramref name="attempted"/> (per home-area
+    /// instance) guards re-entry while writes are in flight, and a create that loses a race to an
+    /// existing record is benign. Writes land in the viewer's OWN partition under the viewer's own
     /// identity (the framework propagates the caller's AccessContext through Subscribe).
     /// </summary>
     private static void EnsureAppRecords(
         LayoutAreaHost host, string ownerId, HomeConfig? config,
-        IReadOnlyList<string> manifestItems, IReadOnlyList<string> recordIds,
+        IReadOnlyList<string> manifestItems, IReadOnlyList<MeshNode> records,
         HashSet<string> attempted)
     {
         var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
@@ -1063,16 +1106,141 @@ public static class UserActivityLayoutAreas
             return;
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.AppRecords");
-        var existing = new HashSet<string>(recordIds, StringComparer.OrdinalIgnoreCase);
+        var byId = records
+            .GroupBy(r => LeafOf(r.Path), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var creates = new List<AppRecordSpec>();
+        var heals = new List<(MeshNode Record, AppRecordSpec Spec)>();
         foreach (var spec in AppRecordSpecs(config, ownerId, manifestItems))
         {
-            if (existing.Contains(spec.Id) || !attempted.Add(spec.Id))
-                continue;
+            if (!byId.TryGetValue(spec.Id, out var record))
+            {
+                if (attempted.Add("create:" + spec.Id))
+                    creates.Add(spec);
+            }
+            else if (NeedsHealing(record, spec) && attempted.Add("heal:" + spec.Id))
+                heals.Add((record, spec));
+        }
+        if (creates.Count == 0 && heals.Count == 0)
+            return;
+
+        // Plugin COVER nodes supply the real name/icon where the specs only have the generic
+        // fallback (manifest-derived installs). ONE one-shot query for all of them, off the render
+        // path — the tiles paint instantly from the records; when the covers land, creates/heals
+        // are written and the records query re-emits the finished rows. A cover failure degrades
+        // to the spec fallbacks rather than blocking materialization.
+        var coverPaths = creates.Concat(heals.Select(h => h.Spec))
+            .Where(s => s.Plugin is { Length: > 0 }
+                        && string.Equals(s.Icon, GenericAppIcon, StringComparison.OrdinalIgnoreCase))
+            .Select(s => s.Plugin!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        ObserveAppCovers(mesh, coverPaths)
+            .Subscribe(
+                covers => MaterializeAppRecords(host, mesh, ownerId, creates, heals, covers, logger),
+                ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "App cover lookup failed for {Owner}; materializing with fallbacks", ownerId);
+                    MaterializeAppRecords(host, mesh, ownerId, creates, heals,
+                        ImmutableDictionary<string, MeshNode>.Empty, logger);
+                });
+    }
+
+    /// <summary>The plugin cover nodes for <paramref name="coverPaths"/> as a one-shot path-keyed
+    /// map (empty input short-circuits — no query). Initial snapshot only; the path alternation
+    /// fans out cross-schema, which is exactly why it runs HERE (write-behind, bounded, once per
+    /// missing/incurable face) and never on the Apps render path.</summary>
+    private static IObservable<IReadOnlyDictionary<string, MeshNode>> ObserveAppCovers(
+        IMeshService mesh, IReadOnlyList<string> coverPaths) =>
+        coverPaths.Count == 0
+            ? Observable.Return<IReadOnlyDictionary<string, MeshNode>>(
+                ImmutableDictionary<string, MeshNode>.Empty)
+            : mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{string.Join("|", coverPaths)}"))
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .Select(c => (IReadOnlyDictionary<string, MeshNode>)c.Items
+                    .Where(n => !string.IsNullOrEmpty(n.Path))
+                    .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
+                    .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase))
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(15));
+
+    /// <summary>The record's navigation target — the plugin cover path, or the owner-hub area path
+    /// for <c>~/</c> apps. Stamped as the record's <see cref="MeshNode.MainNode"/> so the Apps
+    /// grid's icon tiles navigate STRAIGHT to the app (NavigateToMainNode) with no per-tile hub.</summary>
+    internal static string? AppTargetOf(AppRecordSpec spec) =>
+        spec.Plugin is { Length: > 0 } ? spec.Plugin : spec.OpenPath;
+
+    /// <summary>Face (name + icon) for a record: the plugin cover's when one was fetched and has
+    /// the field, else the spec's KnownApps/leaf/generic fallback.</summary>
+    internal static (string Name, string Icon) ResolveAppFace(
+        AppRecordSpec spec, IReadOnlyDictionary<string, MeshNode> covers)
+    {
+        if (spec.Plugin is { Length: > 0 } && covers.TryGetValue(spec.Plugin, out var cover))
+            return (
+                string.IsNullOrWhiteSpace(cover.Name) ? spec.Name : cover.Name!,
+                string.IsNullOrWhiteSpace(cover.Icon) ? spec.Icon : cover.Icon!);
+        return (spec.Name, spec.Icon);
+    }
+
+    /// <summary>True when an existing record is worth a heal attempt: no real navigation target
+    /// yet (MainNode unset or still its own path), the generic/missing icon, or an empty name.</summary>
+    internal static bool NeedsHealing(MeshNode record, AppRecordSpec spec)
+    {
+        var target = AppTargetOf(spec);
+        if (!string.IsNullOrEmpty(target)
+            && (string.IsNullOrEmpty(record.MainNode)
+                || string.Equals(record.MainNode, record.Path, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (string.IsNullOrEmpty(record.Icon)
+            || string.Equals(record.Icon, GenericAppIcon, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return string.IsNullOrEmpty(record.Name);
+    }
+
+    /// <summary>Applies the resolved face + target to a record, touching ONLY fields that actually
+    /// improve (the cross-hub Update sends a merge patch of exactly what changed). Returns
+    /// <paramref name="cur"/> unchanged (same reference) when nothing improves.</summary>
+    internal static MeshNode HealAppRecord(MeshNode cur, string name, string icon, string? target)
+    {
+        var next = cur;
+        if (!string.IsNullOrEmpty(target)
+            && (string.IsNullOrEmpty(next.MainNode)
+                || string.Equals(next.MainNode, next.Path, StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(next.MainNode, target, StringComparison.OrdinalIgnoreCase))
+            next = next with { MainNode = target! };
+        if ((string.IsNullOrEmpty(next.Icon)
+                || string.Equals(next.Icon, GenericAppIcon, StringComparison.OrdinalIgnoreCase))
+            && !string.IsNullOrEmpty(icon)
+            && !string.Equals(next.Icon, icon, StringComparison.OrdinalIgnoreCase))
+            next = next with { Icon = icon };
+        if (string.IsNullOrEmpty(next.Name) && !string.IsNullOrEmpty(name))
+            next = next with { Name = name };
+        return next;
+    }
+
+    /// <summary>Writes the planned creates and heals. Creates carry the full face + MainNode
+    /// target; a create losing the race to an existing record ("already exists") is EXPECTED
+    /// (two home areas can plan the same record) and logged at Debug — anything else is a real
+    /// warning. Heals go through the ONE mutation API; an identity heal (nothing improves — e.g.
+    /// the cover has no icon either) is skipped entirely, so incurable records cost one cover
+    /// lookup per home area and zero writes.</summary>
+    private static void MaterializeAppRecords(
+        LayoutAreaHost host, IMeshService mesh, string ownerId,
+        IReadOnlyList<AppRecordSpec> creates,
+        IReadOnlyList<(MeshNode Record, AppRecordSpec Spec)> heals,
+        IReadOnlyDictionary<string, MeshNode> covers, ILogger? logger)
+    {
+        foreach (var spec in creates)
+        {
+            var (name, icon) = ResolveAppFace(spec, covers);
             var node = new MeshNode(spec.Id, $"{ownerId}/{AppNodeType.UserNamespace}")
             {
                 NodeType = AppNodeType.NodeType,
-                Name = spec.Name,
-                Icon = spec.Icon,
+                Name = name,
+                Icon = icon,
+                MainNode = AppTargetOf(spec) ?? $"{ownerId}/{AppNodeType.UserNamespace}/{spec.Id}",
                 State = MeshNodeState.Active,
                 Content = new App
                 {
@@ -1082,8 +1250,24 @@ public static class UserActivityLayoutAreas
                 },
             };
             mesh.CreateNode(node).Subscribe(_ => { },
-                ex => logger?.LogWarning(ex,
-                    "App record create failed at {Path}", node.Path));
+                ex =>
+                {
+                    if (ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                        logger?.LogDebug("App record at {Path} already existed (benign race)", node.Path);
+                    else
+                        logger?.LogWarning(ex, "App record create failed at {Path}", node.Path);
+                });
+        }
+        foreach (var (record, spec) in heals)
+        {
+            var (name, icon) = ResolveAppFace(spec, covers);
+            var target = AppTargetOf(spec);
+            if (ReferenceEquals(HealAppRecord(record, name, icon, target), record))
+                continue;
+            host.Workspace.GetMeshNodeStream(record.Path)
+                .Update(cur => HealAppRecord(cur, name, icon, target))
+                .Subscribe(_ => { },
+                    ex => logger?.LogWarning(ex, "App record heal failed at {Path}", record.Path));
         }
     }
 
