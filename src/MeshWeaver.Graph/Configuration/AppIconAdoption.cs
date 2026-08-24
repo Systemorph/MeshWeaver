@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -79,8 +80,22 @@ public static class AppIconAdoption
         var mesh = hub.ServiceProvider.GetService<IMeshService>();
         if (mesh is null)
             return Observable.Return(Unit.Default);
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
 
-        return workspace.GetMeshNodeStream()
+        // 🚨 Identity, or this whole hook is an expensive no-op. Initialization is driven by
+        // InitializeHubRequest, which carries no viewer AccessContext — and the post pipeline
+        // fails CLOSED with none, so the read, the query and the write would each be refused and
+        // land in the Catch below as a logged "skipped". That is the silent shape: a green hook
+        // that adopts nothing, which is exactly how the earlier layout-area attempt failed.
+        //
+        // System rather than the hub's own address: the query reads the APP node (Store, Doc, a
+        // plugin's root), which the record hub's address has no grant on. This writes one piece of
+        // derived presentation metadata onto the hub's OWN node — provisioning, not user action —
+        // which is the sanctioned use of ImpersonateAsSystem. Observable.Using scopes it to the
+        // subscription, so it is live for the whole chain and disposed when the chain ends.
+        return Observable.Using(
+            () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
+            _ => workspace.GetMeshNodeStream()
             .Where(node => node is not null)
             .Take(1)
             .SelectMany(record =>
@@ -109,7 +124,7 @@ public static class AppIconAdoption
                             .Update(cur => NeedsIcon(cur) ? cur with { Icon = icon } : cur)
                             .Select(_ => Unit.Default);
                     });
-            })
+            }))
             // The init gate must open regardless: an unreachable target is a cosmetic miss, never
             // a reason to hold a hub shut. Timeout bounds the wait; Catch turns any failure into a
             // logged non-event rather than a stuck activation.
