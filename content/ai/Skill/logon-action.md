@@ -91,6 +91,13 @@ are deliberately **not** checked — unpinning a path that has gone away is usua
 
 If you write a code action that touches named content, do the same existence check yourself.
 
+🚨 **Read every path back off the node before you use it — a TYPE is not a path prefix.** The three
+courses above are top-level nodes whose `nodeType` is `Store/Plugin`, so `Store/AgenticPrimer` looks
+right and **does not resolve**; `path == id == mainNode == "AgenticPrimer"`. Verify with
+`search 'path:AgenticPrimer select:path'`, never compose a path from the type. The failure is quiet
+by design — the existence check skips the bad path, the migration pins nothing, records itself as
+done, and never runs again. A run-once action gets **one attempt per user**, so confirm first.
+
 # 4. Identity — it runs as the USER
 
 A logon action touches the user's own nodes, so it runs under **their** identity. At logon a real

@@ -210,6 +210,16 @@ whole reason the pin targets are data: `memex.meshweaver.cloud` carries the agen
 courses and `systemorph.com` does not, and a hard-coded course path would write a dangling pin onto
 every user's home on every portal that lacks it.
 
+> 🚨 **A node's TYPE is not a path prefix, and this one has already been written wrong.** The three
+> courses above are top-level nodes whose `nodeType` happens to be `Store/Plugin` — so
+> `Store/AgenticPrimer` looks plausible and **does not resolve**. On each of them
+> `path == id == mainNode == "AgenticPrimer"`. Write a path by reading it back off the node
+> (`search 'path:AgenticPrimer select:path'`), never by composing it from the type.
+>
+> The failure is quiet by design: the existence check skips the unresolvable path, the migration
+> pins nothing, records itself as done, and **never runs again**. Nothing errors. Confirm the paths
+> before creating the node, because a run-once action gets one attempt per user.
+
 **Pins are existence-checked; unpins are not.** The asymmetry is deliberate. Unpinning a path that
 has gone away is exactly right — that is often *why* it is being unpinned. Pinning one that does not
 exist is a dead tile. So a deployment missing the targets pins **nothing**, records the action as
