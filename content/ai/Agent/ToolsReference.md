@@ -649,7 +649,7 @@ is a node, and a message is a write to it**:
 | **Steer** a sub-thread that is already running | `send_to_sub_thread(path, message)` | Queues into its inbox; it picks the message up at its next `check_inbox`. Correct course instead of cancelling and re-dispatching. |
 | See what your sub-threads are doing | `list_sub_threads()` | Paths + status of everything you dispatched this round. |
 | **Receive** messages aimed at you mid-round | `check_inbox()` | Above. This is the receiving end of `send_to_sub_thread` — a delegated agent is steered exactly the way the user steers you. |
-| Message a thread that is **not** your sub-thread | Write to the thread node | Queue into its `pendingUserMessages`; an idle thread starts a round, a running one receives it at its next `check_inbox`. Only threads you have write access to. |
+| Message a thread that is **not** your sub-thread | `submit_message(path, text)` | The submission API queues into the thread's inbox with the watcher's bookkeeping intact — never patch the thread node directly, `pendingUserMessages` is watcher-owned. An idle thread starts a round; a running one picks it up at its next `check_inbox`. Only threads you can write to. |
 
 There is no separate direct-message system, and none should be invented: the thread IS the channel,
 which is why every message is addressable, searchable (`Search('nodeType:Thread')`) and survives as
