@@ -79,7 +79,7 @@ public partial class CommentableView
 
         selectionInitialized = true;
         jsModule ??= await JS.InvokeAsync<IJSObjectReference>(
-            "import", "./_content/MeshWeaver.Blazor/Components/selectionComment.js");
+            "import", "./_content/MeshWeaver.Blazor.Views/Components/selectionComment.js");
         dotNetRef = DotNetObjectReference.Create(this);
         selectionHandle = await jsModule.InvokeAsync<IJSObjectReference>(
             "enable", containerRef, ".commentable-content", dotNetRef);

@@ -129,7 +129,7 @@ describe("clients.yml trigger covers every input the jobs read", () => {
     // If the scrape breaks, the coverage assertion below would vacuously pass on an empty list.
     const reads = crossTreeReads();
     expect(reads.length).toBeGreaterThan(2);
-    expect(reads).toContain("src/MeshWeaver.Blazor/BlazorViewRegistry.cs");
+    expect(reads).toContain("src/MeshWeaver.Blazor.Views/ViewsExtensions.cs");
   });
 
   it("every server file a client reads is in the trigger", () => {

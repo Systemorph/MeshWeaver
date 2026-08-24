@@ -18,7 +18,7 @@
             if (firstRender)
             {
                 jsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import",
-                "./_content/MeshWeaver.Blazor/Components/Mermaid.razor.js");
+                "./_content/MeshWeaver.Blazor.Views/Components/Mermaid.razor.js");
             }
 
             if (jsModule is not null)

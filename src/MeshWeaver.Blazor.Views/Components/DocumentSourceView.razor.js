@@ -6,7 +6,7 @@
 // download link plus the passage text, so the pane is never silently blank.
 
 // Resolve the vendored libraries relative to THIS module's URL so the paths are correct wherever the
-// RCL static assets are mounted (they serve under _content/MeshWeaver.Blazor/…, not /lib).
+// RCL static assets are mounted (they serve under _content/MeshWeaver.Blazor.Views/…, not /lib).
 const LIB_BASE = new URL('../lib/', import.meta.url);
 const PDFJS_URL = new URL('pdfjs-dist/build/pdf.mjs', LIB_BASE).href;
 const PDFJS_WORKER_URL = new URL('pdfjs-dist/build/pdf.worker.mjs', LIB_BASE).href;

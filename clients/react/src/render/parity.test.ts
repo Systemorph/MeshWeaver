@@ -8,13 +8,16 @@ import { placeholderControlTypes } from "../controls/mesh.js";
 // Feature-parity guard: the Fluent React pack must render every control the Blazor portal renders.
 //
 // The Blazor vocabulary is DERIVED, not hand-listed. It is parsed out of the switch arms in
-// src/MeshWeaver.Blazor/BlazorViewRegistry.cs — the single place that decides "this control/skin
+// src/MeshWeaver.Blazor.Views/ViewsExtensions.cs — the single place that decides "this control/skin
 // gets this Blazor view". A hand-maintained list is what let Video, SlideShow and the MenuItem skin
 // ship on the Blazor side and stay silently missing here: the list never grew, so the test kept
 // passing. Reading the C# means adding a control to Blazor fails THIS test until React covers it.
 
 // Vitest runs with cwd = this package root (clients/react), so the repo root is two levels up.
-const registryPath = resolve(process.cwd(), "../../src/MeshWeaver.Blazor/BlazorViewRegistry.cs");
+// The control->view switches moved to the default-views PACK (MeshWeaver.Blazor.Views,
+// ViewsExtensions.DefaultFormatting) when the base registry was reduced to machinery + the
+// fallback slot — same arms, new home.
+const registryPath = resolve(process.cwd(), "../../src/MeshWeaver.Blazor.Views/ViewsExtensions.cs");
 const registrySource = readFileSync(registryPath, "utf8");
 
 /**

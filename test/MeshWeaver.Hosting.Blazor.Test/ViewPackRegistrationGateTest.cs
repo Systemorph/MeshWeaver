@@ -1,5 +1,8 @@
 using System;
 using MeshWeaver.Blazor.EntityViews;
+using MeshWeaver.Blazor.Components;
+using MeshWeaver.Blazor.Components.Monaco;
+using MeshWeaver.Blazor.Views;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
@@ -53,7 +56,8 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
             .AddGraphViews()
             .AddChatViews()
             .AddUserProfileViews()
-            .AddEntityViews();
+            .AddEntityViews()
+            .AddDefaultViews();
 
     /// <summary>
     /// Resolves <paramref name="control"/> through the client's real
@@ -131,6 +135,53 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
     }
 
     /// <summary>
+    /// <c>AddDefaultViews</c> (MeshWeaver.Blazor.Views) — the DEFAULT control set resolves to the
+    /// pack's views. These arms lived in the base registry until the pack was factored out; a
+    /// regression here means the standard portal renders raw control JSON through the fallback.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(ButtonControl), typeof(ButtonView))]
+    [InlineData(typeof(BadgeControl), typeof(BadgeView))]
+    [InlineData(typeof(IconControl), typeof(IconView))]
+    [InlineData(typeof(MenuItemControl), typeof(MenuItemView))]
+    [InlineData(typeof(MarkdownControl), typeof(MeshWeaver.Blazor.Components.MarkdownView))]
+    [InlineData(typeof(MarkdownEditorControl), typeof(MarkdownEditorView))]
+    [InlineData(typeof(CodeEditorControl), typeof(CodeEditorView))]
+    [InlineData(typeof(ProgressControl), typeof(ProgressView))]
+    [InlineData(typeof(SpacerControl), typeof(SpacerView))]
+    [InlineData(typeof(RedirectControl), typeof(RedirectView))]
+    [InlineData(typeof(VideoControl), typeof(VideoView))]
+    [InlineData(typeof(SearchBoxControl), typeof(SearchBoxView))]
+    [InlineData(typeof(MeshSearchControl), typeof(MeshSearchView))]
+    [InlineData(typeof(HighlightControl), typeof(HighlightView))]
+    [InlineData(typeof(AppearanceControl), typeof(AppearanceView))]
+    public void DefaultViewsPack_RegistersItsControlViews(Type controlType, Type viewType)
+    {
+        var client = GetClient();
+        AssertPackResolves(client, CreateControl(client, controlType), viewType, "AddDefaultViews");
+    }
+
+    /// <summary>
+    /// <c>AddDefaultViews</c> — the standard skins resolve to the pack's skinned views.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(LayoutSkin), typeof(LayoutView))]
+    [InlineData(typeof(LayoutGridSkin), typeof(LayoutGridView))]
+    [InlineData(typeof(NavMenuSkin), typeof(NavMenuView))]
+    [InlineData(typeof(MainSkin), typeof(MainView))]
+    [InlineData(typeof(ToolbarSkin), typeof(ToolbarView))]
+    [InlineData(typeof(LayoutStackSkin), typeof(LayoutStackView))]
+    [InlineData(typeof(HeaderSkin), typeof(HeaderView))]
+    [InlineData(typeof(CardSkin), typeof(CardView))]
+    [InlineData(typeof(FooterSkin), typeof(FooterView))]
+    [InlineData(typeof(TabsSkin), typeof(TabsView))]
+    public void DefaultViewsPack_RegistersItsSkinViews(Type skinType, Type viewType)
+    {
+        var skinned = new HtmlControl("<p>x</p>").AddSkin((Skin)Activator.CreateInstance(skinType)!);
+        AssertPackResolves(GetClient(), skinned, viewType, "AddDefaultViews");
+    }
+
+    /// <summary>
     /// <c>AddChatViews</c> (MeshWeaver.Blazor.Portal) — the thread-chat control resolves to the
     /// pack's view.
     /// </summary>
@@ -151,15 +202,19 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
     /// no fallback slot here), which is what gives the positive assertions their teeth — a decline
     /// is observable, not masked.
     /// </summary>
+    /// <summary>A control shape no pack has ever seen — the gate's negative probe. HtmlControl
+    /// stopped qualifying when the default-views pack (which owns it) joined this hub.</summary>
+    private sealed record UnownedProbeControl() : UiControl<UnownedProbeControl>("probe", "1.0.0");
+
     [Fact]
     public void UnregisteredControl_ResolvesToNull()
     {
         var layoutClient = GetClient().ServiceProvider.GetRequiredService<ILayoutClient>();
 
-        var descriptor = layoutClient.GetViewDescriptor(new HtmlControl("<p>x</p>"), null, "gate");
+        var descriptor = layoutClient.GetViewDescriptor(new UnownedProbeControl(), null, "gate");
 
         descriptor.Should().BeNull(
-            because: "no pack on this hub maps HtmlControl and no fallback is registered — if this "
+            because: "no pack on this hub maps UnownedProbeControl and no fallback is registered — if this "
                    + "resolves, something answers for controls it does not own and the positive "
                    + "assertions above stop being evidence about the packs");
     }
@@ -194,6 +249,21 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
             _ when controlType == typeof(SwitchControl) => new SwitchControl("/data"),
             _ when controlType == typeof(NumberFieldControl) => new NumberFieldControl("/data", typeRegistry.GetOrAddType(typeof(int))),
             _ when controlType == typeof(RadioGroupControl) => new RadioGroupControl("/data", Array.Empty<object>(), typeRegistry.GetOrAddType(typeof(string))),
+            _ when controlType == typeof(ButtonControl) => new ButtonControl("go"),
+            _ when controlType == typeof(BadgeControl) => new BadgeControl("b"),
+            _ when controlType == typeof(IconControl) => new IconControl("icon"),
+            _ when controlType == typeof(MenuItemControl) => new MenuItemControl("t", "i"),
+            _ when controlType == typeof(MarkdownControl) => new MarkdownControl("# m"),
+            _ when controlType == typeof(MarkdownEditorControl) => new MarkdownEditorControl(),
+            _ when controlType == typeof(CodeEditorControl) => new CodeEditorControl(),
+            _ when controlType == typeof(ProgressControl) => new ProgressControl("m", 1),
+            _ when controlType == typeof(SpacerControl) => new SpacerControl(),
+            _ when controlType == typeof(RedirectControl) => new RedirectControl("/x"),
+            _ when controlType == typeof(VideoControl) => new VideoControl("https://cdn/x.mp4"),
+            _ when controlType == typeof(SearchBoxControl) => new SearchBoxControl(),
+            _ when controlType == typeof(MeshSearchControl) => new MeshSearchControl(),
+            _ when controlType == typeof(HighlightControl) => new HighlightControl("t"),
+            _ when controlType == typeof(AppearanceControl) => new AppearanceControl(),
             _ => throw new ArgumentOutOfRangeException(nameof(controlType), controlType, "add the control here when the gate gains a row")
         };
     }

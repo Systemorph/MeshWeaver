@@ -433,7 +433,7 @@ public partial class CollaborativeMarkdownView
         if (firstRender)
         {
             jsModule = await JS.InvokeAsync<IJSObjectReference>(
-                "import", "./_content/MeshWeaver.Blazor/Components/CollaborativeMarkdownView.razor.js");
+                "import", "./_content/MeshWeaver.Blazor.Views/Components/CollaborativeMarkdownView.razor.js");
         }
 
         if (jsModule != null && !jsInitialized)

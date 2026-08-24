@@ -26,8 +26,8 @@ function updateMarkdownTheme() {
     }
 
     // Use local CSS files with CDN fallback
-    const basePath = '_content/MeshWeaver.Blazor/css/';
-    const vendoredPath = '_content/MeshWeaver.Blazor/lib/github-markdown-css/'; // vendored 5.8.1
+    const basePath = '_content/MeshWeaver.Blazor.Views/css/';
+    const vendoredPath = '_content/MeshWeaver.Blazor.Views/lib/github-markdown-css/'; // vendored 5.8.1
 
     const localTheme = isDarkMode
         ? basePath + 'github-markdown-dark.css'

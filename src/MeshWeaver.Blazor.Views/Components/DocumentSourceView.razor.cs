@@ -70,7 +70,7 @@ public partial class DocumentSourceView
             try
             {
                 jsModule = await JSRuntime.InvokeAsync<IJSObjectReference>(
-                    "import", "./_content/MeshWeaver.Blazor/Components/DocumentSourceView.razor.js");
+                    "import", "./_content/MeshWeaver.Blazor.Views/Components/DocumentSourceView.razor.js");
             }
             catch (JSDisconnectedException) { return; }
         }

@@ -145,7 +145,7 @@ function ensureMermaidLoaded() {
     if (window.mermaid) return Promise.resolve();
     return new Promise((resolve, reject) => {
         const script = document.createElement('script');
-        script.src = '_content/MeshWeaver.Blazor/lib/mermaid/mermaid.min.js'; // vendored, pinned 11.12.1
+        script.src = '_content/MeshWeaver.Blazor.Views/lib/mermaid/mermaid.min.js'; // vendored, pinned 11.12.1
         script.onload = () => setTimeout(resolve, 100);
         script.onerror = reject;
         document.head.appendChild(script);
@@ -204,7 +204,7 @@ export async function renderMathBlocks(contentEl) {
         };
 
         const script = document.createElement('script');
-        script.src = '_content/MeshWeaver.Blazor/lib/mathjax/tex-svg.js'; // vendored, pinned 3.2.2
+        script.src = '_content/MeshWeaver.Blazor.Views/lib/mathjax/tex-svg.js'; // vendored, pinned 3.2.2
 
         const loaded = await new Promise(resolve => {
             script.onload = () => resolve(true);
