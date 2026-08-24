@@ -36,6 +36,7 @@ import {
 } from "@meshweaver/react/core";
 import { useNavigate } from "./nav";
 import { resolveAssetUrl } from "./connection";
+import { ComposerBar } from "./rnComposer";
 import { useTheme } from "./theme";
 
 const s = str;
@@ -226,41 +227,9 @@ const ThreadChat: ControlComponent = ({ control }) => {
       .map((id) => ({ id, msg: pending[id] })),
   ].filter((x): x is { id: string; msg: ThreadMessageJson } => x.msg != null);
 
-  const [text, setText] = useState("");
-  const [sendError, setSendError] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
-
   // The namespace a NEW thread is created under (ThreadChatControl.namespacePath), resolved with the
   // other bindings — never inside the submit handler.
   const namespacePath = s(useResolve(control.namespacePath ?? control.namespace)) || initialContext;
-
-  const send = () => {
-    const body = text.trim();
-    if (!body || !ops || sending) return;
-    setSending(true);
-    setSendError(null);
-    const done = () => {
-      setSending(false);
-      setText("");
-    };
-    const fail = (e: unknown) => {
-      setSending(false);
-      setSendError(e instanceof Error ? e.message : String(e));
-    };
-    if (threadPath) {
-      ops.submitMessage(threadPath, body, { contextPath: initialContext || undefined }).then(done, fail);
-    } else {
-      if (!namespacePath) {
-        setSending(false);
-        setSendError(t("chat.noNamespace"));
-        return;
-      }
-      ops.startThread(namespacePath, body, { contextPath: initialContext || undefined }).then((r) => {
-        setCreatedPath(r.path);
-        done();
-      }, fail);
-    }
-  };
 
   return (
     <View style={styles.chat}>
@@ -285,28 +254,15 @@ const ThreadChat: ControlComponent = ({ control }) => {
           </View>
         ) : null}
       </ScrollView>
-      {sendError ? <Text style={styles.error}>{sendError}</Text> : null}
-      <View style={styles.composerRow}>
-        <TextInput
-          style={styles.composerInput}
-          value={text}
-          onChangeText={setText}
-          placeholder={t("chat.composerPlaceholder")}
-          multiline
-          editable={!!ops}
-          onSubmitEditing={send}
-        />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t("common.send")}
-          style={[styles.sendButton, (!text.trim() || sending) && styles.sendButtonDisabled]}
-          onPress={send}
-        >
-          {/* A glyph, not the word — universal, compact on a phone; the localized "Send"
-              survives as the accessibilityLabel above (the i18n icon+tooltip rule). */}
-          <Text style={styles.sendButtonText}>{sending ? "…" : "➤"}</Text>
-        </Pressable>
-      </View>
+      {/* ONE composer everywhere: the shared model (core useMentionModel) + the speech pipeline,
+          rendered by ComposerBar — the same surface the deleted app-level bar used to be. */}
+      <ComposerBar
+        ops={ops}
+        threadPath={threadPath}
+        namespacePath={namespacePath || undefined}
+        contextPath={initialContext || undefined}
+        onThreadStarted={setCreatedPath}
+      />
     </View>
   );
 };

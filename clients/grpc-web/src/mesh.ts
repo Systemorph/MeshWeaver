@@ -116,6 +116,32 @@ export class Mesh {
     return Array.isArray(parsed.results) ? parsed.results : [];
   }
 
+  /**
+   * One-shot @-mention autocomplete — the wire `AutocompleteRequest(Query, Context)` every
+   * data-enabled hub handles (`DataExtensions.HandleAutocompleteRequest`), targeted at the
+   * VIEWER's home hub (`target`), which aggregates all providers. THE one implementation:
+   * portal and portal-next each hand-rolled this observe (the #1497 drift shape — same wire,
+   * two copies, camelCase/PascalCase tolerated differently); both fold into this. Answers []
+   * on any failure — a composer whose suggestions cannot be served types on undisturbed.
+   */
+  async autocomplete(
+    target: string,
+    query: string,
+    contextPath?: string,
+  ): Promise<Record<string, unknown>[]> {
+    if (!target) return [];
+    try {
+      const resp = await this.conn.observe(target, "AutocompleteRequest", {
+        query,
+        context: contextPath ?? null,
+      });
+      const items = (resp.message["items"] ?? resp.message["Items"]) as Record<string, unknown>[] | undefined;
+      return Array.isArray(items) ? items : [];
+    } catch {
+      return [];
+    }
+  }
+
   /** Read a single node's current state (one snapshot off its live stream). */
   async get(path: string): Promise<MeshNode> {
     for await (const node of this.watch(path)) return node;

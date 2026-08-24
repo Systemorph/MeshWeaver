@@ -65,18 +65,27 @@ function Children({ control }: { control: any }) {
 // ── skins (layout) ──────────────────────────────────────────────────────────
 const stack: SkinComponent = ({ skin, control }) => {
   const horizontal = s(skin.orientation).toLowerCase() === "horizontal";
+  const emit = useEmit();
+  const { area } = useScope();
+  const layout = {
+    flexDirection: horizontal ? ("row" as const) : ("column" as const),
+    // Row: WRAP (a toolbar of node actions overflows a phone otherwise) and size children to their
+    // content height (default `stretch` blew buttons up to fill the row). Column: keep `stretch` so
+    // children fill the width (cards, text, the doc body).
+    flexWrap: horizontal ? ("wrap" as const) : ("nowrap" as const),
+    alignItems: horizontal ? ("flex-start" as const) : ("stretch" as const),
+    gap: (skin.verticalGap ?? skin.horizontalGap ?? 8) as number,
+  };
+  // A CLICKABLE stack posts the ClickedEvent, exactly as Blazor's LayoutStack does — the Store's
+  // category tiles are this shape (isClickable + cursor:pointer) and were inert cards without it.
+  if (control.isClickable)
+    return (
+      <Pressable accessibilityRole="button" style={layout} onPress={() => emit({ kind: "click", area })}>
+        <Children control={control} />
+      </Pressable>
+    );
   return (
-    <View
-      style={{
-        flexDirection: horizontal ? "row" : "column",
-        // Row: WRAP (a toolbar of node actions overflows a phone otherwise) and size children to their
-        // content height (default `stretch` blew buttons up to fill the row). Column: keep `stretch` so
-        // children fill the width (cards, text, the doc body).
-        flexWrap: horizontal ? "wrap" : "nowrap",
-        alignItems: horizontal ? "flex-start" : "stretch",
-        gap: (skin.verticalGap ?? skin.horizontalGap ?? 8) as number,
-      }}
-    >
+    <View style={layout}>
       <Children control={control} />
     </View>
   );
