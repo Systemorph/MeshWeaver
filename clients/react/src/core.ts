@@ -26,6 +26,8 @@ export {
 } from "./area/meshNodeBinding.js";
 export { NodeBindingContext, type NodeSnapshotStore } from "./area/nodeBindingStore.js";
 export { NodeBindingProvider } from "./live/nodeBinding.js";
+// The shared thread-composer @-mention model — one implementation for the web and RN leaves.
+export { useMentionModel, type MentionModel, type AtTokenState } from "./controls/composerModel.js";
 export {
   GrpcAreaSource,
   MeshAreaRegistry,
@@ -54,6 +56,7 @@ export {
   MeshOpsProvider,
   useMeshOps,
   type MeshOps,
+  type AutocompleteSuggestion,
   type MeshNodeState,
   type ThreadSubmitOptions,
   type MarkdownCellSubmission,

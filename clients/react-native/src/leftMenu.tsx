@@ -9,6 +9,7 @@ import { useState, type ReactNode } from "react";
 import { View, Text, Pressable, ScrollView } from "react-native";
 import type { AreaTree } from "@meshweaver/react/core";
 import { type NavTarget } from "./nav";
+import { IconGlyph } from "./rnIcon";
 import { useStyles, type Palette } from "./theme";
 import { StyleSheet } from "react-native";
 
@@ -116,7 +117,7 @@ export function LeftMenuView<D>({
     if (it.area) onNavigate({ address: nav.address, area: it.area });
   };
 
-  const rowLabel = (it: MenuItem) => `${it.icon ? `${it.icon}  ` : ""}${it.label ?? it.area ?? ""}`;
+  const rowLabel = (it: MenuItem) => it.label ?? it.area ?? "";
 
   const entry = (it: MenuItem, i: number) =>
     it.area === SEPARATOR_AREA ? (
@@ -125,6 +126,7 @@ export function LeftMenuView<D>({
       <NavRow
         key={i}
         label={rowLabel(it)}
+        icon={it.icon}
         active={!clientScreen && nav.area === it.area}
         onPress={() => activate(it)}
         chevron={isSubmenuParent(it)}
@@ -193,6 +195,7 @@ export function LeftMenuView<D>({
  */
 export function NavRow({
   label,
+  icon,
   active,
   onPress,
   chevron,
@@ -200,6 +203,10 @@ export function NavRow({
   opensSubmenu,
 }: {
   label: string;
+  /** Optional icon string — emoji, inline SVG, or a mesh-relative .svg URL. Drawn as a real
+   *  GLYPH (IconGlyph): inlining it into the label rendered the colorful node icons as their
+   *  literal "/static/….svg" paths. */
+  icon?: string;
   active: boolean;
   onPress: () => void;
   chevron?: boolean;
@@ -215,6 +222,7 @@ export function NavRow({
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={opensSubmenu ? { expanded: false } : { selected: active }}
     >
+      {icon ? <View style={styles.navIcon}><IconGlyph icon={icon} size={18} /></View> : null}
       <Text style={[styles.navItemText, active && styles.navItemTextActive]} numberOfLines={1}>{label}</Text>
       {chevron ? <Text style={styles.navChevron}>›</Text> : null}
     </Pressable>
@@ -230,6 +238,7 @@ const makeStyles = (p: Palette) =>
     navItem: { flexDirection: "row", alignItems: "center", minHeight: 44, paddingHorizontal: 16, paddingVertical: 7, marginHorizontal: 8, borderRadius: 6 },
     navItemHover: { backgroundColor: p.navHover },
     navItemActive: { backgroundColor: p.navActiveBg },
+    navIcon: { width: 22, marginRight: 8, alignItems: "center" },
     navItemText: { flexShrink: 1, fontSize: 13.5, color: p.text },
     navItemTextActive: { color: p.navActiveText, fontWeight: "600" },
     navChevron: { marginLeft: "auto", paddingLeft: 8, fontSize: 16, color: p.textMuted },

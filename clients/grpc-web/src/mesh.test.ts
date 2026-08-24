@@ -162,3 +162,22 @@ describe("Mesh ops (gRPC-web, in-memory)", () => {
     mesh.close();
   });
 });
+
+describe("Mesh.autocomplete — the ONE @-mention implementation (was duplicated per shell)", () => {
+  it("targets the viewer's home hub with AutocompleteRequest and returns the items", async () => {
+    const targets: string[] = [];
+    const mesh = await Mesh.connect("https://portal.example", {
+      transport: fakeMeshTransport({ onDeliver: (d) => { targets.push(String(d.target)); } }),
+    });
+    const items = await mesh.autocomplete("rbuergi", "Doc", "rbuergi/Thread/t1");
+    expect(items).toEqual([{ label: "hit:Doc", insertText: "@/Doc", path: "Doc" }]);
+    expect(targets).toContain("rbuergi");
+    mesh.close();
+  });
+
+  it("answers [] with no target — an anonymous composer types on undisturbed", async () => {
+    const mesh = await Mesh.connect("https://portal.example", { transport: fakeMeshTransport() });
+    expect(await mesh.autocomplete("", "Doc")).toEqual([]);
+    mesh.close();
+  });
+});

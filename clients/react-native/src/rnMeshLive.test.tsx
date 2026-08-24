@@ -525,3 +525,42 @@ describe("ResultIcon url handling (the icons-not-showing defect)", () => {
     expect(uris).toContain("http://localhost:5250/static/NodeTypeIcons/book.svg");
   });
 });
+
+// ---- the SHARED composer model on the RN leaf (@-mention autocomplete) -----------------------
+
+describe("ThreadChat composer @-mentions (core useMentionModel, native dropdown)", () => {
+  it("typing an @token opens suggestions from ops.autocomplete; picking splices the insertText", async () => {
+    const autocomplete = vi.fn(async () => [
+      { label: "Documentation", insertText: "@/Doc", path: "Doc" },
+    ]);
+    const ops = fakeOps({ autocomplete });
+    let r!: TestRenderer.ReactTestRenderer;
+    await TestRenderer.act(async () => {
+      r = TestRenderer.create(
+        <NavContext.Provider value={() => {}}>
+          <RegistryProvider pack={rnPack}>
+            <MeshOpsProvider ops={ops}>
+              <ScopeProvider
+                source={new StaticAreaSource({ areas: { main: { $type: "ThreadChat", namespacePath: "u1" } as never } })}
+                area="main"
+              >
+                <RenderArea areaKey="main" />
+              </ScopeProvider>
+            </MeshOpsProvider>
+          </RegistryProvider>
+        </NavContext.Provider>,
+      );
+    });
+    const input = r.root.findAll((n) => String(n.type) === "TextInput"
+      && n.props.placeholder === en("chat.composerPlaceholder"))[0];
+    await TestRenderer.act(async () => { input.props.onChangeText("hello @do"); });
+    await TestRenderer.act(async () => { await new Promise((res) => setTimeout(res, 300)); }); // the model's debounce
+    expect(autocomplete).toHaveBeenCalledWith("@do", undefined);
+    const item = r.root.findAll((n) => typeof n.type === "string" && n.props?.accessibilityRole === "menuitem")[0];
+    expect(item).toBeTruthy();
+    await TestRenderer.act(async () => { item.props.onPress(); });
+    const after = r.root.findAll((n) => String(n.type) === "TextInput"
+      && n.props.placeholder === en("chat.composerPlaceholder"))[0];
+    expect(after.props.value).toBe("hello @/Doc ");
+  });
+});
