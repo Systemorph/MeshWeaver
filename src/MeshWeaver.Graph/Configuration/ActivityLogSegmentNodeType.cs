@@ -50,7 +50,7 @@ public static class ActivityLogSegmentNodeType
     {
         Name = "Activity Log Segment",
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<ActivityLogSegment>())

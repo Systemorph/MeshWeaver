@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reflection;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -35,17 +36,22 @@ public sealed class EmbeddedResourcePartitionStorageProvider : IPartitionStorage
     /// <param name="description">Optional human-readable description recorded on the <c>PartitionDefinition</c>.</param>
     /// <param name="seedNodes">Optional in-memory nodes layered over the embedded resources.</param>
     /// <param name="contexts">Optional partition contexts to opt into; defaults to Search, Create, Autocomplete and Browse.</param>
+    /// <param name="contributedParsers">File-format parsers contributed by modules (e.g. the AI
+    /// module's agent parser). 🚨 Without them an embedded <c>.md</c> carrying
+    /// <c>nodeType: Agent</c> is parsed by the catch-all Markdown parser and becomes a plain
+    /// Markdown node — no error, no log, just an agent that no longer exists.</param>
     public EmbeddedResourcePartitionStorageProvider(
         string @namespace,
         Assembly assembly,
         string resourcePrefix,
         string? description = null,
         IEnumerable<MeshNode>? seedNodes = null,
-        IEnumerable<string>? contexts = null)
+        IEnumerable<string>? contexts = null,
+        IEnumerable<IFileFormatParser>? contributedParsers = null)
     {
         _namespace = @namespace;
         Adapter = new EmbeddedResourceStorageAdapter(assembly, resourcePrefix, seedNodes,
-            partitionNamespace: @namespace);
+            partitionNamespace: @namespace, contributedParsers: contributedParsers);
         PartitionDefinition = new PartitionDefinition
         {
             Namespace = @namespace,

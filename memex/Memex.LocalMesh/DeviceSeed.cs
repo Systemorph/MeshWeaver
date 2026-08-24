@@ -36,6 +36,7 @@ public static class DeviceSeed
         hub.ServiceProvider.GetRequiredService<AccessService>().SetHostIdentity(DeviceUser);
 
         SeedInstances(hub);
+        SeedDeviceApps(hub);
         RepairAdminGrant(hub);
     }
 
@@ -129,6 +130,41 @@ public static class DeviceSeed
                 _ => logger?.LogInformation("Repaired the missing global-admin grant"),
                 ex => logger?.LogWarning(ex, "Admin-grant repair failed"));
     }
+
+    /// <summary>
+    /// The DEVICE's own system apps, beyond the platform default trio (Store / Documentation /
+    /// Threads, which <c>EnsureDefaultApps</c> materializes from <c>Admin/HomeConfig</c> for an
+    /// empty grid): <b>Hosting</b> — the deployments-as-data group this mesh carries — belongs on
+    /// the Apps grid like any other app, not as a loose card in the content list. The grid paints
+    /// ONLY from <c>{owner}/_App</c> records, and an existing device user's grid is not empty, so
+    /// the core bootstrap never fires again for them — the device seeds its record here.
+    /// Create-if-absent per app (like <see cref="RepairAdminGrant"/>, and unlike the instances
+    /// seed): these are the device's SYSTEM apps, kept present by boot on purpose.
+    /// </summary>
+    private static void SeedDeviceApps(IMessageHub hub)
+    {
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(nameof(DeviceSeed));
+        var path = AppNodeType.PathFor(DeviceUserId, "Hosting");
+        hub.GetWorkspace()
+            .GetQuery("seed-device-apps", $"path:{path}")
+            .Take(1).Timeout(TimeSpan.FromSeconds(15))
+            .Where(existing => !existing.Any())
+            .SelectMany(_ => meshService.CreateNode(
+                new MeshNode("Hosting", $"{DeviceUserId}/{AppNodeType.UserNamespace}")
+                {
+                    NodeType = AppNodeType.NodeType,
+                    Name = "Hosting",
+                    Icon = "/static/NodeTypeIcons/cloudarrowup.svg",
+                    MainNode = "Hosting",
+                    State = MeshNodeState.Active,
+                    Content = new App { Plugin = "Hosting", Source = "default" },
+                }))
+            .Subscribe(
+                _ => logger?.LogInformation("Seeded the Hosting app record at {Path}", path),
+                ex => logger?.LogWarning(ex, "Device app seed failed at {Path}", path));
+    }
+
 
     /// <summary>
     /// Seeds the instance list on first boot: the own-instance node (this mesh, named after the

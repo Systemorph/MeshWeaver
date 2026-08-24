@@ -33,7 +33,7 @@ public static class AccessAssignmentNodeType
         Name = "Access Assignment",
         Icon = "/static/NodeTypeIcons/shield.svg",
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddAccessAssignmentViews()
             .AddMeshDataSource(source => source
