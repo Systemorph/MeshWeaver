@@ -20,6 +20,9 @@ public sealed record MemexFeatureOptions
 
     public AiFeatureOptions Ai { get; init; } = new();
 
+    /// <summary>Which GUI shells this deployment serves — see <see cref="GuiFeatureOptions"/>.</summary>
+    public GuiFeatureOptions Gui { get; init; } = new();
+
     /// <summary>Static-repo → DB sync: which partitions are materialized into and served from the DB.</summary>
     public StaticRepoSyncFeatureOptions StaticRepoSync { get; init; } = new();
 
@@ -185,4 +188,28 @@ public sealed record AiCliFeatureOptions
     public bool Copilot { get; init; } = true;
 
     public bool HasAny => ClaudeCode || Copilot;
+}
+
+/// <summary>
+/// The GUI SHELLS a deployment serves, and which one owns the front door. Both default ON so an
+/// absent section preserves today's behaviour; a deployment composes its portal by turning shells
+/// off (<c>Features__Gui__Blazor=false</c> → a NEXT-ONLY portal: the host serves the mesh surfaces
+/// — REST, gRPC-web, SignalR, MCP, auth, static assets — and NO Razor-components pipeline, no
+/// circuit, no Blazor view registry; the Next.js app is the whole GUI).
+/// <para>When BOTH are on, <see cref="Default"/> picks the shell a plain browser navigation lands
+/// on, and the viewer can switch per-browser with <c>?gui=next</c> / <c>?gui=blazor</c> (a cookie
+/// remembers the choice — see <c>GuiShellSwitch</c>). Next is served under <c>/next</c> on the
+/// same host (ingress-routed in k8s; <c>PORTAL_ORIGIN</c> rewrites in local dev), so the switch is
+/// a redirect, never a proxy.</para>
+/// </summary>
+public sealed record GuiFeatureOptions
+{
+    /// <summary>Serve the Blazor shell (Razor components + circuit + Blazor view registry).</summary>
+    public bool Blazor { get; init; } = true;
+
+    /// <summary>The Next.js shell participates (under <c>/next</c>); enables the shell switch.</summary>
+    public bool Next { get; init; } = true;
+
+    /// <summary>The shell a plain navigation lands on when both are enabled: "Blazor" or "Next".</summary>
+    public string Default { get; init; } = "Blazor";
 }

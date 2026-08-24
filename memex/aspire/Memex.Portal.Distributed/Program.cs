@@ -20,7 +20,10 @@ using Orleans.Hosting;
 using MeshWeaver.Compiler;
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
-builder.Services.AddServerSideBlazor().AddCircuitOptions(o => o.DetailedErrors = true);
+// Blazor is a per-deployment SHELL (Features:Gui) — a next-only portal registers none of it.
+if ((builder.Configuration.GetSection(Memex.Portal.Shared.MemexFeatureOptions.SectionName)
+        .Get<Memex.Portal.Shared.MemexFeatureOptions>() ?? new Memex.Portal.Shared.MemexFeatureOptions()).Gui.Blazor)
+    builder.Services.AddServerSideBlazor().AddCircuitOptions(o => o.DetailedErrors = true);
 // Give Orleans time to drain grain activations during a rolling update.
 // ACA termination grace period is set to 120 s in Memex.AppHost; this
 // keeps the .NET host alive for 90 s (leaves 30 s headroom before SIGKILL).

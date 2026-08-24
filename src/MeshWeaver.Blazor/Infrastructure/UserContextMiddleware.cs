@@ -57,7 +57,14 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             return;
         }
 
-        var hub = context.RequestServices.GetRequiredService<PortalApplication>().Hub;
+        // The Blazor shell's per-circuit portal hub when it is registered; the mesh root hub on a
+        // portal running without the Blazor shell (Features:Gui:Blazor=false). Identity resolution
+        // is an HTTP concern, not a circuit concern: AccessService is the MESH-wide singleton
+        // either way (a hosted hub only registers its own when the parent has none), so both paths
+        // stamp the same service — the portal hub is merely preferred so SSR scopes reuse their
+        // circuit hub. Same shape as ResolveContentCaller in BlazorHostingExtensions.
+        var hub = context.RequestServices.GetService<PortalApplication>()?.Hub
+                  ?? context.RequestServices.GetRequiredService<IMessageHub>();
         var userService = hub.ServiceProvider.GetRequiredService<AccessService>();
 
         // 🚨 THE ONLY THING WE KNOW about an ANONYMOUS visitor's language. Everything downstream
