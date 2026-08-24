@@ -10,16 +10,29 @@
 // state — no crash, no fake data.
 
 import { useEffect, useMemo, useState } from "react";
-import { View, Text, TextInput, Pressable, ScrollView, ActivityIndicator, StyleSheet } from "react-native";
+import { View, Text, TextInput, Pressable, ScrollView, ActivityIndicator, Image, StyleSheet } from "react-native";
+import { SvgXml } from "react-native-svg";
 import {
+  accessLogQuery,
+  buildGroups,
+  classifyIcon,
+  mergeUnionResults,
+  paintOrdered,
+  parseScopeTabs,
+  toAccessOrder,
+  toSearchResult,
+  unionQueries,
   useLocalize,
   useMeshOps,
   useResolve,
   str,
   useText,
+  withRowOnlySelect,
   type ControlComponent,
   type MeshNodeState,
   type MeshOps,
+  type MeshSearchResult,
+  type MeshSearchScope,
 } from "@meshweaver/react/core";
 import { useNavigate } from "./nav";
 import { useTheme } from "./theme";
@@ -99,29 +112,13 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
-interface NodeResult {
-  path: string;
-  name: string;
-  nodeType: string;
-  description: string;
-}
-
-function toNodeResult(r: Record<string, unknown>): NodeResult {
-  const content = (r.content ?? {}) as Record<string, unknown>;
-  return {
-    path: s(r.path),
-    name: s(r.name) || s(r.path).split("/").pop() || s(r.path),
-    nodeType: s(r.nodeType),
-    description: s(r.description ?? content.description),
-  };
-}
-
 // A hidden query can be a newline-joined UNION of sub-queries (the server declares the home
 // catalog that way; Blazor's MeshSearchView issues them as one MeshQueryRequest union, but the
 // REST verb takes ONE query per call — a newline-joined string parses to nothing server-side).
-// Run each line, concatenate in declaration order, dedupe by path.
-function useMeshQuery(ops: MeshOps | null, queries: string[], basePath?: string): { results: NodeResult[]; loading: boolean } {
-  const [state, setState] = useState<{ results: NodeResult[]; loading: boolean }>({ results: [], loading: false });
+// Run each line, concatenate in declaration order, dedupe by path — mergeUnionResults, the same
+// shared-model half the web pack uses.
+function useMeshQuery(ops: MeshOps | null, queries: string[], basePath?: string): { results: MeshSearchResult[]; loading: boolean } {
+  const [state, setState] = useState<{ results: MeshSearchResult[]; loading: boolean }>({ results: [], loading: false });
   const key = queries.join("\n");
   useEffect(() => {
     if (!ops?.search || queries.length === 0) {
@@ -133,15 +130,7 @@ function useMeshQuery(ops: MeshOps | null, queries: string[], basePath?: string)
     Promise.all(queries.map((q) => ops.search!(q, basePath || undefined)))
       .then((batches) => {
         if (!live) return;
-        const seen = new Set<string>();
-        const merged: NodeResult[] = [];
-        for (const rs of batches)
-          for (const n of rs.map(toNodeResult))
-            if (n.path.length > 0 && !seen.has(n.path)) {
-              seen.add(n.path);
-              merged.push(n);
-            }
-        setState({ results: merged, loading: false });
+        setState({ results: mergeUnionResults(batches), loading: false });
       })
       .catch(() => {
         if (live) setState({ results: [], loading: false });
@@ -152,6 +141,35 @@ function useMeshQuery(ops: MeshOps | null, queries: string[], basePath?: string)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ops, key, basePath]);
   return state;
+}
+
+/**
+ * The viewer's own access log as {activityId → accessed-at ms} — fetched only when a scope asked
+ * for access ordering and the host exposes the viewer's id (ops.userId). Null until it lands, so
+ * the tiles paint from their own query first and re-order when the log arrives.
+ */
+function useAccessOrder(ops: MeshOps | null, enabled: boolean): Map<string, number> | null {
+  const viewer = enabled ? s(ops?.userId) : "";
+  const [map, setMap] = useState<Map<string, number> | null>(null);
+  useEffect(() => {
+    if (!viewer || !ops?.search) {
+      setMap(null);
+      return;
+    }
+    let live = true;
+    ops
+      .search(accessLogQuery(viewer), undefined, 500)
+      .then((rows) => {
+        if (live) setMap(toAccessOrder(rows));
+      })
+      .catch(() => {
+        /* keep the query's own order */
+      });
+    return () => {
+      live = false;
+    };
+  }, [ops, viewer]);
+  return map;
 }
 
 // ── ThreadChat ───────────────────────────────────────────────────────────────
@@ -292,37 +310,172 @@ const ThreadChat: ControlComponent = ({ control }) => {
 
 // ── MeshSearch ───────────────────────────────────────────────────────────────
 
+/** The tile/row icon: the node's Icon column (SVG / URL / emoji) or the initial bubble — the
+ *  native mapping of the web pack's NodeResultIcon fallback chain. */
+function ResultIcon({ node, size, radius }: { node: MeshSearchResult; size: number; radius: number }) {
+  const value = node.icon || node.thumbnail || "";
+  const classified = classifyIcon(value as never);
+  const box = { width: size, height: size, borderRadius: radius, overflow: "hidden" as const, alignItems: "center" as const, justifyContent: "center" as const };
+  switch (classified.kind) {
+    case "svg":
+      return (
+        <View style={box}>
+          <SvgXml xml={classified.text} width={Math.round(size * 0.6)} height={Math.round(size * 0.6)} />
+        </View>
+      );
+    case "url":
+      return <Image source={{ uri: classified.text }} style={{ ...box, resizeMode: "cover" }} />;
+    case "emoji":
+      return (
+        <View style={box}>
+          <Text style={{ fontSize: Math.round(size * 0.55), lineHeight: Math.round(size * 0.7) }}>{classified.text}</Text>
+        </View>
+      );
+    default:
+      return (
+        <View style={[box, styles.iconInitialBox]}>
+          <Text style={{ fontSize: Math.round(size * 0.4), fontWeight: "600", color: "#616161" }}>
+            {(node.name.trim()[0] ?? "?").toUpperCase()}
+          </Text>
+        </View>
+      );
+  }
+}
+
+/** One tile of the phone-home ICON grid (Icons render mode): a large rounded icon with the name
+ *  underneath, navigating to the row's TARGET — painted entirely from the query row. */
+function IconTile({ node, target }: { node: MeshSearchResult; target: string }) {
+  const navigate = useNavigate();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={node.name}
+      style={styles.iconTile}
+      onPress={() => navigate({ address: target, area: "" })}
+    >
+      <View style={styles.iconBox}>
+        <ResultIcon node={node} size={64} radius={16} />
+      </View>
+      <Text style={styles.iconLabel} numberOfLines={2}>
+        {node.name}
+      </Text>
+    </Pressable>
+  );
+}
+
 /**
- * Live mesh search: the hidden query (the control's server-declared filter) is combined with the
- * user's visible term and run through `ops.search`, exactly as the web pack does.
+ * Live mesh search — the native twin of the web pack's MeshSearchView, over the SAME shared model
+ * (@meshweaver/react/core meshSearchModel): scope tabs (a strip only for 2+ tabs; one tab still
+ * applies its settings), newline-joined UNION queries issued per line, the Icons phone-home grid
+ * painted from query rows (row-only select), NavigateToMainNode, most-recently-used-first
+ * ordering from the viewer's own access log (SortByAccess), and grouped-by-type sections with
+ * counts, biggest group first (GroupByFrequency).
  */
 const MeshSearch: ControlComponent = ({ control }) => {
   const t = useLocalize();
   const ops = useMeshOps();
   const navigate = useNavigate();
   const title = useText(control.title);
-  const hiddenQuery = s(useResolve(control.hiddenQuery));
+  const controlHiddenQuery = s(useResolve(control.hiddenQuery));
   const initialVisible = s(useResolve(control.visibleQuery));
   const placeholder = s(useResolve(control.placeholder)) || t("common.typeToSearch");
   const ns = s(useResolve(control.namespace));
+  const controlRenderMode = s(useResolve(control.renderMode)) || "Flat";
   const showSearchBox = useResolve(control.showSearchBox) !== false;
   const liveSearch = useResolve(control.liveSearch) !== false;
   const excludeBasePath = useResolve(control.excludeBasePath) !== false;
   const showEmptyMessage = useResolve(control.showEmptyMessage) !== false;
+  const controlNavigateToMainNode = useResolve(control.navigateToMainNode) === true;
+  const groupByFrequency = useResolve(control.groupByFrequency) === true;
+  const sections = (control.sections ?? {}) as Record<string, unknown>;
+  const showCounts = sections.showCounts !== false;
+  const grouping = (control.grouping ?? {}) as Record<string, unknown>;
+
+  // Scope tabs — active tab tracked by LABEL (a bare index could re-point on a list change);
+  // a vanished label clamps to the first tab. A single tab renders no strip but still applies
+  // its settings (the home's Apps band: Icons + SortByAccess on one scope).
+  const scopeTabs = useMemo(() => parseScopeTabs(control.scopeTabs), [control.scopeTabs]);
+  const [activeScopeLabel, setActiveScopeLabel] = useState<string | null>(null);
+  const activeScopeIndex = Math.max(
+    0,
+    scopeTabs.findIndex((sc) => sc.label === activeScopeLabel),
+  );
+  const scope: MeshSearchScope | null = scopeTabs[activeScopeIndex] ?? null;
+
+  const hiddenQuery = scope ? scope.query : controlHiddenQuery;
+  const renderMode = scope?.renderMode ?? controlRenderMode;
+  const navigateToMainNode = scope?.navigateToMainNode ?? controlNavigateToMainNode;
+  const sortByAccess = scope?.sortByAccess ?? false;
+  const isIcons = renderMode === "Icons";
+  const isGrouped = renderMode === "Grouped";
 
   const [visible, setVisible] = useState(initialVisible);
   const [submitted, setSubmitted] = useState(initialVisible);
   const term = useDebounced(liveSearch ? visible : submitted, 250);
-  // The hidden query's newline-separated sub-queries each get the visible term appended.
-  const hiddenLines = hiddenQuery.split("\n").map((l) => l.trim()).filter(Boolean);
-  const queries = (hiddenLines.length ? hiddenLines : [""])
-    .map((l) => [l, term.trim()].filter(Boolean).join(" "))
-    .filter(Boolean);
+  // Each UNION leg gets the visible term appended; the icon grid ships row-only (`select:`
+  // without content) unless the authored query already selects.
+  const queries = unionQueries(hiddenQuery, term, (leg) => withRowOnlySelect(leg, isIcons));
   const { results, loading } = useMeshQuery(ops, queries, ns);
-  const items = excludeBasePath && ns ? results.filter((n) => n.path !== ns) : results;
+
+  const accessOrder = useAccessOrder(ops, sortByAccess);
+  const targetOf = (n: MeshSearchResult) => (navigateToMainNode && n.mainNode ? n.mainNode : n.path);
+  let items = excludeBasePath && ns ? results.filter((n) => n.path !== ns) : results;
+  if (sortByAccess) items = paintOrdered(items, accessOrder, targetOf);
+
+  const groupBy = s(grouping.groupByProperty) || "NodeType";
+  const groups = buildGroups(items, isGrouped, groupBy, groupByFrequency);
+  const skipHeaders = groups.length === 1;
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const toggleCollapsed = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const renderItems = (groupItems: MeshSearchResult[]) =>
+    isIcons ? (
+      <View style={styles.iconsGrid}>
+        {groupItems.map((n) => (
+          <IconTile key={n.path} node={n} target={targetOf(n)} />
+        ))}
+      </View>
+    ) : (
+      <View style={{ gap: 8 }}>
+        {groupItems.map((n) => (
+          <Pressable key={n.path} style={styles.resultRow} onPress={() => navigate({ address: targetOf(n), area: "" })}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <ResultIcon node={n} size={28} radius={6} />
+              <Text style={styles.resultName}>{n.name}</Text>
+            </View>
+            {n.description ? <Text style={styles.muted}>{n.description}</Text> : null}
+            <Text style={styles.resultPath}>{n.path}</Text>
+          </Pressable>
+        ))}
+      </View>
+    );
 
   return (
     <View style={{ gap: 8 }}>
+      {scopeTabs.length > 1 ? (
+        <View style={styles.scopeRow} accessibilityRole="tablist">
+          {scopeTabs.map((tab, i) => (
+            <Pressable
+              key={tab.label || String(i)}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: i === activeScopeIndex }}
+              style={[styles.scopeTab, i === activeScopeIndex && styles.scopeTabActive]}
+              onPress={() => {
+                setActiveScopeLabel(tab.label);
+                setCollapsed(new Set());
+              }}
+            >
+              <Text style={[styles.scopeTabText, i === activeScopeIndex && styles.scopeTabTextActive]}>{tab.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       {title ? <Text style={styles.sectionTitle}>{title}</Text> : null}
       {showSearchBox ? (
         <View style={styles.searchRow}>
@@ -339,13 +492,21 @@ const MeshSearch: ControlComponent = ({ control }) => {
       ) : null}
       {loading ? <ActivityIndicator /> : null}
       {!loading && items.length === 0 && showEmptyMessage ? <Text style={styles.muted}>{t("common.noResults")}</Text> : null}
-      {items.map((n) => (
-        <Pressable key={n.path} style={styles.resultRow} onPress={() => navigate({ address: n.path, area: "" })}>
-          <Text style={styles.resultName}>{n.name}</Text>
-          {n.description ? <Text style={styles.muted}>{n.description}</Text> : null}
-          <Text style={styles.resultPath}>{n.path}</Text>
-        </Pressable>
-      ))}
+      {groups.map((group) => {
+        const isCollapsed = collapsed.has(group.key);
+        const headerLabel = showCounts ? `${group.label} (${group.items.length})` : group.label;
+        return (
+          <View key={group.key || "·"} style={{ gap: 6 }}>
+            {!skipHeaders ? (
+              <Pressable style={styles.groupHeader} onPress={() => toggleCollapsed(group.key)}>
+                <Text style={styles.groupChevron}>{isCollapsed ? "▶" : "▼"}</Text>
+                <Text style={styles.groupLabel}>{headerLabel}</Text>
+              </Pressable>
+            ) : null}
+            {!isCollapsed ? renderItems(group.items) : null}
+          </View>
+        );
+      })}
     </View>
   );
 };
@@ -358,9 +519,11 @@ const MeshNodeCollection: ControlComponent = ({ control }) => {
   const ops = useMeshOps();
   const navigate = useNavigate();
   const queries = (Array.isArray(control.queries) ? control.queries : []).map(s).filter(Boolean);
-  const [items, setItems] = useState<NodeResult[] | null>(null);
+  const [items, setItems] = useState<MeshSearchResult[] | null>(null);
 
-  const key = queries.join("|");
+  // JSON.stringify: an unambiguous identity for the query LIST — a bare join can collide
+  // (["a","bc"] vs ["ab","c"]) and leave stale results on a list change.
+  const key = JSON.stringify(queries);
   useEffect(() => {
     if (!ops?.search || queries.length === 0) {
       setItems([]);
@@ -370,17 +533,7 @@ const MeshNodeCollection: ControlComponent = ({ control }) => {
     Promise.all(queries.map((q) => ops.search!(q)))
       .then((batches) => {
         if (!live) return;
-        const seen = new Set<string>();
-        const flat: NodeResult[] = [];
-        for (const rows of batches)
-          for (const r of rows) {
-            const n = toNodeResult(r);
-            if (n.path && !seen.has(n.path)) {
-              seen.add(n.path);
-              flat.push(n);
-            }
-          }
-        setItems(flat);
+        setItems(mergeUnionResults(batches));
       })
       .catch(() => live && setItems([]));
     return () => {
@@ -549,6 +702,22 @@ const styles = StyleSheet.create({
   resultRow: { gap: 2, padding: 10, borderWidth: 1, borderColor: "#e1e1e1", borderRadius: 6, backgroundColor: "white" },
   resultName: { fontSize: 14, fontWeight: "600", color: "#242424" },
   resultPath: { fontSize: 11, color: "#8a8886" },
+  // scope tabs (the home's shared search bar across scopes)
+  scopeRow: { flexDirection: "row", gap: 4, borderBottomWidth: 1, borderBottomColor: "#d1d1d1" },
+  scopeTab: { paddingVertical: 8, paddingHorizontal: 12, borderBottomWidth: 2, borderBottomColor: "transparent" },
+  scopeTabActive: { borderBottomColor: "#0f6cbd" },
+  scopeTabText: { fontSize: 14, color: "#242424" },
+  scopeTabTextActive: { color: "#0f6cbd", fontWeight: "600" },
+  // the phone-home icon grid (Icons render mode)
+  iconsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingVertical: 8 },
+  iconTile: { width: 88, alignItems: "center", gap: 6, padding: 4, borderRadius: 12 },
+  iconBox: { width: 64, height: 64, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "#f0f0f0", borderWidth: 1, borderColor: "#e1e1e1", overflow: "hidden" },
+  iconLabel: { fontSize: 12, lineHeight: 15, textAlign: "center", color: "#242424" },
+  iconInitialBox: { backgroundColor: "#f0f0f0" },
+  // grouped sections (the home's content fan-out by type)
+  groupHeader: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 4 },
+  groupChevron: { fontSize: 10, color: "#616161" },
+  groupLabel: { fontSize: 14, fontWeight: "600", color: "#242424" },
   // appearance
   modeRow: { flexDirection: "row", gap: 8 },
   modeChip: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 16, borderWidth: 1, borderColor: "#ccc" },

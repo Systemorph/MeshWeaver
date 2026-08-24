@@ -403,6 +403,7 @@
   "search.nodes": "Nodes",
   "search.namespaces": "Namespaces",
   "search.showAll": "Show all →",
+  "search.showAllCount": "Show all {0}",
   "search.empty": "Empty",
   "search.noNamespace": "No namespace",
   "search.askAgentForDescription": "Ask the agent to create a description.",

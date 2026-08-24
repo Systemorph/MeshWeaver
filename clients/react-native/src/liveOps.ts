@@ -168,6 +168,9 @@ export function buildMeshOps(connection: MeshWebConnection, baseUrl: string, par
   // shell had right and the web shells did not.
   const rest = new MeshRest({ baseUrl, token });
   return {
+    // The viewer's partition doubles as their mesh id — viewer-scoped reads (the home Apps
+    // grid's most-recently-used ordering over {viewer}/_UserActivity) resolve it from here.
+    userId: partition,
     watch: (path: string) => watchNode(mesh, path),
     startThread: (namespacePath: string, userText: string, opts?: ThreadSubmitOptions) =>
       mesh.startThread(namespacePath, userText, opts),
