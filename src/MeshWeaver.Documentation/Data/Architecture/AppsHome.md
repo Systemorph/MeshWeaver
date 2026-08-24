@@ -122,19 +122,36 @@ HIDES anything never opened. The Shared-with-me band's query is therefore a newl
 path-keyed UNION — the accessed-ranked leg first, a plain leg as completeness fallback. On the Apps
 scope, `source:accessed` is meaningless for records, so that option sorts by last modified instead.
 
-## The Threads app — a multi-document shell
+## The Threads app — the chat surface with its native side menu
 
-`/{user}/Chat` (the ChatArea) and EVERY thread's full page render the same
-**`BuildThreadsShell`**: a fixed 280px rail of the viewer's open threads beside the main pane
-(composer on the app page, the conversation on a thread page). Navigating from the rail to a thread
-is REAL navigation — and the destination renders the shell again, so the rail never collapses,
-exactly like switching documents in a multi-document window.
+`/{user}/Chat` (the ChatArea) is ONE `ThreadChatControl` in node-less compact mode with
+`ShowThreadNav` on (`BuildThreadsApp` / `ThreadsAppComposer`): a centered start-a-conversation
+hero above the compact composer, beside the collapsible **THREADS side menu** — the agentic-app
+default view, rendered again on every thread's full page so the navigation never collapses.
 
-Rail rows (`ThreadRailItem`, on each thread's own hub) are title + ✕ **siblings** — never an
-overlay: an absolutely-positioned ✕ over a full-width navigation button loses its clicks to the nav
-surface. The ✕ closes through the canonical `MarkThreadDone`; the rail's query excludes
-`content.status:Done`, so a closed thread leaves the list reactively while staying searchable and
-reopenable. Closing never deletes.
+The side menu is NATIVE to the Blazor chat view and bound through the synced `GetQuery` cache
+(`ThreadQueries.MyOpenThreads` — full thread nodes, content included): New chat, a filter box
+("find the thread which does XYZ"; the global mesh search covers semantic lookups), the thread's
+hierarchy (ancestors · current · delegation sub-threads), and the viewer's open threads — each
+row with its LIVE activity (`ThreadActivity`: **evaluating** while a round runs, a **queued**
+badge when input waits in `PendingUserMessages`, **awaiting input** at rest) and an ✕ that closes
+through the canonical `MarkThreadDone`. The menu collapses to a slim edge toggle — the same
+affordance as the multi-part doc-index rail.
+
+🚨 **Never render a search result through an item area on a foreign hub.** The first Threads app
+was an MDI shell whose rail rows delegated to a `RailItem` area on each THREAD's own hub — one
+hub activation PER ROW, resolving an area on a hub the page does not own. That shape passes in a
+monolith and fails in the distributed portal ("area cannot be found" — the AppTile failure), which
+is why the shell, `ThreadRailItem`, and the `RailItem` area were deleted. The menu paints from the
+query snapshot; nothing on it resolves a foreign area.
+
+🚨 **Never stretch the compact composer.** The `.no-messages` CSS fill chain is scoped
+`:not(.compact-mode)`: unscoped, any page that gives the container a definite height stretched
+the compact input into a viewport-height empty box (the old shell's "giant gray void").
+
+Closing a thread goes through the canonical `MarkThreadDone` (the row's ✕ or the thread page's
+Mark Done); the menu's query excludes `content.status:Done`, so a closed thread leaves the list
+reactively while staying searchable and reopenable. Closing never deletes.
 
 ## Presentation mode (#1803)
 

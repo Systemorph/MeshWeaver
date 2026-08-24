@@ -644,16 +644,42 @@ public static class UserActivityLayoutAreas
         => Observable.Return<UiControl?>(new ThreadChatControl().WithHideEmptyState(true));
 
     /// <summary>
-    /// The chat page at <c>/{user}/Chat</c> (the ChatArea): the node-less composer, nothing else.
-    /// Sending starts a proper thread via <c>StartThread</c> and opens it full-screen.
-    /// <para>🚨 The MDI shell this used to render — a fixed rail of open threads whose rows
-    /// delegated to a <c>RailItem</c> area on each THREAD's own hub — is deleted. A per-result item
-    /// area activates one hub PER ROW and resolves an area on a hub the home does not own, which is
-    /// exactly the shape that failed in the distributed portal as "AppTile not found" while passing
-    /// in a monolith. The home renders from query rows; nothing on it resolves a foreign area.</para>
+    /// The THREADS APP page (<c>/{user}/Chat</c>, the ChatArea) — the agentic-app default view:
+    /// the chat surface with its collapsible THREADS side menu (new chat · searchable list of the
+    /// viewer's open threads with live evaluating/queued/awaiting status, all <c>GetQuery</c>-bound
+    /// inside the Blazor chat view) beside the node-less composer. Sending starts a proper thread
+    /// via <c>StartThread</c> and opens it full-screen — where the same side menu renders again,
+    /// so the navigation never collapses. See <see cref="BuildThreadsApp"/>.
     /// </summary>
     internal static IObservable<UiControl?> ThreadsAppView(LayoutAreaHost host, RenderingContext _)
-        => Observable.Return<UiControl?>(new ThreadChatControl().WithHideEmptyState(true));
+        => Observable.Return<UiControl?>(BuildThreadsApp());
+
+    /// <summary>
+    /// The Threads-app composition — pure (no hub) so the shape is unit-testable: ONE
+    /// <see cref="ThreadChatControl"/> in compact (node-less) mode with the threads side menu
+    /// turned on. The thread list, its live status (evaluating / queued / awaiting input), the
+    /// search box, and the collapse behaviour are all NATIVE to the chat view and bound through
+    /// the synced <c>GetQuery</c> cache — full thread nodes, content included. 🚨 Never
+    /// reintroduce a search-result <c>ItemArea</c> rail here: rows that delegated to a
+    /// <c>RailItem</c> area on each THREAD's own hub activated one hub PER RESULT and resolved
+    /// an area on a hub this page does not own — "area cannot be found" in the distributed
+    /// portal while passing in a monolith (the AppTile failure shape). And never stretch the
+    /// composer: the old shell's <c>height: 100%</c> turned the compact input into a
+    /// viewport-height empty box.
+    /// </summary>
+    internal static UiControl BuildThreadsApp() =>
+        Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("flex: 1; min-height: 0; display: flex; flex-direction: column;")
+            .WithView(ThreadsAppComposer());
+
+    /// <summary>The one control on the Threads app page — the node-less compact composer with the
+    /// threads side menu on. Factored out so the shape is directly assertable.</summary>
+    internal static ThreadChatControl ThreadsAppComposer() =>
+        new ThreadChatControl()
+            .WithHideEmptyState(true)
+            .WithShowThreadNav()
+            .WithStyle("flex: 1; min-height: 0; overflow: hidden;");
 
     /// <summary>
     /// The owner's OPEN threads — their own partition only (<c>{owner}/*_Thread</c>, no cross-partition
