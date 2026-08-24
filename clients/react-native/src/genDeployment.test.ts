@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 // The PLUGIN half of deployment composition (gen-deployment.mjs): a manifest entry
@@ -10,7 +11,8 @@ import { afterEach, describe, expect, it } from "vitest";
 // mechanism. Exercised here against a synthetic plugin checkout so the test is self-contained
 // (the real consumer is MeshWeaver.Plugins/Chess/gui/rn/chess — see deployment/examples/chess.json).
 
-const appRoot = resolve(__dirname, "..");
+// import.meta.url, not __dirname: vitest runs this file as ESM (module: "ESNext").
+const appRoot = fileURLToPath(new URL("..", import.meta.url));
 const script = join(appRoot, "scripts", "gen-deployment.mjs");
 const generated = join(appRoot, "src", "deployment.generated.ts");
 const vendorRoot = join(appRoot, "src", "deployment.vendor");
@@ -77,5 +79,21 @@ describe("gen-deployment plugin modules", () => {
         stdio: "pipe",
       }),
     ).toThrow(/not found/);
+  });
+});
+
+describe("gen-deployment plugin path containment", () => {
+  it("refuses a plugin path that escapes the repo with ..", () => {
+    const { repo } = makePluginRepo();
+    // A real file OUTSIDE the repo that a traversal would otherwise reach.
+    writeFileSync(join(tmp!, "outside.ts"), "export default {};\n");
+    const evil = join(tmp!, "evil.json");
+    writeFileSync(evil, JSON.stringify({ name: "Evil", modules: ["plugin:FixturePlugins/../outside"] }));
+    expect(() =>
+      execFileSync(process.execPath, [script], {
+        env: { ...process.env, MEMEX_DEPLOYMENT: evil, MEMEX_PLUGIN_REPOS: repo },
+        stdio: "pipe",
+      }),
+    ).toThrow(/not found|inside the repo/);
   });
 });

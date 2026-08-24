@@ -59,15 +59,27 @@ const vendorPlugin = (spec) => {
     process.exit(1);
   }
   const modulePath = rest.join("/");
-  const entry = ["", ".tsx", ".ts"].map((ext) => path.join(repo, modulePath + ext)).find((p) => fs.existsSync(p) && fs.statSync(p).isFile());
+  // Containment: the specifier is manifest data — a ".." segment must never let it resolve
+  // outside the plugin checkout (or vendor outside the vendor tree below).
+  const inside = (child, parent) => {
+    const rel = path.relative(parent, child);
+    return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  };
+  const entry = ["", ".tsx", ".ts"]
+    .map((ext) => path.resolve(repo, modulePath + ext))
+    .find((p) => inside(p, repo) && fs.existsSync(p) && fs.statSync(p).isFile());
   if (!entry) {
-    console.error(`gen-deployment: plugin module '${modulePath}(.tsx|.ts)' not found under ${repo}`);
+    console.error(`gen-deployment: plugin module '${modulePath}(.tsx|.ts)' not found under ${repo} (paths must stay inside the repo)`);
     process.exit(1);
   }
   // Copy the module's DIRECTORY (a module may span several files) into the vendor tree at the
   // same repo-relative location, so intra-module relative imports keep working.
   const moduleDir = path.dirname(entry);
-  const destDir = path.join(vendorRoot, repoName, path.relative(repo, moduleDir));
+  const destDir = path.resolve(vendorRoot, repoName, path.relative(repo, moduleDir));
+  if (!inside(destDir, vendorRoot)) {
+    console.error(`gen-deployment: refusing to vendor '${spec}' outside ${vendorRoot}`);
+    process.exit(1);
+  }
   fs.cpSync(moduleDir, destDir, { recursive: true });
   const destEntry = path.join(destDir, path.basename(entry).replace(/\.(tsx|ts)$/, ""));
   return "./" + path.relative(srcDir, destEntry).split(path.sep).join("/");
