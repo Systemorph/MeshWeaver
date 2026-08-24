@@ -98,15 +98,6 @@ public static class ThreadNodeType
     public const string ChangesArea = "Changes";
 
     /// <summary>
-    /// Layout area rendering THIS thread as one compact row of the Threads-app vertical rail
-    /// (<see cref="ThreadRailItem"/>): the title navigating to the thread, plus an ✕ overlay that
-    /// CLOSES the thread (<c>MarkThreadDone</c> — it leaves the rail but stays searchable and
-    /// reopenable; closing is never deleting). Used as a <c>MeshSearch.ItemArea</c> by the user
-    /// hub's Threads app page.
-    /// </summary>
-    public const string RailItemArea = "RailItem";
-
-    /// <summary>
     /// Generates a human-readable speaking ID from message text.
     /// Takes the first few words, lowercases, replaces non-alphanumeric with hyphens,
     /// and appends a short unique suffix.

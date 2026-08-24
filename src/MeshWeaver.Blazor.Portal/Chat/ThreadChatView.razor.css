@@ -27,11 +27,15 @@
     flex: 0 1 auto;
     min-height: 0;
 }
-.thread-chat-container.no-messages .thread-chat-bottom,
-.thread-chat-container.no-messages .thread-chat-footer,
-.thread-chat-container.no-messages .thread-chat-input-area,
-.thread-chat-container.no-messages .thread-chat-input-content,
-.thread-chat-container.no-messages .input-container {
+/* 🚨 Fill chain scoped to :not(.compact-mode) — same reason as the monaco override below: in
+   compact mode the composer must SIZE TO CONTENT (#178 auto-grow). The unscoped fill is what
+   turned the compact composer into a viewport-height empty gray box whenever a page gave the
+   container a definite height (the Threads app page regression). */
+.thread-chat-container.no-messages:not(.compact-mode) .thread-chat-bottom,
+.thread-chat-container.no-messages:not(.compact-mode) .thread-chat-footer,
+.thread-chat-container.no-messages:not(.compact-mode) .thread-chat-input-area,
+.thread-chat-container.no-messages:not(.compact-mode) .thread-chat-input-content,
+.thread-chat-container.no-messages:not(.compact-mode) .input-container {
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
@@ -1573,25 +1577,22 @@ button.thread-chat-status-item {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-
-/* ─── In-thread navigation menu ───────────────────────────────────────
-   A navigation surface within the thread: hierarchy (ancestors → current →
-   sub-threads), my other open threads, and the context chip. The shell wraps
-   the menu + the conversation body; its flex-direction (set by the nav-* class)
-   makes the menu a horizontal TOP BAR (column shell) or a vertical LEFT RAIL
-   (row shell). Hidden → only a small reveal toggle. */
+/* ─── Threads side menu ──────────────────────────────────────────────
+   The agentic-app default navigation: a collapsible left rail (same collapse
+   affordance as the multi-part doc-index menu) wrapping the conversation body.
+   Expanded: a fixed-width vertical rail — New chat, filter box, hierarchy
+   (ancestors → current → sub-threads), and my open threads with live activity
+   status. Collapsed: only a slim edge toggle shows. */
 .thread-nav-shell {
     flex: 1;
     min-height: 0;
     min-width: 0;
     display: flex;
+    flex-direction: row;
     width: 100%;
 }
 .thread-nav-shell:focus,
 .thread-nav-shell:focus-visible { outline: none; }
-.thread-nav-shell.nav-topbar { flex-direction: column; }
-.thread-nav-shell.nav-leftrail { flex-direction: row; }
-.thread-nav-shell.nav-hidden { flex-direction: column; }
 
 .thread-nav-body {
     flex: 1;
@@ -1604,33 +1605,17 @@ button.thread-chat-status-item {
 
 .thread-nav-menu {
     display: flex;
-    gap: 8px;
-    background: var(--neutral-layer-1);
-    border: 0 solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
-}
-
-/* Top bar — horizontal strip above the conversation, scrolls sideways. */
-.nav-topbar .thread-nav-menu {
-    flex-direction: row;
-    align-items: center;
-    flex: 0 0 auto;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 6px 12px;
-    border-bottom-width: 1px;
-}
-
-/* Left rail — vertical panel beside the conversation, scrolls vertically. */
-.nav-leftrail .thread-nav-menu {
     flex-direction: column;
     align-items: stretch;
     flex: 0 0 auto;
-    width: 230px;
+    width: 260px;
     max-width: 40%;
+    min-height: 0;
     overflow-y: auto;
-    padding: 10px;
+    padding: 12px 10px;
     gap: 10px;
-    border-right-width: 1px;
+    background: var(--neutral-layer-1);
+    border-right: 1px solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
 }
 
 .thread-nav-toolbar {
@@ -1638,19 +1623,17 @@ button.thread-chat-status-item {
     align-items: center;
     gap: 6px;
     flex: 0 0 auto;
-}
-.nav-leftrail .thread-nav-toolbar {
-    padding-bottom: 6px;
+    padding-bottom: 8px;
     border-bottom: 1px solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
 }
 
-.thread-nav-cycle,
 .thread-nav-new,
+.thread-nav-collapse,
 .thread-nav-reveal {
     appearance: none;
     -webkit-appearance: none;
-    border: 1px solid var(--neutral-stroke-rest);
-    background: var(--neutral-layer-2);
+    border: 1px solid transparent;
+    background: transparent;
     border-radius: 6px;
     padding: 4px 6px;
     cursor: pointer;
@@ -1659,19 +1642,23 @@ button.thread-chat-status-item {
     justify-content: center;
     color: var(--neutral-foreground-rest);
 }
-.thread-nav-cycle:hover,
 .thread-nav-new:hover,
-.thread-nav-reveal:hover { background: var(--neutral-fill-stealth-hover); }
-
-/* "New chat" sits at the end of the toolbar (after the title, which is hidden in top-bar mode). */
+.thread-nav-collapse:hover,
+.thread-nav-reveal:hover {
+    background: var(--neutral-fill-stealth-hover);
+    border-color: var(--neutral-stroke-rest);
+}
 .thread-nav-new { margin-left: auto; }
-.nav-topbar .thread-nav-new { margin-left: 0; }
 
-/* Hidden state: a small inline reveal toggle above the conversation. */
-.thread-nav-reveal {
+/* Collapsed state: a slim edge strip with a vertically-centered expand toggle —
+   the multi-part (doc-index) rail's collapsed look. */
+.nav-collapsed .thread-nav-reveal {
     flex: 0 0 auto;
-    align-self: flex-start;
-    margin: 6px 0 4px 12px;
+    align-self: center;
+    margin: 0;
+    border-radius: 0 6px 6px 0;
+    border-right: 1px solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
+    padding: 10px 4px;
 }
 
 .thread-nav-title {
@@ -1681,23 +1668,31 @@ button.thread-chat-status-item {
     letter-spacing: 0.04em;
     color: var(--neutral-foreground-hint);
 }
-.nav-topbar .thread-nav-title { display: none; }   /* save horizontal space in the bar */
+
+/* Filter box — narrows the thread list live. */
+.thread-nav-filter {
+    flex: 0 0 auto;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 5px 9px;
+    font: inherit;
+    font-size: 0.8rem;
+    color: var(--neutral-foreground-rest);
+    background: var(--neutral-layer-2);
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 6px;
+    outline: none;
+}
+.thread-nav-filter:focus {
+    border-color: var(--accent-fill-rest);
+}
+.thread-nav-filter::placeholder { color: var(--neutral-foreground-hint); }
 
 .thread-nav-section {
     display: flex;
     flex-direction: column;
     gap: 3px;
     min-width: 0;
-}
-.nav-topbar .thread-nav-section {
-    flex-direction: row;
-    align-items: center;
-    gap: 4px;
-    flex: 0 0 auto;
-}
-.nav-topbar .thread-nav-section + .thread-nav-section {
-    padding-left: 8px;
-    border-left: 1px solid var(--neutral-stroke-divider-rest, var(--neutral-stroke-rest));
 }
 
 .thread-nav-section-label {
@@ -1710,8 +1705,6 @@ button.thread-chat-status-item {
     align-items: center;
     gap: 6px;
 }
-/* In the bar, hide the long "Other open threads" word but keep count + hint. */
-.nav-topbar .thread-nav-section-label > span:first-child { display: none; }
 
 .thread-nav-count {
     font-size: 0.62rem;
@@ -1726,6 +1719,7 @@ button.thread-chat-status-item {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     color: var(--neutral-foreground-hint);
     opacity: 0.85;
+    margin-left: auto;
 }
 
 .thread-nav-item {
@@ -1735,7 +1729,7 @@ button.thread-chat-status-item {
     text-decoration: none;
     color: var(--neutral-foreground-rest);
     border-radius: 6px;
-    padding: 4px 8px;
+    padding: 5px 8px;
     font-size: 0.82rem;
     min-width: 0;
     max-width: 100%;
@@ -1745,7 +1739,6 @@ button.thread-chat-status-item {
     background: var(--neutral-fill-stealth-hover);
     border-color: var(--neutral-stroke-rest);
 }
-.nav-topbar .thread-nav-item { flex: 0 0 auto; max-width: 180px; }
 
 .thread-nav-item-glyph {
     flex: 0 0 auto;
@@ -1767,10 +1760,9 @@ button.thread-chat-status-item {
 .thread-nav-current .thread-nav-item-glyph { color: var(--accent-fill-rest); }
 .thread-nav-ancestor,
 .thread-nav-child { color: var(--neutral-foreground-hint); }
-.nav-leftrail .thread-nav-child { padding-left: 18px; }
+.thread-nav-child { padding-left: 18px; }
 
 .thread-nav-context { max-width: 100%; }
-.nav-topbar .thread-nav-context { max-width: 200px; }
 
 .thread-nav-empty {
     font-size: 0.78rem;
@@ -1779,7 +1771,105 @@ button.thread-chat-status-item {
     padding: 2px 8px;
 }
 
-/* The others list scrolls within the rail; in the bar it lays out inline. */
-.nav-leftrail .thread-nav-others { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-.nav-topbar .thread-nav-others,
-.nav-topbar .thread-nav-hierarchy { flex-direction: row; }
+/* One open-thread row: [status dot · title · queued badge] as the nav link, ✕ as a
+   SIBLING (never an overlay — an absolutely-positioned button over a nav surface
+   loses its clicks to the nav). */
+.thread-nav-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+}
+.thread-nav-row .thread-nav-item { flex: 1 1 auto; min-width: 0; }
+
+.thread-nav-close {
+    appearance: none;
+    -webkit-appearance: none;
+    flex: 0 0 auto;
+    border: none;
+    background: transparent;
+    border-radius: 50%;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--neutral-foreground-hint);
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+.thread-nav-row:hover .thread-nav-close,
+.thread-nav-close:focus-visible { opacity: 1; }
+.thread-nav-close:hover { background: var(--neutral-fill-stealth-hover); }
+
+/* Live activity indicator — the Claude-Code-style session dot. */
+.thread-nav-status {
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+.thread-nav-status-evaluating {
+    background: var(--accent-fill-rest);
+    animation: thread-nav-pulse 1.2s ease-in-out infinite;
+}
+.thread-nav-status-queued {
+    background: var(--warning, #c5a300);
+}
+.thread-nav-status-awaiting {
+    background: transparent;
+    border: 1.5px solid var(--neutral-foreground-hint);
+}
+@keyframes thread-nav-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+/* Queued-messages badge on a row. */
+.thread-nav-queued {
+    flex: 0 0 auto;
+    font-size: 0.62rem;
+    font-weight: 700;
+    background: color-mix(in srgb, var(--warning, #c5a300) 22%, transparent);
+    color: var(--neutral-foreground-rest);
+    border-radius: 8px;
+    padding: 0 5px;
+    line-height: 1.6;
+}
+
+/* The open-threads list scrolls within the rail. */
+.thread-nav-others { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+/* ─── Threads app welcome hero (node-less composer + side menu, no thread) ───
+   Center the prompt: the welcome pushes down from the top, the composer sits
+   directly under it, and the pair floats in the upper-middle of the pane. */
+.thread-chat-container.compact-mode.no-messages .thread-nav-body {
+    justify-content: center;
+    align-items: center;
+    padding: 24px;
+    box-sizing: border-box;
+}
+.thread-chat-container.compact-mode.no-messages .thread-nav-body > * {
+    width: 100%;
+    max-width: 760px;
+}
+.thread-welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 18px;
+    text-align: center;
+}
+.thread-welcome-title {
+    font-size: 1.6rem;
+    font-weight: 650;
+    color: var(--neutral-foreground-rest);
+}
+.thread-welcome-hint {
+    font-size: 0.92rem;
+    color: var(--neutral-foreground-hint);
+}

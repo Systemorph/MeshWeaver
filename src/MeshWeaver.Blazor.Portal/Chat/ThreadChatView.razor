@@ -49,30 +49,39 @@
 }
 else
 {
-    @* ─── In-thread navigation menu ──────────────────────────────────────
-       The thread's position in the hierarchy (ancestors → current → sub-threads),
-       my OTHER open threads (all partitions), and the context chip. Toggles between
-       a horizontal top bar, a vertical left rail, and hidden (CycleNavLayout); the
-       whole shell captures Option-Tab to cycle the other open threads. Only on the
-       full-page thread view (ShowFullHeader + a real thread). *@
-    <div class="thread-nav-shell nav-@(_navLayout.ToString().ToLowerInvariant())" tabindex="0" @onkeydown="OnThreadShellKeyDown">
-    @if (ShowThreadNav && _navLayout != ThreadNavLayout.Hidden)
+    @* ─── Threads side menu ──────────────────────────────────────────────
+       The agentic-app default view: a collapsible left rail (same collapse affordance as the
+       multi-part doc-index menu) with New chat, a filter box, the thread's position in the
+       hierarchy (ancestors → current → sub-threads), and MY open threads — each row carrying
+       its LIVE activity status (evaluating / queued / awaiting input, derived from the
+       GetQuery-bound thread nodes) plus an ✕ that closes the thread via the canonical
+       MarkThreadDone. The whole shell captures Option-Tab to cycle the open threads. Renders on
+       every full-page thread view AND (via ThreadChatControl.ShowThreadNav) on the node-less
+       Threads app page. *@
+    <div class="thread-nav-shell @(_navCollapsed ? "nav-collapsed" : "nav-leftrail")" tabindex="0" @onkeydown="OnThreadShellKeyDown">
+    @if (ShowThreadNav && !_navCollapsed)
     {
         var ancestors = ThreadAncestors();
-        var others = OtherOpenThreads();
+        var hasThread = !string.IsNullOrEmpty(threadPath);
+        var open = FilteredNavThreads();
         var navCtx = ThreadViewModel?.InitialContext;
         <nav class="thread-nav-menu">
             <div class="thread-nav-toolbar">
-                <button class="thread-nav-cycle" @onclick="CycleNavLayout"
-                        title="@($"Navigation: {_navLayout} — click for next (top bar → left rail → hidden)")">
-                    <FluentIcon Value="@(new Icons.Regular.Size16.Navigation())" Color="Color.Neutral" />
-                </button>
                 <span class="thread-nav-title">@Access.Localize("chat.threads")</span>
                 <button class="thread-nav-new" @onclick="StartNewComposer"
-                        title="New chat — start a fresh, empty composer (keeps your harness/agent/model)">
+                        title="@Access.Localize("chat.newTooltip")">
                     <FluentIcon Value="@(new Icons.Regular.Size16.Add())" Color="Color.Neutral" />
                 </button>
+                <button class="thread-nav-collapse" @onclick="ToggleNavCollapsed"
+                        title="@Access.Localize("threads.collapse")">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.PanelLeftContract())" Color="Color.Neutral" />
+                </button>
             </div>
+
+            <input class="thread-nav-filter" type="search"
+                   placeholder="@Access.Localize("threads.searchPlaceholder")"
+                   value="@navFilter"
+                   @oninput="@(e => OnNavFilterChanged(e.Value?.ToString()))" />
 
             @if (!string.IsNullOrEmpty(navCtx))
             {
@@ -86,46 +95,66 @@ else
                 </div>
             }
 
-            <div class="thread-nav-section thread-nav-hierarchy">
-                <div class="thread-nav-section-label">@Access.Localize("chat.thisThread")</div>
-                @foreach (var anc in ancestors)
-                {
-                    <a class="thread-nav-item thread-nav-ancestor" href="/@anc.Path" title="@anc.Path">
-                        <span class="thread-nav-item-glyph">&#8593;</span>
-                        <span class="thread-nav-item-text">@anc.Label</span>
-                    </a>
-                }
-                <div class="thread-nav-item thread-nav-current" title="@threadPath">
-                    <span class="thread-nav-item-glyph">&#9679;</span>
-                    <span class="thread-nav-item-text">@(string.IsNullOrWhiteSpace(ThreadViewModel?.Name) ? "This thread" : ThreadViewModel!.Name)</span>
+            @if (hasThread)
+            {
+                <div class="thread-nav-section thread-nav-hierarchy">
+                    <div class="thread-nav-section-label">@Access.Localize("chat.thisThread")</div>
+                    @foreach (var anc in ancestors)
+                    {
+                        <a class="thread-nav-item thread-nav-ancestor" href="/@anc.Path" title="@anc.Path">
+                            <span class="thread-nav-item-glyph">&#8593;</span>
+                            <span class="thread-nav-item-text">@anc.Label</span>
+                        </a>
+                    }
+                    <div class="thread-nav-item thread-nav-current" title="@threadPath">
+                        <span class="thread-nav-item-glyph">&#9679;</span>
+                        <span class="thread-nav-item-text">@(string.IsNullOrWhiteSpace(ThreadViewModel?.Name) ? Access.Localize("chat.untitledThread") : ThreadViewModel!.Name)</span>
+                    </div>
+                    @foreach (var child in childThreads)
+                    {
+                        <a class="thread-nav-item thread-nav-child" href="/@child.Path" title="@child.Path">
+                            <span class="thread-nav-item-glyph">&#8627;</span>
+                            <span class="thread-nav-item-text">@(child.Name ?? child.Id)</span>
+                        </a>
+                    }
                 </div>
-                @foreach (var child in childThreads)
-                {
-                    <a class="thread-nav-item thread-nav-child" href="/@child.Path" title="@child.Path">
-                        <span class="thread-nav-item-glyph">&#8627;</span>
-                        <span class="thread-nav-item-text">@(child.Name ?? child.Id)</span>
-                    </a>
-                }
-            </div>
+            }
 
             <div class="thread-nav-section thread-nav-others">
                 <div class="thread-nav-section-label">
-                    <span>@Access.Localize("chat.otherOpenThreads")</span>
-                    @if (others.Count > 0) { <span class="thread-nav-count">@others.Count</span> }
+                    <span>@Access.Localize(hasThread ? "chat.otherOpenThreads" : "threads.open")</span>
+                    @if (open.Count > 0) { <span class="thread-nav-count">@open.Count</span> }
                     <span class="thread-nav-hint" title="@Access.Localize("chat.optionTabHint")">&#8997;&#8677;</span>
                 </div>
-                @if (others.Count == 0)
+                @if (open.Count == 0)
                 {
-                    <div class="thread-nav-empty">@Access.Localize("chat.noOtherOpenThreads")</div>
+                    <div class="thread-nav-empty">@Access.Localize(hasThread ? "chat.noOtherOpenThreads" : "chat.noThreadsYet")</div>
                 }
                 else
                 {
-                    @foreach (var t in others.Take(30))
+                    @foreach (var t in open.Take(30))
                     {
-                        <a class="thread-nav-item" href="/@t.Path" title="@t.Path">
-                            <span class="thread-nav-item-glyph">&#9211;</span>
-                            <span class="thread-nav-item-text">@(t.Name ?? t.Id)</span>
-                        </a>
+                        var activity = NavActivityOf(t);
+                        <div class="thread-nav-row" @key="@t.Path">
+                            <a class="thread-nav-item" href="/@t.Path" title="@t.Path">
+                                <span class="thread-nav-status thread-nav-status-@activity.Kind.ToString().ToLowerInvariant()"
+                                      title="@ActivityTitle(activity)"></span>
+                                <span class="thread-nav-item-text">@(t.Name ?? t.Id)</span>
+                                @if (activity.QueuedCount > 0)
+                                {
+                                    <span class="thread-nav-queued" title="@Access.Localize("threads.statusQueued")">@activity.QueuedCount</span>
+                                }
+                            </a>
+                            @* ✕ closes through the canonical MarkThreadDone mesh operation — the row
+                               leaves the list reactively (the query excludes Done) while the thread
+                               stays searchable and reopenable. A SIBLING of the nav link, never an
+                               overlay (an absolutely-positioned button over a nav surface loses its
+                               clicks to the nav). *@
+                            <button type="button" class="thread-nav-close" title="@Access.Localize("thread.close")"
+                                    @onclick="@(() => CloseNavThread(t.Path))">
+                                <FluentIcon Value="@(new Icons.Regular.Size12.Dismiss())" Color="Color.Neutral" />
+                            </button>
+                        </div>
                     }
                 }
             </div>
@@ -133,11 +162,20 @@ else
     }
     else if (ShowThreadNav)
     {
-        <button class="thread-nav-reveal" @onclick="CycleNavLayout" title="@Access.Localize("chat.showThreadNavigation")">
-            <FluentIcon Value="@(new Icons.Regular.Size16.Navigation())" Color="Color.Neutral" />
+        <button class="thread-nav-reveal" @onclick="ToggleNavCollapsed" title="@Access.Localize("chat.showThreadNavigation")">
+            <FluentIcon Value="@(new Icons.Regular.Size16.PanelLeftExpand())" Color="Color.Neutral" />
         </button>
     }
     <div class="thread-nav-body">
+    @* The Threads app page's welcome hero — the node-less composer with the side menu but no
+       thread yet: an agentic-app-style centered prompt above the input. *@
+    @if (ViewModel.HideEmptyState && ShowThreadNav && string.IsNullOrEmpty(threadPath))
+    {
+        <div class="thread-welcome">
+            <div class="thread-welcome-title">@Access.Localize("chat.startConversation")</div>
+            <div class="thread-welcome-hint">@Access.Localize("chat.startConversationHint")</div>
+        </div>
+    }
     <!-- Message history display (hidden in compact/dashboard mode) -->
     @if (!ViewModel.HideEmptyState)
     {

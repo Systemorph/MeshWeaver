@@ -106,7 +106,8 @@ public class CosmosMeshQuery : IMeshQueryProvider
     private async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        [EnumeratorCancellation] CancellationToken ct = default,
+        bool projectSelect = true)
     {
         // Self-filter — MeshQuery's aggregator fans every provider out for
         // every query regardless of Matches(). When the request only targets
@@ -176,9 +177,9 @@ public class CosmosMeshQuery : IMeshQueryProvider
             foreach (var (node, _) in buffered.OrderByDescending(b => b.Score))
             {
                 if (skip > 0) { skip--; continue; }
-                yield return parsedQuery.Select != null
+                yield return projectSelect && parsedQuery.Select != null
                     ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
-                    : node;
+                    : DropUnprojectedContent(node, parsedQuery);
                 count++;
                 // `is > 0`: NoLimit is non-positive, and `count >= -1` is true on the first row.
                 if (parsedQuery.Limit is > 0 && count >= parsedQuery.Limit.Value)
@@ -204,9 +205,9 @@ public class CosmosMeshQuery : IMeshQueryProvider
                 continue;
             }
 
-            yield return parsedQuery.Select != null
+            yield return projectSelect && parsedQuery.Select != null
                 ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
-                : node;
+                : DropUnprojectedContent(node, parsedQuery);
 
             // Apply limit
             countOrig++;
@@ -473,11 +474,36 @@ public class CosmosMeshQuery : IMeshQueryProvider
     private async Task<List<(string? Path, T Item)>> CollectQueryResultsAsync<T>(
         MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct)
     {
+        // 🚨 Never hand a projection to a caller typed on MeshNode. ProjectToSelect returns a
+        // Dictionary<string, object> — the UNTYPED surface's contract — and the `is T` filter
+        // below silently DROPS every projected row when T = MeshNode: a select:-carrying
+        // Query<MeshNode> returns the EMPTY set forever, no error, no log line. PG
+        // (PostgreSqlMeshQuery.CollectQueryResultsAsync, 2026-08-05) and the in-memory provider
+        // (StorageAdapterMeshQueryProvider) carry the same guard with the same comment; this
+        // provider was missed. For typed callers, select: only drops the content column — the
+        // node stays a node.
+        var projectSelect = typeof(T) != typeof(MeshNode);
         var results = new List<(string?, T)>();
-        await foreach (var item in QueryAsync(request, options, ct).ConfigureAwait(false))
+        await foreach (var item in QueryAsync(request, options, ct, projectSelect).ConfigureAwait(false))
             if (item is T typed)
                 results.Add(((item as MeshNode)?.Path, typed));
         return results;
+    }
+
+    /// <summary>
+    /// Mirrors the SQL adapters' content projection for typed callers: when a <c>select:</c> is
+    /// present but does NOT name <c>content</c>, blank <see cref="MeshNode.Content"/> — the same
+    /// shape Postgres produces with <c>NULL::jsonb AS content</c>. Only <c>content</c> is
+    /// conditional; every other MeshNode field is returned regardless of the select list.
+    /// </summary>
+    private static object DropUnprojectedContent(MeshNode node, ParsedQuery parsedQuery)
+    {
+        if (parsedQuery.Select is not { Count: > 0 } select || node.Content is null)
+            return node;
+        foreach (var field in select)
+            if (field.Equals("content", StringComparison.OrdinalIgnoreCase))
+                return node;
+        return node with { Content = null };
     }
 
     private void ProcessBatch<T>(
