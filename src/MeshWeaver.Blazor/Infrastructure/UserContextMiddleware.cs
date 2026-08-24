@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
+using MeshWeaver.Graph.Logon;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
@@ -206,7 +207,13 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // repeated logins from the same user just bump the existing
             // record's AccessCount + LastAccessedAt — not a flood of new
             // entries.
-            TrackLogin(userContext, hub);
+            // 🚨 One dedup gate, two consumers. TrackLogin answers "is this a fresh logon session?"
+            // and only that answer may drive the logon actions: this middleware runs on EVERY HTTP
+            // request, so an ungated call would re-resolve and re-run the platform's logon actions
+            // per page load, per /api call, per SSE frame — the per-request storm the dedup exists
+            // to prevent, on the authentication critical path.
+            if (TrackLogin(userContext, hub))
+                RunLogonActions(userContext, hub);
         }
         else
         {
@@ -280,15 +287,21 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     /// posting the request is logged at Warning (never swallowed) but must not break
     /// authentication, which does not depend on activity tracking.
     /// </summary>
-    private void TrackLogin(AccessContext userContext, IMessageHub hub)
+    /// <returns>
+    /// <c>true</c> when this request opened a fresh logon session — i.e. it passed the dedup gate.
+    /// <see cref="InvokeAsync"/> uses that as the trigger for the platform's logon actions, so the
+    /// two stay on ONE gate: a second dedup dictionary would be a second definition of "a logon",
+    /// free to drift from this one.
+    /// </returns>
+    private bool TrackLogin(AccessContext userContext, IMessageHub hub)
     {
         if (string.IsNullOrEmpty(userContext.ObjectId))
-            return;
+            return false;
 
         var now = DateTimeOffset.UtcNow;
         var last = _loginDedup.GetValueOrDefault(userContext.ObjectId, DateTimeOffset.MinValue);
         if (now - last < LoginDedupWindow)
-            return;
+            return false;
         _loginDedup[userContext.ObjectId] = now;
 
         try
@@ -309,6 +322,48 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // is not on the authentication critical path.
             logger.LogWarning(ex,
                 "TrackLogin: failed to post TrackActivityRequest for {ObjectId}", userContext.ObjectId);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Runs the platform's logon actions for the user who just started a session — the per-user
+    /// sibling of <c>INodePostCreationHandler</c>, which can only ever fire at account creation. See
+    /// <c>Doc/Architecture/LogonActions</c>.
+    ///
+    /// <para>🚨 <b>This is the hook point because it is the only one that sees every sign-in.</b>
+    /// Cookie/OAuth and Bearer both land here with a fully-resolved mesh identity, which is what a
+    /// logon action needs: it acts on the user's own nodes and must therefore run as that user, not
+    /// as <c>system-security</c> and not as a hub. The Blazor circuit handler was the obvious
+    /// alternative and is worse — it fires per TAB and misses the API surface entirely.</para>
+    ///
+    /// <para>Fire-and-forget and fully bounded on the runner's side (it carries its own timeout and
+    /// swallows its own faults): authentication must never wait on a migration, and a mesh that
+    /// cannot answer must cost a missed migration rather than a failed login. The subscription's
+    /// error arm is the last resort for a SYNCHRONOUS composition fault, which is why it is a
+    /// logged Warning and not a rethrow on a timer thread.</para>
+    /// </summary>
+    private void RunLogonActions(AccessContext userContext, IMessageHub hub)
+    {
+        // Optional by design: a host without MeshWeaver.Graph (a bare messaging host, a test
+        // fixture) simply has no runner and no logon actions — never a startup failure.
+        var runner = hub.ServiceProvider.GetService<LogonActionRunner>();
+        if (runner is null)
+            return;
+
+        try
+        {
+            runner.RunFor(userContext)
+                .Subscribe(
+                    _ => { },
+                    ex => logger.LogWarning(ex,
+                        "Logon actions failed for {ObjectId}", userContext.ObjectId));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Logon actions could not be started for {ObjectId}", userContext.ObjectId);
         }
     }
 

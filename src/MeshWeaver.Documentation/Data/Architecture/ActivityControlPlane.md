@@ -721,3 +721,14 @@ hub's init:
 The trace signature is identical to the thread case: a burst of work then silence
 (the worker finished or died and nothing reported the terminal status) is a *missed
 observation*, not a lock — fix the observer, don't bump the timeout.
+
+---
+
+## Related
+
+- [Request via Stream Update](/Doc/Architecture/RequestViaStreamUpdate) — the general rule this page
+  is the activity-shaped instance of.
+- [Logon Actions](/Doc/Architecture/LogonActions) — per-user work at logon. Its run-once ledger is the
+  same **claim-before-you-mutate** shape as the `Idle → StartingExecution` flip above, with the
+  ledger key as the claim: the guard lives *inside* the update lambda so a rebased patch re-reads it
+  and no-ops, which is what makes two concurrent logons apply a migration exactly once.
