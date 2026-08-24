@@ -100,7 +100,19 @@ export class MeshRest {
   constructor(options: MeshRestOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.token = options.token ?? "";
-    this.doFetch = options.fetch ?? globalThis.fetch;
+    // 🚨 `fetch` is a Web IDL operation: the browser requires the GLOBAL as its `this`. Storing it
+    // bare on the instance made every call `this.doFetch(...)` — i.e. `fetch` invoked with the
+    // MeshRest as `this` — which throws `TypeError: Failed to execute 'fetch' on 'Window': Illegal
+    // invocation`. That killed the DEFAULT path every shell uses (no injected fetch): markdown
+    // pages rendered their own raw source (`renderMarkdown` rejects → the caller's fallback) and the
+    // file browser read empty (`queryNodes` swallows failures by rule 3). Invisible to the tests
+    // because every one of them injects a plain-function fetch, for which `this` never mattered.
+    // So the call is wrapped ONCE, here: the closure fixes `this` for the default AND normalises an
+    // injected fetch, which the caller has already detached from its own receiver by passing it.
+    const supplied = options.fetch;
+    this.doFetch = supplied
+      ? (input, init) => supplied(input, init)
+      : (input, init) => globalThis.fetch(input, init);
   }
 
   /**

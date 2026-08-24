@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import RenderHtml from "react-native-render-html";
 import { SvgUri } from "react-native-svg";
 import { View, Image, useWindowDimensions, Platform, StyleSheet } from "react-native";
-import { currentInstance } from "./connection";
+import { resolveAssetUrl } from "./connection";
 
 export function NativeHtml({ html }: { html: string }) {
   const { width } = useWindowDimensions();
@@ -34,13 +34,9 @@ export function NativeHtml({ html }: { html: string }) {
   );
 }
 
-// Resolve a relative asset URL (e.g. "/static/NodeTypeIcons/box.svg") against the connected mesh so the
-// device can fetch it; the local monolith (Memex.LocalMesh) serves /static/{collection}/{file}.
-function resolveUrl(src: string): string {
-  if (!src || /^https?:\/\//i.test(src) || src.startsWith("data:")) return src;
-  const base = (currentInstance().url || "").replace(/\/+$/, "");
-  return base ? `${base}/${src.replace(/^\/+/, "")}` : src;
-}
+// Relative asset URLs (e.g. "/static/NodeTypeIcons/box.svg") resolve against the connected mesh —
+// the ONE shared rule (connection.resolveAssetUrl), also used by the search tiles' ResultIcon.
+const resolveUrl = resolveAssetUrl;
 
 function px(tnode: any, attr: string, prop: string): number | undefined {
   const a = Number(tnode?.attributes?.[attr]);

@@ -233,8 +233,12 @@ function InteractiveMarkdown({ markdown, nodePath }: { markdown: string; nodePat
   }, [markdown, nodePath]);
 
   if (!segments) return <ActivityIndicator />;
+  // A real vertical gap BETWEEN segments — markdown text, area embeds, code cells. Flush embeds
+  // read as one undifferentiated block (the user home's composer sat directly on the Apps band);
+  // the gap only applies at segment boundaries, so a plain doc page's single html chunk is
+  // unaffected. Blazor gets the equivalent from its stylesheet margins.
   return (
-    <>
+    <View style={{ gap: 20 }}>
       {segments.map((seg, i) => {
         if (seg.kind === "html") return <NativeHtml key={i} html={seg.html} />;
         if (seg.kind === "area") {
@@ -248,7 +252,7 @@ function InteractiveMarkdown({ markdown, nodePath }: { markdown: string; nodePat
         }
         return null; // mermaidHtml — not rendered natively (yet)
       })}
-    </>
+    </View>
   );
 }
 
