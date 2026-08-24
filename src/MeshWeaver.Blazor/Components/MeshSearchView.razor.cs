@@ -1108,6 +1108,25 @@ public partial class MeshSearchView
     }
 
     /// <summary>
+    /// Row-only projection for surfaces painted entirely from the query rows — the two-iteration
+    /// load's FIRST iteration: everything EXCEPT <c>content</c> ships (the select list gates ONLY
+    /// the content column; every other MeshNode field — MainNode included — always returns), so
+    /// the grid paints as fast as the rows arrive. The SECOND iteration is the reactive
+    /// subscription itself: row updates (a healed icon, a new record) stream in and re-paint.
+    /// Content is only ever consumed by group-by-over-content-properties, and the Icons grid never
+    /// offers the group-by selector (<see cref="SelectorEligible"/>), so nothing can miss it.
+    /// </summary>
+    private const string RowOnlySelect =
+        "select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified";
+
+    /// <summary>Applies <see cref="RowOnlySelect"/> in Icons mode unless the authored query
+    /// already carries its own projection.</summary>
+    private string WithRowProjection(string query) =>
+        IsIconsMode && !query.Contains("select:", StringComparison.OrdinalIgnoreCase)
+            ? $"{query} {RowOnlySelect}"
+            : query;
+
+    /// <summary>
     /// Builds the query request for the main result stream. A hidden query may declare a UNION of
     /// sub-queries, one per LINE (e.g. the home catalog's first-level index — "partition roots the user
     /// can read" on one line, "the user's home direct children" on another). Each sub-query is combined
@@ -1120,11 +1139,11 @@ public partial class MeshSearchView
         var subQueries = BoundHiddenQuery
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (subQueries.Length <= 1)
-            return MeshQueryRequest.FromQuery(BuildFullQuery());
+            return MeshQueryRequest.FromQuery(WithRowProjection(BuildFullQuery()));
 
         var visible = string.IsNullOrWhiteSpace(_currentValue) ? null : _currentValue.Trim();
         var unioned = subQueries
-            .Select(q => visible is null ? q : $"{q} {visible}")
+            .Select(q => WithRowProjection(visible is null ? q : $"{q} {visible}"))
             .ToArray();
         return MeshQueryRequest.FromQueries(unioned);
     }
