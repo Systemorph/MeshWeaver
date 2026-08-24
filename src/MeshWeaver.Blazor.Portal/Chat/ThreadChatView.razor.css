@@ -202,7 +202,7 @@
     width: 60%;
     animation: thread-msg-skeleton-pulse 1.4s ease-in-out infinite;
 }
-@@keyframes thread-msg-skeleton-pulse {
+@keyframes thread-msg-skeleton-pulse {
     0%, 100% { opacity: 0.35; }
     50%      { opacity: 0.15; }
 }
@@ -880,7 +880,7 @@ button.thread-chat-status-item {
     animation: skeleton-pulse 1.5s ease-in-out infinite;
 }
 
-@@keyframes skeleton-pulse {
+@keyframes skeleton-pulse {
     0%, 100% { opacity: 0.3; }
     50% { opacity: 0.15; }
 }
@@ -1417,7 +1417,7 @@ button.thread-chat-status-item {
     animation: thread-msg-delegation-pulse-anim 1.4s ease-in-out infinite;
 }
 
-@@keyframes thread-msg-delegation-pulse-anim {
+@keyframes thread-msg-delegation-pulse-anim {
     0%, 100% { opacity: 0.4; }
     50%      { opacity: 1;   }
 }
@@ -1548,7 +1548,7 @@ button.thread-chat-status-item {
     animation: thread-runtime-subthread-pulse-anim 1.4s ease-in-out infinite;
 }
 
-@@keyframes thread-runtime-subthread-pulse-anim {
+@keyframes thread-runtime-subthread-pulse-anim {
     0%, 100% { opacity: 0.3; transform: scale(0.85); }
     50%      { opacity: 1;   transform: scale(1.15); }
 }
