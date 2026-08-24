@@ -31,10 +31,53 @@ const name = String(manifest.name ?? sel);
 // in the manifest (author-friendly) and rewritten relative to src/ here, where the generated file
 // lives — Metro and tsc both resolve the emitted import from that directory.
 const srcDir = path.join(root, "src");
+// PLUGIN modules ("plugin:<RepoName>/<path>") are VENDORED: Metro never resolves across repos
+// (watchFolders would pin absolute developer paths into the build), so the module's whole
+// directory is copied from the plugin checkout into src/deployment.vendor/<RepoName>/<dir>/ and
+// imported from there. Deterministic from the checkout's content; the vendor dir is regenerated
+// (wiped) on every run and gitignored — the DEFAULT manifest must never reference a plugin, or a
+// fresh clone could not build without the plugin checkout.
+const vendorRoot = path.join(srcDir, "deployment.vendor");
+fs.rmSync(vendorRoot, { recursive: true, force: true });
+const pluginRepos = (process.env.MEMEX_PLUGIN_REPOS ?? "")
+  .split(":")
+  .filter(Boolean)
+  .map((p) => path.resolve(p));
+const vendorPlugin = (spec) => {
+  const ref = spec.slice("plugin:".length);
+  const [repoName, ...rest] = ref.split("/");
+  if (!repoName || rest.length === 0) {
+    console.error(`gen-deployment: malformed plugin specifier '${spec}' — expected plugin:<RepoName>/<path-in-repo>`);
+    process.exit(1);
+  }
+  const repo = pluginRepos.find((p) => path.basename(p) === repoName);
+  if (!repo) {
+    console.error(
+      `gen-deployment: plugin repo '${repoName}' (for '${spec}') is not in MEMEX_PLUGIN_REPOS — `
+      + `set it to colon-separated checkout paths whose basename names the repo (the memex-local convention). `
+      + `Currently: ${pluginRepos.join(":") || "(unset)"}`);
+    process.exit(1);
+  }
+  const modulePath = rest.join("/");
+  const entry = ["", ".tsx", ".ts"].map((ext) => path.join(repo, modulePath + ext)).find((p) => fs.existsSync(p) && fs.statSync(p).isFile());
+  if (!entry) {
+    console.error(`gen-deployment: plugin module '${modulePath}(.tsx|.ts)' not found under ${repo}`);
+    process.exit(1);
+  }
+  // Copy the module's DIRECTORY (a module may span several files) into the vendor tree at the
+  // same repo-relative location, so intra-module relative imports keep working.
+  const moduleDir = path.dirname(entry);
+  const destDir = path.join(vendorRoot, repoName, path.relative(repo, moduleDir));
+  fs.cpSync(moduleDir, destDir, { recursive: true });
+  const destEntry = path.join(destDir, path.basename(entry).replace(/\.(tsx|ts)$/, ""));
+  return "./" + path.relative(srcDir, destEntry).split(path.sep).join("/");
+};
 const rewrite = (spec) =>
-  spec.startsWith("./") || spec.startsWith("../")
-    ? "./" + path.relative(srcDir, path.resolve(root, spec)).split(path.sep).join("/").replace(/^(?!\.)/, "")
-    : spec;
+  spec.startsWith("plugin:")
+    ? vendorPlugin(spec)
+    : spec.startsWith("./") || spec.startsWith("../")
+      ? "./" + path.relative(srcDir, path.resolve(root, spec)).split(path.sep).join("/").replace(/^(?!\.)/, "")
+      : spec;
 const modules = (Array.isArray(manifest.modules) ? manifest.modules.map(String) : []).map(rewrite);
 const branding = manifest.branding ?? {};
 
