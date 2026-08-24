@@ -410,20 +410,6 @@ public class OAuthConnectController(
                     .Where(t => t.CreatedAt < mintedAt
                                 || (t.CreatedAt == mintedAt
                                     && string.CompareOrdinal(t.NodePath, keepPath) < 0))
-                    // 🚨 Spare credentials that are still WARM. Superseding is a hard delete, so a
-                    // token revoked the instant its replacement is minted strands any request already
-                    // in flight with it — the client is told "rejected on reconnect" while holding a
-                    // credential that was valid when it sent. That race was previously invisible
-                    // because client_ids were random per registration: labels never matched, so this
-                    // filter selected nothing and nothing was ever superseded (hence the token rows
-                    // that piled up). Now that a re-registering client keeps its id, supersede
-                    // actually fires on every reconnect, and the race becomes reachable.
-                    //
-                    // Keeping anything minted within the grace window costs one extra row for a
-                    // couple of minutes and is cleaned up by the NEXT authorization or by expiry.
-                    // Convergence is unaffected: keepPath is excluded above, so the newest token
-                    // always survives regardless of which exchange evaluates last.
-                    .Where(t => t.CreatedAt < mintedAt - SupersedeGrace)
                     .Select(t => t.NodePath)
                     .ToArray();
                 if (superseded.Length == 0)
@@ -470,15 +456,6 @@ public class OAuthConnectController(
     /// field both read from this so they can't drift apart.
     /// </summary>
     private static readonly TimeSpan TokenLifetime = TimeSpan.FromDays(365);
-
-    /// <summary>
-    /// How long a superseded credential stays alive after its replacement is minted.
-    /// Covers a client whose request was already in flight with the old token when the new one
-    /// was issued; without it, such a request is rejected while holding a credential that was
-    /// valid when it was sent. Two minutes is far longer than any reconnect handshake and far
-    /// shorter than the token lifetime, so at most one stale row survives, briefly.
-    /// </summary>
-    internal static readonly TimeSpan SupersedeGrace = TimeSpan.FromMinutes(2);
 }
 
 /// <summary>
