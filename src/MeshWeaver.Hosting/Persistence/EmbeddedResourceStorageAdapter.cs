@@ -50,6 +50,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
     // available because the adapter is wired into the partition provider before the hub is built;
     // without rebuilding here, the JsonFileParser slot stays empty and any .json embedded resource
     // (e.g. sample _Comment/c1.json) silently returns null on Read.
+    private readonly IFileFormatParser[] _contributedParsers;
     private FileFormatParserRegistry _parserRegistry;
     private JsonSerializerOptions? _parserRegistryOptions;
     private readonly Lock _parserRegistryLock = new();
@@ -75,12 +76,16 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
     /// <param name="seedNodes">Optional in-memory nodes layered ahead of the embedded resources on read and listing.</param>
     /// <param name="partitionNamespace">Optional namespace prefixed onto derived paths so lookups by full path match.</param>
     /// <param name="ioPoolRegistry">Optional registry used to resolve the file-system <c>IIoPool</c> that bridges the resource-read leaf to an observable; falls back to an unbounded pool when null.</param>
+    /// <param name="contributedParsers">File-format parsers contributed by modules, tried ahead of
+    /// the built-ins. The AI module's agent parser arrives this way; without it an embedded
+    /// <c>.md</c> with <c>nodeType: Agent</c> silently parses as plain Markdown.</param>
     public EmbeddedResourceStorageAdapter(
         Assembly assembly,
         string prefix,
         IEnumerable<MeshNode>? seedNodes = null,
         string? partitionNamespace = null,
-        IoPoolRegistry? ioPoolRegistry = null)
+        IoPoolRegistry? ioPoolRegistry = null,
+        IEnumerable<IFileFormatParser>? contributedParsers = null)
     {
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
         _assembly = assembly;
@@ -95,7 +100,8 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
             : partitionNamespace.Trim('/') + "/";
         // Initial registry has no JsonSerializerOptions → no JsonFileParser. Replaced in
         // GetParserRegistry() on the first ReadAsync that supplies real options.
-        _parserRegistry = new FileFormatParserRegistry();
+        _contributedParsers = (contributedParsers ?? []).ToArray();
+        _parserRegistry = new FileFormatParserRegistry(contributedParsers: _contributedParsers);
         _entriesByPath = BuildIndex(assembly, _prefix, _partitionPrefix);
         _seedNodes = (seedNodes ?? [])
             .ToDictionary(n => n.Path.Trim('/'), StringComparer.OrdinalIgnoreCase);
@@ -115,7 +121,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
         {
             if (!ReferenceEquals(_parserRegistryOptions, options))
             {
-                _parserRegistry = new FileFormatParserRegistry(options);
+                _parserRegistry = new FileFormatParserRegistry(options, _contributedParsers);
                 _parserRegistryOptions = options;
             }
             return _parserRegistry;
