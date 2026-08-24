@@ -81,16 +81,40 @@ public sealed class PinMigrationLogonAction(string id, LogonAction declaration) 
     /// <summary>
     /// Which of the declared pin targets this deployment actually has.
     ///
-    /// <para>One query for the whole set, not one per path — a per-path point read would activate a
-    /// hub per target on the logon path. <c>QueryAsync</c> is the lagged index and would be wrong
-    /// for reading a node's CONTENT, but "does a node exist at this path" is precisely what the
-    /// index is for (<c>Doc/Architecture/CqrsAndContentAccess</c> → valid query uses).</para>
+    /// <para><b>ONE query for the whole set</b>, via path alternation (<c>path:a|b|c</c>) — the same
+    /// construction the home already uses for its shared-target and pinned-path lookups
+    /// (<c>UserActivityLayoutAreas</c>). This runs on the LOGON path for every user, so a fan-out of
+    /// N concurrent queries would be per-user work on the hot path; one round trip is the whole
+    /// cost, whatever the declaration lists.</para>
+    ///
+    /// <para><c>QueryAsync</c> is the lagged index and would be wrong for reading a node's CONTENT,
+    /// but "does a node exist at this path" is precisely what the index is for
+    /// (<c>Doc/Architecture/CqrsAndContentAccess</c> → valid query uses).</para>
+    ///
+    /// <para>🚨 <b>Absent is a MISSING ROW, never an error</b>, and the two must not collapse into
+    /// each other. An empty result means "this deployment carries none of them" → pin nothing and
+    /// let the action record itself as done. A query that FAILS rethrows, so the action is NOT
+    /// recorded and is retried on the next logon. Treating a failure as "none present" would burn
+    /// the single attempt a run-once action gets and silently pin nothing, forever.</para>
     /// </summary>
     private IObservable<IReadOnlyCollection<string>> ResolveExistingTargets(LogonActionContext context)
     {
+        var logger = context.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.Logon.PinMigration");
+
         var wanted = declaration.PinPaths
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .Select(p => p.Trim())
+            // A path carrying the alternation separator would silently split into two bogus terms
+            // and could match something nobody declared. Drop it loudly instead.
+            .Where(p =>
+            {
+                if (!p.Contains('|'))
+                    return true;
+                logger?.LogWarning(
+                    "Logon action {Action}: pin target '{Path}' contains '|' and was ignored", id, p);
+                return false;
+            })
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
@@ -98,30 +122,27 @@ public sealed class PinMigrationLogonAction(string id, LogonAction declaration) 
             return Observable.Return<IReadOnlyCollection<string>>(wanted);
 
         var mesh = context.Hub.ServiceProvider.GetService<IMeshService>();
-        var logger = context.Hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.Graph.Logon.PinMigration");
         if (mesh is null)
             return Observable.Return<IReadOnlyCollection<string>>([]);
 
         // Runs as the LOGGING-ON USER, so the check is "exists AND this user may see it" — the only
         // question worth asking before pinning something to their home. A target they cannot read
         // would render as an empty card, which is the same broken tile as a dangling path.
-        return wanted
-            .Select(path => mesh
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path} select:path"))
-                .Where(change => change.ChangeType == QueryChangeType.Initial)
-                .Select(change => change.Items.Any() ? path : null)
-                .Take(1))
-            .Merge()
-            .Where(path => path is not null)
-            .Select(path => path!)
-            .ToArray()
+        return mesh
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{string.Join("|", wanted)} select:path"))
+            .Where(change => change.ChangeType == QueryChangeType.Initial)
+            .Select(change => change.Items.Select(node => node.Path).ToArray())
+            .Take(1)
             .Timeout(ExistenceCheckBound)
             .Select(found =>
             {
-                // Order by the DECLARATION, not by which query answered first — the pins are an
-                // ordered list the admin wrote, and a home that reorders itself per logon is a bug.
+                // 🚨 Intersect on EXACT path equality, never on "the query returned something".
+                // Alternation is a match expression, so a row for a DESCENDANT of a declared path
+                // would otherwise read as "the target exists" and pin a path that does not.
                 var present = found.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                // Order by the DECLARATION, not by the order rows came back — the pins are an
+                // ordered list the admin wrote, and a home that reorders itself per logon is a bug.
                 var kept = wanted.Where(present.Contains).ToArray();
                 if (kept.Length != wanted.Length)
                     logger?.LogInformation(
