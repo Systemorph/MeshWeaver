@@ -14,6 +14,7 @@ import {
 } from "@meshweaver/react/core";
 
 import { rnPack } from "./rnPack";
+import { NavContext } from "./nav";
 
 // Assert against the CATALOG, not a literal — that also pins that these strings are localized.
 const en = (key: string) => localize(key, "en");
@@ -350,5 +351,65 @@ describe("MeshSearch union queries", () => {
     // Deduped by path in DECLARATION order: the first batch's "Both" wins, the duplicate is dropped.
     expect(text).toContain("BothFirst");
     expect(text).not.toContain("BothDup");
+  });
+});
+
+// ---- MeshSearch scope tabs + Icons (the tabbed home) -----------------------------------------
+
+describe("MeshSearch scope tabs (the tabbed user home)", () => {
+  const HOME = {
+    $type: "MeshSearch",
+    hiddenQuery: "source:accessed",
+    scopeTabs: [
+      { label: "Spaces", query: "source:accessed" },
+      { label: "Apps", query: "path:rbuergi/_App scope:children nodeType:InstalledApp",
+        renderMode: "Icons", navigateToMainNode: true },
+    ],
+  };
+
+  /** A LIVE renderer (not a toJSON snapshot) so tapping a tab actually re-renders. */
+  async function mount(ops: MeshOps, onNavigate: (t: unknown) => void = () => {}) {
+    let r!: TestRenderer.ReactTestRenderer;
+    await TestRenderer.act(async () => {
+      r = TestRenderer.create(
+        <RegistryProvider pack={rnPack}>
+          <MeshOpsProvider ops={ops}>
+            <NavContext.Provider value={onNavigate as never}>
+              <ScopeProvider source={new StaticAreaSource({ areas: { main: HOME } })} area="main">
+                <RenderArea areaKey="main" />
+              </ScopeProvider>
+            </NavContext.Provider>
+          </MeshOpsProvider>
+        </RegistryProvider>,
+      );
+    });
+    return r;
+  }
+
+  it("renders the strip and searches the FIRST scope by default", async () => {
+    const search = vi.fn(async () => [{ path: "Doc", name: "Documentation", nodeType: "Group", content: {} }]);
+    const r = await mount(fakeOps({ search }));
+    await TestRenderer.act(async () => { await new Promise((res) => setTimeout(res, 300)); });
+    const text = allText(r.toJSON() as Json);
+    expect(text).toContain("Spaces");
+    expect(text).toContain("Apps");
+    expect(search).toHaveBeenCalledWith("source:accessed", undefined);
+  });
+
+  it("switching to Apps swaps the hidden query, paints the ICON grid, and a tap opens the MainNode", async () => {
+    const search = vi.fn(async (q: string) =>
+      q.includes("_App")
+        ? [{ path: "rbuergi/_App/Doc", name: "Documentation", nodeType: "InstalledApp", mainNode: "Doc", icon: "X", content: {} }]
+        : []);
+    const navigated: unknown[] = [];
+    const r = await mount(fakeOps({ search }), (t) => navigated.push(t));
+    const tabs = r.root.findAll((n) => typeof n.type === "string" && n.props?.accessibilityRole === "tab");
+    expect(tabs.length).toBe(2);
+    await TestRenderer.act(async () => { tabs[1].props.onPress(); await new Promise((res) => setTimeout(res, 300)); });
+    expect(search).toHaveBeenCalledWith("path:rbuergi/_App scope:children nodeType:InstalledApp", undefined);
+    // The tile navigates to the APP the record points at (MainNode) — never the record itself.
+    const tile = r.root.findAll((n) => typeof n.type === "string" && n.props?.accessibilityLabel === "Documentation")[0];
+    await TestRenderer.act(async () => { tile.props.onPress(); });
+    expect(navigated).toContainEqual({ address: "Doc", area: "" });
   });
 });

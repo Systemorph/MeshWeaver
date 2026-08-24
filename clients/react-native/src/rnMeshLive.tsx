@@ -9,7 +9,7 @@
 // so a host that wires a MeshOpsProvider gets live behaviour and a host without one gets the empty
 // state — no crash, no fake data.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, ActivityIndicator, StyleSheet } from "react-native";
 import {
   useLocalize,
@@ -22,6 +22,8 @@ import {
   type MeshOps,
 } from "@meshweaver/react/core";
 import { useNavigate } from "./nav";
+import { NativeHtml } from "./nativeHtml";
+import { currentInstance } from "./connection";
 import { useTheme } from "./theme";
 
 const s = str;
@@ -104,6 +106,9 @@ interface NodeResult {
   name: string;
   nodeType: string;
   description: string;
+  /** Row columns the icon grid paints from — no content read, no hub activation. */
+  icon?: string;
+  mainNode?: string;
 }
 
 function toNodeResult(r: Record<string, unknown>): NodeResult {
@@ -113,6 +118,8 @@ function toNodeResult(r: Record<string, unknown>): NodeResult {
     name: s(r.name) || s(r.path).split("/").pop() || s(r.path),
     nodeType: s(r.nodeType),
     description: s(r.description ?? content.description),
+    icon: s(r.icon),
+    mainNode: s(r.mainNode),
   };
 }
 
@@ -292,9 +299,41 @@ const ThreadChat: ControlComponent = ({ control }) => {
 
 // ── MeshSearch ───────────────────────────────────────────────────────────────
 
+/** One SCOPE tab off the wire (MeshSearchScopeTab): label + query, with optional per-scope
+ *  overrides of the control-level render mode / navigation rule. */
+interface ScopeTabJson {
+  label?: string;
+  query?: string;
+  renderMode?: string;
+  navigateToMainNode?: boolean;
+  itemArea?: string;
+}
+
+/** A result tile's icon: inline `<svg>` markup, a `/static/…` (or absolute) image URL, or a bare
+ *  glyph/emoji. Rendered from the ROW only — never a content read. */
+function TileIcon({ icon, size = 48 }: { icon?: string; size?: number }): ReactNode {
+  const src = (icon ?? "").trim();
+  if (!src) return <Text style={{ fontSize: size * 0.66 }}>▦</Text>;
+  if (src.startsWith("<svg")) return <NativeHtml html={src.replace(/<svg /, `<svg width='${size}' height='${size}' `)} />;
+  if (src.startsWith("/") || /^https?:\/\//i.test(src)) {
+    const base = currentInstance().url.replace(/\/+$/, "");
+    const url = /^https?:\/\//i.test(src) ? src : `${base}/${src.replace(/^\/+/, "")}`;
+    return <NativeHtml html={`<img src='${url}' width='${size}' height='${size}'/>`} />;
+  }
+  return <Text style={{ fontSize: size * 0.66 }}>{src}</Text>;
+}
+
 /**
  * Live mesh search: the hidden query (the control's server-declared filter) is combined with the
  * user's visible term and run through `ops.search`, exactly as the web pack does.
+ *
+ * SCOPE TABS (the tabbed home — Pinned · Apps · Spaces · All): `scopeTabs` renders as a strip
+ * above the search box; switching swaps only the active scope's hidden query and per-scope
+ * overrides while the TYPED TERM STAYS (the scopes share one search bar — the server contract).
+ * The Apps scope declares `renderMode: "Icons"` + `navigateToMainNode`, so it paints a phone-home
+ * icon grid ENTIRELY from the query rows and a tap opens the app the record points at — never the
+ * record. Without this the user home degraded to the control-level fallback (the flat Spaces
+ * catalog), i.e. the OLD home, silently.
  */
 const MeshSearch: ControlComponent = ({ control }) => {
   const t = useLocalize();
@@ -309,21 +348,50 @@ const MeshSearch: ControlComponent = ({ control }) => {
   const liveSearch = useResolve(control.liveSearch) !== false;
   const excludeBasePath = useResolve(control.excludeBasePath) !== false;
   const showEmptyMessage = useResolve(control.showEmptyMessage) !== false;
+  const controlRenderMode = s(useResolve(control.renderMode));
+  const controlNavigateToMain = useResolve(control.navigateToMainNode) === true;
+
+  // Scope tabs are plain data on the control (never bound), matching the C# record's fields.
+  const scopes: ScopeTabJson[] = Array.isArray(control.scopeTabs) ? (control.scopeTabs as ScopeTabJson[]) : [];
+  const [scopeIndex, setScopeIndex] = useState(0);
+  const scope = scopes.length ? scopes[Math.min(scopeIndex, scopes.length - 1)] : null;
+  // The FIRST tab's query equals the control's HiddenQuery by contract; the active tab REPLACES it.
+  const activeHidden = scope?.query != null ? s(scope.query) : hiddenQuery;
+  const renderMode = scope?.renderMode ?? controlRenderMode;
+  const navigateToMain = scope?.navigateToMainNode ?? controlNavigateToMain;
 
   const [visible, setVisible] = useState(initialVisible);
   const [submitted, setSubmitted] = useState(initialVisible);
   const term = useDebounced(liveSearch ? visible : submitted, 250);
   // The hidden query's newline-separated sub-queries each get the visible term appended.
-  const hiddenLines = hiddenQuery.split("\n").map((l) => l.trim()).filter(Boolean);
+  const hiddenLines = activeHidden.split("\n").map((l) => l.trim()).filter(Boolean);
   const queries = (hiddenLines.length ? hiddenLines : [""])
     .map((l) => [l, term.trim()].filter(Boolean).join(" "))
     .filter(Boolean);
   const { results, loading } = useMeshQuery(ops, queries, ns);
   const items = excludeBasePath && ns ? results.filter((n) => n.path !== ns) : results;
+  const open = (n: NodeResult) => navigate({ address: (navigateToMain && n.mainNode) || n.path, area: "" });
 
   return (
     <View style={{ gap: 8 }}>
       {title ? <Text style={styles.sectionTitle}>{title}</Text> : null}
+      {scopes.length > 1 ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
+          <View style={styles.scopeStrip}>
+            {scopes.map((sc, i) => (
+              <Pressable
+                key={`${s(sc.label)}|${i}`}
+                onPress={() => setScopeIndex(i)}
+                style={[styles.scopeTab, i === scopeIndex && styles.scopeTabActive]}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: i === scopeIndex }}
+              >
+                <Text style={[styles.scopeTabText, i === scopeIndex && styles.scopeTabTextActive]}>{s(sc.label)}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </ScrollView>
+      ) : null}
       {showSearchBox ? (
         <View style={styles.searchRow}>
           <Text style={styles.searchIcon}>🔍</Text>
@@ -339,13 +407,26 @@ const MeshSearch: ControlComponent = ({ control }) => {
       ) : null}
       {loading ? <ActivityIndicator /> : null}
       {!loading && items.length === 0 && showEmptyMessage ? <Text style={styles.muted}>{t("common.noResults")}</Text> : null}
-      {items.map((n) => (
-        <Pressable key={n.path} style={styles.resultRow} onPress={() => navigate({ address: n.path, area: "" })}>
-          <Text style={styles.resultName}>{n.name}</Text>
-          {n.description ? <Text style={styles.muted}>{n.description}</Text> : null}
-          <Text style={styles.resultPath}>{n.path}</Text>
-        </Pressable>
-      ))}
+      {renderMode === "Icons" ? (
+        <View style={styles.iconGrid}>
+          {items.map((n) => (
+            <Pressable key={n.path} style={styles.iconTile} onPress={() => open(n)} accessibilityLabel={n.name}>
+              <View style={styles.iconTileArt}>
+                <TileIcon icon={n.icon} />
+              </View>
+              <Text style={styles.iconTileName} numberOfLines={2}>{n.name}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : (
+        items.map((n) => (
+          <Pressable key={n.path} style={styles.resultRow} onPress={() => open(n)}>
+            <Text style={styles.resultName}>{n.name}</Text>
+            {n.description ? <Text style={styles.muted}>{n.description}</Text> : null}
+            <Text style={styles.resultPath}>{n.path}</Text>
+          </Pressable>
+        ))
+      )}
     </View>
   );
 };
@@ -524,6 +605,17 @@ export const rnLiveControls: Record<string, ControlComponent> = {
 };
 
 const styles = StyleSheet.create({
+  // The scope-tab strip (the tabbed home: Pinned · Apps · Spaces · All).
+  scopeStrip: { flexDirection: "row", gap: 6 },
+  scopeTab: { paddingVertical: 6, paddingHorizontal: 14, borderRadius: 16, backgroundColor: "#f0f0f0" },
+  scopeTabActive: { backgroundColor: "#0f6cbd" },
+  scopeTabText: { fontSize: 13, color: "#424242", fontWeight: "500" },
+  scopeTabTextActive: { color: "#ffffff" },
+  // The phone-home icon grid (renderMode Icons — the Apps scope).
+  iconGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14, paddingVertical: 6 },
+  iconTile: { width: 76, alignItems: "center", gap: 6 },
+  iconTileArt: { width: 56, height: 56, borderRadius: 14, backgroundColor: "#f5f5f7", alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  iconTileName: { fontSize: 11, textAlign: "center", color: "#424242" },
   body: { fontSize: 14, color: "#242424" },
   muted: { fontSize: 12, color: "#616161" },
   error: { fontSize: 12, color: "#a4262c" },

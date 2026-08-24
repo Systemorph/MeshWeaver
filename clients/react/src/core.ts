@@ -12,6 +12,20 @@ export {
 } from "./render/registryContext.js";
 export { ScopeProvider, useAreaState, useResolve, useBindingPointer, useEmit, useScope } from "./area/context.js";
 export { StaticAreaSource } from "./area/source.js";
+// Node-bound DataContexts (/$meshNode/…): the client twin of MeshNodeBindingExtensions. Exported so a
+// host can reason about (or test) the encoding; the resolver itself is wired into useResolve/useEmit.
+export {
+  parseMeshNodeDataContext,
+  isNodeBoundPointer,
+  resolveNodeField,
+  nodeFieldPatch,
+  combineFieldPointer,
+  fieldPointerOf,
+  MESH_NODE_PREFIX,
+  type MeshNodeDataContext,
+} from "./area/meshNodeBinding.js";
+export { NodeBindingContext, type NodeSnapshotStore } from "./area/nodeBindingStore.js";
+export { NodeBindingProvider } from "./live/nodeBinding.js";
 export {
   GrpcAreaSource,
   MeshAreaRegistry,

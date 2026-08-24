@@ -14,6 +14,7 @@
 
 import { createContext, useContext } from "react";
 import type { ReactNode } from "react";
+import { NodeBindingProvider } from "./nodeBinding.js";
 import type {
   MarkdownCellSubmission,
   MarkdownKernelSession,
@@ -164,5 +165,11 @@ export function useMeshOps(): MeshOps | null {
 }
 
 export function MeshOpsProvider({ ops, children }: { ops: MeshOps | null; children: ReactNode }) {
-  return <MeshOpsCtx.Provider value={ops}>{children}</MeshOpsCtx.Provider>;
+  // NodeBindingProvider rides along: node-bound DataContexts (/$meshNode/…) read and write through
+  // these same ops, so every host that provides MeshOps gets node binding without extra wiring.
+  return (
+    <MeshOpsCtx.Provider value={ops}>
+      <NodeBindingProvider ops={ops}>{children}</NodeBindingProvider>
+    </MeshOpsCtx.Provider>
+  );
 }
