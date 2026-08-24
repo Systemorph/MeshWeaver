@@ -788,7 +788,16 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     .FirstOrDefaultAsync()
                     .ToTask(cancellationToken);
                 var completed = await Task.WhenAny(disposalTask, Task.Delay(TimeSpan.FromSeconds(5), cancellationToken));
-                hubDrained = completed == disposalTask;
+                // 🚨 Winning WhenAny is not the same as DRAINING. disposalTask can complete
+                // CANCELLED (the deactivation token), and `completed == disposalTask` is true in
+                // that case too — which would have earned the unload without the hub ever
+                // reporting it was done. Awaiting the winner makes cancellation throw into the
+                // catch below, where hubDrained stays false.
+                if (completed == disposalTask)
+                {
+                    await disposalTask;
+                    hubDrained = true;
+                }
                 if (!hubDrained)
                     logger.LogError(
                         "Grain {GrainId}: hub disposal exceeded 5 s — KEEPING its load context. "

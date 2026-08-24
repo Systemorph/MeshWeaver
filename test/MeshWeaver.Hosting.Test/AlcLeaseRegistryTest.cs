@@ -75,7 +75,7 @@ public class AlcLeaseRegistryTest
     }
 
     [Fact]
-    public void The_unload_happens_once_the_last_lease_is_released()
+    public async Task The_unload_happens_once_the_last_lease_is_released()
     {
         var registry = new AlcLeaseRegistry();
         var (context, unloaded) = Collectible(nameof(The_unload_happens_once_the_last_lease_is_released));
@@ -90,12 +90,12 @@ public class AlcLeaseRegistryTest
 
         lease.Dispose();
 
-        pending.GetAwaiter().GetResult().Should().BeTrue();
+        (await pending).Should().BeTrue();
         unloaded().Should().BeTrue("releasing the last lease is the positive signal the gate waits for");
     }
 
     [Fact]
-    public void A_lease_taken_while_the_unload_is_pending_still_holds_it_off()
+    public async Task A_lease_taken_while_the_unload_is_pending_still_holds_it_off()
     {
         var registry = new AlcLeaseRegistry();
         var (context, unloaded) = Collectible(nameof(A_lease_taken_while_the_unload_is_pending_still_holds_it_off));
@@ -107,7 +107,7 @@ public class AlcLeaseRegistryTest
         var second = registry.Enter(context);
         first.Dispose();
 
-        pending.GetAwaiter().GetResult().Should().BeFalse();
+        (await pending).Should().BeFalse();
         unloaded().Should().BeFalse("the count never reached zero, so no quiescence signal was ever earned");
 
         second.Dispose();
