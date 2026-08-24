@@ -60,7 +60,14 @@ public static class ModelPriceCatalog
             if (def is not { InputPricePerMillionTokens: { } input, OutputPricePerMillionTokens: { } output })
                 continue;
 
-            var rate = new ModelPriceRate(input, output, def.Currency ?? "USD");
+            // Cache rates ride along when authored; null keeps ModelPriceRate's 0.1x / 1.25x
+            // fallbacks. Dropping them here is what left a cache-heavy model billed at the
+            // Anthropic convention instead of its own (Foundry DeepSeek reads are 1/12, not 1/10).
+            var rate = new ModelPriceRate(input, output, def.Currency ?? "USD")
+            {
+                CacheReadPerMillion = def.CacheReadPricePerMillionTokens,
+                CacheWritePerMillion = def.CacheWritePricePerMillionTokens,
+            };
             if (!string.IsNullOrEmpty(def.Id) && !builder.ContainsKey(def.Id))
                 builder.Add(def.Id, rate);
             if (!string.IsNullOrEmpty(node.Path) && !builder.ContainsKey(node.Path!))

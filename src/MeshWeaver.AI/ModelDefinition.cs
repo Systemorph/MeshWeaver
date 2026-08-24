@@ -100,6 +100,29 @@ public record ModelDefinition
     public decimal? OutputPricePerMillionTokens { get; init; }
 
     /// <summary>
+    /// Price charged per ONE MILLION cache-READ (cache-hit) prompt tokens, in
+    /// <see cref="Currency"/>. Null falls back to the Anthropic-standard 0.1x of
+    /// <see cref="InputPricePerMillionTokens"/>.
+    ///
+    /// <para>Authorable because the 0.1x convention is NOT universal, and on a cache-heavy
+    /// workload the difference is the whole bill rather than a rounding error: Azure Foundry
+    /// bills DeepSeek cache reads on a separate meter at exactly <b>1/12</b> of the input rate
+    /// (1.4274 → 0.11895 CHF/M, derived from four independent days of Cost Management data with
+    /// cache ratios from 33% to 76%, identical to four decimals).</para>
+    /// </summary>
+    [System.ComponentModel.Description("Cache-read price per 1M tokens (blank = 0.1x input)")]
+    public decimal? CacheReadPricePerMillionTokens { get; init; }
+
+    /// <summary>
+    /// Price charged per ONE MILLION cache-WRITE (cache-creation) prompt tokens, in
+    /// <see cref="Currency"/>. Null falls back to the Anthropic-standard 1.25x of
+    /// <see cref="InputPricePerMillionTokens"/> (its 5-minute TTL rate). Providers on the OpenAI
+    /// wire report no separate cache write at all, so this stays null for them.
+    /// </summary>
+    [System.ComponentModel.Description("Cache-write price per 1M tokens (blank = 1.25x input)")]
+    public decimal? CacheWritePricePerMillionTokens { get; init; }
+
+    /// <summary>
     /// ISO currency code the per-million prices are denominated in (e.g.
     /// <c>USD</c>, <c>EUR</c>, <c>CHF</c>). Null defaults to <c>USD</c> in the
     /// cost summaries.

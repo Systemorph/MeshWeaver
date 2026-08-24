@@ -45,6 +45,7 @@ public class CatchAllPageRoutingTest : IAsyncLifetime
     private string webRoot = null!;
 
     private const string StaticAssetContent = "/* probe asset */";
+    private const string NestedAssetContent = "/* nested probe asset */";
 
     public async ValueTask InitializeAsync()
     {
@@ -53,6 +54,9 @@ public class CatchAllPageRoutingTest : IAsyncLifetime
         webRoot = Path.Combine(AppContext.BaseDirectory, "catchall-routing-webroot");
         Directory.CreateDirectory(webRoot);
         await File.WriteAllTextAsync(Path.Combine(webRoot, "probe-asset.css"), StaticAssetContent);
+        var nested = Path.Combine(webRoot, "probe-folder");
+        Directory.CreateDirectory(nested);
+        await File.WriteAllTextAsync(Path.Combine(nested, "nested-asset.css"), NestedAssetContent);
 
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -64,11 +68,18 @@ public class CatchAllPageRoutingTest : IAsyncLifetime
 
         var webApp = builder.Build();
 
-        // Mirrors the portal pipeline (MemexConfiguration.StartPortalApplication):
-        // static files BEFORE routing, then the razor-component endpoints with the
+        // Mirrors the portal pipeline (MemexConfiguration.StartPortalApplication): routing FIRST,
+        // then the static-file middleware, then the razor-component endpoints with the
         // static-asset exclusion applied to the root catch-all page endpoint.
-        webApp.UseStaticFiles();
+        //
+        // 🚨 The order is the portal's and must stay the portal's. Static files run AFTER routing
+        // so MapStaticAssets can answer manifest assets off its per-encoding endpoints (the
+        // pre-compressed copies); StaticFileMiddleware then skips any request whose endpoint is
+        // already selected. That is precisely why the catch-all must refuse a path that is a real
+        // file — otherwise the shell answers it — which is what
+        // RealStaticAsset_IsServedByStaticFileMiddleware pins below.
         webApp.UseRouting();
+        webApp.UseStaticFiles();
         webApp.UseAntiforgery();
         webApp.MapRazorComponents<RouterProbeApp>()
             .AddAdditionalAssemblies(typeof(ApplicationPage).Assembly)
@@ -142,11 +153,40 @@ public class CatchAllPageRoutingTest : IAsyncLifetime
     [Fact]
     public async Task RealStaticAsset_IsServedByStaticFileMiddleware()
     {
+        // 🚨 THE regression guard for the static-asset ordering. The catch-all is `/{**Path}` and
+        // the prefix list covers only the KNOWN asset roots, so a webroot file under no such
+        // prefix ("probe-asset.css") used to match the page endpoint — harmless while the
+        // middleware ran first, fatal once it runs after routing, because it then skips a request
+        // whose endpoint is already selected and the file is answered with the Blazor shell:
+        // HTTP 200, wrong bytes, nothing in any log. The constraint refuses paths that physically
+        // exist, so the file wins.
         var (status, body) = await GetAsync("/probe-asset.css");
 
         status.Should().Be(HttpStatusCode.OK);
         body.Should().Be(StaticAssetContent,
-            because: "physical static assets are served by the static-file middleware ahead of routing");
+            because: "a path that IS a real webroot file must never be swallowed by the catch-all page");
     }
 
+    [Fact]
+    public async Task RealStaticAsset_InASubfolder_IsAlsoServed()
+    {
+        // The same rule one level down — a published SPA bundle or a hand-dropped asset folder.
+        var (status, body) = await GetAsync("/probe-folder/nested-asset.css");
+
+        status.Should().Be(HttpStatusCode.OK);
+        body.Should().Be(NestedAssetContent,
+            because: "the existence check is per PATH, not just for root-level files");
+    }
+
+    [Fact]
+    public async Task MeshPathThatLooksLikeAFile_ButIsNotOne_StillReachesThePage()
+    {
+        // The other half of the contract: the constraint must reject only paths that ACTUALLY
+        // exist on disk. A Document node whose slug ends in .pdf is a mesh path, not a file, and
+        // must still render the page — the agentic-pensions#10 regression in reverse.
+        var (_, body) = await GetAsync("/AgenticPension/content/_Documents/not-on-disk.pdf");
+
+        body.Should().Contain($"{RouterProbeApp.FoundMarker}{nameof(ApplicationPage)}",
+            because: "only a physically present file may be withheld from the catch-all");
+    }
 }
