@@ -8,13 +8,16 @@ import { fullPack } from "./modules/standard";
 // clients/react/src/render/parity.test.ts.
 //
 // The Blazor vocabulary is DERIVED, not hand-listed. It is parsed out of the switch arms in
-// src/MeshWeaver.Blazor/BlazorViewRegistry.cs — the single place that decides "this control/skin gets
+// src/MeshWeaver.Blazor.Views/ViewsExtensions.cs — the single place that decides "this control/skin gets
 // this Blazor view". A hand-maintained list is exactly what let ten controls and thirteen skins ship
 // on the Blazor side and stay silently missing here: RN had no ratchet at all, so nothing failed.
 // Reading the C# means adding a control to Blazor fails THIS test until the RN pack covers it.
 
 // Vitest runs with cwd = this package root (clients/react-native), so the repo root is two levels up.
-const registryPath = resolve(process.cwd(), "../../src/MeshWeaver.Blazor/BlazorViewRegistry.cs");
+// The control->view switches moved to the default-views PACK (MeshWeaver.Blazor.Views,
+// ViewsExtensions.DefaultFormatting) when the base registry was reduced to machinery + the
+// fallback slot — same arms, new home.
+const registryPath = resolve(process.cwd(), "../../src/MeshWeaver.Blazor.Views/ViewsExtensions.cs");
 const registrySource = readFileSync(registryPath, "utf8");
 
 /**
