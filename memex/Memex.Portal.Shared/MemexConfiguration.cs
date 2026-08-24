@@ -92,13 +92,22 @@ public static class MemexConfiguration
         // standalone rather than folded into the host's <App>.styles.css aggregate.
         services.AddMeshModuleStaticAssets();
 
-        services.AddRazorComponents()
-            .AddInteractiveServerComponents()
-            .AddHubOptions(opt =>
-            {
-                opt.DisableImplicitFromServicesParameters = true;
-            })
-            .AddBlazorPortalServices();
+        // ── GUI shells (Features:Gui) — the Blazor pipeline is OPTIONAL per deployment ─────────
+        // A next-only portal (Features__Gui__Blazor=false) serves every mesh surface (REST,
+        // gRPC-web, SignalR, MCP, auth, static assets) and NO Razor components: no circuit, no
+        // Blazor view registry, no per-circuit portal hubs. Both shells default ON — an absent
+        // section preserves today's behaviour.
+        var guiShells = (builder.Configuration
+            .GetSection(MemexFeatureOptions.SectionName)
+            .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions()).Gui;
+        if (guiShells.Blazor)
+            services.AddRazorComponents()
+                .AddInteractiveServerComponents()
+                .AddHubOptions(opt =>
+                {
+                    opt.DisableImplicitFromServicesParameters = true;
+                })
+                .AddBlazorPortalServices();
 
         // Onboarding service — pulls the three-row dual-write out of
         // Onboarding.razor so it's unit-testable end-to-end.
@@ -1032,6 +1041,12 @@ public static class MemexConfiguration
         {
             var features = configuration.GetSection(MemexFeatureOptions.SectionName)
                 .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions();
+            // Without the Blazor shell there are no circuits, hence no per-circuit portal hubs —
+            // the whole portal-hub configuration (view packs + AddBlazor's registry/data wiring)
+            // is circuit-side and must not be built. The JS shells reach the mesh through the
+            // session hubs (REST/gRPC-web), configured elsewhere.
+            if (!features.Gui.Blazor)
+                return (TBuilder)builder;
             return (TBuilder)builder
             .ConfigureHub(mesh => mesh
                 .AddMeshTypes()
@@ -1225,6 +1240,36 @@ public static class MemexConfiguration
 
         app.UseRouting();
 
+        // ── GUI shells (Features:Gui) — middleware placement is load-bearing ────────────────────
+        // Both the per-browser shell switch and the next-only Blazor-prefix gate MUST sit here,
+        // directly after UseRouting: this app's empirical rule (see the UserContextMiddleware
+        // ordering comment below) is that middleware registered after a Map* call never sees a
+        // request that call's endpoint matched, and the raw-wwwroot UseStaticFiles below would
+        // likewise answer /_framework files before a later gate. Registered at the bottom of this
+        // method (2026-08-24, first cut) the 404 gate never ran: the static-asset endpoint for
+        // blazor.web.js executed first and 500'd in dev on the missing file.
+        var guiShells = (app.Configuration
+            .GetSection(MemexFeatureOptions.SectionName)
+            .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions()).Gui;
+        if (guiShells is { Blazor: true, Next: true })
+            // Both shells on one host: the per-browser switch (?gui=next|blazor + cookie).
+            app.UseGuiShellSwitch(guiShells);
+        if (!guiShells.Blazor)
+            // NEXT-ONLY: this portal HAS no Blazor surface, so Blazor's two URL prefixes answer
+            // 404 outright. Without this gate they answer worse: the static-asset manifest still
+            // lists /_framework/blazor.web.js (the assemblies stay referenced), and with
+            // MapRazorComponents absent its endpoint 500s in dev on the missing file.
+            app.Use((http, nextMiddleware) =>
+            {
+                if (http.Request.Path.StartsWithSegments("/_blazor")
+                    || http.Request.Path.StartsWithSegments("/_framework"))
+                {
+                    http.Response.StatusCode = StatusCodes.Status404NotFound;
+                    return Task.CompletedTask;
+                }
+                return nextMiddleware(http);
+            });
+
         // 🚨 The static-file middleware runs AFTER UseRouting, and that ordering is the whole
         // point: StaticFileMiddleware skips a request whose ENDPOINT has already been selected, so
         // everything in the build-time static-asset manifest is answered by MapStaticAssets below
@@ -1400,9 +1445,33 @@ public static class MemexConfiguration
         );
         app.MapStaticAssets();
         app.MapControllers();
-        app.MapRazorComponents<TApp>()
-            .AddMeshViews()
-            .AddInteractiveServerRenderMode();
+        // The shell-switch and next-only middleware live directly after UseRouting above — a
+        // gate registered down here never sees a request an earlier Map* already matched.
+        if (guiShells.Blazor)
+            app.MapRazorComponents<TApp>()
+                .AddMeshViews()
+                .AddInteractiveServerRenderMode();
+        else
+        {
+            // The host serves no pages of its own — send browser navigations to the Next shell's
+            // base path. In k8s the ingress usually routes /next to the Next service before this
+            // fires; locally (PORTAL_ORIGIN dev / e2e) this is what makes the portal origin usable
+            // in a browser at all. APIs and assets are mapped ABOVE and never hit this fallback.
+            // Gated on the Next shell being ON: with BOTH shells off (a headless mesh API
+            // deployment) there is nothing to redirect to, and unmatched paths 404 naturally.
+            if (guiShells.Next)
+            app.MapFallback("/{**path}", (HttpContext http) =>
+            {
+                var accept = http.Request.Headers.Accept.ToString();
+                if (!HttpMethods.IsGet(http.Request.Method)
+                    || !accept.Contains("text/html", StringComparison.OrdinalIgnoreCase))
+                    return Results.NotFound();
+                var path = http.Request.Path.HasValue ? http.Request.Path.Value! : "/";
+                if (path.StartsWith(GuiShellSwitch.NextBasePath, StringComparison.OrdinalIgnoreCase))
+                    return Results.NotFound(); // /next is the Next service's — never loop
+                return Results.Redirect(GuiShellSwitch.NextBasePath + (path == "/" ? "" : path));
+            });
+        }
 
         // Deploy-timing lifecycle markers, measurable in Loki (grep "PortalReady" /
         // "PortalShutdown"). A dedicated Information-level category (the same surfaced-channel
