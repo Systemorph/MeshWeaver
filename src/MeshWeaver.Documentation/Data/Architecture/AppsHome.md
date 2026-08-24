@@ -6,7 +6,7 @@ what you see first is what you *use*, not everything the mesh can show you. The 
 | Tab | Present when | Contents | Default order |
 |---|---|---|---|
 | **Pinned** | the caller has pins | the owner's content shortcuts (`User.PinnedPaths`) | last modified |
-| **Apps** | always | the viewer's OWN `{owner}/_App` records — every app exactly once, as an ICON grid | alphabetical |
+| **Apps** | always | the viewer's OWN `{owner}/_App` records — every app exactly once, as an ICON grid | last used |
 | **Spaces** | always | the catalog **without** store items | last accessed |
 | **All** | always | everything the viewer can read, at every depth | last accessed |
 
@@ -53,24 +53,45 @@ no content load — and a click opens the app, never the record.
 > routing loops, and refused installing any package named App (the static/durable claim collision,
 > #1209). Pick collision-improbable names for built-in NodeTypes.
 
-**Materialization (write-behind).** No onboarding seeding: on home render, `EnsureAppRecords`
-compares what the viewer SHOULD have — the config-declared defaults
-(`Admin/HomeConfig.DefaultApps`) plus every install-manifest item with a live `installedPath`
-(`{owner}/_Install/{slug}`, read untyped by the manifest's own design) — against the records that
-exist, creates the missing ones fire-and-forget into the viewer's own partition, and HEALS records
-that still carry the generic icon or no `MainNode` target (the icon comes from the plugin cover
-node, fetched in ONE one-shot query off the render path; a name only fills when EMPTY — an existing
-name, possibly the owner's rename, is never overwritten). A config addition reaches every user's
-grid on their next home render; the Store's install flow writes and removes records directly
-(phase 2).
+## Who writes a record — the Store, not the home
 
-> 🚨 **The materializer acts only on a REAL records snapshot.** The records observable starts with a
+**The app lifecycle belongs to the STORE**: it creates the record when a viewer installs an app
+(stamping the real `Name`, `Icon` and `MainNode`), refreshes it on reinstall, and deletes it on
+uninstall. The home does not participate. Core holds exactly one write, `EnsureDefaultApps`, and it
+is a **bootstrap, not a sync**: when a viewer's grid is EMPTY, the platform defaults from
+`Admin/HomeConfig.DefaultApps` are created once — otherwise a brand-new home would be a blank
+screen with no icon to reach the Store by. A viewer who has any record at all never triggers it.
+
+> 🚨 **Why the home stopped materializing.** It used to read the Store's install manifests
+> (`{owner}/_Install/{slug}`) on every render, diff them against the records, back-fill what was
+> missing and heal names/icons from plugin cover nodes. That made *every home render a write path*,
+> put the Store's model in two places, and cost a cross-schema cover query to learn things the
+> Store already knew at install time. Rendering the home is a READ.
+
+> 🚨 **A bootstrap acts only on a REAL records snapshot.** The records observable starts with a
 > `null` sentinel — never `[]` — because "not loaded yet" and "no records" must differ: the first
 > shipped materializer synthesized an empty start and every fresh home render fired ~20 doomed
 > `CreateNode` calls against records that already existed ("Node already exists" storms in Loki —
 > and the home lag). A create that still loses a race is logged at Debug, not Warning.
 
-**Threads is an ordinary app.** The `~/Chat` config entry materializes as the record
+## Order — most recently used first
+
+The grid is ordered the way a phone orders apps: **what you opened last comes first**, with
+never-opened apps keeping the query's order behind them. That ordering is applied **at paint**
+(`MeshSearchScopeTab.SortByAccess`), from the viewer's own `{viewer}/_UserActivity` satellites —
+one cheap single-partition read whose ids are the visited path with `/` replaced by `_`, so a
+tile's target maps to its access time by a forward computation and never a reverse lookup.
+
+> 🚨 **Why not `source:accessed`.** It is an INNER JOIN on the access log keyed by the row's OWN
+> path, and it would fail twice here: it drops every never-opened app (a freshly installed app
+> would be invisible), and it matches nothing anyway — opening an app records a visit to the APP,
+> never to the `_App` record that points at it. Ordering is a *sort key*, so it must never be
+> expressed as a join that also filters.
+
+The access snapshot arrives after the tiles have painted and re-orders them — deliberately the
+second pass: ordering never gates the first paint.
+
+**Threads is an ordinary app.** The `~/Chat` config entry seeds the record
 `{owner}/_App/Chat` (name *Threads*, `OpenPath = {owner}/Chat`, `MainNode = {owner}/Chat`) — a
 normal tile among the others, not a special dock, and it REPLACES the old open-threads band on the
 default home template (the `area/Threads` area stays registered for authored bodies that embed it).
@@ -82,8 +103,9 @@ node path.
 The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reloading):
 
 - **`Style`** — `Tabs` (default) or `Catalog`, the escape hatch back to the legacy single flat list.
-- **`DefaultApps`** — the entries every user's Apps grid starts with (shipped: `Store`, `Doc`,
-  `~/Chat`), interpreted by the materializer above. Until a list-capable edit-form field ships it is
+- **`DefaultApps`** — the entries a viewer's Apps grid is BOOTSTRAPPED with (shipped: `Store`,
+  `Doc`, `~/Chat`). Read only when the grid is empty, so editing it changes what new viewers get,
+  not what existing viewers have. Until a list-capable edit-form field ships it is
   `[Browsable(false)]` on the generic content editor — admins edit the node content directly.
 - `Scope`, `Render`, `DefaultSort` — apply to the Spaces/All scopes (and the legacy list).
 

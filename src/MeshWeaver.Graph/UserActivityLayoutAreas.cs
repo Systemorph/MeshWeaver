@@ -482,13 +482,17 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>The catalog region — the TABBED home surface (see <see cref="BuildHome"/>):
-    /// <b>Shared with me</b> (the caller's cross-partition grants, #385 — see
-    /// <see cref="ObserveSharedTargets"/>) · <b>Pinned</b> · <b>Apps</b> (the viewer's OWN
-    /// <c>{owner}/_App</c> records, materialized write-behind from the config defaults + the
-    /// Store's install manifests — see <see cref="EnsureAppRecords"/>) ·
-    /// <b>Spaces</b> (the deduplicated catalog). The
-    /// admin-editable <c>Admin/HomeConfig</c> node drives the shape and can switch back to the
-    /// legacy single-list catalog (<see cref="HomeStyle.Catalog"/>).</summary>
+    /// <b>Pinned</b> · <b>Apps</b> (the viewer's OWN <c>{owner}/_App</c> records — a pure READ) ·
+    /// <b>Spaces</b> (the deduplicated catalog) · <b>All</b>, with the <b>Shared with me</b> band
+    /// (the caller's cross-partition grants, #385 — see <see cref="ObserveSharedTargets"/>)
+    /// below. The admin-editable <c>Admin/HomeConfig</c> node drives the shape and can switch back
+    /// to the legacy single-list catalog (<see cref="HomeStyle.Catalog"/>).
+    /// <para>🚨 The render path performs NO app writes. Everything install-shaped — creating a
+    /// record when an app is installed, removing it on uninstall, stamping its real name/icon and
+    /// refreshing them — belongs to the STORE, which owns the app lifecycle; core only reads what
+    /// the Store wrote. The one exception is <see cref="EnsureDefaultApps"/>: a viewer with ZERO
+    /// records would otherwise face an empty home with no way to reach the Store, so the platform
+    /// defaults are seeded ONCE, only for an empty grid, and never touched again.</para></summary>
     internal static IObservable<UiControl?> CatalogAreaView(LayoutAreaHost host, RenderingContext _)
     {
         var ownerId = OwnerIdOf(host.Hub.Address.ToString());
@@ -503,48 +507,45 @@ public static class UserActivityLayoutAreas
         // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
         // node reactively (shipped defaults when absent), so an admin's edit updates every open home
         // LIVE — no code change, no image roll. Combined with the caller's cross-partition grants
-        // (#385), the owner's installed-app records, and the owner node (pins). Every leg starts
-        // with a value so the home paints instantly.
+        // (#385) and the owner node (pins). Every leg starts with a value so the home paints
+        // instantly. The Apps grid needs NOTHING here: the tiles are rendered from their own
+        // single-partition query inside the search control.
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
-        // Write-behind app-record MATERIALIZATION + HEALING: the Apps grid renders ONLY the
-        // viewer's own {owner}/_App records (a fast SINGLE-PARTITION query). EnsureAppRecords
-        // creates what the config defaults + install manifests say is missing, and repairs
-        // records that carry the generic icon or no navigation target — but ONLY once the records
-        // query has emitted its REAL first snapshot (null sentinel until then): acting on the
-        // synthetic empty start fired ~20 doomed creates per render, the "Node already exists"
-        // storm Loki showed AND the home lag. The per-area `attempted` set guards re-entry while
-        // a write is in flight.
-        var attempted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var bootstrapped = false;
         return HomeConfigNodeType.Observe(host.Workspace, options)
             .CombineLatest(
                 ObserveSharedTargets(host, ownerId),
                 ObserveAppRecords(host, ownerId),
-                ObserveManifestItems(host, ownerId, options),
                 syncStream!.Select(change => change.Value.ContentAs<User>(options)).StartWith((User?)null),
                 screen,
-                (config, shared, records, manifestItems, user, viewerScreen) =>
+                (config, shared, records, user, viewerScreen) =>
                 {
-                    if (records is not null)
-                        EnsureAppRecords(host, ownerId, config, manifestItems, records, attempted);
+                    // Only ever fires for a viewer whose grid is EMPTY (never the null sentinel —
+                    // acting on a synthetic empty start is what fired ~20 doomed creates per
+                    // render, the "Node already exists" storm Loki showed AND the home lag).
+                    if (records is { Count: 0 } && !bootstrapped)
+                    {
+                        bootstrapped = true;
+                        EnsureDefaultApps(host, ownerId, config);
+                    }
                     return (UiControl?)BuildHome(ownerId, config, shared, user, locale, viewerScreen);
                 });
     }
 
     /// <summary>
-    /// The ids of the owner's <c>{owner}/_App/{appId}</c> records (see <see cref="AppNodeType"/>)
-    /// and, below, the INSTALLED item paths of the Store's manifests at
-    /// <c>{owner}/_Install/{slug}</c> — both feed the write-behind record materialization in
-    /// <see cref="CatalogAreaView"/>. The manifest's content type is MESH-compiled
-    /// (<c>Store/Install</c>), so it is read UNTYPED by design (the manifest's own doc says exactly
-    /// that) — a JSON traversal at a genuine type boundary, not an <c>as</c>-cast trap. Both reads
-    /// go via the shared, per-user-RLS, empty-on-absent <c>GetQuery</c> cache on the viewer's OWN
-    /// partition, starting empty so the home paints instantly.
+    /// The owner's <c>{owner}/_App/{appId}</c> records (see <see cref="AppNodeType"/>) — the ONE
+    /// read the home needs about apps, through the shared, per-user-RLS, empty-on-absent
+    /// <c>GetQuery</c> cache on the viewer's OWN partition. Row-only (no content on the wire): the
+    /// tiles are Name + Icon + <see cref="MeshNode.MainNode"/>, and the select list gates only the
+    /// content column — every other field always returns.
+    /// <para>Used ONLY to decide whether the grid is empty (the <see cref="EnsureDefaultApps"/>
+    /// bootstrap); the tiles themselves come from the search control's own query. Reading the
+    /// Store's install manifests here — the previous design — is gone: what a viewer has installed
+    /// is the STORE's business to record, not something the home re-derives on every render.</para>
     /// </summary>
     private static IObservable<IReadOnlyList<MeshNode>?> ObserveAppRecords(
         LayoutAreaHost host, string ownerId) =>
         host.Workspace
-            // Row-only (no content on the wire): healing reads Path/Name/Icon/MainNode, and the
-            // select list gates ONLY the content column — every other field always returns.
             .GetQuery($"home-apps:{ownerId}",
                 $"path:{ownerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType} " +
                 "select:path,id,namespace,name,nodeType,icon")
@@ -553,63 +554,8 @@ public static class UserActivityLayoutAreas
             // The first shipped materializer synthesized an empty list, so every fresh home render
             // fired ~20 doomed CreateNode calls against records that already existed ("Node
             // already exists" storms in Loki, and THE home lag) before the real snapshot arrived.
-            // EnsureAppRecords does nothing until this emits a real list.
+            // The bootstrap does nothing until this emits a real list.
             .StartWith((IReadOnlyList<MeshNode>?)null);
-
-    private static IObservable<IReadOnlyList<string>> ObserveManifestItems(
-        LayoutAreaHost host, string ownerId, JsonSerializerOptions options) =>
-        host.Workspace
-            .GetQuery($"home-installs:{ownerId}",
-                $"path:{ownerId}/_Install scope:children nodeType:Store/Install " +
-                "select:path,id,namespace,name,nodeType,content")
-            .Select(nodes => (IReadOnlyList<string>)nodes
-                .SelectMany(n => InstalledItemsOf(n.Content, options))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList())
-            .StartWith((IReadOnlyList<string>)[]);
-
-    /// <summary>
-    /// The INSTALLED item paths of one Store install-manifest content (see
-    /// <c>Store/Install/Source/InstallManifest.cs</c> in the plugins repo): <c>items[]</c> entries
-    /// whose <c>installedPath</c> is non-empty, keyed by <c>item</c> — the plugin cover path.
-    /// Tolerant JSON traversal: the type is mesh-compiled and deliberately read untyped; anything
-    /// unreadable yields nothing.
-    /// </summary>
-    internal static IEnumerable<string> InstalledItemsOf(object? content, JsonSerializerOptions options)
-    {
-        JsonElement je;
-        try
-        {
-            je = content switch
-            {
-                null => default,
-                JsonElement e => e,
-                _ => JsonSerializer.SerializeToElement(content, options),
-            };
-        }
-        catch
-        {
-            yield break;
-        }
-        if (je.ValueKind != JsonValueKind.Object
-            || !je.TryGetProperty("items", out var items)
-            || items.ValueKind != JsonValueKind.Array)
-            yield break;
-        foreach (var entry in items.EnumerateArray())
-        {
-            if (entry.ValueKind != JsonValueKind.Object)
-                continue;
-            if (!entry.TryGetProperty("installedPath", out var installedPath)
-                || installedPath.ValueKind != JsonValueKind.String
-                || string.IsNullOrWhiteSpace(installedPath.GetString()))
-                continue;
-            var item = entry.TryGetProperty("item", out var itemProp) && itemProp.ValueKind == JsonValueKind.String
-                ? itemProp.GetString()
-                : null;
-            if (!string.IsNullOrWhiteSpace(item))
-                yield return item!.Trim('/');
-        }
-    }
 
     /// <summary>
     /// The cross-partition scopes the owner has been granted access to — an invited module living in
@@ -839,78 +785,131 @@ public static class UserActivityLayoutAreas
         if (cfg.Style == HomeStyle.Catalog)
             return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy);
 
+        // TWO SECTIONS, apps first: the icon grid you launch things from, then the content you
+        // search through. They are different acts — one is "open my app", the other is "find that
+        // thing" — and mixing them into one tab strip made the apps just another lens on a search.
+        var home = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 24px; width: 100%;")
+            .WithView(BuildAppsBand(nodeOwnerId, locale))
+            .WithView(BuildContentSection(nodeOwnerId, config, user, locale, screen));
+
+        // Shared with me — cross-partition invitations, their own band under the content section.
+        // Present only when the caller actually has such grants.
+        var shared = BuildSharedBand(privacy.Retain(sharedTargets), locale);
+        return shared is null ? home : home.WithView(shared);
+    }
+
+    /// <summary>
+    /// The <b>Content</b> section — ONE category of content plus, when the viewer has any, a
+    /// <b>Pinned</b> tab. The category is simply <b>All</b>: every top-level node the viewer can
+    /// reach. "Spaces" never described anything real (the list is just what you have access to),
+    /// and slicing one list into three tabs was navigation the reader had to think about before
+    /// they could look at anything.
+    /// <para>Store items are excluded — those are apps, and an app appears exactly once, up in the
+    /// Apps section. The sort dropdown offers last accessed / last modified / alphabetical, and the
+    /// search box searches the active tab. <see cref="HomeConfig.Scope"/> can widen the list to the
+    /// full subtree. Pure, for tests.</para>
+    /// </summary>
+    internal static MeshSearchControl BuildContentSection(
+        string nodeOwnerId, HomeConfig? config, User? user, string? locale, PresentationScreen? screen)
+    {
+        var cfg = config ?? HomeConfigNodeType.Defaults;
+        var privacy = screen ?? PresentationScreen.Off;
         var scopes = new List<MeshSearchScopeTab>();
 
-        // Pinned — the owner's content shortcuts, union-with-fallback for last accessed.
+        // Pinned — the owner's shortcuts, kept as its own tab, present only when there are pins.
+        // 🚨 The pins are INTERPOLATED INTO the query string, so the presentation screen (#1803)
+        // drops a marked one HERE, before the query exists — not only where its card is painted.
+        // No ItemArea: the inline unpin overlay used to resolve an area on each pinned node's OWN
+        // hub, the per-result foreign-area shape that failed in the distributed portal. Unpinning
+        // lives in the node menu, and the card comes from the query row.
         var pins = privacy.Retain(user?.PinnedPaths);
         if (pins.Count > 0)
         {
             var pinnedBase = $"path:({string.Join(" OR ", pins)})";
-            scopes.Add(HomeScope("home.pinned", locale, HomeCatalogSort.LastModified,
+            scopes.Add(ContentScope("home.pinned", locale, HomeCatalogSort.LastModified,
                 (sort, suffix) => sort == HomeCatalogSort.LastAccessed
+                    // source:accessed is an INNER JOIN — alone it would hide a never-opened pin.
                     ? $"{pinnedBase} {suffix}\n{pinnedBase} {SortSuffixLastModified}"
                     : $"{pinnedBase} {suffix}"));
         }
 
-        // Apps — the viewer's OWN installed-app records: a SINGLE-PARTITION query
-        // ({owner}/_App), which is why it loads fast — the old cover-path alternation fanned out
-        // across every partition schema (the multi-second home lag). Records are materialized
-        // write-behind from config defaults + install manifests (see CatalogAreaView) — Threads is
-        // an ordinary record like every other app. Icons render: the phone-home grid painted
-        // ENTIRELY from the query rows (record Name/Icon; no per-tile hub, no content load — the
-        // per-record AppTile area cost one hub PER RESULT), and NavigateToMainNode makes a tile
-        // open the APP (the record's MainNode target), not the record node. `source:accessed` is
-        // meaningless on records, so that option sorts by modified.
-        var appsBase =
-            $"path:{nodeOwnerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType}";
-        scopes.Add(HomeScope("home.apps", locale, HomeCatalogSort.Alphabetical,
-                (sort, suffix) => sort == HomeCatalogSort.LastAccessed
-                    ? $"{appsBase} {SortSuffixLastModified}"
-                    : $"{appsBase} {suffix}")
-            with
-            {
-                RenderMode = nameof(MeshSearchRenderMode.Icons),
-                NavigateToMainNode = true,
-            });
-
-        // Spaces — the deduplicated catalog (an app never appears twice).
-        scopes.Add(HomeScope("home.spaces", locale, cfg.DefaultSort,
+        // All — every top-level node the viewer can access (apps excluded; they have their own
+        // section). The ONE content category.
+        scopes.Add(ContentScope("home.all", locale, cfg.DefaultSort,
             (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions)));
 
-        // All — search EVERYTHING the viewer can read, at every depth (the "we can search all" tab).
-        scopes.Add(HomeScope("home.all", locale, cfg.DefaultSort,
-            (_, suffix) => CatalogQuery(HomeCatalogScope.Subtree, nodeOwnerId, suffix)));
-
-        var search = Controls.MeshSearch
+        // ONE list that FANS OUT by the node's own type — Spaces, Clients, Courses, … — with the
+        // biggest group first (GroupByFrequency), so the page opens on what the viewer actually
+        // works with. That is what "Spaces" was reaching for and failing to say: the categories
+        // are not a fixed taxonomy the home invents, they are whatever types the viewer's
+        // top-level nodes happen to have.
+        var content = Controls.MeshSearch
+            .WithTitle(LocalizationCatalog.Get("home.content", locale))
             .WithScopeTabs(scopes.ToArray())
-            // Fallbacks for clients without scope support (react renders these): the first scope.
+            // Fallback for clients without scope support (react renders these): the first scope.
             .WithHiddenQuery(scopes[0].Query)
             .WithSortOptions([.. scopes[0].SortOptions!])
             .WithShowSearchBox(true)
             .WithViewOptions(true)
             .WithShowEmptyMessage(true)
-            .WithRenderMode(cfg.Render == HomeCatalogRender.Grouped
-                ? MeshSearchRenderMode.Grouped
-                : MeshSearchRenderMode.Flat)
+            .WithRenderMode(MeshSearchRenderMode.Grouped)
+            .WithGroupBy("NodeType")
+            .WithGroupByFrequency()
+            .WithSectionCounts(true)
+            .WithCollapsibleSections(true)
             .WithMaxColumns(4)
             .WithItemLimit(50)
             .WithMaxRows(6)
             .WithReactiveMode(true)
             .WithCreateHref("/create");
-        if (cfg.Render == HomeCatalogRender.Grouped)
-            search = search.WithSectionCounts(true).WithCollapsibleSections(true);
+        return content;
+    }
 
-        // Shared with me is its OWN titled band below the scoped search (not a scope tab) —
-        // cross-partition invitations are a distinct kind of content, not another lens on the
-        // catalog. Present only when the caller actually has such grants.
-        var shared = BuildSharedBand(privacy.Retain(sharedTargets), locale);
-        if (shared is null)
-            return search;
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("gap: 24px; width: 100%;")
-            .WithView(search)
-            .WithView(shared);
+    /// <summary>
+    /// The <b>Apps</b> section — the phone-home ICON grid over the viewer's OWN
+    /// <c>{owner}/_App</c> records. A SINGLE-PARTITION query (which is why it loads fast — the old
+    /// cover-path alternation fanned out across every partition schema, the multi-second home lag)
+    /// painted ENTIRELY from the query rows: record Name/Icon, no per-tile hub, no content read.
+    /// <c>NavigateToMainNode</c> makes a tile open the APP it points at, never the record.
+    /// <para>ORDER: most recently used first, like a phone (<c>SortByAccess</c>, applied at paint
+    /// from the viewer's own access log). NOT <c>source:accessed</c> — that is an INNER JOIN keyed
+    /// by the row's own path, so it would drop every never-opened app AND match nothing anyway,
+    /// since opening an app records a visit to the APP, never to the record pointing at it.</para>
+    /// <para>No search box and no view options: this is a launcher, not a search surface — the
+    /// content section below is where you search. Pure, exposed for tests.</para>
+    /// </summary>
+    internal static MeshSearchControl BuildAppsBand(string nodeOwnerId, string? locale)
+    {
+        var appsQuery =
+            $"path:{nodeOwnerId}/{AppNodeType.UserNamespace} scope:children " +
+            $"nodeType:{AppNodeType.NodeType} {SortSuffixAlphabetical}";
+        return Controls.MeshSearch
+            .WithTitle(LocalizationCatalog.Get("home.apps", locale))
+            .WithHiddenQuery(appsQuery)
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(false)
+            .WithRenderMode(MeshSearchRenderMode.Icons)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithItemLimit(50)
+            .WithReactiveMode(true)
+            with
+            {
+                NavigateToMainNode = true,
+                // One scope, so the grid's own paint order is the phone order. The scope carries it
+                // because SortByAccess/RenderMode are per-scope settings the view reads there.
+                ScopeTabs =
+                [
+                    new MeshSearchScopeTab(LocalizationCatalog.Get("home.apps", locale), appsQuery)
+                    {
+                        RenderMode = nameof(MeshSearchRenderMode.Icons),
+                        NavigateToMainNode = true,
+                        SortByAccess = true,
+                    },
+                ],
+            };
     }
 
     /// <summary>
@@ -944,9 +943,9 @@ public static class UserActivityLayoutAreas
             .WithReactiveMode(true);
     }
 
-    /// <summary>One home scope tab: localized label + the three catalog sorts (default first),
-    /// each option's full query produced by <paramref name="query"/>(sort, suffix).</summary>
-    private static MeshSearchScopeTab HomeScope(
+    /// <summary>One content tab: localized label + the three catalog sorts (default first), each
+    /// option's full query produced by <paramref name="query"/>(sort, suffix).</summary>
+    private static MeshSearchScopeTab ContentScope(
         string labelKey, string? locale, HomeCatalogSort defaultSort,
         Func<HomeCatalogSort, string, string> query)
     {
@@ -962,13 +961,15 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Product name + icon for the KNOWN default apps (see <see cref="AppRecordSpecs"/>): a
-    /// <see cref="HomeConfig.DefaultApps"/> entry starting with <c>~/</c> is not a node path but an
-    /// AREA on the viewer's own hub (<c>~/Chat</c> → the Threads app at <c>/{owner}/Chat</c>);
-    /// anything not listed falls back to its path leaf + the generic app icon. Names here are
-    /// deliberately GLOSSARY/product terms (Store, Documentation, Threads — English in every
-    /// locale), so no localization key is involved. Immutable constant lookup, never written at
-    /// runtime.
+    /// Product name + icon for the PLATFORM DEFAULT apps (<see cref="HomeConfig.DefaultApps"/>): a
+    /// <c>~/</c> entry is not a node path but an AREA on the viewer's own hub (<c>~/Chat</c> → the
+    /// Threads app at <c>/{owner}/Chat</c>); anything not listed falls back to its path leaf + the
+    /// generic app icon. Names here are deliberately GLOSSARY/product terms (Store, Documentation,
+    /// Threads — English in every locale), so no localization key is involved. Immutable constant
+    /// lookup, never written at runtime.
+    /// <para>This table covers the DEFAULTS only, and deliberately so: every other app's name and
+    /// icon are written by the STORE when the app is installed. Core does not know, and must not
+    /// guess, what a third-party app is called.</para>
     /// </summary>
     private static readonly ImmutableDictionary<string, (string Name, string Icon)> KnownApps =
         new Dictionary<string, (string Name, string Icon)>
@@ -983,21 +984,24 @@ public static class UserActivityLayoutAreas
     private static string LeafOf(string path) =>
         path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
 
-    /// <summary>The blueprint of one to-be-materialized app record.</summary>
+    /// <summary>The blueprint of one platform-default app record.</summary>
     internal sealed record AppRecordSpec(
-        string Id, string Name, string Icon, string? Plugin, string? OpenPath, string Source);
+        string Id, string Name, string Icon, string? Plugin, string? OpenPath, string Source)
+    {
+        /// <summary>The record's navigation target — the app's path, or the owner-hub area path
+        /// for a <c>~/</c> app. Stamped as the record's <see cref="MeshNode.MainNode"/> so an icon
+        /// tile navigates STRAIGHT to the app with nothing else to read.</summary>
+        public string? Target => Plugin is { Length: > 0 } ? Plugin : OpenPath;
+    }
 
     /// <summary>
-    /// The app-record SPECS a viewer should have — the config-declared defaults
-    /// (<see cref="HomeConfig.DefaultApps"/>; a <c>~/</c> entry is an AREA on the viewer's own hub,
-    /// e.g. <c>~/Chat</c> → the Threads app, an ORDINARY record like every other app) unioned with
-    /// the Store manifests' installed items, deduped by record id (a path's <c>/</c> becomes
-    /// <c>-</c>). <see cref="KnownApps"/> gives the known defaults their product name + icon;
-    /// everything else falls back to the path leaf + the generic app icon (the Store's install
-    /// flow upgrades those in phase 2). Pure, exposed for tests.
+    /// The PLATFORM DEFAULT app records (<see cref="HomeConfig.DefaultApps"/>; a <c>~/</c> entry is
+    /// an AREA on the viewer's own hub, e.g. <c>~/Chat</c> → the Threads app, an ORDINARY record
+    /// like every other app), deduped by record id (a path's <c>/</c> becomes <c>-</c>).
+    /// <see cref="KnownApps"/> gives them their product name + icon. Pure, exposed for tests.
+    /// <para>Installed apps are NOT here: the Store writes their records when it installs them.</para>
     /// </summary>
-    internal static IReadOnlyList<AppRecordSpec> AppRecordSpecs(
-        HomeConfig? config, string ownerId, IEnumerable<string>? manifestItems)
+    internal static IReadOnlyList<AppRecordSpec> AppRecordSpecs(HomeConfig? config, string ownerId)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
         var specs = new List<AppRecordSpec>();
@@ -1035,189 +1039,30 @@ public static class UserActivityLayoutAreas
                     Plugin: path, OpenPath: null, Source: "default"));
             }
         }
-        foreach (var item in manifestItems ?? [])
-        {
-            var path = item.Trim('/');
-            if (path.Length == 0)
-                continue;
-            var id = path.Replace('/', '-');
-            if (!seen.Add(id))
-                continue;
-            specs.Add(new AppRecordSpec(id, LeafOf(path), GenericAppIcon,
-                Plugin: path, OpenPath: null, Source: "install"));
-        }
         return specs;
     }
 
     /// <summary>
-    /// Write-behind materialization + HEALING of the viewer's app records. Creates the
-    /// <c>{owner}/_App/{id}</c> node for every <see cref="AppRecordSpecs"/> entry that has no
-    /// record yet, and repairs existing records that still carry the generic icon, an EMPTY name,
-    /// or no navigation target (<see cref="MeshNode.MainNode"/> left at its own path) — stamping
-    /// the icon (and, only when empty, the name) from the plugin COVER node where the specs can
-    /// only guess. A non-empty name is never overwritten: the owner may have renamed the record,
-    /// and covers get their say at CREATE time.
-    /// Fire-and-forget and idempotent: the caller invokes this ONLY after the records query has
-    /// emitted its real first snapshot (never the null sentinel — acting on a synthetic empty list
-    /// was the "Node already exists" create storm), <paramref name="attempted"/> (per home-area
-    /// instance) guards re-entry while writes are in flight, and a create that loses a race to an
-    /// existing record is benign. Writes land in the viewer's OWN partition under the viewer's own
-    /// identity (the framework propagates the caller's AccessContext through Subscribe).
+    /// The home's ONLY app write, and it fires at most once per viewer: seed the platform default
+    /// records when the viewer's grid is EMPTY. Without it a brand-new (or never-onboarded) viewer
+    /// lands on a blank home with no icon to reach the Store by — a bootstrap, not a sync.
+    /// <para>🚨 Everything else about an app's record — creating it on install, deleting it on
+    /// uninstall, its real name and icon, refreshing them — is the STORE's, which owns the app
+    /// lifecycle and already writes the install manifest. Core reading manifests and back-filling
+    /// records made every home render a write path and put the Store's model in two places.</para>
+    /// <para>Fire-and-forget: a create that loses the race to an existing record is benign
+    /// (Debug), and the records query re-emits when the writes land.</para>
     /// </summary>
-    private static void EnsureAppRecords(
-        LayoutAreaHost host, string ownerId, HomeConfig? config,
-        IReadOnlyList<string> manifestItems, IReadOnlyList<MeshNode> records,
-        HashSet<string> attempted)
+    private static void EnsureDefaultApps(LayoutAreaHost host, string ownerId, HomeConfig? config)
     {
         var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (mesh is null || string.IsNullOrEmpty(ownerId))
             return;
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.AppRecords");
-        var byId = records
-            .GroupBy(r => LeafOf(r.Path), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-        var creates = new List<AppRecordSpec>();
-        var heals = new List<(MeshNode Record, AppRecordSpec Spec)>();
-        foreach (var spec in AppRecordSpecs(config, ownerId, manifestItems))
+        foreach (var spec in AppRecordSpecs(config, ownerId))
         {
-            if (!byId.TryGetValue(spec.Id, out var record))
-            {
-                if (attempted.Add("create:" + spec.Id))
-                    creates.Add(spec);
-            }
-            else if (NeedsHealing(record, spec) && attempted.Add("heal:" + spec.Id))
-                heals.Add((record, spec));
-        }
-        if (creates.Count == 0 && heals.Count == 0)
-            return;
-
-        // Plugin COVER nodes supply the real name/icon where the specs only have the generic
-        // fallback (manifest-derived installs). ONE one-shot query for all of them, off the render
-        // path — the tiles paint instantly from the records; when the covers land, creates/heals
-        // are written and the records query re-emits the finished rows. A cover failure degrades
-        // to the spec fallbacks rather than blocking materialization.
-        var coverPaths = creates.Concat(heals.Select(h => h.Spec))
-            .Where(s => s.Plugin is { Length: > 0 }
-                        && string.Equals(s.Icon, GenericAppIcon, StringComparison.OrdinalIgnoreCase))
-            .Select(s => s.Plugin!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        ObserveAppCovers(mesh, coverPaths)
-            .Subscribe(
-                covers => MaterializeAppRecords(host, mesh, ownerId, creates, heals, covers, logger),
-                ex =>
-                {
-                    logger?.LogWarning(ex,
-                        "App cover lookup failed for {Owner}; materializing with fallbacks", ownerId);
-                    MaterializeAppRecords(host, mesh, ownerId, creates, heals,
-                        ImmutableDictionary<string, MeshNode>.Empty, logger);
-                });
-    }
-
-    /// <summary>The plugin cover nodes for <paramref name="coverPaths"/> as a one-shot path-keyed
-    /// map (empty input short-circuits — no query). Initial snapshot only; the path alternation
-    /// fans out cross-schema, which is exactly why it runs HERE (write-behind, bounded, once per
-    /// missing/incurable face) and never on the Apps render path.</summary>
-    private static IObservable<IReadOnlyDictionary<string, MeshNode>> ObserveAppCovers(
-        IMeshService mesh, IReadOnlyList<string> coverPaths) =>
-        coverPaths.Count == 0
-            ? Observable.Return<IReadOnlyDictionary<string, MeshNode>>(
-                ImmutableDictionary<string, MeshNode>.Empty)
-            : mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    // Row-only: the face is Name + Icon; the covers' content stays off the wire.
-                    $"path:{string.Join("|", coverPaths)} select:path,id,namespace,name,nodeType,icon"))
-                .Where(c => c.ChangeType == QueryChangeType.Initial)
-                .Select(c => (IReadOnlyDictionary<string, MeshNode>)c.Items
-                    .Where(n => !string.IsNullOrEmpty(n.Path))
-                    .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
-                    .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase))
-                .FirstAsync()
-                .Timeout(TimeSpan.FromSeconds(15));
-
-    /// <summary>The record's navigation target — the plugin cover path, or the owner-hub area path
-    /// for <c>~/</c> apps. Stamped as the record's <see cref="MeshNode.MainNode"/> so the Apps
-    /// grid's icon tiles navigate STRAIGHT to the app (NavigateToMainNode) with no per-tile hub.</summary>
-    internal static string? AppTargetOf(AppRecordSpec spec) =>
-        spec.Plugin is { Length: > 0 } ? spec.Plugin : spec.OpenPath;
-
-    /// <summary>Face (name + icon) for a record: the plugin cover's when one was fetched and has
-    /// the field, else the spec's KnownApps/leaf/generic fallback.</summary>
-    internal static (string Name, string Icon) ResolveAppFace(
-        AppRecordSpec spec, IReadOnlyDictionary<string, MeshNode> covers)
-    {
-        if (spec.Plugin is { Length: > 0 } && covers.TryGetValue(spec.Plugin, out var cover))
-            return (
-                string.IsNullOrWhiteSpace(cover.Name) ? spec.Name : cover.Name!,
-                string.IsNullOrWhiteSpace(cover.Icon) ? spec.Icon : cover.Icon!);
-        return (spec.Name, spec.Icon);
-    }
-
-    /// <summary>True when an existing record is worth a heal attempt: no real navigation target
-    /// yet (MainNode unset or still its own path), the generic/missing icon, or an empty name.</summary>
-    internal static bool NeedsHealing(MeshNode record, AppRecordSpec spec)
-    {
-        var target = AppTargetOf(spec);
-        if (!string.IsNullOrEmpty(target)
-            && (string.IsNullOrEmpty(record.MainNode)
-                || string.Equals(record.MainNode, record.Path, StringComparison.OrdinalIgnoreCase)))
-            return true;
-        if (string.IsNullOrEmpty(record.Icon)
-            || string.Equals(record.Icon, GenericAppIcon, StringComparison.OrdinalIgnoreCase))
-            return true;
-        return string.IsNullOrEmpty(record.Name);
-    }
-
-    /// <summary>Applies the resolved face + target to a record, touching ONLY fields that actually
-    /// improve (the cross-hub Update sends a merge patch of exactly what changed). Returns
-    /// <paramref name="cur"/> unchanged (same reference) when nothing improves.</summary>
-    internal static MeshNode HealAppRecord(MeshNode cur, string name, string icon, string? target)
-    {
-        var next = cur;
-        if (!string.IsNullOrEmpty(target)
-            && (string.IsNullOrEmpty(next.MainNode)
-                || string.Equals(next.MainNode, next.Path, StringComparison.OrdinalIgnoreCase))
-            && !string.Equals(next.MainNode, target, StringComparison.OrdinalIgnoreCase))
-            next = next with { MainNode = target! };
-        if ((string.IsNullOrEmpty(next.Icon)
-                || string.Equals(next.Icon, GenericAppIcon, StringComparison.OrdinalIgnoreCase))
-            && !string.IsNullOrEmpty(icon)
-            && !string.Equals(next.Icon, icon, StringComparison.OrdinalIgnoreCase))
-            next = next with { Icon = icon };
-        if (string.IsNullOrEmpty(next.Name) && !string.IsNullOrEmpty(name))
-            next = next with { Name = name };
-        return next;
-    }
-
-    /// <summary>Writes the planned creates and heals. Creates carry the full face + MainNode
-    /// target; a create losing the race to an existing record ("already exists") is EXPECTED
-    /// (two home areas can plan the same record) and logged at Debug — anything else is a real
-    /// warning. Heals go through the ONE mutation API; an identity heal (nothing improves — e.g.
-    /// the cover has no icon either) is skipped entirely, so incurable records cost one cover
-    /// lookup per home area and zero writes.</summary>
-    private static void MaterializeAppRecords(
-        LayoutAreaHost host, IMeshService mesh, string ownerId,
-        IReadOnlyList<AppRecordSpec> creates,
-        IReadOnlyList<(MeshNode Record, AppRecordSpec Spec)> heals,
-        IReadOnlyDictionary<string, MeshNode> covers, ILogger? logger)
-    {
-        foreach (var spec in creates)
-        {
-            var (name, icon) = ResolveAppFace(spec, covers);
-            var node = new MeshNode(spec.Id, $"{ownerId}/{AppNodeType.UserNamespace}")
-            {
-                NodeType = AppNodeType.NodeType,
-                Name = name,
-                Icon = icon,
-                MainNode = AppTargetOf(spec) ?? $"{ownerId}/{AppNodeType.UserNamespace}/{spec.Id}",
-                State = MeshNodeState.Active,
-                Content = new App
-                {
-                    Plugin = spec.Plugin ?? "",
-                    OpenPath = spec.OpenPath,
-                    Source = spec.Source,
-                },
-            };
+            var node = BuildAppRecord(ownerId, spec);
             mesh.CreateNode(node).Subscribe(_ => { },
                 ex =>
                 {
@@ -1227,18 +1072,25 @@ public static class UserActivityLayoutAreas
                         logger?.LogWarning(ex, "App record create failed at {Path}", node.Path);
                 });
         }
-        foreach (var (record, spec) in heals)
-        {
-            var (name, icon) = ResolveAppFace(spec, covers);
-            var target = AppTargetOf(spec);
-            if (ReferenceEquals(HealAppRecord(record, name, icon, target), record))
-                continue;
-            host.Workspace.GetMeshNodeStream(record.Path)
-                .Update(cur => HealAppRecord(cur, name, icon, target))
-                .Subscribe(_ => { },
-                    ex => logger?.LogWarning(ex, "App record heal failed at {Path}", record.Path));
-        }
     }
+
+    /// <summary>One default app record: the tile's whole identity lives on the NODE (Name, Icon,
+    /// MainNode = the app it opens), so the grid paints from query rows alone. Pure, for tests.</summary>
+    internal static MeshNode BuildAppRecord(string ownerId, AppRecordSpec spec) =>
+        new(spec.Id, $"{ownerId}/{AppNodeType.UserNamespace}")
+        {
+            NodeType = AppNodeType.NodeType,
+            Name = spec.Name,
+            Icon = spec.Icon,
+            MainNode = spec.Target ?? $"{ownerId}/{AppNodeType.UserNamespace}/{spec.Id}",
+            State = MeshNodeState.Active,
+            Content = new App
+            {
+                Plugin = spec.Plugin ?? "",
+                OpenPath = spec.OpenPath,
+                Source = spec.Source,
+            },
+        };
 
     /// <summary>Dedup for the Spaces and Shared-with-me scopes: anything living in the Store (and
     /// therefore representable as an installed app — plugin covers, the store root) is EXCLUDED,
