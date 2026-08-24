@@ -732,7 +732,9 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
 
     /// <inheritdoc />
-    public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
+    // No `async` — see the DisposalCompleted subscription below. The turn returns immediately and
+    // the work that used to be awaited hangs off the signal instead.
+    public override Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
         var grainId = this.GetPrimaryKeyString();
         logger.LogInformation("Grain {GrainId} deactivating: reason={Reason}", grainId, reason.ReasonCode);
@@ -761,57 +763,58 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // most and dies with the grain — GC covers it.
         try { _hubReadyRaw.OnCompleted(); } catch { /* already terminated */ }
 
-        // 🚨 Gates the ALC unload below. It is only ever set true by the hub REPORTING that it
-        // drained: a timeout, a cancellation, or a disposal fault all leave it false, and false
-        // means we do not unload. Nothing built a hub ⇒ nothing ever ran out of this context.
-        var hubDrained = true;
-
         var hub = _hub;
         if (hub != null)
         {
-            hubDrained = false;
             try
             {
                 hub.CancelCurrentExecution();
                 hub.Dispose();
-                // Bounded wait — Orleans's grain deactivation must not block the silo
-                // shutdown for minutes. 5 s is plenty for action-block drain in tests;
-                // production AI-streaming flushes are best-effort and may be cut short
-                // on silo shutdown. The previous 120 s window was the cause of the
-                // 20+ second inter-class gaps in OrleansClusterCollection runs and the
-                // catastrophic ObjectDisposedException at fixture-cleanup races.
-                // Bridge the reactive completion to a Task once, at this genuine async edge
-                // (Orleans grain deactivation). Catch folds a disposal fault into completion —
-                // deactivation only cares that the hub is done, not why.
-                var disposalTask = hub.DisposalCompleted
-                    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-                    .FirstOrDefaultAsync()
-                    .ToTask(cancellationToken);
-                var completed = await Task.WhenAny(disposalTask, Task.Delay(TimeSpan.FromSeconds(5), cancellationToken));
-                // 🚨 Winning WhenAny is not the same as DRAINING. disposalTask can complete
-                // CANCELLED (the deactivation token), and `completed == disposalTask` is true in
-                // that case too — which would have earned the unload without the hub ever
-                // reporting it was done. Awaiting the winner makes cancellation throw into the
-                // catch below, where hubDrained stays false.
-                if (completed == disposalTask)
-                {
-                    await disposalTask;
-                    hubDrained = true;
-                }
-                if (!hubDrained)
-                    logger.LogError(
-                        "Grain {GrainId}: hub disposal exceeded 5 s — KEEPING its load context. "
-                        + "The hub is still draining, so unloading now is the use-after-unload "
-                        + "SIGSEGV; the context is retained until the process exits instead.",
-                        grainId);
+
+                // 🚨 SUBSCRIBE — do not await. A grain turn is a single-threaded scheduler, so
+                // awaiting here parks it, and the disposal we are waiting for may itself need a
+                // turn to complete. The unload is not something this turn has to witness: it is
+                // work that belongs to the DisposalCompleted signal, so it goes in the callback
+                // and the turn returns immediately.
+                //
+                // This also gets the gate right for free, which the previous shape did not. There
+                // is no timer to race and therefore no "the wait expired, unload anyway" branch:
+                // the callback runs when the hub REPORTS it drained, or it never runs at all. If
+                // disposal never completes, the context is simply retained until the process exits
+                // — a memory cost, chosen over an unload with a live user, which costs the process
+                // (CI 32713409169: a dedicated thread faulted on its first managed call, JITting a
+                // dynamic method whose allocator was gone — see AlcLeaseRegistry for the dump).
+                //
+                // Take(1) unsubscribes on the first emission, so the subscription cannot outlive
+                // the signal and root this grain's context (cf. the discarded-timer-roots-the-hub
+                // defect). A disposal FAULT goes to the error arm and unloads nothing: we did not
+                // observe the hub finish, so we have not earned it.
+                // 🚨 The fault handling is FLUENT (.Catch), not a try/catch around the Subscribe.
+                // A try/catch here can only see a throw from the synchronous subscribe call — a
+                // fault travelling through the stream arrives later, on another thread, and sails
+                // straight past it. Catch turns that fault into an EMPTY sequence, so OnNext never
+                // runs and the context is kept: a hub that faulted is a hub we never saw finish.
+                hub.DisposalCompleted
+                    .Take(1)
+                    .Catch<Unit, Exception>(ex =>
+                    {
+                        logger.LogError(
+                            ex, "Grain {GrainId}: hub disposal faulted — KEEPING its load context", grainId);
+                        return Observable.Empty<Unit>();
+                    })
+                    .Subscribe(_ => UnloadContextIfSafe(reason, grainId));
             }
             catch (Exception ex)
             {
-                // Includes the OperationCanceledException from a cancelled deactivation. Either
-                // way we did not observe the hub finish, so we have not earned the unload.
-                hubDrained = false;
+                // Only the SYNCHRONOUS half — CancelCurrentExecution/Dispose throwing on this
+                // turn. Everything the stream reports is handled fluently above.
                 logger.LogError(ex, "Grain {GrainId}: hub disposal failed — KEEPING its load context", grainId);
             }
+        }
+        else
+        {
+            // No hub was ever built, so nothing ever ran out of this context.
+            UnloadContextIfSafe(reason, grainId);
         }
         // 🚨 The unload is gated on a POSITIVE drain report and never on a timer. It used to run
         // unconditionally: wait up to 5 s for DisposalCompleted, log "moving on", unload anyway —
@@ -841,10 +844,28 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // superseded ALC actually returns memory. So skip it here and let the process exit — and
         // for the live-silo case IoPoolSiloTeardown now cancels + joins the pools before the silo
         // releases, which is what makes any remaining unload safe.
-        if (loadContext != null && !IsSiloShuttingDown(reason) && hubDrained)
-            loadContext.Unload();
+        return base.OnDeactivateAsync(reason, cancellationToken);
+    }
+
+    /// <summary>
+    /// Unloads this grain's collectible context, if unloading it is safe and worth doing. Called
+    /// ONLY from the <c>DisposalCompleted</c> subscription (or directly when no hub was ever
+    /// built) — never on a timer, so an unload always follows a positive drain report.
+    /// </summary>
+    private void UnloadContextIfSafe(DeactivationReason reason, string grainId)
+    {
+        var context = loadContext;
         loadContext = null;
-        await base.OnDeactivateAsync(reason, cancellationToken);
+        if (context == null || IsSiloShuttingDown(reason))
+            return;
+        try
+        {
+            context.Unload();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Grain {GrainId}: unloading the load context failed", grainId);
+        }
     }
 
     /// <summary>
