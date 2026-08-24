@@ -788,16 +788,19 @@ public static class UserActivityLayoutAreas
         // TWO SECTIONS, apps first: the icon grid you launch things from, then the content you
         // search through. They are different acts — one is "open my app", the other is "find that
         // thing" — and mixing them into one tab strip made the apps just another lens on a search.
-        var home = Controls.Stack
+        //
+        // 🚨 No separate "Shared with me" band any more. It existed because the catalog's scope
+        // queries cannot reach a module living in ANOTHER partition that the viewer was invited
+        // into (#385) — but that is a reason to put those items IN the list, not beside it. The
+        // grants are folded into All as an extra union leg (see BuildContentSection), so a shared
+        // module is simply content the viewer can reach, grouped by its type like everything else.
+        // Deleting the band without folding them in would have silently dropped every invitation.
+        return Controls.Stack
             .WithWidth("100%")
             .WithStyle("gap: 24px; width: 100%;")
             .WithView(BuildAppsBand(nodeOwnerId, locale))
-            .WithView(BuildContentSection(nodeOwnerId, config, user, locale, screen));
-
-        // Shared with me — cross-partition invitations, their own band under the content section.
-        // Present only when the caller actually has such grants.
-        var shared = BuildSharedBand(privacy.Retain(sharedTargets), locale);
-        return shared is null ? home : home.WithView(shared);
+            .WithView(BuildContentSection(
+                nodeOwnerId, config, user, locale, screen, privacy.Retain(sharedTargets)));
     }
 
     /// <summary>
@@ -812,13 +815,28 @@ public static class UserActivityLayoutAreas
     /// full subtree. Pure, for tests.</para>
     /// </summary>
     internal static MeshSearchControl BuildContentSection(
-        string nodeOwnerId, HomeConfig? config, User? user, string? locale, PresentationScreen? screen)
+        string nodeOwnerId, HomeConfig? config, User? user, string? locale, PresentationScreen? screen,
+        IReadOnlyList<string>? sharedTargets = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
         var privacy = screen ?? PresentationScreen.Off;
         var scopes = new List<MeshSearchScopeTab>();
 
-        // Pinned — the owner's shortcuts, kept as its own tab, present only when there are pins.
+        // All FIRST, and therefore the DEFAULT tab: the view activates the first scope, and the
+        // control-level fallback query is scopes[0] — so "everything I can reach" is what the home
+        // opens on. Pinned is the narrower, opt-in lens and follows it.
+        //
+        // Cross-partition invitations (#385) are an extra UNION LEG here rather than a band of
+        // their own: a module someone shared with you is content you can reach, and the scope
+        // queries structurally cannot see it (they walk the viewer's own partition and the roots).
+        // Folding it in is what let the separate "Shared with me" section go without losing it.
+        var sharedLeg = sharedTargets is { Count: > 0 }
+            ? "\n" + $"path:{string.Join("|", sharedTargets)} is:main -nodeType:User{SpacesDedupExclusions}"
+            : string.Empty;
+        scopes.Add(ContentScope("home.all", locale, cfg.DefaultSort,
+            (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions) + sharedLeg));
+
+        // Pinned — the owner's shortcuts, present only when there are pins.
         // 🚨 The pins are INTERPOLATED INTO the query string, so the presentation screen (#1803)
         // drops a marked one HERE, before the query exists — not only where its card is painted.
         // No ItemArea: the inline unpin overlay used to resolve an area on each pinned node's OWN
@@ -834,11 +852,6 @@ public static class UserActivityLayoutAreas
                     ? $"{pinnedBase} {suffix}\n{pinnedBase} {SortSuffixLastModified}"
                     : $"{pinnedBase} {suffix}"));
         }
-
-        // All — every top-level node the viewer can access (apps excluded; they have their own
-        // section). The ONE content category.
-        scopes.Add(ContentScope("home.all", locale, cfg.DefaultSort,
-            (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions)));
 
         // ONE list that FANS OUT by the node's own type — Spaces, Clients, Courses, … — with the
         // biggest group first (GroupByFrequency), so the page opens on what the viewer actually
@@ -860,8 +873,12 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(true)
             .WithCollapsibleSections(true)
             .WithMaxColumns(4)
-            .WithItemLimit(50)
-            .WithMaxRows(6)
+            // Fill the page. The home is where a viewer looks for something they can already see;
+            // a short list makes them search for what should have been on screen. 200 bounds the
+            // query, and MaxRows is a per-GROUP cap — with the type fan-out that sets the section's
+            // height rather than a hard total.
+            .WithItemLimit(200)
+            .WithMaxRows(24)
             .WithReactiveMode(true)
             .WithCreateHref("/create");
         return content;
