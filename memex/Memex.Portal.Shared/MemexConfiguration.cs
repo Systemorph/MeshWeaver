@@ -372,6 +372,14 @@ public static class MemexConfiguration
             JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
             services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
                 .AddMicrosoftIdentityWebApp(entraIdConfig);
+            // This branch has its own OIDC correlation/nonce handshake cookies, and an abandoned
+            // login here piles them up exactly like the unified handlers' — same eviction policy,
+            // same constant (see AuthenticationBuilderExtensions.LoginHandshakeCookieMaxAge).
+            services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
+            {
+                options.CorrelationCookie.MaxAge = AuthenticationBuilderExtensions.LoginHandshakeCookieMaxAge;
+                options.NonceCookie.MaxAge = AuthenticationBuilderExtensions.LoginHandshakeCookieMaxAge;
+            });
             services.AddControllersWithViews()
                 .AddMicrosoftIdentityUI();
         }
