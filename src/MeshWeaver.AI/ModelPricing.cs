@@ -114,6 +114,20 @@ public static class ModelPricing
             // Rates as published by the OpenRouter model API, 2026-08.
             ["z-ai/glm-5.2"] = new(0.6286m, 1.9756m, Usd),
             ["moonshotai/kimi-k3"] = new(3.00m, 15.00m, Usd),
+            // The converged frontier catalog fronted through the single funded OpenRouter key
+            // (no per-provider credentials): GLM 5.3, GPT-5, Gemini 3, Claude 5, DeepSeek, Grok,
+            // Qwen. Rates as published by the OpenRouter model API, 2026-08 (per 1M tokens,
+            // standard / non-cached). Same backstop caveat as above — the node price wins.
+            ["z-ai/glm-5.3"] = new(1.4m, 4.4m, Usd),
+            ["openai/gpt-5.2"] = new(1.75m, 14.0m, Usd),
+            ["openai/gpt-5-mini"] = new(0.25m, 2.0m, Usd),
+            ["google/gemini-3.1-pro-preview"] = new(2.0m, 12.0m, Usd),
+            ["google/gemini-3.7-flash"] = new(0.375m, 1.875m, Usd),
+            ["anthropic/claude-opus-5"] = new(5.0m, 25.0m, Usd),
+            ["anthropic/claude-sonnet-5"] = new(2.0m, 10.0m, Usd),
+            ["deepseek/deepseek-v4-pro"] = new(0.5262m, 1.0524m, Usd),
+            ["x-ai/grok-4.6"] = new(2.0m, 6.0m, Usd),
+            ["qwen/qwen3-max"] = new(0.78m, 3.9m, Usd),
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
