@@ -193,7 +193,10 @@ public class HomeCatalogTest
         var search = UserActivityLayoutAreas.BuildCatalog(NodePath, cfg).Should().BeOfType<MeshSearchControl>().Subject;
 
         var query = search.HiddenQuery!.ToString()!;
-        query.Should().Contain("is:main context:search");
+        // is:content, not context:search. The catalog lists content for a person to browse; it
+        // claimed to be the search box only to borrow that context's filtering.
+        query.Should().Contain("is:main is:content");
+        query.Should().NotContain("context:search");
         query.Should().NotContain("namespace:");   // no first-level roots/home-children union
         query.Should().NotContain("\n");           // a single query, not a union
     }

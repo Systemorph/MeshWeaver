@@ -65,7 +65,7 @@ public static class GlobalSettingsNodeType
             NodeType = NodeType,
             Name = "Settings",
             State = MeshNodeState.Active,
-            ExcludeFromContext = new HashSet<string> { "search", "create" },
+            ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         });
 
         builder.AddMeshNodes(CreatePolicy());
@@ -118,7 +118,7 @@ public static class GlobalSettingsNodeType
         Name = "Global Settings",
         Icon = "/static/NodeTypeIcons/settings.svg",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddDefaultGlobalSettingsMenuItems()
             .AddLayout(layout => layout

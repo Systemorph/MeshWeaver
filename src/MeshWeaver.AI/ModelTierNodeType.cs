@@ -79,7 +79,7 @@ public static class ModelTierNodeType
         // Creatable and editable through the standard node editor — that is the point of making a
         // tier a node. Kept out of free-text search results (like ModelProvider) so the registry
         // does not clutter every query; the AI menu's Tiers catalog is where you browse them.
-        ExcludeFromContext = new HashSet<string> { "search" },
+        ExcludeFromContext = new HashSet<string> { "search", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<ModelTierDefinition>())

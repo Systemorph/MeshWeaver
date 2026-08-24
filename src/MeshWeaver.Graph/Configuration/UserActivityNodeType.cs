@@ -50,7 +50,7 @@ public static class UserActivityNodeType
     {
         Name = "User Activity",
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         // Declarative storage routing: UserActivity instances persist to the
         // `user_activities` satellite table within their owning partition's schema
         // (the single-sourced replacement for the central _UserActivity→user_activities

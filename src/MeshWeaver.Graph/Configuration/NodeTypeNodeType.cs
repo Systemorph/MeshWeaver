@@ -31,7 +31,7 @@ public static class NodeTypeNodeType
     {
         Name = "Node Type",
         Icon = "/static/NodeTypeIcons/code.svg",
-        ExcludeFromContext = new HashSet<string> { "search" },
+        ExcludeFromContext = new HashSet<string> { "search", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<NodeTypeDefinition>())

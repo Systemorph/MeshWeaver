@@ -80,7 +80,7 @@ public static class ThreadComposerNodeType
         // path segment (_Thread) and the nodeType resolve to `threads`, so write and read agree and
         // the selection persists. Hidden from the create menu and search so users never hand-create one.
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<ThreadComposer>())

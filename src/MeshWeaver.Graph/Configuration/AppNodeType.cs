@@ -51,7 +51,7 @@ public static class AppNodeType
         Name = "Installed App",
         Icon = "/static/NodeTypeIcons/puzzlepiece.svg",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<App>())
