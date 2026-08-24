@@ -583,7 +583,7 @@
     animation: chat-hint-pulse 1.2s ease-in-out 5;
 }
 
-@@keyframes chat-hint-pulse {
+@keyframes chat-hint-pulse {
     0%, 100% { box-shadow: 0 0 0 0 transparent; }
     50% { box-shadow: 0 0 0 5px var(--accent-fill-rest); }
 }

@@ -697,18 +697,23 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         var query = new Uri(uri, UriKind.RelativeOrAbsolute).IsAbsoluteUri
             ? new Uri(uri).Query
             : uri.Contains('?') ? uri[uri.IndexOf('?')..] : "";
-        if (!query.Contains("hint=chat", StringComparison.OrdinalIgnoreCase))
+        // Exact key=value match — `hint=chatty` (or a `foo-hint=chat` key) must not pulse.
+        var hinted = query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Any(pair => string.Equals(pair, "hint=chat", StringComparison.OrdinalIgnoreCase));
+        if (!hinted)
             return;
         _chatHintCts?.Cancel();
         var cts = _chatHintCts = new CancellationTokenSource();
         ChatHintActive = true;
         InvokeAsync(StateHasChanged);
-        _ = Task.Delay(TimeSpan.FromSeconds(6), cts.Token).ContinueWith(t =>
-        {
-            if (t.IsCanceled) return;
-            ChatHintActive = false;
-            InvokeAsync(StateHasChanged);
-        }, TaskScheduler.Default);
+        _ = Task.Delay(TimeSpan.FromSeconds(6), cts.Token).ContinueWith(_ =>
+            // State flips on the renderer context — never from the timer's background thread.
+            InvokeAsync(() =>
+            {
+                if (cts.IsCancellationRequested) return;
+                ChatHintActive = false;
+                StateHasChanged();
+            }), TaskContinuationOptions.OnlyOnRanToCompletion);
     }
 
     /// <summary>Stops the pulse — the user found the toggle (clicked it), which is the hint's job done.</summary>
