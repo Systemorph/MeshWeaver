@@ -139,9 +139,12 @@ public sealed class FrameworkReleaseBroadcaster
     }
 
     // One repo's dispatch, already isolated: a non-2xx status OR a thrown exception both become a
-    // RepoDispatch(ok:false), so Concat never short-circuits on the first failure.
+    // RepoDispatch(ok:false), so Concat never short-circuits on the first failure. Invoke, not
+    // Run: Run is the eager promise-cache shape — it starts the POST at call time, decoupled from
+    // the subscription, so an unsubscribe (timeout, shutdown) would leave the dispatch running and
+    // holding an HTTP pool slot. Invoke stays cold and propagates cancellation into the leaf's ct.
     private IObservable<RepoDispatch> DispatchOne(string token, string repo, string eventType, string? version) =>
-        HttpPool.Run(ct => PostDispatchAsync(token, repo, eventType, version, ct))
+        HttpPool.Invoke(ct => PostDispatchAsync(token, repo, eventType, version, ct))
             .Catch((Exception ex) => Observable.Return(new RepoDispatch(repo, false, ex.Message)));
 
     private async Task<RepoDispatch> PostDispatchAsync(
