@@ -373,11 +373,13 @@ public class OAuthConnectController(
     /// Removes this client's PREVIOUS tokens once a fresh authorization has minted its replacement
     /// (#1493), so a `(user, client_id)` pair has exactly one live credential.
     ///
-    /// <para>Identity is the label — <c>OAuth: {client_id}</c> — and <c>client_id</c> is a random
-    /// 24-byte value issued per client registration, so a shared label means the same client. The
-    /// token just minted is excluded by PATH, which also makes the read's lag harmless: a listing
-    /// that has not caught up yet simply leaves an older row for the next authorization to collect,
-    /// and can never take the new one.</para>
+    /// <para>Identity is the label — <c>OAuth: {client_id}</c> — and <c>client_id</c> is DERIVED
+    /// from the client's own metadata (see <see cref="DeriveClientId"/>), so a shared label means
+    /// the same client. When ids were still random per registration this filter never matched
+    /// anything, which is exactly why the token rows piled up; a re-registering client keeping its
+    /// id is what makes superseding fire at all. The token just minted is excluded by PATH, which
+    /// also makes the read's lag harmless: a listing that has not caught up yet simply leaves an
+    /// older row for the next authorization to collect, and can never take the new one.</para>
     ///
     /// <para>Deleted, not merely marked revoked: this issue is BOTH "one live credential" and the
     /// unbounded accumulation behind it, and a revoked row keeps accumulating. It matches what
