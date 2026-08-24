@@ -44,7 +44,23 @@ public static class ThreadMessageTool
             if (string.IsNullOrWhiteSpace(text))
                 return "submit_message requires non-empty text; nothing was sent.";
 
+            // Normalise FIRST, then validate the NORMALISED value. `/`, `@/` and `///` all survive
+            // the whitespace check above and normalise to empty — and MeshNode.FromPath("") throws
+            // ArgumentException, which aborts the whole round instead of returning a tool result
+            // the model can act on. A tool must answer, never explode.
             var target = threadPath.Trim().TrimStart('@').Trim('/');
+            if (target.Length == 0)
+                return "submit_message requires a real thread path such as "
+                       + "'alice/_Thread/quarterly-review'; that value normalises to nothing.";
+
+            // Structural guard with a speaking answer, BEFORE the self-send comparison: a path is
+            // checked for being well-formed before it is compared to anything. SubmitMessage
+            // refuses an ownerless top-level `_Thread/{id}` (no partition, no per-node hub — the
+            // cross-hub write would NotFound-storm the router); saying so beats the agent retrying
+            // the same bad path.
+            if (ActivityNodeGuard.IsOwnerless(MeshNode.FromPath(target), out var reason))
+                return $"'{target}' is not a valid thread path: {reason}. "
+                       + "A thread lives at {owner}/_Thread/{id}.";
 
             // Refuse the self-send rather than let an agent queue work onto its own round: the
             // message would be drained by the watcher into the conversation the agent is already
@@ -54,13 +70,6 @@ public static class ThreadMessageTool
                 && string.Equals(own, target, StringComparison.OrdinalIgnoreCase))
                 return "submit_message targets ANOTHER thread — this is the thread you are already in. "
                        + "Just answer here, or use delegate_to_agent to open a sub-thread.";
-
-            // Structural guard with a speaking answer. SubmitMessage refuses an ownerless
-            // top-level `_Thread/{id}` (no partition, no per-node hub — the cross-hub write would
-            // NotFound-storm the router); saying so beats the agent retrying the same bad path.
-            if (ActivityNodeGuard.IsOwnerless(MeshNode.FromPath(target), out var reason))
-                return $"'{target}' is not a valid thread path: {reason}. "
-                       + "A thread lives at {owner}/_Thread/{id}.";
 
             string? failure = null;
             hub.SubmitMessage(target, text, onError: e => failure = e);
