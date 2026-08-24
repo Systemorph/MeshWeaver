@@ -33,7 +33,7 @@ public partial class QueryParser
             return ParsedQuery.Empty with { Paths = listPaths, Path = listPaths[0] };
 
         var tokens = Tokenize(query);
-        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths) = ExtractReservedQualifiers(tokens);
+        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent) = ExtractReservedQualifiers(tokens);
 
         // Parse the filter expression from remaining tokens
         QueryNode? filter = null;
@@ -43,7 +43,13 @@ public partial class QueryParser
             filter = ParseOr(filterTokens, ref position);
         }
 
-        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths);
+        // `is:content` IS a context — the one every browsing surface means. Defaulting it here is
+        // what keeps the existing exclusion machinery (per-node ExcludeFromContext, and per-type
+        // when the marked node is a NodeType definition, pushed into SQL by the DB providers)
+        // working unchanged, instead of these surfaces continuing to claim `context:search`.
+        // An explicit context: always wins.
+        context ??= isContent == true ? MeshContexts.Content : null;
+        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent);
     }
 
     /// <summary>
@@ -440,7 +446,7 @@ public partial class QueryParser
     /// Extracts reserved qualifiers (path, namespace, scope, sort, limit, source) from tokens.
     /// Returns remaining filter tokens and extracted values.
     /// </summary>
-    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context, bool? IsMain, IReadOnlyList<string>? Paths)
+    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context, bool? IsMain, IReadOnlyList<string>? Paths, bool? IsContent)
         ExtractReservedQualifiers(List<Token> tokens)
     {
         var filterTokens = new List<Token>();
@@ -467,6 +473,7 @@ public partial class QueryParser
         IReadOnlyList<string>? select = null;
         string? context = null;
         bool? isMain = null;
+        bool? isContent = null;
 
         foreach (var token in tokens)
         {
@@ -617,6 +624,10 @@ public partial class QueryParser
                 {
                     if (value.Equals("main", StringComparison.OrdinalIgnoreCase))
                         isMain = true;
+                    // is:content — "I am listing content for a person, so do not hand me
+                    // registration nodes". The surface states its own need on its own query.
+                    else if (value.Equals("content", StringComparison.OrdinalIgnoreCase))
+                        isContent = true;
                     continue;
                 }
             }
@@ -675,7 +686,7 @@ public partial class QueryParser
         }
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
-        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths);
+        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent);
     }
 
     /// <summary>

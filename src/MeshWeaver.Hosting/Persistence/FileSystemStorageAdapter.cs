@@ -19,7 +19,14 @@ public class FileSystemStorageAdapter : IStorageAdapter
 {
     private readonly string _baseDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
-    private readonly FileFormatParserRegistry _parserRegistry = new();
+    // 🚨 Contributed parsers reach this adapter or agents silently degrade. The agent file format
+    // ships with MeshWeaver.AI, not with core hosting, and MarkdownFileParser accepts every `.md`
+    // — so without the contribution an `.md` carrying `nodeType: Agent` still parses, still claims
+    // to be an Agent, and merely loses its AgentConfiguration: an agent-shaped node that cannot
+    // act, with no exception and no log line. This adapter backs the FILE-SYSTEM mesh, which is
+    // what the dev monolith and every local e2e run on, so a miss here is invisible in CI and
+    // obvious to whoever runs the portal.
+    private readonly FileFormatParserRegistry _parserRegistry;
     // I/O leaves (Read / Write / FindBestPrefixMatch / SavePartitionObjects) are
     // bridged to IObservable through this pool — never via a bare
     // Observable.FromAsync, which deadlocks under a blocking subscriber. See
@@ -36,20 +43,39 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// </summary>
     private static readonly string[] SupportedExtensions = [".md", ".cs", ".json"];
 
+    // In-process change feed — same isolated-per-subscriber shape as InMemory/PG/Sqlite/Cosmos.
+    // 🚨 This adapter used to be the ONE mutating adapter that never overrode
+    // IStorageAdapter.Changes (interface default: Observable.Empty), which made EVERY live synced
+    // query on a FileSystem-backed mesh delta-blind: the query emitted its Initial snapshot once
+    // and never re-ran — a thread created after page load never appeared in the threads side menu,
+    // the resume picker, or any reactive catalog, on every circuit, for the life of the process
+    // (the synced-query cache lives per (id, user, query-set) for the process). Commit BEFORE
+    // publish, notification-as-trigger (see StorageAdapterMeshQueryProvider #1250 — the consumer
+    // re-queries; the Entity is informational).
+    private readonly IsolatedChangeFeed _changes;
+
+    /// <inheritdoc />
+    public IObservable<DataChangeNotification> Changes => _changes;
+
     /// <summary>
     /// Creates a new FileSystemStorageAdapter.
     /// </summary>
     /// <param name="baseDirectory">Base directory for file storage</param>
     /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing (e.g., to enable WriteIndented)</param>
     /// <param name="ioPoolRegistry">Optional I/O pool registry; the <c>FileSystem</c> pool bridges async file I/O to <c>IObservable</c>. When <c>null</c>, the unbounded pool is used.</param>
+    /// <param name="logger">Optional logger — the change feed uses it to surface a subscriber that throws during fan-out (without it, the isolation would swallow the fault silently).</param>
     public FileSystemStorageAdapter(
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
-        IoPoolRegistry? ioPoolRegistry = null)
+        IoPoolRegistry? ioPoolRegistry = null,
+        Microsoft.Extensions.Logging.ILogger? logger = null,
+        IEnumerable<Parsers.IFileFormatParser>? contributedParsers = null)
     {
+        _parserRegistry = new FileFormatParserRegistry(contributedParsers: contributedParsers);
         _baseDirectory = baseDirectory;
         _writeOptionsModifier = writeOptionsModifier;
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+        _changes = new IsolatedChangeFeed(logger, "file-system");
         Directory.CreateDirectory(baseDirectory);
     }
 
@@ -183,7 +209,14 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => _ioPool.Run<MeshNode?>(async ct => { await WriteAsyncCore(node, options, ct).ConfigureAwait(false); return node; });
+        => _ioPool.Run<MeshNode?>(async ct =>
+        {
+            await WriteAsyncCore(node, options, ct).ConfigureAwait(false);
+            // Committed to disk above — publish AFTER the commit, like every other mutating
+            // adapter, so a consumer's re-query sees the row it was notified about.
+            _changes.OnNext(DataChangeNotification.Updated(node.Path.Trim('/'), node));
+            return node;
+        });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -240,8 +273,16 @@ public class FileSystemStorageAdapter : IStorageAdapter
     }
 
     /// <inheritdoc />
+    /// <remarks>Routed through the FileSystem <see cref="IIoPool"/> like Read/Write — the delete
+    /// is synchronous file I/O and must never run on a hub/query subscriber's thread.</remarks>
     public IObservable<string> Delete(string path)
-        => Observable.Defer(() => { DeleteCore(path); return Observable.Return(path); });
+        => _ioPool.InvokeBlocking(_ =>
+        {
+            DeleteCore(path);
+            // Committed above — publish after, notification-as-trigger (no entity needed).
+            _changes.OnNext(DataChangeNotification.Deleted(path.Trim('/')));
+            return path;
+        });
 
     private void DeleteCore(string path)
     {

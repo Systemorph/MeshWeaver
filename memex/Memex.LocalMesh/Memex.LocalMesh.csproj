@@ -9,6 +9,7 @@
   <ItemGroup>
     <!-- The in-process (monolith) mesh + SQLite persistence — the same local-first stack the MAUI client
          runs in-process, here as a headless host so a JS client (React Native / web) can reach it over gRPC. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Sqlite\MeshWeaver.Hosting.Sqlite.csproj" />
     <!-- The gRPC bridge (bidi Open + gRPC-web Connect/Deliver split) the foreign-language clients use. -->
@@ -22,6 +23,42 @@
          installed. The Whisper client itself arrives as a MODULE (below). -->
     <ProjectReference Include="..\..\src\MeshWeaver.Speech.Contract\MeshWeaver.Speech.Contract.csproj" />
   </ItemGroup>
+
+  <!-- ═════════ The RN web client is BAKED at publish — never hand-copied ═════════
+       The GUI this host serves (Program.cs: UseStaticFiles + MapFallbackToFile) is the React
+       Native app exported to web (clients/react-native, `npm run web:export`). Until this
+       target existed the only lane was a MANUAL `cp -R dist/. wwwroot/` (docs/shell.md), so every
+       shipped sidecar served whatever bundle happened to be lying around — stale UI that "shows
+       the old user view" while the mesh underneath is current, and main-cd's image-relevance
+       filter even classes clients/react-native/ as entering no image because nothing consumed it.
+
+       So a RELEASE PUBLISH bakes the client, the same way the modules/ closure lane rides
+       Publish (MeshModulesPublish.targets): export fresh (an existing dist/ is exactly the
+       staleness this target exists to kill, so it is never trusted), then lay dist/ into
+       $(PublishDir)wwwroot/. Debug builds and `dotnet run` are untouched (dev serves the app from
+       Metro, or the last manual copy). The export shells to npm, which every environment that
+       Release-publishes this host already has (the CI runners build the JS clients; the image
+       publish runs on the runner, not inside the container). Opt out per-invocation with
+       BakeRnWebClient=false (an msbuild property), noting the export fails RED when it breaks:
+       a bake that silently ships without its GUI would be the skip-trapdoor CI forbids. -->
+  <Target Name="BakeRnWebClient" AfterTargets="Publish"
+          Condition="'$(Configuration)' == 'Release' AND '$(BakeRnWebClient)' != 'false'">
+    <PropertyGroup>
+      <RnClientDir>$(MSBuildThisFileDirectory)../../clients/react-native/</RnClientDir>
+    </PropertyGroup>
+    <!-- npm ci only when node_modules is absent (a dev tree already has it; CI does not). -->
+    <Exec Command="npm ci --no-audit --no-fund" WorkingDirectory="$(RnClientDir)"
+          Condition="!Exists('$(RnClientDir)node_modules')" />
+    <Exec Command="npm run web:export" WorkingDirectory="$(RnClientDir)" />
+    <ItemGroup>
+      <RnWebFiles Include="$(RnClientDir)dist/**/*" />
+    </ItemGroup>
+    <Error Text="BakeRnWebClient: the web export produced no dist/index.html — refusing to publish a GUI-less sidecar (pass -p:BakeRnWebClient=false to opt out deliberately)."
+           Condition="!Exists('$(RnClientDir)dist/index.html')" />
+    <RemoveDir Directories="$(PublishDir)wwwroot" />
+    <Copy SourceFiles="@(RnWebFiles)" DestinationFiles="@(RnWebFiles->'$(PublishDir)wwwroot/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Message Importance="high" Text="BakeRnWebClient: baked @(RnWebFiles->Count()) files into $(PublishDir)wwwroot/" />
+  </Target>
 
   <!-- ═════════ Voice ships as a module, not as a reference ═════════
        MeshWeaver.Speech lands in modules/MeshWeaver.Speech/ and is activated by

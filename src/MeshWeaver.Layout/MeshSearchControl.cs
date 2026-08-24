@@ -49,7 +49,15 @@ public enum MeshSearchRenderMode
     /// (<c>scope:ancestors</c> above, <c>scope:nextLevel</c> below). Clicking a card or an
     /// ancestor re-roots the view there and recomputes both — "navigate → visualize → navigate".
     /// </summary>
-    GraphNavigator
+    GraphNavigator,
+
+    /// <summary>
+    /// A phone-home ICON grid: each result renders as a large rounded icon with its name
+    /// underneath — the home's Apps look. Rendered entirely from the query row (name/icon are
+    /// result columns), so no per-result content read or hub activation happens. Appended last:
+    /// enum members serialize by NAME, but the ordinal must stay stable for older rows.
+    /// </summary>
+    Icons
 }
 
 /// <summary>
@@ -83,6 +91,43 @@ public record MeshSearchScopeTab(string Label, string Query)
     /// while this scope is active (first = this scope's default). Null keeps the control-level set.
     /// </summary>
     public IReadOnlyList<MeshSearchSortOption>? SortOptions { get; init; }
+
+    /// <summary>
+    /// Per-item layout area used while this scope is active, REPLACING the control-level
+    /// <see cref="MeshSearchControl.ItemArea"/>. Null keeps the control-level one. Prefer a
+    /// row-rendered mode (e.g. <see cref="MeshSearchRenderMode.Icons"/>) over an item area where
+    /// the row data suffices — an item area activates one hub PER RESULT.
+    /// </summary>
+    public string? ItemArea { get; init; }
+
+    /// <summary>
+    /// Render mode while this scope is active, REPLACING the control-level
+    /// <see cref="MeshSearchControl.RenderMode"/> (the enum member's NAME, e.g. <c>"Icons"</c> —
+    /// the home's Apps scope renders the phone-home icon grid this way). Null keeps the
+    /// control-level mode.
+    /// </summary>
+    public string? RenderMode { get; init; }
+
+    /// <summary>
+    /// When true, clicking a result of this scope navigates to the node's <c>MainNode</c> instead
+    /// of its own path — the home's Apps records point at the APP they represent this way, with no
+    /// content read. Null keeps the control-level <see cref="MeshSearchControl.NavigateToMainNode"/>.
+    /// </summary>
+    public bool? NavigateToMainNode { get; init; }
+
+    /// <summary>
+    /// Order this scope's results by when the VIEWER last opened each result's navigation target,
+    /// most recent first, with never-opened results keeping the query's own order behind them —
+    /// the phone-home rule: what you use most sits where your thumb is. Applied wherever results
+    /// are projected, so every render mode honours it, not just the icon grid.
+    /// <para>Applied at PAINT, not in the query, and deliberately: <c>source:accessed</c> is an
+    /// INNER JOIN on the access log keyed by the result's OWN path, so on the Apps grid it would
+    /// both hide every never-opened app AND match nothing (an app record's access is recorded
+    /// against the app it points at, never against the record). The view instead reads the
+    /// viewer's own <c>_UserActivity</c> satellites — one cheap single-partition query — and uses
+    /// them as a SORT KEY. Ordering arrives with that snapshot, after the tiles have painted.</para>
+    /// </summary>
+    public bool SortByAccess { get; init; }
 }
 
 /// <summary>
@@ -169,6 +214,25 @@ public record MeshSearchControl()
     /// <see cref="HiddenQuery"/>, which should equal the first tab's query.
     /// </summary>
     public IReadOnlyList<MeshSearchScopeTab>? ScopeTabs { get; init; }
+
+    /// <summary>
+    /// In a grouped render, order the sections by SIZE (most items first) instead of
+    /// alphabetically — the home's content section fans out by node type with the type you have
+    /// most of at the top, so the page opens on what you actually work with rather than on
+    /// whatever happens to start with "A". Ties fall back to the label, so the order is stable.
+    /// </summary>
+    public object? GroupByFrequency { get; init; }
+
+    /// <summary>Sets <see cref="GroupByFrequency"/>.</summary>
+    public MeshSearchControl WithGroupByFrequency(bool value = true) =>
+        This with { GroupByFrequency = value };
+
+    /// <summary>
+    /// When true, clicking a result navigates to the node's <c>MainNode</c> instead of its own
+    /// path (default false). A per-scope <see cref="MeshSearchScopeTab.NavigateToMainNode"/>
+    /// overrides this while its scope is active.
+    /// </summary>
+    public object? NavigateToMainNode { get; init; }
 
     /// <summary>
     /// Whether to exclude the base path node from results (default true).

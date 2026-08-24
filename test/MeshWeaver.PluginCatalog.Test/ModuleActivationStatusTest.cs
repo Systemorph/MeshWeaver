@@ -34,6 +34,11 @@ public class ModuleActivationStatusTest : IDisposable
     private static IReadOnlySet<string> Loaded(params string[] names) =>
         names.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>A satisfied platform gate — the state of every pre-shelf test, kept explicit
+    /// because the gate is a required input: pending-ness PROMISES that a restart loads the
+    /// module, and only the floor gate can keep that promise honest (2026-08-22).</summary>
+    private static readonly Func<string?, string?> FloorSatisfied = _ => null;
+
     // ── the pure derivation ─────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -48,7 +53,8 @@ public class ModuleActivationStatusTest : IDisposable
                     new ModuleActivationEntry { Name = "MeshWeaver.Loaded" },
                 ],
             },
-            Loaded("MeshWeaver.Loaded"));
+            Loaded("MeshWeaver.Loaded"),
+            FloorSatisfied);
 
         pending.Should().ContainSingle();
         pending[0].Name.Should().Be("MeshWeaver.Acme");
@@ -69,7 +75,8 @@ public class ModuleActivationStatusTest : IDisposable
                 PendingRestart = false,
                 Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Acme" }],
             },
-            Loaded("MeshWeaver.Something.Else"));
+            Loaded("MeshWeaver.Something.Else"),
+            FloorSatisfied);
 
         pending.Should().ContainSingle();
     }
@@ -84,7 +91,8 @@ public class ModuleActivationStatusTest : IDisposable
                     PendingRestart = true,
                     Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Acme" }],
                 },
-                Loaded("MeshWeaver.Acme"))
+                Loaded("MeshWeaver.Acme"),
+                FloorSatisfied)
             .Should().BeEmpty();
     }
 
@@ -97,8 +105,40 @@ public class ModuleActivationStatusTest : IDisposable
                 {
                     Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Removed", Enabled = false }],
                 },
-                Loaded())
+                Loaded(),
+                FloorSatisfied)
             .Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// 🚨 A HELD entry (2026-08-22) — floor above the running platform, the registry-shelf state — is
+    /// NOT pending: "pending" promises that a restart loads the module, and boot's floor gate
+    /// would skip this one, so the prompt could never be cleared by the restart it asks for. The
+    /// moment the platform satisfies the floor (same entry, same gate), the promise becomes true
+    /// and the entry IS pending — until the boot that reported it loads it.
+    /// </summary>
+    [Fact]
+    public void AHeldEntry_IsNotPending_UntilThePlatformSatisfiesItsFloor()
+    {
+        var list = new ModuleActivationList
+        {
+            Entries = [new ModuleActivationEntry
+            {
+                Name = "MeshWeaver.Speech", MinMeshVersion = "3.0.0-rc7",
+            }],
+        };
+
+        ModuleActivationStatus.NotYetLoaded(list, Loaded(),
+                floor => ModulePlatformFloor.DeclineReason(floor, "3.0.0-rc6"))
+            .Should().BeEmpty(
+                "a restart cannot activate a held module — reporting it would be a permanent "
+                + "restart prompt no restart can clear");
+
+        ModuleActivationStatus.NotYetLoaded(list, Loaded(),
+                floor => ModulePlatformFloor.DeclineReason(floor, "3.0.0-rc7"))
+            .Should().ContainSingle(
+                "once the platform satisfies the floor, the restart promise is honest again")
+            .Subject.Name.Should().Be("MeshWeaver.Speech");
     }
 
     [Fact]
@@ -106,7 +146,8 @@ public class ModuleActivationStatusTest : IDisposable
     {
         ModuleActivationStatus.NotYetLoaded(
                 new ModuleActivationList { Entries = [new ModuleActivationEntry { Name = "MeshWeaver.ACME" }] },
-                Loaded("meshweaver.acme"))
+                Loaded("meshweaver.acme"),
+                FloorSatisfied)
             .Should().BeEmpty();
     }
 

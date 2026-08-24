@@ -51,7 +51,9 @@ public static class SuppliedNavigationRail
     /// <param name="Path">The node the group stands for.</param>
     /// <param name="Expanded">Open only when the reader is at or below <paramref name="Path"/>.</param>
     /// <param name="Links">The entry's own link first, then its children.</param>
-    public sealed record RailGroup(string Label, string Path, bool Expanded, IReadOnlyList<RailLink> Links);
+    /// <param name="Icon">The entry's icon, if it has one — the heading shows it, so a group reads
+    /// like the links beside it instead of losing its icon by having children.</param>
+    public sealed record RailGroup(string Label, string Path, bool Expanded, IReadOnlyList<RailLink> Links, string? Icon = null);
 
     /// <summary>The whole rail: the heading link, flat entries, then the groups.</summary>
     /// <param name="Home">The index root — a link, not a collapsible heading.</param>
@@ -79,7 +81,7 @@ public static class SuppliedNavigationRail
             // {Root}" — a rendering error for what is really a missing node.
             root is null ? null : "/" + root,
             root is not null && string.Equals(root, currentPath, StringComparison.Ordinal),
-            null);
+            supplied.Icon);
 
         var pages = new List<RailLink>();
         var groups = new List<RailGroup>();
@@ -94,7 +96,7 @@ public static class SuppliedNavigationRail
 
             var links = new List<RailLink> { Link(entry) };
             links.AddRange(entry.Children.Select(Link));
-            groups.Add(new RailGroup(entry.Label, entry.Path, IsAtOrBelow(currentPath, entry.Path), links));
+            groups.Add(new RailGroup(entry.Label, entry.Path, IsAtOrBelow(currentPath, entry.Path), links, entry.Icon));
         }
 
         return new Rail(home, pages, groups);
@@ -124,6 +126,8 @@ public static class SuppliedNavigationRail
             // how clicking the index title used to collapse the whole index. The group's own page
             // is the first LINK inside it.
             var rendered = new NavGroupControl(group.Label).WithSkin(s => s.WithExpanded(group.Expanded));
+            if (group.Icon is not null)
+                rendered = rendered.WithIcon(group.Icon);
             foreach (var link in group.Links)
                 rendered = rendered.WithView(RenderLink(link));
             menu = menu.WithNavGroup(rendered);

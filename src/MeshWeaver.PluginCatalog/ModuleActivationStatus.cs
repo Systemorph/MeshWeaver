@@ -34,27 +34,42 @@ public static class ModuleActivationStatus
 {
     /// <summary>
     /// The enabled entries in <paramref name="activation"/> whose assembly is not among
-    /// <paramref name="loadedAssemblyNames"/>.
+    /// <paramref name="loadedAssemblyNames"/> — and which a restart would actually load.
     ///
     /// <para>A DISABLED entry is never pending: it is the record of an uninstall, and its module
     /// being absent from this process is the outcome, not a to-do. (An uninstall that has not taken
     /// effect yet — the module still loaded — is deliberately not reported either: nothing is
     /// missing from the user's point of view, and reporting it would put an alarming "restart
     /// required" on a package that has just been removed.)</para>
+    ///
+    /// <para>🚨 A HELD entry — one whose recorded platform floor <paramref name="platformGate"/>
+    /// refuses — is not pending either (2026-08-22). "Pending" is a promise: a restart activates this.
+    /// For a held entry that promise is false — boot applies the SAME gate and skips it — so
+    /// reporting it would put a permanent "restart required" on the surface that no restart can
+    /// ever clear (a registry SHELVES modules for platforms newer than itself, and the hold lasts
+    /// until a platform update; the update is itself a restart, at which point the entry loads and
+    /// leaves this question entirely). The gate is a parameter for the same reason boot's is:
+    /// production passes <see cref="ModulePlatformFloor.DeclineReason(string?)"/>, and there is
+    /// never a second notion of the module platform requirement.</para>
     /// </summary>
     /// <param name="activation">The persisted activation list.</param>
     /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
+    /// <param name="platformGate">Returns WHY a recorded platform FLOOR is not satisfied by the
+    /// running platform, or null when it is (an absent floor is always satisfied).</param>
     public static ImmutableList<PendingModuleActivation> NotYetLoaded(
         ModuleActivationList activation,
-        IReadOnlySet<string> loadedAssemblyNames)
+        IReadOnlySet<string> loadedAssemblyNames,
+        Func<string?, string?> platformGate)
     {
         ArgumentNullException.ThrowIfNull(activation);
         ArgumentNullException.ThrowIfNull(loadedAssemblyNames);
+        ArgumentNullException.ThrowIfNull(platformGate);
 
         return activation.Entries
             .Where(entry => entry.Enabled
                 && !string.IsNullOrWhiteSpace(entry.Name)
-                && !loadedAssemblyNames.Contains(entry.Name))
+                && !loadedAssemblyNames.Contains(entry.Name)
+                && platformGate(entry.MinMeshVersion) is null)
             .Select(entry => new PendingModuleActivation(entry.Name, entry.PackagePath, entry.Version))
             .ToImmutableList();
     }

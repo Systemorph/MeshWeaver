@@ -1,4 +1,5 @@
 using MeshWeaver.Data;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -41,13 +42,16 @@ public static class AppNodeType
         return builder;
     }
 
-    /// <summary>MeshNode definition for <c>nodeType:InstalledApp</c>.</summary>
+    /// <summary>MeshNode definition for <c>nodeType:InstalledApp</c>. No per-record layout area:
+    /// the home's Apps grid paints its icon tiles straight from the query rows
+    /// (<c>MeshSearchRenderMode.Icons</c>) — a per-record tile area meant one hub activation PER
+    /// RESULT, the exact load the record model exists to avoid.</summary>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Installed App",
         Icon = "/static/NodeTypeIcons/puzzlepiece.svg",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<App>())
