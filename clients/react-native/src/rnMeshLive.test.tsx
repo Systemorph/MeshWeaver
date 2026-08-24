@@ -354,62 +354,137 @@ describe("MeshSearch union queries", () => {
   });
 });
 
-// ---- MeshSearch scope tabs + Icons (the tabbed home) -----------------------------------------
+// ---- MeshSearch home design (scope tabs · Icons grid · SortByAccess · grouped sections) --------
 
-describe("MeshSearch scope tabs (the tabbed user home)", () => {
-  const HOME = {
-    $type: "MeshSearch",
-    hiddenQuery: "source:accessed",
-    scopeTabs: [
-      { label: "Spaces", query: "source:accessed" },
-      { label: "Apps", query: "path:rbuergi/_App scope:children nodeType:InstalledApp",
-        renderMode: "Icons", navigateToMainNode: true },
-    ],
+describe("MeshSearch home design", () => {
+  const appRows = [
+    { path: "u1/_App/alpha", id: "alpha", name: "Alpha", nodeType: "InstalledApp", mainNode: "store/Alpha", icon: "🅰" },
+    { path: "u1/_App/beta", id: "beta", name: "Beta", nodeType: "InstalledApp", mainNode: "store/Beta", icon: "🅱" },
+  ];
+  const appsScope = {
+    label: "Apps",
+    query: "path:u1/_App scope:children nodeType:InstalledApp",
+    renderMode: "Icons",
+    navigateToMainNode: true,
   };
 
-  /** A LIVE renderer (not a toJSON snapshot) so tapping a tab actually re-renders. */
-  async function mount(ops: MeshOps, onNavigate: (t: unknown) => void = () => {}) {
+  it("a SINGLE scope applies its settings without a strip: Icons tiles, row-only select, mainNode target", async () => {
+    const search = vi.fn(async () => appRows);
+    const ops = fakeOps({ search });
+    const navigate = vi.fn();
     let r!: TestRenderer.ReactTestRenderer;
     await TestRenderer.act(async () => {
       r = TestRenderer.create(
-        <RegistryProvider pack={rnPack}>
-          <MeshOpsProvider ops={ops}>
-            <NavContext.Provider value={onNavigate as never}>
-              <ScopeProvider source={new StaticAreaSource({ areas: { main: HOME } })} area="main">
+        <NavContext.Provider value={navigate}>
+          <RegistryProvider pack={rnPack}>
+            <MeshOpsProvider ops={ops}>
+              <ScopeProvider
+                source={
+                  new StaticAreaSource({
+                    areas: {
+                      main: {
+                        $type: "MeshSearch",
+                        hiddenQuery: appsScope.query,
+                        showSearchBox: false,
+                        scopeTabs: [appsScope],
+                      } as never,
+                    },
+                  })
+                }
+                area="main"
+              >
                 <RenderArea areaKey="main" />
               </ScopeProvider>
-            </NavContext.Provider>
-          </MeshOpsProvider>
-        </RegistryProvider>,
+            </MeshOpsProvider>
+          </RegistryProvider>
+        </NavContext.Provider>,
       );
     });
-    return r;
-  }
-
-  it("renders the strip and searches the FIRST scope by default", async () => {
-    const search = vi.fn(async () => [{ path: "Doc", name: "Documentation", nodeType: "Group", content: {} }]);
-    const r = await mount(fakeOps({ search }));
-    await TestRenderer.act(async () => { await new Promise((res) => setTimeout(res, 300)); });
-    const text = allText(r.toJSON() as Json);
-    expect(text).toContain("Spaces");
-    expect(text).toContain("Apps");
-    expect(search).toHaveBeenCalledWith("source:accessed", undefined);
+    await TestRenderer.act(async () => {
+      await new Promise((res) => setTimeout(res, 300)); // the 250 ms search debounce
+    });
+    const j = r.toJSON() as Json;
+    // Row-only: the icon grid never pulls content over the wire.
+    expect(search).toHaveBeenCalledWith(
+      "path:u1/_App scope:children nodeType:InstalledApp select:path,id,namespace,name,nodeType,icon,mainNode",
+      undefined,
+    );
+    const text = allText(j).join("\n");
+    expect(text).toContain("Alpha");
+    expect(text).toContain("Beta");
+    // One tab ⇒ no tab strip.
+    expect([...walk(j)].some((n) => n.props?.accessibilityRole === "tablist")).toBe(false);
+    // Pressing a tile navigates to the row's mainNode (the APP), never the record.
+    const tile = r.root.findAll((n) => n.props?.accessibilityLabel === "Alpha")[0];
+    await TestRenderer.act(async () => {
+      tile.props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledWith({ address: "store/Alpha", area: "" });
   });
 
-  it("switching to Apps swaps the hidden query, paints the ICON grid, and a tap opens the MainNode", async () => {
+  it("SortByAccess orders most-recently-used first from the viewer's access log, keeping never-opened tiles", async () => {
     const search = vi.fn(async (q: string) =>
-      q.includes("_App")
-        ? [{ path: "rbuergi/_App/Doc", name: "Documentation", nodeType: "InstalledApp", mainNode: "Doc", icon: "X", content: {} }]
-        : []);
-    const navigated: unknown[] = [];
-    const r = await mount(fakeOps({ search }), (t) => navigated.push(t));
-    const tabs = r.root.findAll((n) => typeof n.type === "string" && n.props?.accessibilityRole === "tab");
-    expect(tabs.length).toBe(2);
-    await TestRenderer.act(async () => { tabs[1].props.onPress(); await new Promise((res) => setTimeout(res, 300)); });
-    expect(search).toHaveBeenCalledWith("path:rbuergi/_App scope:children nodeType:InstalledApp", undefined);
-    // The tile navigates to the APP the record points at (MainNode) — never the record itself.
-    const tile = r.root.findAll((n) => typeof n.type === "string" && n.props?.accessibilityLabel === "Documentation")[0];
-    await TestRenderer.act(async () => { tile.props.onPress(); });
-    expect(navigated).toContainEqual({ address: "Doc", area: "" });
+      q.includes("_UserActivity")
+        ? [{ id: "store_Beta", lastModified: "2026-08-20T10:00:00Z", path: "u1/_UserActivity/store_Beta", nodeType: "UserActivity" }]
+        : appRows,
+    );
+    const ops = fakeOps({ search, userId: "u1" });
+    const j = await renderLive(
+      {
+        areas: {
+          main: {
+            $type: "MeshSearch",
+            hiddenQuery: appsScope.query,
+            showSearchBox: false,
+            scopeTabs: [{ ...appsScope, sortByAccess: true }],
+          } as never,
+        },
+      },
+      ops,
+    );
+    await TestRenderer.act(async () => {
+      await new Promise((res) => setTimeout(res, 300));
+    });
+    // The access log was read row-only from the viewer's own partition…
+    expect(search.mock.calls.some((c) => String(c[0]).startsWith("namespace:u1/_UserActivity nodeType:UserActivity"))).toBe(true);
+    // …and Beta (opened — its TARGET store/Beta is logged, '/'→'_') leads while Alpha stays.
+    const labels = allText(j).filter((t2) => t2 === "Alpha" || t2 === "Beta");
+    expect(labels).toEqual(["Beta", "Alpha"]);
+  });
+
+  it("renders the strip for 2+ scopes and groups by nodeType with counts, biggest group first", async () => {
+    const search = vi.fn(async () => [
+      { path: "a/1", name: "One", nodeType: "Story" },
+      { path: "a/2", name: "Two", nodeType: "Space" },
+      { path: "a/3", name: "Three", nodeType: "Space" },
+    ]);
+    const ops = fakeOps({ search });
+    const j = await renderLive(
+      {
+        areas: {
+          main: {
+            $type: "MeshSearch",
+            hiddenQuery: "is:main",
+            renderMode: "Grouped",
+            groupByFrequency: true,
+            showSearchBox: false,
+            grouping: { groupByProperty: "NodeType" },
+            scopeTabs: [
+              { label: "All", query: "is:main" },
+              { label: "Pinned", query: "path:(a/1)" },
+            ],
+          } as never,
+        },
+      },
+      ops,
+    );
+    await TestRenderer.act(async () => {
+      await new Promise((res) => setTimeout(res, 300));
+    });
+    expect([...walk(j)].some((n) => n.props?.accessibilityRole === "tablist")).toBe(true);
+    const text = allText(j);
+    // Counts on the section headers, biggest group first.
+    const headers = text.filter((t2) => /\(\d\)$/.test(t2));
+    expect(headers).toEqual(["Space (2)", "Story (1)"]);
   });
 });

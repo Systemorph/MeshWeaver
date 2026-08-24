@@ -18,9 +18,15 @@ a nuisance rather than a cloud compromise.
 kubectl apply -f namespace.yaml
 kubectl apply -f operator-serviceaccount.yaml      # edit AZURE_CLIENT_ID annotation first
 kubectl apply -f operator-rbac.yaml
-kubectl apply -f jobrunner.yaml
+kubectl apply -f jobrunner.yaml                    # 🚨 edit the SA/Secret namespace to your CONTROL
+                                                   # PORTAL's namespace first — a pod can only mount
+                                                   # Secrets from its own namespace, so they live
+                                                   # there, and the RoleBinding in memex-ops names
+                                                   # the foreign SA (verified with a
+                                                   # SubjectAccessReview: create-jobs true,
+                                                   # delete-namespaces false)
 # Mount the jobrunner token into the portal Deployment (portal-patch.json in the env folder):
-#   volume  : secret hosting-jobrunner-token
+#   volume  : secret hosting-jobrunner-token   (same namespace as the portal)
 #   mountPath: /var/run/secrets/hosting-operator
 ```
 

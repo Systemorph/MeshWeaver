@@ -55,14 +55,14 @@ jobs:
       matrix:
         entry: ${{ fromJson(inputs.modules) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check out Systemorph/MeshWeaver at the pinned ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
@@ -177,7 +177,7 @@ jobs:
           echo "bundle OK:"; jq . "$manifest"
 
       - name: Upload the bundle artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: module-bundle-${{ matrix.entry.module }}
           path: ${{ runner.temp }}/bundles/*.module.nupkg
