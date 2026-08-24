@@ -221,9 +221,9 @@
                         @if (IsIconsMode)
                         {
                             <div class="mesh-search-icons-grid">
-                                @* PaintOrdered: most-recently-opened first when the scope asked for
-                                   it (the phone-home rule), query order otherwise. *@
-                                @foreach (var node in PaintOrdered(visibleItems.OfType<MeshNode>().ToList()))
+                                @* Order is applied in ApplyResults (so every render mode honours
+                                   SortByAccess); the tiles just paint what they are given. *@
+                                @foreach (var node in visibleItems.OfType<MeshNode>())
                                 {
                                     @RenderIconTile(node)
                                 }

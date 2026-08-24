@@ -367,19 +367,43 @@ public partial class MeshSearchView
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{viewer}/_UserActivity nodeType:UserActivity " +
                 "select:path,id,namespace,name,nodeType,lastModified sort:LastModified-desc limit:500"))
-            .Subscribe(
-                change => InvokeAsync(() =>
+            // 🚨 FOLD the change feed — never rebuild from change.Items. Only Initial/Reset carry a
+            // full snapshot; Added/Updated/Removed carry ONLY the rows that changed, so rebuilding
+            // would replace the whole lookup with the one row that just moved and mis-order every
+            // tile from the first update onwards. Same Scan shape as ObserveSharedTargets.
+            .Scan(ImmutableDictionary<string, DateTimeOffset>.Empty, (map, change) =>
+            {
+                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                    return change.Items
+                        .Where(n => !string.IsNullOrEmpty(n.Id))
+                        .GroupBy(n => n.Id!, StringComparer.OrdinalIgnoreCase)
+                        .ToImmutableDictionary(g => g.Key, g => g.First().LastModified,
+                            StringComparer.OrdinalIgnoreCase);
+                foreach (var node in change.Items)
                 {
-                    var map = ImmutableDictionary.CreateBuilder<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var node in change.Items)
-                        if (!string.IsNullOrEmpty(node.Id))
-                            map[node.Id] = node.LastModified;
-                    var next = map.ToImmutable();
+                    if (string.IsNullOrEmpty(node.Id))
+                        continue;
+                    map = change.ChangeType switch
+                    {
+                        QueryChangeType.Added or QueryChangeType.Updated =>
+                            map.SetItem(node.Id!, node.LastModified),
+                        QueryChangeType.Removed => map.Remove(node.Id!),
+                        _ => map,
+                    };
+                }
+                return map;
+            })
+            .Subscribe(
+                next => InvokeAsync(() =>
+                {
                     if (next.Count == _accessOrder.Count && next.All(kv =>
                             _accessOrder.TryGetValue(kv.Key, out var at) && at == kv.Value))
                         return;
                     _accessOrder = next;
-                    StateHasChanged();
+                    // Re-PROJECT, not just re-render: the order is applied where results are
+                    // projected (ApplyResults), so a bare StateHasChanged would repaint the
+                    // previous order. Same re-projection the screen subscription uses.
+                    ReprojectForScreen();
                 }),
                 ex => MeshHub.ServiceProvider.GetService<ILoggerFactory>()
                     ?.CreateLogger("MeshWeaver.MeshSearchView")
@@ -955,7 +979,9 @@ public partial class MeshSearchView
         // a no-op for every viewer whose mode is off.
         visible = _screen.Filter(visible, TargetOf);
 
-        _nodes = visible.ToList();
+        // Most-recently-used first when the scope asked for it — applied HERE, so every render
+        // mode (icons, flat, list, grouped) honours it, not just the grid that first needed it.
+        _nodes = PaintOrdered(visible.ToList()).ToList();
         ResolveDeletePermissions(_nodes);
 
         if (ViewModel != null)

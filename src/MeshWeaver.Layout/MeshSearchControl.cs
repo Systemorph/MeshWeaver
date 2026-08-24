@@ -118,7 +118,8 @@ public record MeshSearchScopeTab(string Label, string Query)
     /// <summary>
     /// Order this scope's results by when the VIEWER last opened each result's navigation target,
     /// most recent first, with never-opened results keeping the query's own order behind them —
-    /// the phone-home rule: what you use most sits where your thumb is.
+    /// the phone-home rule: what you use most sits where your thumb is. Applied wherever results
+    /// are projected, so every render mode honours it, not just the icon grid.
     /// <para>Applied at PAINT, not in the query, and deliberately: <c>source:accessed</c> is an
     /// INNER JOIN on the access log keyed by the result's OWN path, so on the Apps grid it would
     /// both hide every never-opened app AND match nothing (an app record's access is recorded
