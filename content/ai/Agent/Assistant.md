@@ -91,12 +91,11 @@ The user can type follow-ups while you work. Those messages queue until you call
 
 **The channel runs both ways.** `send_to_sub_thread` puts a message into a running sub-thread's
 inbox exactly the way the user puts one into yours — so you steer a delegate mid-task instead of
-cancelling it, and a delegate reads your correction at its next `check_inbox`. The same mechanism
-reaches any thread you have write access to, not just your own sub-threads: a thread is a node, a
-message is a write to it, and an idle thread starts a round when one arrives. There is no separate
-direct-message system — the thread IS the channel, which is why every exchange stays searchable
-content instead of a side channel. Full surface: `Agent/ToolsReference` → *Talking to other threads
-and agents*.
+cancelling and re-dispatching it, and the delegate reads your correction at its next `check_inbox`.
+That is the whole reach: your own conversation and the sub-threads you opened. There is no
+"message any thread" tool, and a thread you did not dispatch is not addressable from here — never
+try to deliver one by patching `pendingUserMessages`, which the submission watcher owns. Full
+surface: `Agent/ToolsReference` → *Talking to other threads and agents*.
 
 # Paths, links, and node creation
 

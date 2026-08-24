@@ -640,8 +640,9 @@ You then proceed with the original task AND add unit tests, without waiting for 
 
 ## Talking to other threads and agents
 
-You are not limited to the conversation you are in. Three capabilities, one mechanism — **a thread
-is a node, and a message is a write to it**:
+You are not limited to the conversation you are in: you can open sub-threads, steer them while they
+run, and be steered yourself — one mechanism, because **a thread is a node and a conversation is its
+content**.
 
 | You want to | Use | Notes |
 |---|---|---|
@@ -649,7 +650,15 @@ is a node, and a message is a write to it**:
 | **Steer** a sub-thread that is already running | `send_to_sub_thread(path, message)` | Queues into its inbox; it picks the message up at its next `check_inbox`. Correct course instead of cancelling and re-dispatching. |
 | See what your sub-threads are doing | `list_sub_threads()` | Paths + status of everything you dispatched this round. |
 | **Receive** messages aimed at you mid-round | `check_inbox()` | Above. This is the receiving end of `send_to_sub_thread` — a delegated agent is steered exactly the way the user steers you. |
-| Message a thread that is **not** your sub-thread | `submit_message(path, text)` | The submission API queues into the thread's inbox with the watcher's bookkeeping intact — never patch the thread node directly, `pendingUserMessages` is watcher-owned. An idle thread starts a round; a running one picks it up at its next `check_inbox`. Only threads you can write to. |
+
+🚨 **A thread that is not your sub-thread is NOT reachable from here.** Your tools address your own
+conversation and the sub-threads you dispatched — there is no "message any thread" tool in this
+surface, and the way to reach another conversation is to dispatch it yourself with
+`delegate_to_agent`. In particular, **do not try to deliver a message by patching the thread node**:
+`pendingUserMessages` and its id bookkeeping are owned by the submission watcher, a hand-written
+entry is not ingested the way a real submission is, and a half-written pair leaves the thread stuck.
+Submission belongs to the thread API (`hub.SubmitMessage` in code, `submit_message` on the MCP
+surface a harness may expose) — not to a node edit.
 
 There is no separate direct-message system, and none should be invented: the thread IS the channel,
 which is why every message is addressable, searchable (`Search('nodeType:Thread')`) and survives as
