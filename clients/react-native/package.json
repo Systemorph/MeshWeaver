@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",
-    "expo": "~52.0.0",
+    "expo": "~57.0.16",
     "expo-asset": "~11.1.7",
     "expo-auth-session": "~6.2.1",
     "expo-av": "~15.1.7",
