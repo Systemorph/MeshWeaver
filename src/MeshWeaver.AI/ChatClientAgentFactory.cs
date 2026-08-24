@@ -247,6 +247,11 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         }
 
         tools = tools.Append(PlanStorageTool.Create(Hub, chat));
+        // submit_message: reach ANOTHER thread (a colleague's, an operation's, one a human left
+        // open). Sub-threads have send_to_sub_thread; this is the general case, and it rides the
+        // canonical submission surface — no new request type, and the per-thread submission
+        // watcher on the far side is already the handler, so an idle thread wakes on delivery.
+        tools = tools.Append(ThreadMessageTool.Create(Hub, chat));
         // load_skill: inject a nodeType:Skill node's instructions on demand (found via search nodeType:Skill);
         // a LaunchesSubThread skill runs in its own sub-thread via the generic StartThread launcher.
         tools = tools.Append(SkillTool.Create(Hub, chat));
