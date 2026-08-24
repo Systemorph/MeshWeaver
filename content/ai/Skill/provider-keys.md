@@ -31,10 +31,21 @@ falls back to config:
 
 1. **The `Provider/<Name>` node** — what the portal actually calls the model with. Authoritative.
 2. **The env-var seed** — `Anthropic:ApiKey` / `Anthropic:Endpoint` (env `Anthropic__ApiKey`).
-   `BuiltInLanguageModelProvider` seeds the node from this **once** (create-if-absent), then
-   the admin owns it. On a re-sync the seed re-stamps the node (see §decouple).
+   A **seed into the node, never a live source**: `ProviderCredentialSeed` runs on every boot and
+   fills the node's `apiKey` **only when it is empty**, encrypted (`enc:v1:`). An administered key
+   is never overwritten, and a key configured *after* the node was created now converges instead of
+   never arriving (MeshWeaver#1982 — the memex.systemorph.com week where `Provider/Anthropic` was
+   keyless while `Anthropic__ApiKey` was set). Nothing reads this env var at resolve time any more.
+   🚨 With **no `Ai:KeyProtection:MasterKey`** the seed **refuses** (logged at `Error`) rather than
+   writing the key in the clear — set the master key, then restart.
 3. **On AKS, the seed itself comes from Key Vault** → CSI → the pod's `Anthropic__ApiKey` env
    (see §AKS layering).
+
+**The node is the only place a key is READ from.** `ChatClientCredentialResolver` walks node rungs
+only (`providerRef` → `Provider/{name}` → legacy model-node fields). A driver factory still applies
+its own `IOptions` fallback afterwards, but the platform's verdict — the picker, "is this model
+usable", the stale-model fallback — comes from the node. So: **one place to look, one place to
+rotate.**
 
 **Endpoint and key type must match.** A direct Anthropic key (`sk-ant-…`) only works against
 `https://api.anthropic.com/v1/messages`. An **Azure Foundry**–routed key works against
@@ -94,6 +105,12 @@ root + every child):
 
 > A still-**Synced** `Provider` partition + a deploy/restart = key silently back to our default.
 > If you've checked everything and the key keeps reverting, the partition is not decoupled.
+>
+> 🔑 Since MeshWeaver#1982 the **key** specifically can no longer revert this way: the import carries
+> no credential at all (`ModelStaticRepoSource` strips it) and the seed only fills an EMPTY key. The
+> decouple still governs everything else the import stamps — endpoint, label, the model list — so
+> keep doing it; it is simply no longer the only thing standing between a customer key and a
+> redeploy.
 
 # Validate BEFORE you install (don't trust a stale key)
 

@@ -3,15 +3,17 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Graph;
+using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration.Memory;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 
 namespace MeshWeaver.AI.Test;
@@ -19,24 +21,30 @@ namespace MeshWeaver.AI.Test;
 /// <summary>
 /// A model the deployment can ACTUALLY serve must read as usable.
 ///
-/// <para>Every provider factory resolves its driver config in two steps —
-/// <c>resolution.ApiKey ?? configuration.ApiKey</c> — so a deployment that keeps its key in
-/// configuration (<c>Anthropic__ApiKey</c>) serves that provider's models perfectly well even when
-/// the <c>ModelProvider</c> NODE carries no key. <see cref="ChatClientCredentialResolver"/> used to
-/// see only the node, so it answered <see cref="ChatClientCredentialResolver.HasUsableCredential"/>
-/// = <c>false</c> for a model that runs — and <c>AgentChatClient.ApplyStaleModelFallback</c> then
-/// SILENTLY swapped the user's explicit pick for the deployment default (measured on
-/// <c>memex.systemorph.com</c>, 2026-08-21, MeshWeaver#1965: every <c>claude-*</c> selection was
-/// served by another provider's factory).</para>
+/// <para>A deployment that keeps a provider's key in configuration (<c>Anthropic__ApiKey</c>) serves
+/// that provider's models perfectly well — every factory resolves
+/// <c>resolution.ApiKey ?? configuration.ApiKey</c>. <see cref="ChatClientCredentialResolver"/> saw
+/// only the <c>ModelProvider</c> node, so it answered
+/// <see cref="ChatClientCredentialResolver.HasUsableCredential"/> = <c>false</c> for a model that
+/// runs — and <c>AgentChatClient.ApplyStaleModelFallback</c> then SILENTLY swapped the user's
+/// explicit pick for the deployment default (measured on <c>memex.systemorph.com</c>, 2026-08-21,
+/// MeshWeaver#1965: every <c>claude-*</c> selection was served by another provider's factory).</para>
 ///
-/// <para>The node is keyless in the first place because it is <b>create-if-absent</b>: the catalog
-/// seeder stamps <c>{Section}:ApiKey</c> onto the <c>ModelProvider</c> node the FIRST time it
-/// creates it and never revisits it, so a key added to the deployment's configuration afterwards
-/// reaches the factories and never reaches the node. That is why the fixtures below point their
-/// model at a provider node distinct from the one this test's own catalog source seeds: a
-/// freshly-seeded node would carry the config key and hide the case entirely.</para>
+/// <para>🚨 <b>The mechanism changed under this test, deliberately, and the test did not.</b>
+/// MeshWeaver#1983 made the resolver read the deployment's configuration as a fourth RUNG. That was
+/// the right compensator for a seeder that could only ever run at node CREATION, and the wrong
+/// long-term shape: it left a model's credential living in two places that cannot see each other.
+/// MeshWeaver#1982 removes the rung and makes the SEED real instead —
+/// <see cref="ProviderCredentialSeed"/> carries <c>{Section}:ApiKey</c> onto the node at boot, so
+/// the node can answer. The user-visible claim below is unchanged and must stay true: a key that
+/// lives only in the deployment's configuration makes its models usable.</para>
+///
+/// <para>The fixture is therefore the DB-synced <c>Provider</c> partition — the shape every portal
+/// deployment runs, and the only one where a provider node exists to go stale. (On the in-memory
+/// path <see cref="BuiltInLanguageModelProvider"/> re-projects configuration into the served node on
+/// every read, so the case cannot arise.)</para>
 /// </summary>
-public class DeploymentConfiguredModelUsabilityTest : AITestBase
+public class DeploymentConfiguredModelUsabilityTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     /// <summary>Config section + provider name of a provider whose key the DEPLOYMENT holds.</summary>
     private const string KeyedSection = "AnthropicProbe";
@@ -44,130 +52,112 @@ public class DeploymentConfiguredModelUsabilityTest : AITestBase
     /// <summary>Config section + provider name of a provider nobody holds a key for.</summary>
     private const string KeylessSection = "GatewayProbe";
 
+    /// <summary>🚨 Never logged, never in an assertion message — an echoed key is a rotated key.</summary>
     private const string DeploymentKey = "sk-ant-deployment-config-key";
-    private const string DeploymentEndpoint = "https://probe.example/anthropic/v1/messages";
 
-    /// <summary>The provider node the models point at — endpoint only, deliberately NO key.</summary>
-    private const string KeyedProviderNodeId = "AnthropicProbeExisting";
-    private const string KeylessProviderNodeId = "GatewayProbeExisting";
-    private const string NodeEndpoint = "https://node.example/anthropic/v1/messages";
+    private const string KeyedEndpoint = "https://probe.example/anthropic/v1/messages";
+    private const string KeylessEndpoint = "https://probe.example/gateway/v1/messages";
 
-    public DeploymentConfiguredModelUsabilityTest(ITestOutputHelper output) : base(output) { }
+    private const string KeyedModelId = "claude-probe";
+    private const string KeylessModelId = "gateway-probe";
+
+    private IConfigurationRoot DeploymentConfiguration { get; } = new ConfigurationBuilder()
+        .Add(new MemoryConfigurationSource())
+        .Build();
 
     protected override bool ShareMeshAcrossTests => false;
 
-    private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+    private CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private ChatClientCredentialResolver Resolver =>
         Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
 
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder)
-            // The deployment's own configuration, exactly as a Helm/env deployment supplies it:
-            // Anthropic__ApiKey / Anthropic__Endpoint for ONE of the two providers below.
-            .ConfigureServices(services =>
-            {
-                services.RemoveAll<IConfiguration>();
-                services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
-                    .SetBasePath(Directory.GetCurrentDirectory())
-                    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-                    .AddInMemoryCollection(new Dictionary<string, string?>
-                    {
-                        [$"{KeyedSection}:ApiKey"] = DeploymentKey,
-                        [$"{KeyedSection}:Endpoint"] = DeploymentEndpoint,
-                        // KeylessSection deliberately carries NOTHING.
-                    })
-                    .Build());
-                return services;
-            })
+    {
+        // The deployment's own configuration, exactly as a Helm/env deployment supplies it:
+        // {Section}__ApiKey / __Endpoint / __Models for ONE of the two providers below.
+        DeploymentConfiguration[$"{KeyedSection}:ApiKey"] = DeploymentKey;
+        DeploymentConfiguration[$"{KeyedSection}:Endpoint"] = KeyedEndpoint;
+        DeploymentConfiguration[$"{KeyedSection}:Models:0"] = KeyedModelId;
+        // KeylessSection deliberately carries NO key — an endpoint and a model list only.
+        DeploymentConfiguration[$"{KeylessSection}:Endpoint"] = KeylessEndpoint;
+        DeploymentConfiguration[$"{KeylessSection}:Models:0"] = KeylessModelId;
+        // Required for the seed to write anything at all: without a master key it refuses rather
+        // than persisting a credential in the clear (ProviderCredentialSeedWithoutMasterKeyTest).
+        DeploymentConfiguration["Ai:KeyProtection:MasterKey"] = "test-master-key-usability-do-not-use";
+
+        return base.ConfigureMesh(builder)
+            .AddAI(new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { ModelProviderNodeType.RootNamespace })
             .AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
                 SectionName: KeyedSection, ProviderName: KeyedSection, Order: 1,
-                DisplayLabel: "Anthropic (probe)", DefaultEndpoint: null,
+                DisplayLabel: "Anthropic (probe)", DefaultEndpoint: KeyedEndpoint,
                 DefaultModelIds: ImmutableArray<string>.Empty, RequiresApiKey: true))
             .AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
                 SectionName: KeylessSection, ProviderName: KeylessSection, Order: 2,
-                DisplayLabel: "Gateway (probe)", DefaultEndpoint: null,
-                DefaultModelIds: ImmutableArray<string>.Empty, RequiresApiKey: true));
+                DisplayLabel: "Gateway (probe)", DefaultEndpoint: KeylessEndpoint,
+                DefaultModelIds: ImmutableArray<string>.Empty, RequiresApiKey: true))
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton<IConfiguration>(DeploymentConfiguration);
+                services.AddSingleton<IStaticRepoSource>(sp =>
+                    new ModelStaticRepoSource(sp.GetRequiredService<BuiltInLanguageModelProvider>()));
+                return services;
+            });
+    }
 
-    [Fact]
+    /// <summary>Boots the deployment: the catalog import, then the credential seed — in that order.</summary>
+    private async Task BootAsync()
+    {
+        var imported = await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().ToTask(Ct);
+        foreach (var r in imported)
+            Output.WriteLine($"import: partition={r.Partition} outcome={r.Outcome} count={r.Count}");
+
+        var seeded = await ProviderCredentialSeed.Run(Mesh).ToList().FirstAsync().ToTask(Ct);
+        foreach (var r in seeded)
+            Output.WriteLine($"seed: path={r.ProviderPath} section={r.Section} outcome={r.Outcome}");
+
+        Resolver.EnsureSubscription();
+    }
+
+    [Fact(Timeout = 180000)]
     public async Task ModelWhoseKeyLivesOnlyInDeploymentConfig_IsUsable()
     {
-        var modelId = await SeedModel(KeyedSection, KeyedProviderNodeId, "claude-probe");
+        await BootAsync();
 
         var resolution = await Observable.Interval(TimeSpan.FromMilliseconds(50))
-            .Select(_ => Resolver.Resolve(modelId))
-            .Should().Within(15.Seconds())
+            .Select(_ => Resolver.Resolve(KeyedModelId))
+            .Should().Within(30.Seconds())
             .Match(r => !string.IsNullOrEmpty(r.ApiKey),
                 "the deployment's configured key serves this provider's models");
 
         resolution.ApiKey.Should().Be(DeploymentKey);
-        // The NODE's endpoint still wins over the configured one — same per-field precedence the
-        // factories apply (resolution.Endpoint ?? configuration.Endpoint).
-        resolution.Endpoint.Should().Be(NodeEndpoint);
-        resolution.Source.Should().Contain($"config:{KeyedSection}",
-            "the operator must be able to see WHICH source answered");
+        resolution.Endpoint.Should().Be(KeyedEndpoint);
+        resolution.Source.Should().StartWith("providerRef:",
+            "the NODE answered: configuration reached it through the seed, not through a resolution "
+            + "rung — one administered home, one place to rotate (#1982)");
 
-        Resolver.HasUsableCredential(modelId).Should().BeTrue(
+        Resolver.HasUsableCredential(KeyedModelId).Should().BeTrue(
             "a model the factories can serve must never be reported unusable — that is what "
             + "silently swaps an explicit user selection (MeshWeaver#1965)");
     }
 
-    [Fact]
+    [Fact(Timeout = 180000)]
     public async Task ModelWithNoKeyAnywhere_StaysUnusable()
     {
-        var modelId = await SeedModel(KeylessSection, KeylessProviderNodeId, "gateway-probe");
+        await BootAsync();
 
         // Give the snapshot the same chance to warm as the positive case, then assert the negative.
         await Observable.Interval(TimeSpan.FromMilliseconds(50))
-            .Select(_ => Resolver.Resolve(modelId))
-            .Should().Within(15.Seconds())
-            .Match(r => r.Endpoint == NodeEndpoint, "the model's provider node is in the snapshot");
+            .Select(_ => Resolver.Resolve(KeylessModelId))
+            .Should().Within(30.Seconds())
+            .Match(r => r.Endpoint == KeylessEndpoint, "the model's provider node is in the snapshot");
 
-        Resolver.Resolve(modelId).ApiKey.Should().BeNull(
+        Resolver.Resolve(KeylessModelId).ApiKey.Should().BeNull(
             "no key exists on the node and none is configured for this section");
-        Resolver.HasUsableCredential(modelId).Should().BeFalse(
-            "an endpoint-only provider still throws 'ApiKey is missing' in every factory — the "
-            + "config rung must not turn every model green");
-    }
-
-    /// <summary>
-    /// Creates the memex shape: a <c>ModelProvider</c> node carrying an endpoint but NO key, plus a
-    /// <c>LanguageModel</c> under the provider's catalog namespace that references it.
-    /// </summary>
-    /// <returns>The seeded model's wire id.</returns>
-    private async Task<string> SeedModel(string providerName, string providerNodeId, string modelPrefix)
-    {
-        var providerPath = $"{ModelProviderNodeType.RootNamespace}/{providerNodeId}";
-        await MeshService.CreateNode(new MeshNode(providerNodeId, ModelProviderNodeType.RootNamespace)
-        {
-            NodeType = ModelProviderNodeType.NodeType,
-            Name = providerNodeId,
-            State = MeshNodeState.Active,
-            Content = new ModelProviderConfiguration
-            {
-                Provider = providerName,
-                Endpoint = NodeEndpoint,
-                ApiKey = null,
-            }
-        }).Should().Within(15.Seconds()).Emit();
-
-        var modelId = $"{modelPrefix}-{Guid.NewGuid():N}"[..24];
-        var modelNamespace = $"{ModelProviderNodeType.RootNamespace}/{providerName}";
-        await MeshService.CreateNode(new MeshNode(modelId, modelNamespace)
-        {
-            NodeType = LanguageModelNodeType.NodeType,
-            Name = modelId,
-            State = MeshNodeState.Active,
-            Content = new ModelDefinition
-            {
-                Id = modelId,
-                Provider = providerName,
-                ProviderRef = providerPath,
-            }
-        }).Should().Within(15.Seconds()).Emit();
-
-        Resolver.EnsureSubscription();
-        return modelId;
+        Resolver.HasUsableCredential(KeylessModelId).Should().BeFalse(
+            "an endpoint-only provider still throws 'ApiKey is missing' in every factory — neither "
+            + "the seed nor the resolver may turn every model green");
     }
 }

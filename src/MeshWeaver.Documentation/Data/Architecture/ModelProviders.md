@@ -136,6 +136,17 @@ Resolution proceeds in this order:
 | 3 | **`ModelDefinition.ApiKeySecretRef` / `Endpoint`** | Legacy layouts that put the key directly on the `LanguageModel` node |
 | 4 | **`CredentialResolution.Missing`** | Factory falls back to its own `IOptions<XxxConfiguration>` binding |
 
+> 🔑 **Every rung is a NODE — deployment configuration is a SEED into one, not a rung.** A provider's
+> credential has ONE administered home, and `{Section}:ApiKey` reaches it through
+> `ProviderCredentialSeed`, which runs at boot on a DB-synced deployment and fills the node's key
+> **only when it is empty** (encrypted at rest; refused outright, loudly, when no
+> `Ai:KeyProtection:MasterKey` is configured). An administered key is never overwritten, and a key
+> configured *after* the provider node was created converges instead of never arriving — the
+> create-if-absent seam that made `Provider/Anthropic` read as keyless for a week while every round
+> it served worked (MeshWeaver#1965 → #1982). Nothing reads that configuration at resolve time; a
+> driver factory's own `IOptions` fallback is the driver's business, not a second source of truth the
+> platform arbitrates.
+
 `ChatClientCredentialResolver.WatchPartition(userPath)` widens the live read to include a specific user or org partition's provider subtree (`{user}/_Memex` / `{org}/Provider`). The fixture and chat pipeline call this once per active partition (idempotent; records the path only — no node content is cached).
 
 ---
