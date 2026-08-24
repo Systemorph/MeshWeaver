@@ -1,7 +1,7 @@
 ---
 Name: Platform and content — two layers, two cadences
 Category: Architecture
-Description: The distinction the rest of the architecture rests on. The platform is a harness that makes code ADDRESSABLE and routes a mesh address to the code that answers it; content is the code and data it routes to. They deploy independently, and content iterates far faster than the platform underneath it.
+Description: The distinction the rest of the architecture rests on. The platform is a harness that makes EVERYTHING addressable — data, documents, e-mail, schemas, rules, views, agents and every version of each — and resolves an address to whatever answers it; content is what it resolves to. They deploy independently, and content iterates far faster than the platform underneath it.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M12 10v4"/></svg>
 ---
 
@@ -12,12 +12,18 @@ different answer depending on which one it is about, and most confusion about th
 gets rebuilt, what needs a release, what a customer owns, why a change is live without a deploy —
 dissolves once the split is explicit.
 
-## The platform makes code addressable
+## The platform makes everything addressable
 
-The platform layer does one thing above all: it makes code **addressable**. Everything in the mesh
-has an address, and the platform's job is to route a request for that address to the code that
-answers it — activating the hub that owns it, feeding it exactly the context it needs, enforcing who
-may see it, and versioning what it writes.
+The platform layer does one thing above all: it makes **everything addressable** — and *everything*
+is meant literally, not just code. A domain record, a spreadsheet, an inbound e-mail, a schema, a
+business rule, a layout area, an agent, a skill, and every historical version of any of them: each
+has an address. The platform's job is to resolve that address to whatever answers it — activating
+the hub that owns it, feeding it exactly the context it needs, enforcing who may see it, and
+versioning every write.
+
+That is what lets an agent be handed precisely the right context instead of a document dump, makes
+access control and audit properties of the system rather than features re-implemented per screen,
+and turns "where does this value come from" into a question with an answer.
 
 That is the whole of it. The platform is a **harness**, not an application:
 
@@ -44,7 +50,7 @@ Because of that, it is iterated **far faster than the platform underneath it**: 
 phase, and thereafter by whoever owns the domain rather than by whoever owns the framework.
 
 <div style='border:1px solid #dbe4ee;border-radius:10px;padding:18px 20px;margin:20px 0'>
-<svg class="mw-figure" viewBox="0 0 900 452" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block" role="img" aria-label="Two layers: content modules deployed from Git and iterated daily, sitting on a platform harness deployed as a versioned image and changed rarely; the harness routes a mesh address to the code that answers it.">
+<svg class="mw-figure" viewBox="0 0 900 452" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block" role="img" aria-label="Two layers: content modules deployed from Git and iterated daily, sitting on a platform harness deployed as a versioned image and changed rarely; the harness resolves a mesh address — of data, documents, e-mail, schemas, rules, views or agents — to whatever answers it.">
 <style>@media (prefers-color-scheme: dark){svg.mw-figure{filter:invert(1) hue-rotate(180deg)}} :root[data-theme="dark"] svg.mw-figure{filter:invert(1) hue-rotate(180deg)} :root[data-theme="light"] svg.mw-figure{filter:none}</style>
 <rect x="0" y="0" width="900" height="452" rx="8" fill="#ffffff"/>
 <rect x="176" y="26" width="706" height="132" rx="10" fill="#eef2ff" stroke="#c7d2fe"/>
@@ -63,9 +69,9 @@ phase, and thereafter by whoever owns the domain rather than by whoever owns the
 <text x="784" y="102" text-anchor="middle" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="11.5" fill="#6366f1">instructions</text>
 <text x="192" y="140" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="12.5" fill="#4f46e5">Git repo of node repos · compiled live by the mesh on import · no platform rebuild, no NuGet</text>
 <rect x="176" y="186" width="706" height="76" rx="10" fill="#f8fafc" stroke="#2563eb" stroke-dasharray="5 4"/>
-<text x="529" y="212" text-anchor="middle" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="13.5" font-weight="700" fill="#1d4ed8">THE HARNESS: an address resolves to the code that answers it</text>
-<text x="529" y="234" text-anchor="middle" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="12.5" fill="#475569">activate · route · feed context · enforce access · version every write</text>
-<text x="529" y="252" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#2563eb">Acme/Submission/2026-0417  →  the code, the rules and the view that serve it</text>
+<text x="529" y="212" text-anchor="middle" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="13.5" font-weight="700" fill="#1d4ed8">THE HARNESS: an address resolves to whatever answers it</text>
+<text x="529" y="234" text-anchor="middle" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="12.5" fill="#475569">data · documents · e-mail · schemas · rules · views · agents · every version of each</text>
+<text x="529" y="252" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" fill="#2563eb">Acme/Submission/2026-0417  →  the data, the rules, the documents and the view that serve it</text>
 <path d="M529 158 L529 184" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arL)"/>
 <path d="M529 288 L529 264" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arL)"/>
 <rect x="176" y="290" width="706" height="132" rx="10" fill="#f1f5f9" stroke="#cbd5e1"/>
