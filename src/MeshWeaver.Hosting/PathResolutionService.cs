@@ -244,6 +244,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
         if (forNavigation)
             resolved = resolved
                 .SelectMany(RewriteLegacyUserHome)
+                .SelectMany(r => RewriteTypeNodeShadow(r, routeShapeOnly))
                 // Moved-node redirects are NAVIGATION-ONLY, for the same reason the legacy-home
                 // rewrite above is: a route or a read that silently answers with a DIFFERENT node
                 // than the caller named corrupts callers downstream (the "NO FALLBACK" banner in
@@ -379,6 +380,44 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// node under <c>User/</c> (transitional data, or a NodeType child) matches deeper,
     /// so Prefix != "User" and this is a no-op — that data still resolves by its own path.</para>
     /// </summary>
+    /// <summary>
+    /// Un-shadows an AREA URL that a same-named <b>NodeType definition node</b> swallowed. A module's
+    /// type node may legitimately live at <c>{parent}/{Name}</c> while the PARENT node renders an
+    /// area of the same name at <c>/{parent}/{Name}[/…]</c> — the Store's catalog type node sits at
+    /// <c>Store/Catalog</c>, the Store node's <c>Catalog</c> area at <c>/Store/Catalog/…</c>. The
+    /// longer prefix match won, so <c>/Store/Catalog/Catalog?category=…</c> resolved onto the TYPE
+    /// node's hub with remainder <c>Catalog?…</c>, where the framework's type-catalog area answered
+    /// "Collection ?category=… is not mapped" — on Blazor and every remote shell alike (they share
+    /// this resolver). When navigation lands on a type-definition node WITH a remainder, re-resolve
+    /// the parent and give it the full remainder back, so the area renders on the node that owns it.
+    /// <para><b>NAVIGATION ONLY</b> (same rule as <see cref="RewriteLegacyUserHome"/>): routing and
+    /// reads of <c>{parent}/{Name}</c> stay literal. Navigating exactly TO the definition node
+    /// (empty remainder) is untouched, so the type node's own pages keep working. If the parent does
+    /// not resolve, the original resolution stands — never a null where something matched.</para>
+    /// <para>The predicate is deliberately the narrow definition-node marker
+    /// (<c>NodeType == "NodeType"</c>): dynamic type definitions all carry it, including the live
+    /// Store case. Once the content-visibility classification lands (#2137 —
+    /// <c>MeshNode.ExcludeFromContext</c> / <c>MeshContexts.Content</c> + the config-node
+    /// registration set), widen to "registration OR declared non-content", minding its per-TYPE
+    /// semantics (marking a definition classifies its instances too).</para>
+    /// </summary>
+    private IObservable<AddressResolution?> RewriteTypeNodeShadow(
+        AddressResolution? resolution, bool routeShapeOnly)
+    {
+        if (resolution is null
+            || string.IsNullOrEmpty(resolution.Remainder)
+            || !string.Equals(resolution.Node?.NodeType, "NodeType", StringComparison.Ordinal)
+            || !resolution.Prefix.Contains('/'))
+            return Observable.Return(resolution);
+        var lastSlash = resolution.Prefix.LastIndexOf('/');
+        var parent = resolution.Prefix[..lastSlash];
+        var shadowed = resolution.Prefix[(lastSlash + 1)..];
+        return ResolveSegments(parent.Split('/'), routeShapeOnly)
+            .Select(parentResolution => parentResolution is null || !string.IsNullOrEmpty(parentResolution.Remainder)
+                ? resolution
+                : parentResolution with { Remainder = $"{shadowed}/{resolution.Remainder}" });
+    }
+
     private IObservable<AddressResolution?> RewriteLegacyUserHome(AddressResolution? resolution)
         => resolution is not null
             && string.Equals(resolution.Prefix, UserNodeType.NodeType, StringComparison.OrdinalIgnoreCase)

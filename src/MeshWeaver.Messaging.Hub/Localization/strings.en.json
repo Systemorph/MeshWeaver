@@ -984,6 +984,8 @@
   "pivot.noAggregates": "No pivot aggregates configured",
   "common.total": "Total",
   "chat.noNamespace": "No namespace to start a thread in.",
+  "chat.recording": "Recording…",
+  "chat.transcribing": "Transcribing…",
   "search.meshPlaceholder": "Search the mesh... (e.g. nodeType:Story status:Open)",
   "analysis.kpi.empty": "No figures to show.",
   "analysis.tower.empty": "No structure to draw.",
