@@ -35,8 +35,8 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 ///
 /// <para>Test 1 drives the fixed trigger end-to-end on the production write shape. Test 2
 /// reproduces the stale-deployed-partition state (old unqualified body), pins the failure, and
-/// asserts the per-boot self-heal (<c>GetAuthMirrorSelfHealScript</c>) replaces the body AND
-/// backfills the empty table.</para>
+/// asserts the per-boot self-heal (<c>RunAuthMirrorSelfHealAsync</c> — the script alone only
+/// defines the batch function) replaces the body AND backfills the empty table.</para>
 /// </summary>
 [Collection("PostgreSql")]
 public class AccessTriggerSchemaResolutionTests
@@ -157,7 +157,7 @@ public class AccessTriggerSchemaResolutionTests
     /// Deployed-partition heal: a partition still carrying the PRE-FIX trigger body (unqualified
     /// <c>PERFORM</c>) reproduces the incident — the grant lands in <c>access</c> but
     /// <c>user_effective_permissions</c> stays EMPTY. The per-boot self-heal
-    /// (<see cref="PostgreSqlSchemaInitializer.GetAuthMirrorSelfHealScript"/>, run on every
+    /// (<see cref="PostgreSqlSchemaInitializer.RunAuthMirrorSelfHealAsync"/>, run on every
     /// public-schema init) must CREATE OR REPLACE the function with the TG_TABLE_SCHEMA-qualified
     /// body AND backfill the table via the schema-level rebuild; subsequent grant writes through
     /// the shared pool must then materialize immediately.

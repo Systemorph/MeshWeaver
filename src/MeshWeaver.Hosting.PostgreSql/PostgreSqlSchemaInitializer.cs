@@ -378,10 +378,18 @@ public static class PostgreSqlSchemaInitializer
     /// </list>
     ///
     /// <para>So the work is TRIGGERED in bounded batches and driven to completion: each call takes
-    /// the lock, heals at most <see cref="AuthMirrorHealBatchSize"/> schemas, commits (releasing
-    /// the lock), and returns its cursor. No statement is long, another silo can interleave, and a
-    /// dropped connection costs one batch instead of the sweep — the next call resumes at the
-    /// cursor because the work is idempotent per schema.</para>
+    /// the lock (its first batch also installs the global group-recompute trigger, under that
+    /// lock), heals at most <see cref="AuthMirrorHealBatchSize"/> schemas, commits (releasing the
+    /// lock), and returns its cursor. No statement is long, and another silo can interleave.</para>
+    ///
+    /// <para><b>Failure contract — the cursor lives only inside one drive, deliberately.</b>
+    /// Every batch COMMITS as it lands, so work done before a failure is durable; but if a call
+    /// faults (dropped connection, cancellation) this method throws and the drive is over — the
+    /// caller's retry (the next boot / migration attempt) starts a fresh drive from the top. The
+    /// cursor is NOT persisted across drives, and must not be: a schema created mid-sweep whose
+    /// name sorts before a persisted cursor would be skipped forever, whereas re-scanning from
+    /// the top only re-verifies schemas that are already healed — every step is idempotent, each
+    /// batch is bounded, so a retried drive converges rather than compounding.</para>
     /// </summary>
     /// <remarks>
     /// 🚨 <b>This — not <see cref="GetAuthMirrorSelfHealScript"/> — is the heal.</b> That method now
@@ -593,15 +601,23 @@ public static class PostgreSqlSchemaInitializer
         """;
 
     /// <summary>
-    /// One-shot server-side reconciliation of the auth mirror AND the permission projection:
-    /// per partition schema it (a) installs the <c>mesh_node_mirror_access_objects</c> trigger
+    /// DEFINES the batched heal function <c>public.mw_auth_mirror_heal_batch(p_after, p_limit)</c>
+    /// — executing this script only (re)installs the function and heals NOTHING;
+    /// <see cref="RunAuthMirrorSelfHealAsync"/> is the operation that drives it to completion,
+    /// and is what every caller (boot, migration, test) must use. Each invocation of the
+    /// function reconciles ONE bounded, alphabetically-ordered batch of partition schemas after
+    /// the <c>p_after</c> cursor and returns the last schema it touched (<c>NULL</c> when done),
+    /// under a per-batch advisory xact lock.
+    ///
+    /// <para>Per partition schema in the batch it (a) installs the <c>mesh_node_mirror_access_objects</c> trigger
     /// where missing, (a2) CREATE OR REPLACEs the schema's <c>trg_access_changed()</c> with the
     /// current <see cref="AccessChangedTriggerFunctionBody"/> (and (a3) re-installs the
     /// <c>access_changed</c> trigger where missing) so grant writes materialize
     /// <c>user_effective_permissions</c> into the RIGHT schema — partitions deployed with the
     /// pre-2026-07-13 body resolved the rebuild through the writing session's
-    /// <c>search_path</c> and silently rebuilt <c>public</c> instead; it also installs (once, before
-    /// the per-schema loop) the global <c>public.trg_group_changed()</c> + the two
+    /// <c>search_path</c> and silently rebuilt <c>public</c> instead; it also installs (once per
+    /// drive — the <c>p_after IS NULL</c> first batch, under the advisory lock) the global
+    /// <c>public.trg_group_changed()</c> + the two
     /// <c>zzz_group_recompute_*</c> triggers on <c>auth.mesh_nodes</c>
     /// (<see cref="GroupChangedTriggerFunctionBody"/>) so a Group/GroupMembership change — which
     /// mirrors into <c>auth</c> — recomputes every schema that grants the affected group
@@ -622,8 +638,9 @@ public static class PostgreSqlSchemaInitializer
     /// rebuild here — the schema script (<see cref="InitializeAsync"/> step 3) already rebuilds
     /// <c>public.top_level_index</c> on the same init, and a second DROP+CREATE under
     /// ACCESS EXCLUSIVE just adds lock contention. No-op when <c>auth.mesh_nodes</c> doesn't
-    /// exist. Runs once per boot (public-schema init only, serialized across silos by an advisory
-    /// xact lock) — everything converges on restart rather than relying on one-time migrations.
+    /// exist. Driven once per boot (<see cref="RunAuthMirrorSelfHealAsync"/>, public-schema init
+    /// only; each batch serialized across silos by an advisory xact lock held per batch) —
+    /// everything converges on restart rather than relying on one-time migrations.</para>
     /// </summary>
     public static string GetAuthMirrorSelfHealScript() => $$"""
         CREATE OR REPLACE FUNCTION public.mw_auth_mirror_heal_batch(p_after text, p_limit int)
@@ -665,29 +682,37 @@ public static class PostgreSqlSchemaInitializer
                 RETURN NULL;
             END IF;
 
+            -- One heal batch at a time across the whole mesh (HA silos boot concurrently). Taken
+            -- FIRST, so everything below — the global DDL included — runs serialized; released
+            -- with this transaction, i.e. per BATCH, so concurrent drives interleave instead of
+            -- queueing behind a whole sweep.
+            PERFORM pg_advisory_xact_lock(hashtext('auth_mirror_self_heal'));
+
             -- Cross-partition group recompute lives HERE, on the global auth mirror — the single
             -- convergence point for memberships. A Group/GroupMembership change in ANY partition
             -- mirrors into auth.mesh_nodes; this trigger then recomputes every schema that grants
             -- the affected group(s) (trg_group_changed fans out over the partition schemas). One
             -- trigger, not one per partition: no double-fire, and the row is already in auth when
-            -- it fires (the mirror wrote it), so no firing-order hack is needed. Idempotent.
-            CREATE OR REPLACE FUNCTION public.trg_group_changed() RETURNS TRIGGER AS $trg_group$
+            -- it fires (the mirror wrote it), so no firing-order hack is needed. Idempotent —
+            -- and GLOBAL, so it belongs to the DRIVE, not to every batch: only the first batch
+            -- (p_after IS NULL) installs it, under the lock above. Before the lock covered it,
+            -- two silos could interleave the DROP/CREATE pair and one would error on a trigger
+            -- the other had just recreated — a real race window, not just repeated DDL.
+            IF p_after IS NULL THEN
+                CREATE OR REPLACE FUNCTION public.trg_group_changed() RETURNS TRIGGER AS $trg_group$
         {{GroupChangedTriggerFunctionBody}}
             $trg_group$ LANGUAGE plpgsql;
-            DROP TRIGGER IF EXISTS zzz_group_recompute_ins ON "auth".mesh_nodes;
-            CREATE TRIGGER zzz_group_recompute_ins
-                AFTER INSERT OR UPDATE ON "auth".mesh_nodes
-                FOR EACH ROW WHEN (NEW.node_type IN ('GroupMembership','Group'))
-                EXECUTE FUNCTION public.trg_group_changed();
-            DROP TRIGGER IF EXISTS zzz_group_recompute_del ON "auth".mesh_nodes;
-            CREATE TRIGGER zzz_group_recompute_del
-                AFTER DELETE ON "auth".mesh_nodes
-                FOR EACH ROW WHEN (OLD.node_type IN ('GroupMembership','Group'))
-                EXECUTE FUNCTION public.trg_group_changed();
-
-            -- One heal at a time across the whole mesh (HA silos boot concurrently); the lock
-            -- releases with this transaction.
-            PERFORM pg_advisory_xact_lock(hashtext('auth_mirror_self_heal'));
+                DROP TRIGGER IF EXISTS zzz_group_recompute_ins ON "auth".mesh_nodes;
+                CREATE TRIGGER zzz_group_recompute_ins
+                    AFTER INSERT OR UPDATE ON "auth".mesh_nodes
+                    FOR EACH ROW WHEN (NEW.node_type IN ('GroupMembership','Group'))
+                    EXECUTE FUNCTION public.trg_group_changed();
+                DROP TRIGGER IF EXISTS zzz_group_recompute_del ON "auth".mesh_nodes;
+                CREATE TRIGGER zzz_group_recompute_del
+                    AFTER DELETE ON "auth".mesh_nodes
+                    FOR EACH ROW WHEN (OLD.node_type IN ('GroupMembership','Group'))
+                    EXECUTE FUNCTION public.trg_group_changed();
+            END IF;
 
             -- BOUNDED, ORDERED slice after the caller's cursor. The caller keeps calling with the
             -- last name returned until this returns NULL, so no single statement is long and the

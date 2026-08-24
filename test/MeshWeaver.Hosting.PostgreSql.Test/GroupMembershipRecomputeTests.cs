@@ -300,7 +300,7 @@ public class GroupMembershipRecomputeTests
 
     /// <summary>
     /// The recompute trigger lives on the GLOBAL <c>auth</c> mirror (not per-partition). This pins
-    /// that the per-boot self-heal (<see cref="PostgreSqlSchemaInitializer.GetAuthMirrorSelfHealScript"/>)
+    /// that the per-boot self-heal (<see cref="PostgreSqlSchemaInitializer.RunAuthMirrorSelfHealAsync"/>)
     /// (re)installs it on <c>auth.mesh_nodes</c> and backfills via the schema-level rebuild: with the
     /// auth triggers dropped a membership write does not recompute; after the self-heal it does. A
     /// <c>finally</c> restores the shared auth triggers so a failure here can't leak into other tests.
