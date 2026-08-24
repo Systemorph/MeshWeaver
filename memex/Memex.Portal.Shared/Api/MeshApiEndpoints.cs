@@ -190,8 +190,12 @@ public static class MeshApiEndpoints
     /// </summary>
     private static IResult HandleWhoAmI(HttpContext http)
     {
-        var caller = http.RequestServices.GetRequiredService<PortalApplication>()
-            .Hub.ServiceProvider.GetRequiredService<AccessService>().Context;
+        // Portal hub when the Blazor shell registered one; the mesh root hub on a next-only
+        // portal (Features:Gui:Blazor=false). AccessService is the mesh-wide singleton either
+        // way — see UserContextMiddleware, which stamps the identity this reads.
+        var caller = (http.RequestServices.GetService<PortalApplication>()?.Hub
+                      ?? http.RequestServices.GetRequiredService<IMessageHub>())
+            .ServiceProvider.GetRequiredService<AccessService>().Context;
 
         var userId = caller?.ObjectId;
         var resolved = !string.IsNullOrEmpty(userId)

@@ -38,8 +38,12 @@ public class ApiTokenController(IServiceProvider serviceProvider) : ControllerBa
     /// </para>
     /// </summary>
     private AccessContext? CurrentUser =>
-        serviceProvider.GetRequiredService<PortalApplication>()
-            .Hub.ServiceProvider.GetRequiredService<AccessService>()
+        // Portal hub when the Blazor shell registered one; the mesh root hub on a next-only
+        // portal (Features:Gui:Blazor=false). AccessService is the mesh-wide singleton either
+        // way — see UserContextMiddleware, which stamps the identity this reads.
+        (serviceProvider.GetService<PortalApplication>()?.Hub
+         ?? serviceProvider.GetRequiredService<IMessageHub>())
+            .ServiceProvider.GetRequiredService<AccessService>()
             .Context;
 
     /// <summary>
