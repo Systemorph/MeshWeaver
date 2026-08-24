@@ -18,6 +18,24 @@ namespace MeshWeaver.Blazor.Portal.Authentication;
 public static class AuthenticationBuilderExtensions
 {
     /// <summary>
+    /// 🚨 EXPIRE the login-handshake cookies (correlation + nonce) — EVERY sign-in handler must
+    /// apply this, not just some. The handshake cookies are written when a sign-in STARTS and
+    /// deleted when the callback completes — so every ABANDONED login (user closes the tab, an
+    /// error, a retry) leaves one behind permanently, ~400 bytes each. They accumulate in the
+    /// browser until the Cookie header crosses the server's request-header limit (~10 KB here),
+    /// at which point the connection is reset mid-flow and the user sees a 502 that no amount of
+    /// retrying fixes — retrying makes it worse, because each attempt adds another. Observed in
+    /// production 2026-08-23: a clean browser profile signed in on the first try while an
+    /// accumulated profile failed against the same pods at the same second. A MaxAge lets the
+    /// browser evict them on its own; the flow itself needs seconds, so fifteen minutes is
+    /// generous and still self-healing.
+    /// <para>One constant so a provider added later can't silently fall back to the non-expiring
+    /// default: the legacy <c>AddMicrosoftIdentityWebApp</c> branch in <c>MemexConfiguration</c>
+    /// reads it too.</para>
+    /// </summary>
+    public static readonly TimeSpan LoginHandshakeCookieMaxAge = TimeSpan.FromMinutes(15);
+
+    /// <summary>
     /// Adds Microsoft authentication via OpenID Connect.
     /// Reads from Authentication:Microsoft section: ClientId, ClientSecret, TenantId.
     /// </summary>
@@ -47,18 +65,10 @@ public static class AuthenticationBuilderExtensions
             // no-op there and the security-correct setting everywhere.
             options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
             options.NonceCookie.SecurePolicy = CookieSecurePolicy.Always;
-            // 🚨 EXPIRE the handshake cookies. Correlation/nonce cookies are written when a sign-in
-            // STARTS and deleted when the callback completes — so every ABANDONED login (user closes
-            // the tab, an error, a retry) leaves one behind permanently, ~400 bytes each. They
-            // accumulate in the browser until the Cookie header crosses the server's request-header
-            // limit (~10 KB here), at which point the connection is reset mid-flow and the user sees
-            // a 502 that no amount of retrying fixes — retrying makes it worse, because each attempt
-            // adds another. Observed in production 2026-08-23: a clean browser profile signed in on
-            // the first try while an accumulated profile failed against the same pods at the same
-            // second. A MaxAge lets the browser evict them on its own; the flow itself needs seconds,
-            // so fifteen minutes is generous and still self-healing.
-            options.CorrelationCookie.MaxAge = TimeSpan.FromMinutes(15);
-            options.NonceCookie.MaxAge = TimeSpan.FromMinutes(15);
+            // An abandoned sign-in must not leave its handshake cookies behind forever — see
+            // LoginHandshakeCookieMaxAge for the production 502 this caused.
+            options.CorrelationCookie.MaxAge = LoginHandshakeCookieMaxAge;
+            options.NonceCookie.MaxAge = LoginHandshakeCookieMaxAge;
             options.Scope.Add("openid");
             options.Scope.Add("profile");
             options.Scope.Add("email");
@@ -110,6 +120,9 @@ public static class AuthenticationBuilderExtensions
             options.AuthorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
             options.TokenEndpoint = "https://oauth2.googleapis.com/token";
             options.UserInformationEndpoint = "https://www.googleapis.com/oauth2/v3/userinfo";
+            // An abandoned Google sign-in must not leave its correlation cookie behind forever —
+            // see LoginHandshakeCookieMaxAge.
+            options.CorrelationCookie.MaxAge = LoginHandshakeCookieMaxAge;
             options.Scope.Add("openid");
             options.Scope.Add("profile");
             options.Scope.Add("email");
@@ -153,6 +166,9 @@ public static class AuthenticationBuilderExtensions
             options.AuthorizationEndpoint = "https://www.linkedin.com/oauth/v2/authorization";
             options.TokenEndpoint = "https://www.linkedin.com/oauth/v2/accessToken";
             options.UserInformationEndpoint = "https://api.linkedin.com/v2/userinfo";
+            // An abandoned LinkedIn sign-in must not leave its correlation cookie behind forever —
+            // see LoginHandshakeCookieMaxAge.
+            options.CorrelationCookie.MaxAge = LoginHandshakeCookieMaxAge;
             options.Scope.Add("openid");
             options.Scope.Add("profile");
             options.Scope.Add("email");
@@ -229,7 +245,7 @@ public static class AuthenticationBuilderExtensions
             // rationale as the Microsoft handler above.
             options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
             // Same reason as above — an abandoned Apple sign-in must not leave a cookie forever.
-            options.CorrelationCookie.MaxAge = TimeSpan.FromMinutes(15);
+            options.CorrelationCookie.MaxAge = LoginHandshakeCookieMaxAge;
             options.Events.OnRemoteFailure = context =>
             {
                 var logger = context.HttpContext.RequestServices
