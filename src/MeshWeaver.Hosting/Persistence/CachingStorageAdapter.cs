@@ -35,6 +35,15 @@ public class CachingStorageAdapter : IStorageAdapter
     // (No cross-mesh static cache: that bled stale file state across test classes — see NoStaticState.md.)
     private readonly DirectorySnapshot _snapshot;
 
+    // In-process change feed — published from THIS decorator (after cache+disk are in sync),
+    // not from the throwaway per-call inner FileSystemStorageAdapter, whose own feed nobody can
+    // subscribe. Without it, this adapter was delta-blind like the file-system one used to be:
+    // live synced queries emitted Initial once and never saw a later create/update/delete.
+    private readonly IsolatedChangeFeed _changes;
+
+    /// <inheritdoc />
+    public IObservable<DataChangeNotification> Changes => _changes;
+
     private static readonly string[] SupportedExtensions = [".md", ".cs", ".json"];
 
     /// <summary>
@@ -61,6 +70,7 @@ public class CachingStorageAdapter : IStorageAdapter
         _ioPoolRegistry = ioPoolRegistry;
         _logger = logger;
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+        _changes = new IsolatedChangeFeed(logger, "caching-file-system");
         Directory.CreateDirectory(_baseDirectory);
         _snapshot = new DirectorySnapshot(_baseDirectory);
     }
@@ -233,7 +243,10 @@ public class CachingStorageAdapter : IStorageAdapter
         return innerAdapter.Write(node, options)
             .Do(written =>
             {
-                if (written is not null) RefreshCacheForPath(written.Path);
+                if (written is null) return;
+                RefreshCacheForPath(written.Path);
+                // Cache + disk committed above — publish after, like every mutating adapter.
+                _changes.OnNext(DataChangeNotification.Updated(written.Path.Trim('/'), written));
             });
     }
 
@@ -255,7 +268,9 @@ public class CachingStorageAdapter : IStorageAdapter
         return innerAdapter.WriteIfVersion(node, expectedVersion, options)
             .Do(applied =>
             {
-                if (applied is true) RefreshCacheForPath(node.Path);
+                if (applied is not true) return;
+                RefreshCacheForPath(node.Path);
+                _changes.OnNext(DataChangeNotification.Updated(node.Path.Trim('/'), node));
             });
     }
 
@@ -273,6 +288,7 @@ public class CachingStorageAdapter : IStorageAdapter
                     var relativePath = string.Join("/", segments) + ext;
                     _snapshot.Files.TryRemove(relativePath, out _);
                 }
+                _changes.OnNext(DataChangeNotification.Deleted(normalizedPath));
             });
     }
 

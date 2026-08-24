@@ -72,15 +72,6 @@ public static class UserActivityLayoutAreas
     /// <summary>Link to the doc page that explains the configurable Body-page + <c>@@</c>-region model.</summary>
     internal const string ConfigGuideLink = "/Doc/GUI/ConfigurablePages";
 
-    /// <summary>
-    /// The per-thread rail-row item area consumed by the Threads app's vertical rail — registered
-    /// on every THREAD hub (MeshWeaver.AI, <c>ThreadNodeType.RailItemArea</c> /
-    /// <c>ThreadRailItem.View</c>: title + ✕-close overlay). Referenced here by NAME only: item
-    /// areas resolve on the result node's own hub at render time, so Graph carries no AI
-    /// dependency for it.
-    /// </summary>
-    internal const string ThreadRailItemArea = "RailItem";
-
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
 
@@ -707,67 +698,42 @@ public static class UserActivityLayoutAreas
         => Observable.Return<UiControl?>(new ThreadChatControl().WithHideEmptyState(true));
 
     /// <summary>
-    /// The THREADS APP page (<c>/{user}/Chat</c>, the ChatArea) — the GitHub-Copilot-style shape:
-    /// a vertical RAIL of the owner's open threads on the left (each row rendered by the thread
-    /// hub's <see cref="ThreadRailItemArea"/>: title + ✕ that closes the thread via the canonical
-    /// <c>MarkThreadDone</c>, so it leaves the rail but stays searchable), and the node-less chat
-    /// composer on the right — sending starts a proper thread via <c>StartThread</c> and opens it
-    /// full-screen. Pure composition of existing pieces; see <see cref="BuildThreadsApp"/>.
+    /// The THREADS APP page (<c>/{user}/Chat</c>, the ChatArea) — the agentic-app default view:
+    /// the chat surface with its collapsible THREADS side menu (new chat · searchable list of the
+    /// viewer's open threads with live evaluating/queued/awaiting status, all <c>GetQuery</c>-bound
+    /// inside the Blazor chat view) beside the node-less composer. Sending starts a proper thread
+    /// via <c>StartThread</c> and opens it full-screen — where the same side menu renders again,
+    /// so the navigation never collapses. See <see cref="BuildThreadsApp"/>.
     /// </summary>
     internal static IObservable<UiControl?> ThreadsAppView(LayoutAreaHost host, RenderingContext _)
-        => Observable.Return<UiControl?>(BuildThreadsApp(OwnerIdOf(host.Hub.Address.ToString())));
+        => Observable.Return<UiControl?>(BuildThreadsApp());
 
     /// <summary>
-    /// The Threads-app composition — pure (no hub) so the shape is unit-testable: the MDI shell
-    /// (<see cref="BuildThreadsShell"/>) with the node-less composer as its main pane. Opening a
-    /// thread from the rail NAVIGATES to the thread page, which renders the SAME shell around the
-    /// conversation — the rail (the "document list") stays put across navigations, exactly like a
-    /// multi-document window.
+    /// The Threads-app composition — pure (no hub) so the shape is unit-testable: ONE
+    /// <see cref="ThreadChatControl"/> in compact (node-less) mode with the threads side menu
+    /// turned on. The thread list, its live status (evaluating / queued / awaiting input), the
+    /// search box, and the collapse behaviour are all NATIVE to the chat view and bound through
+    /// the synced <c>GetQuery</c> cache — full thread nodes, content included. 🚨 Never
+    /// reintroduce a search-result <c>ItemArea</c> rail here: rows that delegated to a
+    /// <c>RailItem</c> area on each THREAD's own hub activated one hub PER RESULT and resolved
+    /// an area on a hub this page does not own — "area cannot be found" in the distributed
+    /// portal while passing in a monolith (the AppTile failure shape). And never stretch the
+    /// composer: the old shell's <c>height: 100%</c> turned the compact input into a
+    /// viewport-height empty box.
     /// </summary>
-    internal static UiControl BuildThreadsApp(string nodeOwnerId) =>
-        BuildThreadsShell(nodeOwnerId,
-            new ThreadChatControl().WithHideEmptyState(true));
-
-    /// <summary>
-    /// The Threads MDI SHELL — a FIXED left rail of the viewer's open threads beside the main
-    /// pane. Rendered by BOTH the Threads app page (<c>/{user}/Chat</c>, main = the composer) and
-    /// every thread's full page (main = the conversation), so navigating between threads keeps the
-    /// rail — the menu never collapses. No <c>flex-wrap</c>: a wrapping shell was exactly the
-    /// broken layout it replaces; the rail is a fixed 280px column, the pane takes the rest.
-    /// </summary>
-    public static UiControl BuildThreadsShell(string viewerId, UiControl main) =>
+    internal static UiControl BuildThreadsApp() =>
         Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
-            .WithStyle("width: 100%; height: 100%; min-height: 0; align-items: stretch; gap: 0;")
-            .WithView(Controls.Stack
-                .WithStyle("flex: 0 0 280px; width: 280px; box-sizing: border-box; min-height: 0; " +
-                           "overflow-y: auto; border-right: 1px solid var(--neutral-stroke-rest); " +
-                           "padding-right: 8px;")
-                .WithView(BuildThreadsRail(viewerId)))
-            .WithView(Controls.Stack
-                .WithStyle("flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; " +
-                           "flex-direction: column; padding-left: 12px;")
-                .WithView(main));
+            .WithStyle("flex: 1; min-height: 0; display: flex; flex-direction: column;")
+            .WithView(ThreadsAppComposer());
 
-    /// <summary>The Threads-app rail list: the owner's open threads (never Done, newest first) as a
-    /// single-column list whose rows delegate to the thread hub's <see cref="ThreadRailItemArea"/>.
-    /// Flat render + MaxColumns(1), NOT <see cref="MeshSearchRenderMode.List"/>: the List renderer
-    /// draws its own icon·title·description rows and IGNORES <c>ItemArea</c>, so the ✕ overlay
-    /// would never render there — Flat is the ItemArea path the pinned grid already proves.</summary>
-    internal static MeshSearchControl BuildThreadsRail(string nodeOwnerId) =>
-        Controls.MeshSearch
-            .WithHiddenQuery(
-                $"namespace:{nodeOwnerId}/*_Thread nodeType:Thread -content.status:Done sort:LastModified-desc")
-            .WithShowSearchBox(false)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithMaxColumns(1)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithItemArea(ThreadRailItemArea)
-            .WithItemLimit(50)
-            .WithReactiveMode(true);
+    /// <summary>The one control on the Threads app page — the node-less compact composer with the
+    /// threads side menu on. Factored out so the shape is directly assertable.</summary>
+    internal static ThreadChatControl ThreadsAppComposer() =>
+        new ThreadChatControl()
+            .WithHideEmptyState(true)
+            .WithShowThreadNav()
+            .WithStyle("flex: 1; min-height: 0; overflow: hidden;");
 
     /// <summary>
     /// The owner's OPEN threads — their own partition only (<c>{owner}/*_Thread</c>, no cross-partition
