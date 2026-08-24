@@ -761,9 +761,15 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // most and dies with the grain — GC covers it.
         try { _hubReadyRaw.OnCompleted(); } catch { /* already terminated */ }
 
+        // 🚨 Gates the ALC unload below. It is only ever set true by the hub REPORTING that it
+        // drained: a timeout, a cancellation, or a disposal fault all leave it false, and false
+        // means we do not unload. Nothing built a hub ⇒ nothing ever ran out of this context.
+        var hubDrained = true;
+
         var hub = _hub;
         if (hub != null)
         {
+            hubDrained = false;
             try
             {
                 hub.CancelCurrentExecution();
@@ -782,20 +788,36 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     .FirstOrDefaultAsync()
                     .ToTask(cancellationToken);
                 var completed = await Task.WhenAny(disposalTask, Task.Delay(TimeSpan.FromSeconds(5), cancellationToken));
-                if (completed != disposalTask)
-                    logger.LogWarning("Grain {GrainId}: hub disposal exceeded 5 s — moving on", grainId);
+                hubDrained = completed == disposalTask;
+                if (!hubDrained)
+                    logger.LogError(
+                        "Grain {GrainId}: hub disposal exceeded 5 s — KEEPING its load context. "
+                        + "The hub is still draining, so unloading now is the use-after-unload "
+                        + "SIGSEGV; the context is retained until the process exits instead.",
+                        grainId);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Grain {GrainId}: hub disposal failed", grainId);
+                // Includes the OperationCanceledException from a cancelled deactivation. Either
+                // way we did not observe the hub finish, so we have not earned the unload.
+                hubDrained = false;
+                logger.LogError(ex, "Grain {GrainId}: hub disposal failed — KEEPING its load context", grainId);
             }
         }
-        // 🚨 KNOWN GAP (per-ALC accounting): this Unload orders only on the HUB's
-        // DisposalCompleted above — pooled I/O leaves are mesh-shared, so this grain cannot
-        // drain them (DrainAll here would cancel every OTHER grain's work). A pooled leaf
-        // started by this grain's hub that still references this ALC when Unload begins is
-        // the use-after-unload class. A single grain deactivating on a LIVE silo still needs
-        // per-ALC in-flight tracking to close fully.
+        // 🚨 The unload is gated on a POSITIVE drain report and never on a timer. It used to run
+        // unconditionally: wait up to 5 s for DisposalCompleted, log "moving on", unload anyway —
+        // i.e. the one case where we KNEW a user was still live was also a case where we unloaded.
+        // A retained context costs memory until process exit; an unload with a live user costs the
+        // process (CI 32713409169: a dedicated thread faulted on its first managed call, JITting a
+        // dynamic method whose allocator was gone — see AlcLeaseRegistry for the dump analysis).
+        //
+        // 🚨 STILL A NARROWER GAP (per-ALC accounting): DisposalCompleted covers the hub's action
+        // blocks and message round-trips, not mesh-shared pooled I/O leaves (DrainAll here would
+        // cancel every OTHER grain's work). A leaf started by this grain's hub that still
+        // references this ALC is not counted. AlcLeaseRegistry is the mechanism for closing that —
+        // it is applied to the script-compilation contexts, which are retired far more often than
+        // grain contexts; wiring the pool's leaves to it needs per-leaf ownership the pool does
+        // not carry yet.
         //
         // 🚨 SILO SHUTDOWN IS NOT SAFE, and this comment used to claim it was — on the grounds
         // that "MeshTeardownHostedService drains the whole mesh before the scope dies". It does,
@@ -810,7 +832,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // superseded ALC actually returns memory. So skip it here and let the process exit — and
         // for the live-silo case IoPoolSiloTeardown now cancels + joins the pools before the silo
         // releases, which is what makes any remaining unload safe.
-        if (loadContext != null && !IsSiloShuttingDown(reason))
+        if (loadContext != null && !IsSiloShuttingDown(reason) && hubDrained)
             loadContext.Unload();
         loadContext = null;
         await base.OnDeactivateAsync(reason, cancellationToken);

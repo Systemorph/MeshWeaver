@@ -12,6 +12,7 @@ using Microsoft.Extensions.Options;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
 
@@ -53,6 +54,18 @@ internal class ScriptCompilationService : IDisposable
     }
 
     private readonly ConcurrentDictionary<string, CompiledConfig> _compiledScripts = new();
+
+    // 🚨 Who is currently executing out of each cached entry's collectible context. Eviction used
+    // to call Unload() inline, with nothing asked and nothing waited for — while a script from that
+    // very context could be mid-execution, and while HubConfiguration delegates handed to callers
+    // still pointed into it. Unloading is cooperative, so that is usually survivable; when it is
+    // not, it is the native use-after-unload SIGSEGV, which lands as a bare exit=139 with no
+    // managed stack to attribute it (AlcLeaseRegistry's remarks carry the core-dump analysis).
+    private readonly AlcLeaseRegistry _leases = new();
+
+    /// <summary>How long a retiring context may take to go quiet before we give up and KEEP it.
+    /// Deliberately not "then unload anyway" — see <see cref="AlcLeaseRegistry"/>.</summary>
+    private static readonly TimeSpan UnloadQuiesceBudget = TimeSpan.FromSeconds(30);
 
     // Track script source files on disk for debugging
     private readonly ConcurrentDictionary<string, string> _sourceFiles = new();
@@ -116,7 +129,7 @@ internal class ScriptCompilationService : IDisposable
             // (unloading is cooperative — this call can still execute from it safely).
             compiled = _compiledScripts.GetOrAdd(cacheKey, fresh);
             if (!ReferenceEquals(compiled, fresh))
-                fresh.LoadContext.Unload();
+                RetireContext(fresh, $"duplicate compilation of {node.Path}");
             _logger.LogDebug("Script compiled and cached for {NodePath}", node.Path);
         }
         else
@@ -124,10 +137,13 @@ internal class ScriptCompilationService : IDisposable
             _logger.LogDebug("Using cached script for {NodePath}", node.Path);
         }
 
-        // Execute the script
+        // Execute the script under a lease, so an eviction racing this execution cannot pull the
+        // context out from under the running submission. The lease spans the whole await — the
+        // window that matters is "a thread is still inside this context", not "a call was issued".
         try
         {
-            return await compiled.ExecuteAsync();
+            using (_leases.Enter(compiled.LoadContext))
+                return await compiled.ExecuteAsync();
         }
         catch (Exception ex)
         {
@@ -197,7 +213,7 @@ internal class ScriptCompilationService : IDisposable
     public void InvalidateCache(string cacheKey)
     {
         if (_compiledScripts.TryRemove(cacheKey, out var evicted))
-            evicted.LoadContext.Unload();
+            RetireContext(evicted, cacheKey);
 
         if (_sourceFiles.TryRemove(cacheKey, out var sourcePath) && File.Exists(sourcePath))
         {
@@ -237,9 +253,21 @@ internal class ScriptCompilationService : IDisposable
     {
         foreach (var key in _compiledScripts.Keys.ToList())
             if (_compiledScripts.TryRemove(key, out var evicted))
-                evicted.LoadContext.Unload();
+                RetireContext(evicted, key);
         _sourceFiles.Clear();
     }
+
+    /// <summary>
+    /// Retires an evicted entry's collectible context: unload once nothing is executing out of it,
+    /// and never if it does not go quiet. Cold observable, so the Subscribe is what runs it — the
+    /// error arm only ever reports, because a context we failed to reclaim is a leak we are
+    /// choosing over an unload that could take the process down.
+    /// </summary>
+    private void RetireContext(CompiledConfig evicted, string what) =>
+        _leases.UnloadWhenQuiesced(evicted.LoadContext, UnloadQuiesceBudget, _logger, what)
+            .Subscribe(
+                _ => { },
+                exception => _logger.LogError(exception, "Retiring script context {What} failed", what));
 
     /// <summary>
     /// Computes a cache key based on all compilation inputs.
