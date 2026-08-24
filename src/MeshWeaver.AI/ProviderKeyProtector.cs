@@ -33,8 +33,12 @@ public sealed class ProviderKeyProtector : IProviderKeyProtector
 
     /// <summary>
     /// Encrypts a provider key into the <c>enc:v1:</c> stored form. Idempotent (an
-    /// already-tagged value is returned unchanged) and a passthrough when no master
-    /// key is configured.
+    /// already-tagged value is returned unchanged).
+    ///
+    /// <para>🚨 THROWS when no master key is configured, rather than storing the key in plaintext.
+    /// Writes fail closed; <see cref="Unprotect"/> stays tolerant so a deployment already holding
+    /// legacy plaintext keeps working after an upgrade. Fail on the way IN, tolerate on the way
+    /// OUT.</para>
     /// </summary>
     /// <param name="plaintext">The key to protect; null/empty is returned as-is.</param>
     /// <returns>The encrypted stored form, or the original value when encryption is disabled or skipped.</returns>
@@ -45,7 +49,25 @@ public sealed class ProviderKeyProtector : IProviderKeyProtector
         if (plaintext.StartsWith("enc:", StringComparison.Ordinal)) return plaintext;
 
         var key = masterKeyProvider.GetMasterKey();
-        if (key is null) return plaintext; // encryption disabled → passthrough
+        if (key is null)
+            // 🚨 FAIL CLOSED. This used to `return plaintext` — a silent passthrough that PERSISTED
+            // A RAW PROVIDER KEY whenever no master key was configured. Nothing failed and nothing
+            // logged at the call site, so ProviderKeyEncryptionTest stayed green (it configures a
+            // master key) while an unconfigured deployment quietly stored cleartext. Found
+            // 2026-08-24: a live OpenRouter key sitting in plaintext in Provider/OpenRouter node
+            // content, readable by anyone with read on that namespace.
+            //
+            // A provider key is the one value here that must never be written in the clear, so a
+            // missing master key is a CONFIGURATION FAULT, not a degraded mode. Refusing is also
+            // what makes the encryption invariant true rather than merely usual.
+            //
+            // Unprotect stays a passthrough on purpose — see below.
+            throw new InvalidOperationException(
+                $"Refusing to store a provider key: no master key is configured "
+                + $"({ConfigMasterKeyProvider.ConfigKey}), so the key would be persisted in "
+                + "PLAINTEXT. Configure the master key for this deployment, or reference the "
+                + "credential from the host's secret store instead of storing a literal "
+                + "(ModelDefinition.ApiKeySecretRef, or the provider's {section}:ApiKey config).");
 
         var nonce = RandomNumberGenerator.GetBytes(NonceLen);
         var pt = Encoding.UTF8.GetBytes(plaintext);
