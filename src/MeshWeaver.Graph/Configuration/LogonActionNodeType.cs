@@ -70,11 +70,23 @@ public static class LogonActionNodeType
     /// Asks to be told when a user signs in: <paramref name="address"/> receives a
     /// <see cref="UserSignedIn"/> event, fire-and-forget, once per sign-in.
     ///
-    /// <para>Register this from the SUBSCRIBER's own configuration, not from core's. That is the
-    /// whole point of the seam: core owns "a user signed in" and nothing else, and does not know
-    /// which partitions exist or what they would do about it. A subscriber that is absent on a given
-    /// deployment simply never registers, so there is nothing to probe and no NotFound to
-    /// tolerate.</para>
+    /// <para>Core owns "a user signed in" and nothing else — it does not know which partitions exist
+    /// or what they would do about it. A deployment that carries no subscriber registers none, so
+    /// there is nothing to probe and no NotFound to tolerate.</para>
+    ///
+    /// <para>🚨 <b>This belongs in DEPLOYMENT configuration</b> (where the mesh is built — e.g.
+    /// <c>MemexConfiguration</c>), NOT in a module's own <c>HubConfiguration</c>, and the reason is
+    /// process topology rather than API surface. This registry is a mesh-scoped singleton, so it is
+    /// per-PROCESS; the announcement is posted by whichever process handles the sign-in. A module's
+    /// per-type hub configuration runs only when that node's hub ACTIVATES — on one silo, at some
+    /// point, possibly never — so a module registering itself there would populate the registry in a
+    /// process that may not be the one announcing, and the event would silently go nowhere. It would
+    /// look self-contained and work on a monolith, which is the worst combination.</para>
+    ///
+    /// <para>The one line per subscriber in deployment configuration is therefore not a compromise
+    /// on module self-containment; it is the only placement that runs in every process. If a module
+    /// genuinely must declare its own subscription, that wants to be DATA (a node the announcer
+    /// reads) rather than a call — same reason logon ACTIONS are data.</para>
     ///
     /// <para>The handler runs on the subscriber's own hub under the delivery's identity, so it acts
     /// as the signing-in user. Nothing is expected back — an event with a response would put the
