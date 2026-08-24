@@ -1,3 +1,4 @@
+using MeshWeaver.Hosting.PostgreSql;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using System.Linq;
@@ -266,7 +267,9 @@ public static class OrleansClusteringSetup
     /// </summary>
     private static async Task EnsureDatabaseExistsAsync(string connectionString, ILogger logger)
     {
-        if (connectionString.Contains("database.azure.com", StringComparison.OrdinalIgnoreCase))
+        // Azure pre-creates databases declared in the AppHost and the app identity typically
+        // cannot CREATE DATABASE on Flexible Server — a HOST fact, independent of the auth path.
+        if (AzurePostgres.IsAzureHost(connectionString))
             return;
 
         var targetDb = new NpgsqlConnectionStringBuilder(connectionString).Database ?? "orleans";
