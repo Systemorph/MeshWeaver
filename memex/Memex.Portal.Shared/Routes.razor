@@ -1,6 +1,5 @@
 @using MeshWeaver.Blazor.Portal.Resize
 @using MeshWeaver.Blazor.Portal.Pages
-@using MeshWeaver.Blazor.Graph
 @using MeshWeaver.Blazor.Pages
 @using Microsoft.AspNetCore.Components.Authorization
 @inject AccessService Access
@@ -16,7 +15,7 @@
 <CascadingAuthenticationState>
 <CascadingValue Value="@ViewportInformation">
     <Router AppAssembly="@typeof(Routes).Assembly"
-            AdditionalAssemblies="@(new[] { typeof(ApplicationPage).Assembly, typeof(MeshNodeEditorView).Assembly, typeof(CreateNode).Assembly })">
+            AdditionalAssemblies="@(new[] { typeof(ApplicationPage).Assembly, typeof(CreateNode).Assembly })">
         <Found Context="routeData">
             @* Global last-resort ErrorBoundary. The per-control (DispatchView) and per-area
                (LayoutAreaView) boundaries contain layout-area render throws, but a throw in the
