@@ -52,9 +52,13 @@
            publish RED — a GUI-less sidecar must never ship silently. -->
       <RnClientDir Condition="'$(RnClientDir)' == ''">$(MEMEX_RN_APP_DIR)</RnClientDir>
       <RnClientDir Condition="'$(RnClientDir)' == '' AND Exists('$(MSBuildThisFileDirectory)../../clients/react-native/package.json')">$(MSBuildThisFileDirectory)../../clients/react-native/</RnClientDir>
-      <RnClientDir Condition="'$(RnClientDir)' == ''">$(MSBuildThisFileDirectory)../../../MeshWeaver.Plugins/app/react-native/</RnClientDir>
+      <RnClientDir Condition="'$(RnClientDir)' == '' AND Exists('$(MSBuildThisFileDirectory)../../../MeshWeaver.Plugins/app/react-native/package.json')">$(MSBuildThisFileDirectory)../../../MeshWeaver.Plugins/app/react-native/</RnClientDir>
       <RnDeployment Condition="'$(RnDeployment)' == ''">$(MEMEX_DEPLOYMENT)</RnDeployment>
     </PropertyGroup>
+    <!-- Speak BEFORE any Exec can fail confusingly: no probe hit means there is no app checkout
+         to bake — name the probes and the opt-out instead of dying inside npm. -->
+    <Error Condition="'$(RnClientDir)' == ''"
+           Text="BakeRnWebClient: no RN app checkout found. The app lives in MeshWeaver.Plugins (app/react-native — MeshWeaver#2169 Phase A); probes: -p:RnClientDir / MEMEX_RN_APP_DIR, the old clients/react-native/ tree, the sibling MeshWeaver.Plugins checkout. Clone Systemorph/MeshWeaver.Plugins beside this repo, or pass -p:BakeRnWebClient=false to publish a GUI-less sidecar deliberately." />
     <ItemGroup>
       <RnDeploymentEnv Include="MEMEX_DEPLOYMENT=$(RnDeployment)" Condition="'$(RnDeployment)' != ''" />
     </ItemGroup>
