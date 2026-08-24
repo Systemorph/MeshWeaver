@@ -573,3 +573,17 @@
 ::deep img.contrib-menu-icon {
     filter: invert(1);
 }
+
+/* ─────────── "Where is the chat?" hint (?hint=chat → PortalLayoutBase.CheckChatHint) ───────────
+   A content page cannot reach into the chrome, so a lesson that says "the chat lives in the top
+   menu" links itself with ?hint=chat and the toggle pulses for a few seconds. The ring must read
+   in both themes, so it rides on the accent token rather than a literal color. */
+.side-panel-toggle.chat-hint-pulse {
+    border-radius: 6px;
+    animation: chat-hint-pulse 1.2s ease-in-out 5;
+}
+
+@keyframes chat-hint-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 0 5px var(--accent-fill-rest); }
+}

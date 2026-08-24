@@ -61,7 +61,7 @@ public sealed class GitHubSyncService
         this.credentials = credentials;
         this.appTokens = appTokens;
         this.logger = logger;
-        parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
+        parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
     }
 
     /// <summary>The sync-config node path for a Space: <c>{spacePath}/_GitSync</c>.</summary>

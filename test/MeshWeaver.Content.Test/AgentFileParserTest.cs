@@ -1,5 +1,6 @@
 using System.Threading.Tasks;
 using MeshWeaver.AI;
+using MeshWeaver.AI.Persistence;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using Xunit;

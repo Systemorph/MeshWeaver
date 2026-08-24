@@ -17,16 +17,12 @@ import { rnPack } from "./src/rnPack";
 import { sampleArea } from "./src/sample";
 import { createLiveSource } from "./src/live";
 import { buildMeshOps } from "./src/liveOps";
-import { NavContext, CurrentAddressContext, type NavTarget } from "./src/nav";
+import { NavContext, CurrentAddressContext, resolveNavigationUri, type NavTarget } from "./src/nav";
 import { Shell, HOME } from "./src/Shell";
 import { ensureWebStyles } from "./src/webStyles";
 import { attachInstanceStore, currentInstance, discoverInstances, mergeDiscovered, setConnectStatus, type MeshInstance } from "./src/connection";
 import { type ClientDestination } from "./src/screens";
 import { ThemeProvider, useTheme } from "./src/theme";
-import { ChatComposer } from "./src/chat";
-import { ExpoAudioRecorder } from "./src/speech/expoRecorder";
-import { SpeechTranscriptionClient } from "./src/speech/transcription";
-import type { ThreadSubmitter } from "./src/speech/pushToTalk";
 
 // The client connects to the CURRENT mesh instance — "Local" is the mesh that served this app
 // (same origin, anonymous, no CORS); a remote instance is a portal the user added by URL + token
@@ -38,31 +34,14 @@ import type { ThreadSubmitter } from "./src/speech/pushToTalk";
 // against a static file server). connect() only resolves on a real ack, so a non-mesh origin
 // can never swap the sample out for an empty live source.
 
-// The chat composer + CENTRALIZED speech pipeline (distinct from the shell's VoiceScreen, which is
-// the browser's on-device Web Speech API). `namespacePath` anchors new threads (your partition);
-// speech records via expo-audio and posts the audio to the portal's `POST /api/speech/transcribe`
-// (the centralized Whisper container — see src/speech/transcription.ts; for a dev container use
-// `speech: { url: "http://localhost:8080", path: "/inference" }`). Set CHAT to null to hide the
-// composer entirely. Submission rides the SAME gRPC-web connection the renderer uses.
-interface ChatOptions {
-  namespacePath: string;
-  speech?: { url?: string; token?: string; path?: string; language?: string } | null;
-}
-// Speech follows the CURRENT mesh instance: with no `speech.url`/`speech.path`, the transcription client
-// POSTs to `{instance}/api/speech/transcribe` — the endpoint every backend now bakes in (the portal AND
-// the local sidecar Memex.LocalMesh), so voice input works in every shell (web, the macOS/Windows desktop
-// apps, and against a remote portal) with no separate container URL. To point at a bare dev Whisper
-// container instead, set `speech: { url: "http://localhost:8080", path: "/inference" }`.
-const CHAT: ChatOptions | null = {
-  namespacePath: "rbuergi",
-  speech: { language: "de" },
-};
-// const CHAT: ChatOptions | null = null;
-
+// The app-level "Message the mesh…" bar is GONE: the composer is the mesh-rendered
+// ThreadChatControl (the user home's Composer band, thread views), whose RN leaf now carries the
+// SAME shared model as the web leaf — @-mention autocomplete included — plus the speech pipeline
+// (ComposerBar). ONE composer, declared by the server, exactly like Blazor.
 // Threads anchor in the viewer's OWN partition: on the native local mesh that is the device user
 // (seeded by the sidecar's DeviceSeed); against a remote portal the configured namespacePath applies.
 const chatNamespace = (inst: MeshInstance): string =>
-  Platform.OS !== "web" && inst.local ? "device-user" : (CHAT?.namespacePath ?? "");
+  Platform.OS !== "web" && inst.local ? "device-user" : "";
 
 // 📱 The native-local landing: the device user's own node, rendered with its DECLARED default
 // area (the User layout declares the activities — the same landing as the MAUI shell) — the app
@@ -105,11 +84,13 @@ function AppInner() {
   // The CURRENT home: local → the device user's node; a signed-in remote → the viewer's OWN node
   // (resolved from the portal via /api/mesh/whoami below); anonymous remote → the docs HOME.
   const [home, setHome] = useState<NavTarget>(() => homeFor(currentInstance()));
+  // The signed-in REMOTE viewer's own partition (whoami) — read lazily by MeshOps (kernel anchor,
+  // autocomplete target), which is built before whoami resolves.
+  const viewerPartition = useRef("");
   const [clientScreen, setClientScreen] = useState<ClientDestination | null>(null);
   const [instanceTick, setInstanceTick] = useState(0);
   const [source, setSource] = useState<AreaSource>(() => new StaticAreaSource(sampleArea));
   const [liveConnected, setLiveConnected] = useState(false);
-  const [submitter, setSubmitter] = useState<ThreadSubmitter | undefined>(undefined);
   // The factory `@@` layout-area embeds (LayoutAreaControl) open their nested area streams through.
   const [embedFactory, setEmbedFactory] = useState<AreaSourceFactory | null>(null);
   // The MeshOps surface (interactive-markdown render + kernel, thread submit, node ops) the tree consumes
@@ -144,6 +125,7 @@ function AppInner() {
   useEffect(() => {
     const inst = currentInstance();
     const base = homeFor(inst);
+    viewerPartition.current = "";
     setHome(base);
     if (inst.local || !inst.token) return;
     let live = true;
@@ -157,6 +139,7 @@ function AppInner() {
         const userId = j?.userId ? String(j.userId).trim() : "";
         if (!live || !userId) return;
         const userHome: NavTarget = { address: userId, area: "" };
+        viewerPartition.current = userId;
         setHome(userHome);
         setNav((n) => (n.address === base.address && n.area === base.area ? userHome : n));
       })
@@ -181,7 +164,7 @@ function AppInner() {
     let live: Awaited<ReturnType<typeof createLiveSource>> | null = null;
     let cancelled = false;
     setConnectStatus(`Connecting to ${inst.name}…`);
-    createLiveSource({ url: inst.url, token: inst.token, address: nav.address, area: nav.area })
+    createLiveSource({ url: inst.url, token: inst.token, address: nav.address, area: nav.area, id: nav.id })
       .then((l) => {
         if (cancelled) {
           l.connection.close();
@@ -191,13 +174,19 @@ function AppInner() {
         setSource(l.source);
         setLiveConnected(true);
         setConnectStatus("");
-        // The SAME gRPC-web connection carries thread submissions (Mesh.startThread / Mesh.submitMessage)
-        // AND the nested streams that `@@("area/X")` layout-area embeds open.
-        setSubmitter(Mesh.from(l.connection));
         setEmbedFactory(() => createGrpcEmbeddedFactory(l.connection));
+        // Server-initiated navigation (a clickable stack's ClickedEvent is answered with a
+        // NavigationRequest — the Store's category tiles) — the client twin of Blazor's
+        // NavigationService: resolve the uri's node/area split server-side and navigate.
+        l.connection.onMessage("NavigationRequest", (d) => {
+          const uri = String((d.message as { uri?: unknown }).uri ?? "");
+          if (!uri) return;
+          void resolveNavigationUri(uri, inst.url, inst.token || undefined).then(navigate);
+        });
         // The full MeshOps over the same connection — renderMarkdown (server Markdig) + the per-view kernel
-        // anchor the interactive markdown + runnable code cells; the kernel activity lives in CHAT's partition.
-        setMeshOps(buildMeshOps(l.connection, inst.url, chatNamespace(inst), inst.token));
+        // anchor the interactive markdown + runnable code cells; the kernel activity lives in the viewer's partition.
+        setMeshOps(buildMeshOps(l.connection, inst.url,
+          () => chatNamespace(inst) || viewerPartition.current, inst.token));
         // The LOCAL mesh is the instance STORE: hydrate the switcher's mesh list from its
         // MemexInstance nodes. A remote connect detaches (the in-memory cache keeps serving).
         void attachInstanceStore(
@@ -227,26 +216,9 @@ function AppInner() {
       cancelled = true;
       live?.connection.close();
     };
-  }, [nav.address, nav.area, instanceTick]);
+  }, [nav.address, nav.area, nav.id, instanceTick]);
 
-  // Speech seams — the transcription endpoint follows the CURRENT instance (or an explicit
-  // CHAT.speech.url override); the composer hides the mic when speech isn't configured.
-  const speech = useMemo(() => {
-    if (!CHAT?.speech) return null;
-    const inst = currentInstance();
-    const url = CHAT.speech.url ?? inst.url;
-    if (!url) return null; // no portal to transcribe against
-    return {
-      recorder: new ExpoAudioRecorder(),
-      transcriber: new SpeechTranscriptionClient({
-        url,
-        token: CHAT.speech.token ?? inst.token,
-        path: CHAT.speech.path,
-        language: CHAT.speech.language,
-      }),
-      language: CHAT.speech.language,
-    };
-  }, [instanceTick]);
+
 
   // Offline (no ack yet): the sample tree's root area is "main"; live nav areas only exist
   // once a mesh is streaming.
@@ -276,15 +248,6 @@ function AppInner() {
         </EmbeddedAreaProvider>
        </MeshOpsProvider>
       </RegistryProvider>
-      {CHAT && (
-        <ChatComposer
-          submitter={submitter}
-          namespacePath={chatNamespace(currentInstance())}
-          recorder={speech?.recorder}
-          transcriber={speech?.transcriber}
-          language={speech?.language}
-        />
-      )}
     </SafeAreaView>
   );
 }

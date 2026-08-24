@@ -280,14 +280,18 @@ public class MeshNodeImageHelperTest
     [Fact]
     public void IconLinkFor_InlineSvg_BecomesADataUri()
     {
-        const string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\"></svg>";
+        // A plated icon (the authored store form) travels byte for byte; an icon WITHOUT a plate
+        // gets one generated at the same seam the app renders through (IconBackplate), so the tab
+        // and the page still cannot disagree.
+        const string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\">"
+                           + "<rect width=\"20\" height=\"20\" rx=\"4\" fill=\"#4338ca\"/></svg>";
 
         var link = MeshNodeImageHelper.IconLinkFor(svg);
 
         link.Type.Should().Be("image/svg+xml");
         link.Href.Should().StartWith("data:image/svg+xml,");
         Uri.UnescapeDataString(link.Href["data:image/svg+xml,".Length..])
-            .Should().Be(svg, "the node's icon travels byte for byte — only its transport changes");
+            .Should().Be(svg, "a plated icon travels byte for byte — only its transport changes");
     }
 
     /// <summary>

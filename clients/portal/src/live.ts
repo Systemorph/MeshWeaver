@@ -82,7 +82,9 @@ export async function connectLive(baseUrl: string = window.location.origin): Pro
 
   return {
     connection,
-    ops: adaptOps(mesh, runQuery, runAutocomplete, runRenderMarkdown, runStartKernel, runListContent, runUploadContent),
+    // userId ON the ops too: viewer-scoped reads inside the shared renderer (the home Apps
+    // grid's most-recently-used ordering) resolve the viewer through MeshOps.userId.
+    ops: { ...adaptOps(mesh, runQuery, runAutocomplete, runRenderMarkdown, runStartKernel, runListContent, runUploadContent), userId },
     userId,
     close: () => connection.close(),
   };

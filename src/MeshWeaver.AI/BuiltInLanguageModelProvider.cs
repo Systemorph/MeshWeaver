@@ -102,8 +102,15 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
 
             // Driver config (Endpoint + ApiKey) from the same section the legacy
             // IOptions<...Configuration> binding read from. The endpoint falls back to
-            // the source's bootstrap DefaultEndpoint when config is empty; the ApiKey is
-            // NEVER seeded from code — it stays null until an admin sets it as mesh data.
+            // the source's bootstrap DefaultEndpoint when config is empty.
+            //
+            // 🚨 The ApiKey stamped below is the IN-MEMORY projection ONLY. On that path this
+            // enumeration IS the served node — re-read from configuration on every read, so it can
+            // never go stale and nothing is persisted. On the DB-synced path
+            // ModelStaticRepoSource.StripApiKey removes it before the import, and
+            // ProviderCredentialSeed writes the ENCRYPTED key onto the node instead: a plaintext key
+            // must never reach Postgres, and a per-call ciphertext would destabilise this source's
+            // content fingerprint (see ModelStaticRepoSource). MeshWeaver#1982.
             string? endpoint = null;
             string? apiKey = null;
             try
@@ -132,7 +139,10 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             // Always emit ONE ModelProvider node per source at Provider/{ProviderName},
             // marked ExcludeThisAndChildren so the static importer CREATES it on first boot and
             // NEVER overwrites it again — admin edits to endpoint/key/models survive redeploys
-            // (create-if-absent). This node is the source of truth for driver config: the factory
+            // (create-if-absent). 🚨 That claim is what made a key configured AFTER the node existed
+            // unable to ever reach it; the CREDENTIAL is therefore no longer this seam's business at
+            // all on the synced path — ProviderCredentialSeed converges it field-by-field on every
+            // boot (MeshWeaver#1982). This node is the source of truth for driver config: the factory
             // reads endpoint/key off the selected model's resolved provider node. ModelProvider
             // is NOT WithPublicRead, so only callers with Permission.Api see the ApiKey; the
             // _Policy below opens public READ of the (key-less) LanguageModel children.

@@ -12,6 +12,22 @@ export {
 } from "./render/registryContext.js";
 export { ScopeProvider, useAreaState, useResolve, useBindingPointer, useEmit, useScope } from "./area/context.js";
 export { StaticAreaSource } from "./area/source.js";
+// Node-bound DataContexts (/$meshNode/…): the client twin of MeshNodeBindingExtensions. Exported so a
+// host can reason about (or test) the encoding; the resolver itself is wired into useResolve/useEmit.
+export {
+  parseMeshNodeDataContext,
+  isNodeBoundPointer,
+  resolveNodeField,
+  nodeFieldPatch,
+  combineFieldPointer,
+  fieldPointerOf,
+  MESH_NODE_PREFIX,
+  type MeshNodeDataContext,
+} from "./area/meshNodeBinding.js";
+export { NodeBindingContext, type NodeSnapshotStore } from "./area/nodeBindingStore.js";
+export { NodeBindingProvider } from "./live/nodeBinding.js";
+// The shared thread-composer @-mention model — one implementation for the web and RN leaves.
+export { useMentionModel, type MentionModel, type AtTokenState } from "./controls/composerModel.js";
 export {
   GrpcAreaSource,
   MeshAreaRegistry,
@@ -40,6 +56,7 @@ export {
   MeshOpsProvider,
   useMeshOps,
   type MeshOps,
+  type AutocompleteSuggestion,
   type MeshNodeState,
   type ThreadSubmitOptions,
   type MarkdownCellSubmission,
@@ -57,6 +74,26 @@ export {
   type EmbeddedAreaHandle,
   type EmbeddedAreaReference,
 } from "./render/embeddedArea.js";
+// The pure MeshSearch model (Blazor MeshSearchView semantics: scope tabs, union queries, the
+// Icons grid's row-only select, NavigateToMainNode, SortByAccess paint ordering, grouped-by-type
+// sections) — shared by the web pack and the RN pack so the two cannot drift.
+export {
+  accessKeyOf,
+  accessLogQuery,
+  buildGroups,
+  mergeUnionResults,
+  paintOrdered,
+  parseScopeTabs,
+  parseSortOptions,
+  toAccessOrder,
+  toSearchResult,
+  unionQueries,
+  withRowOnlySelect,
+  type MeshSearchGroup,
+  type MeshSearchResult,
+  type MeshSearchScope,
+  type MeshSearchSortOption,
+} from "./controls/meshSearchModel.js";
 export { getPointer, setPointer, mergePatch, resolve, bindingPointer } from "./area/pointer.js";
 export type { AreaSource, AreaTree, UiControl, Skin, NamedArea, MeshEvent, Json } from "./area/types.js";
 // Area-error classification — the TS twin of the server AreaErrorClassifier. Shells use these to make

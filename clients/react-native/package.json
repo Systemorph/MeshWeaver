@@ -26,13 +26,13 @@
     "expo-status-bar": "~57.0.1",
     "expo-video": "~57.0.2",
     "expo-web-browser": "~57.0.2",
-    "marked": "^18.0.5",
+    "marked": "^18.0.10",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-native": "0.86.2",
     "react-native-fetch-api": "^3.0.0",
     "react-native-render-html": "^6.3.4",
-    "react-native-svg": "15.15.4",
+    "react-native-svg": "15.15.5",
     "react-native-web": "~0.21.2",
     "text-encoding": "^0.7.0",
     "web-streams-polyfill": "^4.3.0"
@@ -44,7 +44,7 @@
     "@types/react-test-renderer": "^19.1.0",
     "react-test-renderer": "19.2.8",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.11"
   },
   "_expo_sdk57_note": [
     "Expo SDK 57 + react-native 0.86.2 + react 19.2.8 \u2014 the combination `expo@57`'s own",

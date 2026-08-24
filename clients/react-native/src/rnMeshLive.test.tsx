@@ -14,6 +14,7 @@ import {
 } from "@meshweaver/react/core";
 
 import { rnPack } from "./rnPack";
+import { NavContext } from "./nav";
 
 // Assert against the CATALOG, not a literal — that also pins that these strings are localized.
 const en = (key: string) => localize(key, "en");
@@ -350,5 +351,216 @@ describe("MeshSearch union queries", () => {
     // Deduped by path in DECLARATION order: the first batch's "Both" wins, the duplicate is dropped.
     expect(text).toContain("BothFirst");
     expect(text).not.toContain("BothDup");
+  });
+});
+
+// ---- MeshSearch home design (scope tabs · Icons grid · SortByAccess · grouped sections) --------
+
+describe("MeshSearch home design", () => {
+  const appRows = [
+    { path: "u1/_App/alpha", id: "alpha", name: "Alpha", nodeType: "InstalledApp", mainNode: "store/Alpha", icon: "🅰" },
+    { path: "u1/_App/beta", id: "beta", name: "Beta", nodeType: "InstalledApp", mainNode: "store/Beta", icon: "🅱" },
+  ];
+  const appsScope = {
+    label: "Apps",
+    query: "path:u1/_App scope:children nodeType:InstalledApp",
+    renderMode: "Icons",
+    navigateToMainNode: true,
+  };
+
+  it("a SINGLE scope applies its settings without a strip: Icons tiles, row-only select, mainNode target", async () => {
+    const search = vi.fn(async () => appRows);
+    const ops = fakeOps({ search });
+    const navigate = vi.fn();
+    let r!: TestRenderer.ReactTestRenderer;
+    await TestRenderer.act(async () => {
+      r = TestRenderer.create(
+        <NavContext.Provider value={navigate}>
+          <RegistryProvider pack={rnPack}>
+            <MeshOpsProvider ops={ops}>
+              <ScopeProvider
+                source={
+                  new StaticAreaSource({
+                    areas: {
+                      main: {
+                        $type: "MeshSearch",
+                        hiddenQuery: appsScope.query,
+                        showSearchBox: false,
+                        scopeTabs: [appsScope],
+                      } as never,
+                    },
+                  })
+                }
+                area="main"
+              >
+                <RenderArea areaKey="main" />
+              </ScopeProvider>
+            </MeshOpsProvider>
+          </RegistryProvider>
+        </NavContext.Provider>,
+      );
+    });
+    await TestRenderer.act(async () => {
+      await new Promise((res) => setTimeout(res, 300)); // the 250 ms search debounce
+    });
+    const j = r.toJSON() as Json;
+    // Row-only: the icon grid never pulls content over the wire.
+    expect(search).toHaveBeenCalledWith(
+      "path:u1/_App scope:children nodeType:InstalledApp select:path,id,namespace,name,nodeType,icon,mainNode",
+      undefined,
+    );
+    const text = allText(j).join("\n");
+    expect(text).toContain("Alpha");
+    expect(text).toContain("Beta");
+    // One tab ⇒ no tab strip.
+    expect([...walk(j)].some((n) => n.props?.accessibilityRole === "tablist")).toBe(false);
+    // Pressing a tile navigates to the row's mainNode (the APP), never the record.
+    const tile = r.root.findAll((n) => n.props?.accessibilityLabel === "Alpha")[0];
+    await TestRenderer.act(async () => {
+      tile.props.onPress();
+    });
+    expect(navigate).toHaveBeenCalledWith({ address: "store/Alpha", area: "" });
+  });
+
+  it("SortByAccess orders most-recently-used first from the viewer's access log, keeping never-opened tiles", async () => {
+    const search = vi.fn(async (q: string) =>
+      q.includes("_UserActivity")
+        ? [{ id: "store_Beta", lastModified: "2026-08-20T10:00:00Z", path: "u1/_UserActivity/store_Beta", nodeType: "UserActivity" }]
+        : appRows,
+    );
+    const ops = fakeOps({ search, userId: "u1" });
+    const j = await renderLive(
+      {
+        areas: {
+          main: {
+            $type: "MeshSearch",
+            hiddenQuery: appsScope.query,
+            showSearchBox: false,
+            scopeTabs: [{ ...appsScope, sortByAccess: true }],
+          } as never,
+        },
+      },
+      ops,
+    );
+    await TestRenderer.act(async () => {
+      await new Promise((res) => setTimeout(res, 300));
+    });
+    // The access log was read row-only from the viewer's own partition…
+    expect(search.mock.calls.some((c) => String(c[0]).startsWith("namespace:u1/_UserActivity nodeType:UserActivity"))).toBe(true);
+    // …and Beta (opened — its TARGET store/Beta is logged, '/'→'_') leads while Alpha stays.
+    const labels = allText(j).filter((t2) => t2 === "Alpha" || t2 === "Beta");
+    expect(labels).toEqual(["Beta", "Alpha"]);
+  });
+
+  it("renders the strip for 2+ scopes and groups by nodeType with counts, biggest group first", async () => {
+    const search = vi.fn(async () => [
+      { path: "a/1", name: "One", nodeType: "Story" },
+      { path: "a/2", name: "Two", nodeType: "Space" },
+      { path: "a/3", name: "Three", nodeType: "Space" },
+    ]);
+    const ops = fakeOps({ search });
+    const j = await renderLive(
+      {
+        areas: {
+          main: {
+            $type: "MeshSearch",
+            hiddenQuery: "is:main",
+            renderMode: "Grouped",
+            groupByFrequency: true,
+            showSearchBox: false,
+            grouping: { groupByProperty: "NodeType" },
+            scopeTabs: [
+              { label: "All", query: "is:main" },
+              { label: "Pinned", query: "path:(a/1)" },
+            ],
+          } as never,
+        },
+      },
+      ops,
+    );
+    await TestRenderer.act(async () => {
+      await new Promise((res) => setTimeout(res, 300));
+    });
+    expect([...walk(j)].some((n) => n.props?.accessibilityRole === "tablist")).toBe(true);
+    const text = allText(j);
+    // Counts on the section headers, biggest group first.
+    const headers = text.filter((t2) => /\(\d\)$/.test(t2));
+    expect(headers).toEqual(["Space (2)", "Story (1)"]);
+  });
+});
+
+// ---- ResultIcon: mesh-relative SVG urls on a device ------------------------------------------
+
+describe("ResultIcon url handling (the icons-not-showing defect)", () => {
+  it("resolves a mesh-relative .svg icon against the instance and renders it via SvgUri", async () => {
+    // The row shape prod actually serves: /static/… node icons are SVG at a RELATIVE path. RN's
+    // Image renders nothing for both reasons (no origin; no svg decoder) — the tile must resolve
+    // the URL against the current instance and route it through react-native-svg.
+    const rows = [{ path: "u1/_App/doc", id: "doc", name: "Documentation", nodeType: "InstalledApp",
+                    mainNode: "Doc", icon: "/static/NodeTypeIcons/book.svg" }];
+    const search = vi.fn(async () => rows);
+    let r!: TestRenderer.ReactTestRenderer;
+    await TestRenderer.act(async () => {
+      r = TestRenderer.create(
+        <NavContext.Provider value={() => {}}>
+          <RegistryProvider pack={rnPack}>
+            <MeshOpsProvider ops={fakeOps({ search })}>
+              <ScopeProvider
+                source={new StaticAreaSource({ areas: { main: {
+                  $type: "MeshSearch", hiddenQuery: "nodeType:InstalledApp",
+                  showSearchBox: false, renderMode: "Icons",
+                } as never } })}
+                area="main"
+              >
+                <RenderArea areaKey="main" />
+              </ScopeProvider>
+            </MeshOpsProvider>
+          </RegistryProvider>
+        </NavContext.Provider>,
+      );
+    });
+    await TestRenderer.act(async () => { await new Promise((res) => setTimeout(res, 300)); });
+    const uris = r.root.findAll((n) => n.type === ("SvgUri" as never)).map((n) => n.props.uri);
+    // Absolute (the mock instance's sidecar origin) — never the bare relative path RN cannot fetch.
+    expect(uris).toContain("http://localhost:5250/static/NodeTypeIcons/book.svg");
+  });
+});
+
+// ---- the SHARED composer model on the RN leaf (@-mention autocomplete) -----------------------
+
+describe("ThreadChat composer @-mentions (core useMentionModel, native dropdown)", () => {
+  it("typing an @token opens suggestions from ops.autocomplete; picking splices the insertText", async () => {
+    const autocomplete = vi.fn(async () => [
+      { label: "Documentation", insertText: "@/Doc", path: "Doc" },
+    ]);
+    const ops = fakeOps({ autocomplete });
+    let r!: TestRenderer.ReactTestRenderer;
+    await TestRenderer.act(async () => {
+      r = TestRenderer.create(
+        <NavContext.Provider value={() => {}}>
+          <RegistryProvider pack={rnPack}>
+            <MeshOpsProvider ops={ops}>
+              <ScopeProvider
+                source={new StaticAreaSource({ areas: { main: { $type: "ThreadChat", namespacePath: "u1" } as never } })}
+                area="main"
+              >
+                <RenderArea areaKey="main" />
+              </ScopeProvider>
+            </MeshOpsProvider>
+          </RegistryProvider>
+        </NavContext.Provider>,
+      );
+    });
+    const input = r.root.findAll((n) => String(n.type) === "TextInput"
+      && n.props.placeholder === en("chat.composerPlaceholder"))[0];
+    await TestRenderer.act(async () => { input.props.onChangeText("hello @do"); });
+    await TestRenderer.act(async () => { await new Promise((res) => setTimeout(res, 300)); }); // the model's debounce
+    expect(autocomplete).toHaveBeenCalledWith("@do", undefined);
+    const item = r.root.findAll((n) => typeof n.type === "string" && n.props?.accessibilityRole === "menuitem")[0];
+    expect(item).toBeTruthy();
+    await TestRenderer.act(async () => { item.props.onPress(); });
+    const after = r.root.findAll((n) => String(n.type) === "TextInput"
+      && n.props.placeholder === en("chat.composerPlaceholder"))[0];
+    expect(after.props.value).toBe("hello @/Doc ");
   });
 });

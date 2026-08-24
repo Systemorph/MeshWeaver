@@ -220,7 +220,11 @@ public static class ThreadComposerView
     /// hub itself.
     /// </summary>
     private static UiControl BuildSendButton(string? locale = null)
-        => Controls.Button(LocalizationCatalog.Get("common.send", locale))
+        // A GLYPH, not the word: the send affordance is universal, a glyph needs no translation and
+        // keeps the footer compact on a phone (the i18n rule: icon + localized tooltip/aria-label
+        // beats a translated label). "Send" survives as the button's Label for tooltip + a11y.
+        => Controls.Button("➤")
+            .WithLabel(LocalizationCatalog.Get("common.send", locale))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {

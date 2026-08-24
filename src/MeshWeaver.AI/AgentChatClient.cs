@@ -516,15 +516,9 @@ public class AgentChatClient : IAgentChat
     /// </summary>
     private async Task<ImmutableList<DataContent>> AppendContextAndAttachmentsAsync(StringBuilder messageText)
     {
-        // 🕰️ WHAT DAY IS IT (#1651). Nothing else in the pipeline told the agent, so every model
-        // answered "what day is today" — and every relative expression a scheduling agent computes
-        // off it — from its training priors. It belongs HERE, in the per-round block, and NOT in
-        // the agent's instructions: agents are built once and cached while a thread lives for days,
-        // so an instruction-time date goes stale and is then confidently wrong in exactly the way
-        // this fixes. Rendered in the viewer's own zone (never .ToLocalTime(), which in the UTC
-        // deployment container is a no-op) plus the ISO-8601 `Z` instant for anything the agent
-        // feeds back into a tool. See CurrentTimeContext.
-        messageText.Append(CurrentTimeContext.Describe(DateTimeOffset.UtcNow, ResolveViewerZoneId()));
+        // 🕰️ WHAT DAY IS IT (#1651) is NOT composed here any more — it is the single most volatile
+        // string in the prompt (seconds precision) and this block is a PREFIX. See
+        // AppendVolatileRoundContext, which puts it at the TAIL where it cannot break the cache.
 
         // Dynamic part: context (changes per navigation)
         if (Context != null)
@@ -639,6 +633,39 @@ public class AgentChatClient : IAgentChat
 
         return binaryAttachments;
     }
+
+    /// <summary>
+    /// The VOLATILE half of the round context — today the date/time block — rendered for appending
+    /// at the very END of the prompt, after the instructions, the context and the whole
+    /// conversation history.
+    ///
+    /// <para>🚨 <b>Position is a COST decision, not a formatting one.</b> Every provider's prompt
+    /// cache is a PREFIX match, so the first token that differs invalidates everything behind it.
+    /// <see cref="CurrentTimeContext"/> renders the UTC instant at SECONDS precision, and it used
+    /// to be composed into the block that is folded into the agent's SYSTEM message — the FIRST
+    /// message of the turn. So the clock ticking between two rounds invalidated the instructions,
+    /// the application context, the entire history and every document the agent had pulled.</para>
+    ///
+    /// <para>Measured against Azure Foundry DeepSeek on 2026-08-23, same 13,040-token prompt:
+    /// with the timestamp in the system message the cache hit rate was <b>0%</b> on every call;
+    /// with the identical prefix and the timestamp moved to the tail it reached <b>98.2%</b>.
+    /// Production sat at 53% — the within-a-round hits (the system message is composed once per
+    /// round, so tool iterations DID cache) minus a full-prefix miss on every new round.</para>
+    ///
+    /// <para>It hits EVERY driver, not just Foundry, and it is worse than a missed discount on the
+    /// ones that cache explicitly: the Anthropic client marks the system prompt with an ephemeral
+    /// <c>cache_control</c> breakpoint, so a volatile system prompt made it WRITE a cache entry
+    /// every round — at the 1.25x write premium — and never read one back. A live thread showed
+    /// exactly that: <c>cacheWriteTokens: 9068</c> against <c>cacheRead: 0</c>.</para>
+    ///
+    /// <para>Appending to the last USER message (rather than adding a trailing system message)
+    /// keeps the turn's message count and role sequence untouched, so no provider sees a second
+    /// system message or two consecutive user turns, and truncation — which never trims the
+    /// current user turn — cannot drop it.</para>
+    /// </summary>
+    /// <returns>The volatile block, ending in a blank line; never null.</returns>
+    private string BuildVolatileRoundContext() =>
+        CurrentTimeContext.Describe(DateTimeOffset.UtcNow, ResolveViewerZoneId());
 
     /// <summary>
     /// The zone the round's date/time block is rendered in — the SUBMITTER's named IANA zone.
@@ -760,6 +787,13 @@ public class AgentChatClient : IAgentChat
             text = await InlineReferenceResolver.ResolveAsync(text, hub, this).ConfigureAwait(false);
             messageText.Append(text);
         }
+
+        // 🕰️ The volatile block goes LAST — after the instructions, the context and every user
+        // message — so the whole stable prefix stays byte-identical between rounds and the
+        // provider's prompt cache can actually hit it. See BuildVolatileRoundContext.
+        messageText.AppendLine();
+        messageText.AppendLine();
+        messageText.Append(BuildVolatileRoundContext());
 
         return (messageText.ToString(), binaryAttachments);
     }
@@ -1024,6 +1058,32 @@ public class AgentChatClient : IAgentChat
         if (!string.IsNullOrEmpty(systemText))
             turnMessages.Add(new ChatMessage(ChatRole.System, systemText));
         turnMessages.AddRange(messages);
+
+        // 🕰️ The volatile per-round block (the clock) rides on the LAST USER message, i.e. the
+        // TAIL of the prompt — never in the system message, which is the cached prefix. Appending
+        // to an existing message rather than adding a trailing one keeps the message count and the
+        // role sequence exactly as every provider expects. See BuildVolatileRoundContext.
+        var volatileIdx = turnMessages.FindLastIndex(m => m.Role == ChatRole.User);
+        if (volatileIdx >= 0)
+        {
+            var target = turnMessages[volatileIdx];
+            var withClock = new List<AIContent>(target.Contents)
+            {
+                new TextContent("\n\n" + BuildVolatileRoundContext()),
+            };
+            turnMessages[volatileIdx] = new ChatMessage(ChatRole.User, withClock)
+            {
+                AuthorName = target.AuthorName,
+            };
+        }
+        else if (!string.IsNullOrEmpty(systemText))
+        {
+            // No user turn to hang it on (a tool-only or seeded round). Fall back to the system
+            // message so the agent still knows the date — correctness beats the cache hit here,
+            // and this branch does not occur on a normal conversational round.
+            turnMessages[0] = new ChatMessage(ChatRole.System, systemText + "\n\n" + BuildVolatileRoundContext());
+        }
+
         // Binary attachments (images/PDFs) ride on the last user message so the model receives them.
         if (!binaryAttachments.IsEmpty)
         {
@@ -2135,9 +2195,10 @@ public class AgentChatClient : IAgentChat
             // usable model AND no agent could be built" into a speaking round failure instead of a
             // raw provider error (#476).
             //
-            // 🚨 The deployment's OWN configured keys are no longer in that blind spot: the resolver
-            // reads {Section}:ApiKey for the model's provider (MeshWeaver#1965), so a model served by
-            // Anthropic__ApiKey now takes the early return above instead of being swapped away.
+            // 🚨 The deployment's OWN configured keys are no longer in that blind spot — but via
+            // the SEED, not a lookup here: ProviderCredentialSeed carries {Section}:ApiKey onto the
+            // ModelProvider node at boot (MeshWeaver#1982), so a model served by Anthropic__ApiKey
+            // resolves from the node and takes the early return above instead of being swapped away.
             modelFallbackExhausted = true;
             if (isRouter)
                 logger.LogWarning(

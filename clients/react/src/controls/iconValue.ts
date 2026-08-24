@@ -57,6 +57,123 @@ export function isEmojiIcon(value: string): boolean {
   return !isLettersOnlyName(value);
 }
 
+// ---- Icon backplate policy — EXACTLY the server's IconBackplate (MeshWeaver.Graph), keep in step.
+// Every inline-svg icon renders on a full-bleed rounded plate: an icon authored without one gets a
+// generated plate here (hue = stable FNV-1a hash of the markup over the shared palette,
+// currentColor recolored to white), so a monochrome outline can never vanish on one theme. Icons
+// that already paint a plate — authored store marks, thread identicons — pass through unchanged.
+
+/** The shared plate palette — same hues, same ORDER as IconBackplate.Palette (the hash indexes it). */
+export const backplatePalette = [
+  "#4338ca", // indigo
+  "#1f6feb", // blue
+  "#0e7490", // cyan
+  "#0f766e", // teal
+  "#15803d", // green
+  "#b45309", // amber
+  "#b91c1c", // red
+  "#be185d", // pink
+  "#7c3aed", // violet
+  "#334155", // slate
+];
+
+/** Stable FNV-1a (32-bit, UTF-16 code units — identical to the C# char loop) into the palette. */
+export function backplateHue(seed: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i++) {
+    hash = Math.imul(hash ^ seed.charCodeAt(i), 0x01000193) >>> 0;
+  }
+  return backplatePalette[hash % backplatePalette.length];
+}
+
+function attrOf(attrs: string, name: string): string | null {
+  // Lookbehind keeps `x` from reading rx="16" and `width` from reading stroke-width.
+  const m = new RegExp(`(?<![-\\w])${name}\\s*=\\s*(["'])(.*?)\\1`, "i").exec(attrs);
+  return m ? m[2].trim() : null;
+}
+
+function numberOf(attrs: string, name: string, fallback: number): number {
+  const raw = attrOf(attrs, name);
+  if (raw == null) return fallback;
+  if (raw.endsWith("%")) {
+    const pct = Number.parseFloat(raw.slice(0, -1));
+    return Number.isFinite(pct) ? (fallback * pct) / 100 : fallback;
+  }
+  const v = Number.parseFloat(raw);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+function canvasOf(svg: string): { w: number; h: number } {
+  const open = /<svg\b([^>]*)>/i.exec(svg);
+  if (!open) return { w: 24, h: 24 };
+  const attrs = open[1];
+  const viewBox = attrOf(attrs, "viewBox");
+  if (viewBox) {
+    const parts = viewBox.split(/[\s,]+/).filter(Boolean);
+    if (parts.length === 4) {
+      const vw = Number.parseFloat(parts[2]);
+      const vh = Number.parseFloat(parts[3]);
+      if (vw > 0 && vh > 0) return { w: vw, h: vh };
+    }
+  }
+  const w = numberOf(attrs, "width", 24);
+  const h = numberOf(attrs, "height", 24);
+  return { w: w > 0 ? w : 24, h: h > 0 ? h : 24 };
+}
+
+/** Whether the svg already paints a full-bleed plate: first drawable is a rect (or circle)
+ *  covering ≥90% of its OWN canvas with a real fill (IconBackplate.HasBackplate). */
+export function hasBackplate(svg: string): boolean {
+  if (!svg || !svg.trim()) return false;
+  const { w: cw, h: ch } = canvasOf(svg);
+  const first = /<(rect|circle|ellipse|path|polygon|polyline|line|text)\b([^>]*?)\/?>/i.exec(svg);
+  if (!first) return false;
+  const [, tag, attrs] = first;
+  const fill = attrOf(attrs, "fill");
+  if (fill === "none" || fill === "transparent") return false;
+  const threshold = 0.9;
+  if (tag.toLowerCase() === "rect") {
+    return (
+      numberOf(attrs, "width", cw) >= cw * threshold &&
+      numberOf(attrs, "height", ch) >= ch * threshold &&
+      numberOf(attrs, "x", 0) <= cw * (1 - threshold) &&
+      numberOf(attrs, "y", 0) <= ch * (1 - threshold)
+    );
+  }
+  if (tag.toLowerCase() === "circle") {
+    return numberOf(attrs, "r", 0) >= (Math.min(cw, ch) * threshold) / 2;
+  }
+  return false;
+}
+
+/** The one entry point (IconBackplate.Ensure): plated svg unchanged; anything else wrapped on a
+ *  generated rx=5 plate, the original nested inset-3 with its own viewBox intact. */
+export function ensureBackplate(svg: string): string {
+  if (!svg || !isInlineSvg(svg) || hasBackplate(svg)) return svg;
+  const hue = backplateHue(svg);
+  let inner = svg.replace(/currentColor/gi, "#fff");
+  const open = /<svg\b([^>]*)>/i.exec(inner);
+  if (open) {
+    const attrs = open[1];
+    const hadViewBox = attrOf(attrs, "viewBox") != null;
+    const { w, h } = canvasOf(inner);
+    const kept = attrs.replace(/\s+(x|y|width|height)\s*=\s*(["']).*?\2/gi, "");
+    const viewBox = hadViewBox ? "" : ` viewBox='0 0 ${w} ${h}'`;
+    inner =
+      inner.slice(0, open.index) +
+      `<svg x='3' y='3' width='18' height='18'${viewBox}${kept}>` +
+      inner.slice(open.index + open[0].length);
+  }
+  return (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>" +
+    "<rect width='24' height='24' rx='5' fill='" +
+    hue +
+    "' stroke='none'/>" +
+    inner +
+    "</svg>"
+  );
+}
+
 /** Legacy Fluent icon names on NODE icons render as nothing. EXACTLY the server's
  *  MeshNodeImageHelper.IsFluentIconName: ASCII letters only, starting UPPERCASE ("Document",
  *  "ArrowLeft") — lowercase-start or digit-carrying values are NOT filtered. */
@@ -96,7 +213,7 @@ export function classifyIcon(value: Json): ClassifiedIcon {
   }
   const s = value == null ? "" : String(value);
   if (!s) return { kind: "none", text: "" };
-  if (isInlineSvg(s)) return { kind: "svg", text: s };
+  if (isInlineSvg(s)) return { kind: "svg", text: ensureBackplate(s) };
   if (isIconUrl(s)) return { kind: "url", text: s };
   if (isEmojiIcon(s)) return { kind: "emoji", text: s };
   // Any letters-only word tries the curated Fluent map (layout-area icon props carry lowercase

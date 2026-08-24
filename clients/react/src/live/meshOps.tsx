@@ -14,6 +14,7 @@
 
 import { createContext, useContext } from "react";
 import type { ReactNode } from "react";
+import { NodeBindingProvider } from "./nodeBinding.js";
 import type {
   MarkdownCellSubmission,
   MarkdownKernelSession,
@@ -40,6 +41,14 @@ export interface ThreadSubmitOptions {
 }
 
 export interface MeshOps {
+  /**
+   * Optional viewing user's mesh id (their home partition) — hosts that know who is signed in
+   * expose it (the web portals learn it from the token mint's nodePath; the RN shell from its
+   * configured partition). Feeds viewer-scoped reads like the home Apps grid's
+   * most-recently-used ordering ({viewer}/_UserActivity — MeshSearchScopeTab.SortByAccess);
+   * absent → those orderings quietly keep the query's own order (no crash, no guess).
+   */
+  userId?: string;
   /** Subscribe to a node's live state — yields on every change (initial state, then updates). */
   watch(path: string): AsyncIterable<MeshNodeState>;
   /**
@@ -164,5 +173,11 @@ export function useMeshOps(): MeshOps | null {
 }
 
 export function MeshOpsProvider({ ops, children }: { ops: MeshOps | null; children: ReactNode }) {
-  return <MeshOpsCtx.Provider value={ops}>{children}</MeshOpsCtx.Provider>;
+  // NodeBindingProvider rides along: node-bound DataContexts (/$meshNode/…) read and write through
+  // these same ops, so every host that provides MeshOps gets node binding without extra wiring.
+  return (
+    <MeshOpsCtx.Provider value={ops}>
+      <NodeBindingProvider ops={ops}>{children}</NodeBindingProvider>
+    </MeshOpsCtx.Provider>
+  );
 }

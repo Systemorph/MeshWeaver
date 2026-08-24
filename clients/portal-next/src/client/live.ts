@@ -140,7 +140,9 @@ export async function connectLive(baseUrl: string = window.location.origin): Pro
   const runTranscribe = (audio: Blob, language?: string) => transcribe(baseUrl, rawToken, audio, language);
   return {
     connection,
-    ops: adaptOps(mesh, runQuery, runAutocomplete, runRenderMarkdown, runStartKernel, runListContent, runUploadContent, runTranscribe),
+    // userId ON the ops too: viewer-scoped reads inside the shared renderer (the home Apps
+    // grid's most-recently-used ordering) resolve the viewer through MeshOps.userId.
+    ops: { ...adaptOps(mesh, runQuery, runAutocomplete, runRenderMarkdown, runStartKernel, runListContent, runUploadContent, runTranscribe), userId },
     userId,
     getNode: (path: string) => mesh.get(path).then((n) => n.raw as MeshNodeRow).catch(() => null),
     queryNodes: runQuery,

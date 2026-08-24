@@ -278,6 +278,11 @@ public static class MemexConfiguration
         // server-side sync — the plugin registry pulling the plugins repo — logs on AS THE APP
         // (installation token), never with a user's personal credential.
         services.Configure<GitHubAppOptions>(builder.Configuration.GetSection("GitHub:App"));
+        // Framework-release broadcaster subscribers (FrameworkBroadcast:Subscribers) — the interim
+        // config source for who gets a repository_dispatch when the platform releases. Only the
+        // control instance carries a list; the durable home is the Hosting fleet's subscriber
+        // registry, which passes its set to FrameworkReleaseBroadcaster.Broadcast directly.
+        services.Configure<FrameworkBroadcastOptions>(builder.Configuration.GetSection("FrameworkBroadcast"));
         // (Course assets ride the MeshWeaver.Courses module — its attribute registers the
         // resolver and contributes GET /assets/{Space}/{path…} through MapMeshModuleEndpoints.
         // It reads the same GitHub App credentials configured above.)
@@ -372,6 +377,14 @@ public static class MemexConfiguration
             JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
             services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
                 .AddMicrosoftIdentityWebApp(entraIdConfig);
+            // This branch has its own OIDC correlation/nonce handshake cookies, and an abandoned
+            // login here piles them up exactly like the unified handlers' — same eviction policy,
+            // same constant (see AuthenticationBuilderExtensions.LoginHandshakeCookieMaxAge).
+            services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
+            {
+                options.CorrelationCookie.MaxAge = AuthenticationBuilderExtensions.LoginHandshakeCookieMaxAge;
+                options.NonceCookie.MaxAge = AuthenticationBuilderExtensions.LoginHandshakeCookieMaxAge;
+            });
             services.AddControllersWithViews()
                 .AddMicrosoftIdentityUI();
         }
@@ -1031,6 +1044,10 @@ public static class MemexConfiguration
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
                 .AddChatViews()   // Register ThreadChatView
                 .AddUserProfileViews() // Register UserProfilePageView
+                // The entity form/edit renderers (MeshWeaver.Blazor.EntityViews) are a MODULE now:
+                // the DLL's EntityViewsViewPackModuleAttribute folds AddEntityViews() when it is
+                // listed under Modules:Assemblies, and Modules:Required gates a rollout that lost
+                // it. No compiled call here — see the csproj note beside the removed reference.
             )
             .AddBlazor(layoutClient => layoutClient
                 // 🚨 The portal hub is the per-user sub-hub that hosts the
@@ -1144,8 +1161,15 @@ public static class MemexConfiguration
                 headers["Permissions-Policy"] =
                     "accelerometer=(), camera=(), geolocation=(), gyroscope=(), " +
                     "magnetometer=(), microphone=(), payment=(), usb=()";
-                if (!headers.ContainsKey("Content-Security-Policy"))
-                    headers["Content-Security-Policy"] =
+                // SET, never defer. Something earlier in the pipeline emits a bare
+                // `frame-ancestors 'self'` on HTML responses (API responses get the full
+                // policy), and a ContainsKey guard here silently yielded to it — so every
+                // page shipped an anti-clickjacking directive with no fetch-directive
+                // fallback (ZAP 10055) while /api/* was correctly covered. This callback is
+                // registered earliest, so it runs LAST and its value wins. The policy below
+                // is a strict superset: it includes frame-ancestors 'self', so nothing the
+                // shorter header expressed is lost.
+                headers["Content-Security-Policy"] =
                         "default-src 'self'; " +
                         "base-uri 'self'; " +
                         "object-src 'none'; " +
@@ -1199,7 +1223,25 @@ public static class MemexConfiguration
             return next();
         });
 
-        // Static files middleware must run before routing to serve _content/* paths from RCLs
+        app.UseRouting();
+
+        // 🚨 The static-file middleware runs AFTER UseRouting, and that ordering is the whole
+        // point: StaticFileMiddleware skips a request whose ENDPOINT has already been selected, so
+        // everything in the build-time static-asset manifest is answered by MapStaticAssets below
+        // — pre-compressed (brotli) off a per-encoding endpoint, fingerprinted, with
+        // `Cache-Control: immutable`. Registered before routing (as it was until 2026-08-24) this
+        // middleware short-circuits FIRST and serves those same files raw: measured on prod,
+        // `_framework/blazor.web.js` came back 200,645 bytes with NO content-encoding and NO
+        // cache-control, and `_content/MeshWeaver.Blazor/*.css` likewise — every asset at full
+        // size, revalidated on every load, while the pre-compressed copies sat unused in the
+        // image. The old comment here claimed the early registration was needed to serve RCL
+        // `_content/*` paths; it is not — those are IN the manifest, which is exactly why
+        // MeshModuleStaticAssetExtensions has to hand-roll its own encoding negotiation for the
+        // modules that are NOT.
+        //
+        // What still needs the middleware: anything with no endpoint — the React SPA under /app,
+        // and files that reach wwwroot outside the manifest. Those match no endpoint, so the
+        // middleware serves them exactly as before.
         app.UseStaticFiles();
 
         // …and the same for modules that ship via modules/<Name>/ rather than a ProjectReference,
@@ -1207,8 +1249,6 @@ public static class MemexConfiguration
         // host's own UseStaticFiles so the platform copy of any shared dependency answers first —
         // the module lane never shadows a platform asset.
         app.UseMeshModuleStaticAssets();
-
-        app.UseRouting();
 
         // gRPC-web middleware — lets browsers / React Native reach the mesh gRPC service
         // (Connect+Deliver split) without HTTP/2 bidi. Must sit between UseRouting and the

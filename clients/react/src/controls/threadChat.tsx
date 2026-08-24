@@ -36,6 +36,7 @@ import {
 import { useNodeState, watchInto } from "../live/nodeState.js";
 import { controlClass, controlStyle } from "../render/style.js";
 import { str } from "./common.js";
+import { useMentionModel } from "./composerModel.js";
 
 // ---- wire shapes (camelCase — SerializationExtensions serialises with camelCase + string enums) ---
 
@@ -503,65 +504,30 @@ export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
     if (ops && threadPath) ops.patch(threadPath, { content: { requestedStatus: "Cancelled" } });
   };
 
-  // ── @-mention autocomplete (the Blazor MeshNodeAutocomplete parity surface) ──────────────────
-  // Typing an @token opens mesh suggestions from MeshOps.autocomplete (the wire
-  // AutocompleteRequest); picking one splices the item's insertText (a UCR `@/path`) into the
-  // composer. Hosts without the optional ops.autocomplete never open the dropdown.
-  const [atState, setAtState] = useState<{ token: string; start: number; end: number } | null>(null);
-  const [atSuggestions, setAtSuggestions] = useState<AutocompleteSuggestion[]>([]);
-  const [atHighlight, setAtHighlight] = useState(0);
-  const atGeneration = useRef(0);
-
-  const trackAtToken = (value: string, caret: number) => {
-    const before = value.slice(0, caret);
-    const match = /(^|\s)(@[\w\-./]*)$/.exec(before);
-    if (!match || !ops?.autocomplete) {
-      setAtState(null);
-      setAtSuggestions([]);
-      return;
-    }
-    setAtState({ token: match[2], start: caret - match[2].length, end: caret });
-  };
-
-  useEffect(() => {
-    if (!atState || !ops?.autocomplete) return;
-    const gen = ++atGeneration.current;
-    const timer = setTimeout(() => {
-      ops.autocomplete!(atState.token, initialContext || threadPath || undefined).then(
-        (items) => {
-          if (atGeneration.current !== gen) return;
-          setAtSuggestions(items.slice(0, 8));
-          setAtHighlight(0);
-        },
-        () => {
-          if (atGeneration.current === gen) setAtSuggestions([]);
-        },
-      );
-    }, 250);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [atState?.token]);
+  // ── @-mention autocomplete — the SHARED composer model (composerModel.ts): token tracking,
+  // debounced MeshOps.autocomplete fetch, highlight and splice-on-pick live in core, so this leaf
+  // and the RN one cannot drift. This leaf keeps only the DOM rendering + key handling.
+  const mention = useMentionModel(ops, initialContext || threadPath || undefined);
+  const trackAtToken = mention.track;
+  const atSuggestions = mention.suggestions;
+  const atHighlight = mention.highlight;
+  const atOpen = mention.open;
 
   const pickSuggestion = (s: AutocompleteSuggestion) => {
-    if (!atState) return;
-    const insert = str(s.insertText) || (s.path ? `@/${str(s.path)}` : str(s.label));
-    setText(text.slice(0, atState.start) + insert + " " + text.slice(atState.end));
-    setAtState(null);
-    setAtSuggestions([]);
+    const next = mention.pick(text, s);
+    if (next != null) setText(next);
   };
-
-  const atOpen = atState != null && atSuggestions.length > 0;
 
   const onComposerKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (atOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setAtHighlight((h) => (h + 1) % atSuggestions.length);
+        mention.move(1);
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setAtHighlight((h) => (h <= 0 ? atSuggestions.length - 1 : h - 1));
+        mention.move(-1);
         return;
       }
       if (e.key === "Enter" || e.key === "Tab") {
@@ -570,8 +536,7 @@ export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
         return;
       }
       if (e.key === "Escape") {
-        setAtState(null);
-        setAtSuggestions([]);
+        mention.dismiss();
         return;
       }
     }
@@ -655,7 +620,7 @@ export function ThreadChatView({ control }: { control: UiControl }): ReactNode {
                   e.preventDefault();
                   pickSuggestion(s);
                 }}
-                onMouseEnter={() => setAtHighlight(i)}
+                onMouseEnter={() => mention.highlightAt(i)}
                 style={{
                   display: "flex",
                   flexDirection: "column",

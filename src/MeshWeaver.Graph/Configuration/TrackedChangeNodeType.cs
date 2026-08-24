@@ -52,7 +52,7 @@ public static class TrackedChangeNodeType
         Name = "TrackedChange",
         Icon = "/static/NodeTypeIcons/document.svg",
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<TrackedChange>())

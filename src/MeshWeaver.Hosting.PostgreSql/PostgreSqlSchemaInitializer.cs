@@ -9,13 +9,52 @@ namespace MeshWeaver.Hosting.PostgreSql;
 public static class PostgreSqlSchemaInitializer
 {
     /// <summary>
+    /// How long a schema-initialization command may run, in seconds.
+    ///
+    /// <para>🚨 <b>Npgsql's default is 30s, and that is a REQUEST-path number.</b> Nothing in this
+    /// class is on a request path: it is boot-time DDL and, in one case, a sweep over EVERY
+    /// partition schema in the database (the auth-mirror self-heal probes triggers and reconciles
+    /// rows for all of them). That work scales with the size of the instance, so the default turns
+    /// "this deployment is large" into a timeout.</para>
+    ///
+    /// <para>It did exactly that on memex.meshweaver.cloud (2026-08-22): the migration
+    /// CrashLoopBackOff'd with <c>Npgsql.NpgsqlException: Exception while reading from stream ---&gt;
+    /// TimeoutException</c> from the self-heal, the portal's new pods never became ready, and the
+    /// roll stalled at 1/5 — while the SAME image migrated a smaller instance fine. The database
+    /// was healthy throughout; the old pods kept serving. A migration that cannot finish is not a
+    /// slow migration, it is a deployment that cannot happen at all, and the failure names Npgsql
+    /// rather than "your instance is big".</para>
+    ///
+    /// <para>Ten minutes is chosen to be far above any healthy sweep while still bounded: a
+    /// migration wedged on a lock must eventually fail rather than hang a rollout forever. This is
+    /// not a substitute for making the sweep cheaper — it is the difference between a large
+    /// instance deploying and not deploying.</para>
+    /// </summary>
+    private const int MaintenanceCommandTimeoutSeconds = 600;
+
+    /// <summary>
+    /// A command for boot-time schema work, with <see cref="MaintenanceCommandTimeoutSeconds"/>
+    /// applied (or a caller-supplied bound, for work that is BOUNDED by construction — the
+    /// batched heal deserves a modest per-batch ceiling, not the whole-sweep one). Use this for
+    /// every statement here so none of them inherits the request-path default; the guard test
+    /// pins the call form.
+    /// </summary>
+    private static NpgsqlCommand CreateMaintenanceCommand(
+        this NpgsqlDataSource dataSource, string sql, int timeoutSeconds = MaintenanceCommandTimeoutSeconds)
+    {
+        var command = dataSource.CreateCommand(sql);
+        command.CommandTimeout = timeoutSeconds;
+        return command;
+    }
+
+    /// <summary>
     /// Creates the partition_access table in the public schema.
     /// This table maps users to partition schemas they can access, populated by
     /// rebuild_user_effective_permissions() trigger in each partition schema.
     /// </summary>
     public static async Task InitializePartitionAccessTableAsync(NpgsqlDataSource dataSource, CancellationToken ct = default)
     {
-        await using var cmd = dataSource.CreateCommand("""
+        await using var cmd = dataSource.CreateMaintenanceCommand("""
             CREATE TABLE IF NOT EXISTS public.partition_access (
                 user_id    TEXT NOT NULL,
                 partition  TEXT NOT NULL,
@@ -220,7 +259,7 @@ public static class PostgreSqlSchemaInitializer
     {
         // Step 1: Create the vector extension using plain SQL (no vector parameters).
         // Even if UseVector() can't find the type yet, plain SQL commands work fine.
-        await using (var cmd = dataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector"))
+        await using (var cmd = dataSource.CreateMaintenanceCommand("CREATE EXTENSION IF NOT EXISTS vector"))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -238,13 +277,13 @@ public static class PostgreSqlSchemaInitializer
         // only by the V27 *repair* migration — which MigrationRunner SKIPS on fresh DBs — so
         // fresh deployments never installed the trigger and `auth` stayed empty. Creating it
         // here (always-run path) makes the guard pass on every DB, fresh or not.
-        await using (var cmd = dataSource.CreateCommand(GetAuthMirrorFunctionScript()))
+        await using (var cmd = dataSource.CreateMaintenanceCommand(GetAuthMirrorFunctionScript()))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         // Step 3: Run the full schema script (tables, indexes, triggers).
-        await using (var cmd = dataSource.CreateCommand(GetSchemaScript(options)))
+        await using (var cmd = dataSource.CreateMaintenanceCommand(GetSchemaScript(options)))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -254,7 +293,7 @@ public static class PostgreSqlSchemaInitializer
         // keeps it idempotent and in sync on every init (runtime bootstrap + the test
         // fixture both run InitializeAsync against public, so both DBs get the proc).
         // Routed to by PostgreSqlPartitionStorageProvider.EnsureSchemaAsync.
-        await using (var cmd = dataSource.CreateCommand(GetEnsurePartitionSchemaProcScript(options.VectorDimensions)))
+        await using (var cmd = dataSource.CreateMaintenanceCommand(GetEnsurePartitionSchemaProcScript(options.VectorDimensions)))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -283,7 +322,7 @@ public static class PostgreSqlSchemaInitializer
         // PUBLIC-INIT ONLY, same as step 5 — per-schema data sources must not provision auth.
         if (string.Equals(options.Schema, "public", StringComparison.OrdinalIgnoreCase))
         {
-            await using var cmd = dataSource.CreateCommand("SELECT public.ensure_partition_schema('auth')");
+            await using var cmd = dataSource.CreateMaintenanceCommand("SELECT public.ensure_partition_schema('auth')");
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
@@ -309,8 +348,79 @@ public static class PostgreSqlSchemaInitializer
         // per-boot singleton; the in-script pg_advisory_xact_lock serializes across silos.
         if (string.Equals(options.Schema, "public", StringComparison.OrdinalIgnoreCase))
         {
-            await using var cmd = dataSource.CreateCommand(GetAuthMirrorSelfHealScript());
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            await RunAuthMirrorSelfHealAsync(dataSource, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>How many partition schemas one heal batch covers. Small enough that a batch is
+    /// never a long statement; large enough that a big mesh is a handful of round-trips.</summary>
+    private const int AuthMirrorHealBatchSize = 25;
+
+    /// <summary>Per-batch ceiling. Bounded work deserves a bounded, modest timeout — the point of
+    /// batching is that no single statement scales with the size of the mesh.</summary>
+    private const int BatchCommandTimeoutSeconds = 120;
+
+    /// <summary>
+    /// Installs the heal FUNCTION, then drives it to completion one bounded batch at a time.
+    ///
+    /// <para>🚨 <b>Why this is not one call.</b> The heal sweeps every partition schema, and it
+    /// used to do so inside a single <c>DO</c> block that the client waited on while holding
+    /// <c>pg_advisory_xact_lock</c> for the WHOLE sweep. Three things were wrong with that, and
+    /// only the first is a timeout:</para>
+    /// <list type="number">
+    /// <item>the client blocked on one statement whose duration scales with the size of the mesh,
+    /// so a big instance hit Npgsql's timeout and the migration CrashLoopBackOff'd — the same
+    /// image migrating a smaller instance fine (memex.meshweaver.cloud, 2026-08-22);</item>
+    /// <item>a timeout ABANDONS the client while the server keeps going, so the work is neither
+    /// finished nor cancelled and nothing knows which;</item>
+    /// <item>the global lock was held for the entire sweep, so every concurrently-booting silo
+    /// queued behind it — the contention grows with the very thing that made it slow.</item>
+    /// </list>
+    ///
+    /// <para>So the work is TRIGGERED in bounded batches and driven to completion: each call takes
+    /// the lock (its first batch also installs the global group-recompute trigger, under that
+    /// lock), heals at most <see cref="AuthMirrorHealBatchSize"/> schemas, commits (releasing the
+    /// lock), and returns its cursor. No statement is long, and another silo can interleave.</para>
+    ///
+    /// <para><b>Failure contract — the cursor lives only inside one drive, deliberately.</b>
+    /// Every batch COMMITS as it lands, so work done before a failure is durable; but if a call
+    /// faults (dropped connection, cancellation) this method throws and the drive is over — the
+    /// caller's retry (the next boot / migration attempt) starts a fresh drive from the top. The
+    /// cursor is NOT persisted across drives, and must not be: a schema created mid-sweep whose
+    /// name sorts before a persisted cursor would be skipped forever, whereas re-scanning from
+    /// the top only re-verifies schemas that are already healed — every step is idempotent, each
+    /// batch is bounded, so a retried drive converges rather than compounding.</para>
+    /// </summary>
+    /// <remarks>
+    /// 🚨 <b>This — not <see cref="GetAuthMirrorSelfHealScript"/> — is the heal.</b> That method now
+    /// only DEFINES the batch function; executing it heals nothing. Anything that wants the sweep
+    /// (boot, a migration, a test) calls this, so there is one way to run it and no caller can
+    /// half-run it by executing the script alone.
+    /// </remarks>
+    public static async Task RunAuthMirrorSelfHealAsync(NpgsqlDataSource dataSource, CancellationToken ct = default)
+    {
+        await using (var install = dataSource.CreateMaintenanceCommand(
+            GetAuthMirrorSelfHealScript(), BatchCommandTimeoutSeconds))
+        {
+            // Installing the function is plain DDL — short by construction.
+            await install.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        string? after = null;
+        while (true)
+        {
+            // Per BATCH, not per sweep: bounded work, so a bound that does not scale with the mesh.
+            await using var batch = dataSource.CreateMaintenanceCommand(
+                "SELECT public.mw_auth_mirror_heal_batch($1, $2)", BatchCommandTimeoutSeconds);
+            batch.Parameters.AddWithValue(after is null ? DBNull.Value : after);
+            batch.Parameters.AddWithValue(AuthMirrorHealBatchSize);
+
+            var cursor = await batch.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            // NULL cursor ⇒ the slice after `after` was empty ⇒ every schema is healed.
+            if (cursor is null or DBNull)
+                return;
+
+            after = (string)cursor;
         }
     }
 
@@ -491,15 +601,23 @@ public static class PostgreSqlSchemaInitializer
         """;
 
     /// <summary>
-    /// One-shot server-side reconciliation of the auth mirror AND the permission projection:
-    /// per partition schema it (a) installs the <c>mesh_node_mirror_access_objects</c> trigger
+    /// DEFINES the batched heal function <c>public.mw_auth_mirror_heal_batch(p_after, p_limit)</c>
+    /// — executing this script only (re)installs the function and heals NOTHING;
+    /// <see cref="RunAuthMirrorSelfHealAsync"/> is the operation that drives it to completion,
+    /// and is what every caller (boot, migration, test) must use. Each invocation of the
+    /// function reconciles ONE bounded, alphabetically-ordered batch of partition schemas after
+    /// the <c>p_after</c> cursor and returns the last schema it touched (<c>NULL</c> when done),
+    /// under a per-batch advisory xact lock.
+    ///
+    /// <para>Per partition schema in the batch it (a) installs the <c>mesh_node_mirror_access_objects</c> trigger
     /// where missing, (a2) CREATE OR REPLACEs the schema's <c>trg_access_changed()</c> with the
     /// current <see cref="AccessChangedTriggerFunctionBody"/> (and (a3) re-installs the
     /// <c>access_changed</c> trigger where missing) so grant writes materialize
     /// <c>user_effective_permissions</c> into the RIGHT schema — partitions deployed with the
     /// pre-2026-07-13 body resolved the rebuild through the writing session's
-    /// <c>search_path</c> and silently rebuilt <c>public</c> instead; it also installs (once, before
-    /// the per-schema loop) the global <c>public.trg_group_changed()</c> + the two
+    /// <c>search_path</c> and silently rebuilt <c>public</c> instead; it also installs (once per
+    /// drive — the <c>p_after IS NULL</c> first batch, under the advisory lock) the global
+    /// <c>public.trg_group_changed()</c> + the two
     /// <c>zzz_group_recompute_*</c> triggers on <c>auth.mesh_nodes</c>
     /// (<see cref="GroupChangedTriggerFunctionBody"/>) so a Group/GroupMembership change — which
     /// mirrors into <c>auth</c> — recomputes every schema that grants the affected group
@@ -520,13 +638,16 @@ public static class PostgreSqlSchemaInitializer
     /// rebuild here — the schema script (<see cref="InitializeAsync"/> step 3) already rebuilds
     /// <c>public.top_level_index</c> on the same init, and a second DROP+CREATE under
     /// ACCESS EXCLUSIVE just adds lock contention. No-op when <c>auth.mesh_nodes</c> doesn't
-    /// exist. Runs once per boot (public-schema init only, serialized across silos by an advisory
-    /// xact lock) — everything converges on restart rather than relying on one-time migrations.
+    /// exist. Driven once per boot (<see cref="RunAuthMirrorSelfHealAsync"/>, public-schema init
+    /// only; each batch serialized across silos by an advisory xact lock held per batch) —
+    /// everything converges on restart rather than relying on one-time migrations.</para>
     /// </summary>
     public static string GetAuthMirrorSelfHealScript() => $$"""
-        DO $auth_mirror_heal$
+        CREATE OR REPLACE FUNCTION public.mw_auth_mirror_heal_batch(p_after text, p_limit int)
+        RETURNS text AS $auth_mirror_heal$
         DECLARE
             s text;
+            last_schema text := NULL;
             -- The CURRENT trg_access_changed body (single-sourced from the C# constant the
             -- partition DDL also embeds). __mw_schema__ is replace()d per schema below;
             -- plain replace, NOT format() — the body carries its own %I/%L format specs.
@@ -555,33 +676,47 @@ public static class PostgreSqlSchemaInitializer
         $prfix$;
         BEGIN
             IF to_regclass('"auth".mesh_nodes') IS NULL THEN
-                RETURN;
+                -- No mirror yet ⇒ nothing to heal, and NULL tells the caller to stop looping.
+                -- (A bare RETURN was valid in the old DO block; in a function returning text it
+                -- is a syntax error — 42601, which surfaces as the whole fixture failing to init.)
+                RETURN NULL;
             END IF;
+
+            -- One heal batch at a time across the whole mesh (HA silos boot concurrently). Taken
+            -- FIRST, so everything below — the global DDL included — runs serialized; released
+            -- with this transaction, i.e. per BATCH, so concurrent drives interleave instead of
+            -- queueing behind a whole sweep.
+            PERFORM pg_advisory_xact_lock(hashtext('auth_mirror_self_heal'));
 
             -- Cross-partition group recompute lives HERE, on the global auth mirror — the single
             -- convergence point for memberships. A Group/GroupMembership change in ANY partition
             -- mirrors into auth.mesh_nodes; this trigger then recomputes every schema that grants
             -- the affected group(s) (trg_group_changed fans out over the partition schemas). One
             -- trigger, not one per partition: no double-fire, and the row is already in auth when
-            -- it fires (the mirror wrote it), so no firing-order hack is needed. Idempotent.
-            CREATE OR REPLACE FUNCTION public.trg_group_changed() RETURNS TRIGGER AS $trg_group$
+            -- it fires (the mirror wrote it), so no firing-order hack is needed. Idempotent —
+            -- and GLOBAL, so it belongs to the DRIVE, not to every batch: only the first batch
+            -- (p_after IS NULL) installs it, under the lock above. Before the lock covered it,
+            -- two silos could interleave the DROP/CREATE pair and one would error on a trigger
+            -- the other had just recreated — a real race window, not just repeated DDL.
+            IF p_after IS NULL THEN
+                CREATE OR REPLACE FUNCTION public.trg_group_changed() RETURNS TRIGGER AS $trg_group$
         {{GroupChangedTriggerFunctionBody}}
             $trg_group$ LANGUAGE plpgsql;
-            DROP TRIGGER IF EXISTS zzz_group_recompute_ins ON "auth".mesh_nodes;
-            CREATE TRIGGER zzz_group_recompute_ins
-                AFTER INSERT OR UPDATE ON "auth".mesh_nodes
-                FOR EACH ROW WHEN (NEW.node_type IN ('GroupMembership','Group'))
-                EXECUTE FUNCTION public.trg_group_changed();
-            DROP TRIGGER IF EXISTS zzz_group_recompute_del ON "auth".mesh_nodes;
-            CREATE TRIGGER zzz_group_recompute_del
-                AFTER DELETE ON "auth".mesh_nodes
-                FOR EACH ROW WHEN (OLD.node_type IN ('GroupMembership','Group'))
-                EXECUTE FUNCTION public.trg_group_changed();
+                DROP TRIGGER IF EXISTS zzz_group_recompute_ins ON "auth".mesh_nodes;
+                CREATE TRIGGER zzz_group_recompute_ins
+                    AFTER INSERT OR UPDATE ON "auth".mesh_nodes
+                    FOR EACH ROW WHEN (NEW.node_type IN ('GroupMembership','Group'))
+                    EXECUTE FUNCTION public.trg_group_changed();
+                DROP TRIGGER IF EXISTS zzz_group_recompute_del ON "auth".mesh_nodes;
+                CREATE TRIGGER zzz_group_recompute_del
+                    AFTER DELETE ON "auth".mesh_nodes
+                    FOR EACH ROW WHEN (OLD.node_type IN ('GroupMembership','Group'))
+                    EXECUTE FUNCTION public.trg_group_changed();
+            END IF;
 
-            -- One heal at a time across the whole mesh (HA silos boot concurrently); the lock
-            -- releases with this transaction.
-            PERFORM pg_advisory_xact_lock(hashtext('auth_mirror_self_heal'));
-
+            -- BOUNDED, ORDERED slice after the caller's cursor. The caller keeps calling with the
+            -- last name returned until this returns NULL, so no single statement is long and the
+            -- advisory lock above is held for ONE BATCH rather than the whole mesh.
             FOR s IN
                 SELECT t.table_schema
                 FROM information_schema.tables t
@@ -589,7 +724,11 @@ public static class PostgreSqlSchemaInitializer
                   AND t.table_schema NOT IN
                       ('information_schema','pg_catalog','pg_toast','public','admin','auth')
                   AND t.table_schema NOT LIKE '%\_versions'
+                  AND (p_after IS NULL OR t.table_schema > p_after)
+                ORDER BY t.table_schema
+                LIMIT p_limit
             LOOP
+                last_schema := s;
                 -- (a) Trigger present on every partition table (auth itself excluded above —
                 --     it is the mirror target, mirroring into itself would loop).
                 IF NOT EXISTS (
@@ -726,8 +865,9 @@ public static class PostgreSqlSchemaInitializer
             -- No matview rebuild here: the schema script (init step 3) rebuilds
             -- public.top_level_index on the same boot; doubling the DROP+CREATE
             -- (ACCESS EXCLUSIVE) only adds lock contention.
+            RETURN last_schema;   -- NULL ⇒ nothing left to heal
         END
-        $auth_mirror_heal$;
+        $auth_mirror_heal$ LANGUAGE plpgsql;
         """;
 
     /// <summary>
@@ -971,7 +1111,7 @@ public static class PostgreSqlSchemaInitializer
             await conn.ReloadTypesAsync().ConfigureAwait(false);
         }
 
-        await using (var cmd = schemaDataSource.CreateCommand(GetUnversionedSchemaScript(options)))
+        await using (var cmd = schemaDataSource.CreateMaintenanceCommand(GetUnversionedSchemaScript(options)))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -990,7 +1130,7 @@ public static class PostgreSqlSchemaInitializer
         CancellationToken ct = default)
     {
         // Step 1: Create the vector extension using plain SQL
-        await using (var cmd = baseDataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector"))
+        await using (var cmd = baseDataSource.CreateMaintenanceCommand("CREATE EXTENSION IF NOT EXISTS vector"))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -1002,13 +1142,13 @@ public static class PostgreSqlSchemaInitializer
         }
 
         // Step 3: Create versions schema tables (mesh_node_history)
-        await using (var cmd = versionsDataSource.CreateCommand(GetVersionsSchemaScript()))
+        await using (var cmd = versionsDataSource.CreateMaintenanceCommand(GetVersionsSchemaScript()))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         // Step 4: Create mesh schema tables + cross-schema trigger
-        await using (var cmd = schemaDataSource.CreateCommand(GetMeshSchemaScript(options, versionsSchema)))
+        await using (var cmd = schemaDataSource.CreateMaintenanceCommand(GetMeshSchemaScript(options, versionsSchema)))
         {
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -1027,7 +1167,7 @@ public static class PostgreSqlSchemaInitializer
         var dim = options.VectorDimensions;
         foreach (var tableName in tableNames.Distinct())
         {
-            await using var cmd = schemaDataSource.CreateCommand(GetSatelliteTableScript(tableName, dim));
+            await using var cmd = schemaDataSource.CreateMaintenanceCommand(GetSatelliteTableScript(tableName, dim));
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
     }

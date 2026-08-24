@@ -136,9 +136,28 @@ silent:
    Build-and-Test**. But its `event` is `workflow_dispatch`, not `push`, so the `workflow_run` gate
    still skips. It is the most convincing possible "it shipped" signal, with no image behind it.
 
-**Neither is terminal now**, because the reconciler reads the *check on the commit* rather than the
-event that produced it — so a dispatched Build-and-Test does eventually lead to an image, within one
-reconcile tick. To kick CD by hand, use its own door:
+3. **Build-and-Test settled RED on main.** CD's push path then decides "⛔ nothing will be built" —
+   and until 2026-08-22 that run ended **SUCCESS**, with the refusal visible only in its step
+   summary. One flaky shard (`ProbeHubCostTest`, a probe hub racing its own dispose — fixed the
+   same day) kept CD reporting green no-ops for hours while both production instances waited on
+   the release it was not building. Since then `delivery-verdict` FAILS on that state and
+   `alert-on-failure` pages it: **a red main is an incident for a continuously-delivered product,
+   never a quiet skip.** The operator move is unchanged by the alarm: read the failing test; a
+   flake → `gh run rerun <id> --failed` (a green rerun fires a fresh `workflow_run`, which
+   publishes by itself); a real failure → fixing main IS the release path.
+
+Two diagnosis cheats, both learned the hard way on 2026-08-22:
+
+- **A CD run with ZERO jobs** ("This run likely failed because of a workflow file issue") means the
+  workflow FILE is invalid — every run since the breaking merge produced nothing. The classic cause
+  is a `needs:` naming a deleted job. Parse before pushing:
+  `python3 -c "import yaml; d=yaml.safe_load(open('.github/workflows/main-cd.yml')); jobs=set(d['jobs']); print([(n,dep) for n,j in d['jobs'].items() for dep in ([j.get('needs')] if isinstance(j.get('needs'),str) else j.get('needs') or []) if dep not in jobs])"`
+- **A green CD run whose jobs are all `skipped`** shipped nothing by decision — read the `Decide`
+  step's last line for which branch fired, and believe that line over the tick.
+
+**Neither of the first two is terminal now**, because the reconciler reads the *check on the
+commit* rather than the event that produced it — so a dispatched Build-and-Test does eventually
+lead to an image, within one reconcile tick. To kick CD by hand, use its own door:
 
 ```bash
 gh workflow run main-cd.yml --ref main     # heals HEAD; cannot publish an untested tree
@@ -194,9 +213,12 @@ Two post-promote legs ride every armed release (#1660 WS3):
 
 **`publish-bake`** runs the content the image itself embeds (the `Doc` tree — and **only** that:
 node-repo content, Store packages and the samples trees arrive already compiled or are gate-only,
-see [CI Content Bake](/Doc/Architecture/CiContentBake)) through `mw-plugin-test --bake-output`
-**inside the `mw-plugin-test` image this run just built and promoted**, then copies the bundles onto
-the portals' shared storage,
+see [CI Content Bake](/Doc/Architecture/CiContentBake)) **inside the `mw-plugin-test` image this run
+just built and promoted**, in two steps (#1763): `mw-plugin-test compile … --output /bake` — the
+BAKE, a build step with no mesh in it — and then `mw-plugin-test … --seed /bake` — the GATE, a mesh
+that CONSUMES that bake, so what renders and runs its `Tests` areas is the assembly about to be
+published. A red gate still fails the job. It then copies the bundles onto the portals' shared
+storage,
 laid out `prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip`
 (`.github/scripts/publish-bake-bundles.sh`). Baking in the image is not an implementation detail —
 it is the whole correctness argument. The framework identity is derived from the **binaries a host
@@ -250,47 +272,49 @@ five attempts with backoff, then a loud error naming it a REGISTRY/INFRA failure
 sibling jobs in the same run reached the same registry fine. `alert-on-failure` still files the red
 on the `ci-failure` issue, so a genuinely broken bake is never silent.
 
-**`notify-dependents`** sends one `repository_dispatch` (`meshweaver-framework-released`, payload:
-commit, version — receivers resolve the framework identity themselves from the new image) to each
-repo in `BAKE_SUBSCRIBER_REPOS`, using
-`DEPENDENT_DISPATCH_TOKEN`. A node repo subscribes with
+**There is no `notify-dependents`.** CD does not tell the node repos that a release happened, and
+holds no credential that could. It was removed on 2026-08-22 after a fleet-stale incident, and the
+reasoning is worth keeping because re-adding it will look like the obvious fix:
+
+- It was **ADDRESSED notification where the design calls for a broadcast** — a publisher must not
+  know its readers. `BAKE_SUBSCRIBER_REPOS` was a hand-maintained second copy of a graph memex
+  already holds, and a missing entry failed **silently**.
+- It needed a cross-repo **write** credential (`DEPENDENT_DISPATCH_TOKEN`, or a GitHub App with
+  `contents: write` on every satellite) purely to say "something happened".
+- It was **never provisioned**, so for its whole life it printed a not-configured notice and did
+  nothing — while the fleet stayed a release behind with every check green. The satellite→satellite
+  variant (`dependent-repos` / `meshweaver-upstream-published`) is gone for the same reasons.
+
+**The wave is PULLED.** A release is a fact about the registry: memex publishes the released image,
+and each node repo's **scheduled** run reads it and rebuilds for the identity it finds.
 
 ```yaml
 on:
   repository_dispatch:
-    types: [meshweaver-framework-released]
+    types: [meshweaver-framework-released]   # hand-fire; carry client_payload.version
+  schedule:
+    - cron: "17,47 * * * *"                  # 🚨 the actual mechanism
 ```
 
-on its gate workflow and answers by re-running its compile gate + bake + publish against the new
-framework identity — the cross-repo half of "a dependency released, rebuild". (The in-repo half
-needs no event at all: a dependency bump lands as a commit, and a commit IS a new framework
-identity, so the next CI run re-bakes by construction.) Reporter-class like the platform-update
-webhook: an unconfigured or lost dispatch is a loud notice, never a red — the next release
-re-notifies, and nothing downstream certifies anything on it.
+> 🚨 **A node repo without the `schedule` trigger never bakes for a released identity.** It bakes
+> its pin, on its own pushes, forever — and the only symptom is an instance HELD on bundles from
+> that repo's source. Check the schedule first.
 
-Provisioning state (2026-08-17): the two halves of this cascade are in different states.
+> 🚨 **A hand-fired dispatch must carry `client_payload.version`.** Some callers resolve the released
+> image from it and fail hard without it:
+> `gh api repos/Systemorph/<repo>/dispatches -f event_type=meshweaver-framework-released -f 'client_payload[version]=<released version>'`.
+> Firing without a payload is how a "remedy" turns into a red bake that changes nothing.
 
-- **The satellites' publish credentials ARE provisioned.** The Azure managed identity
-  `github-actions-bake` (in the cluster's resource group) holds *Storage File Data Privileged Contributor* on the
-  portals' storage account, carries **8 federated credentials — the four satellite repos
-  (`MeshWeaver.Plugins`, `MeshWeaver.Education`, `MeshWeaver.Reinsurance`, `MeshWeaver.SocialMedia`)
-  × two subject formats** (below) — and the `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
-  `AZURE_SUBSCRIPTION_ID` secrets are set on all four repos.
-  **A red publish-bake was designed debt until 2026-08-17 and is a real failure after it** —
-  read any older "credentials pending" or known-red allowlist reference as historical.
-- **The dispatch itself remains dormant.** `BAKE_SUBSCRIBER_REPOS` (platform repo variable) and
-  `DEPENDENT_DISPATCH_TOKEN` (a human-minted PAT with `repo` scope on the four satellites) are
-  still unset, so `notify-dependents` exits with its loud not-configured notice. Until they are
-  provisioned, satellites re-bake only on their own `main` pushes, and a release-triggered rebuild
-  can be hand-fired by anyone with `repo` scope:
-  `gh api repos/Systemorph/<repo>/dispatches -f event_type=meshweaver-framework-released`.
-- **The cascade is now a DAG, not a fan-out.** A satellite that depends on another declares
-  `upstream-sources` and, if its upstream has not published for the target framework, exits without
-  building — waking again on that upstream's own `meshweaver-upstream-published` event, which
-  `node-repo-publish-bake` fires to its `dependent-repos`. See [Release Availability
-  Gates](../ReleaseGates) → "The build gate". One provisioning consequence: naming only the ROOT
-  repos in `BAKE_SUBSCRIBER_REPOS` (those with no upstreams) produces the same wave without the
-  dependent repos each painting one red per release before their upstream publishes.
+Provisioning state (2026-08-17): the satellites' **publish** credentials ARE provisioned. The Azure
+managed identity `github-actions-bake` (in the cluster's resource group) holds *Storage File Data
+Privileged Contributor* on the portals' storage account, carries **8 federated credentials — the
+four satellite repos × two subject formats** (below) — and `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
+`AZURE_SUBSCRIPTION_ID` are set on all four. A red publish-bake was designed debt until 2026-08-17
+and is a real failure after it.
+
+**The cascade is a DAG, not a fan-out.** A satellite that depends on another declares
+`upstream-sources` and, if its upstream has not published for the target framework, exits without
+building — and comes back on its own schedule. See [Release Availability Gates](../ReleaseGates).
 
 ### 🚨 Register BOTH OIDC subject formats — the classic one AND the immutable one
 

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using MeshWeaver.PluginCatalog;
 using Xunit;
 
@@ -49,11 +50,11 @@ public class PlatformBakeLaneGuard
 
         Assert.True(job.Contains("docker run", StringComparison.Ordinal)
                     && job.Contains("--entrypoint /app/mw-plugin-test", StringComparison.Ordinal)
-                    && job.Contains("--bake-output /bake", StringComparison.Ordinal),
+                    && job.Contains("--output /bake", StringComparison.Ordinal),
             $"'{JobName}' in {Workflow} must bake the platform's content by running mw-plugin-test "
-            + "INSIDE the image this run built (docker run … --entrypoint /app/mw-plugin-test … "
-            + "--bake-output /bake). The framework identity is a property of the shipped binaries, "
-            + "so only the image the pods run can produce a bake those pods will adopt.");
+            + "INSIDE the image this run built (docker run … --entrypoint /app/mw-plugin-test "
+            + "compile … --output /bake). The framework identity is a property of the shipped "
+            + "binaries, so only the image the pods run can produce a bake those pods will adopt.");
 
         Assert.True(job.Contains("--platform linux/amd64", StringComparison.Ordinal),
             $"'{JobName}' in {Workflow} must pin the bake platform explicitly. Architecture is part "
@@ -66,6 +67,55 @@ public class PlatformBakeLaneGuard
             $"'{JobName}' in {Workflow} must publish through .github/scripts/publish-bake-bundles.sh "
             + "— the one script whose '_complete' sentinel matches "
             + "ShippedPrebuiltBundles.CompletionSentinelFileName.");
+    }
+
+    /// <summary>
+    /// 🚨 THE SPLIT (#1763): the lane must PRODUCE with the compiler and JUDGE with a mesh, in that
+    /// order, as two separate runs.
+    ///
+    /// <para>Both halves are asserted, because either one alone is a silent regression of a
+    /// different kind. A lane that goes back to the fused
+    /// <c>mw-plugin-test &lt;root&gt; --bake-output</c> is a mesh compiling the content again —
+    /// the finding #1763 opens with, and invisible from the outside because the artifacts are
+    /// identical. A lane that keeps <c>compile</c> but drops the <c>--seed</c> gate has published
+    /// bundles nothing ever rendered or tested: the release gate is gone and every check still
+    /// passes.</para>
+    ///
+    /// <para><c>--seed</c> is also what makes the gate judge the BYTES THAT SHIP rather than a
+    /// private recompile of the same sources, so its absence quietly weakens the strongest claim
+    /// this lane makes.</para>
+    /// </summary>
+    [Fact]
+    public void PlatformBake_IsCompilerDriven_AndTheGateThenConsumesIt()
+    {
+        var job = ExecutableLinesOf(ReadJobBlock());
+
+        Assert.Contains("\"$IMAGE\" compile /repo/doc", job, StringComparison.Ordinal);
+
+        Assert.False(job.Contains("--bake-output", StringComparison.Ordinal),
+            $"'{JobName}' in {Workflow} must not bake through the GATE verb (--bake-output): that "
+            + "stands up an in-process mesh, imports the content and lets the MESH compile it — "
+            + "the mesh-driven bake #1763 exists to remove. Producing an assembly is a build step; "
+            + "use `compile <root> --output <dir>`, which has no MeshBuilder, no AddGraph() and no "
+            + "hub anywhere in its path (pinned by MeshFreeBakePathTest, and proved equivalent to "
+            + "the mesh's own resolution by BakeEquivalenceTest).");
+
+        Assert.True(job.Contains("--seed /bake", StringComparison.Ordinal),
+            $"'{JobName}' in {Workflow} must GATE the bake it just produced (--seed /bake). "
+            + "Splitting the bake out must not lose the gate: the platform's own shipped content "
+            + "failing to render or execute its Tests areas against the image that ships it is a "
+            + "release defect. With --seed the mesh CONSUMES the bake, so what it renders and "
+            + "tests is the assembly that will actually ship — publishing bundles no mesh ever "
+            + "exercised would be a strictly weaker release gate than the one this replaced.");
+
+        // Order matters: the gate consumes what the bake produced, so the bake command must appear
+        // first. A gate step accidentally moved above the bake would run against an empty /bake and
+        // refuse (BakeSeed.Read: "holds no *.zip bundles"), but as a red job rather than as the
+        // clear statement below.
+        Assert.True(
+            job.IndexOf("compile /repo/doc", StringComparison.Ordinal)
+            < job.IndexOf("--seed /bake", StringComparison.Ordinal),
+            $"'{JobName}' in {Workflow} must BAKE before it GATES — the gate consumes the bake.");
     }
 
     /// <summary>
@@ -215,6 +265,160 @@ public class PlatformBakeLaneGuard
             + "them: "
             + string.Join(", ", missing.Select(x => $"{x.key} (set in {x.file})"))
             + ". Add each one to the configmap template — the values file alone does nothing.");
+    }
+
+    /// <summary>
+    /// Keys a values file sets that reach the portal by a route OTHER than this configmap, and are
+    /// therefore legitimately unbound here. Named ONE BY ONE with the route — never a prefix, never
+    /// a whole-file exemption: an unexplained carve-out is how a guard stops being one.
+    ///
+    /// <para><c>Logging__LogLevel__Default</c> — memex-local applies verbose logging as a
+    /// DEPLOYMENT-config override after the helm release ("Applying verbose logging … as a
+    /// deployment-config override"), so it arrives as container env directly.</para>
+    /// </summary>
+    private static readonly HashSet<string> DeliveredOutOfBand =
+        new(StringComparer.Ordinal) { "Logging__LogLevel__Default" };
+
+    /// <summary>
+    /// 🚨 The GENERAL form of the check above: <b>ANY</b> <c>config.memex_portal</c> key set in a
+    /// values file this repo ships must be BOUND in the configmap template.
+    ///
+    /// <para><b>Why the PreWarm-only version was not enough.</b> That check has existed for a
+    /// while and is correct — it is simply scoped to keys starting with <c>PreWarm__</c>, so the
+    /// same defect went on shipping under every other prefix. Three instances reached a running
+    /// deployment before this test existed:</para>
+    /// <list type="number">
+    ///   <item><c>Modules__Root</c> (#1924) — set in three AKS values files, rendered by nothing,
+    ///     so no module could ever be store-activated and <c>/mcp</c> answered 404.</item>
+    ///   <item><c>SelfUpdate__MinRollInterval</c>, <c>WebhookInbox__Targets__0</c>,
+    ///     <c>AzureFoundry__Models__3</c> (#1925/#1999) — the restart floor sat inert, and the
+    ///     typed one later crashed a portal outright on <c>'' is not a valid TimeSpan</c>.</item>
+    ///   <item><c>Modules__Required__N</c> — the AKS overlays blank five entries the image
+    ///     requires; un-templated, the override never arrived. On a laptop, where the modules
+    ///     cannot be landed instead, the health check held <c>/health</c> at 503 and every
+    ///     rollout timed out with the portal never serving.</item>
+    /// </list>
+    ///
+    /// <para>Two things make this test honest rather than noisy, and both were found by running
+    /// it:</para>
+    /// <list type="bullet">
+    ///   <item><b>Read the YAML, never the lines.</b> A line scan sweeps in the <c>secrets:</c>
+    ///     section, whose keys are legitimately bound in <c>secrets.yaml</c> under
+    ///     <c>.Values.secrets.memex_portal.*</c> — 19 false positives.</item>
+    ///   <item><b>Accept the intermediate-variable shape.</b> <c>Portal__BaseUrl</c> is emitted
+    ///     via <c>{{- $portalBaseUrl := … }}</c> so it can fall back to the ingress host. Demanding
+    ///     the literal one-line binding flags it wrongly; requiring the key to be EMITTED and its
+    ///     values path REFERENCED accepts both shapes and still cannot be satisfied by prose.</item>
+    /// </list>
+    /// </summary>
+    [Fact]
+    public void EveryConfigKeySetInAValuesFile_IsBoundInTheConfigMap()
+    {
+        var root = FindRepoRoot();
+        var configMap = File.ReadAllText(Path.Combine(
+            root, "deploy", "helm", "templates", "memex-portal", "config.yaml"));
+
+        // EVERY tracked file that becomes a values overlay — not only the three the chart is
+        // rendered with directly. values.deploy.example.yaml is copied to the overlay
+        // deploy/aks/scripts/deploy.sh passes, and values.local.yaml to the one memex-local
+        // generates for a new install; both carry config.memex_portal mappings, so an untemplated
+        // key added to either reaches no container in exactly the same way (Copilot review, #2104).
+        var missing = new[]
+            {
+                Path.Combine(root, "deploy", "helm", "values.yaml"),
+                Path.Combine(root, "deploy", "aks", "values.aks.yaml"),
+                Path.Combine(root, "deploy", "aks", "scripts", "values.deploy.example.yaml"),
+                Path.Combine(root, "deploy", "homebrew", "share", "values.local.defaults.yaml"),
+                Path.Combine(root, "deploy", "homebrew", "share", "values.local.yaml"),
+            }
+            .Where(File.Exists)
+            .SelectMany(f => PortalConfigKeysOf(File.ReadAllLines(f))
+                .Select(key => (file: Path.GetFileName(f), key)))
+            .Distinct()
+            .Where(x => !DeliveredOutOfBand.Contains(x.key))
+            .Where(x => !IsWiredInConfigMap(configMap, x.key))
+            .ToList();
+
+        Assert.True(missing.Count == 0,
+            "These config.memex_portal keys are set in a values file but never rendered by "
+            + "deploy/helm/templates/memex-portal/config.yaml. The configmap names every key "
+            + "explicitly and the Deployment's only env path is envFrom on it, so the setting "
+            + "reaches NO container — silently, with helm reporting success: "
+            + string.Join(", ", missing.Select(x => $"{x.key} (set in {x.file})"))
+            + ". Template each one — and give a TYPED key a real default, because '' is not a "
+            + "valid TimeSpan/int and crashes the portal at startup rather than reading as unset.");
+    }
+
+    /// <summary>
+    /// The keys under <c>config.memex_portal</c> of a values file — section-scoped, so the
+    /// <c>secrets:</c> block (bound in secrets.yaml, not here) never counts. Comments and nested
+    /// values are dropped; only mapping keys at the section's own indent are returned.
+    /// </summary>
+    private static IEnumerable<string> PortalConfigKeysOf(IEnumerable<string> lines)
+    {
+        var inConfig = false;
+        var inPortal = false;
+        foreach (var raw in lines)
+        {
+            if (raw.TrimStart().StartsWith('#') || raw.Trim().Length == 0)
+                continue;
+            var indent = raw.Length - raw.TrimStart().Length;
+            var line = raw.Trim();
+
+            if (indent == 0)
+            {
+                // A new top-level block ends whichever one we were in — this is what keeps
+                // `secrets:` out, and it is the whole reason the scan is section-aware.
+                inConfig = line.StartsWith("config:", StringComparison.Ordinal);
+                inPortal = false;
+                continue;
+            }
+            if (!inConfig)
+                continue;
+            if (indent == 2)
+            {
+                inPortal = line.StartsWith("memex_portal:", StringComparison.Ordinal);
+                continue;
+            }
+            if (!inPortal || indent != 4)
+                continue;
+            var colon = line.IndexOf(':');
+            if (colon <= 0)
+                continue;
+            var key = line[..colon].Trim();
+            if (key.Length > 0)
+                yield return key;
+        }
+    }
+
+    /// <summary>
+    /// Whether the configmap actually WIRES <paramref name="key"/>: it emits the key as a
+    /// configmap entry AND references its values path somewhere in the template. Both halves are
+    /// needed — emitting alone would accept a hard-coded value that ignores the deployment, and
+    /// referencing alone would accept a Helm variable computed and never written out. Together
+    /// they also accept the intermediate-variable shape, which the stricter one-line form rejects.
+    /// </summary>
+    private static bool IsWiredInConfigMap(string configMap, string key)
+    {
+        // 🚨 Judge EXECUTABLE template text only. Nine {{- /* … */}} blocks in that file name keys
+        // and their .Values paths in prose; one that writes its example line at the entries' own
+        // two-space indent satisfies BOTH halves below while templating nothing — verified by
+        // seeding exactly that shape, which this helper catches and the un-stripped form passes.
+        // "A check a comment can satisfy is not a check" (Copilot review, #2104).
+        var code = ExecutableTemplateOf(configMap);
+        return Regex.IsMatch(code, $@"^\s{{2}}{Regex.Escape(key)}:\s", RegexOptions.Multiline)
+            && code.Contains($".Values.config.memex_portal.{key}", StringComparison.Ordinal);
+    }
+
+    /// <summary>The template with its comments removed: Helm's own <c>{{/* … */}}</c> blocks —
+    /// which no '#'-stripping can reach — and YAML <c>#</c> lines.</summary>
+    private static string ExecutableTemplateOf(string template)
+    {
+        var withoutHelmComments = Regex.Replace(
+            template, @"\{\{-?\s*/\*.*?\*/\s*-?\}\}", "", RegexOptions.Singleline);
+        return string.Join("\n", withoutHelmComments
+            .Split('\n')
+            .Where(l => !l.TrimStart().StartsWith('#')));
     }
 
     /// <summary>

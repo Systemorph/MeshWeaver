@@ -49,8 +49,18 @@ export function DefaultStackSkin({ skin, control }: SkinProps): ReactNode {
   // The control's own inline style (WithStyle) wins over the skin defaults — e.g. an overlay stack
   // declared `position: absolute; top; right` (the pinned-card unpin toggle) must escape flow to sit
   // ON the card, not render as a full-width bar below it. Blazor honours the Style the same way.
+  //
+  // A CLICKABLE stack posts the ClickedEvent, exactly as Blazor's LayoutStack does — the Store's
+  // category tiles are precisely this shape (`isClickable: true` + `cursor: pointer`), and without
+  // the handler they render as inert cards in every JS shell.
+  const onClick = useClick(control);
   return (
-    <div className={controlClass(control)} style={{ ...style, ...controlStyle(control) }}>
+    <div
+      className={controlClass(control)}
+      style={{ ...style, ...controlStyle(control) }}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+    >
       <Children control={control} />
     </div>
   );

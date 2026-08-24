@@ -22,7 +22,15 @@ public class CachingStorageAdapter : IStorageAdapter
 {
     private readonly string _baseDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
-    private readonly FileFormatParserRegistry _parserRegistry = new();
+    // 🚨 Contributed parsers reach this adapter or agents silently degrade. The agent file format
+    // ships with MeshWeaver.AI, not with core hosting, and MarkdownFileParser accepts every `.md`
+    // — so without the contribution an `.md` carrying `nodeType: Agent` still parses, still claims
+    // to be an Agent, and merely loses its AgentConfiguration: an agent-shaped node that cannot
+    // act, with no exception and no log line. This adapter backs the FILE-SYSTEM mesh, which is
+    // what the dev monolith and every local e2e run on, so a miss here is invisible in CI and
+    // obvious to whoever runs the portal.
+    private readonly Parsers.IFileFormatParser[] _contributedParsers;
+    private readonly FileFormatParserRegistry _parserRegistry;
     private readonly IoPoolRegistry? _ioPoolRegistry;
     private readonly ILogger<CachingStorageAdapter>? _logger;
     // The Read leaf is bridged to IObservable through this pool — never via a
@@ -34,6 +42,15 @@ public class CachingStorageAdapter : IStorageAdapter
     // per hub (PersistenceExtensions), so this instance field lives and dies with the mesh.
     // (No cross-mesh static cache: that bled stale file state across test classes — see NoStaticState.md.)
     private readonly DirectorySnapshot _snapshot;
+
+    // In-process change feed — published from THIS decorator (after cache+disk are in sync),
+    // not from the throwaway per-call inner FileSystemStorageAdapter, whose own feed nobody can
+    // subscribe. Without it, this adapter was delta-blind like the file-system one used to be:
+    // live synced queries emitted Initial once and never saw a later create/update/delete.
+    private readonly IsolatedChangeFeed _changes;
+
+    /// <inheritdoc />
+    public IObservable<DataChangeNotification> Changes => _changes;
 
     private static readonly string[] SupportedExtensions = [".md", ".cs", ".json"];
 
@@ -54,13 +71,17 @@ public class CachingStorageAdapter : IStorageAdapter
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
         IoPoolRegistry? ioPoolRegistry = null,
-        ILogger<CachingStorageAdapter>? logger = null)
+        ILogger<CachingStorageAdapter>? logger = null,
+        IEnumerable<Parsers.IFileFormatParser>? contributedParsers = null)
     {
+        _contributedParsers = (contributedParsers ?? []).ToArray();
+        _parserRegistry = new FileFormatParserRegistry(contributedParsers: _contributedParsers);
         _baseDirectory = Path.GetFullPath(baseDirectory);
         _writeOptionsModifier = writeOptionsModifier;
         _ioPoolRegistry = ioPoolRegistry;
         _logger = logger;
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+        _changes = new IsolatedChangeFeed(logger, "caching-file-system");
         Directory.CreateDirectory(_baseDirectory);
         _snapshot = new DirectorySnapshot(_baseDirectory);
     }
@@ -229,11 +250,14 @@ public class CachingStorageAdapter : IStorageAdapter
     /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger, _contributedParsers);
         return innerAdapter.Write(node, options)
             .Do(written =>
             {
-                if (written is not null) RefreshCacheForPath(written.Path);
+                if (written is null) return;
+                RefreshCacheForPath(written.Path);
+                // Cache + disk committed above — publish after, like every mutating adapter.
+                _changes.OnNext(DataChangeNotification.Updated(written.Path.Trim('/'), written));
             });
     }
 
@@ -251,18 +275,20 @@ public class CachingStorageAdapter : IStorageAdapter
         // Cast to the interface: WriteIfVersion is a DEFAULT interface member on the file-system
         // adapter (it does not override it), so it is only reachable through IStorageAdapter.
         IStorageAdapter innerAdapter =
-            new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+            new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger, _contributedParsers);
         return innerAdapter.WriteIfVersion(node, expectedVersion, options)
             .Do(applied =>
             {
-                if (applied is true) RefreshCacheForPath(node.Path);
+                if (applied is not true) return;
+                RefreshCacheForPath(node.Path);
+                _changes.OnNext(DataChangeNotification.Updated(node.Path.Trim('/'), node));
             });
     }
 
     /// <inheritdoc />
     public IObservable<string> Delete(string path)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger, _contributedParsers);
         return innerAdapter.Delete(path)
             .Do(deletedPath =>
             {
@@ -273,6 +299,7 @@ public class CachingStorageAdapter : IStorageAdapter
                     var relativePath = string.Join("/", segments) + ext;
                     _snapshot.Files.TryRemove(relativePath, out _);
                 }
+                _changes.OnNext(DataChangeNotification.Deleted(normalizedPath));
             });
     }
 
@@ -470,7 +497,7 @@ public class CachingStorageAdapter : IStorageAdapter
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger, _contributedParsers);
         return innerAdapter.SavePartitionObjects(nodePath, subPath, objects, options)
             .Do(_ => RefreshCacheForPartition(nodePath, subPath));
     }
@@ -478,7 +505,7 @@ public class CachingStorageAdapter : IStorageAdapter
     /// <inheritdoc />
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger, _contributedParsers);
         return innerAdapter.DeletePartitionObjects(nodePath, subPath);
     }
 

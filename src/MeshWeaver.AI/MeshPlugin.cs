@@ -96,7 +96,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     /// <summary>MCP/agent tool: deletes nodes (and their descendants) from the mesh by path.</summary>
     /// <param name="paths">A JSON array of path strings to delete.</param>
     /// <returns>A task with the deletion result or a descriptive error string.</returns>
-    [Description("Deletes nodes from the mesh by path. Recursive: deleting a parent removes all descendants — pass the subtree root, no need to enumerate children.")]
+    [Description("Deletes nodes from the mesh by path. Recursive: deleting a parent removes all descendants — pass the subtree root, no need to enumerate children. This operation can be BLOCKED by permissions: the current identity often holds no Delete on shared or system-synced spaces, and a refusal is not an error to retry. The result then names the refused path with its Delete page link (/{path}/Delete) — present that URL to the user so they review and confirm the deletion under their OWN identity in the GUI. A whole SET of nodes can be offered the same way via /{anchorPath}/Delete?q=<url-encoded mesh query> (multiple queries newline-separated inside the one encoded parameter).")]
     public Task<string> Delete(
         [Description("JSON array of path strings to delete")] string paths)
         => WithContext(() => ops.Delete(paths)).FirstAsync().ToTask();

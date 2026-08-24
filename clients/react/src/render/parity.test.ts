@@ -45,7 +45,22 @@ const EXTERNALLY_PACKED_CONTROLS = [
   // The analysis pack (MeshWeaver.Blazor.Analysis, AddAnalysisViews) — extracted from the core
   // registry onto the view-pack seam; the control records stay in MeshWeaver.Layout.
   "KpiStrip", "Tower", "ComparisonBars",
+  // The entity-views pack (MeshWeaver.Blazor.EntityViews, AddEntityViews) — the entity form/edit
+  // controls, the second set extracted onto the pack seam; the control records stay in
+  // MeshWeaver.Layout. MeshNodePicker moved with them (to MeshWeaver.Blazor.Graph, AddGraphViews:
+  // its view derives from the pack's FormComponentBase).
+  "TextField", "TextArea", "NumberField", "RadioGroup", "DateTime",
+  "Combobox", "Listbox", "Select", "CheckBox", "Switch", "MeshNodePicker",
+  // Group B of the same extraction: the MeshNode surface renderers folded into the Graph pack
+  // (MeshWeaver.Blazor.Graph, AddGraphViews) — one registration, one home. MeshSearch STAYS in
+  // the base registry (its arm is still scraped above); it reaches the card via DispatchView.
+  "MeshNodeCard", "MeshNodeCollection",
 ];
+
+// Skins dispatched by an external view pack rather than a BlazorViewRegistry switch arm — same
+// deal as EXTERNALLY_PACKED_CONTROLS, for the skin registry: parity coverage is preserved, the
+// arm to scrape is just elsewhere (EntityViewsExtensions.EntityViewsMap).
+const EXTERNALLY_PACKED_SKINS = ["Editor", "EditForm", "Property"];
 
 // Skins the React renderer covers WITHOUT a registry entry, by design. SplitterPane is read by the
 // parent SplitterSkin (paneSkinOf → paneSpec) to size each pane, exactly as Blazor's
@@ -55,8 +70,10 @@ const SKINS_HANDLED_BY_PARENT = ["SplitterPane"];
 describe("React ↔ Blazor control parity", () => {
   it("scrapes a plausible vocabulary out of BlazorViewRegistry.cs", () => {
     // Guard the guard: if the C# is refactored into a shape the regex no longer matches, the
-    // parity assertions below would vacuously pass on an empty list.
-    expect(BLAZOR_LEAF_CONTROLS.length).toBeGreaterThan(40);
+    // parity assertions below would vacuously pass on an empty list. (Was >40 before the entity
+    // form controls — 11 arms — left the switch for the EntityViews/Graph packs; they are pinned
+    // under EXTERNALLY_PACKED_CONTROLS above, so coverage moved rather than shrank.)
+    expect(BLAZOR_LEAF_CONTROLS.length).toBeGreaterThan(30);
     expect(BLAZOR_SKINS.length).toBeGreaterThan(15);
     expect(BLAZOR_LEAF_CONTROLS).toContain("Markdown");
     expect(BLAZOR_SKINS).toContain("LayoutStack");
@@ -75,6 +92,11 @@ describe("React ↔ Blazor control parity", () => {
   it("also covers the controls dispatched by the external view packs", () => {
     const missing = EXTERNALLY_PACKED_CONTROLS.filter((t) => !(t in controlRegistry));
     expect(missing, `Missing externally-packed controls: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("also covers the skins dispatched by the external view packs", () => {
+    const missing = EXTERNALLY_PACKED_SKINS.filter((t) => !(t in skinRegistry));
+    expect(missing, `Missing externally-packed skins: ${missing.join(", ")}`).toEqual([]);
   });
 
   it("registered controls are React components (functions), not accidental values", () => {

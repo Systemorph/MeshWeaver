@@ -47,6 +47,10 @@ export class MeshWebConnection {
   private connectionId = "";
   private readonly pending = new Map<string, (d: Delivery) => void>();
   private readonly subscriptions = new Map<string, (d: Delivery) => void>();
+  // Handlers for UNSOLICITED typed messages (no RequestId, no streamId) — the server-initiated
+  // channel: a clickable control's ClickedEvent is answered with a NavigationRequest addressed to
+  // this participant, exactly what Blazor's PortalApplication handles with WithHandler<...>.
+  private readonly typedHandlers = new Map<string, Set<(d: Delivery) => void>>();
   // The SubscribeRequest params per live streamId — kept so a dropped Connect stream can be
   // re-opened and every subscription REPLAYED (see open()'s reconnect loop). Without replay, a
   // mid-delivery drop strands the UI on whatever subset of area frames arrived first.
@@ -157,7 +161,26 @@ export class MeshWebConnection {
       return;
     }
     const streamId = (delivery.message["streamId"] ?? delivery.message["StreamId"]) as string | undefined;
-    if (streamId && this.subscriptions.has(streamId)) this.subscriptions.get(streamId)!(delivery);
+    if (streamId && this.subscriptions.has(streamId)) {
+      this.subscriptions.get(streamId)!(delivery);
+      return;
+    }
+    if (delivery.messageType) this.typedHandlers.get(delivery.messageType)?.forEach((h) => h(delivery));
+  }
+
+  /**
+   * Subscribe to unsolicited messages of `messageType` — the client twin of the Blazor portal
+   * hub's `WithHandler<T>` (e.g. `NavigationRequest`: a server click action tells THIS participant
+   * where to go). Returns the unsubscribe.
+   */
+  onMessage(messageType: string, handler: (d: Delivery) => void): () => void {
+    let set = this.typedHandlers.get(messageType);
+    if (!set) this.typedHandlers.set(messageType, (set = new Set()));
+    set.add(handler);
+    return () => {
+      set!.delete(handler);
+      if (set!.size === 0) this.typedHandlers.delete(messageType);
+    };
   }
 
   /** Send `delivery` to the mesh via the unary Deliver, tagged with our connection id. */

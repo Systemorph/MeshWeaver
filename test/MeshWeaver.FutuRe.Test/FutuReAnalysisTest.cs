@@ -415,9 +415,15 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that the EuropeRe LineOfBusiness Search area renders correctly,
-    /// returns the 8 EuropeRe-specific LoB instances, and does NOT contain
-    /// sibling nodes like Analysis or TransactionMapping.
+    /// Verifies that the retired FutuRe/EuropeRe/LineOfBusiness node still serves its
+    /// namespace. #1786: the node used to be a source-less copy of the group NodeType —
+    /// the same WithContentType&lt;LineOfBusiness&gt;() lambda with none of the parent's
+    /// Source/*.cs — so it could only ever park at CompilationStatus.Error and never typed
+    /// a single instance. It is now an ordinary Markdown node; its Search area renders the
+    /// generic instance catalog (MeshNodeLayoutAreas.Search, non-NodeType branch), whose
+    /// query must return the 8 EuropeRe LoB instances — all typed by the GROUP
+    /// FutuRe/LineOfBusiness NodeType — and no sibling nodes like Analysis or
+    /// TransactionMapping.
     /// </summary>
     [Fact(Timeout = ColdCompileTimeoutMs)]
     public async Task EuropeRe_LineOfBusiness_Search_ShouldReturn8LoBs()
@@ -425,34 +431,23 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/LineOfBusiness");
 
-        // No ping: the Search subscription activates the hub + triggers the cold
-        // compile itself; the 50s budget carries it.
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Search");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        // Shell splitter → content pane, same as the group-level test above.
-        var shell = await stream
+        // A Markdown node's Search area is the instance catalog wrapped in a breadcrumbs
+        // Stack (the path has ancestors → BuildBreadcrumbs returns a trail):
+        // Stack(breadcrumbs, MeshSearchControl). No NodeType admin shell — the node is no
+        // longer a NodeType.
+        var control = await stream
             .GetControlStream(reference.Area!)
             .Should().Within(30.Seconds())
-            .Match(x => x is SplitterControl s && s.Areas.Count >= 2);
-        var contentAreaId = ((SplitterControl)shell!).Areas.Last().Area.ToString()!;
-
-        // The shell's content pane wraps the instance search in a breadcrumbs Stack for a NESTED
-        // NodeType (FutuRe/LineOfBusiness sits under FutuRe → BuildBreadcrumbs returns a trail), so the
-        // pane is a StackControl(breadcrumbs, MeshSearchControl); a top-level type renders the bare
-        // MeshSearchControl. Drill to the search either way.
-        var contentPane = await stream
-            .GetControlStream(contentAreaId)
-            .Should().Within(30.Seconds())
-            .Match(x => x is MeshSearchControl || x is StackControl);
-        var searchAreaId = contentPane is StackControl stk
-            ? stk.Areas.Last().Area.ToString()!
-            : contentAreaId;
+            .Match(x => x is StackControl s && s.Areas.Count >= 2);
+        var stack = (StackControl)control!;
         var searchControl = (MeshSearchControl)(await stream
-            .GetControlStream(searchAreaId)
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Should().Within(30.Seconds())
             .Match(x => x is MeshSearchControl))!;
         searchControl.HiddenQuery.Should().NotBeNull("Search should have a hidden query");
@@ -460,11 +455,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var hiddenQuery = searchControl.HiddenQuery!.ToString()!;
         Output.WriteLine($"EuropeRe hidden query: {hiddenQuery}");
         hiddenQuery.Should().Contain("namespace:FutuRe/EuropeRe/LineOfBusiness",
-            "Search query should scope to EuropeRe LineOfBusiness namespace, not to FutuRe/EuropeRe (which would show siblings like Analysis and TransactionMapping)");
-
-        // Must NOT contain a fallback query that scopes to the parent namespace
-        hiddenQuery.Should().NotContain("path:FutuRe/EuropeRe",
-            "Search should use NodeType mode (namespace:), not instance fallback (path:)");
+            "the catalog must scope to the LineOfBusiness namespace, not to FutuRe/EuropeRe (which would show siblings like Analysis and TransactionMapping)");
 
         // Execute the query and verify we get the 8 EuropeRe LoBs
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -473,6 +464,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var names = results.Select(n => n.Name).ToList();
         Output.WriteLine($"EuropeRe query returned {results.Count} results: {string.Join(", ", names)}");
         results.Count.Should().Be(8, "Should find all 8 EuropeRe lines of business");
+        results.Should().OnlyContain(n => n.NodeType == "FutuRe/LineOfBusiness",
+            "instances are typed by the group NodeType — the retired local NodeType never typed anything (#1786)");
 
         // Verify NO sibling nodes are returned (the bug that showed Analysis/TransactionMapping)
         var ids = results.Select(n => n.Id).ToList();
@@ -928,14 +921,16 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Should().Within(30.Seconds())
             .Match(x => x is not null);
 
-        var stack = control.Should().BeOfType<StackControl>().Subject;
-        Output.WriteLine($"Stack has {stack.Areas?.Count} areas");
+        control.Should().BeAssignableTo<IContainerControl>(
+            "the Overview root is a container — a plain Stack without sub-nodes, or the resizable "
+            + "side-menu SPLITTER when sub-nodes render (MarkdownOverviewLayoutArea.BuildWithSubNodeNav)");
+        Output.WriteLine($"{control!.GetType().Name} has {((IContainerControl)control).Areas?.Count} areas");
 
-        // Find the markdown body control ANYWHERE in the Overview control tree. A node WITH sub-nodes
-        // renders the collapsible side-menu wrapper (MarkdownOverviewLayoutArea.BuildWithSubNodeNav),
-        // which nests the body inside a content column — so it may be a direct child (no sub-nodes) or
-        // a grandchild (side menu present). The Overview body is a CollaborativeMarkdownControl (value
-        // in `Value`); legacy areas may still produce MarkdownControl (`Markdown`). Accept either.
+        // Find the markdown body control ANYWHERE in the Overview control tree, walking EVERY
+        // container kind — the wrapper changed from Stack to Splitter once (for drag-resize) and a
+        // walk pinned to one container type reported the body missing when it was merely re-parented.
+        // The Overview body is a CollaborativeMarkdownControl (value in `Value`); legacy areas may
+        // still produce MarkdownControl (`Markdown`). Accept either.
         async Task<string?> FindMarkdown(UiControl? c)
         {
             switch (c)
@@ -944,8 +939,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                     return mc.Markdown?.ToString();
                 case CollaborativeMarkdownControl cmc:
                     return cmc.Value?.ToString();
-                case StackControl sc:
-                    foreach (var area in sc.Areas ?? [])
+                case IContainerControl cc:
+                    foreach (var area in cc.Areas ?? [])
                     {
                         var childKey = area.Area?.ToString();
                         if (string.IsNullOrEmpty(childKey)) continue;
@@ -962,7 +957,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             }
         }
 
-        var markdown = await FindMarkdown(stack);
+        var markdown = await FindMarkdown(control);
 
         markdown.Should().NotBeNullOrEmpty(
             "Overview should contain a markdown body control (MarkdownControl or CollaborativeMarkdownControl), " +

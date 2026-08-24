@@ -54,7 +54,7 @@ public static class InstanceSyncConfiguration
             {
                 Name = "Instance Sync Config",
                 IsSatelliteType = false,
-                ExcludeFromContext = new HashSet<string> { "search", "create" },
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<InstanceSyncConfig>()),
             });
