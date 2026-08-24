@@ -31,7 +31,10 @@ builder.AddServiceDefaults();
 
 var connectionString = builder.Configuration.GetConnectionString("memex") ?? "";
 Console.WriteLine($"[Migration] ConnectionString: {(string.IsNullOrEmpty(connectionString) ? "(empty)" : connectionString[..Math.Min(30, connectionString.Length)] + "...")}");
-if (connectionString.Contains("database.azure.com"))
+// Entra-ID token path ONLY for an Azure host with no password; an Azure host reached with a
+// password takes plain Npgsql (AddAzureNpgsqlDataSource wires a token provider that throws on
+// connect when a password is also present). See AzurePostgres for the full rationale.
+if (AzurePostgres.UsesManagedIdentityAuth(connectionString))
     builder.AddAzureNpgsqlDataSource("memex");
 else
     builder.AddNpgsqlDataSource("memex");
@@ -68,9 +71,11 @@ logger.LogInformation("Running database migration...");
 //   2. A self-managed Postgres (the pgvector container in Compose/Helm) does NOT pre-create
 //      the app database the way managed Azure Postgres does — connect to the maintenance
 //      'postgres' database and CREATE it if missing.
-// Managed Azure Postgres pre-creates the database and uses a credential provider on the
-// data source, so for that path we just probe the data source directly.
-var isAzurePg = connectionString.Contains("database.azure.com");
+// Managed Azure Postgres pre-creates the database (declared in the AppHost) and the app identity
+// typically cannot CREATE DATABASE on Flexible Server, so for that path we just probe the data
+// source directly. This is a HOST fact — true whether the connection uses a token or a password —
+// so it keys on the host, not on the auth mechanism.
+var isAzurePg = AzurePostgres.IsAzureHost(connectionString);
 var pgReadyDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(120);
 while (true)
 {

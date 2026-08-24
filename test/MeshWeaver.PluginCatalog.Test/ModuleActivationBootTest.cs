@@ -94,6 +94,41 @@ public class ModuleActivationBootTest
             "the skip must name both versions — the entry stays for when the platform moves forward");
     }
 
+    /// <summary>
+    /// 🚨 The FLIP that finishes the registry-shelf story (2026-08-22): a HELD entry — shelved by the
+    /// publish path while its floor exceeded the platform — activates on the NORMAL boot path the
+    /// moment a platform update satisfies the floor. Same entry, same gate, no extra state and no
+    /// separate reconcile: held-ness is DERIVED from the recorded floor against whatever platform
+    /// is running, so the platform update (which is itself a restart) is the whole flip. This is
+    /// the same computation the skip test above pins from the other side.
+    /// </summary>
+    [Fact]
+    public void AHeldEntry_ActivatesOnceThePlatformSatisfiesItsFloor()
+    {
+        // The very entry ShelveModule records for an above-floor publish: enabled, floor recorded.
+        var held = List(Store("MeshWeaver.Speech", floor: "3.0.0-rc7"));
+
+        // While the registry still runs rc6, boot skips it — loudly, naming the floor.
+        var skips = new List<(string Module, string Reason)>();
+        ModuleActivationBoot.ComputeEffectiveModuleEntries(
+                [], held,
+                floor => ModulePlatformFloor.DeclineReason(floor, "3.0.0-rc6"),
+                AllDllsExist,
+                (m, r) => skips.Add((m, r)))
+            .Should().BeEmpty("a held module must not load into a platform below its floor");
+        skips.Should().ContainSingle().Subject.Reason.Should()
+            .Contain("3.0.0-rc7").And.Contain("3.0.0-rc6");
+
+        // The platform updates to rc7 — the SAME entry now passes the SAME gate and loads.
+        var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+            [], held,
+            floor => ModulePlatformFloor.DeclineReason(floor, "3.0.0-rc7"),
+            AllDllsExist);
+        effective.Select(m => m.Entry).Should().Equal("MeshWeaver.Speech.dll");
+        effective.Single().Landed.Should().NotBeNull(
+            "it activates as the store-landed module it is, resolving to its own generation");
+    }
+
     [Fact]
     public void NoRecordedFloor_Loads_AbsenceIsNoConstraint()
     {
