@@ -9,8 +9,8 @@ namespace MeshWeaver.Graph.Test;
 
 /// <summary>
 /// Presentation mode (issue #1803) on the SURFACES the issue names — the home's viewer-scoped
-/// surfaces (the Pinned and Apps tabs, the Shared-with-me band, and the Spaces catalog, which is
-/// where the former Spaces / Last Read / Last Edited tabs live) and the node menu that marks them.
+/// surfaces (the Apps section, the Content section's Pinned tab and its one All category, the
+/// Shared-with-me band) and the node menu that marks them.
 ///
 /// <para>The Pinned tab and the Shared band filter at the point the QUERY is built rather than
 /// only where a card is painted, and that is the interesting part: a pinned path and a shared-band
@@ -89,53 +89,50 @@ public class PresentationSurfacesTest
             .Should().Contain("Acme");
     }
 
-    // ── The scoped home: Shared with me, Pinned, Apps ──────────────────────────────────────────
+    // ── The home's sections: Apps, Content (Pinned + All), Shared with me ──────────────────────
 
-    private static MeshSearchControl HomeSearch(UiControl home) =>
-        home.Should().BeOfType<MeshSearchControl>().Subject;
+    private static string[] ScopeLabels(MeshSearchControl content) =>
+        content.ScopeTabs!.Select(t => t.Label).ToArray();
 
-    private static string[] ScopeLabels(UiControl home) =>
-        HomeSearch(home).ScopeTabs!.Select(t => t.Label).ToArray();
+    private static string ScopeQuery(MeshSearchControl content, string label) =>
+        content.ScopeTabs!.Single(t => t.Label == label).Query;
 
-    private static string ScopeQuery(UiControl home, string label) =>
-        HomeSearch(home).ScopeTabs!.Single(t => t.Label == label).Query;
+    private static MeshSearchControl ContentOf(User? user, PresentationScreen? screen) =>
+        UserActivityLayoutAreas.BuildContentSection(Owner, null, user, null, screen);
 
     [Fact]
-    public void Home_AScopeWhoseWholeContentIsMarked_Disappears()
+    public void Content_AScopeWhoseWholeContentIsMarked_Disappears()
     {
         var user = new User { PinnedPaths = ["Acme/Q3-Renewal"] };
 
         // Off: the Pinned tab is there.
-        ScopeLabels(UserActivityLayoutAreas.BuildHome(Owner, user: user))
-            .Should().Equal("Pinned", "Apps", "Spaces", "All");
+        ScopeLabels(ContentOf(user, null)).Should().Equal("Pinned", "All");
 
         // On, with Acme marked: everything pinned is inside the marked space, so the tab goes — an
         // empty tab labelled "Pinned" would itself say something.
-        ScopeLabels(UserActivityLayoutAreas.BuildHome(Owner, user: user, screen: Active("Acme")))
-            .Should().Equal("Apps", "Spaces", "All");
+        ScopeLabels(ContentOf(user, Active("Acme"))).Should().Equal("All");
     }
 
     [Fact]
-    public void Home_AScopeKeepsItsUnmarkedContent()
+    public void Content_AScopeKeepsItsUnmarkedContent()
     {
-        var home = UserActivityLayoutAreas.BuildHome(
-            Owner,
-            user: new User { PinnedPaths = ["Acme", "Doc/Guide"] },
-            screen: Active("Acme"));
+        var content = ContentOf(new User { PinnedPaths = ["Acme", "Doc/Guide"] }, Active("Acme"));
 
-        ScopeLabels(home).Should().Equal("Pinned", "Apps", "Spaces", "All");
-        ScopeQuery(home, "Pinned").Should().NotContain("Acme").And.Contain("Doc/Guide");
+        ScopeLabels(content).Should().Equal("Pinned", "All");
+        ScopeQuery(content, "Pinned").Should().NotContain("Acme").And.Contain("Doc/Guide");
     }
 
     [Fact]
     public void Home_TheSharedBand_DisappearsWhenEveryTargetIsMarked()
     {
         // The band's targets are query-string content, so the screen applies BEFORE the query is
-        // built. Every target marked ⇒ no band at all — the home is the bare search again.
+        // built. Every target marked ⇒ no band at all: the home is back to its two sections.
         UserActivityLayoutAreas.BuildHome(Owner, sharedTargets: ["Acme/Deals"])
-            .Should().BeOfType<StackControl>("off-screen, the shared band wraps the home in a stack");
+            .Should().BeOfType<StackControl>().Subject
+            .Areas.Should().HaveCount(3, "apps, content, shared");
         UserActivityLayoutAreas.BuildHome(Owner, sharedTargets: ["Acme/Deals"], screen: Active("Acme"))
-            .Should().BeOfType<MeshSearchControl>();
+            .Should().BeOfType<StackControl>().Subject
+            .Areas.Should().HaveCount(2, "apps and content only — the marked band is gone");
     }
 
     [Fact]
@@ -150,16 +147,15 @@ public class PresentationSurfacesTest
     }
 
     [Fact]
-    public void AppsScope_QueryNeverCarriesAppPaths()
+    public void AppsBand_QueryNeverCarriesAppPaths()
     {
-        // The Apps scope queries the viewer's OWN {owner}/_App records — a GENERIC query, so no
+        // The Apps band queries the viewer's OWN {owner}/_App records — a GENERIC query, so no
         // app path (marked or not) can ever reach the query string / the `hq=` URL. The marked-app
         // guarantee therefore lives at PAINT (below), where the tile's name would otherwise show.
-        var query = ScopeQuery(
-            UserActivityLayoutAreas.BuildHome(Owner, screen: Active("Acme")), "Apps");
+        var query = UserActivityLayoutAreas.BuildAppsBand(Owner, null).HiddenQuery!.ToString()!;
 
-        query.Should().Be(ScopeQuery(UserActivityLayoutAreas.BuildHome(Owner), "Apps"));
         query.Should().NotContain("Acme");
+        query.Should().Contain($"path:{Owner}/_App");
     }
 
     [Fact]
@@ -222,11 +218,9 @@ public class PresentationSurfacesTest
         QueryOf(marked).Should().Be(QueryOf(plain));
         QueryOf(marked).Should().NotContain("Acme");
 
-        // Same for the home's Spaces scope: identical query with and without the screen.
-        var spacesMarked = HomeSearch(UserActivityLayoutAreas.BuildHome(Owner, screen: Active("Acme")))
-            .ScopeTabs!.Single(t => t.Label == "Spaces").Query;
-        var spacesPlain = HomeSearch(UserActivityLayoutAreas.BuildHome(Owner))
-            .ScopeTabs!.Single(t => t.Label == "Spaces").Query;
+        // Same for the content section's one category: identical query with and without the screen.
+        var spacesMarked = ScopeQuery(ContentOf(null, Active("Acme")), "All");
+        var spacesPlain = ScopeQuery(ContentOf(null, null), "All");
         spacesMarked.Should().Be(spacesPlain).And.NotContain("Acme");
     }
 
