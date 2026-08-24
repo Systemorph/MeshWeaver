@@ -61,7 +61,7 @@ public class UpstreamBuildGateGuard
     /// passed. This asserts the two shapes that would do it.
     /// </summary>
     [Fact]
-    public void NeitherTheGateNorTheDispatchCanBeSkippedOrDowngraded()
+    public void TheGateCannotBeSkippedOrDowngraded()
     {
         var body = Body();
 
@@ -73,54 +73,8 @@ public class UpstreamBuildGateGuard
         Assert.Contains("::error", gateBlock, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// 🚨 The edge that makes "exit, don't wait" work: a repo that exited is woken ONLY by its
-    /// upstream's publication event. If that dispatch is lost and the job still passes, the
-    /// downstream repo silently never rebuilds for the release — the terminal-exit failure #1755
-    /// names explicitly. So a failed dispatch must fail the job, never merely warn.
-    /// </summary>
-    [Fact]
-    public void ALostWakeUpFailsTheJob_RatherThanWarning()
-    {
-        var notify = SectionAfter(Body(), "Notify dependent repos");
 
-        Assert.Contains("meshweaver-upstream-published", notify, StringComparison.Ordinal);
-        Assert.Contains("::error", notify, StringComparison.Ordinal);
-        Assert.DoesNotContain("::warning", notify, StringComparison.Ordinal);
-    }
 
-    /// <summary>
-    /// 🚨 The dispatch may only announce a publication that actually sealed. Firing it earlier
-    /// would send every dependent into a build against an artifact that is not there — turning one
-    /// repo's failure into the whole wave's.
-    /// </summary>
-    [Fact]
-    public void TheWakeUpFiresOnlyAfterThePublication()
-    {
-        var body = Body();
-        var publish = body.IndexOf("publish-bake-bundles.sh", StringComparison.Ordinal);
-        // The STEP's position, not the first mention of the event name — the input/secret
-        // declarations at the top of the file name it too, and comparing against those would make
-        // this assertion pass or fail for reasons that have nothing to do with ordering.
-        var notify = body.IndexOf("Notify dependent repos", StringComparison.Ordinal);
-
-        Assert.True(publish > 0 && notify > publish,
-            "the dependent wake-up must come after the publish step it announces.");
-    }
-
-    /// <summary>
-    /// Declaring dependents declares an OBLIGATION, so the token is asserted as a declared-input
-    /// check — never as an "is the secret set?" probe deciding whether to run, which is the exact
-    /// trapdoor that let the cross-repo plugin gate report green without ever running.
-    /// </summary>
-    [Fact]
-    public void DeclaringDependentsWithoutATokenIsPreflightedRed()
-    {
-        var preflight = SectionAfter(Body(), "Preflight: the publish credentials");
-
-        Assert.Contains("DEPENDENT_REPOS", preflight, StringComparison.Ordinal);
-        Assert.Contains("dependent-dispatch-token", preflight, StringComparison.Ordinal);
-    }
 
     /// <summary>Everything from <paramref name="marker"/> to the next step boundary at the same
     /// indent, so an assertion about one step cannot be satisfied by another.</summary>
@@ -140,5 +94,27 @@ public class UpstreamBuildGateGuard
             dir = dir.Parent;
         Assert.NotNull(dir);
         return dir!.FullName;
+    }
+
+    /// <summary>
+    /// 🚨 The wave is PULLED, and no credential may creep back in.
+    ///
+    /// <para>This workflow used to POST <c>meshweaver-upstream-published</c> to a declared list of
+    /// dependent repos, using a token with write access to each. Both are gone: a publication is a
+    /// FACT about the registry, and a dependent repo's scheduled run reads memex for the released
+    /// image and rebuilds if it must.</para>
+    ///
+    /// <para>Pinned because the tempting fix, when a satellite is found a release behind, is to add
+    /// the token back — which reintroduces a cross-repo write credential AND a hand-maintained
+    /// second copy of a graph memex already holds, whose missing entry fails silently.</para>
+    /// </summary>
+    [Fact]
+    public void ThereIsNoDependentDispatch_AndNoCredentialForOne()
+    {
+        var body = Body();
+
+        Assert.DoesNotContain("dependent-dispatch-token", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("meshweaver-upstream-published", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("/dispatches", body, StringComparison.Ordinal);
     }
 }

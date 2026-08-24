@@ -2589,7 +2589,7 @@ public class MeshOperations
                         .Catch((Exception ex) =>
                         {
                             logger.LogWarning(ex, "Error deleting {Path}", capturedPath);
-                            return Observable.Return($"Error deleting {capturedPath}: {ex.Message}");
+                            return Observable.Return(DeleteErrorLine(capturedPath, ex));
                         }));
             }
 
@@ -2600,6 +2600,25 @@ public class MeshOperations
                 .Select(lines => string.Join("\n", lines));
         });
     }
+
+    /// <summary>
+    /// One per-path failure line for <see cref="Delete(string)"/>. A REFUSED delete is not a broken
+    /// one: agent identities routinely hold no Delete on shared or system-synced spaces, and the
+    /// server is the authority. So the line tells the agent what to do instead of inviting a retry:
+    /// present the user with the node's Delete page URL, where they review the node (and its
+    /// descendant count) and confirm under their OWN identity. Pure — pinned in unit tests.
+    /// </summary>
+    /// <param name="path">The resolved path whose delete failed.</param>
+    /// <param name="ex">The failure.</param>
+    /// <returns>The result line for this path.</returns>
+    internal static string DeleteErrorLine(string path, Exception ex) =>
+        ex is UnauthorizedAccessException
+            ? $"Refused deleting {path}: {ex.Message}. The current identity does not hold Delete here — " +
+              "do not retry. Present the user with this link so they can review and delete it themselves " +
+              $"in the GUI, under their own identity: /{path}/Delete " +
+              "(a whole query result set can be offered the same way: /{anchorPath}/Delete?q=<url-encoded mesh query>, " +
+              "multiple queries newline-separated inside the one encoded parameter)."
+            : $"Error deleting {path}: {ex.Message}";
 
     /// <summary>
     /// Builds the standard "content is null" rejection message for Update/Patch,
@@ -2749,8 +2768,14 @@ public class MeshOperations
                     var probeAddress = new Address($"{addressPrefix}/{Guid.NewGuid():N}");
                     // Stamp the NodeType path so a WithContentType reached from this probe records
                     // an EXACT registry entry rather than a bare-name one (see NodeTypePathHolder).
+                    // startDataSources: false — this probe reads NOTHING but the type registry,
+                    // which Initialize fills inside Build; starting sources would open a sync/
+                    // stream whose creation races the probeHub.Dispose() below (the CD-killing
+                    // ProbeHubCostTest flake). Probes that snapshot data keep the default.
                     var probeHub = hub.GetHostedHub(
-                        probeAddress, c => hubConfig(c.WithNodeTypePath(nodeType)).AsTransientNodeProbe());
+                        probeAddress,
+                        c => hubConfig(c.WithNodeTypePath(nodeType))
+                            .AsTransientNodeProbe(startDataSources: false));
                     if (probeHub == null) return null;
                     try
                     {

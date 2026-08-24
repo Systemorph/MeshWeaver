@@ -195,6 +195,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         // panel's own thread during a running round can't trip it (the "chat vanishes during
         // execution" bug the nav-context path had to guard against with SameThreadIdentity).
         NavigationManager.LocationChanged += OnLocationChanged;
+        CheckChatHint(NavigationManager.Uri);
         _nodeMenuSubscription = MenuItemsProvider.GetMenu(NodeMenuContext).Subscribe(items =>
         {
             _nodeMenuItems = items;
@@ -676,6 +677,63 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     private NavigationContext? _currentNavContext;
 
+    // ─────────────────────── "Where is the chat?" hint (?hint=chat) ───────────────────────
+    // Content pages cannot reach into the portal chrome, so a page that wants to POINT at the
+    // ever-present chat entry (course lessons: "the chat is always one click away in the top
+    // menu") links its own URL with `?hint=chat`. Landing on such a URL pulses the header's
+    // side-panel/chat toggle for a few seconds — a visual "it's THIS one" — and nothing else:
+    // no navigation, no panel state change, and clicking the toggle dismisses the pulse.
+
+    /// <summary>True while the header chat toggle is pulsing (see <see cref="CheckChatHint"/>).</summary>
+    protected bool ChatHintActive { get; private set; }
+
+    private CancellationTokenSource? _chatHintCts;
+
+    /// <summary>Arms the chat-toggle pulse when <paramref name="uri"/> carries <c>hint=chat</c>.
+    /// The pulse self-dismisses after a few seconds so a shared or bookmarked hint link cannot
+    /// leave the chrome blinking forever.</summary>
+    private void CheckChatHint(string uri)
+    {
+        var query = new Uri(uri, UriKind.RelativeOrAbsolute).IsAbsoluteUri
+            ? new Uri(uri).Query
+            : uri.Contains('?') ? uri[uri.IndexOf('?')..] : "";
+        // Exact key=value match — `hint=chatty` (or a `foo-hint=chat` key) must not pulse.
+        var hinted = query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Any(pair => string.Equals(pair, "hint=chat", StringComparison.OrdinalIgnoreCase));
+        if (!hinted)
+            return;
+        _chatHintCts?.Cancel();
+        var cts = _chatHintCts = new CancellationTokenSource();
+        ChatHintActive = true;
+        InvokeAsync(StateHasChanged);
+        _ = Task.Delay(TimeSpan.FromSeconds(6), cts.Token).ContinueWith(_ =>
+            // State flips on the renderer context — never from the timer's background thread.
+            InvokeAsync(() =>
+            {
+                if (cts.IsCancellationRequested) return;
+                ChatHintActive = false;
+                StateHasChanged();
+            }), TaskContinuationOptions.OnlyOnRanToCompletion);
+    }
+
+    /// <summary>Stops the pulse — the user found the toggle (clicked it), which is the hint's job done.</summary>
+    private void DismissChatHint()
+    {
+        if (!ChatHintActive) return;
+        _chatHintCts?.Cancel();
+        ChatHintActive = false;
+    }
+
+
+    /// <summary>
+    /// Collapses the side pane when the MAIN view navigates to a thread node. Fired on the real
+    /// <see cref="NavigationManager.LocationChanged"/> event (a genuine URL navigation) — never the
+    /// nav-context stream — so a background context re-emission during a running round cannot collapse
+    /// the active side-panel chat (the recurring "chat disappears during execution" bug). An unsent
+    /// new-chat composer (empty <c>ContentPath</c>) is preserved: it is not an opened thread. This
+    /// implements "opening a thread in the main pane collapses the side pane" for EVERY entry point
+    /// (composer full-screen submit, Open-Full-Screen, a thread link) since they all navigate.
+    /// </summary>
     /// <summary>
     /// Collapses the side pane when the MAIN view navigates to a thread node. Fired on the real
     /// <see cref="NavigationManager.LocationChanged"/> event (a genuine URL navigation) — never the
@@ -687,6 +745,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// </summary>
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
+        CheckChatHint(e.Location);
         if (!isAuthenticated || !SidePanelState.IsVisible || string.IsNullOrEmpty(SidePanelState.ContentPath))
             return;
         var path = NavigationManager.ToBaseRelativePath(e.Location);
@@ -848,6 +907,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// <returns>A task that completes once panel state and size have been applied.</returns>
     public async Task ToggleSidePanel()
     {
+        DismissChatHint();
         var contextPath = CurrentThreadContextPath();
 
         // On a thread in the main view → the side panel is a peek of the thread's context node.

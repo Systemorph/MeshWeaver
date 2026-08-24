@@ -218,7 +218,18 @@
                             : group.Items;
                         var hiddenCount = group.Items.Count - visibleItems.Count;
 
-                        @if (IsListMode)
+                        @if (IsIconsMode)
+                        {
+                            <div class="mesh-search-icons-grid">
+                                @* Order is applied in ApplyResults (so every render mode honours
+                                   SortByAccess); the tiles just paint what they are given. *@
+                                @foreach (var node in visibleItems.OfType<MeshNode>())
+                                {
+                                    @RenderIconTile(node)
+                                }
+                            </div>
+                        }
+                        else if (IsListMode)
                         {
                             <div class="mesh-search-list">
                                 @foreach (var item in visibleItems)
@@ -336,6 +347,11 @@
 
     private RenderFragment RenderCard(MeshNode node) => __builder =>
     {
+        // The card renders through DispatchView (registry resolution), NOT a compile-time
+        // <MeshNodeCardView …/> reference: MeshNodeCardView lives in the MeshWeaver.Blazor.Graph
+        // view pack now, and the base pack cannot name a pack component without inverting the
+        // reference direction. Registry dispatch is also what keeps this honest — the search page
+        // renders whatever view the mesh's registered pack maps to MeshNodeCardControl.
         var cardControl = GetCardControl(node);
         var clickAddress = ViewModel?.ClickMessageAddress?.ToString();
         var drillArea = BoundDrillDownArea;
@@ -359,18 +375,18 @@
             @if (isPicker)
             {
                 <div style="cursor: pointer;" @onclick="() => OnNodeSelected.InvokeAsync(node)">
-                    <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                    <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
                 </div>
             }
             else if (!string.IsNullOrEmpty(clickAddress))
             {
                 <div style="cursor: pointer;" @onclick="() => PostClickMessage(node, clickAddress)">
-                    <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                    <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
                 </div>
             }
             else
             {
-                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+                <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
             }
 
             @if (showDrill)
@@ -427,6 +443,41 @@
                 @RenderDeleteAffordance(node)
             }
         </div>
+    };
+
+    /// <summary>
+    /// One tile of the phone-home ICON grid (Icons mode): a large rounded icon with the name
+    /// underneath, navigating to <see cref="TargetOf"/> — everything comes from the query ROW
+    /// (name/icon are result columns), never from the node's content or a per-result hub.
+    /// </summary>
+    private RenderFragment RenderIconTile(MeshNode node) => __builder =>
+    {
+        var imageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(node, includeThumbnail: false);
+        var title = node.Name ?? node.Path;
+        var isInlineSvg = imageUrl?.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase) == true;
+        var isEmoji = !string.IsNullOrEmpty(imageUrl) && !isInlineSvg && !imageUrl.Contains('/') && !imageUrl.StartsWith("data:");
+
+        <a class="mesh-search-icon-tile" href="/@TargetOf(node)" title="@title">
+            <div class="mesh-search-icon-box">
+                @if (isInlineSvg)
+                {
+                    @((MarkupString)imageUrl!)
+                }
+                else if (isEmoji)
+                {
+                    <span class="mesh-search-icon-emoji">@imageUrl</span>
+                }
+                else if (!string.IsNullOrEmpty(imageUrl))
+                {
+                    <img src="@imageUrl" alt="" />
+                }
+                else
+                {
+                    <span class="mesh-search-icon-initial">@(string.IsNullOrEmpty(title) ? "?" : title[..1].ToUpperInvariant())</span>
+                }
+            </div>
+            <div class="mesh-search-icon-label">@title</div>
+        </a>
     };
 
     /// <summary>The icon + title + description content of a List-mode row.</summary>
@@ -791,7 +842,7 @@
         var cardControl = MeshNodeCardControl.FromNode(node, node.Path, BoundItemArea, true);
         <div class="mesh-nav-card-wrap">
             <a class="mesh-nav-card-link" href="/@node.Path" title="Open @(node.Name ?? node.Id)">
-                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"nav-{node.Path}")" />
+                <DispatchView ViewModel="@cardControl" Stream="@Stream" Area="@($"nav-{node.Path}")" />
             </a>
             @if (item.HasChildren)
             {

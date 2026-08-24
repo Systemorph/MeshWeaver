@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.Components;
+using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Layout;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;

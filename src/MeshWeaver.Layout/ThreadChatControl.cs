@@ -38,6 +38,16 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
     public bool ShowFullHeader { get; init; }
 
     /// <summary>
+    /// When true, renders the collapsible THREADS side menu (new chat · searchable list of the
+    /// viewer's open threads with live evaluating/queued/awaiting status) beside the chat even
+    /// when no thread is open yet — the Threads app page (<c>/{user}/Chat</c>) sets this so the
+    /// node-less composer carries the same default navigation as every thread page. Thread pages
+    /// show the menu implicitly (<see cref="ShowFullHeader"/> + a real thread); the side panel
+    /// and the home composer leave both off.
+    /// </summary>
+    public bool ShowThreadNav { get; init; }
+
+    /// <summary>
     /// Data-bound thread view model (via JsonPointerReference).
     /// Contains ThreadPath, InitialContext, Messages — all thread state.
     /// Null when control is created directly (side panel, dashboard).
@@ -59,6 +69,9 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
     /// <summary>Returns a copy with <paramref name="show"/> controlling whether the full-page thread header is rendered inside the scrollable area.</summary>
     /// <param name="show">When <c>true</c>, the hero header scrolls with the conversation.</param>
     public ThreadChatControl WithShowFullHeader(bool show = true) => this with { ShowFullHeader = show };
+    /// <summary>Returns a copy with <paramref name="show"/> controlling whether the collapsible threads side menu renders even without an open thread.</summary>
+    /// <param name="show">When <c>true</c>, the threads side menu renders beside the chat.</param>
+    public ThreadChatControl WithShowThreadNav(bool show = true) => this with { ShowThreadNav = show };
     /// <summary>Returns a copy with <paramref name="threadViewModel"/> as the data-bound thread view model.</summary>
     /// <param name="threadViewModel">A data-bound thread view model or pointer reference; <c>null</c> for direct-path mode.</param>
     public ThreadChatControl WithThreadViewModel(object? threadViewModel) => this with { ThreadViewModel = threadViewModel };

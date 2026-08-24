@@ -166,7 +166,7 @@
             </div>
             <AuthorizeView>
                 <Authorized>
-                    <div class="side-panel-toggle">
+                    <div class="side-panel-toggle @(ChatHintActive ? "chat-hint-pulse" : null)">
                         @* Context-aware icon: open → close-panel; closed on a thread → show-context;
                            closed elsewhere → chat (open a new conversation). *@
                         <FluentButton BackgroundColor="transparent" OnClick="ToggleSidePanel" Title="@SidePanelToggleTitle">
