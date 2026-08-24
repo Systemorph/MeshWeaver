@@ -108,11 +108,13 @@ public sealed class AlcLeaseRegistry
     /// arbitrary module and finalizer code. Doing that inline would run it under our lock.</para>
     /// </summary>
     public IObservable<Unit> Quiesced(AssemblyLoadContext context) =>
-        entries.TryGetValue(context, out var entry)
-            ? entry.Count.Where(count => count == 0).Take(1)
-                .Select(_ => Unit.Default)
-                .ObserveOn(TaskPoolScheduler.Default)
-            : Observable.Return(Unit.Default);
+        (entries.TryGetValue(context, out var entry)
+            ? entry.Count.Where(count => count == 0).Take(1).Select(_ => Unit.Default)
+            : Observable.Return(Unit.Default))
+        // On BOTH paths, including the never-leased one. A context nobody ever entered is the
+        // common case (retiring a duplicate compilation), and without the hop there it would run
+        // Unload — module and finalizer code — inline on whichever thread happened to subscribe.
+        .ObserveOn(TaskPoolScheduler.Default);
 
     /// <summary>
     /// Unloads <paramref name="context"/> once it is quiesced, and NOT AT ALL if it fails to
@@ -132,8 +134,13 @@ public sealed class AlcLeaseRegistry
             .Timeout(budget)
             .Select(quiesced =>
             {
-                entries.TryRemove(context, out _);
+                // Unload FIRST, drop the tracking only once it succeeded. Removing the entry up
+                // front meant a throwing Unload (a context that turns out not to be collectible)
+                // landed in the Catch below reporting InFlight = 0 — a diagnostic that says
+                // "nothing was using it", about a context we just failed to reclaim and are now
+                // no longer tracking.
                 context.Unload();
+                entries.TryRemove(context, out _);
                 logger?.LogDebug("Unloaded collectible context {What}", what ?? context.Name);
                 return true;
             })
