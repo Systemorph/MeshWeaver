@@ -312,6 +312,18 @@ public partial class MeshSearchView
     /// (the active scope's opt-in; the home's Apps grid sets it).</summary>
     private bool BoundSortByAccess => ActiveScopeTab?.SortByAccess ?? false;
 
+    /// <summary>Order grouped sections by SIZE instead of alphabetically — the home's content
+    /// section fans out by node type with the biggest type first.</summary>
+    private bool BoundGroupByFrequency
+    {
+        get
+        {
+            if (ViewModel?.GroupByFrequency is bool b) return b;
+            if (ViewModel?.GroupByFrequency is JsonElement je) return je.ValueKind == JsonValueKind.True;
+            return false;
+        }
+    }
+
     /// <summary>The activity id the access log stores a visit to <paramref name="path"/> under.</summary>
     private static string AccessKeyOf(string path) => path.Replace('/', '_');
 
@@ -1029,13 +1041,19 @@ public partial class MeshSearchView
                     Items = limitedItems.Cast<object>().ToList(),
                     TotalCount = items.Count
                 };
-            })
-            .OrderBy(g => g.Label)
-            .ToList();
+            });
+
+        // BY FREQUENCY when asked (the home's content section): the type you have most of leads,
+        // so the page opens on what you actually work with instead of whatever starts with "A".
+        // Ties fall back to the label so the order is stable across renders.
+        groups = BoundGroupByFrequency
+            ? groups.OrderByDescending(g => g.TotalCount).ThenBy(g => g.Label)
+            : groups.OrderBy(g => g.Label);
+        var orderedGroups = groups.ToList();
 
         return new GroupedSearchResult
         {
-            Groups = groups,
+            Groups = orderedGroups,
             TotalItems = sortedNodes.Count
         };
     }

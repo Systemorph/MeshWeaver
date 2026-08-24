@@ -215,6 +215,18 @@ public record MeshSearchControl()
     public IReadOnlyList<MeshSearchScopeTab>? ScopeTabs { get; init; }
 
     /// <summary>
+    /// In a grouped render, order the sections by SIZE (most items first) instead of
+    /// alphabetically — the home's content section fans out by node type with the type you have
+    /// most of at the top, so the page opens on what you actually work with rather than on
+    /// whatever happens to start with "A". Ties fall back to the label, so the order is stable.
+    /// </summary>
+    public object? GroupByFrequency { get; init; }
+
+    /// <summary>Sets <see cref="GroupByFrequency"/>.</summary>
+    public MeshSearchControl WithGroupByFrequency(bool value = true) =>
+        This with { GroupByFrequency = value };
+
+    /// <summary>
     /// When true, clicking a result navigates to the node's <c>MainNode</c> instead of its own
     /// path (default false). A per-scope <see cref="MeshSearchScopeTab.NavigateToMainNode"/>
     /// overrides this while its scope is active.

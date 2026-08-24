@@ -72,15 +72,6 @@ public static class UserActivityLayoutAreas
     /// <summary>Link to the doc page that explains the configurable Body-page + <c>@@</c>-region model.</summary>
     internal const string ConfigGuideLink = "/Doc/GUI/ConfigurablePages";
 
-    /// <summary>
-    /// The per-thread rail-row item area consumed by the Threads app's vertical rail — registered
-    /// on every THREAD hub (MeshWeaver.AI, <c>ThreadNodeType.RailItemArea</c> /
-    /// <c>ThreadRailItem.View</c>: title + ✕-close overlay). Referenced here by NAME only: item
-    /// areas resolve on the result node's own hub at render time, so Graph carries no AI
-    /// dependency for it.
-    /// </summary>
-    internal const string ThreadRailItemArea = "RailItem";
-
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
 
@@ -653,67 +644,16 @@ public static class UserActivityLayoutAreas
         => Observable.Return<UiControl?>(new ThreadChatControl().WithHideEmptyState(true));
 
     /// <summary>
-    /// The THREADS APP page (<c>/{user}/Chat</c>, the ChatArea) — the GitHub-Copilot-style shape:
-    /// a vertical RAIL of the owner's open threads on the left (each row rendered by the thread
-    /// hub's <see cref="ThreadRailItemArea"/>: title + ✕ that closes the thread via the canonical
-    /// <c>MarkThreadDone</c>, so it leaves the rail but stays searchable), and the node-less chat
-    /// composer on the right — sending starts a proper thread via <c>StartThread</c> and opens it
-    /// full-screen. Pure composition of existing pieces; see <see cref="BuildThreadsApp"/>.
+    /// The chat page at <c>/{user}/Chat</c> (the ChatArea): the node-less composer, nothing else.
+    /// Sending starts a proper thread via <c>StartThread</c> and opens it full-screen.
+    /// <para>🚨 The MDI shell this used to render — a fixed rail of open threads whose rows
+    /// delegated to a <c>RailItem</c> area on each THREAD's own hub — is deleted. A per-result item
+    /// area activates one hub PER ROW and resolves an area on a hub the home does not own, which is
+    /// exactly the shape that failed in the distributed portal as "AppTile not found" while passing
+    /// in a monolith. The home renders from query rows; nothing on it resolves a foreign area.</para>
     /// </summary>
     internal static IObservable<UiControl?> ThreadsAppView(LayoutAreaHost host, RenderingContext _)
-        => Observable.Return<UiControl?>(BuildThreadsApp(OwnerIdOf(host.Hub.Address.ToString())));
-
-    /// <summary>
-    /// The Threads-app composition — pure (no hub) so the shape is unit-testable: the MDI shell
-    /// (<see cref="BuildThreadsShell"/>) with the node-less composer as its main pane. Opening a
-    /// thread from the rail NAVIGATES to the thread page, which renders the SAME shell around the
-    /// conversation — the rail (the "document list") stays put across navigations, exactly like a
-    /// multi-document window.
-    /// </summary>
-    internal static UiControl BuildThreadsApp(string nodeOwnerId) =>
-        BuildThreadsShell(nodeOwnerId,
-            new ThreadChatControl().WithHideEmptyState(true));
-
-    /// <summary>
-    /// The Threads MDI SHELL — a FIXED left rail of the viewer's open threads beside the main
-    /// pane. Rendered by BOTH the Threads app page (<c>/{user}/Chat</c>, main = the composer) and
-    /// every thread's full page (main = the conversation), so navigating between threads keeps the
-    /// rail — the menu never collapses. No <c>flex-wrap</c>: a wrapping shell was exactly the
-    /// broken layout it replaces; the rail is a fixed 280px column, the pane takes the rest.
-    /// </summary>
-    public static UiControl BuildThreadsShell(string viewerId, UiControl main) =>
-        Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithWidth("100%")
-            .WithStyle("width: 100%; height: 100%; min-height: 0; align-items: stretch; gap: 0;")
-            .WithView(Controls.Stack
-                .WithStyle("flex: 0 0 280px; width: 280px; box-sizing: border-box; min-height: 0; " +
-                           "overflow-y: auto; border-right: 1px solid var(--neutral-stroke-rest); " +
-                           "padding-right: 8px;")
-                .WithView(BuildThreadsRail(viewerId)))
-            .WithView(Controls.Stack
-                .WithStyle("flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; " +
-                           "flex-direction: column; padding-left: 12px;")
-                .WithView(main));
-
-    /// <summary>The Threads-app rail list: the owner's open threads (never Done, newest first) as a
-    /// single-column list whose rows delegate to the thread hub's <see cref="ThreadRailItemArea"/>.
-    /// Flat render + MaxColumns(1), NOT <see cref="MeshSearchRenderMode.List"/>: the List renderer
-    /// draws its own icon·title·description rows and IGNORES <c>ItemArea</c>, so the ✕ overlay
-    /// would never render there — Flat is the ItemArea path the pinned grid already proves.</summary>
-    internal static MeshSearchControl BuildThreadsRail(string nodeOwnerId) =>
-        Controls.MeshSearch
-            .WithHiddenQuery(
-                $"namespace:{nodeOwnerId}/*_Thread nodeType:Thread -content.status:Done sort:LastModified-desc")
-            .WithShowSearchBox(false)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithMaxColumns(1)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithItemArea(ThreadRailItemArea)
-            .WithItemLimit(50)
-            .WithReactiveMode(true);
+        => Observable.Return<UiControl?>(new ThreadChatControl().WithHideEmptyState(true));
 
     /// <summary>
     /// The owner's OPEN threads — their own partition only (<c>{owner}/*_Thread</c>, no cross-partition
@@ -819,84 +759,131 @@ public static class UserActivityLayoutAreas
         if (cfg.Style == HomeStyle.Catalog)
             return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy);
 
+        // TWO SECTIONS, apps first: the icon grid you launch things from, then the content you
+        // search through. They are different acts — one is "open my app", the other is "find that
+        // thing" — and mixing them into one tab strip made the apps just another lens on a search.
+        var home = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 24px; width: 100%;")
+            .WithView(BuildAppsBand(nodeOwnerId, locale))
+            .WithView(BuildContentSection(nodeOwnerId, config, user, locale, screen));
+
+        // Shared with me — cross-partition invitations, their own band under the content section.
+        // Present only when the caller actually has such grants.
+        var shared = BuildSharedBand(privacy.Retain(sharedTargets), locale);
+        return shared is null ? home : home.WithView(shared);
+    }
+
+    /// <summary>
+    /// The <b>Content</b> section — ONE category of content plus, when the viewer has any, a
+    /// <b>Pinned</b> tab. The category is simply <b>All</b>: every top-level node the viewer can
+    /// reach. "Spaces" never described anything real (the list is just what you have access to),
+    /// and slicing one list into three tabs was navigation the reader had to think about before
+    /// they could look at anything.
+    /// <para>Store items are excluded — those are apps, and an app appears exactly once, up in the
+    /// Apps section. The sort dropdown offers last accessed / last modified / alphabetical, and the
+    /// search box searches the active tab. <see cref="HomeConfig.Scope"/> can widen the list to the
+    /// full subtree. Pure, for tests.</para>
+    /// </summary>
+    internal static MeshSearchControl BuildContentSection(
+        string nodeOwnerId, HomeConfig? config, User? user, string? locale, PresentationScreen? screen)
+    {
+        var cfg = config ?? HomeConfigNodeType.Defaults;
+        var privacy = screen ?? PresentationScreen.Off;
         var scopes = new List<MeshSearchScopeTab>();
 
-        // Pinned — the owner's content shortcuts, union-with-fallback for last accessed.
+        // Pinned — the owner's shortcuts, kept as its own tab, present only when there are pins.
+        // 🚨 The pins are INTERPOLATED INTO the query string, so the presentation screen (#1803)
+        // drops a marked one HERE, before the query exists — not only where its card is painted.
+        // No ItemArea: the inline unpin overlay used to resolve an area on each pinned node's OWN
+        // hub, the per-result foreign-area shape that failed in the distributed portal. Unpinning
+        // lives in the node menu, and the card comes from the query row.
         var pins = privacy.Retain(user?.PinnedPaths);
         if (pins.Count > 0)
         {
             var pinnedBase = $"path:({string.Join(" OR ", pins)})";
-            scopes.Add(HomeScope("home.pinned", locale, HomeCatalogSort.LastModified,
+            scopes.Add(ContentScope("home.pinned", locale, HomeCatalogSort.LastModified,
                 (sort, suffix) => sort == HomeCatalogSort.LastAccessed
+                    // source:accessed is an INNER JOIN — alone it would hide a never-opened pin.
                     ? $"{pinnedBase} {suffix}\n{pinnedBase} {SortSuffixLastModified}"
                     : $"{pinnedBase} {suffix}"));
         }
 
-        // Apps — the viewer's OWN app records: a SINGLE-PARTITION query ({owner}/_App), which is
-        // why it loads fast (the old cover-path alternation fanned out across every partition
-        // schema — the multi-second home lag). The records are the STORE's to write; the home only
-        // reads them (Threads is an ordinary record like every other app). Icons render: the
-        // phone-home grid painted ENTIRELY from the query rows (record Name/Icon; no per-tile hub,
-        // no content load — the per-record AppTile area cost one hub PER RESULT), and
-        // NavigateToMainNode makes a tile open the APP (the record's MainNode target).
-        //
-        // ORDER: most recently used first, like a phone. That ordering is applied at PAINT
-        // (SortByAccess) rather than in the query, because `source:accessed` is an INNER JOIN on
-        // the access log keyed by the row's OWN path: it would drop every never-opened app AND
-        // match nothing anyway — opening an app records a visit to the APP, never to the record
-        // that points at it. The sort options below stay pure order-bys over the records; the
-        // "Last accessed" option is the query-side no-op that keeps the dropdown honest.
-        var appsBase =
-            $"path:{nodeOwnerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType}";
-        scopes.Add(HomeScope("home.apps", locale, HomeCatalogSort.LastAccessed,
-                (sort, suffix) => sort == HomeCatalogSort.LastAccessed
-                    ? $"{appsBase} {SortSuffixAlphabetical}"
-                    : $"{appsBase} {suffix}")
-            with
-            {
-                RenderMode = nameof(MeshSearchRenderMode.Icons),
-                NavigateToMainNode = true,
-                SortByAccess = true,
-            });
-
-        // Spaces — the deduplicated catalog (an app never appears twice).
-        scopes.Add(HomeScope("home.spaces", locale, cfg.DefaultSort,
+        // All — every top-level node the viewer can access (apps excluded; they have their own
+        // section). The ONE content category.
+        scopes.Add(ContentScope("home.all", locale, cfg.DefaultSort,
             (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions)));
 
-        // All — search EVERYTHING the viewer can read, at every depth (the "we can search all" tab).
-        scopes.Add(HomeScope("home.all", locale, cfg.DefaultSort,
-            (_, suffix) => CatalogQuery(HomeCatalogScope.Subtree, nodeOwnerId, suffix)));
-
-        var search = Controls.MeshSearch
+        // ONE list that FANS OUT by the node's own type — Spaces, Clients, Courses, … — with the
+        // biggest group first (GroupByFrequency), so the page opens on what the viewer actually
+        // works with. That is what "Spaces" was reaching for and failing to say: the categories
+        // are not a fixed taxonomy the home invents, they are whatever types the viewer's
+        // top-level nodes happen to have.
+        var content = Controls.MeshSearch
+            .WithTitle(LocalizationCatalog.Get("home.content", locale))
             .WithScopeTabs(scopes.ToArray())
-            // Fallbacks for clients without scope support (react renders these): the first scope.
+            // Fallback for clients without scope support (react renders these): the first scope.
             .WithHiddenQuery(scopes[0].Query)
             .WithSortOptions([.. scopes[0].SortOptions!])
             .WithShowSearchBox(true)
             .WithViewOptions(true)
             .WithShowEmptyMessage(true)
-            .WithRenderMode(cfg.Render == HomeCatalogRender.Grouped
-                ? MeshSearchRenderMode.Grouped
-                : MeshSearchRenderMode.Flat)
+            .WithRenderMode(MeshSearchRenderMode.Grouped)
+            .WithGroupBy("NodeType")
+            .WithGroupByFrequency()
+            .WithSectionCounts(true)
+            .WithCollapsibleSections(true)
             .WithMaxColumns(4)
             .WithItemLimit(50)
             .WithMaxRows(6)
             .WithReactiveMode(true)
             .WithCreateHref("/create");
-        if (cfg.Render == HomeCatalogRender.Grouped)
-            search = search.WithSectionCounts(true).WithCollapsibleSections(true);
+        return content;
+    }
 
-        // Shared with me is its OWN titled band below the scoped search (not a scope tab) —
-        // cross-partition invitations are a distinct kind of content, not another lens on the
-        // catalog. Present only when the caller actually has such grants.
-        var shared = BuildSharedBand(privacy.Retain(sharedTargets), locale);
-        if (shared is null)
-            return search;
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("gap: 24px; width: 100%;")
-            .WithView(search)
-            .WithView(shared);
+    /// <summary>
+    /// The <b>Apps</b> section — the phone-home ICON grid over the viewer's OWN
+    /// <c>{owner}/_App</c> records. A SINGLE-PARTITION query (which is why it loads fast — the old
+    /// cover-path alternation fanned out across every partition schema, the multi-second home lag)
+    /// painted ENTIRELY from the query rows: record Name/Icon, no per-tile hub, no content read.
+    /// <c>NavigateToMainNode</c> makes a tile open the APP it points at, never the record.
+    /// <para>ORDER: most recently used first, like a phone (<c>SortByAccess</c>, applied at paint
+    /// from the viewer's own access log). NOT <c>source:accessed</c> — that is an INNER JOIN keyed
+    /// by the row's own path, so it would drop every never-opened app AND match nothing anyway,
+    /// since opening an app records a visit to the APP, never to the record pointing at it.</para>
+    /// <para>No search box and no view options: this is a launcher, not a search surface — the
+    /// content section below is where you search. Pure, exposed for tests.</para>
+    /// </summary>
+    internal static MeshSearchControl BuildAppsBand(string nodeOwnerId, string? locale)
+    {
+        var appsQuery =
+            $"path:{nodeOwnerId}/{AppNodeType.UserNamespace} scope:children " +
+            $"nodeType:{AppNodeType.NodeType} {SortSuffixAlphabetical}";
+        return Controls.MeshSearch
+            .WithTitle(LocalizationCatalog.Get("home.apps", locale))
+            .WithHiddenQuery(appsQuery)
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(false)
+            .WithRenderMode(MeshSearchRenderMode.Icons)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithItemLimit(50)
+            .WithReactiveMode(true)
+            with
+            {
+                NavigateToMainNode = true,
+                // One scope, so the grid's own paint order is the phone order. The scope carries it
+                // because SortByAccess/RenderMode are per-scope settings the view reads there.
+                ScopeTabs =
+                [
+                    new MeshSearchScopeTab(LocalizationCatalog.Get("home.apps", locale), appsQuery)
+                    {
+                        RenderMode = nameof(MeshSearchRenderMode.Icons),
+                        NavigateToMainNode = true,
+                        SortByAccess = true,
+                    },
+                ],
+            };
     }
 
     /// <summary>
@@ -930,9 +917,9 @@ public static class UserActivityLayoutAreas
             .WithReactiveMode(true);
     }
 
-    /// <summary>One home scope tab: localized label + the three catalog sorts (default first),
-    /// each option's full query produced by <paramref name="query"/>(sort, suffix).</summary>
-    private static MeshSearchScopeTab HomeScope(
+    /// <summary>One content tab: localized label + the three catalog sorts (default first), each
+    /// option's full query produced by <paramref name="query"/>(sort, suffix).</summary>
+    private static MeshSearchScopeTab ContentScope(
         string labelKey, string? locale, HomeCatalogSort defaultSort,
         Func<HomeCatalogSort, string, string> query)
     {
