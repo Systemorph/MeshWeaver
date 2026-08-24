@@ -38,7 +38,12 @@ namespace MeshWeaver.Graph.Logon;
 /// </summary>
 public sealed class SeedDefaultAppsLogonAction : ILogonAction
 {
-    /// <summary>Bound on the config read. A slow or absent config costs the seed, never the
+    /// <summary>How long to wait for a real <c>Admin/HomeConfig</c> to answer before settling for
+    /// what we have. Short, because on a portal with no such node this is pure latency on every
+    /// first logon — and the action runs off the critical path.</summary>
+    private static readonly TimeSpan ConfigSettleBound = TimeSpan.FromSeconds(2);
+
+    /// <summary>Outer bound on the config read. A slow or absent config costs the seed, never the
     /// logon — and an unrecorded action simply retries on the next one.</summary>
     private static readonly TimeSpan ConfigReadBound = TimeSpan.FromSeconds(10);
 
@@ -66,12 +71,24 @@ public sealed class SeedDefaultAppsLogonAction : ILogonAction
 
         // The same admin-editable Admin/HomeConfig the home reads, so the defaults a user is seeded
         // with are the defaults the deployment declares — instance-specific, not compiled in.
-        // Skip(1) past the synthetic StartWith(Defaults): seeding is a one-shot write, and acting on
-        // the placeholder would seed the shipped defaults at a portal that has configured its own.
+        //
+        // 🚨 Getting the number of emissions right matters more than it looks. Observe() is
+        // StartWith(Defaults) + DistinctUntilChanged, so a portal with NO materialized HomeConfig
+        // node — or one whose config equals the shipped defaults — emits exactly ONCE. Skipping
+        // that first emission to "avoid acting on the placeholder" therefore waits forever on
+        // precisely the fresh deployment this action exists to serve, times out, and seeds nothing:
+        // the original bug, reintroduced from the other side.
+        //
+        // So: take up to two emissions (the placeholder, then the real config if a node answers),
+        // stop waiting at the settle bound either way, and use whichever arrived last. One
+        // emission ⇒ the declared/shipped defaults after the bound; two ⇒ the configured set as
+        // soon as the query answers. Always terminates, and never seeds the shipped set at a
+        // portal that has configured its own.
         return HomeConfigNodeType
             .Observe(context.Hub.GetWorkspace(), context.Hub.JsonSerializerOptions)
-            .Skip(1)
-            .Take(1)
+            .Take(2)
+            .TakeUntil(Observable.Timer(ConfigSettleBound))
+            .LastAsync()
             .Timeout(ConfigReadBound)
             .SelectMany(config =>
             {
@@ -85,9 +102,10 @@ public sealed class SeedDefaultAppsLogonAction : ILogonAction
                     .ToArray()
                     .Select(_ => LogonActionOutcome.Nothing);
             })
-            // A failure to read the config must not cost the user their logon, and must not record
-            // the action as done — an unrecorded action retries next time, which is exactly right
-            // for one that has nothing to undo.
+            // Anything that got this far unhandled — the config read, or a create that was not an
+            // already-exists — is logged HERE and rethrown, so the runner does not record the
+            // action as done. An unrecorded run-once action retries on the next logon, which is
+            // exactly right for one whose every step is idempotent.
             .Catch((Exception exception) =>
             {
                 logger?.LogWarning(exception, "Seeding default apps for {Owner} failed", ownerId);
@@ -96,9 +114,17 @@ public sealed class SeedDefaultAppsLogonAction : ILogonAction
     }
 
     /// <summary>
-    /// Creates one record, treating "already exists" as success. That is what makes this safe
-    /// against the Store having written the same app's record first, and against a concurrent
-    /// logon: the create is the claim, and losing the race is a no-op rather than an overwrite.
+    /// Creates one record, treating "already exists" — and ONLY that — as success. That is what
+    /// makes this safe against the Store having written the same app's record first, and against a
+    /// concurrent logon: the create is the claim, and losing the race is a no-op rather than an
+    /// overwrite.
+    ///
+    /// <para>🚨 Every OTHER failure propagates, and must. This is a RunOnce action, so the runner
+    /// commits the ledger entry when it completes — swallowing a transient fault (access denied, a
+    /// missing parent, a storage blip) would mark the action permanently done for that user while
+    /// leaving them short a tile, with no mechanism that ever revisits it. Failing instead leaves
+    /// the ledger unwritten so the next logon retries, which costs nothing because the creates are
+    /// idempotent.</para>
     /// </summary>
     private static IObservable<Unit> Create(
         IMeshService mesh, string ownerId, UserActivityLayoutAreas.AppRecordSpec spec, ILogger? logger)
@@ -109,12 +135,13 @@ public sealed class SeedDefaultAppsLogonAction : ILogonAction
             .Catch((Exception exception) =>
             {
                 if (exception.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                {
                     logger?.LogDebug("Default app record {Path} already existed", node.Path);
-                else
-                    // One bad record must not stop the others — a partial seed beats none, and the
-                    // next create is independent of this one.
-                    logger?.LogWarning(exception, "Default app record create failed at {Path}", node.Path);
-                return Observable.Return(Unit.Default);
+                    return Observable.Return(Unit.Default);
+                }
+
+                logger?.LogWarning(exception, "Default app record create failed at {Path}", node.Path);
+                return Observable.Throw<Unit>(exception);
             });
     }
 }

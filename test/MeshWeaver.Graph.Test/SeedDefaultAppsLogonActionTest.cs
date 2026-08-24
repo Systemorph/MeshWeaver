@@ -1,4 +1,5 @@
 using System.Linq;
+using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.Logon;
 using Xunit;
@@ -71,6 +72,45 @@ public class SeedDefaultAppsLogonActionTest
         var specs = UserActivityLayoutAreas.AppRecordSpecs(new HomeConfig { DefaultApps = [] }, "alice");
 
         specs.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_config_stream_that_emits_only_the_defaults_still_seeds()
+    {
+        // 🚨 The regression this pins, which I wrote and review caught: HomeConfigNodeType.Observe
+        // is StartWith(Defaults) + DistinctUntilChanged, so a portal with NO materialized
+        // Admin/HomeConfig node emits exactly ONCE. Skipping that emission to avoid "acting on the
+        // placeholder" waits forever on precisely the fresh deployment this action exists for.
+        // Shape assertion: one emission must still yield a usable config, not a hang.
+        var single = Observable.Return(HomeConfigNodeType.Defaults);
+
+        var settled = single
+            .Take(2)
+            .TakeUntil(Observable.Timer(TimeSpan.FromMilliseconds(200)))
+            .LastAsync()
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Wait();
+
+        settled.Should().NotBeNull();
+        UserActivityLayoutAreas.AppRecordSpecs(settled, "alice").Should().NotBeEmpty(
+            "a deployment without a HomeConfig node must still get the shipped defaults");
+    }
+
+    [Fact]
+    public void A_config_stream_that_emits_twice_uses_the_configured_set()
+    {
+        // The other half: when a real node DOES answer, its value must win over the placeholder —
+        // otherwise a portal that configured its own apps would be seeded the shipped ones.
+        var configured = new HomeConfig { DefaultApps = ["OnlyThis"] };
+
+        var settled = Observable.Return(HomeConfigNodeType.Defaults).Concat(Observable.Return(configured))
+            .Take(2)
+            .TakeUntil(Observable.Timer(TimeSpan.FromSeconds(2)))
+            .LastAsync()
+            .Wait();
+
+        UserActivityLayoutAreas.AppRecordSpecs(settled, "alice").Select(s => s.Id)
+            .Should().Equal("OnlyThis");
     }
 
     [Fact]
