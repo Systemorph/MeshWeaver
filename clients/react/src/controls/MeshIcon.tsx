@@ -12,7 +12,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { Json } from "../area/types.js";
 import { resolveIconByName } from "./icon.js";
-import { classifyIcon, sanitizeInlineSvg } from "./iconValue.js";
+import { classifyIcon, sanitizeInlineSvg, sizeInlineSvg } from "./iconValue.js";
 
 export interface MeshIconProps {
   /** The raw icon value: name, `{provider,id,…}` object, inline SVG, URL/path, or emoji. */
@@ -47,7 +47,7 @@ export function MeshIcon({ value, size = 20, fallback = null, style, className, 
           onClick={onClick}
           style={box}
           className={mergeCls("mw-inline-svg", className)}
-          dangerouslySetInnerHTML={{ __html: sanitizeInlineSvg(classified.text) }}
+          dangerouslySetInnerHTML={{ __html: sizeInlineSvg(sanitizeInlineSvg(classified.text), size) }}
         />
       );
     case "url":

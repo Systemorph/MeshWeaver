@@ -39,6 +39,27 @@ export function sanitizeInlineSvg(svg: string): string {
     .replace(/((?:xlink:)?href)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, "");
 }
 
+/** Force the REQUESTED render size onto an inline SVG's ROOT tag. Authored icons can carry
+ *  explicit width/height intrinsics (width="24" height="24"), and both SvgXml (native) and inline
+ *  DOM rendering honor them over the surrounding box — a 24px paint inside a 64px tile, while
+ *  viewBox-only icons fill (the "tiles render tiny" defect; Plugins #620 stripped the authored
+ *  set, this is the structural half so the next fixed-size icon cannot regress it). The root
+ *  tag's own width/height are stripped and the requested size injected FIRST on the tag (a
+ *  duplicate attribute later in a tag is ignored by the parser), so the caller's size always
+ *  wins; viewBox is preserved so content scales; CHILD width/height (<rect width=…>) are
+ *  untouched. */
+export function sizeInlineSvg(svg: string, size: number): string {
+  return svg.replace(/<svg\b([^>]*)>/i, (_m, attrs: string) => {
+    const cleaned = attrs
+      .replace(/\s(?:width|height)\s*=\s*"[^"]*"/gi, "")
+      .replace(/\s(?:width|height)\s*=\s*'[^']*'/gi, "")
+      // Stop before "/" too: in `<svg … width=24/>` the unquoted value must not swallow the
+      // self-closing slash (that would emit a never-closed root tag — malformed XML).
+      .replace(/\s(?:width|height)\s*=\s*[^\s>/]+/gi, "");
+    return `<svg width="${size}" height="${size}"${cleaned}>`;
+  });
+}
+
 /** An image reference: absolute/rooted URL, data URI, or a path ending in an image extension. */
 export function isIconUrl(value: string): boolean {
   return /^(https?:|data:|blob:|\/)/i.test(value) || /\.(svg|png|jpg|jpeg|gif|webp|ico)(\?|#|$)/i.test(value);

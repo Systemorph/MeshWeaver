@@ -3,7 +3,7 @@
 // ("most SVGs are not showing").
 
 import { describe, expect, it } from "vitest";
-import { backplatePalette, classifyIcon, ensureBackplate, hasBackplate, iconForRendering, isEmojiIcon, isIconUrl } from "./iconValue.js";
+import { backplatePalette, classifyIcon, ensureBackplate, hasBackplate, iconForRendering, isEmojiIcon, isIconUrl, sizeInlineSvg } from "./iconValue.js";
 
 describe("classifyIcon", () => {
   it("classifies inline SVG documents", () => {
@@ -109,5 +109,37 @@ describe("ensureBackplate", () => {
     const out = classifyIcon(monochrome);
     expect(out.kind).toBe("svg");
     expect(out.text).toContain("<rect width='24' height='24' rx='5'");
+  });
+});
+
+describe("sizeInlineSvg", () => {
+  it("strips authored root width/height and injects the requested size first", () => {
+    const out = sizeInlineSvg(`<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><rect width='24' height='24'/></svg>`, 64);
+    expect(out.startsWith(`<svg width="64" height="64"`)).toBe(true);
+    // the root tag carries no authored size any more…
+    expect(out.slice(0, out.indexOf(">"))).not.toContain("'24'");
+    // …but the CHILD rect keeps its geometry, and the viewBox survives so content scales
+    expect(out).toContain(`<rect width='24' height='24'/>`);
+    expect(out).toContain(`viewBox='0 0 24 24'`);
+  });
+
+  it("sizes a viewBox-only icon the same way", () => {
+    const out = sizeInlineSvg(`<svg viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>`, 20);
+    expect(out.startsWith(`<svg width="20" height="20"`)).toBe(true);
+    expect(out).toContain(`viewBox="0 0 24 24"`);
+  });
+
+  it("handles double-quoted and unquoted authored sizes", () => {
+    const out = sizeInlineSvg(`<svg width="24" height=24 viewBox="0 0 24 24"/>`, 32);
+    const root = out.slice(0, out.indexOf(">"));
+    expect(root).toContain(`width="32"`);
+    expect(root).toContain(`height="32"`);
+    expect(root).not.toContain('width="24"');
+    expect(root).not.toContain("height=24");
+  });
+
+  it("preserves the self-closing slash when an unquoted size is the last attribute", () => {
+    const out = sizeInlineSvg(`<svg viewBox="0 0 24 24" width=24/>`, 32);
+    expect(out).toBe(`<svg width="32" height="32" viewBox="0 0 24 24"/>`);
   });
 });

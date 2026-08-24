@@ -124,6 +124,7 @@ export {
   isIconUrl,
   isInlineSvg,
   sanitizeInlineSvg,
+  sizeInlineSvg,
   type ClassifiedIcon,
   type IconKind,
 } from "./controls/iconValue.js";
