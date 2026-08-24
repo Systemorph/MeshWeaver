@@ -74,9 +74,27 @@
                 </div>
                 @if (ViewModel?.CanDelete(_items.Count) == true)
                 {
-                    <button type="button" class="mesh-node-collection-delete" @onclick="() => DeleteItem(capturedNode.Path)" @onclick:stopPropagation="true">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" />
-                    </button>
+                    @* Two-step confirm: the trash only ARMS; the explicit check issues the delete. *@
+                    @if (_pendingDeletePath == capturedNode.Path)
+                    {
+                        <div class="mesh-node-collection-delete-confirm" @onclick:stopPropagation="true">
+                            <button type="button" class="mesh-node-collection-delete-yes" title="@Access.Localize("search.confirmDelete")"
+                                    @onclick="() => DeleteItem(capturedNode.Path)" @onclick:stopPropagation="true">
+                                <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" />
+                            </button>
+                            <button type="button" class="mesh-node-collection-delete-no" title="@Access.Localize("common.cancel")"
+                                    @onclick="CancelDelete" @onclick:stopPropagation="true">
+                                <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
+                            </button>
+                        </div>
+                    }
+                    else
+                    {
+                        <button type="button" class="mesh-node-collection-delete" title="@Access.Localize("common.delete")"
+                                @onclick="() => RequestDelete(capturedNode.Path)" @onclick:stopPropagation="true">
+                            <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" />
+                        </button>
+                    }
                 }
             </div>
         }

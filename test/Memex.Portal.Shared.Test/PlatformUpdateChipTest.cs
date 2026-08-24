@@ -60,16 +60,15 @@ public class PlatformUpdateChipTest
     /// and on the tooltip without even that.
     /// </summary>
     [Fact]
-    public void DisplayText_says_when_it_was_deployed_and_names_no_version()
+    public void Tooltip_says_when_it_was_deployed_and_the_bar_names_no_version()
     {
         const string full = "3.0.0-rc4.ci.0+8278244204d7e3d0cc95b1461c825383cf0875a9";
         var chip = PlatformUpdateChip.Describe(
             new PlatformUpdateStatus(PlatformUpdateAvailability.UpToDate, null),
             full, "memex-portal-7d9c-abcde", Deployed, "Europe/Zurich", Echo);
 
-        chip.DisplayText.Should().Be("about.lastDeployed 08-18 15:35");
-        chip.DisplayText.Should().NotContain("3.0.0", "the version left the header on purpose");
-        chip.DisplayText.Should().NotContain("8278244", "the sha left with it");
+        chip.Tooltip.Should().Contain("about.lastDeployed 08-18 15:35",
+            "the chip is glyph-only, so the deployment time has nowhere to live but the tooltip");
         chip.Tooltip.Should().Contain(full, "the full build id must remain one hover away");
     }
 
@@ -79,30 +78,33 @@ public class PlatformUpdateChipTest
     /// string in the bar would be the same unreadable identifier, just a newer one.
     /// </summary>
     [Fact]
-    public void DisplayText_stays_a_deployment_time_when_an_update_is_pending()
+    public void Tooltip_still_carries_the_deployment_time_when_an_update_is_pending()
     {
         var chip = PlatformUpdateChip.Describe(
             new PlatformUpdateStatus(PlatformUpdateAvailability.UpdateAvailable, "3.0.0-rc4.ci.4191"),
             "3.0.0-rc4.ci.4180", "memex-portal-7d9c-abcde", Deployed, "Europe/Zurich", Echo);
 
-        chip.DisplayText.Should().Be("about.lastDeployed 08-18 15:35");
-        chip.DisplayText.Should().NotContain("4191", "the pending version belongs on the tooltip, not the bar");
+        chip.Tooltip.Should().Contain("about.lastDeployed 08-18 15:35",
+            "an update pending does not displace WHEN — both ride the one tooltip");
         chip.IsUpdate.Should().BeTrue("the glyph is what says an update is waiting");
         chip.Tooltip.Should().Contain("3.0.0-rc4.ci.4191");
     }
 
     /// <summary>
-    /// An unknown deployment time leaves the header text empty — the glyph still renders, so the
-    /// button is never blank-but-clickable. Nothing is invented to fill the slot.
+    /// An unknown deployment time is OMITTED, not invented — no epoch date, no "unknown" filler.
+    /// The tooltip still names the build, and the glyph still renders, so the button is never
+    /// blank-but-clickable.
     /// </summary>
     [Fact]
-    public void DisplayText_is_null_when_the_deployment_time_is_unknown()
+    public void An_unknown_deployment_time_is_omitted_rather_than_invented()
     {
         var chip = PlatformUpdateChip.Describe(
             new PlatformUpdateStatus(PlatformUpdateAvailability.UpToDate, null),
             "3.0.0-rc4.ci.4180", "memex-portal-7d9c-abcde", default, "Europe/Zurich", Echo);
 
-        chip.DisplayText.Should().BeNull();
+        chip.Tooltip.Should().NotContain("about.lastDeployed");
+        chip.Tooltip.Should().Contain("3.0.0-rc4.ci.4180",
+            "the build is a fact even when the deployment time is not");
     }
 
     /// <summary>
@@ -153,7 +155,7 @@ public class PlatformUpdateChipTest
     {
         var chip = Describe(new PlatformUpdateStatus(PlatformUpdateAvailability.UpToDate, null));
 
-        chip.DisplayText.Should().Be("about.lastDeployed 08-18 15:35");
+        chip.Tooltip.Should().Contain("about.lastDeployed 08-18 15:35");
         chip.IsUpdate.Should().BeFalse();
         chip.Action.Should().Be(PlatformUpdateChipAction.OpenAbout,
             "there is no newer build to reload onto, so the chip is a link to the full build identity");
@@ -168,7 +170,7 @@ public class PlatformUpdateChipTest
         // fact regardless, and it is the whole point of the chip.
         var chip = Describe(PlatformUpdateStatus.Unknown);
 
-        chip.DisplayText.Should().Be("about.lastDeployed 08-18 15:35");
+        chip.Tooltip.Should().Contain("about.lastDeployed 08-18 15:35");
         chip.IsUpdate.Should().BeFalse();
         chip.Tooltip.Should().Contain("3.0.0-rc4.ci.4180",
             "the running build is still a fact — it moved to the tooltip, it did not disappear");

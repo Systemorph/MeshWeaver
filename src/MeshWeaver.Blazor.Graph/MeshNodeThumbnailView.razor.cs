@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.Graph;
 
 /// <summary>
 /// Code-behind for <see cref="MeshNodeThumbnailView"/>. Subscribes to

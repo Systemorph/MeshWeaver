@@ -10,7 +10,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.Graph;
 
 /// <summary>
 /// Blazor view for <c>MeshNodeCollectionControl</c> — renders a live, query-driven list of
@@ -114,12 +114,29 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
         _ => current
     };
 
+    // Two-step delete: the first click on the trash ARMS a compact inline confirm for that row
+    // (check / dismiss — same pattern as MeshSearchView's card affordance), and only the explicit
+    // confirm issues the delete. A destructive action never runs off a single stray click.
+    private string? _pendingDeletePath;
+
+    /// <summary>First click on the trash arms the inline confirm for that row.</summary>
+    private void RequestDelete(string nodePath) => _pendingDeletePath = nodePath;
+
+    /// <summary>Dismisses the armed confirm without deleting.</summary>
+    private void CancelDelete() => _pendingDeletePath = null;
+
     private void DeleteItem(string nodePath)
     {
+        _pendingDeletePath = null;
         var nodeFactory = Hub!.ServiceProvider.GetRequiredService<IMeshService>();
-        nodeFactory.DeleteNode(nodePath).Subscribe(
-            (bool _) => LoadItems(),
-            (Exception _) => { });
+        // No manual LoadItems on success: the per-query subscriptions are LIVE, so the delete's
+        // Removed change drops the row on its own — and re-running LoadItems from this callback
+        // would be exactly the off-renderer clear-then-refill race issue #1308 removed.
+        // A refused delete is USER-FACING, never a silent no-op: the server is the authority, so
+        // its refusal surfaces through the canonical SurfaceError (modal + inline + log).
+        _subscriptions.Add(nodeFactory.DeleteNode(nodePath).Subscribe(
+            (bool _) => { },
+            ex => SurfaceError(ex, $"Deleting '{nodePath}'")));
     }
 
     private void NavigateToItem(string nodePath) => NavigationManager.NavigateTo($"/{nodePath}");

@@ -32,11 +32,27 @@ name: Node repo publish-bake (reusable)
 #       # BOTH: the platform releasing, and an UPSTREAM of this repo publishing (#1755). The second
 #       # is what wakes a run that exited because its upstreams were not ready yet.
 #       types: [meshweaver-framework-released]
+#     # 🚨 REQUIRED, not optional. The dispatch above has NEVER been armed, and the cross-repo
+#     # PAT it needed was removed on purpose (2026-08-21), so THIS POLL is how a satellite learns a
+#     # release happened. Without it the repo bakes only on its own pushes while the platform mints
+#     # an identity per merge, so every portal boots on an identity nobody baked and falls back to a
+#     # full in-mesh Roslyn sweep. Measured 2026-08-22: 3 of 4 satellites had no schedule and
+#     # followed nothing, behind a wall of green ticks. Stagger the minute per repo. Full rationale:
+#     # CiContentBake.md -> "Following the release is a POLL in every satellite".
+#     schedule:
+#       - cron: "17,47 * * * *"
+#
+#   # The schedule MUST share the dispatch's concurrency lane: a scheduled run carries the DEFAULT
+#   # BRANCH ref, so in the `github.ref` group a poll can cancel a main run mid-`tag-modules`.
+#   concurrency:
+#     group: ${{ github.workflow }}-${{ (github.event_name == 'repository_dispatch' || github.event_name == 'schedule') && 'framework-release' || github.ref }}
+#     cancel-in-progress: true
 #
 #   publish-bake:
 #     if: >
 #       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-#       github.event_name == 'repository_dispatch'
+#       github.event_name == 'repository_dispatch' ||
+#       github.event_name == 'schedule'
 #     needs: [preflight, validate, compile-check, test-repos]
 #     permissions: { contents: read, id-token: write }   # OIDC — must be granted BY the caller
 #     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-publish-bake.yml@<40-char platform commit sha>

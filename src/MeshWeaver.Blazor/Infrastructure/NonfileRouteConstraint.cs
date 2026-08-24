@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Routing.Patterns;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Blazor.Infrastructure;
 
@@ -54,7 +56,41 @@ public class NonfileRouteConstraint : IRouteConstraint
         if (slashIndex >= 0)
             firstSegment = firstSegment[..slashIndex];
 
-        return !ExcludedPrefixes.Contains(firstSegment.ToString());
+        if (ExcludedPrefixes.Contains(firstSegment.ToString()))
+            return false;
+
+        // 🚨 A path that IS a real file in webroot is never a page route. The prefix list above
+        // only covers the KNOWN asset roots (_framework, _content, …); anything else physically
+        // present — a hand-dropped wwwroot file, a published SPA bundle, an asset outside the
+        // build-time manifest — would otherwise match this catch-all, and since the static-file
+        // middleware runs AFTER routing (so MapStaticAssets can serve the pre-compressed copies)
+        // it SKIPS a request whose endpoint is already selected. The file would then be answered
+        // with the Blazor shell: HTTP 200, wrong bytes, no error anywhere.
+        //
+        // Deliberately an existence check and NOT a "does the last segment contain a dot" test:
+        // mesh Document nodes legitimately end in .pdf/.docx/.txt, and rejecting dotted paths is
+        // exactly the agentic-pensions#10 regression this class was written to fix.
+        return !FileExistsInWebRoot(httpContext, path);
+    }
+
+    /// <summary>True when <paramref name="path"/> resolves to a file that physically exists in the
+    /// host's web root. Absent an <see cref="IWebHostEnvironment"/> (constraint evaluated outside a
+    /// request), the answer is false — the prefix rules alone then decide, exactly as before.</summary>
+    private static bool FileExistsInWebRoot(HttpContext? httpContext, string path)
+    {
+        var webRoot = httpContext?.RequestServices?.GetService<IWebHostEnvironment>()?.WebRootFileProvider;
+        if (webRoot is null || path.Length == 0)
+            return false;
+        try
+        {
+            return webRoot.GetFileInfo(path).Exists;
+        }
+        catch (Exception)
+        {
+            // A malformed or traversal-shaped path makes the provider throw; that is not a file,
+            // and a routing constraint must never be the thing that 500s a request.
+            return false;
+        }
     }
 }
 

@@ -18,6 +18,17 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <!-- ViewPackRegistrationGateTest drives each view pack's registration entry point
+         (AddGraphViews / AddChatViews / AddUserProfileViews) through a real hub and asserts the
+         pack's controls resolve to the pack's views via LayoutClientConfiguration — the gate whose
+         absence let AppleMaps/OpenStreetMap ship with inert registrations. Direct references on
+         purpose: the gate anchors the packs themselves. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Graph\MeshWeaver.Blazor.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
+    <!-- ControlStyleRenderingTest names EditorView / NumberFieldView<> / RadioGroupView<> by
+         type — a compiled-in reference on purpose (a publish lane can never satisfy a by-name
+         type reference, the #2018 lesson). -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.EntityViews\MeshWeaver.Blazor.EntityViews.csproj" />
     <!-- StaticContentUnmountedTest drives the REAL /static + /api/content endpoints over a real
          monolith mesh (real PermissionEvaluator, real content collections) — no mocks. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />

@@ -2,35 +2,65 @@
 @inherits SkinnedView<NavMenuControl, NavMenuSkin, NavMenuView>
 @inject AccessService Access
 
-<div class="navmenu @Class" style="@Style">
+<div class="navmenu @(Collapsible ? (Expanded ? "rail" : "rail rail-collapsed") : null) @Class" style="@RootStyle">
     @if (Collapsible)
     {
-        <div class="navmenu-toggle-container">
-            <!-- Bind the checkbox's checked state to Expanded -->
-            <input type="checkbox"
-                   title="@Access.Localize("menu.expandCollapse")"
-                   id="navmenu-toggle"
-                   class="navmenu-icon"
-                   @bind="Expanded" />
-            <label for="navmenu-toggle" class="navmenu-icon">
-                <FluentIcon Value="@(new Size20.Navigation())" Color="Color.Neutral" />
-            </label>
-        </div>
+        @* A real button, not the checkbox+label hack: the checkbox rendered as a visible, focusable
+           control beside the icon (nothing ever hid it), and a button is what this IS. The icon says
+           what the click DOES (contract/expand the panel) rather than "menu". *@
+        <button type="button"
+                class="navmenu-toggle"
+                title="@Access.Localize("menu.expandCollapse")"
+                aria-label="@Access.Localize("menu.expandCollapse")"
+                aria-expanded="@Expanded"
+                @onclick="ToggleExpanded">
+            <FluentIcon Value="@ToggleIcon" Color="Color.Neutral" />
+        </button>
     }
-    <nav class="sitenav @(Expanded ? "expanded" : "collapsed")" aria-labelledby="main-menu">
-        <FluentNavMenu Id="main-menu"
-                       Title="@Access.Localize("menu.mainMenu")"
-                       CustomToggle="true"
-                       @bind-Expanded="Expanded">
+    @if (Expanded || !Collapsible)
+    {
+        @* Our own list markup: the items are NavLink / NavGroup components, which render every
+           icon form a node can carry (see MeshIcon). The FluentNavMenu this used to wrap dropped
+           non-Fluent icons and owned the collapse in ways we then had to fight. *@
+        <nav class="sitenav" aria-label="@Access.Localize("menu.mainMenu")">
             <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
-        </FluentNavMenu>
-    </nav>
+        </nav>
+    }
 </div>
 
 @code {
     private bool Expanded = true;
     private int? Width { get; set; }
     public bool Collapsible { get; set; }
+
+    /// <summary>
+    /// Width of the collapsed rail: just the toggle button. Wide enough to be an obvious click
+    /// target — the affordance the old collapse (which left nothing visible) did not have.
+    /// </summary>
+    private const int CollapsedWidth = 44;
+
+    private Microsoft.FluentUI.AspNetCore.Components.Icon ToggleIcon =>
+        Expanded ? new Size20.PanelLeftContract() : new Size20.PanelLeftExpand();
+
+    private void ToggleExpanded() => Expanded = !Expanded;
+
+    /// <summary>
+    /// The collapsible rail gets a FIXED width in BOTH states — the skin's width expanded,
+    /// <see cref="CollapsedWidth"/> collapsed. Without it the rail was sized by its content, so a
+    /// long title made the whole index page-width and toggling a group made the rail jump.
+    /// Non-collapsible menus (Settings panes inside a Splitter) keep sizing to their pane.
+    /// </summary>
+    private string? RootStyle
+    {
+        get
+        {
+            if (!Collapsible)
+                return Style;
+            var width = Expanded ? Width ?? 250 : CollapsedWidth;
+            var sized = $"width: {width}px; min-width: {width}px; flex: 0 0 {width}px;";
+            return string.IsNullOrEmpty(Style) ? sized : $"{sized} {Style}";
+        }
+    }
 
     protected override void BindData()
     {

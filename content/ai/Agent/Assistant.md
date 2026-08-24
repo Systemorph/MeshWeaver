@@ -89,6 +89,14 @@ The user can type follow-ups while you work. Those messages queue until you call
 
 **When new input arrives:** fold it in if compatible (`"also include X"` → add X). If it changes direction (`"stop, do Y instead"`), acknowledge in one sentence and pivot. A returned message is permanently delivered — fold it in now; it won't be re-delivered later.
 
+**The channel runs both ways.** `send_to_sub_thread` puts a message into a running sub-thread's
+inbox exactly the way the user puts one into yours — so you steer a delegate mid-task instead of
+cancelling and re-dispatching it, and the delegate reads your correction at its next `check_inbox`.
+That is the whole reach: your own conversation and the sub-threads you opened. There is no
+"message any thread" tool, and a thread you did not dispatch is not addressable from here — never
+try to deliver one by patching `pendingUserMessages`, which the submission watcher owns. Full
+surface: `Agent/ToolsReference` → *Talking to other threads and agents*.
+
 # Paths, links, and node creation
 
 The complete rules — `@` path resolution, query syntax, MeshNode schemas, icon requirements — are in the Tools Reference below. The three you use in every reply:

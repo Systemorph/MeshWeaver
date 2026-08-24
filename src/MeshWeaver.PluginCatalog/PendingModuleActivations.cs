@@ -84,7 +84,11 @@ public sealed class PendingModuleActivations(string moduleRoot)
             return new ModuleActivationReport([], corrupt);
 
         return new ModuleActivationReport(
-            ModuleActivationStatus.NotYetLoaded(activation, loadedAssemblyNames));
+            // The ONE platform gate (ModulePlatformFloor), threaded here as boot threads it: a
+            // HELD entry (floor above this platform — the registry shelf, 2026-08-22) must not read
+            // as "restart required", because the boot this report promises would skip it.
+            ModuleActivationStatus.NotYetLoaded(
+                activation, loadedAssemblyNames, ModulePlatformFloor.DeclineReason));
     }
 
     /// <summary>
