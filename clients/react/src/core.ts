@@ -57,6 +57,26 @@ export {
   type EmbeddedAreaHandle,
   type EmbeddedAreaReference,
 } from "./render/embeddedArea.js";
+// The pure MeshSearch model (Blazor MeshSearchView semantics: scope tabs, union queries, the
+// Icons grid's row-only select, NavigateToMainNode, SortByAccess paint ordering, grouped-by-type
+// sections) — shared by the web pack and the RN pack so the two cannot drift.
+export {
+  accessKeyOf,
+  accessLogQuery,
+  buildGroups,
+  mergeUnionResults,
+  paintOrdered,
+  parseScopeTabs,
+  parseSortOptions,
+  toAccessOrder,
+  toSearchResult,
+  unionQueries,
+  withRowOnlySelect,
+  type MeshSearchGroup,
+  type MeshSearchResult,
+  type MeshSearchScope,
+  type MeshSearchSortOption,
+} from "./controls/meshSearchModel.js";
 export { getPointer, setPointer, mergePatch, resolve, bindingPointer } from "./area/pointer.js";
 export type { AreaSource, AreaTree, UiControl, Skin, NamedArea, MeshEvent, Json } from "./area/types.js";
 // Area-error classification — the TS twin of the server AreaErrorClassifier. Shells use these to make
