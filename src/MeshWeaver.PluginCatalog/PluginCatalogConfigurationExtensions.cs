@@ -215,7 +215,7 @@ public static class PluginCatalogConfigurationExtensions
     {
         Name = "Plugin Registry Credential",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(s => s.WithContentType<PluginRegistryCredential>()),
     };
@@ -228,7 +228,7 @@ public static class PluginCatalogConfigurationExtensions
     {
         Name = "Sync Token Signing Key",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(s => s.WithContentType<SyncTokenSigningKey>()),
     };
@@ -267,7 +267,7 @@ public static class PluginCatalogConfigurationExtensions
             // Bookkeeping, not a satellite of anything: it is a single node in the Plugins
             // partition, addressed by a fixed path, exactly like the credential node type.
             IsSatelliteType = false,
-            ExcludeFromContext = new HashSet<string> { "search", "create" },
+            ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
             HubConfiguration = config => config
                 .AddMeshDataSource(s => s.WithContentType<DefaultInstallLedger>()),
         };

@@ -38,7 +38,7 @@ public static class MeshDataSourceNodeType
         Name = "Data Source",
         Icon = "/static/NodeTypeIcons/database.svg",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSourceViews()
             .AddMeshDataSource(source => source.WithContentType<MeshDataSourceConfiguration>())

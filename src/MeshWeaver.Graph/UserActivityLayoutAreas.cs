@@ -721,8 +721,8 @@ public static class UserActivityLayoutAreas
     /// otherwise list itself on its own home page. <paramref name="exclusions"/> (leading-space
     /// <c>-nodeType:…</c> clauses) applies to BOTH legs — the Spaces tab's dedup.</summary>
     private static string FirstLevelUnion(string ownerId, string sortSuffix, string exclusions = "") =>
-        $"namespace: is:main context:search -nodeType:User{exclusions} {sortSuffix}\n" +
-        $"namespace:{ownerId} is:main context:search{exclusions} {sortSuffix}";
+        $"namespace: is:main is:content -nodeType:User{exclusions} {sortSuffix}\n" +
+        $"namespace:{ownerId} is:main is:content{exclusions} {sortSuffix}";
 
     /// <summary>The catalog query for a scope + sort suffix: the first-level union (partition roots + the
     /// user's home children), or a cross-partition SUBTREE query (everything the viewer can read at every
@@ -730,7 +730,7 @@ public static class UserActivityLayoutAreas
     /// nodes are excluded in both shapes — a home page never lists the user's own root.</summary>
     private static string CatalogQuery(HomeCatalogScope scope, string ownerId, string sortSuffix, string exclusions = "") =>
         scope == HomeCatalogScope.Subtree
-            ? $"is:main context:search -nodeType:User{exclusions} {sortSuffix}"
+            ? $"is:main is:content -nodeType:User{exclusions} {sortSuffix}"
             : FirstLevelUnion(ownerId, sortSuffix, exclusions);
 
     // The three user-selectable sort orders (the view-options "Sort by" dropdown). LAST ACCESSED:
@@ -831,7 +831,7 @@ public static class UserActivityLayoutAreas
         // queries structurally cannot see it (they walk the viewer's own partition and the roots).
         // Folding it in is what let the separate "Shared with me" section go without losing it.
         var sharedLeg = sharedTargets is { Count: > 0 }
-            ? "\n" + $"path:{string.Join("|", sharedTargets)} is:main -nodeType:User{SpacesDedupExclusions}"
+            ? "\n" + $"path:{string.Join("|", sharedTargets)} is:main is:content -nodeType:User{SpacesDedupExclusions}"
             : string.Empty;
         scopes.Add(ContentScope("home.all", locale, cfg.DefaultSort,
             (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions) + sharedLeg));
@@ -852,6 +852,21 @@ public static class UserActivityLayoutAreas
                     ? $"{pinnedBase} {suffix}\n{pinnedBase} {SortSuffixLastModified}"
                     : $"{pinnedBase} {suffix}"));
         }
+
+        // Mine — the viewer's OWN partition, which is the second leg of the All union standing on
+        // its own. Unconditional: your own space is the one tab that is never empty for you, and a
+        // tab that appears and disappears is worse than one that is occasionally short.
+        scopes.Add(ContentScope("home.mine", locale, cfg.DefaultSort,
+            (_, suffix) => $"namespace:{nodeOwnerId} is:main is:content{SpacesDedupExclusions} {suffix}"));
+
+        // Shared — the cross-partition invitations (#385), which All folds in as a union leg. As a
+        // TAB it answers the different question ("what did someone give me?"), so it is worth its
+        // own place; but only when there is something in it, since the query is a path list and an
+        // empty list matches nothing at all.
+        if (sharedTargets is { Count: > 0 })
+            scopes.Add(ContentScope("home.sharedWithMe", locale, HomeCatalogSort.LastModified,
+                (_, suffix) =>
+                    $"path:{string.Join("|", sharedTargets)} is:main is:content -nodeType:User{SpacesDedupExclusions} {suffix}"));
 
         // ONE list that FANS OUT by the node's own type — Spaces, Clients, Courses, … — with the
         // biggest group first (GroupByFrequency), so the page opens on what the viewer actually
@@ -945,7 +960,7 @@ public static class UserActivityLayoutAreas
     {
         if (visibleShared.Count == 0)
             return null;
-        var sharedBase = $"path:{string.Join("|", visibleShared)} is:main -nodeType:User{SpacesDedupExclusions}";
+        var sharedBase = $"path:{string.Join("|", visibleShared)} is:main is:content -nodeType:User{SpacesDedupExclusions}";
         return Controls.MeshSearch
             .WithTitle(LocalizationCatalog.Get("home.sharedWithMe", locale))
             .WithHiddenQuery($"{sharedBase} {SortSuffixLastAccessed}\n{sharedBase} {SortSuffixLastModified}")
@@ -1109,10 +1124,15 @@ public static class UserActivityLayoutAreas
             },
         };
 
-    /// <summary>Dedup for the Spaces and Shared-with-me scopes: anything living in the Store (and
-    /// therefore representable as an installed app — plugin covers, the store root) is EXCLUDED,
-    /// so an app appears exactly once, on the Apps scope. Only non-redundant items survive: the
-    /// user's own spaces, shared workspaces, and their top-level home items.</summary>
+    /// <summary>Dedup for the content scopes: anything living in the Store (and therefore
+    /// representable as an installed app — plugin covers, the store root) is EXCLUDED, so an app
+    /// appears exactly once, on the Apps scope.
+    /// <para>🚨 This is the ONE list left, and it should not be here either: these belong on their
+    /// own NodeType nodes as <c>ExcludeFromContext: ["content"]</c> — which is one
+    /// <c>.HideFromContent()</c> call — but <c>Store/Plugin</c> and <c>Store/Catalog</c> are
+    /// DYNAMIC node types living in the Store partition, so marking them is a MeshWeaver.Plugins
+    /// change, landing after this. Deleting the terms first would put every installed plugin's root
+    /// back on the content list, where it duplicates its own app tile.</para></summary>
     private const string SpacesDedupExclusions = " -nodeType:Store/Plugin -nodeType:Store/Catalog";
 
     /// <summary>
@@ -1474,7 +1494,7 @@ public static class UserActivityLayoutAreas
     private static UiControl BuildProfileItems(string ownerId) =>
         Controls.MeshSearch
             .WithTitle("Items")
-            .WithHiddenQuery($"namespace:{ownerId} is:main context:search scope:descendants sort:LastModified-desc")
+            .WithHiddenQuery($"namespace:{ownerId} is:main is:content scope:descendants sort:LastModified-desc")
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             .WithSectionCounts(true)
@@ -1515,7 +1535,7 @@ public static class UserActivityLayoutAreas
 
         // Fallback — the owner's recent public content (visibility-filtered), so the band is never bare.
         return Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{ownerId} is:main context:search scope:descendants sort:LastModified-desc")
+            .WithHiddenQuery($"namespace:{ownerId} is:main is:content scope:descendants sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
