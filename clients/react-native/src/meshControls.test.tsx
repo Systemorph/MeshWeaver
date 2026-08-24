@@ -106,7 +106,9 @@ describe("RN leaf pack renders the mesh display controls", () => {
   it("ThreadChat renders its real empty state and composer without a mesh", () => {
     expect(hasText("▦ Thread chat")).toBe(false);
     expect(hasText(en("chat.startConversation"))).toBe(true);
-    expect(hasText(en("common.send"))).toBe(true);
+    // The send affordance is the ➤ glyph (compact, language-neutral); the localized "Send"
+    // survives as its accessibilityLabel, asserted by the a11y attribute rather than visible text.
+    expect(hasText("➤")).toBe(true);
   });
 
   it("MeshSearch renders its real search box without a mesh", () => {

@@ -209,6 +209,18 @@ export function defaultPortalUrl(): string {
   return DEFAULT_PORTAL_URL;
 }
 
+/**
+ * Resolve a mesh-relative asset URL (a node Icon like "/static/NodeTypeIcons/book.svg", an inline
+ * doc image) against the CURRENT instance, so a native build — which has no serving origin — can
+ * actually fetch it. Absolute and data:/blob: URLs pass through; on web the same-origin base is
+ * the serving portal, so the result is identical to the browser's own resolution.
+ */
+export function resolveAssetUrl(src: string): string {
+  if (!src || /^(https?:|data:|blob:)/i.test(src)) return src;
+  const base = (currentInstance().url || "").replace(/\/+$/, "");
+  return base ? `${base}/${src.replace(/^\/+/, "")}` : src;
+}
+
 const sameOrigin = (): string =>
   typeof window !== "undefined" && window.location ? window.location.origin : "";
 
