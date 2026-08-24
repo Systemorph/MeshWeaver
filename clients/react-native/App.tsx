@@ -17,7 +17,7 @@ import { rnPack } from "./src/rnPack";
 import { sampleArea } from "./src/sample";
 import { createLiveSource } from "./src/live";
 import { buildMeshOps } from "./src/liveOps";
-import { NavContext, CurrentAddressContext, type NavTarget } from "./src/nav";
+import { NavContext, CurrentAddressContext, resolveNavigationUri, type NavTarget } from "./src/nav";
 import { Shell, HOME } from "./src/Shell";
 import { ensureWebStyles } from "./src/webStyles";
 import { attachInstanceStore, currentInstance, discoverInstances, mergeDiscovered, setConnectStatus, type MeshInstance } from "./src/connection";
@@ -164,7 +164,7 @@ function AppInner() {
     let live: Awaited<ReturnType<typeof createLiveSource>> | null = null;
     let cancelled = false;
     setConnectStatus(`Connecting to ${inst.name}…`);
-    createLiveSource({ url: inst.url, token: inst.token, address: nav.address, area: nav.area })
+    createLiveSource({ url: inst.url, token: inst.token, address: nav.address, area: nav.area, id: nav.id })
       .then((l) => {
         if (cancelled) {
           l.connection.close();
@@ -175,6 +175,14 @@ function AppInner() {
         setLiveConnected(true);
         setConnectStatus("");
         setEmbedFactory(() => createGrpcEmbeddedFactory(l.connection));
+        // Server-initiated navigation (a clickable stack's ClickedEvent is answered with a
+        // NavigationRequest — the Store's category tiles) — the client twin of Blazor's
+        // NavigationService: resolve the uri's node/area split server-side and navigate.
+        l.connection.onMessage("NavigationRequest", (d) => {
+          const uri = String((d.message as { uri?: unknown }).uri ?? "");
+          if (!uri) return;
+          void resolveNavigationUri(uri, inst.url, inst.token || undefined).then(navigate);
+        });
         // The full MeshOps over the same connection — renderMarkdown (server Markdig) + the per-view kernel
         // anchor the interactive markdown + runnable code cells; the kernel activity lives in the viewer's partition.
         setMeshOps(buildMeshOps(l.connection, inst.url,
@@ -208,7 +216,7 @@ function AppInner() {
       cancelled = true;
       live?.connection.close();
     };
-  }, [nav.address, nav.area, instanceTick]);
+  }, [nav.address, nav.area, nav.id, instanceTick]);
 
 
 

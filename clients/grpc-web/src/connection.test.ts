@@ -28,3 +28,28 @@ describe("MeshWebConnection (gRPC-web split, in-memory)", () => {
     mesh.close();
   });
 });
+
+describe("unsolicited typed messages (onMessage)", () => {
+  it("dispatches a server-initiated NavigationRequest to its handler, after pending/stream demux", async () => {
+    const { fakeMeshTransport } = await import("./testTransport");
+    const { MeshWebConnection } = await import("./connection");
+    const conn = await MeshWebConnection.connect("https://portal.example", { transport: fakeMeshTransport() });
+    const seen: string[] = [];
+    const off = conn.onMessage("NavigationRequest", (d) => seen.push(String(d.message["uri"])));
+    // Round-trip an Echo so the fake's stream is live, then hand-feed an unsolicited delivery the
+    // way the server sends one: no RequestId, no streamId — just a typed message to this node.
+    await conn.observe("any", "EchoRequest", { text: "warm" });
+    (conn as unknown as { onFrame(r: string): void }).onFrame(
+      JSON.stringify({ id: "x", sender: "Store", target: conn.address,
+        message: { $type: "NavigationRequest", uri: "Store/Catalog/Catalog?category=Games" }, properties: {} }),
+    );
+    expect(seen).toEqual(["Store/Catalog/Catalog?category=Games"]);
+    off();
+    (conn as unknown as { onFrame(r: string): void }).onFrame(
+      JSON.stringify({ id: "y", sender: "Store", target: conn.address,
+        message: { $type: "NavigationRequest", uri: "Elsewhere" }, properties: {} }),
+    );
+    expect(seen).toEqual(["Store/Catalog/Catalog?category=Games"]); // unsubscribed — not delivered
+    conn.close();
+  });
+});

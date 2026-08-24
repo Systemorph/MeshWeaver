@@ -7,6 +7,7 @@ import { View, Text, TextInput, Pressable, Switch, ScrollView, ActivityIndicator
 import { SvgXml } from "react-native-svg";
 import { marked } from "marked";
 import { NativeHtml } from "./nativeHtml";
+import { IconGlyph } from "./rnIcon";
 import {
   ControlRenderer,
   RenderArea,
@@ -583,19 +584,9 @@ const Spacer: ControlComponent = () => <View style={{ flex: 1 }} />;
 // native) shows a neutral chip. The DECISION lives in the core; only the leaves are native.
 const Icon: ControlComponent = ({ control }) => {
   const v = useResolve(control.icon ?? control.data);
-  const classified = classifyIcon(v as never);
-  switch (classified.kind) {
-    case "svg":
-      return <SvgXml xml={classified.text} width={20} height={20} />;
-    case "url":
-      return <Image source={{ uri: classified.text }} style={{ width: 20, height: 20, resizeMode: "contain" }} />;
-    case "emoji":
-      return <Text style={styles.body}>{classified.text}</Text>;
-    case "fluent":
-      return <Text style={styles.body}>▨</Text>;
-    default:
-      return null;
-  }
+  // One shared glyph (rnIcon): resolves relative URLs against the instance and routes .svg
+  // through react-native-svg — RN's Image decodes neither, which left the colorful node icons blank.
+  return <IconGlyph icon={s(v)} />;
 };
 
 // ── mesh display controls (native twins of controls/mesh.tsx) ──────────────────────────────────────
