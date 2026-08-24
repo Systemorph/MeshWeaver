@@ -111,7 +111,12 @@ export function fieldPointerOf(dataContext: string, pointer: string): string | n
 }
 
 function splitPointer(pointer: string): string[] {
-  return pointer.split("/").filter((s) => s.length > 0);
+  // RFC 6901 unescape per segment, in the server's exact order (SplitPointer: ~1 first, then ~0) —
+  // a field named with `/` or `~` must resolve to the SAME key on both sides of the wire.
+  return pointer
+    .split("/")
+    .filter((s) => s.length > 0)
+    .map((s) => s.replace(/~1/g, "/").replace(/~0/g, "~"));
 }
 
 function getCaseInsensitive(obj: Record<string, unknown>, key: string): unknown {

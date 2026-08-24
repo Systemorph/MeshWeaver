@@ -202,6 +202,22 @@ describe("the uninjected fetch — called with the GLOBAL as its receiver", () =
     }
   });
 
+  // The review asked after the EXPLICIT injection of the global fetch: `supplied(input, init)` is a
+  // plain call, so `this` is undefined — which Web IDL invocation coerces to the global object (the
+  // very reason `(i, o) => globalThis.fetch(i, o)` is safe). The defect was a DEFINED wrong
+  // receiver (the MeshRest instance via `this.doFetch`), never an undefined one. Pinned here so the
+  // distinction is a test, not an argument.
+  it("an explicitly injected global fetch keeps a legal receiver too", async () => {
+    const { seen, restore } = globalFetchStub();
+    try {
+      const rest = new MeshRest({ baseUrl: "https://portal.example", token: "mw_tok", fetch: globalThis.fetch });
+      await expect(rest.renderMarkdown("### hi")).resolves.toMatchObject({ html: "<p>ok</p>" });
+      expect(seen.every((r) => r === undefined || r === globalThis)).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
   it("every verb goes through the same receiver-safe call", async () => {
     const { restore } = globalFetchStub();
     try {

@@ -96,3 +96,16 @@ describe("writing a field back", () => {
       .toEqual({ content: { composer: { harness: "x" } } });
   });
 });
+
+describe("RFC 6901 escaped segments — the server's SplitPointer unescapes, so must we", () => {
+  const escNode = { path: "x", content: { "a/b": { "c~d": "v" } } };
+  const ctx = parseMeshNodeDataContext(RBUERGI)!;
+
+  it("reads a field whose name contains / (~1) or ~ (~0)", () => {
+    expect(resolveNodeField(escNode, ctx, "a~1b/c~0d")).toBe("v");
+  });
+
+  it("patches through escaped segments onto the real keys", () => {
+    expect(nodeFieldPatch(escNode, ctx, "a~1b/c~0d", "w")).toEqual({ content: { "a/b": { "c~d": "w" } } });
+  });
+});
