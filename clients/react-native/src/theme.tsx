@@ -40,7 +40,7 @@ const DARK: Palette = {
   appBg: "#1b1a19", topbarBg: "#252423", surface: "#2d2c2b", border: "#3b3a39",
   sidebarBg: "#201f1e", rightBg: "#252423", text: "#f3f2f1", textSubtle: "#c8c6c4",
   textMuted: "#979593", accent: deploymentBranding.accentDark, onAccent: "#ffffff", navHover: "#323130",
-  navActiveBg: "#2b3a4a", navActiveText: "#6cb8f0", inputBg: "#1b1a19",
+  navActiveBg: "#2b3a4a", navActiveText: deploymentBranding.accentDark, inputBg: "#1b1a19",
 };
 
 interface ThemeCtx {
