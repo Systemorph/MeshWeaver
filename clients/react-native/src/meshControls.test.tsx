@@ -3,7 +3,6 @@ import React from "react";
 import TestRenderer, { type ReactTestRendererJSON } from "react-test-renderer";
 import { RegistryProvider, ScopeProvider, RenderArea, StaticAreaSource, localize, type AreaTree } from "@meshweaver/react/core";
 
-import { rnPack } from "./rnPack";
 import { fullPack } from "./modules/standard";
 
 // Assert against the CATALOG, not a literal — that also pins that these strings are localized.

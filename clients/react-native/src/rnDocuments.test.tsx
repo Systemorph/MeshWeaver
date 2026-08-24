@@ -13,7 +13,6 @@ import {
   localize,
 } from "@meshweaver/react/core";
 
-import { rnPack } from "./rnPack";
 import { fullPack } from "./modules/standard";
 import { retargetBundleNode } from "./rnDocuments";
 
