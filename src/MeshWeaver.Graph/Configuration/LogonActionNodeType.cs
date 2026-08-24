@@ -60,7 +60,41 @@ public static class LogonActionNodeType
             // Mesh-scoped singleton: its lifetime IS the mesh's, so nothing survives disposal and
             // nothing bleeds between tests (Doc/Architecture/NoStaticState).
             .AddSingleton<LogonActionRunner>()
+            .AddSingleton<SignInNotificationTargets>()
+            .AddSingleton<ILogonAction, AnnounceSignInLogonAction>()
             .AddSingleton<ILogonAction, AppIconAdoptionLogonAction>());
+        return builder;
+    }
+
+    /// <summary>
+    /// Asks to be told when a user signs in: <paramref name="address"/> receives a
+    /// <see cref="UserSignedIn"/> event, fire-and-forget, once per sign-in.
+    ///
+    /// <para>Register this from the SUBSCRIBER's own configuration, not from core's. That is the
+    /// whole point of the seam: core owns "a user signed in" and nothing else, and does not know
+    /// which partitions exist or what they would do about it. A subscriber that is absent on a given
+    /// deployment simply never registers, so there is nothing to probe and no NotFound to
+    /// tolerate.</para>
+    ///
+    /// <para>The handler runs on the subscriber's own hub under the delivery's identity, so it acts
+    /// as the signing-in user. Nothing is expected back — an event with a response would put the
+    /// subscriber's availability on the user's sign-in path.</para>
+    /// </summary>
+    /// <param name="builder">The mesh builder.</param>
+    /// <param name="address">The hub address to notify.</param>
+    public static TBuilder AddSignInNotificationTarget<TBuilder>(this TBuilder builder, Address address)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<SignInNotificationTargets>();
+            return services;
+        });
+        builder.ConfigureHub(config => config.WithInitialization(hub =>
+        {
+            hub.ServiceProvider.GetService<SignInNotificationTargets>()?.Add(address);
+            return System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
+        }));
         return builder;
     }
 
