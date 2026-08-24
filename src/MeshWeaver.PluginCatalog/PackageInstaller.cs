@@ -116,7 +116,7 @@ public static class PackageInstaller
                 $"Package '{manifest.Id}' has no targetPartition."));
 
         var sourceFolder = manifest.SourceFolder ?? manifest.Id;
-        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
+        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
 
         var nodes = files
             .Where(f => !IsManifest(f.RelativePath))
@@ -1691,7 +1691,7 @@ public static class PackageInstaller
         var partition = string.IsNullOrWhiteSpace(manifest.TargetPartition) ? "type" : manifest.TargetPartition!;
         var nodeTypePath = $"{partition}/{manifest.Id}";
         var sourceFolder = manifest.SourceFolder ?? manifest.Id;
-        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
+        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
 
         var sourceNodes = files
             .Where(f => !IsManifest(f.RelativePath))
@@ -1996,7 +1996,7 @@ public static class PackageInstaller
         string installedFromRef, ILogger? logger, int batchSize, string? authorizingUserId)
     {
         _ = batchSize; // node-repo installs are ordered (bucketed bulk saves + Concat), not fanned out
-        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
+        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
         // The CI manifest sidecar (when the package ships one) becomes the install record's diff
         // baseline — the next update touches only what its manifest diff names.
         var moduleManifest = files
@@ -2558,7 +2558,7 @@ public static class PackageInstaller
         string? authorizingUserId)
     {
 
-        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
+        var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
         var nodes = ParseAll(parsers, changedFiles, manifest.Id, logger);
 
         if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)

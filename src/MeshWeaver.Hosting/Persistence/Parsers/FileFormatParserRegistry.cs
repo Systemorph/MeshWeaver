@@ -13,18 +13,33 @@ public class FileFormatParserRegistry
     private readonly List<IFileFormatParser> _parsers;
 
     /// <summary>
-    /// Builds the registry with the built-in parsers (agent, markdown, C#) in priority order,
-    /// adding a JSON parser only when serializer options are supplied.
+    /// Builds the registry with the built-in parsers (markdown, C#) in priority order, adding a
+    /// JSON parser only when serializer options are supplied, and putting any
+    /// <paramref name="contributedParsers"/> FIRST.
+    ///
+    /// <para>🚨 Priority order is load-bearing for <c>.md</c>: a contributed parser that recognises
+    /// a specific front matter (the AI module's agent parser is the one in the box) must be tried
+    /// BEFORE <see cref="MarkdownFileParser"/>, which accepts every <c>.md</c> file and would
+    /// otherwise win by default — turning an Agent into a plain Markdown node with no error
+    /// anywhere. That silent degradation is the whole reason the order is stated here rather than
+    /// left to registration accident.</para>
+    ///
+    /// <para>The agent parser used to be hard-coded in this list, which is what made
+    /// <c>MeshWeaver.Hosting</c> — core hosting — depend on <c>MeshWeaver.AI</c>. It now travels
+    /// with the AI assembly and arrives through this parameter, so the platform can be built and
+    /// run without AI at all.</para>
     /// </summary>
     /// <param name="jsonOptions">Serializer options used to construct the JSON parser; when null, no JSON parser is registered.</param>
-    public FileFormatParserRegistry(JsonSerializerOptions? jsonOptions = null)
+    /// <param name="contributedParsers">Parsers contributed by modules, tried before the built-ins.</param>
+    public FileFormatParserRegistry(
+        JsonSerializerOptions? jsonOptions = null,
+        IEnumerable<IFileFormatParser>? contributedParsers = null)
     {
-        // Parsers are listed in priority order for each extension
-        // AgentFileParser comes before MarkdownFileParser for .md files
+        // Parsers are listed in priority order for each extension.
         _parsers =
         [
-            new AgentFileParser(),      // High priority for .md with nodeType: Agent
-            new MarkdownFileParser(),   // Fallback for other .md files
+            ..(contributedParsers ?? []),   // e.g. the AI module's agent parser, ahead of Markdown
+            new MarkdownFileParser(),       // Fallback for other .md files
             new CSharpFileParser(),
             ..( jsonOptions != null ? [new JsonFileParser(jsonOptions)] : Array.Empty<IFileFormatParser>())
         ];

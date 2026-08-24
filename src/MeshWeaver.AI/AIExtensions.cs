@@ -1,6 +1,8 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.AI.Persistence;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Services;
@@ -53,7 +55,15 @@ public static class AIExtensions
                         // picker ever asks for them. Registered here because AI owns the registries;
                         // MeshWeaver.PluginCatalog invokes it and neither project references the other.
                         .AddSingleton<MeshWeaver.Graph.IPartitionInstallHook>(sp =>
-                            new AiSourcesInstallHook(sp.GetRequiredService<IMessageHub>())))
+                            new AiSourcesInstallHook(sp.GetRequiredService<IMessageHub>()))
+                        // The agent FILE FORMAT travels with AI, not with core hosting. Every
+                        // FileFormatParserRegistry built from a service provider picks this up and
+                        // tries it BEFORE the catch-all Markdown parser, which is what keeps an
+                        // `.md` carrying `nodeType: Agent` from degrading into a plain Markdown
+                        // node. Registering it here — rather than hard-coding it in the registry —
+                        // is what let MeshWeaver.Hosting drop its ProjectReference to this
+                        // assembly, so the platform builds and runs with no AI at all.
+                        .AddSingleton<IFileFormatParser, AgentFileParser>())
                     // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
                     .ConfigureHub(config =>
                     {
