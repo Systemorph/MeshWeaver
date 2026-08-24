@@ -44,7 +44,15 @@
   <Target Name="BakeRnWebClient" AfterTargets="Publish"
           Condition="'$(Configuration)' == 'Release' AND '$(BakeRnWebClient)' != 'false'">
     <PropertyGroup>
-      <RnClientDir>$(MSBuildThisFileDirectory)../../clients/react-native/</RnClientDir>
+      <!-- The RN app lives in MeshWeaver.Plugins now (app/react-native — #2169 Phase A). The bake
+           probes: explicit -p:RnClientDir / MEMEX_RN_APP_DIR > the app's old in-repo home (kept
+           first so a transition-era checkout still wins) > the sibling MeshWeaver.Plugins
+           checkout. No workflow in THIS repo publishes the sidecar Release, so CI carries no
+           cross-repo dependency; when none of the probes hit, the Error below still fails the
+           publish RED — a GUI-less sidecar must never ship silently. -->
+      <RnClientDir Condition="'$(RnClientDir)' == ''">$(MEMEX_RN_APP_DIR)</RnClientDir>
+      <RnClientDir Condition="'$(RnClientDir)' == '' AND Exists('$(MSBuildThisFileDirectory)../../clients/react-native/package.json')">$(MSBuildThisFileDirectory)../../clients/react-native/</RnClientDir>
+      <RnClientDir Condition="'$(RnClientDir)' == ''">$(MSBuildThisFileDirectory)../../../MeshWeaver.Plugins/app/react-native/</RnClientDir>
       <RnDeployment Condition="'$(RnDeployment)' == ''">$(MEMEX_DEPLOYMENT)</RnDeployment>
     </PropertyGroup>
     <ItemGroup>

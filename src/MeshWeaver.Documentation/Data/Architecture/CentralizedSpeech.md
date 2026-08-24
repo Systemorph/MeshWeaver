@@ -39,7 +39,7 @@ portal configures.
 | **`ISpeechTranscriber` / `WhisperContainerTranscriber`** — the centralized client; `POST /inference` on the HTTP `IIoPool`, cold `IObservable` | `src/MeshWeaver.Speech/` | done + unit tests against the real `/inference` contract |
 | **Portal endpoint** — `POST /api/speech/transcribe` the clients call | `memex/Memex.Portal.Shared/Api/SpeechEndpoints.cs` (`MapSpeechApi`, wired in `MemexConfiguration`) | done |
 | **Mic UI** — a record button in `ThreadChatView` (browser `MediaRecorder`) → transcript into the composer | `MeshWeaver.Blazor.Portal/Chat` | done |
-| **React / React Native** — record → same endpoint | `clients/react` (`ops.transcribe`), `clients/react-native/src/speech/` | done |
+| **React / React Native** — record → same endpoint | `clients/react` (`ops.transcribe`), `MeshWeaver.Plugins app/react-native/src/speech/` | done |
 | **MAUI** | `memex/Memex.Client/Voice/` | still the **on-device** Whisper.net path — see [On-device voice](/Doc/Architecture/OnDeviceVoice) |
 
 ## Why a container (vs. on-device or a cloud STT)
