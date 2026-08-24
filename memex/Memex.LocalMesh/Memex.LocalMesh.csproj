@@ -45,11 +45,20 @@
           Condition="'$(Configuration)' == 'Release' AND '$(BakeRnWebClient)' != 'false'">
     <PropertyGroup>
       <RnClientDir>$(MSBuildThisFileDirectory)../../clients/react-native/</RnClientDir>
+      <RnDeployment Condition="'$(RnDeployment)' == ''">$(MEMEX_DEPLOYMENT)</RnDeployment>
     </PropertyGroup>
+    <ItemGroup>
+      <RnDeploymentEnv Include="MEMEX_DEPLOYMENT=$(RnDeployment)" Condition="'$(RnDeployment)' != ''" />
+    </ItemGroup>
     <!-- npm ci only when node_modules is absent (a dev tree already has it; CI does not). -->
     <Exec Command="npm ci --no-audit --no-fund" WorkingDirectory="$(RnClientDir)"
           Condition="!Exists('$(RnClientDir)node_modules')" />
-    <Exec Command="npm run web:export" WorkingDirectory="$(RnClientDir)" />
+    <!-- The DEPLOYMENT the baked app is composed from (deployment/*.json: portal, branding, the
+         client modules in the bundle). MSBuild property or MEMEX_DEPLOYMENT env; unset = default.
+         web:export regenerates src/deployment.generated.ts from it (npm pre-script), so the baked
+         GUI is exactly the declared variant. -->
+    <Exec Command="npm run web:export" WorkingDirectory="$(RnClientDir)"
+          EnvironmentVariables="@(RnDeploymentEnv)" />
     <ItemGroup>
       <RnWebFiles Include="$(RnClientDir)dist/**/*" />
     </ItemGroup>
