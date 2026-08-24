@@ -36,7 +36,7 @@ public static class EmailNodeType
     {
         Name = "Email",
         Icon = "/static/NodeTypeIcons/message.svg",
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<Email>())
