@@ -239,7 +239,7 @@ public class CachingStorageAdapter : IStorageAdapter
     /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger);
         return innerAdapter.Write(node, options)
             .Do(written =>
             {
@@ -264,7 +264,7 @@ public class CachingStorageAdapter : IStorageAdapter
         // Cast to the interface: WriteIfVersion is a DEFAULT interface member on the file-system
         // adapter (it does not override it), so it is only reachable through IStorageAdapter.
         IStorageAdapter innerAdapter =
-            new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+            new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger);
         return innerAdapter.WriteIfVersion(node, expectedVersion, options)
             .Do(applied =>
             {
@@ -277,7 +277,7 @@ public class CachingStorageAdapter : IStorageAdapter
     /// <inheritdoc />
     public IObservable<string> Delete(string path)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger);
         return innerAdapter.Delete(path)
             .Do(deletedPath =>
             {
@@ -486,7 +486,7 @@ public class CachingStorageAdapter : IStorageAdapter
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger);
         return innerAdapter.SavePartitionObjects(nodePath, subPath, objects, options)
             .Do(_ => RefreshCacheForPartition(nodePath, subPath));
     }
@@ -494,7 +494,7 @@ public class CachingStorageAdapter : IStorageAdapter
     /// <inheritdoc />
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger);
         return innerAdapter.DeletePartitionObjects(nodePath, subPath);
     }
 

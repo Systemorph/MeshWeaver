@@ -1,5 +1,7 @@
 using System.Text.Json;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -41,6 +43,9 @@ public class FileSystemStorageAdapterFactory : IStorageAdapterFactory
             writeOptionsModifier = FormattedJsonModifier;
         }
 
-        return new FileSystemStorageAdapter(basePath, writeOptionsModifier);
+        // A real logger so the change feed can surface a subscriber that throws during fan-out —
+        // a null logger restores exactly the silent-failure mode IsolatedChangeFeed exists to kill.
+        var logger = serviceProvider.GetService<ILoggerFactory>()?.CreateLogger<FileSystemStorageAdapter>();
+        return new FileSystemStorageAdapter(basePath, writeOptionsModifier, logger: logger);
     }
 }

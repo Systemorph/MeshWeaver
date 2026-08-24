@@ -56,15 +56,17 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// <param name="baseDirectory">Base directory for file storage</param>
     /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing (e.g., to enable WriteIndented)</param>
     /// <param name="ioPoolRegistry">Optional I/O pool registry; the <c>FileSystem</c> pool bridges async file I/O to <c>IObservable</c>. When <c>null</c>, the unbounded pool is used.</param>
+    /// <param name="logger">Optional logger — the change feed uses it to surface a subscriber that throws during fan-out (without it, the isolation would swallow the fault silently).</param>
     public FileSystemStorageAdapter(
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
-        IoPoolRegistry? ioPoolRegistry = null)
+        IoPoolRegistry? ioPoolRegistry = null,
+        Microsoft.Extensions.Logging.ILogger? logger = null)
     {
         _baseDirectory = baseDirectory;
         _writeOptionsModifier = writeOptionsModifier;
         _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
-        _changes = new IsolatedChangeFeed(null, "file-system");
+        _changes = new IsolatedChangeFeed(logger, "file-system");
         Directory.CreateDirectory(baseDirectory);
     }
 
@@ -262,13 +264,15 @@ public class FileSystemStorageAdapter : IStorageAdapter
     }
 
     /// <inheritdoc />
+    /// <remarks>Routed through the FileSystem <see cref="IIoPool"/> like Read/Write — the delete
+    /// is synchronous file I/O and must never run on a hub/query subscriber's thread.</remarks>
     public IObservable<string> Delete(string path)
-        => Observable.Defer(() =>
+        => _ioPool.InvokeBlocking(_ =>
         {
             DeleteCore(path);
             // Committed above — publish after, notification-as-trigger (no entity needed).
             _changes.OnNext(DataChangeNotification.Deleted(path.Trim('/')));
-            return Observable.Return(path);
+            return path;
         });
 
     private void DeleteCore(string path)
