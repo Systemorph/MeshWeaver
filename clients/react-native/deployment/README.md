@@ -29,6 +29,22 @@ dotnet publish memex/Memex.LocalMesh -c Release -p:RnDeployment=deployment/examp
 # or: MEMEX_DEPLOYMENT=acme dotnet publish …
 ```
 
-`deployment/examples/` holds a complete worked example: `acme.json` (brand + portal + one module)
-and `acme-module/` (the module shape). `src/deployment.test.tsx` pins that a manifest-injected
-leaf renders through the composed registry.
+**The stock app is itself composed this way** — the core pack is the PLATFORM (layout, skins,
+inputs, markdown, icons, navigation plumbing), and every product domain is a standard module the
+default manifest lists: `threads` (chat + composer), `meshBrowse` (search/catalog), `nodeEditing`,
+`data` (pivot/chart), `documents`, `analysis`, `media` (the only expo-av Video touchpoint — a
+deployment without it ships no expo-av video). Same shape as Blazor, where each module registers
+its own views. `src/modules/standard.ts` is the code-side twin of `default.json`;
+`deployment.test.tsx` guards the two against drifting apart, and pins that the CORE pack contains
+none of the domain leaves.
+
+`deployment/examples/` holds worked examples: `acme.json` (brand + portal + an extension module),
+`acme-module/` (the module shape), and `kiosk.json` (a LEAN deployment: browse + documents only —
+no chat, no media). `src/deployment.test.tsx` pins that a manifest-injected leaf renders through
+the composed registry.
+
+**Where module JS will live**: these in-repo `src/modules/*` are the platform's own standard set.
+A mesh module's bespoke leaves belong NEXT TO the module (its GUI pack — the same folder that
+carries its Blazor views, e.g. in MeshWeaver.Plugins), referenced from a deployment manifest as a
+package specifier once the plugin-packaging lane can carry JS assets; the manifest and the
+composition rule here don't change when that lands — only the specifiers do.

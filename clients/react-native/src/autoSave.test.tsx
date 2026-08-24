@@ -13,6 +13,7 @@ import {
   type UiControl,
 } from "@meshweaver/react/core";
 import { rnPack } from "./rnPack";
+import { fullPack } from "./modules/standard";
 
 // Issue #1476 — the native editors must persist an auto-saving control's edits too.
 //
@@ -42,7 +43,7 @@ function renderAndType(control: Record<string, unknown>, ops: MeshOps, text: str
   let root!: TestRenderer.ReactTestRenderer;
   TestRenderer.act(() => {
     root = TestRenderer.create(
-      <RegistryProvider pack={rnPack}>
+      <RegistryProvider pack={fullPack}>
         <MeshOpsProvider ops={ops}>
           <ScopeProvider source={new StaticAreaSource(tree(control))} area="main">
             <RenderArea areaKey="main" />

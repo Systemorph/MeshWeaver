@@ -1,0 +1,7 @@
+{
+  "$schema": "../deployment.schema.json",
+  "name": "Kiosk",
+  "portalUrl": "https://memex.meshweaver.cloud",
+  "branding": { "displayName": "Memex Kiosk", "accent": "#0f6cbd" },
+  "modules": ["./src/modules/meshBrowse", "./src/modules/documents"]
+}

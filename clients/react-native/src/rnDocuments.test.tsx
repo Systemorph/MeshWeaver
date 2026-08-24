@@ -14,6 +14,7 @@ import {
 } from "@meshweaver/react/core";
 
 import { rnPack } from "./rnPack";
+import { fullPack } from "./modules/standard";
 import { retargetBundleNode } from "./rnDocuments";
 
 // Assert against the CATALOG, not a literal — that also pins that these strings are localized.
@@ -49,7 +50,7 @@ async function renderLive(tree: AreaTree, ops: MeshOps | null): Promise<TestRend
   );
   await TestRenderer.act(async () => {
     r = TestRenderer.create(
-      <RegistryProvider pack={rnPack}>{ops ? <MeshOpsProvider ops={ops}>{inner}</MeshOpsProvider> : inner}</RegistryProvider>,
+      <RegistryProvider pack={fullPack}>{ops ? <MeshOpsProvider ops={ops}>{inner}</MeshOpsProvider> : inner}</RegistryProvider>,
     );
   });
   return r;
@@ -228,7 +229,7 @@ describe("NodeImport", () => {
   });
 
   it("is its own component — never an alias of NodeExport", () => {
-    expect(rnPack.controls.NodeImport).not.toBe(rnPack.controls.NodeExport);
+    expect(fullPack.controls.NodeImport).not.toBe(fullPack.controls.NodeExport);
   });
 });
 

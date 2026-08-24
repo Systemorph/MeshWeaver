@@ -7,5 +7,14 @@
     "accent": "#7c3aed",
     "accentDark": "#a78bfa"
   },
-  "modules": ["./deployment/examples/acme-module"]
+  "modules": [
+    "./src/modules/threads",
+    "./src/modules/meshBrowse",
+    "./src/modules/nodeEditing",
+    "./src/modules/data",
+    "./src/modules/documents",
+    "./src/modules/analysis",
+    "./src/modules/media",
+    "./deployment/examples/acme-module"
+  ]
 }

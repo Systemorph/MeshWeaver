@@ -7,5 +7,13 @@
     "accent": "#0f6cbd",
     "accentDark": "#4aa3e8"
   },
-  "modules": []
+  "modules": [
+    "./src/modules/threads",
+    "./src/modules/meshBrowse",
+    "./src/modules/nodeEditing",
+    "./src/modules/data",
+    "./src/modules/documents",
+    "./src/modules/analysis",
+    "./src/modules/media"
+  ]
 }

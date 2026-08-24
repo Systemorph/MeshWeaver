@@ -3,6 +3,7 @@ import React from "react";
 import TestRenderer, { type ReactTestRendererJSON } from "react-test-renderer";
 import { RegistryProvider, ScopeProvider, RenderArea, StaticAreaSource, type AreaTree } from "@meshweaver/react/core";
 import { rnPack } from "./rnPack";
+import { fullPack } from "./modules/standard";
 import { chartModelFor, chartSvg, slicePath } from "./rnData";
 
 type Json = ReactTestRendererJSON;
@@ -11,7 +12,7 @@ function renderTree(tree: AreaTree): Json {
   let r!: TestRenderer.ReactTestRenderer;
   TestRenderer.act(() => {
     r = TestRenderer.create(
-      <RegistryProvider pack={rnPack}>
+      <RegistryProvider pack={fullPack}>
         <ScopeProvider source={new StaticAreaSource(tree)} area="main">
           <RenderArea areaKey="main" />
         </ScopeProvider>
@@ -234,6 +235,6 @@ describe("PivotGrid control", () => {
   });
 
   it("is its own component — never an alias of DataGrid", () => {
-    expect(rnPack.controls.PivotGrid).not.toBe(rnPack.controls.DataGrid);
+    expect(fullPack.controls.PivotGrid).not.toBe(fullPack.controls.DataGrid);
   });
 });

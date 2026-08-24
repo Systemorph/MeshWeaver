@@ -36,10 +36,6 @@ import {
 import { parseHref, useNavigate } from "./nav";
 import { rnSkins } from "./rnSkins";
 import { rnContainerControls } from "./rnContainers";
-import { rnLiveControls } from "./rnMeshLive";
-import { rnDataControls } from "./rnData";
-import { rnDocumentControls } from "./rnDocuments";
-import { rnAnalysisControls } from "./rnAnalysis";
 
 // Binding helpers (useField/useOptions/str) come from the shared core — the RN pack used to carry
 // its own copies before the core exported them.
@@ -611,19 +607,6 @@ const UserProfile: ControlComponent = ({ control }) => {
   );
 };
 
-const ThreadMessageBubble: ControlComponent = ({ control }) => {
-  const role = s(useResolve(control.role)) || "user";
-  const mine = /user/i.test(role);
-  const text = s(useResolve(control.message)) || s(useResolve(control.data));
-  return (
-    <View style={{ flexDirection: "row", justifyContent: mine ? "flex-end" : "flex-start" }}>
-      <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
-        <Text style={styles.body}>{text}</Text>
-      </View>
-    </View>
-  );
-};
-
 // A mesh node as a card: emoji/initial + title + description; taps fire a server click when clickable.
 const MeshNodeCard: ControlComponent = ({ control }) => {
   const emit = useEmit();
@@ -731,19 +714,15 @@ export const rnPack: LeafPack = {
     // mesh display controls
     MeshNodePicker,
     UserProfile,
-    ThreadMessageBubble,
     MeshNodeCard,
     LayoutAreaDefinition: LayoutAreaDefinitionCard,
-    // NamedArea / Commentable / Redirect / Dialog / Video / SlideShow
+    // NamedArea / Commentable / Redirect / Dialog — core plumbing every deployment needs
     ...rnContainerControls,
-    // ThreadChat / MeshSearch / MeshNodeCollection / Appearance / MeshNodeContentEditor
-    ...rnLiveControls,
-    // PivotGrid / Chart
-    ...rnDataControls,
-    // DocumentSource / ExportDocument / NodeExport / NodeImport / FileBrowser
-    ...rnDocumentControls,
-    // KpiStrip / Tower / ComparisonBars — placed from the shared geometry, not a native re-derivation
-    ...rnAnalysisControls,
+    // 🧩 NOTHING domain-shaped past this point. Threads, mesh browse, node editing, data,
+    // documents, analysis and media are DEPLOYMENT MODULES (src/modules/*) — the manifest
+    // (deployment/*.json) decides which of them a deployment's bundle carries, and
+    // composeDeployment folds them over this core at App start. Same shape as Blazor, where each
+    // module registers its own views: the core pack is the platform, not the product.
   },
   fallback,
 };
@@ -811,9 +790,6 @@ const styles = StyleSheet.create({
   userRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   avatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#0f6cbd", alignItems: "center", justifyContent: "center" },
   avatarText: { color: "white", fontSize: 12, fontWeight: "700" },
-  bubble: { maxWidth: "78%", paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12 },
-  bubbleMine: { backgroundColor: "#cfe4fa" },
-  bubbleTheirs: { backgroundColor: "#f0f0f0" },
   nodeCard: { flexDirection: "row", alignItems: "center", gap: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: "#e1e1e1", backgroundColor: "white" },
   nodeCardIcon: { width: 48, height: 48, borderRadius: 6, backgroundColor: "#cfe4fa", alignItems: "center", justifyContent: "center" },
   nodeCardIconText: { fontSize: 22, fontWeight: "600", color: "#0f6cbd" },

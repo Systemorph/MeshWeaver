@@ -14,6 +14,7 @@ import {
 } from "@meshweaver/react/core";
 
 import { rnPack } from "./rnPack";
+import { fullPack } from "./modules/standard";
 import { NavContext } from "./nav";
 
 // Assert against the CATALOG, not a literal — that also pins that these strings are localized.
@@ -49,7 +50,7 @@ async function renderLive(tree: AreaTree, ops: MeshOps): Promise<Json> {
   let r!: TestRenderer.ReactTestRenderer;
   await TestRenderer.act(async () => {
     r = TestRenderer.create(
-      <RegistryProvider pack={rnPack}>
+      <RegistryProvider pack={fullPack}>
         <MeshOpsProvider ops={ops}>
           <ScopeProvider source={new StaticAreaSource(tree)} area="main">
             <RenderArea areaKey="main" />
@@ -142,7 +143,7 @@ describe("ThreadChat", () => {
     let r!: TestRenderer.ReactTestRenderer;
     await TestRenderer.act(async () => {
       r = TestRenderer.create(
-        <RegistryProvider pack={rnPack}>
+        <RegistryProvider pack={fullPack}>
           <MeshOpsProvider ops={ops}>
             <ScopeProvider source={new StaticAreaSource({ areas: { main: { $type: "ThreadChat", threadPath } } })} area="main">
               <RenderArea areaKey="main" />
@@ -167,7 +168,7 @@ describe("ThreadChat", () => {
     let r!: TestRenderer.ReactTestRenderer;
     await TestRenderer.act(async () => {
       r = TestRenderer.create(
-        <RegistryProvider pack={rnPack}>
+        <RegistryProvider pack={fullPack}>
           <MeshOpsProvider ops={ops}>
             <ScopeProvider
               source={new StaticAreaSource({ areas: { main: { $type: "ThreadChat", namespacePath: "acme" } } })}
@@ -242,7 +243,7 @@ describe("MeshNodeCollection", () => {
   });
 
   it("is its own component — never an alias of Catalog", () => {
-    expect(rnPack.controls.MeshNodeCollection).not.toBe(rnPack.controls.Catalog);
+    expect(fullPack.controls.MeshNodeCollection).not.toBe(fullPack.controls.Catalog);
   });
 });
 
@@ -263,7 +264,7 @@ describe("MeshNodeContentEditor", () => {
     let r!: TestRenderer.ReactTestRenderer;
     await TestRenderer.act(async () => {
       r = TestRenderer.create(
-        <RegistryProvider pack={rnPack}>
+        <RegistryProvider pack={fullPack}>
           <MeshOpsProvider ops={ops}>
             <ScopeProvider
               source={new StaticAreaSource({ areas: { main: { $type: "MeshNodeContentEditor", nodePath } } })}
@@ -376,7 +377,7 @@ describe("MeshSearch home design", () => {
     await TestRenderer.act(async () => {
       r = TestRenderer.create(
         <NavContext.Provider value={navigate}>
-          <RegistryProvider pack={rnPack}>
+          <RegistryProvider pack={fullPack}>
             <MeshOpsProvider ops={ops}>
               <ScopeProvider
                 source={
@@ -503,7 +504,7 @@ describe("ResultIcon url handling (the icons-not-showing defect)", () => {
     await TestRenderer.act(async () => {
       r = TestRenderer.create(
         <NavContext.Provider value={() => {}}>
-          <RegistryProvider pack={rnPack}>
+          <RegistryProvider pack={fullPack}>
             <MeshOpsProvider ops={fakeOps({ search })}>
               <ScopeProvider
                 source={new StaticAreaSource({ areas: { main: {
@@ -538,7 +539,7 @@ describe("ThreadChat composer @-mentions (core useMentionModel, native dropdown)
     await TestRenderer.act(async () => {
       r = TestRenderer.create(
         <NavContext.Provider value={() => {}}>
-          <RegistryProvider pack={rnPack}>
+          <RegistryProvider pack={fullPack}>
             <MeshOpsProvider ops={ops}>
               <ScopeProvider
                 source={new StaticAreaSource({ areas: { main: { $type: "ThreadChat", namespacePath: "u1" } as never } })}

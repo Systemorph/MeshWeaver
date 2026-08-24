@@ -26,7 +26,7 @@ describe("deployment-composed pack", () => {
         </RegistryProvider>,
       );
     });
-    const texts = r.root.findAll((n) => typeof n.type === "string" && n.type === "Text");
+    const texts = r.root.findAll((n) => String(n.type) === "Text");
     expect(texts.some((t) => String(t.props.children) === "Hello Acme")).toBe(true);
   });
 
@@ -45,5 +45,38 @@ describe("deployment-composed pack", () => {
       );
     });
     expect(r.toJSON()).toBeTruthy();
+  });
+});
+
+// ---- ultra-modular: the core pack is the PLATFORM, the product is composed -------------------
+
+describe("core pack minimality (this is what modularity means)", () => {
+  const domainLeaves = [
+    "ThreadChat", "ThreadMessageBubble",           // threads
+    "MeshSearch", "MeshNodeCollection",            // meshBrowse
+    "MeshNodeContentEditor", "Appearance",         // nodeEditing
+    "PivotGrid", "Chart",                          // data
+    "FileBrowser", "ExportDocument", "NodeExport", "NodeImport", "DocumentSource", // documents
+    "KpiStrip", "Tower", "ComparisonBars",         // analysis
+    "Video", "SlideShow",                          // media (the expo-av touchpoint)
+  ];
+
+  it("the BASE pack contains none of the domain leaves — they arrive only via modules", () => {
+    for (const t of domainLeaves) expect(rnPack.controls[t], t).toBeUndefined();
+  });
+
+  it("the standard set restores every domain leaf", async () => {
+    const { standardModules } = await import("./modules/standard");
+    const full = composeDeployment(rnPack, standardModules);
+    for (const t of domainLeaves) expect(full.controls[t], t).toBeTruthy();
+  });
+
+  // 🚨 The drift guard: default.json (what the BUILD composes) and standardModules (what the
+  // TESTS compose) must be the same seven — a module added to one but not the other would test
+  // a different app than ships.
+  it("deployment/default.json and standardModules agree", async () => {
+    const { standardModules } = await import("./modules/standard");
+    const { deployment } = await import("./deployment.generated");
+    expect(deployment.modules.map((m) => m.name)).toEqual(standardModules.map((m) => m.name));
   });
 });

@@ -3,20 +3,15 @@
 // This file IS the deployment: the static imports below are how a deployment's client
 // modules enter the bundle (Hermes loads no code at runtime — build-time composition).
 import type { DeploymentModule } from "@meshweaver/react/core";
-
-export interface DeploymentBranding {
-  displayName: string;
-  accent: string;
-  accentDark: string;
-}
+import module0 from "./modules/threads";
+import module1 from "./modules/meshBrowse";
+import module2 from "./modules/nodeEditing";
+import module3 from "./modules/data";
+import module4 from "./modules/documents";
+import module5 from "./modules/analysis";
+import module6 from "./modules/media";
 
 export const deployment = {
   name: "Memex",
-  portalUrl: "http://localhost:5250",
-  branding: {
-    displayName: "MeshWeaver",
-    accent: "#0f6cbd",
-    accentDark: "#4aa3e8",
-  } satisfies DeploymentBranding,
-  modules: [] as readonly DeploymentModule[],
+  modules: [module0 as DeploymentModule, module1 as DeploymentModule, module2 as DeploymentModule, module3 as DeploymentModule, module4 as DeploymentModule, module5 as DeploymentModule, module6 as DeploymentModule] as readonly DeploymentModule[],
 } as const;
