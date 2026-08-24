@@ -10,7 +10,10 @@
 
 <div style="max-width: 1400px; margin: 0 auto; padding: 24px; width: 100%;">
     <ContentSearchResultsView Query="@Query" Namespace="@Namespace" />
-    <MeshSearchView ViewModel="@searchControl" />
+    @* Dispatch through the registered view maps rather than naming the concrete component — the
+       MeshSearchView renderer lives in the MeshWeaver.Blazor.Views MODULE now, which this project
+       deliberately does not compile against. *@
+    <DispatchView ViewModel="@searchControl" Area="mesh-search" />
 </div>
 
 @code {
