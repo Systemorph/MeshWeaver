@@ -258,11 +258,30 @@ internal static class NodeTypeCompilationHelpers
 
                     if (parkRegistry?.IsParked(hubPath) == true)
                     {
-                        logger?.LogDebug(
-                            "Compile watcher: {HubPath} is PARKED (terminal compile failure) — " +
-                            "skipping recompile, serving cached error", hubPath);
-                        SettleAsError(parkRegistry.GetParkedError(hubPath));
-                        return;
+                        // 🅿️ …unless THIS Pending flip is the one sanctioned automatic retry
+                        // (#2260). The failed-verdict re-drive used to un-park so its flip would
+                        // not be swallowed here — which left the type un-parked for the whole
+                        // round-trip until a second failure re-parked it, and un-parked FOREVER
+                        // whenever the re-drive's own re-check then declined to flip. It now asks
+                        // for a one-shot ADMISSION instead, so the park never moves and the
+                        // containment guarantee ("parked ⇒ no later trigger can storm") holds at
+                        // every instant. Consuming the admission is what lets this single flip
+                        // through; every other trigger still takes the short-circuit below.
+                        if (parkRegistry.TryConsumeRetryAdmission(hubPath))
+                        {
+                            logger?.LogDebug(
+                                "Compile watcher: {HubPath} is PARKED but this Pending flip carries the "
+                                + "sanctioned one-shot retry admission — letting it through WITHOUT "
+                                + "un-parking (the park holds for every other trigger).", hubPath);
+                        }
+                        else
+                        {
+                            logger?.LogDebug(
+                                "Compile watcher: {HubPath} is PARKED (terminal compile failure) — " +
+                                "skipping recompile, serving cached error", hubPath);
+                            SettleAsError(parkRegistry.GetParkedError(hubPath));
+                            return;
+                        }
                     }
 
                     // 🚨 THE ADOPT-ONLY GATE (Modules:RequirePrebuilt, MeshWeaver#2193 §A). On a
@@ -711,43 +730,16 @@ internal static class NodeTypeCompilationHelpers
                         liveInputs, total, NodeTypeCompileParkRegistry.MaxAutomaticFailureRedrives,
                         def.CompilationError ?? "(none recorded)");
 
-                    // 🅿️ Un-park FIRST (in-memory + synchronous, so it happens-before the Pending
-                    // emission the compile watcher observes), exactly as the sources watcher's
-                    // parked auto-retry does — otherwise the parked short-circuit would swallow the
-                    // flip and re-settle it to Error. This does not weaken the park: the predicate
-                    // above is false for a type parked in THIS process under THESE inputs, so a
-                    // broken type whose inputs have not moved is never woken.
-                    parkRegistry?.Unpark(hubPath);
                     var redriveAccess = hub.ServiceProvider.GetService<AccessService>();
                     using var systemScope = redriveAccess?.ImpersonateAsSystem();
-                    workspace.GetMeshNodeStream().Update(curr =>
-                    {
-                        if (curr?.Content is not NodeTypeDefinition d) return curr!;
-                        // Never clobber an in-flight compile (a concurrent release request or
-                        // enrichment self-heal may already have flipped Pending/Compiling).
-                        if (d.CompilationStatus is CompilationStatus.Pending
-                                                or CompilationStatus.Compiling)
-                            return curr;
-                        // Re-check inside the lambda — a genuine compile may have settled between
-                        // the outer Where and this write.
-                        if (!HasStaleFailureVerdict(d, guards.ModulesHash)) return curr;
-                        return curr with
-                        {
-                            Content = d with
-                            {
-                                // 🚨 The bookkeeping and the flip land TOGETHER. Stamping the live
-                                // inputs here — not only in ApplyCompileFailure — is what makes the
-                                // re-drive unable to schedule another pass even if the compile
-                                // never writes back at all (process death mid-compile, the parked
-                                // re-settle, a poisoned content read).
-                                FailedBuildInputs = BuildInputsToken(
-                                    guards.ModulesHash, d.CurrentSourceVersions),
-                                CompilationStatus = CompilationStatus.Pending
-                            }
-                        };
-                    }).Subscribe(_ => { },
-                        ex => logger?.LogWarning(ex,
-                            "Failed-verdict re-drive: Update failed for {HubPath}", hubPath));
+                    // 🅿️ The park is NOT lifted here (#2260). Admission and flip are one decision
+                    // and they commit together, inside the lambda — see ApplyFailedVerdictRedrive.
+                    workspace.GetMeshNodeStream()
+                        .Update(curr => ApplyFailedVerdictRedrive(
+                            curr, hubPath, guards.ModulesHash, parkRegistry))
+                        .Subscribe(_ => { },
+                            ex => logger?.LogWarning(ex,
+                                "Failed-verdict re-drive: Update failed for {HubPath}", hubPath));
                 },
                 ex => logger?.LogWarning(ex,
                     "Failed-verdict re-drive: own-stream subscription faulted for {HubPath} — a "
@@ -1724,6 +1716,71 @@ internal static class NodeTypeCompilationHelpers
             def.FailedBuildInputs,
             BuildInputsToken(modulesHash, def.CurrentSourceVersions),
             StringComparison.Ordinal);
+
+    /// <summary>
+    /// 🅿️ THE failed-verdict re-drive's COMMIT step (#2260) — the whole decision, including the
+    /// retry ADMISSION, as one function of the node state it commits against. Passed as the
+    /// <c>Update</c> lambda so it runs on the data source's action block, exactly once, immediately
+    /// before the write it produces.
+    ///
+    /// <para><b>Two defects this shape closes, both in the old
+    /// <c>parkRegistry.Unpark(hubPath); …Update(…)</c> pair.</b></para>
+    ///
+    /// <para>(1) <b>An un-park decided from a SNAPSHOT.</b> The subscriber's emission is a snapshot;
+    /// by the time the body ran, a terminal failure could have parked the type again
+    /// (<c>NodeTypeCompileParkRegistry.ParkAndNotify</c> is the only writer of that entry). The
+    /// un-park removed a park the decision never observed — and, when the lambda's own re-checks
+    /// then declined to flip, NOTHING re-parked afterwards. The type ended up neither parked nor
+    /// re-driven: exactly the state the park exists to make impossible. Here every early return
+    /// leaves the registry untouched, so the registry is only ever touched by a re-drive that is,
+    /// in the same committed state, genuinely flipping the type back to Pending.</para>
+    ///
+    /// <para>(2) <b>Un-parking at all.</b> Even a perfectly-validated un-park leaves the type
+    /// un-parked for the whole Pending → refusal → re-park round-trip, and any trigger arriving in
+    /// that window is admitted. Under <c>Modules:RequirePrebuilt</c> that window opened on EVERY
+    /// refusal. The re-drive never needed the failure cleared — only its one flip let through — so
+    /// it asks for a one-shot <c>AdmitOneRetry</c> and <see cref="NodeTypeCompileParkRegistry.IsParked"/>
+    /// stays true at every instant. The admission still happens-before the Pending emission the
+    /// compile watcher observes (this lambda runs ahead of the commit), which is what the old
+    /// hoisted-out un-park was buying.</para>
+    /// </summary>
+    /// <param name="curr">The node state this write is committing against (authoritative).</param>
+    /// <param name="hubPath">The NodeType's path.</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the compile inputs.</param>
+    /// <param name="parkRegistry">The park registry, or <c>null</c> on a host that has none.</param>
+    /// <returns><paramref name="curr"/> unchanged when the re-drive declines; otherwise the node
+    /// flipped to <see cref="CompilationStatus.Pending"/> with the live inputs stamped.</returns>
+    internal static MeshNode ApplyFailedVerdictRedrive(
+        MeshNode curr, string hubPath, string? modulesHash,
+        NodeTypeCompileParkRegistry? parkRegistry)
+    {
+        if (curr?.Content is not NodeTypeDefinition d) return curr!;
+        // Never clobber an in-flight compile (a concurrent release request or
+        // enrichment self-heal may already have flipped Pending/Compiling).
+        if (d.CompilationStatus is CompilationStatus.Pending
+                                or CompilationStatus.Compiling)
+            return curr;
+        // Re-check against the state being committed — a genuine compile may have settled, or a
+        // fresh terminal failure may have re-parked, between the outer Where and this write.
+        if (!HasStaleFailureVerdict(d, modulesHash)) return curr;
+        // 🅿️ Committing the flip — and ONLY now — claim the one-shot admission, so the compile
+        // watcher's parked short-circuit lets this Pending emission through. The park itself is
+        // never touched.
+        parkRegistry?.AdmitOneRetry(hubPath);
+        return curr with
+        {
+            Content = d with
+            {
+                // 🚨 The bookkeeping and the flip land TOGETHER. Stamping the live
+                // inputs here — not only in ApplyCompileFailure — is what makes the
+                // re-drive unable to schedule another pass even if the compile
+                // never writes back at all (process death mid-compile, the parked
+                // re-settle, a poisoned content read).
+                FailedBuildInputs = BuildInputsToken(modulesHash, d.CurrentSourceVersions),
+                CompilationStatus = CompilationStatus.Pending
+            }
+        };
+    }
 
     /// <summary>
     /// THE terminal stamp of a SUCCESSFUL compile — the exact field set
