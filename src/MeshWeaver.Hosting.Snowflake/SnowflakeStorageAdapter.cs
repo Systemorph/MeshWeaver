@@ -419,39 +419,54 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         foreach (var group in groups)
         {
             var table = group.Key;
-            var groupPaths = group.ToArray();
-            if (groupPaths.Length == 0)
-                continue;
-
-            var placeholders = string.Join(", ", Enumerable.Range(0, groupPaths.Length).Select(i => $":path{i}"));
-            await using var cmd = connection.CreateCommand();
-            cmd.CommandText =
-                $"SELECT {NodeColumns}, {SyncBehaviorCol(table)} " +
-                $"FROM {table} WHERE \"path\" IN ({placeholders})";
-            for (var i = 0; i < groupPaths.Length; i++)
-                SnowflakeConnectionSource.AddParam(cmd, $"path{i}", groupPaths[i], DbType.String);
-
-            // Open the reader in its own try/catch: `yield return` can't live inside a
-            // catch-bearing try, so the open is separated from the read loop. An absent table
-            // (unprovisioned partition) simply contributes no rows.
-            DbDataReader? reader;
-            try
+            // One bind parameter per path, so the statement is CHUNKED to stay well under
+            // driver/emulator limits — the same bound SavePartitionObjects applies. Grouping by
+            // table (rather than by table AND namespace, which the positional split forced) is what
+            // makes a mixed bulk read one query per table; without a chunk that also makes it one
+            // UNBOUNDED placeholder list. PG needs no equivalent: it binds the whole set as a single
+            // array parameter (`path = ANY($1)`).
+            foreach (var groupPaths in group.Chunk(ReadManyChunkSize))
             {
-                reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (IsUndefinedObject(ex))
-            {
-                _logger?.LogDebug(ex, "ReadMany on {Table} hit undefined-object; skipping group.", table);
-                continue;
-            }
+                if (groupPaths.Length == 0)
+                    continue;
 
-            await using (reader)
-            {
-                while (await reader.ReadAsync(ct).ConfigureAwait(false))
-                    yield return SnowflakeMeshNodeReader.ReadMeshNode(reader, options, _logger);
+                var placeholders = string.Join(", ", Enumerable.Range(0, groupPaths.Length).Select(i => $":path{i}"));
+                await using var cmd = connection.CreateCommand();
+                cmd.CommandText =
+                    $"SELECT {NodeColumns}, {SyncBehaviorCol(table)} " +
+                    $"FROM {table} WHERE \"path\" IN ({placeholders})";
+                for (var i = 0; i < groupPaths.Length; i++)
+                    SnowflakeConnectionSource.AddParam(cmd, $"path{i}", groupPaths[i], DbType.String);
+
+                // Open the reader in its own try/catch: `yield return` can't live inside a
+                // catch-bearing try, so the open is separated from the read loop. An absent table
+                // (unprovisioned partition) simply contributes no rows.
+                DbDataReader? reader;
+                try
+                {
+                    reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (IsUndefinedObject(ex))
+                {
+                    _logger?.LogDebug(ex, "ReadMany on {Table} hit undefined-object; skipping group.", table);
+                    break;
+                }
+
+                await using (reader)
+                {
+                    while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                        yield return SnowflakeMeshNodeReader.ReadMeshNode(reader, options, _logger);
+                }
             }
         }
     }
+
+    /// <summary>
+    /// Paths per <c>ReadMany</c> statement — one bind parameter each, so the statement stays well
+    /// under driver/emulator limits however large the caller's batch is (mirrors the 100-row chunk
+    /// <c>SavePartitionObjects</c> uses for the same reason).
+    /// </summary>
+    private const int ReadManyChunkSize = 200;
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
