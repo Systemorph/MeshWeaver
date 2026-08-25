@@ -96,8 +96,9 @@ namespace MeshWeaver.Hosting.Blazor.Test;
 /// <c>ControlView&lt;TControl, TView&gt;</c> now constrains <c>TView</c> to
 /// <c>BlazorView&lt;TControl, TView&gt;</c>, so a fourth is a compile error at the registration line
 /// (verified: reverting one view's base yields CS0311 there); the two reflection-built registrations
-/// the constraint cannot reach are covered by
-/// <see cref="ReflectionRegisteredViews_AreStillBlazorViewsForTheirControl"/>.</para>
+/// the constraint cannot reach are covered by the pack-side
+/// <c>EntityViewsStyleContractTest.ReflectionRegisteredViews_AreStillBlazorViewsForTheirControl</c>
+/// (MeshWeaver.Plugins, beside the pack — MeshWeaver#2169).</para>
 /// </summary>
 public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {

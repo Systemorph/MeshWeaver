@@ -192,7 +192,6 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
     /// </summary>
     private static UiControl CreateControl(IMessageHub client, Type controlType)
     {
-        var typeRegistry = client.ServiceProvider.GetRequiredService<MeshWeaver.Domain.ITypeRegistry>();
         return controlType switch
         {
             _ when controlType == typeof(MeshNodeEditorControl) => new MeshNodeEditorControl(),
