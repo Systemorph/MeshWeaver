@@ -418,7 +418,18 @@ public sealed class GitHubSyncService
                     // what the mesh already imported, so the up-to-date display and the git-diff base
                     // stay correct — a repo commit touching no node files must not leave the Space
                     // forever "behind". A clean RECONCILING import (nothing preserved) records both.
+                    // 🚨 "did anything fail", NOT the literal "Failed". The importer has TWO
+                    // failure-bearing outcomes — a whole-import "Failed" and the per-file
+                    // "ImportedWithErrors" — and only the first was tested here, so a partial
+                    // import advanced the baseline past the commit whose nodes never landed. The
+                    // webhook's SkipReason then answered "already at this commit" for every later
+                    // build, so the miss was PERMANENT until the repo produced a new commit, and
+                    // the Space's own UI read "up to date" the whole time (#2229 item C). The
+                    // canonical case: a repo shipping an instance of a type it introduces — the
+                    // instance is refused "NodeType 'X' is not registered" on the first pass, and
+                    // the retry that would land it once the type node exists never ran.
                     .SelectMany(x => x.Result.Preserved > 0
+                            || x.Result.Failed > 0
                             || string.Equals(x.Result.Outcome, "Failed", StringComparison.OrdinalIgnoreCase)
                         ? Observable.Return(x.Result)
                         : string.Equals(x.Result.Outcome, "Skipped", StringComparison.OrdinalIgnoreCase)

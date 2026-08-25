@@ -40,10 +40,28 @@ public sealed class HubDisposingException : ObjectDisposedException
     /// <param name="what">What could not be created, e.g. the stream reference.</param>
     public HubDisposingException(Address hubAddress, object what)
         : base(hubAddress.ToString(),
-            $"Hub {hubAddress} is shutting down — cannot create '{what}'. "
+            // 🚨 No outer quotes around `what`. A WorkspaceReference renders as its own POINTER,
+            // which already quotes its segments — EntityReference's is `/{collection}/'{id}'` — so
+            // wrapping it produced the unreadable `cannot create '/data/'postAdvanceStatus''`
+            // (#2255). The reference self-delimits; a second pair of quotes only nests.
+            $"Hub {hubAddress} is shutting down — cannot create {Describe(what)}. "
             + "The address may reactivate (recycle / restart); retry to get the authoritative answer.")
     {
         HubAddress = hubAddress;
+    }
+
+    /// <summary>
+    /// Renders <paramref name="what"/> for the message, quoting it ONLY when it does not already
+    /// delimit itself. A <c>WorkspaceReference</c>'s <c>ToString</c> IS its JSON pointer and those
+    /// carry their own quotes; a plain name does not. Pure and total — a null renders as
+    /// <c>'(unspecified)'</c> rather than throwing inside an exception constructor.
+    /// </summary>
+    private static string Describe(object? what)
+    {
+        var text = what?.ToString();
+        if (string.IsNullOrEmpty(text))
+            return "'(unspecified)'";
+        return text.Contains('\'') ? text : $"'{text}'";
     }
 
     /// <summary>

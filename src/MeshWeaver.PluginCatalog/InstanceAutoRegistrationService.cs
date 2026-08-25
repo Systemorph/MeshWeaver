@@ -305,7 +305,20 @@ public sealed class InstanceAutoRegistrationService(
             // startup thread — re-entering the hub schedulers mid-init, which deadlocks. Same fix,
             // same reason, as StaticRepoImportHostedService.
             .SubscribeOn(TaskPoolScheduler.Default)
-            .Do(summary => logger.LogInformation("[DefaultInstall] reconciled: {Summary}", summary))
+            // 🚨 A pass that dropped a package must not report at the same level as a clean one.
+            // The boot line was Information either way, so an instance coming up short of a
+            // package the deployment DECLARES read as a healthy boot (#2254).
+            .Do(summary =>
+            {
+                if (summary.Failed > 0)
+                    logger.LogError(
+                        "[DefaultInstall] reconciled with FAILURES: {Summary}. This installation is "
+                        + "missing {Count} declared package(s) — they are recorded on {Ledger} and "
+                        + "re-attempted on the next boot.",
+                        summary, summary.Failed, SeedLedgerPath);
+                else
+                    logger.LogInformation("[DefaultInstall] reconciled: {Summary}", summary);
+            })
             // A failed pass must not leave the completion signal hanging forever — report it as a
             // pass that installed nothing, having already logged the cause at Error.
             .Catch((Exception ex) =>
@@ -521,8 +534,9 @@ public sealed class InstanceAutoRegistrationService(
                         string.Join(", ", included.Select(c => $"{c.Flag}:{c.Entry}")));
                 return Observable.Return(DefaultInstallSummary.Empty);
             })
-            : SeedLedger().SelectMany(seeded =>
+            : SeedLedger().SelectMany(ledger =>
             {
+                var seeded = ledger.Seeded.ToImmutableHashSet(StringComparer.Ordinal);
                 // 🚨 PER-PACKAGE, not once-per-installation. The old gate was "install the seed only
                 // while the instance has ZERO packages", which made a misconfigured first boot
                 // unrecoverable: the boot installed the pre-installed baseline, the instance was no
@@ -557,7 +571,7 @@ public sealed class InstanceAutoRegistrationService(
                         .Where(c => c.Reconciled || !seeded.Contains(c.Package.Id))
                         .ToList())
                     .SelectMany(InstallAll)
-                    .SelectMany(summary => RecordSeeded(seeded, summary).Select(_ => summary));
+                    .SelectMany(summary => RecordSeeded(ledger, summary).Select(_ => summary));
             }));
     }
 
@@ -569,41 +583,68 @@ public sealed class InstanceAutoRegistrationService(
     public const string LedgerNodeType = "DefaultInstallLedger";
 
     /// <summary>
-    /// The package ids the default-install seed has already delivered. Empty on a fresh instance
-    /// and whenever the ledger cannot be read — failing OPEN here is deliberate: the cost of a
-    /// missing ledger is re-installing a package (idempotent, content-identity gated), whereas
-    /// failing closed would silently skip the repair this whole mechanism exists to perform.
+    /// The default-install ledger as stored — what the seed has delivered, and what the LAST pass
+    /// could not deliver. Empty on a fresh instance and whenever the ledger cannot be read —
+    /// failing OPEN here is deliberate: the cost of a missing ledger is re-installing a package
+    /// (idempotent, content-identity gated), whereas failing closed would silently skip the repair
+    /// this whole mechanism exists to perform.
     /// </summary>
-    private IObservable<ImmutableHashSet<string>> SeedLedger()
+    private IObservable<DefaultInstallLedger> SeedLedger()
     {
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         return Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
                 _ => hub.GetMeshNode(SeedLedgerPath, TimeSpan.FromSeconds(10)))
             .Take(1)
-            .Select(node => node?.ContentAs<DefaultInstallLedger>(hub.JsonSerializerOptions) is { } led
-                ? led.Seeded.ToImmutableHashSet(StringComparer.Ordinal)
-                : ImmutableHashSet<string>.Empty)
+            .Select(node => node?.ContentAs<DefaultInstallLedger>(hub.JsonSerializerOptions)
+                            ?? new DefaultInstallLedger())
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex,
                     "Could not read the default-install ledger at {Path} — treating as empty.",
                     SeedLedgerPath);
-                return Observable.Return(ImmutableHashSet<string>.Empty);
+                return Observable.Return(new DefaultInstallLedger());
             });
     }
 
     /// <summary>
-    /// Appends the packages this pass covered to the ledger, so they are never seeded again.
-    /// Records what was COVERED (installed or already current), not what merely succeeded: a
-    /// package that FAILED stays off the ledger and is retried next boot — that retry is the
-    /// repair. Written as System; the Plugins partition is System-owned.
+    /// Records what this pass DELIVERED (installed or already current) on the ledger, so the seed
+    /// never re-asserts it, and records what it FAILED so a dropped package is detectable without
+    /// grepping a boot log. Written as System; the Plugins partition is System-owned.
+    ///
+    /// <para>🚨 <b>A FAILED package must never reach the seeded list.</b> The ledger is what makes
+    /// the seed lane skip a package forever ("the only way it can be gone is that someone removed
+    /// it"), so ledgering a failure converts one transient install error into a package this
+    /// installation will never install again. That is exactly what happened on memex-cloud
+    /// (#2254): the per-instance NodeOps hub did not answer inside the 60 s request budget, the
+    /// package was stepped over — and then written to the ledger anyway, because the summary's
+    /// <c>Packages</c> list carried every package the pass TOUCHED, failures included. The class
+    /// doc already promised the opposite ("a package that FAILED stays off the ledger and is
+    /// retried next boot — that retry is the repair"); the code did not honour it, so the retry
+    /// that IS the repair never ran.</para>
+    ///
+    /// <para>The failure list is a per-package replacement, not an append: an id this pass
+    /// delivered drops off it, an id this pass did not touch stays. So the ledger always answers
+    /// "which default packages are missing right now", which is the question an operator has.</para>
     /// </summary>
     private IObservable<Unit> RecordSeeded(
-        ImmutableHashSet<string> already, DefaultInstallSummary summary)
+        DefaultInstallLedger ledger, DefaultInstallSummary summary)
     {
-        var delivered = summary.Packages.Where(id => !already.Contains(id)).ToList();
-        if (delivered.Count == 0)
+        var already = ledger.Seeded.ToImmutableHashSet(StringComparer.Ordinal);
+        // 🚨 Delivered, NOT covered. summary.Packages includes the failures.
+        var delivered = summary.Delivered.Where(id => !already.Contains(id)).ToList();
+
+        // Failures the ledger already knows about, minus anything this pass has now delivered,
+        // plus what it failed on. A package the pass never touched keeps its recorded state.
+        var touched = summary.Packages.ToImmutableHashSet(StringComparer.Ordinal);
+        var failures = ledger.Failed
+            .Where(id => !touched.Contains(id))
+            .Concat(summary.Failures)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToImmutableList();
+
+        if (delivered.Count == 0 && failures.SequenceEqual(ledger.Failed, StringComparer.Ordinal))
             return Observable.Return(Unit.Default);
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
@@ -622,6 +663,7 @@ public sealed class InstanceAutoRegistrationService(
             Content = new DefaultInstallLedger
             {
                 Seeded = already.Union(delivered).OrderBy(x => x, StringComparer.Ordinal).ToImmutableList(),
+                Failed = failures,
                 UpdatedAt = DateTimeOffset.UtcNow,
             },
         };
@@ -1117,9 +1159,16 @@ public sealed class InstanceAutoRegistrationService(
             .Catch((Exception exception) =>
             {
                 logger.LogError(exception,
-                    "[DefaultInstall] installing package {Id} failed — continuing with the rest; the "
-                    + "instance is missing it until the next boot or a manual install", package.Id);
-                return Observable.Return(new DefaultInstallSummary(0, 0, 1, [package.Id]));
+                    "[DefaultInstall] installing package {Id} failed — continuing with the rest. It "
+                    + "is recorded as FAILED on {Ledger}, stays OFF the seeded list, and the next "
+                    + "boot re-attempts it; that retry is the repair", package.Id, SeedLedgerPath);
+                // 🚨 NAMED, not just counted. The id has to travel so the ledger can keep it off
+                // the seeded list — counting it and still listing it under Packages is what made a
+                // failed install permanent (#2254).
+                return Observable.Return(new DefaultInstallSummary(0, 0, 1, [package.Id])
+                {
+                    Failures = [package.Id],
+                });
             });
     }
 
@@ -1227,8 +1276,21 @@ public sealed class InstanceAutoRegistrationService(
 /// </summary>
 public record DefaultInstallLedger
 {
-    /// <summary>Package ids the seed has delivered. Append-only in practice.</summary>
+    /// <summary>Package ids the seed has DELIVERED (installed, or already current). Append-only in
+    /// practice. 🚨 A package whose install FAILED never appears here — it belongs on
+    /// <see cref="Failed"/> and is retried next boot; that retry is the repair (#2254).</summary>
     public ImmutableList<string> Seeded { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// Package ids a default-install pass selected and could NOT deliver, and which no later pass
+    /// has delivered since — i.e. the default packages this installation is currently MISSING.
+    ///
+    /// <para>Exists because the alternative is grepping a boot log: a package dropped by a
+    /// NodeOps-hub timeout left nothing durable behind, so an instance silently short of a
+    /// declared package was undetectable (#2254). An id drops off this list the moment a pass
+    /// delivers it, so a non-empty list always means "still missing right now".</para>
+    /// </summary>
+    public ImmutableList<string> Failed { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>When the ledger last changed.</summary>
     public DateTimeOffset UpdatedAt { get; init; }
@@ -1243,10 +1305,29 @@ public record DefaultInstallLedger
 /// <param name="Installed">Packages that actually wrote content this pass.</param>
 /// <param name="UpToDate">Packages already at the catalog's content version.</param>
 /// <param name="Failed">Packages whose install threw (logged, stepped over).</param>
-/// <param name="Packages">The package ids the pass covered, in install order.</param>
+/// <param name="Packages">The package ids the pass ATTEMPTED, in install order — successes AND
+/// failures. 🚨 Never the ledger's input: use <see cref="Delivered"/> for that.</param>
 public readonly record struct DefaultInstallSummary(
     int Installed, int UpToDate, int Failed, ImmutableList<string> Packages)
 {
+    /// <summary>
+    /// The ids of the packages that FAILED this pass — the named subset of
+    /// <see cref="Packages"/> that <see cref="Failed"/> only counts.
+    ///
+    /// <para>🚨 Without the names, "covered" and "delivered" were the same list and a failed
+    /// package was ledgered as seeded, so the seed lane skipped it forever and the boot-log line
+    /// was the only trace it had ever been attempted (#2254).</para>
+    /// </summary>
+    public ImmutableList<string> Failures { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// The ids this pass actually DELIVERED — installed or already current. The ledger's input:
+    /// what the seed may stop re-asserting.
+    /// </summary>
+    public ImmutableList<string> Delivered
+        => (Packages ?? ImmutableList<string>.Empty)
+            .RemoveRange(Failures ?? ImmutableList<string>.Empty);
+
     /// <summary>A pass that covered nothing.</summary>
     public static DefaultInstallSummary Empty { get; } = new(0, 0, 0, ImmutableList<string>.Empty);
 
@@ -1255,10 +1336,15 @@ public readonly record struct DefaultInstallSummary(
         Installed + other.Installed,
         UpToDate + other.UpToDate,
         Failed + other.Failed,
-        Packages.AddRange(other.Packages));
+        Packages.AddRange(other.Packages))
+    {
+        Failures = (Failures ?? ImmutableList<string>.Empty)
+            .AddRange(other.Failures ?? ImmutableList<string>.Empty),
+    };
 
     /// <inheritdoc />
     public override string ToString() =>
         $"{Installed} installed, {UpToDate} up to date, {Failed} failed "
-        + $"[{string.Join(", ", Packages)}]";
+        + $"[{string.Join(", ", Packages)}]"
+        + (Failures is { Count: > 0 } f ? $" — FAILED: [{string.Join(", ", f)}]" : "");
 }
