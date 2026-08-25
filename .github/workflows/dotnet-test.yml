@@ -2227,7 +2227,7 @@ jobs:
     - name: Fail if the clients gate failed
       if: needs.clients-gate.result != 'success'
       run: |
-        echo "::error::The Clients workflow verdict is '${{ needs.clients-gate.outputs.verdict }}' (gate job: ${{ needs.clients-gate.result }}) — see the 'Clients workflow verdict' job. main-cd's portal-next image leg runs the same build, and its promote step is all-or-nothing, so merging this would stop ALL image publication."
+        echo "::error::The Clients workflow verdict is '${{ needs.clients-gate.outputs.verdict }}' (gate job: ${{ needs.clients-gate.result }}) — see the 'Clients workflow verdict' job. The clients tree is now just the Python SDK (the GUI clients moved to MeshWeaver.Plugins, MeshWeaver#2169), so a red verdict is a real SDK regression rather than the image-publication stopper it used to be."
         exit 1
 
     - name: Fail if a required CI input is missing

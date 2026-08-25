@@ -97,14 +97,14 @@ public class OpenGraphHtmlParserTest
     /// <summary>
     /// 🚨 The exact head a MeshWeaver (Blazor) portal serves: <c>&lt;base href="/"&gt;</c> plus a
     /// RELATIVE <c>href="favicon.ico"</c>. Resolved against the PAGE URL this would yield
-    /// <c>/PartnerRe/favicon.ico</c> — which a catch-all-routed SPA answers with 200 text/html,
+    /// <c>/Acme/AIConsulting/favicon.ico</c> — which a catch-all-routed SPA answers with 200 text/html,
     /// not a 404, i.e. a silently broken image. The base tag is what makes it resolve to the real
     /// origin-root icon.
     /// </summary>
     [Fact]
     public void Parse_RelativeIcon_ResolvesAgainstBaseHref_NotThePagePath()
     {
-        const string nested = "https://portal.example.org/PartnerRe/EslProposalQA";
+        const string nested = "https://portal.example.org/Acme/AIConsulting/FinalReport";
         const string html = """
             <html><head><base href="/">
             <link rel="icon" type="image/png" href="favicon.ico">

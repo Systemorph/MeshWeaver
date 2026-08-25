@@ -50,7 +50,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// compile SETTLES, terminally, naming the dead query, and a fresh trigger recovers.</para>
 /// </summary>
 public class CompileSourceSnapshotWedgeTest(ITestOutputHelper output)
-    : MonolithMeshTestBase(output), IDisposable
+    : MonolithMeshTestBase(output)
 {
     private readonly string _cacheDir = Path.Combine(
         Path.GetTempPath(), $"MeshWeaverSnapshotWedgeTest-{Guid.NewGuid():N}");
@@ -76,9 +76,20 @@ public class CompileSourceSnapshotWedgeTest(ITestOutputHelper output)
                 }));
     }
 
-    public new void Dispose()
+    /// <summary>
+    /// 🚨 Overrides <see cref="MonolithMeshTestBase.DisposeAsync"/> — it does NOT implement
+    /// <see cref="IDisposable"/> and block on it. This used to read
+    /// <c>base.DisposeAsync().AsTask().GetAwaiter().GetResult()</c>, which parks the disposing thread
+    /// in a native wait on MESH TEARDOWN — the one operation in this suite with a documented history
+    /// of not completing. xUnit's <c>methodTimeout</c> cannot abort a thread in that state, and
+    /// teardown runs outside it anyway, so a stall there is not a failed test: it is the whole shard
+    /// hanging to its wall-clock cap and reporting <c>exit=124 TIMEOUT</c> with no test named
+    /// (#2013). Awaiting suspends instead of parking, so the same stall surfaces as a bounded,
+    /// attributable teardown.
+    /// </summary>
+    public override async ValueTask DisposeAsync()
     {
-        base.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        await base.DisposeAsync();
         if (Directory.Exists(_cacheDir))
             try { Directory.Delete(_cacheDir, recursive: true); } catch { }
     }

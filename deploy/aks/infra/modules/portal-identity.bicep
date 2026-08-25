@@ -30,7 +30,7 @@
 //     another RG, so acrId is left empty here and the grant is done either by the
 //     subscription-scoped acr-role-assignment.bicep module (opt-in IaC) or
 //     OUT-OF-BAND via `az role assignment create` — exactly as the cluster
-//     kubelet's AcrPull is granted (see DEPLOY-RUNBOOK.md / README.md).
+//     kubelet's AcrPull is granted (see README.md, "Grant AcrPull on a SHARED registry").
 // ---------------------------------------------------------------------------
 
 @description('Azure region for the managed identity.')
