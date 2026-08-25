@@ -300,29 +300,28 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
     /// Watches the per-model <see cref="TokenUsage"/> satellite at
     /// <c>{threadPath}/_Usage/{modelKey}</c> until it matches <paramref name="predicate"/>.
     ///
-    /// <para>🚨 Through the LIVE CHILDREN QUERY of <c>{threadPath}/_Usage</c> — byte for byte the
-    /// primitive <c>ThreadTokenChip</c> binds to in the portal, and the same helper
-    /// <c>ThreadTokenUsageTest</c> and <c>DelegationSubThreadUsageTest</c> already use — never a
-    /// point <c>GetMeshNodeStream({threadPath}/_Usage/{modelKey})</c> read. A point read of an
-    /// ABSENT node answers with an authoritative routing NotFound and TERMINATES the stream with an
-    /// error; it cannot wait for a node to appear. The children query starts from the (possibly
-    /// empty) collection and re-emits when the node lands, which is the only shape that serves this
-    /// ordering — and <c>TokenUsageNodeType.RecordUsage</c> is subscribed as an INDEPENDENT side
-    /// effect, deliberately NOT chained before the round's terminal status write, so "the round
-    /// finished" never implies "the satellite exists".</para>
-    ///
-    /// <para>This class was the last straggler on the point read. It cost a red shard on an
-    /// unrelated PR (#1703, 2026-08-17): the round lost the race and the read errored inside a
-    /// second with <c>No node found at …/_Usage/…</c> — an error, not a timeout, so no amount of
-    /// waiting could have saved it. Same defect #1040 fixed in <c>ThreadTokenUsageTest</c>.</para>
-    ///
-    /// <para>🚨 <b>Do not switch this to the node stream</b> (#1812). That issue proposed it, on the
-    /// theory that an all-zero <c>TokenUsage</c> CI once timed out on was a stale CQRS projection.
-    /// Measured, it is not: this query and <c>GetMeshNodeStream(usagePath)</c> resolve within ±13 ms
-    /// of each other, and the point stream is the SLOWER of the two once its cold per-node hub
-    /// activation is counted. The zeros were the node's authoritative value — <c>RecordUsage</c>'s
-    /// phase 1 wrote them — so an authoritative read returned the same zeros. Fixed on the write
-    /// side; pinned by <c>ThreadTokenUsageTest.UsageSatelliteIsNeverObservableWithZeroTokens</c>.</para>
+    /// <para><b>EXISTENCE from the children listing, CONTENT from the owner</b> — the same two-leg
+    /// composition <c>ThreadTokenUsageTest.ObserveUsage</c> documents in full, and for the same
+    /// reason: reading an optional node has two rules pulling opposite ways and neither may be
+    /// bent.</para>
+    /// <list type="bullet">
+    ///   <item>A point <c>GetMeshNodeStream({usagePath})</c> on an ABSENT node answers with an
+    ///     authoritative routing NotFound, TERMINATES the stream, and opens
+    ///     <c>MeshNodeStreamCache</c>'s storm-breaker window on the very path <c>RecordUsage</c> is
+    ///     about to write — fast-failing the WRITE too. This class was the last straggler on that
+    ///     read and it cost a red shard on an unrelated PR (#1703, 2026-08-17): the round lost the
+    ///     race and the read errored inside a second with <c>No node found at …/_Usage/…</c>, an
+    ///     error rather than a timeout, so no budget could have saved it. <c>RecordUsage</c> is
+    ///     subscribed as an INDEPENDENT side effect, NOT chained before the round's terminal status
+    ///     write, so "the round finished" never implies "the satellite exists".</item>
+    ///   <item>A query cannot answer for a known path's CONTENT — the index is eventually
+    ///     consistent (AGENTS.md → "Never Query for a Single Node's Content"), so waiting on a VALUE
+    ///     through it is waiting on an unbounded lag. That is the #1812 / #2001 / run 32876073965
+    ///     failure shape.</item>
+    /// </list>
+    /// <para>So the listing answers only "is it there yet" (empty-on-absent; a stale negative merely
+    /// waits a beat longer), and the value comes off the owner's stream once the node demonstrably
+    /// exists — which is also when the point read is safe.</para>
     /// </summary>
     private async Task<TokenUsage> WaitForUsage(string threadPath, string modelKey, Func<TokenUsage, bool> predicate, int timeoutMs)
     {
@@ -330,10 +329,12 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
         return (await Mesh.GetQuery(
                 $"usage:{threadPath}",
                 $"path:{threadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children "
-                + $"nodeType:{TokenUsageNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
-            .Select(nodes => nodes
-                .FirstOrDefault(n => string.Equals(n.Path, usagePath, StringComparison.OrdinalIgnoreCase))
-                .ContentAs<TokenUsage>(Mesh.JsonSerializerOptions))
+                + $"nodeType:{TokenUsageNodeType.NodeType} select:path")
+            .Where(nodes => nodes.Any(n =>
+                string.Equals(n.Path, usagePath, StringComparison.OrdinalIgnoreCase)))
+            .Take(1)
+            .SelectMany(_ => Mesh.GetWorkspace().GetMeshNodeStream(usagePath))
+            .Select(n => n.ContentAs<TokenUsage>(Mesh.JsonSerializerOptions))
             .Where(u => u is not null)
             .Should().Within(TimeSpan.FromMilliseconds(timeoutMs))
             .Match(u => predicate(u!)))!;
