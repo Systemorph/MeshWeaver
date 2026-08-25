@@ -11,6 +11,7 @@ using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Hosting.Grpc;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
+using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Hosting.AspNetCore.Portal.Authentication;
 using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
