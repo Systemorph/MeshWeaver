@@ -38,8 +38,11 @@ public static class ModuleBundleSource
     /// <param name="moduleName">The module's entry-assembly name without extension.</param>
     /// <param name="activation">The deployment's activation sidecar list (empty for a module that
     /// ships with the image — image modules have no sidecar entry).</param>
-    /// <returns>Absolute file paths (entry DLL first) or the decline reason.</returns>
-    public static (IReadOnlyList<string> Files, string? DeclineReason) Collect(
+    /// <returns>Absolute closure paths (entry DLL first), the module's STATIC WEB ASSETS as
+    /// (module-relative path, absolute path) pairs, or the decline reason.</returns>
+    public static (IReadOnlyList<string> Files,
+        IReadOnlyList<(string RelativePath, string FullPath)> Assets,
+        string? DeclineReason) Collect(
         string baseDirectory,
         string moduleName,
         ModuleActivationList activation)
@@ -48,12 +51,12 @@ public static class ModuleBundleSource
             || moduleName is "." or ".."
             || moduleName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
             || moduleName.Contains('/') || moduleName.Contains('\\'))
-            return ([], $"'{moduleName}' is not a valid module name");
+            return ([], [], $"'{moduleName}' is not a valid module name");
 
         var entry = activation.Entries.FirstOrDefault(e =>
             string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
         if (entry is { Enabled: false })
-            return ([], $"module '{moduleName}' is uninstalled on this instance");
+            return ([], [], $"module '{moduleName}' is uninstalled on this instance");
         // 🚨 Deliberately NO floor check on the entry here — a HELD landing (floor above this
         // instance's platform, ShelveModule) and a landing the platform rolled back below are
         // both SERVED: their recorded floor rides the index and the manifest, and the consumer's
@@ -70,17 +73,36 @@ public static class ModuleBundleSource
             // Covers the missing folder, the transitional publish state (a module still riding the
             // app closure prunes its modules/ folder empty), and a lost volume alike: no entry DLL,
             // no module bundle — the package still serves its content and NodeType assemblies.
-            return ([], $"{Path.GetFileName(folder)}/{moduleName}.dll does not exist on this instance");
+            return ([], [], $"{Path.GetFileName(folder)}/{moduleName}.dll does not exist on this instance");
 
-        // Entry DLL first, the rest of the closure (dlls + symbols) in stable order. Top level
-        // only — a module directory is flat by construction (ModuleLandingService writes file
-        // names, and the publish target lays closures out flat).
+        // Entry DLL first, the rest of the CLOSURE (dlls + symbols) in stable order. Top level
+        // only — a module's assemblies are flat by construction (ModuleLandingService writes file
+        // names, and the publish target lays closures out flat). 🚨 That flatness is why the
+        // assets below need their own walk: they are the one part of a landed module that is NOT
+        // flat, and a top-level-only listing silently omits every one of them.
         var files = new List<string> { entryDll };
         files.AddRange(Directory.EnumerateFiles(folder)
             .Where(f => Path.GetExtension(f).ToLowerInvariant() is ".dll" or ".pdb")
             .Where(f => !string.Equals(f, entryDll, StringComparison.OrdinalIgnoreCase))
             .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase));
 
-        return (files, null);
+        // 🚨 THE ASSETS MUST ROUND-TRIP, or the registry re-creates the very defect it was just
+        // fixed for. A consumer lands what this bundle carries and nothing else, so a pack whose
+        // wwwroot the SERVE path drops renders unstyled downstream even though the shelf holds it
+        // — the publish-side fix (#2221) only makes the registry's own copy complete. Assets keep
+        // their RELATIVE path: a component asks for _content/<pack>/Components/x.razor.js, so a
+        // flattened asset 404s exactly like a missing one.
+        var assetRoot = Path.Combine(folder, "wwwroot");
+        var assets = Directory.Exists(assetRoot)
+            ? Directory.EnumerateFiles(assetRoot, "*", SearchOption.AllDirectories)
+                .Select(f => (
+                    RelativePath: "wwwroot/" + Path.GetRelativePath(assetRoot, f)
+                        .Replace(Path.DirectorySeparatorChar, '/'),
+                    FullPath: f))
+                .OrderBy(a => a.RelativePath, StringComparer.Ordinal)
+                .ToList()
+            : [];
+
+        return (files, assets, null);
     }
 }
