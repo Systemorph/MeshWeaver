@@ -56,10 +56,9 @@ else if(ViewDescriptor != null)
                 }))
             </ChildContent>
             <ErrorContent Context="renderError">
-                <div class="meshweaver-render-error"
-                     style="padding:0.75rem;border:1px solid var(--error,#d13438);border-radius:4px;background:rgba(209,52,56,0.08);color:var(--error,#d13438);font-size:0.875rem">
+                <div class="meshweaver-render-error">
                     <strong>@Access.Localize("error.viewFailed")</strong>
-                    <div style="margin-top:0.25rem;white-space:pre-wrap;font-family:monospace">@renderError.Message</div>
+                    <div class="meshweaver-render-error-detail">@renderError.Message</div>
                 </div>
             </ErrorContent>
         </ErrorBoundary>
