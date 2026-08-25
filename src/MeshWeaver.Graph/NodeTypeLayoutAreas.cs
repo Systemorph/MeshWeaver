@@ -513,6 +513,22 @@ public static class NodeTypeLayoutAreas
                         node.Path, CodeQueryResolver.DefaultSourceGroupName);
                 if (groups.Count == 0)
                     return Observable.Return<IReadOnlyList<(CodeQueryGroup, IReadOnlyList<MeshNode>)>>([]);
+                // 🚨 The adopt-only mesh (#2193 §C): source nodes are not persisted here, so the
+                // groups' node queries would resolve to nothing and the tree would read like a
+                // module with no code. Instead each group lists through the registry-backed
+                // source browser — the same tree, walked over stand-in nodes whose paths are
+                // exactly the paths the imported nodes would have had.
+                if (ModuleSourceBrowsing.BrowsesRemotely(host.Hub.ServiceProvider))
+                {
+                    var browser = host.Hub.ServiceProvider.GetService<IModuleSourceBrowser>();
+                    if (browser is null)
+                        return Observable.Return<IReadOnlyList<(CodeQueryGroup, IReadOnlyList<MeshNode>)>>(
+                            groups.Select(g => (g, (IReadOnlyList<MeshNode>)[])).ToList());
+                    var remote = groups.Select(g => BrowseGroup(browser, g, node.Path)
+                        .Select(nodes => (Group: g, Nodes: nodes)));
+                    return Observable.CombineLatest(remote)
+                        .Select(list => (IReadOnlyList<(CodeQueryGroup, IReadOnlyList<MeshNode>)>)list.ToList());
+                }
                 var streams = groups.Select(g =>
                     RunQueries(host, g.ExpandedQueries).Select(nodes => (Group: g, Nodes: nodes)));
                 return Observable.CombineLatest(streams)
@@ -749,9 +765,68 @@ public static class NodeTypeLayoutAreas
                     "*No source file selected — pick one from the Sources or Tests tree.*")
                 .WithStyle("padding: 24px;"));
 
+        // The adopt-only mesh (#2193 §C): there is no Code node to embed — the file is read from
+        // the module's repo through the registry and rendered read-only, at the same URL an
+        // imported node would answer. No browser → the shell says why, never a blank page.
+        if (ModuleSourceBrowsing.BrowsesRemotely(host.Hub.ServiceProvider))
+        {
+            var browser = host.Hub.ServiceProvider.GetService<IModuleSourceBrowser>();
+            if (browser is null)
+                return Observable.Return<UiControl?>(
+                    Controls.Markdown(ModuleSourceBrowsing.NeedsRegistryMarkdown).WithStyle("padding: 24px;"));
+            return browser.FetchSource(ModuleSourceBrowsing.PackageOf(codePath!), codePath!)
+                .Take(1)
+                .Select(text => text is null
+                    ? Controls.Markdown(ModuleSourceBrowsing.NotServedMarkdown(codePath!))
+                        .WithStyle("padding: 24px;")
+                    : (UiControl?)BrowsedSourceView(codePath!, text))
+                .Catch<UiControl?, Exception>(ex => Observable.Return<UiControl?>(
+                    Controls.Markdown($"*Could not read `{codePath}` through the registry:* {ex.Message}")
+                        .WithStyle("padding: 24px;")));
+        }
+
         return Observable.Return<UiControl?>(
             new LayoutAreaControl(new Address(codePath!), new LayoutAreaReference(CodeLayoutAreas.ContentArea))
                 .WithStyle("width: 100%;"));
+    }
+
+    /// <summary>A browsed (registry-served) source file: its path as the heading, the text in a
+    /// read-only editor. Pure — pinned in ModuleSourceBrowsingTest.</summary>
+    internal static UiControl BrowsedSourceView(string nodePath, string text) =>
+        Controls.Stack
+            .WithStyle("width: 100%; gap: 8px;")
+            .WithView(Controls.Markdown($"##### `{nodePath}` — read from the module's repository")
+                .WithStyle("margin: 8px 0 0 0;"))
+            .WithView(BrowsedSourceEditor(text));
+
+    /// <summary>The editor a browsed file renders in: read-only always — the repository is the
+    /// truth, and there is no node here to write back to. Pure.</summary>
+    internal static CodeEditorControl BrowsedSourceEditor(string text) =>
+        new CodeEditorControl()
+            .WithValue(text)
+            .WithLanguage("csharp")
+            .WithReadonly(true)
+            .WithLineNumbers(true)
+            .WithMinimap(false)
+            .WithHeight("70vh");
+
+    /// <summary>One source/test group, listed through the browser: the package's files whose
+    /// node paths fall under the group's namespace root (a type's own <c>Source/</c>, or a
+    /// <c>shared=@Pkg/…</c> root in another package), as stand-in nodes. A group with no
+    /// resolvable root lists nothing. Pure over the browser's answer.</summary>
+    internal static IObservable<IReadOnlyList<MeshNode>> BrowseGroup(
+        IModuleSourceBrowser browser, CodeQueryGroup group, string nodeTypePath)
+    {
+        var root = group.BaseNamespace;
+        if (string.IsNullOrEmpty(root))
+            return Observable.Return<IReadOnlyList<MeshNode>>([]);
+        return browser.ListSources(ModuleSourceBrowsing.PackageOf(root!))
+            .Take(1)
+            .Select(files => (IReadOnlyList<MeshNode>)files
+                .Where(f => f.NodePath.StartsWith(root! + "/", StringComparison.Ordinal))
+                .Select(ModuleSourceBrowsing.Synthesize)
+                .ToList())
+            .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return<IReadOnlyList<MeshNode>>([]));
     }
 
     /// <summary>
