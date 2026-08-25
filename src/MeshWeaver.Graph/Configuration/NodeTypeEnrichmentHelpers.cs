@@ -1744,7 +1744,33 @@ internal static class NodeTypeEnrichmentHelpers
                 && NodeTypeCompilationHelpers.HasUsableBuild(t!, def, guards));
         }
 
-        var usable = typeStream.Where(t => Evaluate(t).Usable);
+        // 🚨 A FAULTED type stream must not KILL the watcher (#1701, point 4). `typeStream` is the
+        // shared MeshNodeStreamCache handle, and while the NodeType's owner is being recycled — or
+        // when the type does not exist on this replica AT ALL (the `Store/Plugin` case in the
+        // issue: `DeliveryFailureException: No node found at 'Store/Plugin'`) — the cache classifies
+        // that as a negative and forwards OnError to every subscriber. Rx `Merge` propagates a fault
+        // from ANY source and unsubscribes ALL of them, so one such error tore down `advanced`,
+        // `graced` AND the re-read ladder together and hit the terminal `ex =>` arm: the watcher was
+        // dead from birth, and "self-heal on type arrival" silently did not exist for exactly the
+        // state it is there to watch out of.
+        //
+        // Switching to `Never` on a fault — rather than `Empty` — stops this stream delivering
+        // without COMPLETING the merge, so the RE-EVALUATION ladder below (built for precisely this
+        // "the type is not readable from here yet" case, and already Catch-guarded per rung) keeps
+        // running and can still heal. Not a swallow: the fault is logged, and the ladder is the
+        // mechanism that reaches the verdict the stream could not deliver. Not a poller either — the
+        // ladder's own budget/spacing is unchanged.
+        var guardedTypeStream = typeStream.Catch<MeshNode, Exception>(ex =>
+        {
+            logger?.LogWarning(ex,
+                "Overlay self-heal: the NodeType stream for '{NodeType}' (instance '{InstancePath}') faulted — "
+                + "the type is not readable from here right now (absent on this replica, or its owner is "
+                + "recycling). The watcher stays armed and heals through the re-read ladder instead of dying.",
+                nodeType, instanceHub.Address);
+            return Observable.Never<MeshNode>();
+        });
+
+        var usable = guardedTypeStream.Where(t => Evaluate(t).Usable);
 
         // FAST path — the version advanced past the overlay: a genuinely NEW build landed, heal now.
         var advanced = usable.Where(t =>
