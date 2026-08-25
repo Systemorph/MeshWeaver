@@ -1496,13 +1496,20 @@ public static class PackageInstaller
                 var gating = warmed
                     .Where(root => InPackageTypeOf(root, nodes) is not null)
                     .ToList();
-                return gating.Count == 0
-                    ? Observable.Return(Unit.Default)
-                    : gating
-                        .Select(root => WaitForGating(hub, root, logger))
-                        .Merge()
-                        .DefaultIfEmpty(Unit.Default)
-                        .LastAsync();
+                if (gating.Count == 0)
+                    return Observable.Return(Unit.Default);
+                // 🚨 SYSTEM, like phase 1 — the whole install runs as System and the _Access
+                // listing is only readable that way; under the ambient (empty) identity the
+                // listing would come back empty and the wait would spend its full bound on a
+                // grant that is actually there. RunAsSystem, never Observable.Using: the latter
+                // opens the scope on the SUBSCRIBING thread and closes it on the terminating one,
+                // leaving the subscriber latched as system-security (#1790, and the shape
+                // ImpersonationScopeSiteRatchetGuard refuses at any new site).
+                return accessService.RunAsSystem(() => gating
+                    .Select(root => WaitForGating(hub, root, logger))
+                    .Merge()
+                    .DefaultIfEmpty(Unit.Default)
+                    .LastAsync());
             });
     }
 
