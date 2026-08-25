@@ -325,11 +325,17 @@ public static class ModuleActivationSidecar
     private static ModuleActivationList ReadLegacy(string baseDirectory, Action<string>? onCorrupt)
     {
         var path = SidecarPath(baseDirectory);
-        var text = TryReadAllText(path);
-        if (text is null)
-            return new ModuleActivationList();
         try
         {
+            // 🚨 The READ is inside the try, not before it. Only genuine ABSENCE is silent
+            // (TryReadAllText); every other failure — an SMB sharing violation or lease conflict
+            // arriving as IOException/UnauthorizedAccessException just as much as a parse error —
+            // must be REPORTED and skipped, never allowed to escape. Boot calls this un-wrapped, so
+            // an escaping exception would take the portal down over a transient volume blip: worse
+            // than the silence this whole change exists to remove.
+            var text = TryReadAllText(path);
+            if (text is null)
+                return new ModuleActivationList();
             return JsonSerializer.Deserialize<ModuleActivationList>(text, Json)
                    ?? new ModuleActivationList();
         }
@@ -366,17 +372,24 @@ public static class ModuleActivationSidecar
 
         foreach (var file in files)
         {
-            var text = TryReadAllText(file);
-            if (text is null)
-                // Vanished between the listing and the read — another replica re-landing that very
-                // module. Its next read sees the new file; nothing else is affected, which is the
-                // whole point of one file per module.
-                continue;
             ModuleActivationEntry? entry;
             try
             {
+                var text = TryReadAllText(file);
+                if (text is null)
+                    // Vanished between the listing and the read — another replica re-landing that
+                    // very module. Its next read sees the new file; nothing else is affected, which
+                    // is the whole point of one file per module.
+                    continue;
                 entry = JsonSerializer.Deserialize<ModuleActivationEntry>(text, Json);
             }
+            // 🚨 EVERY failure, not only a parse error. An SMB sharing violation or lease conflict
+            // arrives as IOException/UnauthorizedAccessException, and letting it escape would fail
+            // the WHOLE activation read — restoring the exact all-or-nothing behaviour this change
+            // removes, and crashing boot, which calls Read un-wrapped. It costs the one module it
+            // names, loudly. Deliberately NOT retried: the contended window is now a single
+            // module's own record being replaced, and a retry loop here would be a band-aid over a
+            // condition the next boot resolves on its own.
             catch (Exception ex)
             {
                 onCorrupt?.Invoke(

@@ -239,6 +239,54 @@ public class ModuleActivationContentionTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 An IO failure is not a parse failure, and the read must survive BOTH the same way.
+    ///
+    /// <para>An SMB sharing violation or lease conflict surfaces as <c>IOException</c> /
+    /// <c>UnauthorizedAccessException</c>, not as bad JSON — and boot calls
+    /// <see cref="ModuleActivationSidecar.Read"/> UN-WRAPPED, so an escaping exception takes the
+    /// portal down over a transient volume blip. A symlink LOOP reproduces exactly that class
+    /// (<c>ELOOP</c> → <c>IOException</c>) deterministically and without depending on the uid the
+    /// test happens to run as — a permission-based arrangement would silently do nothing as root,
+    /// which CI containers often are. Both halves are asserted: the neighbour still loads, and the
+    /// failure is reported by name.</para>
+    /// </summary>
+    [Fact]
+    public async Task AnIOFailureOnOneRecord_IsReportedAndSkipped_NeverThrown()
+    {
+        using var replica = new ModuleLandingService(baseDirectory: root);
+        await Land(replica, "MeshWeaver.Good");
+
+        var looped = ModuleActivationSidecar.EntryPath(root, "MeshWeaver.Looped");
+        var partner = ModuleActivationSidecar.EntryPath(root, "MeshWeaver.Partner");
+        File.CreateSymbolicLink(looped, partner);
+        File.CreateSymbolicLink(partner, looped);
+
+        var reported = new List<string>();
+        var list = ModuleActivationSidecar.Read(root, reported.Add);
+
+        list.Entries.Select(entry => entry.Name).Should().Equal(["MeshWeaver.Good"],
+            "one unreadable record costs its own module and nothing else");
+        reported.Should().HaveCount(2, "each unreadable record reports itself, by name");
+        reported.Should().OnlyContain(line => line.Contains("MeshWeaver.Looped")
+            || line.Contains("MeshWeaver.Partner"));
+    }
+
+    /// <summary>The legacy aggregate gets the same treatment: an IO failure there is reported and
+    /// skipped, never thrown, because boot reads it before anything can catch.</summary>
+    [Fact]
+    public void AnIOFailureOnTheLegacyAggregate_IsReportedAndSkipped_NeverThrown()
+    {
+        Directory.CreateDirectory(ModuleActivationSidecar.SidecarPath(root));
+        ModuleActivationSidecar.WriteEntry(root, new ModuleActivationEntry { Name = "MeshWeaver.Good" });
+
+        var reported = new List<string>();
+        var list = ModuleActivationSidecar.Read(root, reported.Add);
+
+        list.Entries.Select(entry => entry.Name).Should().Equal(["MeshWeaver.Good"]);
+        reported.Should().ContainSingle().Which.Should().Contain("activation.json");
+    }
+
+    /// <summary>
     /// 🚨 The module name BECOMES a path, so it is refused at the writer rather than trusted from
     /// whichever caller got there. A record file named after its module is a path-traversal surface
     /// the moment a name can carry a separator.

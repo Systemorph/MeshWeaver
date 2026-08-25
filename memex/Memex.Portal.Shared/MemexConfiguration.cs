@@ -462,7 +462,15 @@ public static class MemexConfiguration
     {
         var logger = app.Services.GetRequiredService<ILoggerFactory>()
             .CreateLogger("MeshWeaver.PluginCatalog.ModuleActivation");
-        var report = app.Services.GetRequiredService<PendingModuleActivations>().Read();
+        // 🚨 CONSTRUCTED, not resolved — deliberately. PendingModuleActivations is registered in
+        // the MESH container (AddPluginCatalog), which is why every other caller reaches it through
+        // `hub.ServiceProvider` and guards with GetService. Asking `app.Services` for it would
+        // throw at startup on any host where the two containers differ — a diagnostic that CRASHES
+        // the portal it exists to inform is worse than the silence it replaces. Constructing costs
+        // nothing and cannot differ: the reader is a stateless file reader that starts nothing and
+        // writes nothing, and the registration is this same one-liner over the same resolved
+        // module root.
+        var report = new PendingModuleActivations(app.Configuration).Read();
 
         if (report.IsUndetermined)
         {
