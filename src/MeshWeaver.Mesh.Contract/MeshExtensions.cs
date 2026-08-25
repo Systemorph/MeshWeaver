@@ -3400,6 +3400,10 @@ public static class MeshExtensions
             return Observable.Empty<System.Reactive.Unit>();
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        // 🚨 The announcement channel for the additional nodes below (#2087). A bulk/raw storage
+        // write that skips it lands a node that EXISTS in Postgres and does not exist to the
+        // running mesh — see WriteAndPublishCreated for the full mechanism.
+        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
         var handlers = hub.ServiceProvider.GetServices<INodePostCreationHandler>()
             .Where(h => h.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -3447,7 +3451,21 @@ public static class MeshExtensions
                     return handleObs;
 
                 var saveExtras = additional
-                    .Select(extra => persistence.Write(extra with { State = MeshNodeState.Active }, hub.JsonSerializerOptions)
+                    // 🚨 …AndPublishCreated, never a bare Write (#2087). These are BRAND-NEW nodes
+                    // — a Space's creator-Admin grant, an Admin/Partition definition, onboarding
+                    // seeds — written straight to storage on the create path of every node whose
+                    // type has a post-creation handler, i.e. on essentially every imported root.
+                    // Without the announcement the row is in Postgres and does not exist to the
+                    // running mesh: PathResolutionService's cached miss for that path is never
+                    // evicted, MeshNodeStreamCache and the Orleans path-cache invalidator are never
+                    // told, and routing answers "No node found at '…'" for the life of the process.
+                    // The DataChangeRequest.Update posted below is NOT a substitute — it targets the
+                    // new node's own address (which is what has to become reachable in the first
+                    // place) and feeds synced queries, not the resolution caches. This is the
+                    // #817/#824 announce-loss shape on a mutation path that never adopted the
+                    // helpers.
+                    .Select(extra => persistence.WriteAndPublishCreated(
+                            extra with { State = MeshNodeState.Active }, hub.JsonSerializerOptions, changeFeed)
                         .Where(saved => saved is not null)
                         .Select(saved => saved!)
                         .Do(saved =>
