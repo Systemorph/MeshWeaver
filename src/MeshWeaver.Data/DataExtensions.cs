@@ -222,6 +222,7 @@ public static class DataExtensions
                 typeof(SubscribeAck),
                 typeof(UnsubscribeRequest),
                 typeof(StreamErrorEvent),
+                typeof(StreamEndedEvent),
                 typeof(GetDomainTypesRequest),
                 typeof(DomainTypesResponse),
                 typeof(TypeDescription),
