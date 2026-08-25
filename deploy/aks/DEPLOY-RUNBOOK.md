@@ -434,6 +434,19 @@ pod` the outliers (grace-drain; the Deployment replaces them). Prevention: enabl
 published build and old ALCs collect — mechanism in
 `src/MeshWeaver.Documentation/Data/Architecture/NodeTypeCompilation.md`.
 
+**You no longer have to be watching.** `PortalReplicaWorkingSetDiverged`
+(`deploy/aks/scripts/values.observability.yaml`, group `portal-degraded`) fires when one
+`memex-portal` container's working set is >3× the lightest in the same namespace AND above 8 GB for
+15 minutes — the exact 2026-08-25 shape, where nothing alerted and the two sick pods served hung
+pages for three and a half hours. It is DETECTION only; the fix is still convergence. It needs the
+observability stack installed (`install-observability.sh`), and it can never fire on a
+single-replica namespace by construction (`max == min`).
+
+⚠️ Still open on #2194: a **progress-aware `/alive`**. Both post-startup probes watch `/alive`, a
+trivial process-up check a GC-thrashing pod answers happily. Do NOT "fix" that by pointing readiness
+back at `/health` — that re-creates the 2026-07-21 probe death-spiral. A restart threshold needs
+calibrating against real GC-pause data first, which is what the alert above starts producing.
+
 ## Known gaps / follow-ups
 - **Dump mount not applied to the live clusters** (2026-07-28): all three namespaces carry the dump
   env vars while no pod mounts `/data/dumps`, so every production `exit=139` so far produced no

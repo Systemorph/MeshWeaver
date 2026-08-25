@@ -376,7 +376,9 @@ public static class PersistenceExtensions
             new MeshWeaver.Compiler.FileSystemAssemblyStore(
                 System.IO.Path.Combine(System.IO.Path.GetTempPath(),
                     $"MeshWeaver-AssemblyStore-pid{System.Environment.ProcessId}"),
-                sp.GetRequiredService<ILogger<MeshWeaver.Compiler.FileSystemAssemblyStore>>()));
+                sp.GetRequiredService<ILogger<MeshWeaver.Compiler.FileSystemAssemblyStore>>(),
+                MeshWeaver.Compiler.AssemblyStoreExtensions.KeepVersionsPerType(
+                    sp.GetService<Microsoft.Extensions.Configuration.IConfiguration>())));
     }
 
     /// <summary>
