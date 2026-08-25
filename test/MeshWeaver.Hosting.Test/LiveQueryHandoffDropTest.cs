@@ -98,6 +98,16 @@ public class LiveQueryHandoffDropTest
         /// <summary>Holds the FIRST walk of the query's own base path only — later reads run free.</summary>
         public string? GateOn;
         private int gateArmed = 1;
+        private int gateTimedOut;
+
+        /// <summary>
+        /// True when the gate gave up instead of being released. 🚨 The test MUST assert this is
+        /// false: a gate that times out lets the scope walk continue on its own, so the Initial is
+        /// no longer pinned relative to the notification's fan-out snapshot — the window the test
+        /// exists to hold open would never have been held, and the test could pass having verified
+        /// nothing.
+        /// </summary>
+        public bool GateTimedOut => Volatile.Read(ref gateTimedOut) != 0;
 
         public IObservable<DataChangeNotification> Changes => feed;
 
@@ -110,7 +120,8 @@ public class LiveQueryHandoffDropTest
                 if (!string.Equals(parentPath, GateOn, StringComparison.OrdinalIgnoreCase)) return;
                 if (Interlocked.Exchange(ref gateArmed, 0) != 1) return;
                 ReadEntered.Set();
-                ReleaseRead.Wait(TimeSpan.FromSeconds(7));
+                if (!ReleaseRead.Wait(TimeSpan.FromSeconds(10)))
+                    Volatile.Write(ref gateTimedOut, 1);
             });
 
         public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
@@ -184,6 +195,13 @@ public class LiveQueryHandoffDropTest
             // query's only route to the row is the notification whose snapshot we already hold.
             adapter.ReleaseRead.Set();
             Assert.True(initial.Wait(TimeSpan.FromSeconds(10)), "the query never emitted its Initial");
+
+            // 🚨 The gate must have been RELEASED, not given up on. A timed-out gate lets the walk
+            // continue by itself, which un-pins the Initial from the notification's snapshot — the
+            // test would then pass without ever holding the window it exists to hold.
+            Assert.False(adapter.GateTimedOut,
+                "the scope-walk gate timed out instead of being released — the Initial was no longer "
+                + "pinned relative to the notification's fan-out snapshot, so this run verified nothing");
 
             // The setup is only meaningful if the Initial genuinely predates the write — otherwise
             // the row would arrive through the snapshot and this test would prove nothing.
