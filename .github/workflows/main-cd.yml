@@ -207,6 +207,60 @@ jobs:
   #                   set — i.e. driven by observed state, which is what makes it a reconciler
   #                   rather than a retry.
   #
+  # ─────────────────── PREFLIGHT: assert the external inputs, RED ───────────────────
+  # 🚨 A gate NEVER tests its own inputs. Every CI input that comes from outside the tree is
+  # asserted HERE and fails RED naming exactly what to provision; no downstream job carries an
+  # input-shaped `if:` ("is the secret set?") or a `continue-on-error:` on the step that fetches
+  # its input. GitHub renders a skipped job with the same tick as a passed one, so the two shapes
+  # are how a gate reports success having verified nothing.
+  #
+  # This job exists because that is precisely what happened to the release broadcast (#2235):
+  # `notify-platform-update` opened with `if [ -z "$URL" ] || [ -z "$SECRET" ]; then … exit 0`,
+  # so an unprovisioned notify path was a NOTICE in a summary nobody reads and a green tick on
+  # every promote. The broadcast dispatched nothing for eight days and CD said "delivered" every
+  # single time.
+  #
+  # No `if:` on this job at all — not even "only when we publish". It asserts and fails; it does
+  # not decide whether to run. An hourly reconcile tick that publishes nothing still proves the
+  # notify path is provisioned, so an unset secret is found on the next tick rather than on the
+  # next release.
+  preflight:
+    name: "Assert the inputs exist"
+    # 🚨 The ONE sanctioned condition, and it is a check on the EVENT — never on whether a secret is
+    # set. It is byte-identical to `gate`'s below, and it is here for the same reason: `workflow_run`
+    # fires for EVERY completion of Build-and-Test, PRs included, and GitHub withholds org secrets
+    # from a FORK by design. Without this a fork's PR would light up a red CD run asserting inputs
+    # it can never be given — the one legitimate exemption AGENTS.md carves out, expressed once, on
+    # the event. It costs nothing in coverage: a run this skips is a run where `gate` publishes
+    # nothing either, so there is no path on which CD acts without having been preflighted.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every external input, or a red build naming what to provision
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          PLATFORM_WEBHOOK_URL: ${{ vars.PLATFORM_WEBHOOK_URL }}
+          PLATFORM_WEBHOOK_SECRET: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
+        run: |
+          missing=()
+          [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID           OIDC app registration for azure/login")
+          [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID           the Systemorph AAD tenant")
+          [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID     the subscription holding ACR meshweaver")
+          [ -n "$PLATFORM_WEBHOOK_URL" ]  || missing+=("vars.PLATFORM_WEBHOOK_URL         the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds — WITHOUT it no release event ever reaches the mesh, so the framework-release broadcast to the node repos never fires and every satellite falls back to its schedule poll")
+          [ -n "$PLATFORM_WEBHOOK_SECRET" ] || missing+=("secrets.PLATFORM_WEBHOOK_SECRET  the shared HMAC the inbox watcher verifies X-Hub-Signature-256 against. It must be BYTE-IDENTICAL to the control instance's Hosting:PlatformWebhookSecret (Key Vault -> Hosting-PlatformWebhookSecret, see deploy/aks/envs/example/secretproviderclass.yaml); a mismatch is INVISIBLE from here — the POST still answers 2xx and the watcher silently drops every delivery as unverifiable")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::CD cannot deliver a release event — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "All external inputs are present."
+
   # Every downstream job takes its commit from here, so a push run and a heal run are literally
   # the same pipeline with a different target and a different reason.
   gate:
@@ -1268,25 +1322,55 @@ jobs:
   #   • no hand-maintained list here — the subscriber set lives in the Hosting fleet registry ON
   #     memex ("register a new repo in Hosting"), the graph memex already owns; nothing is named in
   #     this file.
+  # 🚨 `BAKE_SUBSCRIBER_REPOS` IS GONE — deleted as a repo variable on 2026-08-25, not merely
+  # unused. It survived the 2026-08-23 redesign holding one stale repo name, and a leftover
+  # variable that LOOKS like the live subscriber list is worse than none: the next person to debug
+  # a missing rebake reads it, believes the fan-out targets exactly that repo, and stops looking.
+  # If you need to know who is subscribed, ask the Hosting registry on the control instance.
   # Pull stays the fallback: each repo's `schedule` run still reads the registry
   # (`Resolve the bake target` in each ci.yml) and bakes for the identity it finds, so a lost
   # dispatch costs at most one delayed rebake wave and a repo that stops baking still shows up as an
   # instance HELD on its own UpdatePolicy. REPORTER-CLASS: the broadcast makes the wave prompt; the
   # poll makes it guaranteed.
 
-  # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (optional) ──────────────────
-  # After the release is ARMED (promote's last PUT), tell the registry instance's mesh that a new
+  # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (required) ──────────────────
+  # After the release is ARMED (promote's last PUT), tell the control instance's mesh that a new
   # platform build exists: one signed POST to the WebhookInbox target the Hosting plugin watches
-  # (Hosting/PlatformBuilds/main). The mesh side verifies the HMAC over the RAW body, starts a
-  # thread with the platform-update agent, and that agent opens the MW_IMAGE_DIGEST bump PRs on
-  # the plugin repos — the platform half of dependency maintenance (Dependabot is the ecosystem
-  # half). REPORTER-CLASS, deliberately: losing one notification costs one delayed update wave
-  # (the next green build re-notifies); it can never hide a defect, so an unconfigured or failed
-  # POST must not redden CD. Configure with repo var PLATFORM_WEBHOOK_URL + secret
-  # PLATFORM_WEBHOOK_SECRET; the NOTICE below keeps "not configured" loud in the summary.
+  # (Hosting/PlatformBuilds). The mesh side verifies the HMAC over the RAW body, runs the pin
+  # updater (the MW_IMAGE_DIGEST bump PRs on the node repos) and BROADCASTS the release to every
+  # subscriber as a `repository_dispatch` (FrameworkReleaseBroadcaster, src/MeshWeaver.GitSync) so
+  # each satellite re-bakes in seconds instead of at its next schedule poll.
+  #
+  # 🚨 THIS POST IS THE ONLY THING THAT STARTS THAT WAVE, AND IT USED TO BE UNFAILABLE (#2235).
+  # It was written REPORTER-CLASS — "losing one notification costs one delayed update wave" — and
+  # that reasoning produced exactly one observable outcome: a green tick on every promote while
+  # ZERO releases were broadcast between 2026-08-22 and 2026-08-25. Two shapes did it, and both
+  # are now gone:
+  #   * an input-shaped `if [ -z "$URL" ] || [ -z "$SECRET" ]; then ... exit 0` — a gate testing
+  #     its own inputs, which renders identically to a gate that passed. The inputs are now
+  #     asserted in `preflight`, which fails RED naming what to provision.
+  #   * a non-2xx downgraded to `::warning::`. A release event the mesh REFUSED is a wave that did
+  #     not happen; it is now `exit 1`.
+  # The pull/schedule fallback is still there and still means a single lost dispatch costs at most
+  # one delayed rebake — but "the fallback exists" is a reason to keep CD's images shipping, never
+  # a reason to stop REPORTING that delivery failed. This job runs after `promote`, so failing it
+  # cannot unpublish anything: the images are already tagged and every install still self-updates.
+  # What changes is that the failure is now visible (and filed by `alert-on-failure`) instead of
+  # being a sentence in a step summary.
+  #
+  # 🚨 WHAT A 2xx HERE DOES *NOT* PROVE. The inbox is deliberately dumb (WebhookInbox: allowlist +
+  # size cap, verifies nothing) so a 2xx means "the delivery was STORED", not "the wave ran". The
+  # half this side cannot see is the shared HMAC: if the control instance's
+  # `Hosting:PlatformWebhookSecret` is unset or differs from `secrets.PLATFORM_WEBHOOK_SECRET`,
+  # the watcher drops every delivery as unverifiable and this job still goes green. That is the
+  # residual #2235 tracks; its close condition is observing a `repository_dispatch` run on the
+  # satellites plus the MW_IMAGE_DIGEST bump PRs — never a green tick here.
   notify-platform-update:
     name: "Notify platform-update registry"
-    needs: [gate, plugin-test-image, promote]
+    # `preflight` is what guarantees URL + SECRET exist, so nothing in this job checks for them.
+    needs: [preflight, gate, plugin-test-image, promote]
+    # The ONLY condition, and it is about the RUN, not about an input: notify when this run
+    # actually published something. Never "notify if the secret happens to be set".
     if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1307,22 +1391,39 @@ jobs:
           V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
         run: |
           set -euo pipefail
-          if [ -z "${URL:-}" ] || [ -z "${SECRET:-}" ]; then
-            echo "::notice::Platform-update notify NOT CONFIGURED — set repo var PLATFORM_WEBHOOK_URL and secret PLATFORM_WEBHOOK_SECRET to enable the fleet platform-update agent."
-            echo "### ⚠️ Platform-update notify not configured (PLATFORM_WEBHOOK_URL / PLATFORM_WEBHOOK_SECRET)" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
           az acr login --name meshweaver
           # The digest of mw-plugin-test:main — the exact pin (MW_IMAGE_DIGEST) the plugin repos
           # compile against. Resolved HERE so the mesh side needs no registry credential.
           DIGEST=$(docker buildx imagetools inspect meshweaver.azurecr.io/mw-plugin-test:main --format '{{json .Manifest.Digest}}' | tr -d '"')
-          [ -n "$DIGEST" ] || { echo "::error::could not resolve mw-plugin-test:main digest"; exit 1; }
-          BODY=$(printf '{"event":"platform-build","repo":"%s","sha":"%s","version":"%s","image":"meshweaver.azurecr.io/mw-plugin-test","digest":"%s"}'             "$GITHUB_REPOSITORY" "$SHA" "$V_PLUGIN" "$DIGEST")
+          [ -n "$DIGEST" ] || { echo "::error::could not resolve mw-plugin-test:main digest — the release event would name a pin that does not exist"; exit 1; }
+          BODY=$(printf '{"event":"platform-build","repo":"%s","sha":"%s","version":"%s","image":"meshweaver.azurecr.io/mw-plugin-test","digest":"%s"}' "$GITHUB_REPOSITORY" "$SHA" "$V_PLUGIN" "$DIGEST")
           SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
-          code=$(curl -sS -o /tmp/resp -w '%{http_code}' -X POST "$URL"             -H 'Content-Type: application/json' -H "X-Hub-Signature-256: $SIG" --data "$BODY")
+          # `|| code=000` is not defensive noise: `run:` is `bash -e`, so a curl that fails at the
+          # TRANSPORT level (DNS, TLS, connection refused) would kill the step before the verdict
+          # below — failing closed, but with a bare curl error instead of the sentence naming what
+          # is wrong. The timeouts stop an unreachable instance from burning the job timeout.
+          code=$(curl -sS -o /tmp/resp -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+            -X POST "$URL" -H 'Content-Type: application/json' \
+            -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
           echo "POST $URL -> $code"; cat /tmp/resp || true
-          case "$code" in 2*) echo "### 📣 Platform build $SHA ($DIGEST) notified to the update agent" >> "$GITHUB_STEP_SUMMARY";;
-            *) echo "::warning::platform-update notify returned $code — the next green build re-notifies; investigate the registry instance if it persists.";; esac
+          case "$code" in
+            2*)
+              echo "### 📣 Release event for $SHA ($DIGEST) accepted by the inbox (HTTP $code)" >> "$GITHUB_STEP_SUMMARY"
+              echo "The mesh STORED the delivery. Whether the wave actually ran is verified on the satellites (a repository_dispatch run + the MW_IMAGE_DIGEST bump PR), never here — see #2235." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            000)
+              echo "::error::could not reach the platform-update inbox at all (DNS/TLS/connection refused). No release event was delivered, so no satellite will re-bake against $SHA until its next schedule poll."
+              exit 1
+              ;;
+            404)
+              echo "::error::the platform-update inbox answered 404. It is FAIL-CLOSED and answers 404 for BOTH an unlisted target and a wrong URL — check vars.PLATFORM_WEBHOOK_URL against the instance's WebhookInbox:Targets (deploy/aks/values.aks.yaml sets WebhookInbox__Targets__0=Hosting/PlatformBuilds). No release event was delivered."
+              exit 1
+              ;;
+            *)
+              echo "::error::the platform-update inbox refused the release event (HTTP $code). No satellite will re-bake against $SHA until its next schedule poll."
+              exit 1
+              ;;
+          esac
 
   # ─────────────────────────── DID IT ACTUALLY SHIP? ──────────────────────────
   # Belt and braces: `promote` PREVENTS a partial set, this CONFIRMS one landed. Assert the
@@ -1457,7 +1558,11 @@ jobs:
     # delivery-verdict is in this list ON PURPOSE: it is the job that turns the two
     # invisible do-nothing states (green-but-stuck reconcile, red-main push) into failures,
     # and a failure nobody is paged for is still invisible.
-    needs: [gate, portal-image, migration-image, plugin-test-image, promote, verify-images, publish-bake, delivery-verdict]
+    # `preflight` and `notify-platform-update` are in this list ON PURPOSE (#2235): the release
+    # event that starts the cross-repo rebake wave used to be unfailable, and a failure nobody is
+    # paged for is still invisible. A red notify job does NOT mean the images are missing —
+    # `verify-images` answers that — it means no satellite learned about them.
+    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1486,7 +1591,12 @@ jobs:
             --color B60205 --force || echo "::warning::could not ensure the ci-failure label (continuing to file the alert)"
           body="CD failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) for commit \`${HEAD_SHA}\` (entered via \`${REASON:-unknown}\`).
 
-          No complete image set was published - publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set. Triage the failed job in the linked run. The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. Close this issue once CD is green."
+          Triage the failed job in the linked run - which of the two things CD delivers is broken depends on WHICH job went red:
+
+          * an IMAGE job / promote / verify-images: no complete image set was published. Publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set.
+          * preflight / notify-platform-update: the images may be fine, but the release EVENT did not reach the control instance, so no node repo re-bakes against this commit until its own schedule poll (#2235). Read the job's ::error:: line - it names what to provision or what refused the delivery.
+
+          The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. Close this issue once CD is green."
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
             --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
@@ -1507,5 +1617,5 @@ jobs:
   # credentials — which is also why the old `az aks command invoke` deploy job was deleted: it
   # required a central service principal with per-cluster Azure RBAC (the `commandResults/read`
   # authorization failure on 2026-06-29), a model that cannot scale to installs prod doesn't manage.
-  # See SelfUpdate.md / DEPLOY-RUNBOOK.md for enabling self-update on an environment (the SA + RBAC are
+  # See deploy/aks/SELF-UPDATE.md / deploy/aks/README.md for enabling self-update on an environment (the SA + RBAC are
   # in the Helm chart; set selfUpdate.azureClientId and grant the UAMI AcrPull).
