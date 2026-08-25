@@ -9,7 +9,6 @@
   <ItemGroup>
     <!-- The in-process (monolith) mesh + SQLite persistence — the same local-first stack the MAUI client
          runs in-process, here as a headless host so a JS client (React Native / web) can reach it over gRPC. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Operations\MeshWeaver.Mesh.Operations.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Sqlite\MeshWeaver.Hosting.Sqlite.csproj" />
