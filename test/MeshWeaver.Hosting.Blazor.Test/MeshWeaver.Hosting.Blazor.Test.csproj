@@ -23,13 +23,11 @@
          pack's controls resolve to the pack's views via LayoutClientConfiguration — the gate whose
          absence let AppleMaps/OpenStreetMap ship with inert registrations. Direct references on
          purpose: the gate anchors the packs themselves. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Graph\MeshWeaver.Blazor.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
     <!-- ControlStyleRenderingTest and the registration gate name the DEFAULT pack's views
          (ButtonView, MarkdownView, Monaco/CodeEditorView, …) by type — a compiled-in reference
          on purpose (a publish lane can never satisfy a by-name type reference, the #2018
          lesson). The EntityViews slices moved WITH that pack to MeshWeaver.Plugins. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Views\MeshWeaver.Blazor.Views.csproj" />
     <!-- StaticContentUnmountedTest drives the REAL /static + /api/content endpoints over a real
          monolith mesh (real PermissionEvaluator, real content collections) — no mocks. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
