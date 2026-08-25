@@ -198,7 +198,8 @@ public class NodeContentTypeRoundTripTest(ITestOutputHelper output) : HubTestBas
         var attemptedAt = new DateTimeOffset(2026, 8, 23, 13, 48, 0, TimeSpan.Zero);
         var content = PostPublishProblem.Apply(
             new SocialPost { Text = "Hello", Status = "Scheduled" },
-            PostPublishProblem.Explain("not-connected"),
+            "not-connected",
+            statusCode: 0,
             attemptedAt);
         var node = new MeshNode("CarsonPublishTest", "Posts")
         {
@@ -221,7 +222,10 @@ public class NodeContentTypeRoundTripTest(ITestOutputHelper output) : HubTestBas
         // …and a success CLEARS it, rather than leaving a live post explaining a failure it
         // recovered from.
         var cleared = Assert.IsType<SocialPost>(
-            RoundTrip(node with { Content = PostPublishProblem.Apply(stored, null, attemptedAt) }).Content);
+            RoundTrip(node with
+            {
+                Content = PostPublishProblem.Apply(stored, null, statusCode: 0, attemptedAt),
+            }).Content);
         Assert.Null(cleared.LastPublishError);
         Assert.Null(cleared.LastPublishAttemptAt);
     }

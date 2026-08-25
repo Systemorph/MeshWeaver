@@ -148,15 +148,165 @@ public class ScheduledPublishIdentityTest
         var stored = System.Text.Json.JsonDocument.Parse(
             """{"$type":"SocialPost","text":"hello","status":"Scheduled"}""").RootElement.Clone();
 
-        var withProblem = PostPublishProblem.Apply(stored, "It did not go out.", now);
+        var withProblem = PostPublishProblem.Apply(stored, "not-connected", statusCode: 0, now);
         Assert.Equal("SocialPost", withProblem["$type"]!.GetValue<string>());
-        Assert.Equal("It did not go out.", withProblem[PostPublishProblem.ErrorKey]!.GetValue<string>());
+        // 🌍 The stored datum is the CODE — that is what a localized renderer will read.
+        Assert.Equal("not-connected", withProblem[PostPublishProblem.ErrorCodeKey]!.GetValue<string>());
+        // …with the English rendering alongside it, for the bundle page that reads it today.
+        Assert.Contains("connect LinkedIn",
+            withProblem[PostPublishProblem.ErrorKey]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
         Assert.Equal("hello", withProblem["text"]!.GetValue<string>());
 
-        var cleared = PostPublishProblem.Apply(withProblem, null, now);
+        var cleared = PostPublishProblem.Apply(withProblem, null, statusCode: 0, now);
         Assert.Equal("SocialPost", cleared["$type"]!.GetValue<string>());
         Assert.True(cleared.ContainsKey(PostPublishProblem.ErrorKey), "the key must be WRITTEN as null, not omitted");
         Assert.Null(cleared[PostPublishProblem.ErrorKey]);
+        Assert.Null(cleared[PostPublishProblem.ErrorCodeKey]);
+        Assert.Null(cleared[PostPublishProblem.AttemptedAtKey]);
         Assert.Equal("hello", cleared["text"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// 🚨 <b>The repair-on-sight regression (PR #2261 review).</b> The arming policy used to skip
+    /// any Pending timer whose slot already matched — which is EVERY timer the broken build armed:
+    /// they carry a null <c>CreatedBy</c> and an otherwise-correct <c>FireAt</c>. So the #50 fix
+    /// would have helped only posts scheduled AFTER the deploy, while every already-scheduled post
+    /// stayed silently refused at its slot, with the fix in place. A timer this deployment would
+    /// refuse to fire must be rewritten, not skipped.
+    /// </summary>
+    [Fact]
+    public void ATimerArmedByTheOldBugIsRepairedRatherThanSkipped()
+    {
+        var slot = new DateTimeOffset(2026, 8, 23, 13, 48, 0, TimeSpan.Zero);
+
+        // The exact shape the broken build left behind: right slot, nobody to publish as.
+        Assert.True(ScheduledPostWatcher.ShouldArm(Timer(slot, EventSubscriptionStatus.Pending, null), slot));
+        // A system/hub principal is just as unusable, and just as repairable.
+        Assert.True(ScheduledPostWatcher.ShouldArm(
+            Timer(slot, EventSubscriptionStatus.Pending, "system-security"), slot));
+
+        // A healthy, unchanged timer is still left completely alone — no churn, no re-emission.
+        Assert.False(ScheduledPostWatcher.ShouldArm(
+            Timer(slot, EventSubscriptionStatus.Pending, "carson"), slot));
+
+        // A post with no timer at all is armed.
+        Assert.True(ScheduledPostWatcher.ShouldArm(null, slot));
+        // A re-slotted post moves its timer.
+        Assert.True(ScheduledPostWatcher.ShouldArm(
+            Timer(slot.AddHours(-1), EventSubscriptionStatus.Pending, "carson"), slot));
+    }
+
+    /// <summary>
+    /// The repair must NOT loosen the at-most-once rule. Publishing is not idempotent — firing
+    /// twice posts to LinkedIn twice — so a handed-over or human-stopped timer is never rewritten,
+    /// whatever its identity says. A Failed one is re-armed only for a genuinely different slot,
+    /// which ties the retry to a new human decision rather than to a reconcile loop.
+    /// </summary>
+    [Theory]
+    [InlineData(EventSubscriptionStatus.Fired)]
+    [InlineData(EventSubscriptionStatus.Cancelled)]
+    public void AHandedOverOrStoppedTimerIsNeverRearmed(EventSubscriptionStatus status)
+    {
+        var slot = new DateTimeOffset(2026, 8, 23, 13, 48, 0, TimeSpan.Zero);
+
+        Assert.False(ScheduledPostWatcher.ShouldArm(Timer(slot, status, "carson"), slot));
+        // …not even to "repair" a missing identity, and not even for a new slot.
+        Assert.False(ScheduledPostWatcher.ShouldArm(Timer(slot, status, null), slot));
+        Assert.False(ScheduledPostWatcher.ShouldArm(Timer(slot, status, "carson"), slot.AddHours(1)));
+    }
+
+    [Fact]
+    public void AFailedTimerIsRearmedOnlyForADifferentSlot()
+    {
+        var slot = new DateTimeOffset(2026, 8, 23, 13, 48, 0, TimeSpan.Zero);
+
+        Assert.False(ScheduledPostWatcher.ShouldArm(
+            Timer(slot, EventSubscriptionStatus.Failed, "carson"), slot));
+        Assert.True(ScheduledPostWatcher.ShouldArm(
+            Timer(slot, EventSubscriptionStatus.Failed, "carson"), slot.AddHours(1)));
+    }
+
+    /// <summary>A post's publish timer, as the subscription store holds it.</summary>
+    private static EventSubscription Timer(
+        DateTimeOffset fireAt, EventSubscriptionStatus status, string? createdBy) =>
+        new()
+        {
+            Id = ScheduledPostWatcher.SubscriptionId("Posts/CarsonPublishTest"),
+            FireAt = fireAt,
+            Status = status,
+            CreatedBy = createdBy,
+            ContinuationType = EventContinuationType.PublishSocialPost,
+            TargetPath = "Posts/CarsonPublishTest",
+        };
+
+    /// <summary>
+    /// 🌍 The recorded problem is a stable CODE plus its status, not only a sentence — that is what
+    /// makes it localizable later without re-migrating stored English. The HTTP status is recorded
+    /// when LinkedIn answered, and omitted when nothing ever reached the network.
+    /// </summary>
+    [Fact]
+    public void TheProblemIsStoredAsACodeAndAStatus()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        var refused = PostPublishProblem.Apply(null, "duplicate post", 422, now);
+        Assert.Equal("duplicate post", refused[PostPublishProblem.ErrorCodeKey]!.GetValue<string>());
+        Assert.Equal(422, refused[PostPublishProblem.ErrorStatusKey]!.GetValue<int>());
+
+        // A pre-publish gate never reached LinkedIn, so there is no status to record.
+        var gated = PostPublishProblem.Apply(null, "not-connected", statusCode: 0, now);
+        Assert.Null(gated[PostPublishProblem.ErrorStatusKey]);
+    }
+
+    /// <summary>
+    /// 🚨 A refusal that names no reason must still RECORD one. Null means CLEAR everywhere in this
+    /// class, so passing a null reason straight through would wipe the post's problem and leave the
+    /// only person who can act on it seeing nothing at all — the exact silence #50 is about.
+    /// </summary>
+    [Fact]
+    public void ARefusalWithNoReasonStillRecordsAProblem()
+    {
+        Assert.Equal(PostPublishProblem.UnknownCode, PostPublishProblem.CodeOf(null));
+        Assert.Equal(PostPublishProblem.UnknownCode, PostPublishProblem.CodeOf("   "));
+        Assert.Equal("not-connected", PostPublishProblem.CodeOf("not-connected"));
+
+        var content = PostPublishProblem.Apply(
+            null, PostPublishProblem.CodeOf(null), 500, DateTimeOffset.UtcNow);
+        Assert.Equal(PostPublishProblem.UnknownCode,
+            content[PostPublishProblem.ErrorCodeKey]!.GetValue<string>());
+        Assert.NotEmpty(content[PostPublishProblem.ErrorKey]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// 🚨 The regression for the asymmetric no-op (PR #2261 review): a matching CODE is enough to
+    /// skip a re-record — that is the write-storm guard — but a CLEAR must look at the whole
+    /// problem. A post whose code is already absent can still carry a stale attempted-at written by
+    /// an older build, and skipping on the code alone would leave a published post permanently
+    /// claiming a failed attempt.
+    /// </summary>
+    [Fact]
+    public void ClearingIsNotSkippedWhileAnyResidueRemains()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        // Same code, same status → nothing to write.
+        var recorded = PostPublishProblem.Apply(null, "not-connected", statusCode: 0, now);
+        Assert.True(PostPublishProblem.AlreadySays(recorded, "not-connected"));
+        Assert.False(PostPublishProblem.AlreadySays(recorded, "empty-text"));
+        // A DIFFERENT status is a different problem, even under the same code.
+        Assert.False(PostPublishProblem.AlreadySays(recorded, "not-connected", 429));
+
+        // Clearing a recorded problem must write.
+        Assert.False(PostPublishProblem.AlreadySays(recorded, null));
+
+        // The residue case: no code left, but a stale attempted-at still on the node.
+        var residue = System.Text.Json.JsonDocument.Parse(
+            "{\"$type\":\"SocialPost\",\"" + PostPublishProblem.AttemptedAtKey
+            + "\":\"2026-08-23T13:48:00Z\"}").RootElement.Clone();
+        Assert.False(PostPublishProblem.AlreadySays(residue, null));
+
+        // Only a genuinely clean post is a no-op to clear.
+        Assert.True(PostPublishProblem.AlreadySays(
+            PostPublishProblem.Apply(recorded, null, statusCode: 0, now), null));
     }
 }

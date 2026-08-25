@@ -74,6 +74,12 @@ public sealed class LinkedInPublishService
 
         var text = textOverride ?? Prop(postNode, "body") ?? Prop(postNode, "text");
         var profilePath = ProfilePathOf(postNode);
+        // 🚨 These awaits are NOT a new async surface, and they cannot be removed here (PR #2261
+        // review). This service is the HTTP-edge async LEAF — documented as such on the class — and
+        // the hub side never awaits it: ScheduledSocialPublishHandler runs the whole call through
+        // `_httpPool.Invoke(ct => service.PublishPostAsync(...))`, which is exactly the IIoPool
+        // boundary AGENTS.md prescribes for a Task-returning leaf. Returning the Task instead of
+        // awaiting it is not an option either — CS4016: an async method cannot return a Task<T>.
         if (string.IsNullOrWhiteSpace(profilePath))
             return await RefuseAsync(postNode, "profile-path-missing", ct);
         if (string.IsNullOrWhiteSpace(text))
@@ -91,22 +97,19 @@ public sealed class LinkedInPublishService
         // the recorded reason is CLEARED — a post that is live must not keep explaining a failure
         // it recovered from. On refusal the reason is the whole point: without it the post reads
         // "Failed" and says nothing about why, which is the silence this write exists to break.
+        var now = DateTimeOffset.UtcNow;
         var updates = outcome.Success
-            ? new Dictionary<string, object?>
-            {
-                ["status"] = "Published",
-                ["publishedUrn"] = outcome.Urn,
-                ["publishedAt"] = DateTimeOffset.UtcNow,
-                [PostPublishProblem.ErrorKey] = null,
-                [PostPublishProblem.AttemptedAtKey] = null,
-            }
-            : new Dictionary<string, object?>
-            {
-                ["status"] = "Failed",
-                [PostPublishProblem.ErrorKey] =
-                    PostPublishProblem.Explain(ShortReason(outcome.Error), outcome.StatusCode),
-                [PostPublishProblem.AttemptedAtKey] = DateTimeOffset.UtcNow,
-            };
+            ? Bag(new Dictionary<string, object?>
+                {
+                    ["status"] = "Published",
+                    ["publishedUrn"] = outcome.Urn,
+                    ["publishedAt"] = now,
+                },
+                // Clears the recorded problem — see PostPublishProblem.Fields.
+                PostPublishProblem.Fields(reasonCode: null, statusCode: 0, now))
+            : Bag(new Dictionary<string, object?> { ["status"] = "Failed" },
+                PostPublishProblem.Fields(
+                    PostPublishProblem.CodeOf(ShortReason(outcome.Error)), outcome.StatusCode, now));
         await WriteBackAsync(postNode, updates, ct);
 
         return outcome.Success
@@ -222,14 +225,23 @@ public sealed class LinkedInPublishService
     /// existed a scheduled post refused for a missing credential sat past its slot in complete
     /// silence (issue #50). <c>HttpAttempted</c> stays false — nothing was sent to LinkedIn.
     /// </summary>
-    private async Task<PublishNodeOutcome> RefuseAsync(MeshNode postNode, string reason, CancellationToken ct)
+    private async Task<PublishNodeOutcome> RefuseAsync(MeshNode postNode, string reasonCode, CancellationToken ct)
     {
-        await WriteBackAsync(postNode, new Dictionary<string, object?>
-        {
-            [PostPublishProblem.ErrorKey] = PostPublishProblem.Explain(reason),
-            [PostPublishProblem.AttemptedAtKey] = DateTimeOffset.UtcNow,
-        }, ct);
-        return PublishNodeOutcome.Fail(reason);
+        await WriteBackAsync(
+            postNode,
+            Bag(new Dictionary<string, object?>(),
+                PostPublishProblem.Fields(reasonCode, statusCode: 0, DateTimeOffset.UtcNow)),
+            ct);
+        return PublishNodeOutcome.Fail(reasonCode);
+    }
+
+    /// <summary>The update bag <paramref name="head"/> with <paramref name="rest"/> applied over it.</summary>
+    private static Dictionary<string, object?> Bag(
+        Dictionary<string, object?> head, IReadOnlyList<KeyValuePair<string, object?>> rest)
+    {
+        foreach (var (key, value) in rest)
+            head[key] = value;
+        return head;
     }
 
     private async Task WriteBackAsync(MeshNode postNode, IReadOnlyDictionary<string, object?> updates, CancellationToken ct)

@@ -86,9 +86,8 @@ public sealed class ScheduledSocialPublishHandler(
         if (UnusableScheduler(scheduler) is { } refusal)
             return RecordThenThrow(
                 postPath!,
-                "This post could not be published because the mesh could not tell who scheduled it, "
-                + "and the LinkedIn account to post from is chosen per person. Open the post and "
-                + "schedule it again from the page.",
+                PostPublishProblem.SchedulerUnknownCode,
+                statusCode: 0,
                 new InvalidOperationException(
                     $"Event subscription {subscription.Id} cannot publish: {refusal} The credential is "
                     + "chosen by the post's authorPath, so an un-gated timed publish could go out through "
@@ -129,7 +128,8 @@ public sealed class ScheduledSocialPublishHandler(
                 // it owns; this covers the ones it does not reach and is idempotent either way.
                 : RecordThenThrow(
                     postPath!,
-                    PostPublishProblem.Explain(outcome.Reason, outcome.StatusCode),
+                    PostPublishProblem.CodeOf(outcome.Reason),
+                    outcome.StatusCode,
                     new InvalidOperationException(
                         $"Scheduled publish of '{postPath}' was refused: {outcome.Reason ?? "unknown"}"
                         + (outcome.StatusCode > 0 ? $" (HTTP {outcome.StatusCode})" : string.Empty)
@@ -141,7 +141,7 @@ public sealed class ScheduledSocialPublishHandler(
     }
 
     /// <summary>
-    /// Records <paramref name="reason"/> on the post, then fails with <paramref name="error"/> —
+    /// Records <paramref name="reasonCode"/> on the post, then fails with <paramref name="error"/> —
     /// the reason the person sees and the reason the operator sees, in that order.
     ///
     /// <para>🚨 <b>The throw is unconditional.</b> <see cref="PostPublishProblem.Record"/> completes
@@ -154,8 +154,13 @@ public sealed class ScheduledSocialPublishHandler(
     /// <para>A failure of the diagnostic write itself is logged and DISCARDED for the same reason:
     /// it must never REPLACE the reason it was describing.</para>
     /// </summary>
-    private IObservable<MeshNode> RecordThenThrow(string postPath, string reason, Exception error) =>
-        PostPublishProblem.Record(hub, postPath, reason, DateTimeOffset.UtcNow, logger)
+    /// <param name="postPath">The post to record the problem on.</param>
+    /// <param name="reasonCode">The stable problem code the post should carry.</param>
+    /// <param name="statusCode">The HTTP status LinkedIn answered with, or 0 when it did not.</param>
+    /// <param name="error">The failure to raise once the problem is recorded.</param>
+    private IObservable<MeshNode> RecordThenThrow(
+        string postPath, string reasonCode, int statusCode, Exception error) =>
+        PostPublishProblem.Record(hub, postPath, reasonCode, statusCode, DateTimeOffset.UtcNow, logger)
             .IgnoreElements()
             .Catch<MeshNode, Exception>(writeEx =>
             {

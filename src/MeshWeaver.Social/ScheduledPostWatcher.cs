@@ -130,7 +130,7 @@ public sealed class ScheduledPostWatcher(
             // …and say it where the person who scheduled it will look. A log line reaches whoever
             // has cluster access; the post reaches its owner (issue #50).
             foreach (var post in authorless)
-                ReportProblem(post, PostPublishProblem.Explain("profile-path-missing"));
+                ReportProblem(post, "profile-path-missing");
         }
 
         var posts = asking.Where(p => !string.IsNullOrWhiteSpace(AuthorPathOf(p))).ToList();
@@ -199,21 +199,7 @@ public sealed class ScheduledPostWatcher(
         var id = SubscriptionId(postPath);
         timers.TryGetValue(id, out var current);
 
-        if (!MayArm(current, slot))
-            return;
-
-        // Unchanged — writing again would churn the node's version for nothing, and every write
-        // re-emits the query that brought us here.
-        //
-        // 🚨 "Unchanged" includes the IDENTITY, not just the slot. Every timer armed by the build
-        // this fixes carries a null CreatedBy (the path-less query could not name one), and such a
-        // timer is Pending with exactly the right FireAt — so a slot-only comparison would skip it
-        // forever and every post scheduled BEFORE this deploys would still be refused at its slot,
-        // silently, with the fix in place. A timer whose identity this deployment would refuse is
-        // therefore treated as changed and REPAIRED on sight.
-        if (current is { Status: EventSubscriptionStatus.Pending }
-            && current.FireAt == slot
-            && UsableScheduler(current.CreatedBy) is not null)
+        if (!ShouldArm(current, slot))
             return;
 
         // WHO the publish runs as, resolved AUTHORITATIVELY — see ResolveScheduler. An existing
@@ -266,6 +252,33 @@ public sealed class ScheduledPostWatcher(
         _ => false,
     };
 
+    /// <summary>
+    /// Whether the post's timer must be WRITTEN — the complete arming policy, pure so that the one
+    /// decision behind "why did my post not go out?" is testable without a mesh.
+    ///
+    /// <para>It is <see cref="MayArm"/> (may this timer be touched at all) minus the unchanged
+    /// case: rewriting an identical subscription churns the node's version for nothing, and every
+    /// write re-emits the query that brought the watcher here.</para>
+    ///
+    /// <para>🚨 <b>"Unchanged" includes the IDENTITY, not just the slot.</b> Every timer armed by
+    /// the build this fixes carries a null <c>CreatedBy</c> — the path-less query could not name
+    /// one (see <see cref="ResolveScheduler"/>) — and such a timer is <c>Pending</c> with exactly
+    /// the right <c>FireAt</c>. A slot-only comparison therefore skips it forever, so every post
+    /// scheduled BEFORE this deploys would still be refused at its slot, silently, with the fix in
+    /// place and nothing to indicate why. A timer whose identity this deployment would refuse is
+    /// treated as changed and REPAIRED on sight.</para>
+    /// </summary>
+    /// <param name="current">The post's existing timer, or null when it has none.</param>
+    /// <param name="slot">The slot the post is now asking for.</param>
+    public static bool ShouldArm(EventSubscription? current, DateTimeOffset slot)
+    {
+        if (!MayArm(current, slot))
+            return false;
+        return current is not { Status: EventSubscriptionStatus.Pending }
+            || current.FireAt != slot
+            || UsableScheduler(current.CreatedBy) is null;
+    }
+
     /// <summary>Writes the post's timer.</summary>
     private void Arm(
         MeshNode post, DateTimeOffset slot, EventSubscription? current, string id, string? scheduler)
@@ -280,10 +293,7 @@ public sealed class ScheduledPostWatcher(
             logger?.LogWarning(
                 "No timer armed for {Path}: {Refusal} Set an author profile and re-schedule it from "
                 + "the post page so the publish has an identity to run as.", postPath, refusal);
-            ReportProblem(post,
-                "This post could not be handed over for publishing because the mesh could not tell "
-                + "who scheduled it, and the LinkedIn account to post from is chosen per person. "
-                + "Open the post and schedule it again from the page.");
+            ReportProblem(post, PostPublishProblem.SchedulerUnknownCode);
             return;
         }
 
@@ -378,12 +388,13 @@ public sealed class ScheduledPostWatcher(
     /// authoritative node, so the convergence does not depend on the projection either.</para>
     /// </summary>
     /// <param name="post">The post as the emission delivered it.</param>
-    /// <param name="reason">The sentence its owner should read.</param>
-    private void ReportProblem(MeshNode post, string reason)
+    /// <param name="reasonCode">The stable problem code to record.</param>
+    private void ReportProblem(MeshNode post, string reasonCode)
     {
-        if (string.Equals(Prop(post, PostPublishProblem.ErrorKey), reason, StringComparison.Ordinal))
+        if (PostPublishProblem.AlreadySays(post.Content, reasonCode))
             return;
-        AsSystem(() => PostPublishProblem.Record(hub, post.Path, reason, DateTimeOffset.UtcNow, logger))
+        AsSystem(() => PostPublishProblem.Record(
+                hub, post.Path, reasonCode, statusCode: 0, DateTimeOffset.UtcNow, logger))
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex, "Could not record the publish problem on {Path}", post.Path));
