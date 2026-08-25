@@ -20,6 +20,40 @@ namespace MeshWeaver.Graph.Configuration;
 public static class PrebuiltAssemblySeeder
 {
     /// <summary>
+    /// Deployment opt-in that turns the compile FALLBACK into a NAMED, early error: a mesh that
+    /// sets <c>Modules:RequirePrebuilt</c> to <c>true</c> refuses to Roslyn-compile module content
+    /// whose prebuilt assemblies are missing — the miss fails the install/update immediately,
+    /// naming the package, the registry, the framework identity/architecture and the fix
+    /// (publish or rebake the bundle for this lane) instead of quietly compiling.
+    ///
+    /// <para>🚨 <b>Default OFF.</b> Compiling stays the correct fallback wherever the bake lanes do
+    /// not yet cover the mesh's identity (local/dev meshes, CI's disposable meshes, the bake mesh
+    /// itself — those are the places compiling remains legal). A PRODUCTION portal opts in because
+    /// its invariant is "the runtime artifact of a module is a baked DLL": a silent compile there
+    /// is a distribution failure being papered over — the 2026-08-25 Store incident's
+    /// "carried no assemblies — compiling instead" family. Design of record:
+    /// Systemorph/MeshWeaver#2193 §A. Sibling policy key:
+    /// <c>NodeTypeEnrichmentHelpers.AutoRecycleConfigKey</c> (convergence after a publish).</para>
+    /// </summary>
+    public const string RequirePrebuiltConfigKey = "Modules:RequirePrebuilt";
+
+    /// <summary>Reads <see cref="RequirePrebuiltConfigKey"/> — absent or unparseable means OFF,
+    /// the compile-fallback default. Never throws.</summary>
+    public static bool RequirePrebuilt(IServiceProvider? services)
+    {
+        try
+        {
+            var value = services?
+                .GetService<Microsoft.Extensions.Configuration.IConfiguration>()?[RequirePrebuiltConfigKey];
+            return bool.TryParse(value, out var parsed) && parsed;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Why a prebuilt assembly may NOT be adopted, or null when it may.
     ///
     /// <para>🚨 This is the whole safety argument, kept as one pure function so it can be tested

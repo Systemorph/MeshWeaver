@@ -53,6 +53,7 @@ public sealed class PluginBundleClient
     // The count that proves the lane works (#1782 gap 4). Optional: a host that registers no
     // ledger loses the counting, never the fetching.
     private readonly BundleAdoptionLedger? _ledger;
+    private readonly bool _requirePrebuilt;
 
     // ONE index read per client, shared by every package the install pass covers. PromiseSlot, not
     // a plain cached field: concurrent first callers share the single run, and a fault EVICTS so
@@ -78,6 +79,9 @@ public sealed class PluginBundleClient
         _logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger<PluginBundleClient>();
         _ledger = hub.ServiceProvider.GetService<BundleAdoptionLedger>();
+        // Deployment policy, resolved once: a require-prebuilt mesh turns every miss below into a
+        // named early failure instead of a compile fallback. See RequirePrebuiltConfigKey.
+        _requirePrebuilt = PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider);
     }
 
     /// <summary>What the registry advertises: the framework its assemblies were built against, and
@@ -199,18 +203,36 @@ public sealed class PluginBundleClient
             });
 
     /// <summary>
-    /// Records a miss and reports it as the zero every caller already handles.
+    /// Records a miss and reports it as the zero every caller already handles — or, on a mesh that
+    /// opted into <see cref="PrebuiltAssemblySeeder.RequirePrebuiltConfigKey"/>, FAILS with the
+    /// named <see cref="PrebuiltRequiredException"/> instead: such a mesh does not compile, so a
+    /// miss is not a slow success, it is the distribution lane being dark, and it must fail the
+    /// install EARLY, naming what is missing and what fixes it (#2193 §A).
     ///
-    /// <para>The integer return is deliberately unchanged: adoption must never fail an install, and
-    /// widening the contract would ripple through five call sites for no gain. What changes is that
-    /// the zero is no longer the ONLY thing that happened — the reason is named in the log and
-    /// counted in the ledger, so "the lane is dark" is answerable after the fact.</para>
+    /// <para>On the default path the integer return is deliberately unchanged: adoption must never
+    /// fail an install there, and widening the contract would ripple through five call sites for
+    /// no gain. What changed first (#1782) is that the zero is no longer the ONLY thing that
+    /// happened — the reason is named in the log and counted in the ledger; the ledger records the
+    /// miss in BOTH modes, so the flag never trades observability for strictness.</para>
     /// </summary>
     private IObservable<int> Miss(string pluginId, BundleAdoptionKind kind, string? reason)
     {
         _ledger?.Record(new BundleAdoptionOutcome(pluginId, kind, _registryUrl, Reason: reason));
+        if (_requirePrebuilt)
+            return Observable.Throw<int>(new PrebuiltRequiredException(RequiredMessage(
+                pluginId, kind.ToString(), reason)));
         return Observable.Return(0);
     }
+
+    /// <summary>The one message shape for every <see cref="PrebuiltAssemblySeeder.RequirePrebuiltConfigKey"/>
+    /// refusal on this lane — package, registry, identity/architecture, miss kind, fix. Pure.</summary>
+    private string RequiredMessage(string pluginId, string kind, string? reason) =>
+        $"{PrebuiltAssemblySeeder.RequirePrebuiltConfigKey}: no prebuilt assemblies for "
+        + $"'{pluginId}' from {_registryUrl} on framework "
+        + $"{PrebuiltAssemblySeeder.LiveFrameworkMvid}/{ReleaseArchitecture.Live} "
+        + $"({kind}{(string.IsNullOrWhiteSpace(reason) ? "" : $": {reason}")}). "
+        + "This mesh does not compile module content — publish or rebake the bundle for this "
+        + "framework identity and architecture, then retry the install (MeshWeaver#2193 §A).";
 
     /// <summary>
     /// Fetches <paramref name="pluginId"/>'s bundle and LANDS the compiled module it carries into
@@ -444,12 +466,23 @@ public sealed class PluginBundleClient
                 // like a package that has no NodeTypes, and the compile that follows looks like
                 // normal behaviour rather than a regression in the distribution lane.
                 if (manifest?.Misses is { Count: > 0 } misses)
+                {
                     _logger?.LogWarning(
                         "Bundle for {Plugin}: the registry could resolve NO artifact for {Missed} "
                         + "NodeType(s) on framework {Identity}/{Architecture} — they will be "
                         + "compiled here: {Misses}",
                         pluginId, misses.Count, PrebuiltAssemblySeeder.LiveFrameworkMvid,
                         ReleaseArchitecture.Live, string.Join(" | ", misses));
+                    // 🚨 PARTIAL coverage fails a require-prebuilt mesh just like a whole-bundle
+                    // miss, and it fails BEFORE any of the resolved assemblies are seeded: the
+                    // unresolved types would otherwise compile at first access — the exact silent
+                    // fallback the flag forbids — and a half-seeded package would make the retry
+                    // after the rebake harder to reason about, not easier.
+                    if (_requirePrebuilt)
+                        return Miss(pluginId, BundleAdoptionKind.NoAssemblies,
+                            $"the registry resolved no artifact for {misses.Count} NodeType(s): "
+                            + string.Join(" | ", misses));
+                }
 
                 if (assemblies.Count == 0)
                 {
