@@ -1333,14 +1333,14 @@ jobs:
         fi
         # (no copy: the ratchet already sits at the root of the tree being gated)
         echo "gating every package under $STAGE"
-        # A gate that discovered nothing must not look like one that passed — the same
-        # postcondition landed-modules-gate asserts about its project list.
-        packages="$(find "$STAGE" -mindepth 2 -maxdepth 2 -name 'index.json' -not -path '*/node_modules/*' | wc -l | tr -d ' ')"
-        echo "packages discovered: $packages"
-        if [ "$packages" -eq 0 ]; then
-          echo "::error::no packages discovered under the plugins checkout — this gate would report green having tested nothing. Either the layout moved or the checkout is wrong."
-          exit 1
-        fi
+        # 🚨 No discovery pre-check here, deliberately. "A gate that discovers nothing must not
+        # look like one that passed" is right, and the TESTER already enforces it: PluginGateRunner
+        # returns a GateReport with FatalError "No node-repo packages (top-level folders with an
+        # index.json root)" when it finds none, and a FatalError exits red. A shell count beside it
+        # would be a SECOND discovery rule that has to agree with the first forever — and it would
+        # not: the tester filters on the index.json CONTENT (DeclaresNodeType), a find(1) count
+        # cannot, so a layout change would false-red every PR in this repo while the tester was
+        # perfectly happy. One source of truth for what counts as a package.
         # plugin-gate.allow is the plugins repo's known-debt ratchet: listed failures are
         # tolerated, NEW failures fail this PR. Same one-way contract the plugins CI uses, so the
         # two gates cannot disagree about what is acceptable.
