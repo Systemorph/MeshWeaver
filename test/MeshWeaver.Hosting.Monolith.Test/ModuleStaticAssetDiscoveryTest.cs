@@ -474,6 +474,10 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
             "App.razor links exactly this URL off the manifest");
         bundle.Headers.CacheControl!.ToString().Should().Contain("immutable",
             "the URL carries the body's content hash, so the bytes behind it can never change");
+        bundle.Headers.Vary.Should().BeEmpty(
+            "this body is written from memory, identity-encoded, and negotiation runs after it — "
+            + "so it does NOT vary by encoding, and claiming it does would split a shared cache's "
+            + "key per Accept-Encoding value on a URL meant to be stored once for a year");
 
         var plain = await client.GetAsync($"/_content/{ModuleName}/{ModuleName}.styles.css");
         plain.StatusCode.Should().Be(HttpStatusCode.OK,
@@ -487,6 +491,9 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
         script.Headers.CacheControl!.NoCache.Should().BeTrue(
             "a pack authors this URL itself, so the host cannot fingerprint it — and saying "
             + "nothing would let a heuristic cache serve the pre-upgrade file");
+        script.Headers.Vary.Should().Contain("Accept-Encoding",
+            "the mounts DO vary — the negotiation serves a .br/.gz body to a client that accepts "
+            + "one — which is exactly why the in-memory bundle above must not copy this header");
 
         await app.StopAsync();
     }

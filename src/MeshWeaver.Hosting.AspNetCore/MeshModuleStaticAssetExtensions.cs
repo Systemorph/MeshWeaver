@@ -143,7 +143,16 @@ public static partial class MeshModuleStaticAssetExtensions
                     && bodies.TryGetValue(context.Request.Path.Value ?? "", out var stylesheet))
                 {
                     context.Response.ContentType = "text/css";
-                    context.Response.Headers.Vary = HeaderNames.AcceptEncoding;
+                    // 🚨 NO `Vary: Accept-Encoding` here, deliberately — do not "harmonise" this
+                    // with the mounts below. This body is written from memory, identity-encoded,
+                    // and the encoding negotiation runs AFTER this middleware, so the response is
+                    // byte-identical whatever the client accepts (and no response-compression
+                    // middleware is registered anywhere in the host to make it otherwise). Vary is
+                    // a promise that the response DOES differ; stating it when it does not splits
+                    // a shared cache's key per Accept-Encoding value and buys nothing — which
+                    // matters most on the fingerprinted URL, whose whole point is one cached copy
+                    // that lives a year. The mounts keep Vary because there it is true: the
+                    // negotiation genuinely serves a .br or .gz body to a client that accepts one.
                     context.Response.Headers.CacheControl = stylesheet.Immutable
                         ? ImmutableCacheControl
                         : RevalidateCacheControl;
