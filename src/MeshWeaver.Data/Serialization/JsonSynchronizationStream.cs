@@ -51,6 +51,42 @@ public static class JsonSynchronizationStream
     /// </summary>
     private const int MaxHostLookupDepth = 8;
 
+    /// <summary>
+    /// 🚨 The hub to post a <see cref="StreamEndedEvent"/> from — <paramref name="owner"/> itself
+    /// when it is healthy, otherwise the nearest ancestor that can still route.
+    ///
+    /// <para>The announcement fires from the stream's disposal, and the case that matters most is
+    /// the OWNING hub tearing down (an idle deactivation, a recycle, a restart) — which disposes
+    /// its hosted <c>sync/</c> hubs from the <c>DisposeHostedHubs</c> phase, by which point the
+    /// owner's own <c>MessageService</c> refuses new posts. Announcing from the owner alone
+    /// therefore works for the tidy single-stream unsubscribe and is SILENT on the exact path
+    /// production takes: measured, with <c>OwnerHubTeardown_ReEstablishesTheSubscription_…</c>
+    /// timing out for its full budget while the tidy case passed.</para>
+    ///
+    /// <para>The parent (a per-node hub's mesh hub) is alive throughout its child's teardown and
+    /// routes by address, so the message lands. When the WHOLE tree is going down nothing here is
+    /// live, the walk finds nobody, and the caller posts from the owner and logs the failure at
+    /// Debug — correct: the process is leaving anyway.</para>
+    ///
+    /// <para>Depth-capped, and it stops on a SELF-PARENT: <c>Configuration.ParentHub</c> resolves
+    /// <c>IMessageHub</c> from the parent DI scope, which for a root hub is the hub itself — the
+    /// same trap <c>LocalInstanceOf</c> documents, where an unguarded walk spins forever.</para>
+    /// </summary>
+    private static IMessageHub AnnouncingHub(IMessageHub owner)
+    {
+        var h = owner;
+        for (var depth = 0; depth < MaxHostLookupDepth; depth++)
+        {
+            if (h.RunLevel <= MessageHubRunLevel.Started && h is not MessageHub { IsDisposing: true })
+                return h;
+            var parent = h.Configuration.ParentHub;
+            if (parent is null || ReferenceEquals(parent, h))
+                break;
+            h = parent;
+        }
+        return owner;
+    }
+
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
     // Mesh.Contract in the project graph and cannot reference it. Same literal
     // recognized by AccessService.ImpersonateAsSystem and PostgreSqlMeshQuery's
@@ -497,6 +533,41 @@ public static class JsonSynchronizationStream
             )
         );
 
+        // 🚨 THE OWNER ANNOUNCING THAT OUR SERVER-SIDE HALF HAS ENDED (#2191).
+        //
+        // Emitted by the owner's outbound forwarding subscription when its per-subscriber stream
+        // completes — an idle release, an UnsubscribeRequest, the owning hub deactivating. Before
+        // this existed the end was SILENT: this mirror kept replaying its last snapshot and every
+        // later change to the node vanished at that seam, which is what froze an open live-bound
+        // layout area on its pre-write content until a reload or a Recycle.
+        //
+        // It rides the SAME carrier as the ShuttingDown NACK, deliberately, so it inherits every
+        // guard that path already earned: the re-ask is held until the owner's teardown has
+        // actually COMPLETED (OwnerTeardownSettled — never racing the dying instance), it goes
+        // through Resubscribe's in-flight guard, it arms ExpectResubscribeFull (the fresh snapshot
+        // may carry a frame version below our cached one after the owner's clock reset), it runs
+        // as System, and it is bounded. Semantically identical, too: the owner has told us in one
+        // breath both that it is gone and that the address will reactivate.
+        //
+        // NOT a watchdog — no timer, no poll, no backoff. One re-ask per real end event, and a
+        // re-ask can never CAUSE an end, so there is nothing here to amplify.
+        reduced.RegisterForDisposal(
+            reduced.Hub.Register<StreamEndedEvent>(
+                delivery =>
+                {
+                    // Debug, not Information: Resubscribe already logs the re-ask at Information
+                    // WITH this reason string, so an Information line here would double the Loki
+                    // volume of one event.
+                    logger.LogDebug(
+                        "Stream {StreamId}: owner {Owner} ended the server-side subscription — re-asking once its teardown settles.",
+                        reduced.StreamId, owner);
+                    rejectedByRecycle.OnNext("ended our server-side subscription");
+                    return delivery.Processed();
+                },
+                d => reduced.StreamId.Equals(d.Message.StreamId)
+            )
+        );
+
         reduced.RegisterForDisposal(
             new AnonymousDisposable(
                 () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner))
@@ -512,6 +583,9 @@ public static class JsonSynchronizationStream
         if (!owner.Equals(hub.Address))
         {
             var resubscribing = 0;
+            // Declared HERE rather than beside its own subscription below so Resubscribe can clear
+            // it — see the reset in the success arm.
+            var recycleReArms = 0;
 
             void Resubscribe(string reason)
             {
@@ -556,6 +630,17 @@ public static class JsonSynchronizationStream
                                 // Owner's first DataChangedEvent is already routed to the
                                 // inner hub by RouteStreamMessage; just clear the flag.
                                 Interlocked.Exchange(ref resubscribing, 0);
+                                // 🚨 …and give the re-arm budget back. MaxRecycleReArms exists to
+                                // stop a DEGENERATE loop — an owner stuck recycling, where each
+                                // re-ask is answered by another rejection/end and nothing is ever
+                                // established. A re-ask the owner ANSWERED is proof this is not
+                                // that loop, so charging it against a once-per-process budget is
+                                // wrong: without this reset a long-lived page that is legitimately
+                                // orphaned a fourth time (four idle deactivations over a working
+                                // day) would silently stop recovering and go stale for good — the
+                                // very symptom of #2191, merely deferred. The budget still bites
+                                // exactly where it should: consecutive unanswered attempts.
+                                Interlocked.Exchange(ref recycleReArms, 0);
                             },
                             ex =>
                             {
@@ -621,7 +706,6 @@ public static class JsonSynchronizationStream
             // Concat, not SelectMany: attempt N+1's wait starts only after attempt N's has ended,
             // so two rejections arriving together can never sit on two teardowns at once and race
             // into Resubscribe's in-flight guard. One at a time, without a lock.
-            var recycleReArms = 0;
             var recycleReArm = rejectedByRecycle
                 .Where(_ => Interlocked.Increment(ref recycleReArms) <= MaxRecycleReArms)
                 .Select(reason => OwnerTeardownSettled().Select(_ => reason))
@@ -1039,6 +1123,61 @@ public static class JsonSynchronizationStream
                         o => o.WithTarget(request.Subscriber));
                 })
         );
+
+        // 🚨🚨 THE ANNOUNCEMENT THAT DID NOT EXIST — Systemorph/MeshWeaver#2191.
+        //
+        // The owner had exactly two things to say to a subscriber: here is a change (above), and
+        // here is an error (above). It had NOTHING to say about the case that actually happens most
+        // — this subscription simply ENDING: an UnsubscribeRequest, an idle release, the owning
+        // per-node hub deactivating, recycling or restarting.
+        //
+        // With nothing said, the subscriber was told NOTHING. Its own half stays flawless — hub
+        // Started, stream undisposed, replay subject still handing out the last snapshot it ever
+        // saw — so StreamLiveness.IsUsable says "usable", the workspace cache keeps serving it, and
+        // every later change to the node is dropped at this seam with no error, no log, and nothing
+        // for the mirror to observe. An open live-bound layout area froze on its pre-write snapshot
+        // indefinitely; only a page reload or a Recycle brought it back, and users reasonably
+        // concluded their edit had been lost and re-issued it.
+        //
+        // Recovery existed but was INCIDENTAL: the mirror's change-feed latch resubscribes when the
+        // feed announces a version it has not received — which needs somebody to WRITE the owner's
+        // node and that event to reach this subscriber. A subscription must not depend on an
+        // unrelated future write to discover that it no longer exists. This is the same hole the
+        // "UN-ANNOUNCED RECYCLE" note above describes for an IN-FLIGHT SubscribeRequest, one step
+        // later in the lifecycle: there the NACK is the event, here the END is.
+        //
+        // 🚨 It hangs off RegisterForDisposal, NOT an onCompleted arm on the forwarding
+        // subscription above, and that distinction is the whole fix. Store.OnCompleted() runs only
+        // when SynchronizationStream.Dispose() is called — but the ordinary route is the sync HUB
+        // being disposed directly (WithHandler<UnsubscribeRequest> does exactly `hub.Dispose()`,
+        // and an owner tearing down disposes its hosted sync hubs), which walks
+        // `streamDisposables` and NEVER completes the store. An onCompleted arm is therefore silent
+        // on the common path — measured: the repro test still timed out with one wired.
+        // RegisterForDisposal fires on BOTH routes, and it is the exact mirror of how the CLIENT
+        // already announces its own end (CreateExternalClient's UnsubscribeRequest registration).
+        //
+        // Not a watchdog: nothing polls, nothing is on a timer, and this fires exactly once per
+        // real end. StreamEndedEvent is [CanBeIgnored] precisely because one common case is the
+        // subscriber's OWN teardown (it disposed, which is what sent us the UnsubscribeRequest) —
+        // routing then drops the announcement silently instead of NACKing, so a normal navigation
+        // costs nothing.
+        reduced.RegisterForDisposal(new AnonymousDisposable(() =>
+        {
+            try
+            {
+                AnnouncingHub(hub).Post(new StreamEndedEvent(request.StreamId),
+                    o => o.WithTarget(request.Subscriber));
+            }
+            catch (Exception ex)
+            {
+                // Best-effort by construction: when the WHOLE tree is going down there is no live
+                // hub left to route from and the announcement is correctly lost — the process is
+                // leaving anyway. Debug, not swallowed silence.
+                logger.LogDebug(ex,
+                    "Owner {Owner} could not announce the end of stream {StreamId} to {Subscriber}",
+                    hub.Address, request.StreamId, request.Subscriber);
+            }
+        }));
 
         // NOTE: The following subscription was causing an infinite feedback loop.
         // When a client sends a DataChangeRequest, the workspace processes it and updates the stream.

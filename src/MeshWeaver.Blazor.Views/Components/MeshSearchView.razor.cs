@@ -1448,16 +1448,27 @@ public partial class MeshSearchView
                     parts.Add("grid-template-columns: 1fr;");
                 else
                 {
-                    // Container-responsive: auto-fill capped at maxCols via percentage minimum.
+                    // Container-responsive: capped at maxCols via the percentage minimum.
+                    // 🚨 auto-FIT, matching .mesh-search-area-grid in the stylesheet (which documents
+                    // the intent): auto-fill KEEPS the empty trailing tracks, so two cards on a wide
+                    // row stay squeezed at the minmax floor instead of sharing the row. auto-fit
+                    // collapses them and lets the real cards expand — the cap still holds, because a
+                    // track can never be narrower than 100/cols per cent (#2181).
                     var pct = 100.0 / cols;
                     parts.Add(
-                        $"grid-template-columns: repeat(auto-fill, minmax(max({pct:F1}% - 8px, {floor}px), 1fr));");
+                        $"grid-template-columns: repeat(auto-fit, minmax(max({pct:F1}% - 8px, {floor}px), 1fr));");
                 }
             }
             else if (BoundMinItemWidth is > 0)
             {
                 // No MaxColumns set: the configured floor must STILL apply, or WithMinItemWidth
                 // silently no-ops against the stylesheet's default cell minimum.
+                // 🚨 auto-FILL here, deliberately, unlike the capped branch above. This branch is
+                // the compact tile band (the home's Apps dock), whose floor is small — 96px, not
+                // 200 — and whose tiles are meant to PACK LEFT at that size. auto-fit would collapse
+                // the unused tracks and stretch two small tiles across the whole row, which is the
+                // opposite of what a dock wants. The row-filling fix (#2181) belongs to the card
+                // grid, which always carries a column cap.
                 parts.Add($"grid-template-columns: repeat(auto-fill, minmax({floor}px, 1fr));");
             }
             // WithGridSpacing is authored in px by every call site; unset keeps the stylesheet gap.
