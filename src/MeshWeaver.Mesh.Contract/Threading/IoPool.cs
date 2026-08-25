@@ -365,8 +365,15 @@ public sealed class IoPool : IIoPool, IDisposable
 
                 return Disposable.Create(() =>
                 {
+                    // 🚨 No catch. The old `catch { /* already disposed */ }` guarded a case that
+                    // cannot occur — `cts` is this subscription's own linked source, disposed
+                    // nowhere but the finally below, and Disposable.Create runs its action at most
+                    // once — while silently swallowing the case that CAN: Cancel() throws an
+                    // AggregateException when a registered cancellation callback faults, and that is
+                    // a real defect in the pooled work, not teardown noise. Same call as the two
+                    // ObjectDisposedException catches this change deletes: a catch for the
+                    // impossible only hides the possible.
                     try { cts.Cancel(); }
-                    catch { /* already disposed */ }
                     finally { cts.Dispose(); }
                 });
             }

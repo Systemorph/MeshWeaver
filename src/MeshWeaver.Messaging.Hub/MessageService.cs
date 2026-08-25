@@ -1259,6 +1259,20 @@ public class MessageService : IMessageService
     {
         var cts = new CancellationTokenSource();
         var tracker = (delivery, cts);
+
+        // 🚨 RETIRE THE DISPLACED TRACKER. This write used to be a bare indexer assignment, so a
+        // re-deferred id (a repost keeps its Id) silently orphaned the previous tracker: with the
+        // pair-exact claim below, the old timer's TryRemove now correctly fails and returns — which
+        // means NOTHING would ever cancel or dispose it, and its CancellationTokenSource plus a live
+        // 30 s Task.Delay would linger to the deadline. TryRemove IS the claim here too (the same
+        // discipline DrainDeferredDeliveries uses), so exactly one caller retires it. Cancelling
+        // makes the displaced timer's continuation see IsCanceled and return without touching
+        // anything, so the dispose that follows is safe.
+        if (deferredDeliveries.TryRemove(delivery.Id, out var displaced))
+        {
+            displaced.TimeoutCts.Cancel();
+            displaced.TimeoutCts.Dispose();
+        }
         deferredDeliveries[delivery.Id] = tracker;
         _ = Task.Delay(DeferralTimeout, cts.Token).ContinueWith(t =>
         {
