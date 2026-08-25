@@ -81,12 +81,21 @@ public class SearchViewBarWrapTest
         Assert.Matches(@"min-width:\s*0", body);
     }
 
-    [Fact]
-    public void ViewBarSelects_CanShrink()
+    /// <summary>
+    /// The selects carry the longest content ("Last accessed"). They must be allowed to narrow;
+    /// otherwise the field shrinks to nothing and the select still overflows it.
+    ///
+    /// <para>BOTH are named, not just one. They share a grouped rule today, so asserting either
+    /// covers both — but the day someone splits the group, an assertion on one selector keeps
+    /// passing while the other regresses (Copilot review, #2219). The guard has to say what it
+    /// means: every select in this bar can shrink.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(".mesh-search-groupby")]
+    [InlineData(".mesh-search-sortby")]
+    public void ViewBarSelects_CanShrink(string selector)
     {
-        // The selects carry the longest content ("Last accessed"). They must be allowed to narrow;
-        // otherwise the field shrinks to nothing and the select still overflows it.
-        var body = RuleBody(Stylesheet(), ".mesh-search-sortby");
+        var body = RuleBody(Stylesheet(), selector);
         Assert.Matches(@"min-width:\s*0", body);
     }
 }
