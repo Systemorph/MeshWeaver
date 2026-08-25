@@ -177,17 +177,20 @@ Two ways to fix an AKS deployment:
 1. **Config in the chart** — `deploy/helm/templates/memex-portal/config.yaml` templates the `Anthropic__*` / `AzureFoundry__*` / `ModelTier__*` keys and `secrets.yaml` the `Anthropic__ApiKey` / `AzureFoundry__ApiKey` / `Ai__KeyProtection__MasterKey` keys; `deploy/aks/values.aks.yaml` carries the AKS-correct values (key from Key Vault via the CSI Secrets Store add-on). Set the endpoint + key there and a fresh deploy self-populates the system catalog, matching Aspire.
 2. **Author space/user provider nodes** — create `ModelProvider` + `LanguageModel` nodes directly (see [Set up a space provider](#set-up-a-space-provider)). This needs no redeploy and is how the Systemorph shared provider was set up; the key still has to be supplied (org key on the node, or per-user keys).
 
-### Choosing models: open-weight high / medium / low
+### Choosing models: open-weight, and Auto routes only to these
 
-The Systemorph space ships three tiers, chosen to be **powerful but inexpensive and open-weight** — strong at programming and at producing structured data — sourced from the Azure AI Foundry catalog:
+The Systemorph deployments run their tiers on **open-weight** models — cheap, fast, strong at programming and structured output, and (uniquely) able to run on-device — served through the single funded **OpenRouter** key. **Auto routes only to these**; Claude/GPT/Gemini/Grok stay installed but **untiered** (a manual pick — see the note below, and [Auto and the tiers route to open-weight models only](/Doc/AI/ModelTiers)).
 
 | Tier | Model id | Why |
 |---|---|---|
-| **`coding`** (legacy `heavy`) | `DeepSeek-V4-Pro` | flagship open-weight (2026), best open-source coding + reasoning. The pick when a wrong answer is expensive. |
-| **`reasoning`** (legacy `standard`) | `DeepSeek-V3-0324` | proven open-weight workhorse, large deployed quota; balanced general use at low cost. |
-| **`chat` / `utility`** (legacy `light`) | `DeepSeek-V4-Flash` | fast + very cheap open-weight variant, ideal for high-volume classification, extraction, and JSON/structured output. |
+| **`coding`** (legacy `heavy`) | `moonshotai/kimi-k3` | the strongest rung — where a wrong patch costs the most |
+| **`reasoning`** (legacy `standard`) | `z-ai/glm-5.3` *(via the deployment default)* | multi-step analysis and planning |
+| **`chat`** (legacy `light`) | `qwen/qwen3.6-35b-a3b` | the everyday round and most traffic — a fast MoE (~3B active) |
+| **`utility`** | `z-ai/glm-5.3` *(via the deployment default)* | high-volume background jobs |
 
-All three are deployed on one Azure AI Foundry resource (verify with `az cognitiveservices account deployment list -n <foundry-account> -g <foundry-rg>`). Put the tier on the model NODE (`"tier": "coding"`) — see [Model Tiers](/Doc/AI/ModelTiers). The `ModelTier:Heavy/Standard/Light/Utility` config keys still work (mapped by rank) but are deprecated.
+Put the tier on the model NODE (`"tier": "coding"`); leave `utility`/`reasoning` unlabelled so they fall through to the default (`z-ai/glm-5.3`). The full policy, the two-stage **Auto** router, and how an unlabelled tier resolves are in [Model Tiers](/Doc/AI/ModelTiers). The `ModelTier:Heavy/Standard/Light/Utility` config keys still work (mapped by rank) but are deprecated. On a laptop the same tiers point at a **local Ollama** qwen (a `Provider/OpenAICompatible` node at `localhost`) instead of OpenRouter — the payoff of keeping Auto on open weights.
+
+> 🕰️ These previously ran on Azure AI Foundry (`DeepSeek-V4-Pro/V3-0324/V4-Flash`); the deployment moved to the OpenRouter open-weight set above (2026-08). The tier *mechanism* is unchanged — only the model ids behind the labels.
 
 > **Claude (Anthropic) works very well — noticeably stronger on the hardest agentic and coding tasks — but it comes at a price.** It is intentionally **not** wired as a shared org key. Each user connects **Claude Code** (the co-hosted CLI, `Features:Ai:Clis:ClaudeCode`) under their own account in **Settings → Models → Connect**, which stores a per-user `{user}/_Memex/ClaudeCode` provider and injects Claude into their picker on their own subscription. To turn this on for a deployment, see [Enabling per-user Claude Code Connect](#enabling-per-user-claude-code-connect).
 
@@ -238,6 +241,7 @@ Work top-down — the first hit is usually the cause:
 
 ## Related
 
+- [Model Tiers](/Doc/AI/ModelTiers) — the tier taxonomy, the two-stage **Auto** router, the open-weights-only routing policy, and how an unlabelled tier resolves
 - [Enabling per-user Claude Code Connect](#enabling-per-user-claude-code-connect) — turn on per-user Claude Code Connect (`Features__Ai__Clis__ClaudeCode`) so each user runs Claude on their own subscription
 - [AI Model Provider Settings](/Doc/AI/ModelProviderSettings) — the Settings → Models UI design (API vs CLI providers, inline CLI login)
 - [/provider-keys](/Skill/provider-keys) — administering AI provider keys the framework way (encryption at rest, the "bring your own key" decouple)
