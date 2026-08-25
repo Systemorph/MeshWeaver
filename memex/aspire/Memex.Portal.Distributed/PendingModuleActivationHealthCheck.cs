@@ -60,8 +60,12 @@ public sealed class PendingModuleActivationHealthCheck(PendingModuleActivations 
         if (report.IsUndetermined)
             return Task.FromResult(HealthCheckResult.Degraded(report.Describe()));
 
-        return Task.FromResult(report.HasPending
-            ? HealthCheckResult.Degraded(report.Describe())
-            : HealthCheckResult.Healthy(report.Describe()));
+        // 🚨 An ACTIVATED module whose landed assembly is GONE degrades too, and says so in its own
+        // words (#2093). It is not "pending": no restart loads it, so folding it into the pending
+        // line would print a restart prompt that can never come true — the exact false promise that
+        // let /mcp 404 for a pod's whole lifetime while every surface read "restart required".
+        return report.HasPending || report.HasUnresolvable
+            ? Task.FromResult(HealthCheckResult.Degraded(report.Describe()))
+            : Task.FromResult(HealthCheckResult.Healthy(report.Describe()));
     }
 }

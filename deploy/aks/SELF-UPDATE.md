@@ -30,7 +30,7 @@ PATCH). Wired by `AddSelfUpdate()` in `MemexConfiguration.cs`.
 misses the whole `/data` assembly cache by design, and a lazily-compiled mesh leaves any un-visited
 type hanging its pages ("no definition", 60 s `SubscribeRequest` timeouts — memex-cloud 2026-07-30).
 The self-updater itself only patches the image; the compiling happens on the NEW pod at startup via
-`PreWarm__DynamicTypes` (see `DEPLOY-RUNBOOK.md` §7): every new pod sweeps and compiles all dynamic
+`PreWarm__DynamicTypes` (see `README.md` → "Operating it — rolling a new image, and the traps"): every new pod sweeps and compiles all dynamic
 NodeTypes at start, so an un-visited type can no longer sit "no definition" until its pages hang.
 Managed envs run the sweep ON — an env with it off has no deploy-time compile at all on this
 channel.
@@ -66,7 +66,7 @@ timeout still surfaces instead of hiding a genuine regression.
 
 ⚠️ The gate is only as real as the namespace it runs in: it needs a `startupProbe` **on `/health`**
 (nothing else reads it) and `strategy.maxUnavailable: 0` (otherwise the serving pod can be deleted
-before the replacement is ready). Verify both before trusting it — see DEPLOY-RUNBOOK.md §7. And if
+before the replacement is ready). Verify both before trusting it — see README.md, "Operating it". And if
 a roll DOES stall, investigate it: the old image keeps serving, so there is no outage, but
 self-update stops advancing until someone looks.
 
@@ -88,7 +88,7 @@ annotation/label/env. The gaps are operational:
 
 1. **Azure (once):** ensure the portal UAMI + per-namespace federated credentials exist
    (`deploy/aks/infra/modules/portal-identity.bicep`, default-on via `main.bicep`), and grant it
-   **AcrPull** on the registry (cross-RG, out-of-band — see `DEPLOY-RUNBOOK.md`):
+   **AcrPull** on the registry (cross-RG, out-of-band — see `README.md` → "Grant AcrPull on a SHARED registry"):
    ```bash
    PORTAL_MI=$(az identity show -g <aks-resource-group> -n <portal-identity> --query principalId -o tsv)
    az role assignment create --assignee-object-id "$PORTAL_MI" --assignee-principal-type ServicePrincipal \
@@ -107,9 +107,20 @@ annotation/label/env. The gaps are operational:
    `[SelfUpdate] applying update <tag>`. A `403` on PATCH = missing RBAC (step 2); a token/ACR error =
    missing workload identity or AcrPull (steps 1–2).
 
-> ⚠️ The chart's migration is a **Job**, but the updater/RBAC target `memex-migration-deployment`. Live
-> AKS clusters still have that Deployment (scaled to 0), so the migration PATCH is a harmless no-op
-> there; a chart-only env logs a 404 and skips it.
+> ⚠️ The chart's migration is a **Job**, but the updater/RBAC still target `memex-migration-deployment`
+> — a workload the chart does not render (verified: `helm template deploy/helm` emits `kind: Job` named
+> `memex-migration-<revision>`, and the ONLY `memex-migration-deployment` in the output is the
+> `resourceNames` grant in `templates/memex-portal/rbac.yaml`). Where a namespace still carries the legacy
+> Deployment the PATCH lands on a pod spec that may or may not be scaled to 0; on a chart-only env it
+> **404s and `PatchDeploymentImageAsync` THROWS** — it does not log-and-skip. The portal is patched first,
+> so the roll happens and only the migration leg faults.
+>
+> 🚨 **Do not "clean this up" by dropping the RBAC entry first.** Removing the grant turns the 404 into a
+> 403 — still a throw — and on a namespace where the legacy Deployment is what actually applies migrations
+> it would stop the schema advancing while the portal rolls ahead of it, which `DbVersionGate` answers by
+> refusing to start the portal at all. The order is: teach the updater to run the migration **Job**
+> (`SelfUpdateOptions.MigrationDeployment` + `KubernetesDeploymentUpdater` in `MeshWeaver.Plugins`), then
+> remove the orphan Deployments and this grant. Tracked in #1788.
 
 ## Follow-up: the "edge" (any / unverified) channel
 

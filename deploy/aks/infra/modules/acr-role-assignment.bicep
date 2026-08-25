@@ -11,7 +11,7 @@
 // principal must have User Access Administrator (or Owner) on the registry's
 // resource group for this to succeed — that is why it is opt-in (default off):
 // where the deployer lacks that role, grant AcrPull out-of-band instead, exactly
-// as the cluster kubelet's AcrPull is granted (DEPLOY-RUNBOOK.md step 2).
+// as the cluster kubelet's AcrPull is granted (README.md, "Grant AcrPull on a SHARED registry").
 // ---------------------------------------------------------------------------
 
 @description('Name of the EXISTING container registry in this resource group (e.g. "meshweaver").')
