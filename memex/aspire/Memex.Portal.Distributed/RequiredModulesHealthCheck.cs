@@ -42,7 +42,9 @@ namespace Memex.Portal.Distributed;
 /// <para>It reports only what the deployment ITSELF declared required, so it is inert by default:
 /// no <c>Modules:Required</c> means nothing to report.</para>
 /// </summary>
-public sealed class RequiredModulesHealthCheck(IConfiguration configuration) : IHealthCheck
+public sealed class RequiredModulesHealthCheck(
+    IConfiguration configuration,
+    IEnumerable<IncompatibleModule> incompatibleModules) : IHealthCheck
 {
     /// <inheritdoc />
     public Task<HealthCheckResult> CheckHealthAsync(
@@ -65,10 +67,12 @@ public sealed class RequiredModulesHealthCheck(IConfiguration configuration) : I
             entry => File.Exists(MeshBuilder.ResolveModulePath(entry)),
             activation,
             entry => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, entry),
-            ModulePlatformFloor.DeclineReason);
+            ModulePlatformFloor.DeclineReason,
+            [.. incompatibleModules]);
 
         var absent = RequiredModuleStatus.Absent(verdicts);
         var expected = RequiredModuleStatus.ExpectedLater(verdicts);
+        var incompatible = RequiredModuleStatus.Incompatible(verdicts);
 
         // 🚨 Both lists ship in the payload whatever the verdict, so an operator reading /health
         // never has to infer which bucket a module fell into from the status alone.
@@ -76,9 +80,22 @@ public sealed class RequiredModulesHealthCheck(IConfiguration configuration) : I
         {
             ["missing"] = absent.Select(v => v.Entry).ToArray(),
             ["expected"] = expected.Select(v => v.Entry).ToArray(),
+            ["incompatible"] = incompatible.Select(v => v.Entry).ToArray(),
             ["detail"] = verdicts.Select(v => $"{v.Name} [{v.State}]: {v.Reason}").ToArray(),
             ["unreadableActivationRecords"] = unreadable.ToArray(),
         };
+
+        // 🚨 BEFORE the absent/expected buckets, and Unhealthy on purpose. Without this the verdict
+        // falls through to "every required module is present" — the assembly IS on the deployment,
+        // so nothing above it is false — and a replica whose feature is entirely missing reports
+        // Healthy. Stalling here preserves the previous generation, which still has the module
+        // working, and this is a fault the deployment can actually fix by moving both halves.
+        if (incompatible.Count > 0)
+            return Task.FromResult(HealthCheckResult.Unhealthy(
+                $"{incompatible.Count} required module(s) are present but did not install against "
+                + "this platform build, so their features are absent: "
+                + RequiredModuleStatus.Describe(incompatible),
+                data: data));
 
         if (absent.Count > 0)
             return Task.FromResult(HealthCheckResult.Unhealthy(
