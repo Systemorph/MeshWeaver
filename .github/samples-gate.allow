@@ -29,14 +29,7 @@ Northwind/Product compile
 # generator to be reachable from the gate host, which is a separate change.
 PensionFund/BalanceSheet compile
 
-# PensionFund idempotence — the SECOND install rewrites Currency/{CHF,EUR,USD} (3 nodes, expected
-# 0). Not the BOM, and not all instances: Year/2024 and every Position/* round-trip clean. The
-# three that churn are exactly the three whose content is default-valued. `Currency.DecimalPlaces`
-# carries a C# initializer `= 2` (PensionFund/Currency/Source/Currency.cs) and all three instance
-# files author `"decimalPlaces": 2`. Once the Currency NodeType COMPILES, its content type is
-# registered, so the installer materialises the instance as a typed `Currency` instead of an
-# untyped JsonElement and re-serialises it — and default-suppression drops the property whose value
-# equals the type's default. The stored node then differs from the authored file and the
-# unchanged-skip misses. This is invisible until the NodeType compiles, which is precisely what
-# #2063 restored, and it is the deploy-flicker the idempotence pin exists to catch.
-PensionFund idempotence
+# PensionFund idempotence — REMOVED 2026-08-25 by #2063's discovery fix. The gate reported it
+# STALE ("now passing"), and the ratchet may only shrink. It is passing for the right reason:
+# the gate now DISCOVERS PensionFund's 5 NodeTypes (it saw 0 while the BOM hid them), so the
+# idempotence check finally runs against compiled types instead of never running at all.
