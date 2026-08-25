@@ -54,11 +54,17 @@ public class StaticAssetReferenceIntegrityTest
 
         var packages = DiscoverPackages(Path.Combine(root!, "src"));
 
-        // A discovery that found nothing has verified nothing; it must not read as a pass.
-        Assert.True(packages.Count > 3,
-            "the repository ships several RCLs with static assets — a tiny discovery means the walk broke");
-        Assert.True(packages.Values.Sum(p => p.ScannedFiles.Count) > 10,
-            "there are many first-party JS modules — an empty scan means the walk broke, not that references hold");
+        // A discovery that found nothing has verified nothing; it must not read as a pass. The
+        // floor used to be a bare count (> 3), which broke the moment the view packs left this
+        // repo (MeshWeaver#2169) — a number that tracks how many RCLs happen to live here says
+        // nothing about whether the WALK works. Naming a package that is still here does: if the
+        // walk breaks, this fails for a reason the message can state.
+        Assert.True(packages.ContainsKey("MeshWeaver.Blazor.Portal"),
+            "the walk did not discover MeshWeaver.Blazor.Portal, an RCL this repo ships with static "
+            + $"assets — discovery found [{string.Join(", ", packages.Keys.OrderBy(k => k))}], so the "
+            + "walk is broken rather than the references being clean");
+        Assert.True(packages.Values.Sum(p => p.ScannedFiles.Count) > 3,
+            "no first-party JS modules were scanned — an empty scan means the walk broke, not that references hold");
 
         var failures = new List<string>();
 

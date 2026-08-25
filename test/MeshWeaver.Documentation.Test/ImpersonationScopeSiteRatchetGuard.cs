@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
 using Xunit;
 
 namespace MeshWeaver.Documentation.Test;
@@ -65,14 +64,11 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
 
     private const string AllowFileName = "ImpersonationScopeSites.allow";
 
-    private static readonly string[] ExcludedSegments =
-        ["bin", "obj", "node_modules", "TestResults", ".git", ".vs", "dist"];
-
     [Fact]
     public void NoNewSiteOpensAnImpersonationScopeInsideObservableUsing()
     {
-        var root = FindRepoRoot();
-        var allowed = ReadAllowFile(Path.Combine(root, "test", AllowFileName));
+        var root = SourceScan.FindRepoRoot();
+        var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = Scan(root);
 
         var failures = new List<string>();
@@ -125,7 +121,7 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerFindsTheShapeItIsRatcheting()
     {
-        var root = FindRepoRoot();
+        var root = SourceScan.FindRepoRoot();
         var found = Scan(root);
 
         Assert.True(found.Count > 0,
@@ -148,13 +144,8 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     }
 
     private static Dictionary<string, int> Scan(string root) =>
-        ScannedRoots
-            .Select(r => Path.Combine(root, r))
-            .Where(Directory.Exists)
-            .SelectMany(dir => Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-            .Where(f => Path.GetExtension(f) is ".cs" or ".razor")
-            .Where(f => !IsExcluded(root, f))
-            .Select(f => (Relative: Relative(root, f), Count: CountSites(f)))
+        SourceScan.SourceFiles(root, ScannedRoots)
+            .Select(f => (Relative: SourceScan.Relative(root, f), Count: CountSites(f)))
             .Where(x => x.Count > 0)
             .ToDictionary(x => x.Relative, x => x.Count, StringComparer.Ordinal);
 
@@ -171,7 +162,7 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
 
         if (!text.Contains(Marker, StringComparison.Ordinal)) return 0;
 
-        var code = MaskCommentsAndStrings(text);
+        var code = SourceScan.MaskCommentsAndStrings(text);
         var count = 0;
         var at = 0;
         while ((at = code.IndexOf(Marker, at, StringComparison.Ordinal)) >= 0)
@@ -179,167 +170,11 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
             var open = code.IndexOf('(', at + Marker.Length);
             at += Marker.Length;
             if (open < 0) continue;
-            var firstArg = FirstArgument(code, open);
+            var firstArg = SourceScan.FirstArgument(code, open);
             if (ScopeFactories.Any(f => firstArg.Contains(f, StringComparison.Ordinal)))
                 count++;
         }
 
         return count;
-    }
-
-    /// <summary>The text between <paramref name="openParen"/> and the first comma at its own nesting
-    /// depth (or the matching close paren) — i.e. the call's first argument.</summary>
-    private static string FirstArgument(string code, int openParen)
-    {
-        var depth = 0;
-        for (var i = openParen; i < code.Length; i++)
-        {
-            switch (code[i])
-            {
-                case '(' or '[' or '{':
-                    depth++;
-                    break;
-                case ')' or ']' or '}':
-                    if (--depth == 0) return code[(openParen + 1)..i];
-                    break;
-                case ',' when depth == 1:
-                    return code[(openParen + 1)..i];
-            }
-        }
-
-        return code[(openParen + 1)..];
-    }
-
-    /// <summary>
-    /// Blanks comment and string-literal characters, preserving offsets and newlines, so the scan
-    /// sees code only. Handles line/block comments, ordinary, verbatim and raw string literals, and
-    /// character literals — enough that a doc comment containing <c>Plugins/*</c> does not swallow
-    /// the next thousand lines (which is exactly what a naive scanner did).
-    /// </summary>
-    private static string MaskCommentsAndStrings(string text)
-    {
-        var masked = new StringBuilder(text);
-        var i = 0;
-        var n = text.Length;
-
-        void Blank(int from, int to)
-        {
-            for (var k = from; k < to && k < n; k++)
-                if (text[k] != '\n')
-                    masked[k] = ' ';
-        }
-
-        while (i < n)
-        {
-            var c = text[i];
-            var next = i + 1 < n ? text[i + 1] : '\0';
-
-            if (c == '/' && next == '/')
-            {
-                var end = text.IndexOf('\n', i);
-                end = end < 0 ? n : end;
-                Blank(i, end);
-                i = end;
-            }
-            else if (c == '/' && next == '*')
-            {
-                var end = text.IndexOf("*/", i + 2, StringComparison.Ordinal);
-                end = end < 0 ? n : end + 2;
-                Blank(i, end);
-                i = end;
-            }
-            else if (c == '"' && i + 2 < n && text[i + 1] == '"' && text[i + 2] == '"')
-            {
-                var end = text.IndexOf("\"\"\"", i + 3, StringComparison.Ordinal);
-                end = end < 0 ? n : end + 3;
-                Blank(i, end);
-                i = end;
-            }
-            else if (c == '@' && next == '"')
-            {
-                i = MaskVerbatim(text, masked, i + 1, Blank);
-            }
-            else if (c == '$' && next == '@' && i + 2 < n && text[i + 2] == '"')
-            {
-                Blank(i, i + 2);
-                i = MaskVerbatim(text, masked, i + 2, Blank);
-            }
-            else if (c is '"' or '\'')
-            {
-                var quote = c;
-                Blank(i, i + 1);
-                i++;
-                while (i < n && text[i] != quote && text[i] != '\n')
-                {
-                    var step = text[i] == '\\' ? 2 : 1;
-                    Blank(i, i + step);
-                    i += step;
-                }
-
-                if (i < n && text[i] == quote) { Blank(i, i + 1); i++; }
-            }
-            else
-            {
-                i++;
-            }
-        }
-
-        return masked.ToString();
-    }
-
-    /// <summary>Masks a verbatim string starting at its opening quote; <c>""</c> is an escaped quote.</summary>
-    private static int MaskVerbatim(string text, StringBuilder masked, int quote, Action<int, int> blank)
-    {
-        var n = text.Length;
-        blank(quote, quote + 1);
-        var i = quote + 1;
-        while (i < n)
-        {
-            if (text[i] == '"')
-            {
-                if (i + 1 < n && text[i + 1] == '"') { blank(i, i + 2); i += 2; continue; }
-                blank(i, i + 1);
-                return i + 1;
-            }
-
-            blank(i, i + 1);
-            i++;
-        }
-
-        return n;
-    }
-
-    /// <summary>
-    /// <c>relative/path.cs&lt;TAB&gt;count</c>, one per line; <c>#</c> starts a comment.
-    /// </summary>
-    private static Dictionary<string, int> ReadAllowFile(string path)
-    {
-        Assert.True(File.Exists(path),
-            $"{AllowFileName} is missing — without it this guard cannot tell a pre-existing site "
-            + "from a new one and would report every occurrence as a failure. Restore it from git "
-            + "rather than regenerating it: a regenerated file would silently bless whatever is in "
-            + "the tree, which is the one thing a ratchet must never do.");
-
-        return File.ReadAllLines(path)
-            .Select(l => l.Trim())
-            .Where(l => l.Length > 0 && !l.StartsWith('#'))
-            .Select(l => l.Split('\t', StringSplitOptions.TrimEntries))
-            .ToDictionary(parts => parts[0], parts => int.Parse(parts[1]), StringComparer.Ordinal);
-    }
-
-    private static string Relative(string root, string path) =>
-        Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
-
-    private static bool IsExcluded(string root, string path) =>
-        Relative(root, path).Split('/').Any(s => ExcludedSegments.Contains(s, StringComparer.OrdinalIgnoreCase));
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException(
-                   "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
     }
 }
