@@ -134,11 +134,16 @@ public class InvitationServiceTests(ITestOutputHelper output) : MonolithMeshTest
         stored.AcceptedAt.Should().NotBeNull();
     }
 
-    /// <summary>The NoOp sender (Email:Enabled=false) reports success without sending.</summary>
+    /// <summary>
+    /// The NoOp sender reports success without sending — but ONLY on the configuration it is
+    /// meant for, <c>Email:Enabled=false</c>, where nothing queues mail and no watcher runs. The
+    /// <c>Enabled=true</c> half of the contract (a refusal, never a false success) is pinned by
+    /// <c>Memex.Portal.Shared.Test.NoOpEmailSenderRefusalTest</c>, next to the watchers it stops.
+    /// </summary>
     [Fact(Timeout = 10000)]
     public async Task NoOpEmailSender_ReturnsTrue_WithoutSending()
     {
-        IEmailSender sender = new NoOpEmailSender();
+        IEmailSender sender = new NoOpEmailSender(new EmailOptions { Enabled = false });
         (await sender.SendEmail("x@example.com", "hi", "<p>body</p>").Should().Emit()).Should().BeTrue();
     }
 }
