@@ -472,17 +472,18 @@ dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.cs
 dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj -c Release \
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
-# Roll out (NS = memex):
+# Roll out (NS = memex). 🚨 The MIGRATION is a Job, not a Deployment — see below.
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "\
   kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
-  kubectl -n <NS> set image deployment/memex-migration-deployment memex-migration=meshweaver.azurecr.io/memex-migration:<tag>; \
-  kubectl -n <NS> rollout restart deployment/memex-migration-deployment deployment/memex-portal-deployment; \
+  kubectl -n <NS> rollout restart deployment/memex-portal-deployment; \
   kubectl -n <NS> rollout status deployment/memex-portal-deployment --timeout=300s"
 ```
 
-- **`deploy/aks/envs/<env>/deploy.sh` is first-time ENV SETUP only** (helm install + PVCs + KV SecretProviderClass + ingress + connection-string patch). Do NOT use it for a code update — it re-runs the whole chart and can reset live config.
+- **An env's `deploy.sh` is first-time ENV SETUP only** (helm install + PVCs + KV SecretProviderClass + ingress + connection-string patch). Do NOT use it for a code update — it re-runs the whole chart and can reset live config. 🚨 **Env folders live in the PRIVATE `Systemorph/Memex` repo**, not `deploy/aks/envs/<env>/` — they moved out 2026-08-08/09 (`a69959165`) because their directory names are tenant identities; `deploy/aks/envs/example/` here is the reference template only.
 - **Don't run `tools/deploy.sh` or `aspire deploy` against the AKS cluster** — those are the *Container Apps* route (a different target), not a code-update path for AKS.
-- `memex-migration` runs the migration then exits 0 and the Deployment restarts it (benign `CrashLoopBackOff`). Before declaring success, confirm its log shows `Database migration completed. Version: N` AND the portal serves (HTTP 200).
+- 🚨 **The migration is a run-once `Job`, NOT a Deployment** (`deploy/helm/templates/memex-migration/job.yaml`: `kind: Job`, `restartPolicy: Never`, name embeds `.Release.Revision`, `ttlSecondsAfterFinished`). It runs on **`helm upgrade`**, not on an image-tag roll — so `kubectl set image` / `rollout restart` against a `memex-migration-deployment` is a command with no object: the chart does not define one, and any that exists in a live namespace is a cluster-only orphan of a chart revision that predates the Job (#1788). Do not resurrect it. A `MigrationWorkloadModelGuard` (test/MeshWeaver.Documentation.Test) fails the build if a command like that returns to this file, a doc or a deploy script.
+- **A crash-looping migration pod is a FAILURE, not noise.** It used to be modelled as a Deployment, which restarted it forever after each clean exit — three prod namespaces sat at 50/53/38 restarts, each rebuilding `public.top_level_index` across every partition schema. Documenting that as "benign" is what made a real migration failure unreadable. With the Job form the pod runs once and stops, so `CrashLoopBackOff` on it now means exactly what it says. Before declaring a deploy successful, confirm the Job's log shows `Database migration completed. Version: N` AND the portal serves (HTTP 200) — `kubectl -n <NS> get jobs -l app.kubernetes.io/component=memex-migration` and `kubectl -n <NS> logs job/memex-migration-<revision>`.
+- **The schema still has a hard gate.** `DbVersionGate` (a hosted service in `Memex.Portal.Distributed`) reads `admin.mesh_nodes.db_version` at startup and `StopApplication()`s with a `LogCritical` when it is below `DbVersion.Latest`. So a portal rolled ahead of its schema refuses to serve rather than serving a half-migrated database — loud, and the reason the ordering between the two workloads cannot silently invert.
 
 Routes + full reference: [Deployment.md](src/MeshWeaver.Documentation/Data/Architecture/Deployment.md) (index) · [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md) · [DeploymentContainerApps.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentContainerApps.md)
 
@@ -757,7 +758,43 @@ attempt, a stale negative produces DUPLICATE DATA, not merely duplicated work.
 **Wrong:** reading content by exact path, reading state before a write, polling for job completion,
 deciding create-or-skip for a known path.
 
-`GetMeshNodeStream(path)` + `Where(...).Take(1)` is also the right primitive for **waiting for work to finish**.
+`GetMeshNodeStream(path)` + `Where(...).Take(1)` is also the right primitive for **waiting for work to finish** — for a node that **exists**.
+
+🚨 **A node that may NOT EXIST YET is the one case where neither half is enough on its own, and each
+half alone is a defect that has shipped.** Do not pick a horn:
+
+- **A point read of an ABSENT node is forbidden by the framework**, not merely slow: the owner
+  answers an authoritative routing NotFound which **terminates the stream with an error** (it cannot
+  wait for the node to appear), and that NotFound opens `MeshNodeStreamCache`'s **storm-breaker**
+  window on the path — and the breaker **fast-fails WRITES too**, so the read suppresses the write it
+  is waiting for. The breaker says so itself: *"A point node-access to a node that does not exist is
+  a defect — read optional nodes via GetQuery (empty-on-absent), not GetMeshNodeStream(exactPath)."*
+- **Reading that node's CONTENT out of a query is forbidden above** — unbounded lag.
+
+**The composition, and it is the canonical pattern — listing for EXISTENCE, stream for CONTENT:**
+
+```csharp
+hub.GetQuery(id, $"path:{parent} scope:children nodeType:X select:path")   // EXISTENCE — empty-on-absent
+    .Where(nodes => nodes.Any(n => string.Equals(n.Path, target, StringComparison.OrdinalIgnoreCase)))
+    .Take(1)
+    .SelectMany(_ => workspace.GetMeshNodeStream(target))                  // CONTENT — authoritative, live
+    .Select(node => node.ContentAs<X>(hub.JsonSerializerOptions));
+```
+
+The index **trails** the store, so "the index has seen it" implies "the store has it" — the point read
+opened on that signal can never be early, and never NotFounds. The same lag that disqualifies a query
+for CONTENT is what makes it a safe gate. Creating the node anyway? Skip the check entirely and use
+`CreateOrUpdateNodeRequest`.
+
+🚨 **This is about ONE known path whose value you are GATING on — not about node counts.** The
+worked counter-example is `src/MeshWeaver.Blazor.Portal/Chat/ThreadTokenChip.razor.cs:106`: it reads
+`content` out of the very same `{thread}/_Usage scope:children` query, **and it is correct** — it
+sums a SET to paint a total, and a briefly-stale total is cosmetic. Converting it to N point reads
+would mean N per-node hub activations per render, and on a legitimately EMPTY set (a thread with no
+rounds yet) every one is an absent-node read tripping the breaker **on the render path**. So: stale
+answer merely looks wrong on screen → query, `content` and all. Stale answer DECIDES whether
+something proceeds, passes, or is written → the owner's stream. Full pattern:
+[CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) → "An OPTIONAL node".
 
 **Free-floating words → vector search.** When a query contains bare text tokens (`laptop nodeType:Story`) AND PG is the backend AND an `IEmbeddingProvider` is registered, `PostgreSqlMeshQuery.QueryAsync` automatically routes through the HNSW cosine index instead of ILIKE substring scan. Structured-only queries (`nodeType:Story namespace:ACME`) stay on the regular SQL path. Full reference: [VectorSearch.md](src/MeshWeaver.Documentation/Data/Architecture/VectorSearch.md).
 

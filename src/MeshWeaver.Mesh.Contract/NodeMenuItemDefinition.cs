@@ -91,6 +91,29 @@ public record NodeMenuItemDefinition(
     public string? TooltipKey { get; init; }
 
     /// <summary>
+    /// Wire-safe id of the COMMAND this entry runs — one of <see cref="MenuActions"/> — or
+    /// <c>null</c> for an ordinary navigation. A renderer that recognises the id runs the command
+    /// IN PLACE instead of navigating.
+    ///
+    /// <para>🚨 An id, never a delegate: this record crosses the wire to three renderers (Blazor,
+    /// portal-next, and anything else reading <c>$Menu</c>), so the only thing it can carry is a
+    /// name they agree on. It is also why applicability stays with the provider that emits the
+    /// entry — <see cref="RequiredPermission"/> is the gate, and nothing downstream re-checks it
+    /// (see <c>MenuPresentation</c>).</para>
+    ///
+    /// <para><b>An action entry still sets <see cref="Href"/>, and that is deliberate.</b> For an
+    /// action the href is where the page LANDS once the command completes, which doubles as the
+    /// graceful degradation: a renderer that does not know the id falls through to its existing
+    /// href branch and navigates somewhere sensible instead of to a dead
+    /// <c>/{node}/{unknown-area}</c> URL. Recycle's href is the node's own default page, so an
+    /// unaware client simply shows the node.</para>
+    /// </summary>
+    public string? Action { get; init; }
+
+    /// <summary>True when this entry runs a command rather than navigating — see <see cref="Action"/>.</summary>
+    public bool IsAction => Action is { Length: > 0 };
+
+    /// <summary>
     /// This item with <see cref="Label"/> and <see cref="Tooltip"/> resolved into the current
     /// viewer's language (recursively, so nested menus translate too). Items with no
     /// <see cref="LabelKey"/> are returned unchanged. Call once, at menu aggregation.
@@ -123,7 +146,7 @@ public record NodeMenuItemDefinition(
         if (ReferenceEquals(this, other)) return true;
         return Label == other.Label && Area == other.Area && Icon == other.Icon
             && RequiredPermission == other.RequiredPermission && Order == other.Order
-            && Href == other.Href && Tooltip == other.Tooltip
+            && Href == other.Href && Tooltip == other.Tooltip && Action == other.Action
             && ChildrenEqual(Children, other.Children);
     }
 
@@ -139,6 +162,7 @@ public record NodeMenuItemDefinition(
         hash.Add(Order);
         hash.Add(Href);
         hash.Add(Tooltip);
+        hash.Add(Action);
         foreach (var c in Children ?? [])
             hash.Add(c);
         return hash.ToHashCode();
@@ -152,6 +176,27 @@ public record NodeMenuItemDefinition(
         if (ca != cb) return false;
         return ca == 0 || a!.SequenceEqual(b!);   // recurses through this Equals
     }
+}
+
+/// <summary>
+/// The command ids a <see cref="NodeMenuItemDefinition.Action"/> may carry. One place, because the id
+/// is a CONTRACT between the provider that emits the entry and every renderer that runs it — a
+/// literal on either side is how a menu entry silently becomes a dead navigation.
+/// </summary>
+public static class MenuActions
+{
+    /// <summary>
+    /// Tear down the node's hub so the next access re-activates it against the latest compiled
+    /// build.
+    ///
+    /// <para>🚨 It is an ACTION rather than a navigation for a structural reason, not a UX
+    /// preference (#2202): the confirmation page it used to navigate to was HOSTED ON THE HUB IT
+    /// KILLS, so its confirm button pushed a redirect into an area stream and then tore that stream
+    /// down — the redirect raced its own dispose and the button read as dead. Every renderer must
+    /// therefore run this somewhere that SURVIVES the target: the page/circuit, never the node's
+    /// own layout area.</para>
+    /// </summary>
+    public const string Recycle = "recycle";
 }
 
 /// <summary>
