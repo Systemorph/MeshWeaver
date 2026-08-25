@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh.Persistence;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -245,7 +246,10 @@ public class FileSystemAssemblyStoreTest : IDisposable
         // A previous image's generation, at versions the live one is about to bury.
         var foreignGeneration = Path.Combine(typeDirectory, "v1-bbbbbbbb-0123456789ab.dll");
         var legacyPreTag = Path.Combine(typeDirectory, "v1-0123456789ab.dll");
-        var atomicWriteLeftover = Path.Combine(typeDirectory, "v1-cccccccc-0123456789ab.dll.tmp-42");
+        // The REAL staging convention, not an approximation of it: AtomicFileWrite exposes
+        // TempPathFor so a test asserts the invariant instead of re-deriving the name shape.
+        var atomicWriteLeftover = AtomicFileWrite.TempPathFor(
+            Path.Combine(typeDirectory, $"v1-{FileSystemAssemblyStore.FrameworkTag}-0123456789ab.dll"));
         File.WriteAllBytes(foreignGeneration, [1]);
         File.WriteAllBytes(legacyPreTag, [2]);
         File.WriteAllBytes(atomicWriteLeftover, [3]);
