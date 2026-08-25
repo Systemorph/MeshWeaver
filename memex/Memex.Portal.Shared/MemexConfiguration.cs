@@ -147,18 +147,34 @@ public static class MemexConfiguration
             .GetSection(EmailOptions.SectionName)
             .Get<EmailOptions>() ?? new EmailOptions();
         services.AddSingleton(emailOptions);
-        if (emailOptions.Enabled)
-        {
-            // Executive Assistant: per-user JUST-IN-TIME delegated Graph access (the user consents to the
-            // EA touching THEIR OWN mailbox only when they first use the tool — no standing app
-            // permission). EaGraphAuth drives the consent/token flow; it is raw OAuth over HTTP, so it
-            // stays HERE with its consent controller — the EA's mailbox TOOLS (which do use the Graph
-            // SDK) ride the MeshWeaver.Mail.MicrosoftGraph module and depend only on this seam.
-            services.AddHttpClient<IEaGraphAuth, Authentication.EaGraphAuth>();
-            // The notification triage runner (escalates in-app notifications to email/Teams per each
-            // recipient's NotificationRules) rides the MeshWeaver.Notifications.Channels module
-            // (Modules:Assemblies); its hosted service self-skips unless Email:Enabled.
-        }
+        // The notification triage runner (escalates in-app notifications to email/Teams per each
+        // recipient's NotificationRules) rides the MeshWeaver.Notifications.Channels module
+        // (Modules:Assemblies); its hosted service self-skips unless Email:Enabled.
+
+        // Executive Assistant: per-user JUST-IN-TIME delegated Graph access (the user consents to the
+        // EA touching THEIR OWN mailbox only when they first use the tool — no standing app
+        // permission). EaGraphAuth drives the consent/token flow; it is raw OAuth over HTTP, so it
+        // stays HERE with its consent controller — the EA's mailbox TOOLS (which do use the Graph
+        // SDK) ride the MeshWeaver.Mail.MicrosoftGraph module and depend only on this seam.
+        //
+        // 🚨 UNCONDITIONAL, and it must stay that way. EaConsentController is registered by
+        // AddControllers().AddApplicationPart(...) below — which discovers controllers by TYPE, with
+        // no idea what any of them needs — so /auth/ea/connect and /auth/ea/callback are routed on
+        // EVERY deployment. Gating this one registration on Email:Enabled therefore did not disable
+        // the endpoint; it left it routed with an unresolvable dependency, and MVC's activator threw
+        // "Unable to resolve service for type 'MeshWeaver.Mesh.IEaGraphAuth' while attempting to
+        // activate 'EaConsentController'" — a deterministic 500 on the consent flow, in memex prod
+        // (issue #2218). A controller and its dependencies are one unit: whatever routes the one
+        // must register the other.
+        //
+        // Nothing is enabled by registering it. The descriptor is inert (a typed HttpClient factory
+        // registration does no work until something resolves it), and IEaGraphAuth carries its own
+        // honest feature probe: EaGraphAuth.IsConfigured reads Authentication:Microsoft
+        // ClientId/ClientSecret — the credentials the DELEGATED flow actually needs, which are not
+        // what Email:Enabled describes (that gates the SYSTEM mailbox's app-permission sender). The
+        // controller checks IsConfigured first and answers 400 "not configured", which is the honest
+        // answer for a deployment that has not set up the EA — instead of a 500 that reads as a bug.
+        services.AddHttpClient<IEaGraphAuth, Authentication.EaGraphAuth>();
 
         // 🚨 TryAdd, deliberately. The Graph sender lives in the MeshWeaver.Mail.MicrosoftGraph
         // module, which registers it with a plain AddSingleton. The pairing is ORDER-INDEPENDENT:
