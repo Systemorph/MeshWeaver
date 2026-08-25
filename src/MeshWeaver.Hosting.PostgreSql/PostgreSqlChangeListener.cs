@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
@@ -47,7 +48,11 @@ public class PostgreSqlChangeListener : IAsyncDisposable
     /// <c>LISTEN</c> but does not re-signal — this answers "has this listener ever come up", not
     /// "is the connection healthy right now".</para>
     /// </summary>
-    public IObservable<System.Reactive.Unit> Listening => _listening;
+    /// <remarks><c>AsObservable()</c>, not the subject: the runtime type would otherwise still be
+    /// <c>AsyncSubject&lt;Unit&gt;</c>, so a caller could downcast and SIGNAL readiness itself —
+    /// the one thing a readiness signal must never let anyone but its source do. Same guard as
+    /// <c>OrleansStreamingReadiness</c>.</remarks>
+    public IObservable<System.Reactive.Unit> Listening => _listening.AsObservable();
 
     /// <summary>
     /// Initializes the change listener.
