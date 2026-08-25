@@ -40,10 +40,10 @@ public sealed class HubDisposingException : ObjectDisposedException
     /// <param name="what">What could not be created, e.g. the stream reference.</param>
     public HubDisposingException(Address hubAddress, object what)
         : base(hubAddress.ToString(),
-            // 🚨 No outer quotes around `what`. A WorkspaceReference renders as its own POINTER,
-            // which already quotes its segments — EntityReference's is `/{collection}/'{id}'` — so
-            // wrapping it produced the unreadable `cannot create '/data/'postAdvanceStatus''`
-            // (#2255). The reference self-delimits; a second pair of quotes only nests.
+            // 🚨 DOUBLE quotes around `what`, chosen because the value cannot contain them. A
+            // WorkspaceReference renders as its own POINTER, which already carries single quotes
+            // around its segments — EntityReference's is `/{collection}/'{id}'` — so single-quoting
+            // it produced the unreadable `cannot create '/data/'postAdvanceStatus''` (#2255).
             $"Hub {hubAddress} is shutting down — cannot create {Describe(what)}. "
             + "The address may reactivate (recycle / restart); retry to get the authoritative answer.")
     {
@@ -51,17 +51,25 @@ public sealed class HubDisposingException : ObjectDisposedException
     }
 
     /// <summary>
-    /// Renders <paramref name="what"/> for the message, quoting it ONLY when it does not already
-    /// delimit itself. A <c>WorkspaceReference</c>'s <c>ToString</c> IS its JSON pointer and those
-    /// carry their own quotes; a plain name does not. Pure and total — a null renders as
-    /// <c>'(unspecified)'</c> rather than throwing inside an exception constructor.
+    /// Renders <paramref name="what"/> for the message, delimited with DOUBLE quotes — always,
+    /// with no inspection of the value.
+    ///
+    /// <para>The value is very often a <c>WorkspaceReference</c>, whose <c>ToString</c> IS its JSON
+    /// pointer and carries its own single quotes (<c>EntityReference</c>'s is
+    /// <c>/{collection}/'{id}'</c>). Single-quoting that produced the unreadable
+    /// <c>cannot create '/data/'postAdvanceStatus''</c>.</para>
+    ///
+    /// <para>Choosing a delimiter the value cannot contain beats testing whether it "looks quoted":
+    /// an apostrophe anywhere in the text proves nothing about delimiting — <c>Bob'sThing</c> has
+    /// one and is not delimited, and a pointer's quotes sit in the middle rather than at the ends —
+    /// so any such test is a guess that is wrong in both directions. One rule, no branch, always
+    /// delimited. Pure and total: a null renders as <c>"(unspecified)"</c> rather than throwing
+    /// inside an exception constructor.</para>
     /// </summary>
     private static string Describe(object? what)
     {
         var text = what?.ToString();
-        if (string.IsNullOrEmpty(text))
-            return "'(unspecified)'";
-        return text.Contains('\'') ? text : $"'{text}'";
+        return $"\"{(string.IsNullOrEmpty(text) ? "(unspecified)" : text)}\"";
     }
 
     /// <summary>
