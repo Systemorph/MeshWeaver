@@ -152,7 +152,7 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 .ToImmutableArray();
 
             // Always emit ONE ModelProvider node per source at Provider/{ProviderName},
-            // marked ExcludeThisAndChildren so the static importer CREATES it on first boot and
+            // marked ExcludeThisOnly so the static importer CREATES it on first boot and
             // NEVER overwrites it again — admin edits to endpoint/key/models survive redeploys
             // (create-if-absent). 🚨 That claim is what made a key configured AFTER the node existed
             // unable to ever reach it; the CREDENTIAL is therefore no longer this seam's business at
@@ -161,6 +161,16 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             // reads endpoint/key off the selected model's resolved provider node. ModelProvider
             // is NOT WithPublicRead, so only callers with Permission.Api see the ApiKey; the
             // _Policy below opens public READ of the (key-less) LanguageModel children.
+            //
+            // 🚨 ExcludeThisOnly, NOT ExcludeThisAndChildren (MeshWeaver#2211). The claim protects
+            // THIS node — the one an admin edits — and nothing else. Claiming the SUBTREE also
+            // claimed the LanguageModel children, so a model added to the deployment AFTER the
+            // provider node existed could never materialize: the importer skipped every child as
+            // "claimed" forever. A deployment that configured 12 OpenRouter models kept the two it
+            // was born with, permanently, and no restart or recycle could heal it. The children are
+            // configuration-derived and carry no credential — there is nothing there for an admin to
+            // own — so they sync normally: a listed id gets a node, an id dropped from configuration
+            // has its node pruned, and the deployment's model list is enforceable again.
             var providerConfig = new ModelProviderConfiguration
             {
                 Provider = source.ProviderName,
@@ -200,15 +210,16 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 // (not the legacy "Key" Fluent name, which MeshNodeImageHelper filters
                 // out) so node.Icon is always directly renderable. See ModelProviderIcons.
                 Icon = ModelProviderIcons.ForProvider(source.ProviderName) ?? "/static/NodeTypeIcons/key.svg",
-                // create-if-absent: importer seeds it once, then admin owns it.
-                SyncBehavior = SyncBehavior.ExcludeThisAndChildren,
+                // create-if-absent for THIS node only: importer seeds it once, then admin owns it.
+                // Its children stay synced — see the note above (#2211).
+                SyncBehavior = SyncBehavior.ExcludeThisOnly,
                 Content = providerConfig
             });
 
             // Emit a public, key-less LanguageModel child per model id at
             // Provider/{ProviderName}/{modelId}. No credential gate — the child carries
-            // NO ApiKey (it's read-only/public) and the ExcludeThisAndChildren parent protects
-            // the whole subtree from overwrite AND prune. Children keep default SyncBehavior.
+            // NO ApiKey (it's read-only/public). Children keep default SyncBehavior and are
+            // therefore fully synced: the configured model list IS the child set.
             foreach (var modelId in models)
             {
                 if (string.IsNullOrWhiteSpace(modelId)) continue;

@@ -111,6 +111,18 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
     private static bool SelectorAsksFor(IReadOnlyList<string>? select, string column)
         => select is null || select.Any(s => s.Equals(column, StringComparison.OrdinalIgnoreCase));
 
+    // 🚨 THE POSITIONAL (namespace, id) SPLIT BELOW IS A COSMOS-ONLY EXCEPTION, and it is not a
+    // pattern to copy. The SQL adapters were fixed to address every row by its stored `path` column
+    // because an id may contain '/' — every LanguageModel id is the provider's wire id
+    // (`z-ai/glm-5.3`) — and splitting at the last slash looked under a namespace that has no rows,
+    // so DELETE reported NodeNotFound for a node Read resolves (issue #2212;
+    // Doc/Architecture/PostgresSchemaArchitecture → the path-addressing footgun).
+    //
+    // Cosmos cannot reach that state: an item's `id` is part of the resource link, so the service
+    // FORBIDS '/', '\', '#' and '?' in it. A slash-bearing id can never be written here, which is
+    // why splitting the path back into (partition key, item id) round-trips exactly what the write
+    // stored. If Cosmos ever gains an escaping write path, this read must move to a path lookup
+    // with it — the split is safe only while the store makes such an id impossible.
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => _ioPool.Invoke(ct => ReadAsyncCore(path, options, ct));

@@ -9,6 +9,51 @@ name: node-repo module pack
 # `content.minMeshVersion` — the ONE declaration `NodeRepoPackageSource` reads. The job asserts
 # that `content.module` names the module it is packing, so the two halves of a mixed package
 # cannot drift apart silently.
+#
+# ─────────────────────────────── Caller contract ───────────────────────────────
+# 🚨 THE MODULE LANE MUST FOLLOW THE RELEASE, exactly as the bundle bake does (#2088). A module is
+# built against a platform PIN. When the platform releases, the pin moves and the module must be
+# rebuilt AND republished, or every portal reads `FrameworkDeclined (built against <old>, live
+# <new>)` and adopts nothing — which is what both prod portals said after ci.5050. The rebuild
+# already happened there: the repo's release-follow schedule ran it. What threw it away was the
+# caller passing `publish: ${{ github.event_name == 'push' }}`, so a scheduled run packed, versioned
+# and inspected the bundles and handed them to nobody. Module adoption then stayed broken until an
+# unrelated push to the plugin repo republished by accident.
+#
+# So `publish` is TRUNK-ONLY, not PUSH-ONLY. A caller wires it exactly like node-repo-publish-bake:
+#
+#   on:
+#     push: { branches: [main] }
+#     pull_request:
+#     repository_dispatch:
+#       types: [meshweaver-framework-released]
+#     # 🚨 REQUIRED, not optional — the dispatch above has never been armed and the cross-repo PAT
+#     # it needed was removed on purpose (2026-08-21), so THIS POLL is how a satellite learns a
+#     # release happened. Stagger the minute per repo.
+#     schedule:
+#       - cron: "17,47 * * * *"
+#
+#   # Share the dispatch's concurrency lane: a scheduled run carries the DEFAULT BRANCH ref, so in
+#   # a plain `github.ref` group a poll can cancel a main run mid-publish.
+#   concurrency:
+#     group: ${{ github.workflow }}-${{ (github.event_name == 'repository_dispatch' || github.event_name == 'schedule') && 'framework-release' || github.ref }}
+#     cancel-in-progress: true
+#
+#   module-pack:
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-pack.yml@<40-char platform sha>
+#     with:
+#       publish: >-
+#         ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main')
+#             || github.event_name == 'repository_dispatch'
+#             || github.event_name == 'schedule' }}
+#     secrets: { publish-token: ${{ secrets.PLUGIN_REGISTRY_PUBLISH_TOKEN }} }
+#
+# Republishing is SAFE to repeat, which is why the schedule may simply publish rather than
+# first proving something changed: the registry is keyed by `{package}@{version}` from
+# `manifest.lock`, so a rebuild of an unchanged version overwrites the same slot with equivalent
+# bytes. There is no `_complete` sentinel to shrink here — unlike the prebuilt-bundle bake, this
+# lane uploads one independent bundle per module and never seals a listing, so a partial run costs
+# only the modules it did not reach, never the ones it did.
 
 on:
   workflow_call:
@@ -25,7 +70,11 @@ on:
         required: true
         type: string
       publish:
-        description: Hand the packed bundles to the registry. Trunk only — a PR packs and inspects, never publishes.
+        description: >
+          Hand the packed bundles to the registry. TRUNK-ONLY, not push-only — a PR packs and
+          inspects and never publishes, but a release-follow schedule or repository_dispatch run
+          MUST publish or the rebuild it just did is discarded and every portal stays on
+          FrameworkDeclined (#2088). See the caller contract at the top of this file.
         type: boolean
         default: false
       registry-source:
