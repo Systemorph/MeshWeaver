@@ -50,7 +50,43 @@ public static class ServiceDefaults
 #pragma warning disable EXTEXP0001
         builder.Services.AddHttpClient("plugin-registry")
             .RemoveAllResilienceHandlers()
-            .AddStandardResilienceHandler();
+            .AddStandardResilienceHandler(options =>
+            {
+                // 🚨 The STANDARD defaults (10s per attempt, 30s total) cannot serve this client,
+                // and the failure is deterministic rather than flaky.
+                //
+                // Measured 2026-08-26 from inside two production portals: GET
+                // /api/plugins/bundles/index.json — an 8.7 KB document — connects in ~0.03s and
+                // then takes 12–19s to first byte, because the registry evaluates entitlement per
+                // package and runs a mesh query on every request. TTFB alone therefore exceeds the
+                // 10s ATTEMPT timeout, so every attempt is cancelled, all three retries are
+                // cancelled the same way, and the pipeline reports TotalRequestTimeout at 30s.
+                //
+                // What that looked like in production: `Module 'MeshWeaver.SelfUpdate.Aks' of
+                // Hosting: landing failed`, repeatedly, on memex.systemorph.com. The consequences
+                // were three deep and none of them named a timeout:
+                //   1. modules stopped landing — 40 present against a sibling's 55;
+                //   2. the ones that did land pre-dated the asset fix, so `_content/…` 404'd and
+                //      pages died with "Importing a module script failed";
+                //   3. MeshWeaver.SelfUpdate.Aks never landed, so the real Kubernetes patcher was
+                //      never registered, IDeploymentUpdater stayed DetectOnly, and the instance
+                //      recorded an available version forever while patching nothing. Self-update
+                //      was silently off.
+                //
+                // These are DOWNLOADS, not API calls: a bundle is megabytes and the registry is a
+                // long way from a p99. So the budget is sized for a slow large transfer instead of
+                // a chatty JSON endpoint. Raising it is a mitigation, not the cure — the registry
+                // being this slow to serve 8.7 KB is its own defect and wants caching — but a
+                // client whose budget cannot cover the server's OBSERVED latency will keep failing
+                // even after the server improves, and it fails invisibly.
+                //
+                // Polly validates these against each other: TotalRequestTimeout must exceed
+                // AttemptTimeout, and the breaker's SamplingDuration must be at least twice the
+                // AttemptTimeout — so all three move together or the handler throws at startup.
+                options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(120);
+                options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(5);
+                options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(240);
+            });
 #pragma warning restore EXTEXP0001
 
         builder.Services.AddRequestTimeouts();
