@@ -34,12 +34,7 @@ public record BurstAggregation(
     int RedBursts,
     int TotalLines,
     int FoldedSites,
-    ImmutableList<HeaderOnlyBurst>? HeaderOnly = null)
-{
-    /// <summary>The bodyless bursts this window saw; never null.</summary>
-    public ImmutableList<HeaderOnlyBurst> HeaderOnly { get; init; } =
-        HeaderOnly ?? ImmutableList<HeaderOnlyBurst>.Empty;
-}
+    ImmutableList<HeaderOnlyBurst> HeaderOnly);
 
 /// <summary>
 /// A red burst whose console header was all that reached the aggregator.
