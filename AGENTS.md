@@ -743,8 +743,19 @@ workspace.GetMeshNodeStream(path)
     .Take(1).Timeout(TimeSpan.FromSeconds(10));
 ```
 
-**Valid query uses:** listing children (`path/*`), searching by predicate, existence checks, autocomplete.  
-**Wrong:** reading content by exact path, reading state before a write, polling for job completion.
+**Valid query uses:** listing children (`path/*`), searching by predicate, autocomplete — anywhere a
+stale negative is harmless.  
+🚨 **Existence of a SPECIFIC path is NOT one of them** — use `GetMeshNodeStream(path)` / a direct read.
+A query's negative can be minutes old, so a caller that reads it as "absent" redoes work that already
+happened. This line used to sanction existence checks, and that was wrong in a way that shipped: on
+2026-08-25 a `search` reported two just-minted tiles missing while a direct `get` returned both
+(#2229), and a create whose reply was lost plus a query that then answered "absent" gave one caller
+two independent reasons to conclude nothing had happened — two mesh-wide sweeps were armed 40 seconds
+apart on that basis. Existence-by-query is safe only where the write it guards is path-deterministic
+and idempotent (the redundant write lands on the same path); where the target id is minted per
+attempt, a stale negative produces DUPLICATE DATA, not merely duplicated work.  
+**Wrong:** reading content by exact path, reading state before a write, polling for job completion,
+deciding create-or-skip for a known path.
 
 `GetMeshNodeStream(path)` + `Where(...).Take(1)` is also the right primitive for **waiting for work to finish**.
 

@@ -209,6 +209,31 @@ module will also mint.
 
 The recompile design that this rule supports is described in [NodeTypeCompilation](/Doc/Architecture/NodeTypeCompilation) — the NodeType keeps a `{sourcePath → version}` snapshot from the synced query, and a divergent emission triggers re-fetch and recompile. Nothing in the catalog row's `Content` is consulted.
 
+### 🚨 Never query to ask "does this path exist?" — a stale negative redoes finished work
+
+Same shape as staleness below, and it bites harder because the answer is acted on by *writers*. The
+query index trails the durable store by design, so a `search`/`path:` probe can answer "absent" for a
+node that exists — measured 2026-08-25 (#2229): a `search` reported two just-minted `_App` tiles
+missing while a direct read returned both, minutes after they landed.
+
+| Question | Read it with |
+|---|---|
+| "Does `{partition}/_App/{id}` exist?" | `GetMeshNodeStream(path)` / a direct path read |
+| "Should I create it, or is it already there?" | Neither — use [`CreateOrUpdateNodeRequest`](#upserts-createorupdatenoderequest--single-verb-no-delete-then-create), which reads persistence itself |
+| "Which children does this parent have?" | A query — a stale negative in a listing is harmless |
+
+**Severity depends on the write the check guards**, and it is worth knowing which case you are in:
+
+- The write target is **path-deterministic and idempotent** (`{viewer}/_App/{packageId}`, an install
+  whose copy plan skips by path): a stale negative costs a **redundant write or a repeated sweep** —
+  expensive and confusing, never corrupting. Both audited plugin-side guards are this shape.
+- The write mints a **new id per attempt**: a stale negative produces **duplicate DATA**. Treat any
+  such guard as a defect.
+
+The compounding case to watch for: a write whose *reply* was lost looks identical to a write that
+never happened, and a query that then answers "absent" appears to confirm it. On 2026-08-25 that pair
+armed two mesh-wide sweeps forty seconds apart. Check existence by path before retrying anything.
+
 ### 🚨 Staleness lives on the owner — never query to check "is this stale?"
 
 A query is for finding **sets** of things. "Is *this specific thing* up to date?" is a question about one thing, and the answer belongs **on that thing** as a property — never re-derived by querying.
