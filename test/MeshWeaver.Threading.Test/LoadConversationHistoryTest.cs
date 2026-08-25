@@ -305,7 +305,12 @@ public class LoadConversationHistoryTest(ITestOutputHelper output) : MonolithMes
     private async Task SeedRawContentCell(
         IMessageHub client, string threadPath, string cellId, string contentJson)
     {
-        var content = JsonDocument.Parse(contentJson).RootElement.Clone();
+        // Clone out of the document and dispose it right away — the clone owns its own memory, so
+        // nothing keeps the parser's pooled buffers alive across the create round-trip below.
+        JsonElement content;
+        using (var doc = JsonDocument.Parse(contentJson))
+            content = doc.RootElement.Clone();
+
         var resp = await client.Observe(
             new CreateNodeRequest(new MeshNode(cellId, threadPath)
             {
