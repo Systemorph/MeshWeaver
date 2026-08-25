@@ -1429,7 +1429,10 @@ public static class PackageInstaller
                 });
         }
 
-        return roots
+        // PHASE 1 — ACTIVATE, strictly sequentially. Each activation's gating pass WRITES its
+        // partition's access table, and concurrent passes deadlock (40P01) on the shared
+        // effective-permissions rebuild, so this half must stay a Concat.
+        var activated = roots
             .Select(root => Observable
                 .Using(
                     () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
@@ -1439,11 +1442,6 @@ public static class PackageInstaller
                                 .Where(node => node is not null)
                                 .Take(1)
                                 .Timeout(WarmTimeout)
-                                // 🚨 Warming the hub is only half of "installed". The gating pass
-                                // that makes the partition READABLE runs off this activation, so
-                                // returning here reports a clean install over a partition whose
-                                // cover still denies every viewer. Wait for the grant itself.
-                                .SelectMany(_ => WaitForGating(hub, root, logger))
                                 .Select(_ => true)
                             : Observable.Return(false)))
                 .Where(warmed => warmed)
@@ -1458,9 +1456,33 @@ public static class PackageInstaller
             .ToObservable()
             .Concat()
             .Do(root => logger?.LogInformation("[PackageInstaller] warmed installed root {Root}", root))
-            .DefaultIfEmpty(string.Empty)
-            .LastAsync()
-            .Select(_ => Unit.Default);
+            .ToList();
+
+        // PHASE 2 — wait for the cover grants, CONCURRENTLY.
+        //
+        // 🚨 Warming the hub is only half of "installed". The gating pass that makes the partition
+        // READABLE runs off the activation, so returning at the end of phase 1 reports a clean
+        // install over a partition whose cover still denies every viewer. Wait for the grant itself.
+        //
+        // 🚨 But the wait must NOT ride the sequential chain. It only OBSERVES — a listing, no
+        // write — so it carries none of the serialisation phase 1 needs, and GatingSettleTimeout is
+        // ALSO the "this partition does not gate" answer, which is a normal and common shape. Ridden
+        // sequentially, a boot installing eight non-gating packages would pay the bound eight times
+        // over (~4 minutes of dead air). Merged, the whole install pays it at most once.
+        //
+        // The predecessor of this code appeared to be fast here, but only because it asked an
+        // exact-path GetMeshNodeStream about a node that is usually absent: that NotFounds
+        // immediately, so the wait never actually waited for ANY grant to land — and it poisoned the
+        // path's storm breaker on the way past, which is what then suppressed the gating write
+        // itself (#2229 item A).
+        return activated
+            .SelectMany(warmed => warmed.Count == 0
+                ? Observable.Return(Unit.Default)
+                : warmed
+                    .Select(root => WaitForGating(hub, root, logger))
+                    .Merge()
+                    .DefaultIfEmpty(Unit.Default)
+                    .LastAsync());
     }
 
     /// <summary>

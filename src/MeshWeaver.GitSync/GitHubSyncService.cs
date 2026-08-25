@@ -428,9 +428,7 @@ public sealed class GitHubSyncService
                     // canonical case: a repo shipping an instance of a type it introduces — the
                     // instance is refused "NodeType 'X' is not registered" on the first pass, and
                     // the retry that would land it once the type node exists never ran.
-                    .SelectMany(x => x.Result.Preserved > 0
-                            || x.Result.Failed > 0
-                            || string.Equals(x.Result.Outcome, "Failed", StringComparison.OrdinalIgnoreCase)
+                    .SelectMany(x => !MayAdvanceBaseline(x.Result)
                         ? Observable.Return(x.Result)
                         : string.Equals(x.Result.Outcome, "Skipped", StringComparison.OrdinalIgnoreCase)
                             ? RecordSeenCommit(spacePath, x.CommitSha, sourceId).Select(_ => x.Result)
@@ -438,6 +436,40 @@ public sealed class GitHubSyncService
             });
         });
     }
+
+    /// <summary>
+    /// Whether an import's outcome permits ADVANCING this source's last-sync baseline
+    /// (<c>LastSyncedAt</c> + <c>LastSyncCommitSha</c>). Pure — the whole decision in one place, so
+    /// it can be stated as a fact rather than re-derived inside a reactive chain.
+    ///
+    /// <para>Three reasons to hold the baseline where it is:</para>
+    /// <list type="bullet">
+    ///   <item><b>Preserved &gt; 0</b> — a two-way import kept server-newer nodes, so the mesh is
+    ///     AHEAD of the repo. Advancing past them makes the NEXT diff overwrite the very edits
+    ///     two-way just protected (#675/#677).</item>
+    ///   <item><b>Failed &gt; 0</b> — 🚨 <b>the #2229 item C hole.</b> Some nodes did not land. The
+    ///     guard used to test the outcome LITERAL <c>"Failed"</c> only, and a per-file failure
+    ///     reports <c>"ImportedWithErrors"</c> — a different string — so a partial import advanced
+    ///     the pointer past the commit whose nodes never landed. Every later sync then answered
+    ///     "already at this commit" (<c>GitHubWebhookProcessor.SkipReason</c>) and the miss became
+    ///     PERMANENT until the repo produced a new commit, with the Space's own UI reading "up to
+    ///     date" throughout. The canonical case is a repo shipping an instance of a type it
+    ///     introduces: the instance is refused <c>NodeType 'X' is not registered</c> on the pass
+    ///     that also writes the type node, so the retry that would land it never ran.</item>
+    ///   <item><b>Outcome "Failed"</b> — the whole import failed; it carries no per-file tally to
+    ///     read, so the literal is still the signal for that one.</item>
+    /// </list>
+    ///
+    /// <para>A "Skipped" (fingerprint-matched no-op) outcome is NOT judged here — it is allowed
+    /// through to <c>RecordSeenCommit</c>, which advances the SEEN commit only and deliberately
+    /// leaves the conflict horizon alone.</para>
+    /// </summary>
+    /// <param name="result">The import outcome to judge.</param>
+    /// <returns><c>true</c> when the mesh is genuinely in sync with the repo at this commit.</returns>
+    internal static bool MayAdvanceBaseline(StaticRepoImportResult result)
+        => result.Preserved == 0
+           && result.Failed == 0
+           && !string.Equals(result.Outcome, "Failed", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Asks GitHub — LIVE, nothing stored — for the configured branch's current HEAD commit,
