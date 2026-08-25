@@ -167,6 +167,13 @@ public static class MemexConfiguration
         // Graph sender wins; module absent ⇒ this no-op keeps OutboundEmailSender and
         // InvitationEmailSender — both of which GetRequiredService<IEmailSender> — resolvable
         // instead of throwing at startup.
+        //
+        // 🚨 Resolvable is NOT the same as able to send, and conflating the two was #2023: with
+        // Email:Enabled=true and the module absent, this fallback used to report success for every
+        // send, so OutboundEmailSender stamped queued mail New → Sending → Sent while nothing left
+        // the process. Both halves of that are now refused — the no-op fails loudly on this
+        // configuration (NoOpEmailSender), and the two watchers decline to start at all
+        // (EmailDeliveryGuard), leaving mail visibly queued instead of falsely delivered.
         services.TryAddSingleton<IEmailSender, NoOpEmailSender>();
 
         // Inbound email→agent channel (intake). Mail is treated as a chat device: each inbound email

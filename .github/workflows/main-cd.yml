@@ -1657,5 +1657,5 @@ jobs:
   # credentials — which is also why the old `az aks command invoke` deploy job was deleted: it
   # required a central service principal with per-cluster Azure RBAC (the `commandResults/read`
   # authorization failure on 2026-06-29), a model that cannot scale to installs prod doesn't manage.
-  # See SelfUpdate.md / DEPLOY-RUNBOOK.md for enabling self-update on an environment (the SA + RBAC are
+  # See deploy/aks/SELF-UPDATE.md / deploy/aks/README.md for enabling self-update on an environment (the SA + RBAC are
   # in the Helm chart; set selfUpdate.azureClientId and grant the UAMI AcrPull).
