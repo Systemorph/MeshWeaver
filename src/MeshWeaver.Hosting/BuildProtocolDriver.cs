@@ -161,21 +161,32 @@ public static class BuildProtocolDriver
                 _ => { },
                 ex => logger?.LogWarning(ex, "BuildProtocol: heartbeat failed for {Holder}", holder));
 
-        return mesh
-            // Record the plan on the root, then materialize + claim + open an activity per chunk.
-            .UpdateBuildAsHolder(holder, s => s with
-            {
-                Status = BuildStatus.Building,
-                Chunks = chunks.Keys.OrderBy(k => k, StringComparer.Ordinal).ToImmutableList(),
-            })
-            .SelectMany(_ => chunks
-                .OrderBy(c => c.Key, StringComparer.Ordinal)
-                .Select(c => OpenChunk(mesh, holder, fingerprint, c.Key, c.Value, logger))
-                .Concat())
-            .ToList()
-            .SelectMany(openedChunks => Observable.Using(
-                StartHeartbeat,
-                _ => bake()
+        // 🚨 The heartbeat covers the WHOLE master path, chunk opening included (#2076). It used to
+        // start only after `.ToList()` — i.e. after every chunk had been materialised, claimed and
+        // given an activity — and `OpenChunk` waits up to `GrantWindow` for each chunk's own grant.
+        // With 37 chunks that is minutes of silence on a claim whose only liveness stamp is the
+        // grant instant, and `Observable.Interval` does not beat until one full
+        // `HeartbeatInterval` after it is subscribed. Across clusters the holder's identity is
+        // Unknown BY CONSTRUCTION (Orleans membership is per-cluster), so the peer's arbiter judges
+        // it on `ClaimStaleAfter` alone — and a builder that is working perfectly well can age past
+        // that budget before its first beat, licensing a second builder. Starting the beat first
+        // makes the stamp track the work rather than trail it; the Using still disposes it with the
+        // sweep, so a released claim stops beating exactly as before.
+        return Observable.Using(
+            StartHeartbeat,
+            _ => mesh
+                // Record the plan on the root, then materialize + claim + open an activity per chunk.
+                .UpdateBuildAsHolder(holder, s => s with
+                {
+                    Status = BuildStatus.Building,
+                    Chunks = chunks.Keys.OrderBy(k => k, StringComparer.Ordinal).ToImmutableList(),
+                })
+                .SelectMany(_ => chunks
+                    .OrderBy(c => c.Key, StringComparer.Ordinal)
+                    .Select(c => OpenChunk(mesh, holder, fingerprint, c.Key, c.Value, logger))
+                    .Concat())
+                .ToList()
+                .SelectMany(openedChunks => bake()
                     .Do(outcomes.Add)
                     .Concat(Observable.Defer(() =>
                         CloseOut(mesh, holder, fingerprint, chunks, openedChunks.ToList(), outcomes, logger)
