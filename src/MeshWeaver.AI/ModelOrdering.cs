@@ -32,8 +32,24 @@ public static class ModelOrdering
     public static readonly ImmutableDictionary<string, int> Defaults =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
-            // The fast/cheap DeepSeek tier — the platform default. Order -1 = "make this the default".
+            // The fast/cheap DeepSeek tier — Order -1 = "make this the default".
             ["DeepSeek-V4-Flash"] = -1,
+
+            // 🚨 The OPEN-WEIGHTS default. The deployment default is what an UNLABELED tier falls
+            // through to (ChatClientCredentialResolver: "the tier label; null/unknown → the
+            // deployment default"), so it decides what runs whenever no tier carries a model — which
+            // is deliberately most of the time. Pinning an open-weights model here is what makes
+            // "Auto only ever lands on open weights" true by construction rather than by everyone
+            // remembering to label.
+            //
+            // Why it needs a pin at all: the catalog source stamps a UNIFORM Order per provider, so
+            // every OpenRouter model shares one value and "lowest Order" is a tie broken arbitrarily
+            // — a proprietary model could win it. Measured 2026-08-25 on systemorph: glm-5.3 and
+            // eleven siblings all carried Order 6.
+            //
+            // -2, not -1: it must also beat DeepSeek-V4-Flash above, which is proprietary-adjacent
+            // and would otherwise take the default on any deployment carrying both.
+            ["z-ai/glm-5.3"] = -2,
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
