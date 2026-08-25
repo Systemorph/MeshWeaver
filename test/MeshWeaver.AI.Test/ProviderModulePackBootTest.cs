@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -67,6 +68,70 @@ public class ProviderModulePackBootTest
             (IServiceCollection)new ServiceCollection(), (collection, configure) => configure(collection));
 
         AssertFactoryAndCatalogSourceLanded(services);
+    }
+
+    /// <summary>
+    /// The partner to the fold above, and the property that would have kept memex-cloud serving on
+    /// 2026-08-25 (#2234): a module this build CANNOT install must cost its own contribution and
+    /// nothing else. It used to cost the process — a landed AzureFoundry built against a
+    /// 9-parameter record ctor met the 8-parameter image, the MissingMethodException escaped
+    /// InstallAssemblies, and every replacement pod aborted ~2 s into boot with no application
+    /// logging, for ~90 minutes.
+    ///
+    /// <para>🚨 The assertion that matters is not "it did not throw" — it is that the GOOD pack
+    /// beside it still landed. A fix that swallowed the failure and also dropped the healthy
+    /// module would pass a no-throw test while leaving the portal just as broken.</para>
+    /// </summary>
+    [Fact]
+    public void InstallAssemblies_WithAModuleItCannotLoad_KeepsTheGoodOne_AndDoesNotAbort()
+    {
+        var configurations = new List<Func<IServiceCollection, IServiceCollection>>();
+        var builder = new MeshBuilder(configure => configurations.Add(configure),
+            AddressExtensions.CreateMeshAddress());
+
+        var unloadable = Path.Combine(AppContext.BaseDirectory, "MeshWeaver.ThisModuleCannotLoad.dll");
+
+        var exception = Record.Exception(() => builder.InstallAssemblies(
+            unloadable,
+            typeof(ProbeProviderPackAttribute).Assembly.Location));
+
+        Assert.Null(exception);
+
+        var services = configurations.Aggregate(
+            (IServiceCollection)new ServiceCollection(), (collection, configure) => configure(collection));
+
+        // The healthy pack is unaffected by its neighbour's failure.
+        AssertFactoryAndCatalogSourceLanded(services);
+
+        // And the failure is RECORDED rather than swallowed — a skip nobody can see is the shape
+        // that forges correct-looking bugs, so the host must be able to surface it.
+        var recorded = services
+            .Where(d => d.ServiceType == typeof(IncompatibleModule))
+            .Select(d => d.ImplementationInstance)
+            .OfType<IncompatibleModule>()
+            .ToList();
+        var broken = Assert.Single(recorded);
+        Assert.Equal("MeshWeaver.ThisModuleCannotLoad", broken.Name);
+        Assert.Contains("CONTRIBUTING NOTHING", broken.Report());
+    }
+
+    /// <summary>
+    /// The other direction: with every module loadable, nothing is reported as incompatible. A
+    /// recorder that always fired would make the assertion above meaningless.
+    /// </summary>
+    [Fact]
+    public void InstallAssemblies_WithEveryModuleLoadable_RecordsNoIncompatibility()
+    {
+        var configurations = new List<Func<IServiceCollection, IServiceCollection>>();
+        var builder = new MeshBuilder(configure => configurations.Add(configure),
+            AddressExtensions.CreateMeshAddress());
+
+        builder.InstallAssemblies(typeof(ProbeProviderPackAttribute).Assembly.Location);
+
+        var services = configurations.Aggregate(
+            (IServiceCollection)new ServiceCollection(), (collection, configure) => configure(collection));
+
+        Assert.DoesNotContain(services, d => d.ServiceType == typeof(IncompatibleModule));
     }
 
     [Fact]
