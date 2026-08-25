@@ -2,6 +2,7 @@
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
+using MeshWeaver.GitSync;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
@@ -63,7 +64,17 @@ public static class AIExtensions
                         // node. Registering it here — rather than hard-coding it in the registry —
                         // is what let MeshWeaver.Hosting drop its ProjectReference to this
                         // assembly, so the platform builds and runs with no AI at all.
-                        .AddSingleton<IFileFormatParser, AgentFileParser>())
+                        .AddSingleton<IFileFormatParser, AgentFileParser>()
+                        // Writes the live Agent + Skill partitions back to the repo's content/ai
+                        // section — the inverse of the built-in providers that READ it. Dev-time
+                        // (source checkout) only, and AI content by definition, so it rides AI
+                        // rather than GitSync (#2276).
+                        .AddSingleton<AiContentDiskWriter>()
+                        // The real PR drafter, delegating to the PullRequestWriter agent through
+                        // the existing chat surface. A plain AddSingleton against GitSync's
+                        // TryAddSingleton fallback: this one wins in EITHER configure order, and a
+                        // deployment without AI still opens PRs with the placeholder draft.
+                        .AddSingleton<IPullRequestDraftService, PullRequestDraftService>())
                     // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
                     .ConfigureHub(config =>
                     {
@@ -74,7 +85,17 @@ public static class AIExtensions
                     {
                         config.TypeRegistry.AddAITypes();
                         return config
-                            .WithHandler<Plugins.SaveContentRequest>(HandleSaveContent);
+                            .WithHandler<Plugins.SaveContentRequest>(HandleSaveContent)
+                            // "Sync to repo" on Agent/Skill nodes + the area its item navigates to.
+                            // Self-gates to a source checkout and a platform admin, so it is inert
+                            // on a deployment that has neither.
+                            .WithServices(s =>
+                            {
+                                s.TryAddEnumerable(ServiceDescriptor.Scoped<INodeMenuProvider, AiContentSyncMenuProvider>());
+                                return s;
+                            })
+                            .AddLayout(layout => layout
+                                .WithView(AiContentSyncArea.AreaName, AiContentSyncArea.Render));
                     })
                 ;
         }

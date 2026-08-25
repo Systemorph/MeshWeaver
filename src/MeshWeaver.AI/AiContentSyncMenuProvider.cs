@@ -1,12 +1,12 @@
 using System.Reactive.Linq;
-using MeshWeaver.AI;
+using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.GitSync;
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// DI-registered <see cref="INodeMenuProvider"/> that contributes the "Sync to repo" entry to the NODE

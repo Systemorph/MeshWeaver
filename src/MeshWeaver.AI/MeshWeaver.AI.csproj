@@ -47,6 +47,7 @@
       <ProjectReference Include="..\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
       <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
       <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+      <ProjectReference Include="..\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
       <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
       <ProjectReference Include="..\MeshWeaver.Markdown.Collaboration\MeshWeaver.Markdown.Collaboration.csproj" />
