@@ -174,4 +174,28 @@ public class UserIdentityLookupClassifierTest
 
         Assert.Same(node, determined.Node);
     }
+
+    /// <summary>
+    /// Subscribing to the change feed BEFORE taking the first reading has a cost the old
+    /// <c>Defer</c>/<c>StartWith</c> shape did not: the subscription already exists when the reading
+    /// runs. If that reading throws and the exception is simply allowed to propagate out of the
+    /// subscribe factory, the handle is never returned to anyone — leaving a live subscription to a
+    /// hot, process-wide stream that keeps re-invoking the reading for the life of the cache, with no
+    /// way to dispose it. So a throwing reading must tear the feed down and surface as the sequence's
+    /// own <c>OnError</c>. (Copilot review, #2259.)
+    /// </summary>
+    [Fact]
+    public async Task UntilDetermined_AThrowingReading_FaultsTheSequence_AndLeavesNoSubscriptionBehind()
+    {
+        var indexChanged = new Subject<Unit>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await UserIdentityLookup
+                .UntilDetermined(indexChanged, () => throw new InvalidOperationException("index read failed"))
+                .Timeout(TimeSpan.FromSeconds(10))
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken));
+
+        Assert.False(indexChanged.HasObservers);
+    }
 }

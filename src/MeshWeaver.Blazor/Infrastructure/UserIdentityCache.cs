@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -129,7 +130,23 @@ public readonly record struct UserIdentityLookup(MeshNode? Node, string? Unavail
                 // before the subscription exists is unrecoverable.
                 var serialized = Observer.Synchronize(observer);
                 var changes = indexChanged.Select(_ => lookup()).Subscribe(serialized);
-                serialized.OnNext(lookup());
+                try
+                {
+                    serialized.OnNext(lookup());
+                }
+                catch (Exception ex)
+                {
+                    // Subscribing FIRST means the feed subscription already exists when the reading
+                    // is taken, so a throwing lookup must not simply propagate out of this factory:
+                    // `changes` would never be returned, and a live subscription to a hot,
+                    // process-wide stream that nobody holds re-invokes `lookup()` for the life of
+                    // the cache. Tear it down and report the fault as the sequence's own OnError,
+                    // which is what the old Defer/StartWith shape got for free by not having
+                    // subscribed yet.
+                    changes.Dispose();
+                    serialized.OnError(ex);
+                    return Disposable.Empty;
+                }
                 return changes;
             })
             .Where(l => !l.IsUnavailable)
