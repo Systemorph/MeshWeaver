@@ -48,7 +48,10 @@
 }
 
 .mesh-search-header .mesh-search-viewbar {
-    flex: 0 0 auto;
+    /* 0 1 auto, not 0 0 auto: the search box keeps its 320px basis, so a bar that may not shrink
+       simply runs off the end of the row. */
+    flex: 0 1 auto;
+    min-width: 0;
     margin-left: auto;
     margin-bottom: 12px;
 }
@@ -217,6 +220,11 @@
     gap: 8px;
     margin-bottom: 12px;
     min-height: 28px;
+    /* Give way instead of overflowing (#2216). Every piece of this bar is a flex container, and a
+       flex item's default `min-width: auto` refuses to shrink below its content — so without these
+       the bar could neither wrap nor narrow, and drew its selects over the search input with the
+       captions cut mid-word. `flex-wrap` here, `min-width: 0` on each nested container below. */
+    flex-wrap: wrap;
 }
 
 .mesh-search-viewbar-spacer {
@@ -227,6 +235,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
 }
 
 .mesh-search-viewbar-label {
@@ -236,6 +245,7 @@
 
 .mesh-search-groupby,
 .mesh-search-sortby {
+    min-width: 0;
     font-size: 13px;
     padding: 3px 24px 3px 8px;
     height: 28px;
