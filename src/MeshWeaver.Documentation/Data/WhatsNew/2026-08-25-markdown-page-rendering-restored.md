@@ -1,8 +1,9 @@
 ---
 Name: Markdown page rendering restored
-Category: What's New
+Category: Fix
 Description: Fixes markdown pages failing with "This view could not be rendered" after the latest platform update.
 Icon: Sparkle
+Order: -20260825
 ---
 
 # Markdown page rendering restored
