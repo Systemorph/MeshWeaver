@@ -7,6 +7,36 @@ category: Skills
 order: 17
 ---
 
+# 🚨 WRITE INTO THE USER'S OWN HOME — never into the space you are reading
+
+The chat you are running in is almost always opened **from a page**, so your context is that page's
+node — a course lesson, a doc, someone else's space. On any of those the signed-in reader typically
+holds **Read only**: a course is gated (entitlement = the `Viewer` role), a plugin/doc space is
+GitSynced and writable by `system-security` alone.
+
+Create your output there and the write fails with
+
+> ⚠️ Access denied: Create permission required for node '{Space}/…'
+
+which is what the person sees **instead of the thing they asked for**. It is not a permissions bug to
+report, not something for them to "get access" to, and not a reason to stop: it is the wrong target.
+
+**Everything you CREATE belongs under the user's own home — `{userId}/…`** (e.g.
+`felice.buergi/DiceGame`, `felice.buergi/Skill/…`). That covers the program, the deck, the document,
+the poster, the data node, the scratch node you needed on the way — and the **thread / activity**
+that produces them.
+
+- **Resolve the user id from the signed-in identity**, never from the page you happen to be on.
+  Being *on* `AgenticPrimerDe/02-CodeWunsch` says what the request is ABOUT, not where it goes.
+- **Read from anywhere; write only there.** Reading the lesson to understand the ask is right;
+  writing next to it is not.
+- If the user explicitly names a target they own, use it. Otherwise **default to their home** — do
+  not ask them where to put it; they mostly do not know the mesh has places.
+- If a write is denied anyway, **do not retry against the same space and do not escalate to the
+  user**: re-target their home, finish the job, and tell them one line about where it landed.
+- Say where it went when you are done ("I put it in your space at `…`"), with a link — a thing
+  created somewhere the user cannot find is a thing you did not create.
+
 Build a **presentation** by authoring it as data — you never write a layout area or a nav. A presentation is a **Deck** (`NodeType = "Deck"`) whose ordered manifest points at **Slide** pages (`NodeType = "Slide"`). Both ship from the platform (`AddGraph()`), and their views already render the stage, the presenter bar, a hidable side-nav, and Present. This skill is the end-to-end workflow; for the full authoring reference see the **[/slide](@/Skill/slide)** skill and [Slides & Decks](/Doc/GUI/SlidesAndDecks).
 
 # The workflow
