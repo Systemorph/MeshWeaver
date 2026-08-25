@@ -61,6 +61,13 @@ public sealed class InvitationEmailSender(
             return Task.CompletedTask;
         }
 
+        // 🚨 Same refusal as OutboundEmailSender, and it matters more here: this watcher's claim is
+        // Invitation.EmailSentAt, which is PERMANENT — an invitation stamped "emailed" by a sender
+        // that delivered nothing can never be re-sent by any code path. Not starting leaves it
+        // un-stamped, so delivery resumes by itself once the module lands (#2023).
+        if (EmailDeliveryGuard.RefuseToStart(rootServices, options, logger, nameof(InvitationEmailSender)))
+            return Task.CompletedTask;
+
         // Defer mesh access until the host is fully started (Orleans + mesh hub come up as
         // hosted services too) — same rationale as OutboundEmailSender.
         lifetime.ApplicationStarted.Register(BeginWatching);
