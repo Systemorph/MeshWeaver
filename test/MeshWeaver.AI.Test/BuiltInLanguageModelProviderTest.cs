@@ -14,7 +14,8 @@ namespace MeshWeaver.AI.Test;
 /// Contract for the admin-managed platform catalog seeder + the /model selection path:
 /// <list type="number">
 ///   <item><b>Always-seed catalog.</b> Each catalog source ALWAYS emits a <c>ModelProvider</c>
-///   node (create-if-absent, <c>ExcludeThisAndChildren</c>) plus a key-less, public
+///   node (create-if-absent, <c>ExcludeThisOnly</c> — the claim covers the node an admin edits and
+///   NOT its children, so a model configured after the node exists can still appear: #2211) plus a key-less, public
 ///   <c>LanguageModel</c> child per model id — regardless of whether an Endpoint/ApiKey is wired
 ///   in config. Keys/endpoints are set later as mesh data; the picker shows the catalog and the
 ///   admin manages credentials. (This drops the older "hide unconfigured models" gate.)</item>
@@ -81,6 +82,43 @@ public class BuiltInLanguageModelProviderTest
 
         ProvidersOf(provider).Select(n => n.Name).Should().Contain("Azure",
             "the provider node is always emitted (create-if-absent) so the admin can configure it");
+    }
+
+    /// <summary>
+    /// 🚨 THE PROVIDER NODE'S CLAIM COVERS THE NODE, NEVER ITS CHILDREN (#2211).
+    ///
+    /// <para><c>Provider/{name}</c> is create-if-absent so an admin's endpoint/key edits survive a
+    /// redeploy — that is what the claim is for, and it applies to THAT node. Claiming the SUBTREE
+    /// (<see cref="SyncBehavior.ExcludeThisAndChildren"/>, as it used to) also froze the
+    /// <c>LanguageModel</c> children, so a model added to the deployment AFTER the provider node
+    /// existed could never materialize: the importer declined every child as "claimed" on every boot
+    /// and recorded the run as Succeeded. A deployment that configured 12 OpenRouter models kept the
+    /// two it was born with, permanently; no restart or recycle healed it.</para>
+    ///
+    /// <para>The children are configuration-derived and carry no credential, so there is nothing
+    /// there for an admin to own — they sync normally, and the configured model list is enforceable
+    /// again. Pinned here so the width cannot silently widen back.</para>
+    /// </summary>
+    [Fact]
+    public void ProviderNode_ClaimsItselfOnly_SoConfiguredModelsCanStillArrive()
+    {
+        var provider = Build(new Dictionary<string, string?>
+        {
+            ["Azure:Models:0"] = "claude-sonnet-4",
+            ["Azure:ApiKey"] = "sk-secret",
+        }, new LanguageModelCatalogSource("Azure", "Azure"));
+
+        // The CREDENTIAL-bearing provider node — the one a claim exists for. (The keyless `Auto`
+        // router node is platform-owned and deliberately unclaimed; it is not this contract.)
+        var azure = ProvidersOf(provider).Single(n => n.Id == "Azure");
+        azure.SyncBehavior.Should().Be(SyncBehavior.ExcludeThisOnly,
+            "the claim protects the node an admin edits — claiming its subtree blocks the CREATION of "
+            + "every configured model child, forever and silently (#2211)");
+
+        ModelsOf(provider).Should().OnlyContain(
+            n => n.SyncBehavior == SyncBehavior.Include,
+            "a model child is configuration-derived and carries no credential: it stays fully synced, "
+            + "so a listed id gets a node and an id dropped from configuration loses one");
     }
 
     [Fact]

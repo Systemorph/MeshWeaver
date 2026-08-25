@@ -200,6 +200,15 @@ public class ThreadTokenUsageTest : AITestBase
     /// <para>The watcher is opened BEFORE the round so it is live across every write the satellite
     /// receives: the underlying query re-runs on each change with no debounce, so a durable zero
     /// state cannot slip past it. Pre-fix this failed on the first emission, every run.</para>
+    ///
+    /// <para>🚨 The zero-watch deliberately reads through
+    /// <see cref="ObserveUsageAsThePortalChipDoes"/> — the query-shaped reader — because the claim
+    /// is about what a query-bound GUI reader can OBSERVE, and pointing it at
+    /// <see cref="ObserveUsage"/> would quietly gut it: that helper's point-read leg opens only once
+    /// the index has already seen the node, so a regressed zero window could land and be overwritten
+    /// before the leg ever subscribes, and this test would pass having watched nothing. The SETTLE,
+    /// by contrast, runs on <see cref="ObserveUsage"/>, so the test's pass does not hang on the
+    /// query index's lag — the assertion keeps its subject, without inheriting its flakiness.</para>
     /// </summary>
     [Fact]
     public async Task UsageSatelliteIsNeverObservableWithZeroTokens()
@@ -212,13 +221,15 @@ public class ThreadTokenUsageTest : AITestBase
 
         // Live from before the round — see the summary: this must see every state the node passes
         // through, not just the one it settles on.
-        var settled = ObserveUsage(threadPath, "usage_model")
-            .Do(u =>
+        using var zeroWatch = ObserveUsageAsThePortalChipDoes(threadPath, "usage_model")
+            .Subscribe(u =>
             {
                 if (u.InputTokens == 0 && u.OutputTokens == 0
                     && u.CacheReadTokens == 0 && u.CacheWriteTokens == 0)
                     lock (gate) zeroSnapshots.Add(u);
-            })
+            });
+
+        var settled = ObserveUsage(threadPath, "usage_model")
             .Should().Within(TimeSpan.FromSeconds(20))
             .Match(u => u.InputTokens == InTokens && u.OutputTokens == OutTokens);
 
@@ -480,49 +491,89 @@ public class ThreadTokenUsageTest : AITestBase
     /// The live per-model <see cref="TokenUsage"/> satellite at <c>{threadPath}/_Usage/{modelKey}</c>,
     /// as every emission the reader can observe (nulls — "not there yet" — filtered out).
     ///
-    /// <para>🚨 Through the LIVE CHILDREN QUERY of <c>{threadPath}/_Usage</c> — byte for byte the
-    /// primitive <c>ThreadTokenChip</c> binds to in the portal — and never a point
-    /// <c>GetMeshNodeStream({threadPath}/_Usage/{modelKey})</c> read. The satellite is written by
-    /// <c>TokenUsageNodeType.RecordUsage</c>, which is subscribed as an INDEPENDENT side effect and
-    /// deliberately NOT chained before the round's terminal status write; a watcher can therefore be
-    /// in place before the node exists. A point read of an absent node answers with an authoritative
-    /// routing NotFound and TERMINATES the stream with an error — it cannot wait for a node to
-    /// appear, and worse, that NotFound opens MeshNodeStreamCache's storm-breaker window on the very
-    /// path RecordUsage is about to write, which fast-fails the WRITE too. The children query starts
-    /// from the (possibly empty) collection and re-emits when the node lands, which is the only shape
-    /// that serves this ordering. Listing children is exactly the use AGENTS.md sanctions for a
-    /// query.</para>
+    /// <para><b>Two legs, and the split is the whole point: EXISTENCE from a listing, CONTENT from
+    /// the owner.</b> Reading an optional node has two rules pulling opposite ways, and every
+    /// previous version of this helper picked one horn and was bitten by the other:</para>
+    /// <list type="bullet">
+    ///   <item><b>A point read cannot wait for a node to appear.</b>
+    ///     <c>GetMeshNodeStream({usagePath})</c> on an ABSENT node answers with an authoritative
+    ///     routing NotFound and TERMINATES the stream with an error — and that NotFound opens
+    ///     <c>MeshNodeStreamCache</c>'s storm-breaker window on the very path
+    ///     <c>RecordUsage</c> is about to write, which fast-fails the WRITE too. That is #1040's
+    ///     <c>No node found at …/_Usage/…</c>, an error rather than a timeout, and it is why
+    ///     <c>02b851fd6</c> moved this helper onto a query at all. <c>RecordUsage</c> is subscribed
+    ///     as an INDEPENDENT side effect, deliberately NOT chained before the round's terminal
+    ///     status write, so "the round reached a terminal state" never implies "the satellite
+    ///     exists" — a reader genuinely has to cope with the node not being there yet.</item>
+    ///   <item><b>A query cannot answer for a known path's CONTENT.</b> The query index is
+    ///     eventually consistent; AGENTS.md → "Never Query for a Single Node's Content" forbids
+    ///     exactly this, and the 2026-08-25 tightening of
+    ///     <c>Doc/Architecture/CqrsAndContentAccess</c> (#2229) put a number on it: a query's answer
+    ///     for one path can be minutes old. Waiting on a VALUE through that index is waiting on an
+    ///     unbounded lag, which is what turned this class into a repeat CI offender — #1812, #2001
+    ///     and run 32876073965 are all the same shape, "the observable emitted nothing at all" on a
+    ///     <c>WaitForUsage</c>, never on <c>WaitForThread</c>/<c>WaitForCell</c> despite identical
+    ///     budgets in the same test methods.</item>
+    /// </list>
     ///
-    /// <para>That mismatch was #1040's largest blocker: at
-    /// <c>DOTNET_PROCESSOR_COUNT=4 -parallel collections</c> three of this class's tests failed
-    /// inside a second with <c>No node found at …/_Usage/…</c> — not a timeout, an error. Serial
-    /// scheduling merely let the create win the race.
-    /// <see cref="UsageWatchedFromBeforeTheRound_ArrivesWhenTheSatelliteIsCreated"/> pins the losing
-    /// ordering deterministically.</para>
+    /// <para>So: the children LISTING answers only "is it there yet" — the one query use AGENTS.md
+    /// still sanctions, empty-on-absent, where a stale negative merely makes us wait a beat longer —
+    /// and the moment it says yes, CONTENT comes off the OWNER's authoritative
+    /// <c>GetMeshNodeStream(usagePath)</c>, which is never stale and stays live so accumulation
+    /// across rounds is observed. The point read only ever opens on a node the index has already
+    /// seen, so it cannot NotFound and cannot poison the writer. Both horns satisfied; neither rule
+    /// bent. <see cref="UsageWatchedFromBeforeTheRound_ArrivesWhenTheSatelliteIsCreated"/> pins the
+    /// watcher-first ordering deterministically.</para>
     ///
-    /// <para>🚨 <b>Do NOT "fix" a slow usage read by switching this to the node stream</b> (#1812).
-    /// That issue proposed it, on the theory that the all-zero <c>TokenUsage</c> CI once timed out on
-    /// was a stale CQRS projection. Measured, it is not: with both readers racing the same round,
-    /// this query and <c>GetMeshNodeStream(usagePath)</c> resolve within ±13 ms of each other, and
-    /// the point stream is the SLOWER of the two once its cold per-node hub activation is counted.
-    /// The zeros were not a lagged view of a written value — they WERE the node's authoritative
-    /// value, because <c>RecordUsage</c>'s phase 1 wrote them. An authoritative read would have
-    /// returned the same zeros. The defect was on the write side and is fixed there; see
-    /// <see cref="UsageSatelliteIsNeverObservableWithZeroTokens"/>, which pins it.</para>
+    /// <para>🚨 Do not "simplify" this back to either half. Switching wholesale to the node stream
+    /// re-opens #1040 (NotFound + storm breaker); reading <c>content</c> out of the query re-opens
+    /// the unbounded-lag wait. Note also that widening the wait is not a repair: #2001's fix
+    /// (<c>3fcf79f8f</c>) replaced every 10 s budget with 20 s, and the same assertion then failed
+    /// at 20 s.</para>
     /// </summary>
     private IObservable<TokenUsage> ObserveUsage(string threadPath, string modelKey)
     {
         var usagePath = $"{threadPath}/{TokenUsageNodeType.SatelliteSegment}/{modelKey}";
-        return Mesh.GetQuery(
-                $"usage:{threadPath}",
-                $"path:{threadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children "
-                + $"nodeType:{TokenUsageNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
+        // Leg 1 — EXISTENCE, via the children listing. select:path only: nothing here reads Content.
+        return ObserveUsageNamespace(threadPath, "select:path")
+            .Where(nodes => nodes.Any(n =>
+                string.Equals(n.Path, usagePath, StringComparison.OrdinalIgnoreCase)))
+            .Take(1)
+            // Leg 2 — CONTENT, from the owner. Live (no Take): rounds 2+ accumulate onto the same node.
+            .SelectMany(_ => Mesh.GetWorkspace().GetMeshNodeStream(usagePath))
+            .Select(n => n.ContentAs<TokenUsage>(Mesh.JsonSerializerOptions))
+            .Where(u => u is not null)
+            .Select(u => u!);
+    }
+
+    /// <summary>
+    /// The satellite as the PORTAL's <c>ThreadTokenChip</c> sees it — the raw children query,
+    /// content and all. This is deliberately the shape <see cref="ObserveUsage"/> refuses to use for
+    /// a value wait, and it exists for exactly one job: letting
+    /// <see cref="UsageSatelliteIsNeverObservableWithZeroTokens"/> assert what a query-bound GUI
+    /// reader can observe, without also making the test's PASS depend on that reader's lag.
+    /// </summary>
+    private IObservable<TokenUsage> ObserveUsageAsThePortalChipDoes(string threadPath, string modelKey)
+    {
+        var usagePath = $"{threadPath}/{TokenUsageNodeType.SatelliteSegment}/{modelKey}";
+        return ObserveUsageNamespace(threadPath, "select:path,id,namespace,name,nodeType,content")
             .Select(nodes => nodes
                 .FirstOrDefault(n => string.Equals(n.Path, usagePath, StringComparison.OrdinalIgnoreCase))
                 .ContentAs<TokenUsage>(Mesh.JsonSerializerOptions))
             .Where(u => u is not null)
             .Select(u => u!);
     }
+
+    /// <summary>
+    /// The live children listing of <c>{threadPath}/_Usage</c>. Distinct cache ids per projection —
+    /// the query set is part of the cache key (#1311), and giving the two projections separate ids
+    /// keeps that explicit rather than relying on it.
+    /// </summary>
+    private IObservable<IEnumerable<MeshNode>> ObserveUsageNamespace(string threadPath, string select)
+        => Mesh.GetQuery(
+            $"usage:{threadPath}:{select}",
+            $"path:{threadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children "
+            + $"nodeType:{TokenUsageNodeType.NodeType} {select}");
 
     /// <summary>
     /// Watches <see cref="ObserveUsage"/> until it matches <paramref name="predicate"/>.

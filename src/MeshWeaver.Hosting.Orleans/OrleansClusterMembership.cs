@@ -21,6 +21,10 @@ namespace MeshWeaver.Hosting.Orleans;
 /// or — the case that matters — our snapshot is not hydrated yet, and reading that as "gone" on a
 /// freshly-started silo would license taking over from a peer that is perfectly alive. Unknown falls
 /// back to whatever the caller's fallback is, which is always the safe direction.</para>
+///
+/// <para>🚨 <b>…and the mirror-image rule: a row that is merely PRESENT is not
+/// <see cref="ClusterMemberState.Alive"/> either</b> — see <see cref="Classify"/> for why
+/// <see cref="SiloStatus.Created"/> / <see cref="SiloStatus.Joining"/> report Unknown (#2076).</para>
 /// </summary>
 public sealed class OrleansClusterMembership(
     IClusterMembershipService membership,
@@ -65,15 +69,45 @@ public sealed class OrleansClusterMembership(
             return ClusterMemberState.Unknown;
         }
 
-        return status switch
-        {
-            // Still executing — including while it drains. Anything it holds, it still holds.
-            SiloStatus.Created or SiloStatus.Joining or SiloStatus.Active
-                or SiloStatus.ShuttingDown or SiloStatus.Stopping => ClusterMemberState.Alive,
-            // The ONE positive departure verdict.
-            SiloStatus.Dead => ClusterMemberState.Gone,
-            // SiloStatus.None — not in this snapshot. See the class remarks: absence is not death.
-            _ => ClusterMemberState.Unknown
-        };
+        return Classify(status);
     }
+
+    /// <summary>
+    /// The <see cref="SiloStatus"/> → <see cref="ClusterMemberState"/> mapping, pure so the rule can
+    /// be pinned without standing up a cluster.
+    ///
+    /// <para>🚨 <b><see cref="SiloStatus.Created"/> and <see cref="SiloStatus.Joining"/> are NOT
+    /// <see cref="ClusterMemberState.Alive"/></b> (#2076). <c>Alive</c> is not "a row exists" — it is
+    /// a POSITIVE verdict that the member is running, and its consumers treat it as
+    /// permission-denied-forever: <c>BuildNodeType.HolderStillHoldsIt</c> reads Alive as <i>"never
+    /// take over, however old the heartbeat looks"</i>, deliberately skipping the
+    /// <c>ClaimStaleAfter</c> clock. Orleans only probes ACTIVE silos, so a process that died before
+    /// finishing its join leaves a <c>Created</c>/<c>Joining</c> row that no failure detector will
+    /// ever move to <c>Dead</c>. Mapping those to Alive therefore made the clock fallback
+    /// STRUCTURALLY UNREACHABLE for the one case it exists to cover — and that is exactly what
+    /// happened on memex-cloud (2026-08-22): a pod deleted MID-BOOT held the build claim, every
+    /// other pod sat in <c>FollowGo</c> for 25+ minutes, and with <c>PreWarm:GateReadiness=true</c>
+    /// that held the whole rollout.</para>
+    ///
+    /// <para>Reporting them as <see cref="ClusterMemberState.Unknown"/> is the honest answer — the
+    /// cluster genuinely has no opinion about a member that never joined — and it hands the decision
+    /// to the caller's fallback rather than to a takeover. It does NOT license an immediate steal: a
+    /// holder that IS mid-join and working keeps its claim through the heartbeat it writes, and only
+    /// a holder that has been silent for the full staleness budget is displaced. The states that
+    /// mean "this process reached Active and is still executing" — including while it drains — stay
+    /// Alive, which is what the original rule was actually reaching for.</para>
+    /// </summary>
+    /// <param name="status">The membership status read from the snapshot.</param>
+    /// <returns>What this cluster knows about that member.</returns>
+    internal static ClusterMemberState Classify(SiloStatus status) => status switch
+    {
+        // Reached Active and still executing — including while it drains. Anything it holds, it
+        // still holds, and Orleans' failure detector is watching it.
+        SiloStatus.Active or SiloStatus.ShuttingDown or SiloStatus.Stopping => ClusterMemberState.Alive,
+        // The ONE positive departure verdict.
+        SiloStatus.Dead => ClusterMemberState.Gone,
+        // SiloStatus.Created / Joining — never became a probed member, so nothing will ever move it
+        // to Dead (see above). SiloStatus.None — not in this snapshot; absence is not death.
+        _ => ClusterMemberState.Unknown
+    };
 }
