@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.AI;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Features;
@@ -1139,20 +1140,35 @@ public sealed class InstanceAutoRegistrationService(
         if (bundles is null)
             return Observable.Return(0);
 
-        return bundles.Adopt(package.Id)
-            .Catch((Exception exception) =>
-            {
-                logger.LogInformation(exception,
-                    "[DefaultInstall] {Id}: no prebuilt assemblies adopted — compiling instead",
-                    package.Id);
-                return Observable.Return(0);
-            });
+        return AbsorbUnlessPrebuiltRequired(bundles.Adopt(package.Id), logger, package.Id);
         // A package's compiled MODULE (#1664) is deliberately NOT adopted here: the module branch
         // lives inside CatalogLayoutAreas.InstallOrUpdate — the one orchestrator this lane (and the
         // manual click, and the content auto-update) already funnels through — riding the
         // RegistryPackageSource's own Bundles handle. A second call here would land drift the
         // update policy is supposed to gate (the reconciler's module pass owns drift).
     }
+
+    /// <summary>
+    /// The absorb policy on the adoption lane: any ordinary failure is logged and stepped over —
+    /// compiling is the correct, always-available fallback on a default mesh — EXCEPT the named
+    /// <see cref="PrebuiltRequiredException"/>, which only exists on a mesh that opted into
+    /// <see cref="PrebuiltAssemblySeeder.RequirePrebuiltConfigKey"/> and must therefore PROPAGATE:
+    /// swallowing it here would restore the exact silent compile the flag forbids, one call site
+    /// above where it was refused (#2193 §A). The failure surfaces in this lane's install summary,
+    /// naming the package. Internal for the DefaultInstallPrebuiltPolicyTest pin
+    /// (InternalsVisibleTo).
+    /// </summary>
+    internal static IObservable<int> AbsorbUnlessPrebuiltRequired(
+        IObservable<int> adoption, ILogger? logger, string packageId) =>
+        adoption.Catch((Exception exception) =>
+        {
+            if (exception is PrebuiltRequiredException)
+                return Observable.Throw<int>(exception);
+            logger?.LogInformation(exception,
+                "[DefaultInstall] {Id}: no prebuilt assemblies adopted — compiling instead",
+                packageId);
+            return Observable.Return(0);
+        });
 
     /// <summary>One package the default install should carry, and the source it came from.</summary>
     /// <param name="Source">The source the package was listed from.</param>
