@@ -1,5 +1,4 @@
 using System;
-using MeshWeaver.Blazor.EntityViews;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Blazor.Views;
@@ -56,7 +55,9 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
             .AddGraphViews()
             .AddChatViews()
             .AddUserProfileViews()
-            .AddEntityViews()
+            // EntityViews' gate rows moved WITH its source to MeshWeaver.Plugins
+            // (src/MeshWeaver.Blazor.EntityViews.Test — MeshWeaver#2169): a by-name assertion
+            // needs a compiled reference, which only the pack's new home carries.
             .AddDefaultViews();
 
     /// <summary>
@@ -94,44 +95,6 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
     {
         var client = GetClient();
         AssertPackResolves(client, CreateControl(client, controlType), viewType, "AddGraphViews");
-    }
-
-    /// <summary>
-    /// <c>AddEntityViews</c> (MeshWeaver.Blazor.EntityViews) — every form control the pack
-    /// registers resolves to the pack's view, including the two reflection-closed generics
-    /// (<c>NumberFieldView&lt;T&gt;</c> / <c>RadioGroupView&lt;T&gt;</c>, closed on the control's
-    /// declared value type through the hub's type registry).
-    /// </summary>
-    [Theory]
-    [InlineData(typeof(TextFieldControl), typeof(TextFieldView))]
-    [InlineData(typeof(TextAreaControl), typeof(TextAreaView))]
-    [InlineData(typeof(DateTimeControl), typeof(DateTimeView))]
-    [InlineData(typeof(ComboboxControl), typeof(Combobox))]
-    [InlineData(typeof(ListboxControl), typeof(Listbox))]
-    [InlineData(typeof(SelectControl), typeof(SelectView))]
-    [InlineData(typeof(CheckBoxControl), typeof(Checkbox))]
-    [InlineData(typeof(SwitchControl), typeof(Switch))]
-    [InlineData(typeof(NumberFieldControl), typeof(NumberFieldView<int>))]
-    [InlineData(typeof(RadioGroupControl), typeof(RadioGroupView<string>))]
-    public void EntityViewsPack_RegistersItsControlViews(Type controlType, Type viewType)
-    {
-        var client = GetClient();
-        AssertPackResolves(client, CreateControl(client, controlType), viewType, "AddEntityViews");
-    }
-
-    /// <summary>
-    /// <c>AddEntityViews</c> — the three entity-editing SKINS resolve to the pack's skinned
-    /// views. The skin rides the control's skin stack, exactly as the renderer sees it; the
-    /// pack's map pops it and returns the skin view.
-    /// </summary>
-    [Theory]
-    [InlineData(typeof(EditorSkin), typeof(EditorView))]
-    [InlineData(typeof(EditFormSkin), typeof(EditFormView))]
-    [InlineData(typeof(PropertySkin), typeof(PropertyView))]
-    public void EntityViewsPack_RegistersItsSkinViews(Type skinType, Type viewType)
-    {
-        var skinned = new HtmlControl("<p>x</p>").AddSkin((Skin)Activator.CreateInstance(skinType)!);
-        AssertPackResolves(GetClient(), skinned, viewType, "AddEntityViews");
     }
 
     /// <summary>
@@ -239,16 +202,6 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
             _ when controlType == typeof(MeshNodeRoleEditorControl) => new MeshNodeRoleEditorControl("path", 0),
             _ when controlType == typeof(MeshNodeCollectionControl) => new MeshNodeCollectionControl(),
             _ when controlType == typeof(MeshNodePickerControl) => new MeshNodePickerControl("/data"),
-            _ when controlType == typeof(TextFieldControl) => new TextFieldControl("/data"),
-            _ when controlType == typeof(TextAreaControl) => new TextAreaControl("/data"),
-            _ when controlType == typeof(DateTimeControl) => new DateTimeControl("/data"),
-            _ when controlType == typeof(ComboboxControl) => new ComboboxControl("/data", Array.Empty<object>()),
-            _ when controlType == typeof(ListboxControl) => new ListboxControl("/data", Array.Empty<object>()),
-            _ when controlType == typeof(SelectControl) => new SelectControl("/data", Array.Empty<object>()),
-            _ when controlType == typeof(CheckBoxControl) => new CheckBoxControl("/data"),
-            _ when controlType == typeof(SwitchControl) => new SwitchControl("/data"),
-            _ when controlType == typeof(NumberFieldControl) => new NumberFieldControl("/data", typeRegistry.GetOrAddType(typeof(int))),
-            _ when controlType == typeof(RadioGroupControl) => new RadioGroupControl("/data", Array.Empty<object>(), typeRegistry.GetOrAddType(typeof(string))),
             _ when controlType == typeof(ButtonControl) => new ButtonControl("go"),
             _ when controlType == typeof(BadgeControl) => new BadgeControl("b"),
             _ when controlType == typeof(IconControl) => new IconControl("icon"),

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Blazor.Components;
-using MeshWeaver.Blazor.EntityViews;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Graph;
@@ -109,12 +108,11 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddBlazor()
-            // The entity form/edit views left the base registry for the EntityViews pack, and the
-            // MeshNode surface views (card/collection/thumbnail/…) for the Graph pack; this
-            // harness names those views by type AND renders MeshSearchView, which reaches the card
-            // through DispatchView (registry resolution) — so it registers both packs the same way
-            // the portal does.
-            .ConfigureHub(config => config.AddEntityViews().AddGraphViews())
+            // The MeshNode surface views (card/collection/thumbnail/…) render from the Graph
+            // pack; MeshSearchView reaches the card through DispatchView (registry resolution).
+            // EntityViews' style-contract slice moved WITH its source to MeshWeaver.Plugins
+            // (src/MeshWeaver.Blazor.EntityViews.Test — MeshWeaver#2169).
+            .ConfigureHub(config => config.AddGraphViews())
             .ConfigureServices(services => services
                 // The two ambient browser services every view assumes. Neither is exercised by a
                 // static render, but Blazor's [Inject] pipeline throws if they are unregistered.
@@ -453,30 +451,6 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
         html.Should().NotContain(ClassValue);
         html.Should().NotContain("class=\"\"",
             because: "a null Class must leave the attribute out entirely, not emit an empty one");
-    }
-
-    /// <summary>
-    /// <c>EditorView</c>'s wrapper was <c>&lt;div style="@Style"&gt;</c> with no class attribute at all,
-    /// so the class had nowhere to land. It is a <c>SkinnedView</c>, hence the explicit skin parameter.
-    /// </summary>
-    [Fact]
-    public async Task EditorControl_Class_ReachesTheDom()
-    {
-        var html = await RenderAsync<EditorView>(
-            new EditorControl().WithClass(ClassValue), ("Skin", new EditorSkin()));
-
-        html.Should().Contain($"class=\"{ClassValue}\"",
-            because: "the editor wrapper honoured Style and had no slot at all for Class");
-    }
-
-    /// <inheritdoc cref="LabelControl_WithoutClass_GainsNoClassAttribute"/>
-    [Fact]
-    public async Task EditorControl_WithoutClass_GainsNoClassAttribute()
-    {
-        var html = await RenderAsync<EditorView>(new EditorControl(), ("Skin", new EditorSkin()));
-
-        html.Should().NotContain("class=\"\"",
-            because: "Blazor omits a null attribute — the unstyled wrapper stays <div> exactly as before");
     }
 
     /// <summary><c>FluentTabs</c> accepts <c>Class</c>; <c>TabsView</c> passed only <c>Style</c>.</summary>
@@ -930,29 +904,6 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
 
         html.Should().Contain("class=\"monaco-editor-container with-border\"");
         html.Should().Contain("style=\"height: 300px; max-height: none; min-height: 40px;\"");
-    }
-
-    /// <summary>
-    /// The two registrations the <c>ControlView&lt;,&gt;</c> constraint cannot reach. <c>MapControl</c>
-    /// builds these view types by reflection —
-    /// <c>typeof(NumberFieldView&lt;&gt;).MakeGenericType(control.Type)</c> — so they go through the
-    /// UNCONSTRAINED <c>StandardView(instance, viewType, …)</c> overload and no compile error is
-    /// possible. This is the same assertion the constraint makes for the other fifty, made at runtime
-    /// for the two it cannot see, so "a view registered here is a <c>BlazorView</c>" has no silent gap.
-    /// </summary>
-    [Theory]
-    [InlineData(typeof(NumberFieldView<>), typeof(NumberFieldControl))]
-    [InlineData(typeof(RadioGroupView<>), typeof(RadioGroupControl))]
-    public void ReflectionRegisteredViews_AreStillBlazorViewsForTheirControl(Type openView, Type controlType)
-    {
-        // TValue is the value the field edits and is unconstrained; decimal is representative.
-        var closedView = openView.MakeGenericType(typeof(decimal));
-        var requiredBase = typeof(MeshWeaver.Blazor.BlazorView<,>).MakeGenericType(controlType, closedView);
-
-        requiredBase.IsAssignableFrom(closedView).Should().BeTrue(
-            because: $"{openView.Name} is registered as a control view for {controlType.Name} through the "
-                   + "reflection path, where the ControlView<,> constraint cannot apply — if it stops being "
-                   + "a BlazorView, Style/Class/Id silently stop being bound, which is #1333");
     }
 
     private sealed class NoopErrorBoundaryLogger : IErrorBoundaryLogger
