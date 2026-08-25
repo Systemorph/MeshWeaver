@@ -783,7 +783,17 @@ hub.GetQuery(id, $"path:{parent} scope:children nodeType:X select:path")   // EX
 The index **trails** the store, so "the index has seen it" implies "the store has it" — the point read
 opened on that signal can never be early, and never NotFounds. The same lag that disqualifies a query
 for CONTENT is what makes it a safe gate. Creating the node anyway? Skip the check entirely and use
-`CreateOrUpdateNodeRequest`. Full pattern: [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) → "An OPTIONAL node".
+`CreateOrUpdateNodeRequest`.
+
+🚨 **This is about ONE known path whose value you are GATING on — not about node counts.** The
+worked counter-example is `src/MeshWeaver.Blazor.Portal/Chat/ThreadTokenChip.razor.cs:106`: it reads
+`content` out of the very same `{thread}/_Usage scope:children` query, **and it is correct** — it
+sums a SET to paint a total, and a briefly-stale total is cosmetic. Converting it to N point reads
+would mean N per-node hub activations per render, and on a legitimately EMPTY set (a thread with no
+rounds yet) every one is an absent-node read tripping the breaker **on the render path**. So: stale
+answer merely looks wrong on screen → query, `content` and all. Stale answer DECIDES whether
+something proceeds, passes, or is written → the owner's stream. Full pattern:
+[CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) → "An OPTIONAL node".
 
 **Free-floating words → vector search.** When a query contains bare text tokens (`laptop nodeType:Story`) AND PG is the backend AND an `IEmbeddingProvider` is registered, `PostgreSqlMeshQuery.QueryAsync` automatically routes through the HNSW cosine index instead of ILIKE substring scan. Structured-only queries (`nodeType:Story namespace:ACME`) stay on the regular SQL path. Full reference: [VectorSearch.md](src/MeshWeaver.Documentation/Data/Architecture/VectorSearch.md).
 
