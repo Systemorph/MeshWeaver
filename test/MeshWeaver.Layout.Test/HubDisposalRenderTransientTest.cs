@@ -183,23 +183,31 @@ public class HubDisposalRenderTransientTest : HubTestBase
     }
 
     /// <summary>
-    /// The cosmetic half of #2255: the message quoted a reference that already quotes itself,
-    /// rendering <c>cannot create '/data/'postAdvanceStatus''</c>. A reference's <c>ToString</c> IS
-    /// its JSON pointer; a plain name still gets quoted.
+    /// The cosmetic half of #2255: the message single-quoted a reference that already carries
+    /// single quotes of its own, rendering <c>cannot create '/data/'postAdvanceStatus''</c>.
+    ///
+    /// <para>The delimiter is now one the value cannot contain, applied unconditionally. An
+    /// "is it already quoted?" test would be a guess that is wrong in both directions — an
+    /// apostrophe can appear inside an ordinary name, and a pointer's quotes are in the middle
+    /// rather than at the ends — so the third case below pins exactly that.</para>
     /// </summary>
     [Fact]
-    public void TheDisposalMessage_DoesNotQuoteAnAlreadyQuotedReference()
+    public void TheDisposalMessage_DelimitsWithAQuoteTheValueCannotContain()
     {
         var reference = new HubDisposingException(
             new Address(DisposingHub), new EntityReference("data", "postAdvanceStatus")).Message;
         Output.WriteLine(reference);
-        reference.Should().Contain("cannot create /data/'postAdvanceStatus'.");
-        // The reference self-delimits; a second pair of quotes only nests.
-        reference.Should().NotContain("''");
+        reference.Should().Contain("cannot create \"/data/'postAdvanceStatus'\".");
+        reference.Should().NotContain("''", "a second pair of single quotes only nests");
 
-        // A plain name carries no quotes of its own, so it still gets them.
+        // A plain name is delimited the same way — one rule, no branch.
         new HubDisposingException(new Address(DisposingHub), "MeshNode")
-            .Message.Should().Contain("cannot create 'MeshNode'.");
+            .Message.Should().Contain("cannot create \"MeshNode\".");
+
+        // 🚨 An apostrophe INSIDE an ordinary name must not be read as "already delimited" — the
+        // heuristic this replaced would have emitted it bare.
+        new HubDisposingException(new Address(DisposingHub), "Bob'sThing")
+            .Message.Should().Contain("cannot create \"Bob'sThing\".");
     }
 
     private RenderFailureRecord[] Records()

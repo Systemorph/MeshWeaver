@@ -623,23 +623,33 @@ public sealed class InstanceAutoRegistrationService(
     /// retried next boot — that retry is the repair"); the code did not honour it, so the retry
     /// that IS the repair never ran.</para>
     ///
-    /// <para>The failure list is a per-package replacement, not an append: an id this pass
-    /// delivered drops off it, an id this pass did not touch stays. So the ledger always answers
-    /// "which default packages are missing right now", which is the question an operator has.</para>
+    /// <para>🚨 <b>The failure list is REPLACED by this pass, never appended to</b> — it is a
+    /// snapshot of what is missing NOW, which is what its name and its docstring promise. Carrying
+    /// an untouched id forward would have made it lie in the one case that matters: a package the
+    /// operator STOPS declaring by default is never selected again, so a retained entry would
+    /// advertise it as missing for the life of the installation. That is the same
+    /// stale-state-reported-as-current defect this whole change is about, one level up.</para>
+    ///
+    /// <para>Replacement is safe because a failed package is never seeded, so every later pass
+    /// re-selects it while it is still declared: still-declared ⇒ re-attempted and re-recorded;
+    /// no longer declared ⇒ correctly dropped. The one thing replacement must NOT do is read a
+    /// pass that attempted nothing as "nothing is missing any more" — see the guard below.</para>
     /// </summary>
     private IObservable<Unit> RecordSeeded(
         DefaultInstallLedger ledger, DefaultInstallSummary summary)
     {
+        // 🚨 A pass that attempted NOTHING knows nothing. A source listing that failed yields an
+        // empty summary, and treating that as "no package is missing" would erase the record of a
+        // genuinely missing one — the ledger would then be at its most optimistic exactly when the
+        // instance is least healthy.
+        if (summary.Packages.Count == 0)
+            return Observable.Return(Unit.Default);
+
         var already = ledger.Seeded.ToImmutableHashSet(StringComparer.Ordinal);
         // 🚨 Delivered, NOT covered. summary.Packages includes the failures.
         var delivered = summary.Delivered.Where(id => !already.Contains(id)).ToList();
 
-        // Failures the ledger already knows about, minus anything this pass has now delivered,
-        // plus what it failed on. A package the pass never touched keeps its recorded state.
-        var touched = summary.Packages.ToImmutableHashSet(StringComparer.Ordinal);
-        var failures = ledger.Failed
-            .Where(id => !touched.Contains(id))
-            .Concat(summary.Failures)
+        var failures = summary.Failures
             .Distinct(StringComparer.Ordinal)
             .OrderBy(x => x, StringComparer.Ordinal)
             .ToImmutableList();
@@ -1287,8 +1297,12 @@ public record DefaultInstallLedger
     ///
     /// <para>Exists because the alternative is grepping a boot log: a package dropped by a
     /// NodeOps-hub timeout left nothing durable behind, so an instance silently short of a
-    /// declared package was undetectable (#2254). An id drops off this list the moment a pass
-    /// delivers it, so a non-empty list always means "still missing right now".</para>
+    /// declared package was undetectable (#2254).</para>
+    ///
+    /// <para>Written as a SNAPSHOT of the last pass that attempted anything, not as an accumulating
+    /// list: an id drops off the moment a pass delivers it AND the moment it stops being declared
+    /// by default. So a non-empty list always means "declared, attempted, and still missing right
+    /// now" — never "was once a problem".</para>
     /// </summary>
     public ImmutableList<string> Failed { get; init; } = ImmutableList<string>.Empty;
 

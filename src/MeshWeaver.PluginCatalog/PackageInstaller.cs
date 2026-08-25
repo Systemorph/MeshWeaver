@@ -409,6 +409,15 @@ public static class PackageInstaller
     private static readonly TimeSpan GatingSettleTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// How many cover-grant waits may be in flight at once. Each is a LIVE mesh query held open
+    /// until its grant lands, so an unbounded fan-out over a large install is a self-inflicted
+    /// query storm — the shape that saturates the action block and takes the liveness probe with
+    /// it. Small on purpose: the waits overlap, so the phase still finishes in one
+    /// <see cref="GatingSettleTimeout"/> rather than one per root.
+    /// </summary>
+    private const int GatingWaitConcurrency = 4;
+
+    /// <summary>
     /// The cover grant a gating node type writes at its partition root — the ONE observable proof
     /// that the partition has become readable rather than merely present.
     ///
@@ -484,17 +493,26 @@ public static class PackageInstaller
         // written, and it is LIVE — the grant landing emits. Nothing here reads Content, so the
         // index's lag costs at most one extra beat of waiting; existence is all this asks.
         // See Doc/Architecture/CqrsAndContentAccess.md → "An OPTIONAL node".
-        // 🚨 `select:path,id,namespace`, never a bare `select:path`. MeshNode.Path is COMPUTED
-        // (`Namespace + "/" + Id`), so projecting the path alone blanks both of its inputs and
-        // every result comes back with an EMPTY path — a listing that can never match, i.e. a wait
-        // that always times out. Same three fields SecurityQueries.IdentityProjection carries.
-        // Content is deliberately not projected: this asks existence, nothing else.
+        // 🚨 Anchored at the EXACT grant, never a page of the _Access container's children.
+        // A `scope:children … limit:N` listing can MISS a grant that exists — a partition with more
+        // than N access entries puts it off the first page — and the wait would then time out for a
+        // partition that is perfectly readable. That is the same user-visible symptom this method
+        // was just fixed for (a false "no cover grant"), reintroduced by a rarer and harder-to-
+        // diagnose route.
+        //
+        // `path:{grant}` with no `scope:` qualifier is QueryScope.Exact, whose contract for a path
+        // that does not exist is documented in QueryParser: "answered ZERO ROWS with no error". So
+        // it is empty-on-absent like any listing — no routing NotFound, no terminated stream, no
+        // storm-breaker window (which is what made the original point read suppress the very write
+        // it was waiting for) — while being incapable of paging past the one row it can return.
+        //
+        // No `select:` projection: MeshNode.Path is COMPUTED (`Namespace + "/" + Id`), so a
+        // projection that omits either input yields an EMPTY path and the match below can never
+        // succeed. At most one small AccessAssignment row is materialised, and nothing reads its
+        // Content — this asks existence and nothing else.
         return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{root}/_Access scope:children "
-                + $"nodeType:{AccessAssignmentNodeType.NodeType} select:path,id,namespace "
-                + $"limit:{QueryLimit}"))
-            .Where(change => change.Items.Any(node =>
-                string.Equals(node.Path, grant, StringComparison.OrdinalIgnoreCase)))
+                $"path:{grant} nodeType:{AccessAssignmentNodeType.NodeType}"))
+            .Where(change => change.Items.Count > 0)
             .Take(1)
             .Select(_ => Unit.Default)
             .Do(_ => logger?.LogInformation(
@@ -1507,7 +1525,16 @@ public static class PackageInstaller
                 // ImpersonationScopeSiteRatchetGuard refuses at any new site).
                 return accessService.RunAsSystem(() => gating
                     .Select(root => WaitForGating(hub, root, logger))
-                    .Merge()
+                    .ToObservable()
+                    // 🚨 BOUNDED. A bare Merge() subscribes every root at once, and each one is a
+                    // LIVE mesh query held open until the grant lands or the bound elapses — a boot
+                    // installing a large selection would fan that out with no ceiling at all. This
+                    // repo's failure mode for exactly that is documented: storm -> action block
+                    // saturated -> liveness probe times out -> pod pulled from the Service -> 502 ->
+                    // SIGKILL. Merge's own maxConcurrent is the bound (never a SemaphoreSlim, which
+                    // parks a hub thread); it costs nothing in latency here because the waits
+                    // overlap, and the whole phase is still capped by GatingSettleTimeout.
+                    .Merge(GatingWaitConcurrency)
                     .DefaultIfEmpty(Unit.Default)
                     .LastAsync());
             });

@@ -145,6 +145,16 @@ public class DefaultInstallFailureLedgerTest(ITestOutputHelper output) : Monolit
         second.Packages.Should().NotContain("Good",
             "a package the seed has delivered is never re-asserted; if it were, this test would "
             + "prove nothing about the ledger being consulted at all");
+
+        // 🚨 The failure list is a SNAPSHOT of what is missing now, not an accumulating history.
+        // Pass 2 attempted only "Bad" and failed it again, so that is exactly what the ledger must
+        // hold — no growth, no duplicate. An accumulating list would also keep an id that the
+        // operator has STOPPED declaring by default, advertising a package as missing for the life
+        // of the installation when nobody wants it any more.
+        var after = await ReadLedger();
+        after!.Failed.Should().Equal(["Bad"]);
+        after.Seeded.Should().Contain("Good");
+        after.Seeded.Should().NotContain("Bad");
     }
 
     private InstanceAutoRegistrationService Installer() =>
