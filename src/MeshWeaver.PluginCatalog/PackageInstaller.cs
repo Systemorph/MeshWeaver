@@ -484,9 +484,15 @@ public static class PackageInstaller
         // written, and it is LIVE — the grant landing emits. Nothing here reads Content, so the
         // index's lag costs at most one extra beat of waiting; existence is all this asks.
         // See Doc/Architecture/CqrsAndContentAccess.md → "An OPTIONAL node".
+        // 🚨 `select:path,id,namespace`, never a bare `select:path`. MeshNode.Path is COMPUTED
+        // (`Namespace + "/" + Id`), so projecting the path alone blanks both of its inputs and
+        // every result comes back with an EMPTY path — a listing that can never match, i.e. a wait
+        // that always times out. Same three fields SecurityQueries.IdentityProjection carries.
+        // Content is deliberately not projected: this asks existence, nothing else.
         return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{root}/_Access scope:children "
-                + $"nodeType:{AccessAssignmentNodeType.NodeType} select:path limit:{QueryLimit}"))
+                + $"nodeType:{AccessAssignmentNodeType.NodeType} select:path,id,namespace "
+                + $"limit:{QueryLimit}"))
             .Where(change => change.Items.Any(node =>
                 string.Equals(node.Path, grant, StringComparison.OrdinalIgnoreCase)))
             .Take(1)
@@ -1476,13 +1482,28 @@ public static class PackageInstaller
         // path's storm breaker on the way past, which is what then suppressed the gating write
         // itself (#2229 item A).
         return activated
-            .SelectMany(warmed => warmed.Count == 0
-                ? Observable.Return(Unit.Default)
-                : warmed
-                    .Select(root => WaitForGating(hub, root, logger))
-                    .Merge()
-                    .DefaultIfEmpty(Unit.Default)
-                    .LastAsync());
+            .SelectMany(warmed =>
+            {
+                // 🚨 Only roots whose NodeType THIS PACKAGE DEFINES. The cover grant is written by
+                // that type's gating configuration, which lives plugin-side — core cannot introspect
+                // it, which is exactly why the grant is addressed as a well-known PATH here. So for a
+                // root typed by something this install did not bring, there is no gating pass of ours
+                // to wait for and the bound would be spent entirely on dead air.
+                //
+                // This can only ever skip a DIAGNOSTIC: WaitForGating is documented "never fatal",
+                // its result is discarded, and its whole product is the log line below it. It cannot
+                // change what is installed or who can read it.
+                var gating = warmed
+                    .Where(root => InPackageTypeOf(root, nodes) is not null)
+                    .ToList();
+                return gating.Count == 0
+                    ? Observable.Return(Unit.Default)
+                    : gating
+                        .Select(root => WaitForGating(hub, root, logger))
+                        .Merge()
+                        .DefaultIfEmpty(Unit.Default)
+                        .LastAsync();
+            });
     }
 
     /// <summary>
