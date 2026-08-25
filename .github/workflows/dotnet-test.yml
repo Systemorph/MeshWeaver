@@ -1342,20 +1342,25 @@ jobs:
         # 🚨 The run is TEED, not swallowed: the log still streams to the job, and the copy is read
         # afterwards for the tester's verdict line. `if !` (not `set +e`) so `set -e` stays armed
         # for everything else, and PIPESTATUS[0] is the TESTER's code — tee always exits 0.
-        # 🚨 Since #1660 WS1 the gate also PERSISTS what it compiled (--bake-output): one
-        # MVID-keyed prebuilt bundle per vital module, with the plugins-repo commit it was synced
-        # from recorded in each manifest (--source-sha) so the artifact's provenance is auditable.
-        # Same adoption caveat as the content bake: only consumers sharing THIS run's build (its
-        # Graph.dll MVID) can adopt; anything else declines wholesale until #1660 WS3.
+        # 🚨 TWO STEPS, not one (#2064). The bake is a BUILD step — `compile` resolves each
+        # NodeType's sources straight from the staged tree and compiles them with
+        # MeshWeaver.Compiler: no MeshBuilder, no AddGraph(), no import, no hub. The gate is then a
+        # mesh CONSUMING that bake (`--seed`), so what renders and what runs the `Tests` areas is
+        # the assembly that will actually ship, not a private recompile of the same sources.
+        # bake-then-gate.sh holds the pair — the SAME split main-cd's publish-bake makes — so the
+        # PR lane cannot drift back to baking through a mesh. It also asserts what a green tick
+        # cannot show: that the gate ADOPTED the baked bytes (declared = adopted, adopted > 0)
+        # rather than quietly compiling its own.
+        # The bundles are still MVID-keyed and still carry the plugins-repo commit they were synced
+        # from (--source-sha), so the uploaded artifact's provenance is unchanged. Same adoption
+        # caveat as the content bake: only consumers sharing THIS run's build (its Graph.dll MVID)
+        # can adopt; anything else declines wholesale until #1660 WS3.
         PLUGINS_SHA="$(git -C "$GITHUB_WORKSPACE/plugins-repo" rev-parse HEAD)"
         log="${RUNNER_TEMP:-/tmp}/plugin-gate.log"
         status=0
-        if ! time dotnet "$TESTER" "$STAGE" --allow "$STAGE/plugin-gate.allow" \
-            --bake-output "${RUNNER_TEMP:-/tmp}/bake-plugins" --source-sha "$PLUGINS_SHA" 2>&1 | tee "$log"; then
-          status="${PIPESTATUS[0]}"
-          # tee always exits 0, so a non-zero pipeline with a zero head means tee itself failed.
-          if [ "$status" = "0" ]; then status=1; fi
-        fi
+        bash .github/scripts/bake-then-gate.sh "$TESTER" "$STAGE" \
+          "${RUNNER_TEMP:-/tmp}/bake-plugins" "$STAGE/plugin-gate.allow" "$PLUGINS_SHA" \
+          "${RUNNER_TEMP:-/tmp}/plugin-gate" || status=$?
         # The tester's verdict line IS the message — `GATE FAILED — tests: Store/Catalog — 1 new
         # failure(s), …` (GateReport.FailedPrefix). Lifted verbatim: nothing here re-derives or
         # re-words a cause, which is exactly how this job came to annotate a `tests` failure as
@@ -1405,7 +1410,7 @@ jobs:
           echo "### 📦 Baked plugin bundles (framework $(cat "$mvid_file"))"
           echo
           echo '```'
-          grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/plugin-gate.log" || true
+          grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/plugin-gate-bake.log" || true
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
     - name: "Upload artifact: baked plugin bundles"
@@ -1717,9 +1722,17 @@ jobs:
         set -euo pipefail
         tar -I 'zstd --long=27' -xf build-output-0.tar.zst
         rm -f build-output-0.tar.zst
-    # 🚨 `--bake-output` here is a SMOKE TEST of the bake stage, NOT a delivery lane (#1725).
-    # It costs almost nothing — the tester has already compiled everything, this only persists it —
-    # and it makes a bake-stage regression fail on the PR that causes it rather than in CD.
+    # 🚨 The bake here is a SMOKE TEST of the bake stage, NOT a delivery lane (#1725). It costs
+    # almost nothing and it makes a bake-stage regression fail on the PR that causes it rather than
+    # in CD.
+    #
+    # 🚨 Since #2064 it runs as TWO STEPS — `compile … --output` then the gate with `--seed` — the
+    # same split main-cd's publish-bake makes, held in .github/scripts/bake-then-gate.sh so the two
+    # lanes cannot drift. The PR lane used to bake THROUGH A MESH (one fused `--bake-output` run
+    # that stood up an in-process mesh and let the mesh compile every NodeType), which is the thing
+    # #1763 removed from CD and #2064 removes from here. It also makes this gate strictly stronger:
+    # what renders, and what runs the `Tests` areas, is now the assembly the bake produced rather
+    # than a private recompile of the same sources that nothing ever ships.
     #
     # What it deliberately no longer does is FEED the portals. Until #1725 this job's bundles were
     # uploaded as `baked-assemblies-<identity>` and published to portal storage by main-cd. That can
@@ -1750,29 +1763,25 @@ jobs:
         # .github/doc-gate.allow is THIS repo's known-debt ratchet for doc content: listed
         # failures are tolerated, NEW failures fail the PR, and a listed check that starts
         # passing fails the PR until its line is removed — the list can only shrink.
+        #
+        # ONE bake directory PER TREE. A shared directory would let the doc gate's `--seed` see the
+        # samples bundles (and the reverse), and the "declared ∩ installed" postcondition would then
+        # be satisfied by bundles the run under judgement never installed.
         log="${RUNNER_TEMP:-/tmp}/doc-gate.log"
         status=0
-        if ! time dotnet "$TESTER" "$STAGE" --allow .github/doc-gate.allow \
-            --bake-output "$BAKE" --source-sha "$GITHUB_SHA" 2>&1 | tee "$log"; then
-          status="${PIPESTATUS[0]}"
-          # tee always exits 0, so a non-zero pipeline with a zero head means tee itself failed.
-          if [ "$status" = "0" ]; then status=1; fi
-        fi
-        verdict="$(grep -m1 -- '^GATE FAILED' "$log" || true)"
+        bash .github/scripts/bake-then-gate.sh "$TESTER" "$STAGE" "$BAKE/doc" \
+          .github/doc-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/doc-gate" || status=$?
+        verdict="$(grep -m1 -- '^GATE FAILED' "$log" 2>/dev/null || true)"
         # ── Second stage: the samples trees — the "12k lines of C# no build ever type-checks"
         # from AGENTS.md. Same tester, same mechanics; .github/samples-gate.allow is its own
-        # one-way debt ratchet (seeded with the 8 cross-NodeType source defects the first run
-        # surfaced — a listed entry that starts passing fails the run until removed).
+        # one-way debt ratchet (a listed entry that starts passing fails the run until removed).
         SSTAGE="${RUNNER_TEMP:-/tmp}/samples"
         bash .github/scripts/stage-samples-gate.sh samples/Graph/Data "$SSTAGE"
         slog="${RUNNER_TEMP:-/tmp}/samples-gate.log"
         sstatus=0
-        if ! time dotnet "$TESTER" "$SSTAGE" --allow .github/samples-gate.allow \
-            --bake-output "$BAKE" --source-sha "$GITHUB_SHA" 2>&1 | tee "$slog"; then
-          sstatus="${PIPESTATUS[0]}"
-          if [ "$sstatus" = "0" ]; then sstatus=1; fi
-        fi
-        sverdict="$(grep -m1 -- '^GATE FAILED' "$slog" || true)"
+        bash .github/scripts/bake-then-gate.sh "$TESTER" "$SSTAGE" "$BAKE/samples" \
+          .github/samples-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/samples-gate" || sstatus=$?
+        sverdict="$(grep -m1 -- '^GATE FAILED' "$slog" 2>/dev/null || true)"
         combined="$(printf '%s\n%s' "$verdict" "$sverdict" | grep . | head -1 || true)"
         {
           echo "failure<<GATE_EOF"
@@ -1789,15 +1798,24 @@ jobs:
         fi
     # A green gate that produced no bake identity is a bake-stage REGRESSION — fail RED (no
     # continue-on-error, no "is the file there?" skip: the gate above already proved the tester ran
-    # green, so the identity file is a POSTcondition). This is the whole point of keeping
-    # --bake-output on the PR lane: the bake stage breaks HERE, on the PR that breaks it, instead of
-    # in CD after the merge.
+    # green, so the identity file is a POSTcondition). This is the whole point of keeping the bake
+    # on the PR lane: the bake stage breaks HERE, on the PR that breaks it, instead of in CD after
+    # the merge. bake-then-gate.sh already asserts each tree's own identity and bundles; this step
+    # additionally cross-checks the TWO trees against each other and publishes the summary.
     - name: "Bake summary + identity"
       run: |
         set -euo pipefail
-        mvid_file="${RUNNER_TEMP:-/tmp}/bake/framework-mvid.txt"
-        if [ ! -s "$mvid_file" ]; then
-          echo "::error::the content gate ran green but wrote no bake identity ($mvid_file) — the bake stage regressed."
+        mvid_file="${RUNNER_TEMP:-/tmp}/bake/doc/framework-mvid.txt"
+        smvid_file="${RUNNER_TEMP:-/tmp}/bake/samples/framework-mvid.txt"
+        if [ ! -s "$mvid_file" ] || [ ! -s "$smvid_file" ]; then
+          echo "::error::the content gate ran green but one of its bakes wrote no identity ($mvid_file / $smvid_file) — the bake stage regressed."
+          exit 1
+        fi
+        # Both trees are baked by the SAME binary in the SAME job, so a difference here is not a
+        # cosmetic mismatch — it means one of the two resolved a framework identity the other did
+        # not, and bundles keyed to it would be declined by every consumer that adopts the other.
+        if [ "$(cat "$mvid_file")" != "$(cat "$smvid_file")" ]; then
+          echo "::error::the doc and samples bakes resolved DIFFERENT framework identities ($(cat "$mvid_file") vs $(cat "$smvid_file")) — one of them is keyed to an identity no consumer of the other resolves."
           exit 1
         fi
         {
@@ -1807,7 +1825,7 @@ jobs:
           echo "inside the shipped image. See Doc/Architecture/CiContentBake."
           echo
           echo '```'
-          grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/doc-gate.log" "${RUNNER_TEMP:-/tmp}/samples-gate.log" || true
+          grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/doc-gate-bake.log" "${RUNNER_TEMP:-/tmp}/samples-gate-bake.log" || true
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
     # 🚨 NO artifact upload — deliberately, since #1725. These bundles are keyed to THIS job's

@@ -6,3 +6,37 @@ FutuRe/EuropeRe/LineOfBusiness compile
 FutuRe/EuropeRe/TransactionMapping compile
 Northwind/AnalyticsCatalog compile
 Northwind/Product compile
+
+# ── PensionFund: revealed by #2063, NOT caused by it ────────────────────────────────────────────
+# PensionFund ships 72 files, 62 of them BOM'd, including all 5 of its NodeTypes. Until #2063 the
+# gate's own discovery parsed package bytes raw and dropped every BOM'd file, so this package
+# gated `0 type(s)` and reported [PASS] over nothing. Both entries below are pre-existing debt that
+# was simply never looked at — each diagnosed, neither bulk-added.
+
+# PensionFund/BalanceSheet — the legacy scope-generator `#r` cannot resolve on a gate/deploy host.
+# BalanceSheetScopes.cs:20 declares `#r "nuget:MeshWeaver.BusinessRules.Generator"`.
+# GeneratorPipeline.StripBuiltInScopeGeneratorRef removes that directive from the NuGet resolve set
+# ONLY when `BuiltInGeneratorPaths` is non-empty, i.e. when MeshWeaver.BusinessRules.Generator.dll
+# sits beside the app. BusinessRules left the platform (f7a8c086c — it ships in the
+# MeshWeaver.Plugins/BusinessRules plugin), so that list is EMPTY on this host and the strip is a
+# no-op. The directive then reaches NuGet, where NuGet.config's packageSourceMapping pins
+# `MeshWeaver.*` exclusively to the `mesh-local` source `dist/packages` — a feed #395 stopped
+# producing (dotnet-test.yml:372-377 documents that CI deliberately packs it no longer). Result:
+# NuGet.Protocol.FatalProtocolException "The local source '<repo>/dist/packages' doesn't exist".
+# Deterministic, not a flake: no `dist/packages` on any CI runner and no generator dll beside
+# mw-plugin-test. The real fix is content-side (drop the legacy `#r`; the generator is supplied via
+# `shared=@BusinessRules/Scope/Source`) and is NOT part of #2063 — it needs the plugin's scope
+# generator to be reachable from the gate host, which is a separate change.
+PensionFund/BalanceSheet compile
+
+# PensionFund idempotence — the SECOND install rewrites Currency/{CHF,EUR,USD} (3 nodes, expected
+# 0). Not the BOM, and not all instances: Year/2024 and every Position/* round-trip clean. The
+# three that churn are exactly the three whose content is default-valued. `Currency.DecimalPlaces`
+# carries a C# initializer `= 2` (PensionFund/Currency/Source/Currency.cs) and all three instance
+# files author `"decimalPlaces": 2`. Once the Currency NodeType COMPILES, its content type is
+# registered, so the installer materialises the instance as a typed `Currency` instead of an
+# untyped JsonElement and re-serialises it — and default-suppression drops the property whose value
+# equals the type's default. The stored node then differs from the authored file and the
+# unchanged-skip misses. This is invisible until the NodeType compiles, which is precisely what
+# #2063 restored, and it is the deploy-flicker the idempotence pin exists to catch.
+PensionFund idempotence
