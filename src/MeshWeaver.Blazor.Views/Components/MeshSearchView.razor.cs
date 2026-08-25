@@ -188,6 +188,30 @@ public partial class MeshSearchView
         }
     }
     private bool BoundExcludeBasePath => ViewModel?.ExcludeBasePath is bool exclude ? exclude : true;
+    private bool BoundIncludeHidden => ViewModel?.IncludeHidden is bool include && include;
+
+    /// <summary>
+    /// Whether <paramref name="path"/> sits under an underscore-prefixed SATELLITE segment
+    /// relative to <paramref name="anchor"/> (the catalog's namespace root) — the rule behind the
+    /// catalog's default hiding of governance bookkeeping (<c>_Entitlements</c>, <c>_Access</c>,
+    /// <c>_Policy</c>, …). The anchor itself and its own leading segments are never tested, so an
+    /// anchored catalog INSIDE a satellite (e.g. drilling into <c>X/_App</c> explicitly) still
+    /// lists its children. Pure.
+    /// </summary>
+    public static bool HasSatelliteSegmentUnder(string? path, string? anchor)
+    {
+        if (string.IsNullOrEmpty(path))
+            return false;
+        var trimmed = path.Trim('/');
+        var root = (anchor ?? "").Trim('/');
+        var rel = root.Length > 0 && trimmed.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase)
+            ? trimmed[(root.Length + 1)..]
+            : trimmed;
+        foreach (var segment in rel.Split('/'))
+            if (segment.StartsWith('_'))
+                return true;
+        return false;
+    }
     private bool BoundLiveSearch => ViewModel?.LiveSearch is bool live ? live : true;
     private bool BoundReactiveMode
     {
@@ -973,6 +997,15 @@ public partial class MeshSearchView
             var basePath = BoundNamespace.Trim('/');
             visible = visible.Where(n => n.Path != basePath);
         }
+        // Governance satellites (_Entitlements, _Access, _Policy, …) are bookkeeping, not
+        // content: a namespace-ANCHORED catalog hides them by default (?hidden=true /
+        // WithIncludeHidden reveals). Unanchored searches are untouched — thread/agent results
+        // legitimately live under satellite segments.
+        if (!BoundIncludeHidden && !string.IsNullOrEmpty(BoundNamespace))
+        {
+            var anchor = BoundNamespace.Trim('/');
+            visible = visible.Where(n => !HasSatelliteSegmentUnder(n.Path, anchor));
+        }
 
         // The presentation screen (#1803): display-only, per-viewer, and applied to what is
         // PAINTED — the query, the permissions and the nodes themselves are untouched, and this is
@@ -1633,6 +1666,15 @@ public partial class MeshSearchView
             .Subscribe(
                 change =>
                 {
+                    // Same default as the flat results: governance satellites stay out of the
+                    // namespace tree unless the control opts in.
+                    if (!BoundIncludeHidden)
+                        change = change with
+                        {
+                            Items = change.Items
+                                .Where(n => !HasSatelliteSegmentUnder(n.Path, TreeRootNamespace))
+                                .ToList()
+                        };
                     switch (change.ChangeType)
                     {
                         case QueryChangeType.Initial:
