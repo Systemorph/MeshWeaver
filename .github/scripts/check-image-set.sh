@@ -61,12 +61,11 @@ for repo in memex-portal-ai memex-migration mw-plugin-test; do
   fi
 done
 
-# portal-next is amd64-only BY DESIGN (every AKS node is amd64) — existence is the check.
-if ! az acr manifest show --registry "$REGISTRY" --name "memex-portal-next:$SHA" -o json >/dev/null 2>&1; then
-  report "memex-portal-next:$SHA is MISSING from ACR — main $SHA has an INCOMPLETE image set"
-else
-  ok "memex-portal-next:$SHA (linux/amd64)"
-fi
+# 🚨 memex-portal-next is NOT checked here any more: its sources and its build lane moved to
+# MeshWeaver.Plugins (MeshWeaver#2169). It is publishable independently because portalNext is
+# opt-in (chart default enabled: false) and the self-updater never rolls it — nothing waits on
+# it, so it is not part of THIS repo's all-or-nothing set. Asserting an image this repo does not
+# build would fail every commit.
 
 if [ "$fail" -ne 0 ]; then
   echo "::error::main $SHA does NOT have a complete image set. Every self-updating install stays on the previous image until a CD run publishes all of them."
