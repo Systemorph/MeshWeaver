@@ -130,8 +130,6 @@
          still drops everything the app closure already provides (BlazorMonaco, FluentUI, the base
          pack). Dev note: the MONOLITH keeps Debug ships-the-bits references to these two (see its
          csproj) — a dev tree without them renders every control as escaped HTML. -->
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Views/MeshWeaver.Blazor.Views.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Graph/MeshWeaver.Blazor.Graph.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Snowflake/MeshWeaver.Hosting.Snowflake.csproj" />
