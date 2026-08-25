@@ -204,15 +204,37 @@ public sealed class ScheduledPostWatcher(
 
         // Unchanged — writing again would churn the node's version for nothing, and every write
         // re-emits the query that brought us here.
-        if (current is { Status: EventSubscriptionStatus.Pending } && current.FireAt == slot)
+        //
+        // 🚨 "Unchanged" includes the IDENTITY, not just the slot. Every timer armed by the build
+        // this fixes carries a null CreatedBy (the path-less query could not name one), and such a
+        // timer is Pending with exactly the right FireAt — so a slot-only comparison would skip it
+        // forever and every post scheduled BEFORE this deploys would still be refused at its slot,
+        // silently, with the fix in place. A timer whose identity this deployment would refuse is
+        // therefore treated as changed and REPAIRED on sight.
+        if (current is { Status: EventSubscriptionStatus.Pending }
+            && current.FireAt == slot
+            && UsableScheduler(current.CreatedBy) is not null)
             return;
 
         // WHO the publish runs as, resolved AUTHORITATIVELY — see ResolveScheduler. An existing
-        // value is kept so re-slotting never silently changes WHO the post goes out as.
+        // USABLE value is kept so re-slotting never silently changes WHO the post goes out as; an
+        // unusable one (null from the old bug, or a system/hub principal) is replaced rather than
+        // preserved, which is what makes the repair above actually land.
         ResolveScheduler(post).Subscribe(
-            scheduler => Arm(post, slot, current, id, current?.CreatedBy ?? scheduler),
+            scheduler => Arm(post, slot, current, id, UsableScheduler(current?.CreatedBy) ?? scheduler),
             ex => logger?.LogWarning(ex, "Could not resolve who scheduled {Path}", postPath));
     }
+
+    /// <summary>
+    /// <paramref name="scheduler"/> when this deployment would actually publish as it, else null —
+    /// the ONE definition, borrowed from <see cref="ScheduledSocialPublishHandler.UnusableScheduler"/>
+    /// so that arming, repairing and firing cannot drift apart on what "usable" means.
+    /// </summary>
+    /// <param name="scheduler">The identity recorded on an existing timer, or null.</param>
+    private static string? UsableScheduler(string? scheduler) =>
+        scheduler is not null && ScheduledSocialPublishHandler.UnusableScheduler(scheduler) is null
+            ? scheduler
+            : null;
 
     /// <summary>
     /// Whether a post whose current timer is <paramref name="current"/> may be armed for
