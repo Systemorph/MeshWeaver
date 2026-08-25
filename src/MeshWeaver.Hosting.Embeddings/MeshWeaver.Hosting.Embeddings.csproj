@@ -6,6 +6,9 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <!-- EmbeddingCapabilityReporter: one IHostedService that writes the embeddings
+         on/off decision to the log at startup. Abstractions only — no host. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
       <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
