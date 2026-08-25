@@ -17,13 +17,13 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// 🚨 #1127: pins <see cref="AiSourcesInstallHook"/>'s user enumeration against the SELF-TYPED
-/// <c>User</c> NodeType declaration node.
+/// 🚨 #1127: pins <see cref="AiSourcesInstallHook"/>'s user enumeration against the <c>User</c>
+/// NodeType DECLARATION node ever being reconciled as an account.
 ///
-/// <para><c>User</c> is deliberately self-typed (<see cref="UserNodeType.CreateMeshNode"/> sets
-/// <c>NodeType = "User"</c> on the declaration at path <c>User</c>), so the hook's pathless
-/// <c>nodeType:User</c> enumeration returns the DECLARATION alongside the real accounts. Pre-fix,
-/// the declaration's Id (<c>"User"</c>) was treated as an account id, and every install / boot
+/// <para><c>User</c> used to be SELF-TYPED — <see cref="UserNodeType.CreateMeshNode"/> set
+/// <c>NodeType = "User"</c> on the declaration at path <c>User</c> — so the hook's pathless
+/// <c>nodeType:User</c> enumeration returned the DECLARATION alongside the real accounts. The
+/// declaration's Id (<c>"User"</c>) was then treated as an account id, and every install / boot
 /// repair pass tried to write <c>User/_Memex/AiSettings</c> — a partition literally named
 /// <c>User</c> that no instance provisions. On PostgreSQL that failed each time with
 /// <c>42P01: relation "user.mesh_nodes" does not exist</c> (27× on memex-cloud: 3 pod boots ×
@@ -31,10 +31,15 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// partition schemas it silently created a phantom node. The failing writes carried nothing a
 /// real user ever entered — no user data was lost — but the noise re-fired on every boot.</para>
 ///
-/// <para>The fix is in the enumeration (<c>AiSourcesInstallHook.Users()</c>): the declaration id
-/// is dropped before reconciliation. This test seeds real accounts, runs the hook end-to-end on
-/// the monolith mesh (where the phantom write would SUCCEED and leave evidence), and asserts the
-/// package sources land on real users while <c>User/_Memex/AiSettings</c> is never created.</para>
+/// <para><b>The first fix was a hand-rolled <c>id != "User"</c> filter in the enumeration; the
+/// root fix replaced it</b> (Systemorph/MeshWeaver#2160/#2161/#2162): a declaration now declares
+/// itself a NodeType, so <c>nodeType:User</c> returns accounts and nothing else — for every type,
+/// not the two the filter happened to name. <c>NodeTypeDeclarationSelfTypingTest</c> pins that
+/// invariant; THIS test stays exactly as it was, because it pins the OUTCOME (the phantom is never
+/// written) rather than the mechanism, and is the one that would catch a regression arriving by
+/// some other route. It seeds real accounts, runs the hook end-to-end on the monolith mesh (where
+/// the phantom write would SUCCEED and leave evidence), and asserts the package sources land on
+/// real users while <c>User/_Memex/AiSettings</c> is never created.</para>
 /// </summary>
 public class AiSourcesInstallHookTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
