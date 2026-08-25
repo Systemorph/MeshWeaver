@@ -160,7 +160,10 @@ public class AiContentPackDriftTest
         var section = Section();
         var drifted = Ledger().Files!
             .Where(e => section.TryGetValue(e.File, out var text) && ContentHash(text) != e.Core)
-            .Select(e => $"{e.File}: pinned {e.Core[..12]}… → now {ContentHash(section[e.File])[..12]}…")
+            // The NEW hash is printed in FULL, because re-pinning the entry means pasting it. A
+            // truncated hash would turn a one-paste fix into "go and compute it yourself".
+            .Select(e => $"{e.File}: pinned {e.Core[..12]}… → re-pin \"core\" to "
+                + $"\"{ContentHash(section[e.File])}\"")
             .OrderBy(x => x, StringComparer.Ordinal)
             .ToArray();
 
