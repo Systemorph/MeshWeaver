@@ -241,6 +241,34 @@
              Properties="MeshModulesAppDir=$([System.IO.Path]::GetFullPath('$(OutDir)', '$(MSBuildProjectDirectory)'));Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=false;MeshModulesClosureSubset=$([MSBuild]::Escape('$(MeshModulesClosureSubset)'))" />
   </Target>
 
+  <!--
+    The ONE place @(MeshModuleClosure) is restored, shared by every host's lane (#2127).
+
+    🚨 The property set here is the whole point, and it is why this cannot be folded back into
+    LayoutMeshModuleClosures. That target is parameterised per host — MeshModulesAppDir,
+    MeshModulesGuardAppRoot, MeshModulesClosureSubset — so each host gets its own build
+    configuration of this file and its own restore. This one is invoked with those REMOVED, so all
+    of them resolve to the same configuration and MSBuild runs it exactly once per build.
+
+    🚨 It restores the FULL inventory, not the caller's subset. MeshModulesClosureSubset is removed
+    above precisely so the subset lane (Memex.Portal.Shared.Test: Cosmos + Snowflake) converges with
+    the full lanes instead of forking a second configuration — a superset restore is free, since the
+    other modules are restored by the other lanes in the same build anyway. Narrowing happens in
+    LayoutMeshModuleClosures, which is where it affects what gets LAID OUT.
+  -->
+  <Target Name="RestoreMeshModuleClosures">
+    <MSBuild Projects="@(MeshModuleClosure)"
+             Targets="Restore"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration)"
+             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
+    <!-- Says ONCE per build, however many lanes are open — which is the whole assertion this target
+         makes, and the cheapest way to notice if a property leak ever forks the configuration again
+         (two of these lines in one log means the dedupe is gone and #2127 is live). -->
+    <Message Importance="high"
+             Text="RestoreMeshModuleClosures: restored @(MeshModuleClosure->Count()) closure module(s) — one shared lane for every host (#2127)." />
+  </Target>
+
   <!-- The closure-lane worker. Runs against THIS file as its own project (see the callers for
        why), parameterized by MeshModulesAppDir — so it must receive Configuration,
        MeshModulesTargetFramework and NetCoreTargetingPackRoot from the caller: evaluated
@@ -283,9 +311,28 @@
          Restore explicitly: post-flip the module is OUTSIDE the host's project graph, so the
          host's implicit restore never touches it and a clean machine has no assets file. A
          separate invocation (different global properties than the build below) also sidesteps
-         MSBuild's evaluation reuse between a Restore and the build that needs its outputs. -->
-    <MSBuild Projects="@(MeshModuleClosure)"
-             Targets="Restore"
+         MSBuild's evaluation reuse between a Restore and the build that needs its outputs.
+
+         🚨 And it is hoisted into RestoreMeshModuleClosures above rather than run here — #2127.
+         Every host that imports this file opens its own lane, so three lanes were live within ~7 s
+         of each other in one CI run. `BuildInParallel="false"` serialises the modules WITHIN a lane
+         and nothing serialised the lanes, so `Social:Restore` from one lane and
+         `Hosting.Cosmos:Restore` from another overlapped — two NuGet RestoreTasks whose closures
+         both contain src/MeshWeaver.AI, racing the write of its shared obj/project.assets.json.
+         The loser's atomic temp-file move found the destination already present:
+
+             error : The file '.../src/MeshWeaver.AI/obj/project.assets.json' already exists.
+                     [.../MeshWeaver.Social.csproj]
+             MSB4181: The "MSBuild" task returned false but did not log an error.  (x2)
+
+         and `Build solution (once)` failed for a PR whose diff was one markdown file. MSBuild
+         cannot dedupe those on its own: the entry projects differ, so they are distinct build
+         requests however much their restore graphs overlap. Routing every lane through ONE
+         self-invocation with a host-INDEPENDENT property set gives them a single shared build
+         configuration instead, which MSBuild does dedupe — the first lane runs it, the rest block
+         and take the cached result. -->
+    <MSBuild Projects="$(MSBuildThisFileFullPath)"
+             Targets="RestoreMeshModuleClosures"
              BuildInParallel="false"
              Properties="Configuration=$(Configuration)"
              RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
