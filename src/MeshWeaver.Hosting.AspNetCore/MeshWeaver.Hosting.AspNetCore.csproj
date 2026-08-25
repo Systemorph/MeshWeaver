@@ -22,9 +22,10 @@
          middleware, caches and accessors the PLATFORM depends on, which merely happened to live in
          the Blazor project. Not one of them imports MeshWeaver.Blazor or
          Microsoft.AspNetCore.Components — they were already Blazor-free, which is what made the
-         lift a pure move. These two references are the only ones the move adds:
-           ContentCollections — ArticleExtensions
-           Layout             — PortalErrorSink -->
+         lift a pure move. Three references are the only ones the move adds, one per consumer:
+           ContentCollections      — ArticleExtensions
+           Layout                  — PortalErrorSink
+           Markdown.Export.Contract — PortalApplication -->
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\MeshWeaver.Markdown.Export.Contract\MeshWeaver.Markdown.Export.Contract.csproj" />
