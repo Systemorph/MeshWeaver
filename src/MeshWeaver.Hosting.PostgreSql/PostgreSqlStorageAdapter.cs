@@ -310,8 +310,21 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     /// <summary>Bounded exponential backoff for the transient-read retry: 200ms, 400ms, 800ms (capped).</summary>
-    internal static TimeSpan TransientReadBackoff(int attempt)
+    internal static TimeSpan TransientReadBackoffBase(int attempt)
         => TimeSpan.FromMilliseconds(Math.Min(200 * Math.Pow(2, attempt), 800));
+
+    /// <summary>
+    /// <see cref="TransientReadBackoffBase"/> JITTERED by up to ±40% — the delay actually used.
+    ///
+    /// <para>🚨 The jitter earns its place on the DEADLOCK arm of the classifier (<c>40P01</c>,
+    /// <c>40001</c>). Postgres picks a deadlock victim precisely because two transactions took
+    /// overlapping locks in opposite orders at the same moment; waking both after an identical
+    /// 200 ms re-creates that same moment, and they deadlock again on every attempt until the
+    /// bound is spent. Spreading the wake-ups is what turns a bounded retry into one that
+    /// converges. (Harmless for the connectivity arm — a dropped connection does not care.)</para>
+    /// </summary>
+    internal static TimeSpan TransientReadBackoff(int attempt)
+        => TransientReadBackoffBase(attempt) * (0.6 + Random.Shared.NextDouble() * 0.8);
 
     /// <summary>
     /// Wraps a cold read observable with a bounded exponential-backoff retry that fires ONLY on
@@ -923,7 +936,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     // connection-pool size, NOT the cap-1 write pool (which would serialise it behind writes).
     /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-        => _readPool.Invoke(ct => ListChildPathsAsyncCore(parentPath, ct))
+        => WithTransientRetry(() => _readPool.Invoke(ct => ListChildPathsAsyncCore(parentPath, ct)), "ListChildPaths")
             .Catch<(IEnumerable<string>, IEnumerable<string>), Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []))
                 : Observable.Throw<(IEnumerable<string>, IEnumerable<string>)>(ex));
@@ -964,9 +977,18 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// node-less intermediate segments (<c>{path}/_Thread/{id}</c>,
     /// <c>{nodeType}/Release/{version}</c>) — exactly the rows that survived (issue #839).
     /// An absent (never-provisioned) schema means nothing to enumerate → empty.
+    ///
+    /// <para>🚨 Wrapped in <see cref="WithTransientRetry{T}"/> like every other read, and issue
+    /// #2158 is what happens when it is not. This UNION spans the partition's primary table and
+    /// every satellite, and it runs as the planning step of a recursive DELETE — so it is one of
+    /// the likeliest reads in the system to be chosen as a Postgres deadlock victim
+    /// (<c>40P01</c>) by a concurrent writer on an overlapping subtree. A deadlock is not a
+    /// failure, it is Postgres electing a loser and rolling it back atomically precisely SO THAT
+    /// the loser can retry; un-retried it aborted the whole user-facing delete with
+    /// <c>partial-deleted=0</c> and no hint that trying again would work.</para>
     /// </summary>
     public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
-        => _readPool.Invoke(ct => ListDescendantPathsAsyncCore(rootPath, ct))
+        => WithTransientRetry(() => _readPool.Invoke(ct => ListDescendantPathsAsyncCore(rootPath, ct)), "ListDescendantPaths")
             .Catch<IReadOnlyCollection<string>, Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<IReadOnlyCollection<string>>([])
                 : Observable.Throw<IReadOnlyCollection<string>>(ex));
