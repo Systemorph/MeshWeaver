@@ -51,7 +51,7 @@ public sealed class NavigationResolver
             case NavigationInputKind.DirectPath:
                 return ResolveDirect(row!.Trim(), contextPath);
             default:
-                return ResolvePhrase(row!.Trim());
+                return ResolvePhrase(row!.Trim(), contextPath);
         }
     }
 
@@ -121,10 +121,16 @@ public sealed class NavigationResolver
             .Timeout(TimeSpan.FromSeconds(ExistsTimeoutSeconds))
             .Catch((Exception _) => Observable.Return((MeshNode?)null));
 
-    private IObservable<NavigationResolution> ResolvePhrase(string phrase)
+    private IObservable<NavigationResolution> ResolvePhrase(string phrase, string? contextPath)
     {
         // 1) Prefer a SKILL — a skill can do more than a route change ("change my model" → /model).
-        return SearchNodes("nodeType:Skill", 100)
+        // The skills considered are the ones the USER resolves — their AI Settings sources for this
+        // context, through the one seam (AiSourceCatalog) — never an unanchored nodeType sweep.
+        var user = AgentPickerProjection.ResolveUserHome(hub.ServiceProvider.GetService<AccessService>());
+        return AiSettingsNodeType
+            .ObserveSkillQueries(hub.GetWorkspace(), hub, hub.ServiceProvider, user, contextPath, nodeTypePath: null)
+            .Take(1)
+            .SelectMany(queries => SearchNodes(queries, 100))
             .SelectMany(skills =>
             {
                 var skill = NavigationTargetResolver.PickBestSkill(phrase, skills);
@@ -166,6 +172,19 @@ public sealed class NavigationResolver
         nodes.Where(n => !string.IsNullOrEmpty(n.Path)
                     && !string.Equals(n.Path, exclude, StringComparison.OrdinalIgnoreCase))
             .Select(n => n.Path!).Distinct().Take(take).ToList();
+
+    private IObservable<IReadOnlyList<MeshNode>> SearchNodes(IReadOnlyList<string> queries, int limit) =>
+        queries.Count == 0
+            ? Observable.Return((IReadOnlyList<MeshNode>)[])
+            : mesh.Query<MeshNode>(new MeshQueryRequest { Queries = queries, Limit = limit })
+                .Take(1)
+                .Select(change => (IReadOnlyList<MeshNode>)change.Items.ToList())
+                .Timeout(TimeSpan.FromSeconds(SearchTimeoutSeconds))
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex, "Navigation search failed for queries {Queries}", string.Join(" | ", queries));
+                    return Observable.Return((IReadOnlyList<MeshNode>)[]);
+                });
 
     private IObservable<IReadOnlyList<MeshNode>> SearchNodes(string query, int limit) =>
         mesh.Query<MeshNode>(new MeshQueryRequest { Query = query, Limit = limit })
