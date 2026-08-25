@@ -410,7 +410,7 @@ public static class AgentPickerProjection
     /// (agent / model / harness) the default is the node with the LOWEST <c>Order</c> (the <c>Order = -1</c>
     /// convention: "to make something the default, set its order to -1"). No hardcoded agent name, model
     /// id, or harness; nothing is invented when a registry is empty (the field stays null). Reactive +
-    /// testable like <see cref="ObserveAgents"/> / <see cref="ObserveModels"/>; the chat view subscribes
+    /// testable like <see cref="ObserveAgents"/> / <see cref="ObserveModels(IWorkspace, IMessageHub, string?, string?, IReadOnlyList{string}?, string?)"/>; the chat view subscribes
     /// to this to seed a new composer.
     /// <para>Utility (generator) agents are excluded — the default is never a background generator.</para>
     /// </summary>
@@ -565,13 +565,36 @@ public static class AgentPickerProjection
     /// varying only namespace + scope (the synced-collection all-Initial gating constraint). The
     /// per-partition flat <c>/Model</c> registry is the next increment; credentials live in <c>Provider</c>.
     /// </summary>
+    /// <summary>The node types every model-registry query reads — models, their providers and the tiers.</summary>
+    public const string ModelRegistryTypes =
+        $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}|{ModelTierNodeType.NodeType}";
+
+    /// <summary>
+    /// The SETTINGS-AWARE model pipeline: the user's resolved model sources
+    /// (<see cref="AiSettingsNodeType.ObserveModelQueries"/>) drive the registry snapshot, so the
+    /// picker lists exactly what the user's AI Settings say — and re-resolves when they change.
+    /// Prefer this over the raw-context overload in every user-facing surface.
+    /// </summary>
+    public static IObservable<IReadOnlyList<ModelInfo>> ObserveModels(
+        IWorkspace workspace, IMessageHub hub, IServiceProvider services, string? user,
+        string? currentPath = null, string? nodeTypePath = null,
+        IReadOnlyList<string>? selectedProviderPaths = null)
+        => AiSettingsNodeType
+            .ObserveModelQueries(workspace, hub, services, user, currentPath, nodeTypePath, selectedProviderPaths)
+            .Select(queries => ObserveSnapshot(workspace, hub,
+                    BuildModelQueryId(ModelsQueryId, currentPath, nodeTypePath, selectedProviderPaths, user)
+                    + "|q=" + string.Join(";", queries),
+                    queries)
+                .Select(snapshot => ProjectModels(snapshot, hub.JsonSerializerOptions)))
+            .Switch();
+
     public static string[] BuildModelQueries(
         string? currentPath = null,
         string? nodeTypePath = null,
         IEnumerable<string>? selectedProviderPaths = null,
         string? userPath = null)
     {
-        var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}|{ModelTierNodeType.NodeType}";
+        var typeFilter = ModelRegistryTypes;
         var queries = new List<string>
         {
             $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants{RegistryProjection}",

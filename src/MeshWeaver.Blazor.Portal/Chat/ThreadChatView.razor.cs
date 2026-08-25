@@ -974,7 +974,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// READ-ONLY subscription to the live model catalog — the SAME <see cref="AgentPickerProjection.ObserveModels"/>
+    /// READ-ONLY subscription to the live model catalog — the SAME <see cref="AgentPickerProjection.ObserveModels(IWorkspace, IMessageHub, IServiceProvider, string?, string?, string?, IReadOnlyList{string}?)"/>
     /// pipeline the /model picker binds to. Drives Send-gating (empty catalog → disable + message) and
     /// submit-time model resolution. NEVER writes a node (a prior write-from-callback NotFound-stormed the
     /// hub). A load error is logged, not surfaced, and leaves <c>_modelsLoaded</c> false so Send isn't
@@ -988,7 +988,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
         var picker = AgentPickerProjection.DerivePickerContext(_currentNavContext, initialContext);
         modelsSubscription = AgentPickerProjection
-            .ObserveModels(workspace, Hub, picker.ContextPath, picker.NodeTypePath, userPath: _userHome)
+            .ObserveModels(workspace, Hub, Hub.ServiceProvider, _userHome, picker.ContextPath, picker.NodeTypePath)
             .Subscribe(
                 models => InvokeAsync(() =>
                 {

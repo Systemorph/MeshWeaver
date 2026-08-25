@@ -97,6 +97,14 @@ public record ModelProviderConfiguration
     /// <summary>Human-readable display name (e.g. "Roland's personal key").</summary>
     public string? Label { get; init; }
 
+    /// <summary>
+    /// What a user should know before using this provider — rendered as the provider node's
+    /// description everywhere the provider is offered (AI Settings, the catalogs, plan cards). ONE
+    /// source: the platform's OpenRouter path carries its disclosure and terms link here
+    /// (<see cref="AiSourceCatalog.OpenRouterDisclosure"/>), and no other surface repeats it.
+    /// </summary>
+    public string? Description { get; init; }
+
     /// <summary>UTC timestamp when this provider configuration node was first created.</summary>
     public DateTimeOffset CreatedAt { get; init; }
 

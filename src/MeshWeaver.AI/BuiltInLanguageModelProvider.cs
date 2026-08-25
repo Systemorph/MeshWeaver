@@ -40,6 +40,21 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
     private readonly LanguageModelCatalogOptions options;
     private readonly ILogger<BuiltInLanguageModelProvider>? logger;
 
+    /// <summary>The wire name of the platform's OpenRouter provider (<c>Provider/OpenRouter</c>).</summary>
+    public const string OpenRouterProviderName = "OpenRouter";
+
+    /// <summary>
+    /// The description a provider node is seeded with: what the source declares, else — for the
+    /// platform's OpenRouter path only — the ONE disclosure text with OpenRouter's terms link
+    /// (<see cref="AiSourceCatalog.OpenRouterDisclosure"/>). Every surface that offers the provider
+    /// renders this description; none repeats the link. Pure.
+    /// </summary>
+    public static string? ProviderDescription(string providerName, string? declared) =>
+        !string.IsNullOrWhiteSpace(declared) ? declared
+        : string.Equals(providerName, OpenRouterProviderName, StringComparison.OrdinalIgnoreCase)
+            ? AiSourceCatalog.OpenRouterDisclosure
+            : null;
+
     /// <summary>
     /// Constructs the provider from the configuration root (where each catalog source reads
     /// its endpoint/key/models) and the registered catalog options.
@@ -156,6 +171,10 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 // its group title, so ProviderName here published "AzureFoundry" as a user-facing
                 // heading while the source had declared "Azure Foundry" all along.
                 Label = source.EffectiveLabel,
+                // The provider's disclosure — what a user should know before using it — rendered as
+                // the node's description on every surface that offers the provider. The platform's
+                // OpenRouter path carries its terms link HERE and nowhere else.
+                Description = ProviderDescription(source.ProviderName, source.Description),
                 // 🚨 DETERMINISTIC seed timestamp — NEVER DateTimeOffset.UtcNow. The static-repo
                 // importer fingerprints this node's CONTENT (Versioned=false → contentHash). A
                 // per-enumeration UtcNow changed the content — and thus the fingerprint — on EVERY
@@ -174,6 +193,7 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             {
                 NodeType = ModelProviderNodeType.NodeType,
                 Name = source.EffectiveLabel,
+                Description = providerConfig.Description,
                 Category = "Providers",
                 // Brand logo when the provider name resolves to a known maker; the
                 // generic key SVG otherwise. Fall back to the self-contained SVG URL
@@ -456,7 +476,8 @@ public record LanguageModelCatalogSource(
     string? DefaultEndpoint = null,
     ImmutableArray<string> DefaultModelIds = default,
     bool RequiresApiKey = true,
-    ProviderKind Kind = ProviderKind.Api)
+    ProviderKind Kind = ProviderKind.Api,
+    string? Description = null)
 {
     /// <summary>Effective display label — falls back to <see cref="ProviderName"/> when not supplied.</summary>
     public string EffectiveLabel => DisplayLabel ?? ProviderName;

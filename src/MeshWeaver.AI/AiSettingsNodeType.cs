@@ -128,14 +128,10 @@ public static class AiSettingsNodeType
     public static string[] ResolveSkillQueries(
         AiSettings? settings, string? contextPath, string? nodeTypePath, string? userPath)
     {
-        var templates = settings is { SkillQueries.IsDefaultOrEmpty: false }
-            ? settings.SkillQueries.AsEnumerable()
-            : DefaultSkillQueryTemplates;
-        string? Partition(string? path)
-            => AgentPickerProjection.IsReservedPartition(path) ? null : AgentPickerProjection.PartitionOf(path);
-        var resolved = ResolveQueries(templates, Partition(contextPath), Partition(nodeTypePath), userPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        // THE seam: named entries → legacy templates → defaults, expanded and anchored by
+        // AiSourceCatalog (the one algorithm every skill/agent/model consumer shares).
+        var resolved = AiSourceCatalog.Queries(AiSourceCatalog.Resolve(
+            AiSourceKinds.Skill, settings, AiSourceCatalog.Context(userPath, contextPath, nodeTypePath)));
         return resolved.Length > 0
             ? resolved
             : SkillNodeType.SkillQueries(contextPath, userPath, nodeTypePath);
@@ -150,14 +146,30 @@ public static class AiSettingsNodeType
     /// </summary>
     public static AiSettings MergeSkillSource(AiSettings settings, string sourceNamespace)
     {
+        var query = $"namespace:{sourceNamespace} nodeType:{SkillNodeType.NodeType}";
+        // A user who maintains NAMED sources gets the package as a named row beside them; the
+        // legacy template list is only extended while it is still the list in force.
+        if (!settings.SkillSources.IsDefaultOrEmpty)
+            return settings.SkillSources.Any(e => string.Equals(e.Query, query, StringComparison.OrdinalIgnoreCase))
+                ? settings
+                : settings with { SkillSources = settings.SkillSources.Add(PackageEntry(AiSourceKinds.Skill, sourceNamespace, query)) };
         var rows = settings.SkillQueries.IsDefaultOrEmpty
             ? DefaultSkillQueryTemplates
             : settings.SkillQueries;
-        var query = $"namespace:{sourceNamespace} nodeType:{SkillNodeType.NodeType}";
         return rows.Contains(query, StringComparer.OrdinalIgnoreCase)
             ? settings with { SkillQueries = rows }
             : settings with { SkillQueries = rows.Add(query) };
     }
+
+    /// <summary>The named row an installed package contributes — its partition as the name, the
+    /// source query as the how. Pure.</summary>
+    public static AiSourceEntry PackageEntry(string kind, string sourceNamespace, string query) => new()
+    {
+        Kind = kind,
+        Name = $"{AgentPickerProjection.PartitionOf(sourceNamespace) ?? sourceNamespace} package",
+        Description = $"Installed package source: {sourceNamespace}.",
+        Query = query,
+    };
 
     /// <summary>
     /// The default AGENT sources, as tokenized templates — the same set
@@ -178,11 +190,15 @@ public static class AiSettingsNodeType
     /// </summary>
     public static AiSettings MergeAgentSource(AiSettings settings, string sourceNamespace)
     {
+        var query = $"namespace:{sourceNamespace}/{AgentPickerProjection.AgentSubNamespace} "
+                    + $"nodeType:{AgentNodeType.NodeType}{AgentPickerProjection.RegistryProjection}";
+        if (!settings.AgentSources.IsDefaultOrEmpty)
+            return settings.AgentSources.Any(e => string.Equals(e.Query, query, StringComparison.OrdinalIgnoreCase))
+                ? settings
+                : settings with { AgentSources = settings.AgentSources.Add(PackageEntry(AiSourceKinds.Agent, sourceNamespace, query)) };
         var rows = settings.AgentQueries.IsDefaultOrEmpty
             ? DefaultAgentQueryTemplates
             : settings.AgentQueries;
-        var query = $"namespace:{sourceNamespace}/{AgentPickerProjection.AgentSubNamespace} "
-                    + $"nodeType:{AgentNodeType.NodeType}{AgentPickerProjection.RegistryProjection}";
         return rows.Contains(query, StringComparer.OrdinalIgnoreCase)
             ? settings with { AgentQueries = rows }
             : settings with { AgentQueries = rows.Add(query) };
@@ -215,18 +231,53 @@ public static class AiSettingsNodeType
     public static string[] ResolveAgentQueries(
         AiSettings? settings, string? contextPath, string? userPath)
     {
-        string? Partition(string? path)
-            => AgentPickerProjection.IsReservedPartition(path) ? null : AgentPickerProjection.PartitionOf(path);
-        var spacePartition = Partition(contextPath);
-        var baseQuery = AgentPickerProjection.BuildAgentQuery(userPath, spacePartition);
-        var templates = settings is { AgentQueries.IsDefaultOrEmpty: false }
-            ? settings.AgentQueries.AsEnumerable()
-            : DefaultAgentQueryTemplates;
+        var context = AiSourceCatalog.Context(userPath, contextPath, null);
+        var baseQuery = AgentPickerProjection.BuildAgentQuery(userPath, context.ObjectPartition);
         return new[] { baseQuery }
-            .Concat(ResolveQueries(templates, spacePartition, null, userPath))
+            .Concat(AiSourceCatalog.Queries(AiSourceCatalog.Resolve(AiSourceKinds.Agent, settings, context)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    /// <summary>
+    /// Resolves the user's MODEL sources for a context — the model-picker counterpart of
+    /// <see cref="ResolveAgentQueries"/>: the user's named entries (else legacy templates, else the
+    /// <see cref="AiSourceCatalog.ModelDefaults"/>, which are exactly
+    /// <see cref="AgentPickerProjection.BuildModelQueries"/>'s rows), expanded and anchored by the
+    /// seam, plus a <c>selfAndDescendants</c> row per explicitly selected provider subtree. Falls back
+    /// to the canonical builder if everything resolves away, so the picker is never empty by
+    /// construction.
+    /// </summary>
+    public static string[] ResolveModelQueries(
+        AiSettings? settings, string? contextPath, string? nodeTypePath, string? userPath,
+        IEnumerable<string>? selectedProviderPaths = null)
+    {
+        var context = AiSourceCatalog.Context(userPath, contextPath, nodeTypePath);
+        var resolved = AiSourceCatalog.Queries(AiSourceCatalog.Resolve(AiSourceKinds.Model, settings, context));
+        var selected = (selectedProviderPaths ?? Array.Empty<string>())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => $"namespace:{p} nodeType:{AgentPickerProjection.ModelRegistryTypes} "
+                         + $"scope:selfAndDescendants{AgentPickerProjection.RegistryProjection}");
+        var all = resolved.Concat(selected).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return all.Length > 0
+            ? all
+            : AgentPickerProjection.BuildModelQueries(contextPath, nodeTypePath, selectedProviderPaths, userPath);
+    }
+
+    /// <summary>
+    /// The LIVE resolved model queries for a user + context — mirrors
+    /// <see cref="ObserveAgentQueries"/>: observes the user's <see cref="AiSettings"/> (defaults when
+    /// signed out) and re-resolves on change.
+    /// </summary>
+    public static IObservable<string[]> ObserveModelQueries(
+        IWorkspace workspace, IMessageHub hub, IServiceProvider services,
+        string? user, string? contextPath, string? nodeTypePath,
+        IReadOnlyList<string>? selectedProviderPaths = null)
+        => string.IsNullOrEmpty(user)
+            ? Observable.Return(ResolveModelQueries(null, contextPath, nodeTypePath, user, selectedProviderPaths))
+            : Observe(workspace, hub, services, user!)
+                .Select(settings => ResolveModelQueries(settings, contextPath, nodeTypePath, user, selectedProviderPaths))
+                .DistinctUntilChanged(qs => string.Join("\n", qs));
 
     /// <summary>
     /// The LIVE resolved agent queries for a user + context — the reactive form
