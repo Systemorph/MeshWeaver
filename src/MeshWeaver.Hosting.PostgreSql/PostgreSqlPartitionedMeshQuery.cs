@@ -876,13 +876,16 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
 
         // 🚨 Carry the REQUEST-level limit into the parsed query — the same propagation the
         // per-schema delegate does (PostgreSqlMeshQuery: `if (request.Limit.HasValue) parsedQuery =
-        // parsedQuery with { Limit = request.Limit }`). Without it, `request.Limit` was silently
-        // DROPPED on the unpinned path: QueryAcrossSchemasAsync reads only ParsedQuery.Limit and
-        // substitutes a hard default of 50, so a caller asking for 500 across partitions got 50 and
-        // had no way to tell (issue #1216 — the batch bake's global `nodeType:Code` fetch is exactly
-        // this shape and resolved 50 Code nodes out of thousands). A request that states no limit at
-        // all still gets the fan-out's default: an unanchored UNION over every partition schema
-        // needs SOME bound, and changing that default is a separate decision.
+        // parsedQuery with { Limit = request.Limit }`). Without it, `request.Limit` is silently
+        // DROPPED on the unpinned path — QueryAcrossSchemasAsync reads only ParsedQuery.Limit — so
+        // a caller asking for 500 across partitions would get whatever the query STRING said, and
+        // have no way to tell (issue #1216 — the batch bake's global `nodeType:Code` fetch is
+        // exactly this shape).
+        // 🚨 A request that states no limit at all now gets EVERY match. The fan-out overload this
+        // method calls applies no default clip, and the paging overload that did substitute 50 is
+        // deleted (#2048) — it had no runtime caller, and a silent default is the defect #1216 and
+        // #1326 were filed against. If a bound is ever wanted for an unanchored UNION, it belongs
+        // on this ONE shape and it has to be LOUD.
         // 🚨 Propagate the request limit WHATEVER its sign, including the non-positive "no clip"
         // encoding (MeshQueryRequest.NoLimit). It used to be dropped for `<= 0` because a zero
         // reached SQL as a literal `LIMIT 0` — ZERO ROWS for a caller that asked for everything —

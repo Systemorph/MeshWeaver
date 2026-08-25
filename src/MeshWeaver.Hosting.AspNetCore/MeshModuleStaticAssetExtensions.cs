@@ -59,6 +59,19 @@ public static partial class MeshModuleStaticAssetExtensions
     private static readonly PrecompressedContentTypeProvider PrecompressedContentTypes = new();
 
     /// <summary>
+    /// What a FINGERPRINTED URL may promise: the bytes behind it can never change, so a browser
+    /// that has them never asks again. One year is the conventional "forever" (RFC 8246 §2 puts
+    /// the practical ceiling there).
+    /// </summary>
+    private const string ImmutableCacheControl = "public, max-age=31536000, immutable";
+
+    /// <summary>
+    /// What an UNFINGERPRINTED URL may promise: nothing. Store it, but revalidate before every
+    /// use — a 304 while the module is unchanged, the new bytes the moment it is upgraded.
+    /// </summary>
+    private const string RevalidateCacheControl = "no-cache";
+
+    /// <summary>
     /// Registers the <see cref="ModuleStaticAssetManifest"/> — what each installed module
     /// contributes, resolved once on first use. Pair it with
     /// <see cref="UseMeshModuleStaticAssets"/>; a host that mounts without registering gets a
@@ -118,20 +131,23 @@ public static partial class MeshModuleStaticAssetExtensions
                 Provider: new PhysicalFileProvider(mount.PhysicalPath)))
             .ToArray();
 
-        // A module aggregate whose host-provided @imports were stripped is served from MEMORY,
-        // ahead of the mounts — the landed bytes stay exactly as published (a generation is
-        // immutable), and only the response differs. Also ahead of encoding negotiation: the
-        // rewritten body has no precompressed sibling to negotiate to.
-        var rewrites = manifest.RewrittenStylesheets;
-        if (rewrites is { Count: > 0 })
+        // Every linked scoped-CSS aggregate is served from MEMORY, ahead of the mounts — the
+        // landed bytes stay exactly as published (a generation is immutable), and only the
+        // response differs. Also ahead of encoding negotiation: the served body has no
+        // precompressed sibling to negotiate to.
+        var bodies = manifest.StylesheetBodies;
+        if (bodies is { Count: > 0 })
             app.Use(async (context, next) =>
             {
                 if (HttpMethods.IsGet(context.Request.Method)
-                    && rewrites.TryGetValue(context.Request.Path.Value ?? "", out var body))
+                    && bodies.TryGetValue(context.Request.Path.Value ?? "", out var stylesheet))
                 {
                     context.Response.ContentType = "text/css";
                     context.Response.Headers.Vary = HeaderNames.AcceptEncoding;
-                    await context.Response.WriteAsync(body);
+                    context.Response.Headers.CacheControl = stylesheet.Immutable
+                        ? ImmutableCacheControl
+                        : RevalidateCacheControl;
+                    await context.Response.WriteAsync(stylesheet.Body);
                     return;
                 }
                 await next();
@@ -151,11 +167,25 @@ public static partial class MeshModuleStaticAssetExtensions
                 FileProvider = provider,
                 RequestPath = requestPath,
                 ContentTypeProvider = PrecompressedContentTypes,
-                // Every representation of these URLs varies by Accept-Encoding — including the
-                // identity one, or a shared cache hands a brotli body to a client that cannot
-                // decode it.
                 OnPrepareResponse = static served =>
-                    served.Context.Response.Headers.Vary = HeaderNames.AcceptEncoding,
+                {
+                    // Every representation of these URLs varies by Accept-Encoding — including the
+                    // identity one, or a shared cache hands a brotli body to a client that cannot
+                    // decode it.
+                    served.Context.Response.Headers.Vary = HeaderNames.AcceptEncoding;
+                    // 🚨 STATE the caching policy, never leave it to heuristics. These URLs carry
+                    // no fingerprint (a pack's component hard-codes
+                    // `_content/<Name>/<file>` in its OWN source — see the manifest remarks), so
+                    // `immutable` would be a lie. Saying nothing is worse than it looks: with no
+                    // Cache-Control at all a browser applies HEURISTIC freshness off
+                    // Last-Modified and may serve an UPGRADED module's asset from cache without
+                    // revalidating at all — a landed new generation whose CSS/JS never reaches the
+                    // viewer. `no-cache` means "you may store it, but revalidate before use", so
+                    // the conditional GET answers 304 while the module is unchanged and delivers
+                    // the new bytes the moment it is not. Same bargain MapStaticAssets makes for
+                    // the HOST's own unfingerprinted routes.
+                    served.Context.Response.Headers.CacheControl = RevalidateCacheControl;
+                },
             });
 
         return app;
@@ -296,7 +326,7 @@ public static partial class MeshModuleStaticAssetExtensions
 
         var mounts = new List<ModuleStaticAssetMount>();
         var stylesheets = new List<string>();
-        var rewrites = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var bodies = new Dictionary<string, ModuleStylesheetResponse>(StringComparer.OrdinalIgnoreCase);
         // First mount wins per request path — two modules carrying the SAME dependency (a shared
         // RCL) is ordinary composition, not a fault, so the second is skipped quietly rather than
         // refused. Shadowing the HOST is the case that must never happen, and that is the
@@ -329,7 +359,7 @@ public static partial class MeshModuleStaticAssetExtensions
             var bundlePath = Path.Combine(moduleWwwroot, $"{name}.styles.css");
             if (File.Exists(bundlePath))
             {
-                var requestPath = $"{ContentRoot}/{name}/{name}.styles.css";
+                var plainPath = $"{ContentRoot}/{name}/{name}.styles.css";
 
                 // 🚨 The aggregate opens with @import lines for its DEPENDENCIES' bundles at
                 // FINGERPRINTED urls, computed at MODULE-build time
@@ -339,8 +369,8 @@ public static partial class MeshModuleStaticAssetExtensions
                 // They are also redundant: the host already links its own aggregate, which contains
                 // those very bundles. Strip exactly those, by the SAME predicate that decides not to
                 // mount the dependency, so the two can never disagree about who provides what.
-                var rewritten = StripHostProvidedImports(
-                    File.ReadAllText(bundlePath), hostAssets, name, logger);
+                var landed = File.ReadAllText(bundlePath);
+                var rewritten = StripHostProvidedImports(landed, hostAssets, name, logger);
 
                 // A pack with NO .razor.css of its own still emits an aggregate — one made of
                 // nothing but those imports (211 bytes for AppleMaps and OpenStreetMap). Once they
@@ -356,9 +386,31 @@ public static partial class MeshModuleStaticAssetExtensions
                 }
                 else
                 {
-                    stylesheets.Add(requestPath);
-                    if (rewritten is not null)
-                        rewrites["/" + requestPath] = rewritten;
+                    // 🚨 FINGERPRINTED, because this is the ONE module asset whose URL the HOST
+                    // owns. Everything else under the mounts is addressed by a pack's own
+                    // component source (`_content/<Name>/GoogleMapView.razor.js`), so its URL
+                    // cannot be rewritten from here and can only ever be `no-cache`; this one is
+                    // linked by App.razor off THIS manifest, so the platform decides its spelling.
+                    // Putting the body's content hash in the path buys the two things
+                    // revalidation cannot: an upgrade is picked up INSTANTLY (a different URL,
+                    // never a stale cached copy) and an unchanged module costs ZERO requests
+                    // rather than one conditional GET per page render.
+                    //
+                    // The hash is over the body actually SERVED, not the landed file: two
+                    // generations whose aggregates differ only in host-provided @imports —
+                    // exactly what StripHostProvidedImports removes — collapse to the same URL,
+                    // which is the correct answer for a byte-identical response.
+                    var body = rewritten ?? landed;
+                    var fingerprintedPath =
+                        $"{ContentRoot}/{name}/{name}.{Fingerprint(body)}.styles.css";
+
+                    stylesheets.Add(fingerprintedPath);
+                    bodies["/" + fingerprintedPath] = new ModuleStylesheetResponse(body, true);
+                    // The plain path is served too — nothing links it, but leaving it to fall
+                    // through to the mount would serve the LANDED file, whose host-provided
+                    // @imports point at fingerprints only the module's own build ever had (they
+                    // 404, silently, once per page load). One body, two URLs, one truth.
+                    bodies["/" + plainPath] = new ModuleStylesheetResponse(body, false);
                 }
             }
 
@@ -403,7 +455,7 @@ public static partial class MeshModuleStaticAssetExtensions
                 "Module static assets: {Count} root(s) mounted, {Stylesheets} stylesheet(s) to link",
                 mounts.Count, stylesheets.Count);
 
-        return new ModuleStaticAssetManifest(mounts, stylesheets, rewrites);
+        return new ModuleStaticAssetManifest(mounts, stylesheets, bodies);
     }
     /// <summary>
     /// Where a boot-installed module's published static web assets live: <c>wwwroot</c> BESIDE the
@@ -493,6 +545,22 @@ public static partial class MeshModuleStaticAssetExtensions
     [GeneratedRegex("""^\s*@import\s+['"]_content/(?<dep>[^/'"]+)/[^'"]*['"]\s*;""")]
     private static partial Regex ImportedContentBundle();
 
+    /// <summary>
+    /// The URL-safe content fingerprint of a served body: 16 hex characters (64 bits) of its
+    /// SHA-256. Long enough that a collision between two generations of one module's stylesheet is
+    /// not a thing that happens; short enough to read in a page source.
+    ///
+    /// <para>Derived from the CONTENT, never from a version string or a landing timestamp: a
+    /// generation is a new directory whether or not its bytes changed, so a
+    /// generation-derived token would invalidate every viewer's cached copy on a republish that
+    /// changed nothing — the cost this fingerprint exists to remove.</para>
+    /// </summary>
+    private static string Fingerprint(string body) =>
+        Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(body)))[..16]
+            .ToLowerInvariant();
+
 }
 
 /// <summary>One mounted asset root: everything under <paramref name="PhysicalPath"/> is served at
@@ -511,12 +579,38 @@ public sealed record ModuleStaticAssetMount(string RequestPath, string PhysicalP
 /// standalone and nothing links it — which renders the module's components unstyled while every
 /// script still works, the most confusing possible half-failure. Hosts render one
 /// <c>&lt;link&gt;</c> per <paramref name="Stylesheets"/> entry to close that gap.</para>
+///
+/// <para><b>Fingerprinting, and the one place it can reach.</b> The linked bundle is the ONLY
+/// module asset whose URL the platform authors, so it is the only one that can carry a content
+/// fingerprint: everything else under the mounts is addressed by a pack's own component source
+/// (<c>RadzenViewBase</c> self-loads <c>_content/Radzen.Blazor/…</c>; <c>GoogleMapView.razor.cs</c>
+/// imports <c>./_content/MeshWeaver.Blazor.GoogleMaps/GoogleMapView.razor.js</c>), which is not in
+/// this build graph and cannot be rewritten from the host. Those URLs are therefore served
+/// <c>no-cache</c> — correct on upgrade, one conditional GET per render — and the fingerprinted
+/// bundle is served <c>immutable</c>, which costs nothing at all.</para>
 /// </summary>
 /// <param name="Mounts">Asset roots to serve, in module order.</param>
 /// <param name="Stylesheets">
-/// Root-relative paths (<c>_content/&lt;Name&gt;/&lt;Name&gt;.styles.css</c>), in module order.
+/// Root-relative FINGERPRINTED paths (<c>_content/&lt;Name&gt;/&lt;Name&gt;.&lt;hash&gt;.styles.css</c>),
+/// in module order. Each is a key of <paramref name="StylesheetBodies"/>.
+/// </param>
+/// <param name="StylesheetBodies">
+/// Every stylesheet URL this lane answers from MEMORY, rooted (leading <c>/</c>) — the
+/// fingerprinted path a host links AND the plain <c>&lt;Name&gt;.styles.css</c> it supersedes, both
+/// carrying the same body. Serving the plain path too keeps the LANDED file — whose host-provided
+/// <c>@import</c>s name fingerprints only the module's own build ever had — from being reached
+/// through the mount underneath.
 /// </param>
 public sealed record ModuleStaticAssetManifest(
     IReadOnlyList<ModuleStaticAssetMount> Mounts,
     IReadOnlyList<string> Stylesheets,
-    IReadOnlyDictionary<string, string>? RewrittenStylesheets = null);
+    IReadOnlyDictionary<string, ModuleStylesheetResponse>? StylesheetBodies = null);
+
+/// <summary>One stylesheet URL answered from memory.</summary>
+/// <param name="Body">The CSS to write.</param>
+/// <param name="Immutable">
+/// Whether the URL carries the body's content fingerprint. Fingerprinted ⇒ the bytes behind this
+/// URL can never change, so it is answered <c>immutable</c> and never revalidated; otherwise
+/// <c>no-cache</c>, because a module upgrade changes what the plain URL means.
+/// </param>
+public sealed record ModuleStylesheetResponse(string Body, bool Immutable);
