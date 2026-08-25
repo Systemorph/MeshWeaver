@@ -227,8 +227,16 @@ public static class ModuleActivationSidecar
     public static void WriteEntry(string baseDirectory, ModuleActivationEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        if (string.IsNullOrWhiteSpace(entry.Name))
-            throw new ArgumentException("An activation entry must name its module.", nameof(entry));
+        // 🚨 The name BECOMES a path here, so it is validated here — not only in the landing
+        // service that happens to be today's caller. A record file is derived from the module
+        // name, and a name carrying a separator or '..' would write wherever it points.
+        if (string.IsNullOrWhiteSpace(entry.Name)
+            || entry.Name is "." or ".."
+            || entry.Name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || entry.Name.Contains('/') || entry.Name.Contains('\\'))
+            throw new ArgumentException(
+                $"'{entry.Name}' is not a valid module name — an activation record is a file named "
+                + "after its module.", nameof(entry));
         WriteAtomic(EntryPath(baseDirectory, entry.Name), JsonSerializer.Serialize(entry, Json));
     }
 
