@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using Memex.Portal.Distributed;
+using MeshWeaver.Mesh;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -43,7 +44,8 @@ public class RequiredModulesHealthCheckTest : IDisposable
         catch { /* temp cleanup is the OS's problem, never a test failure */ }
     }
 
-    private Task<HealthCheckResult> Check(string[] required, string[] baseline)
+    private Task<HealthCheckResult> Check(
+        string[] required, string[] baseline, params IncompatibleModule[] incompatible)
     {
         var settings = new Dictionary<string, string?> { [ModuleRoot.ConfigKey] = root };
         for (var i = 0; i < required.Length; i++)
@@ -52,8 +54,49 @@ public class RequiredModulesHealthCheckTest : IDisposable
             settings[$"Modules:Assemblies:{i}"] = baseline[i];
 
         return new RequiredModulesHealthCheck(
-                new ConfigurationBuilder().AddInMemoryCollection(settings).Build())
+                new ConfigurationBuilder().AddInMemoryCollection(settings).Build(),
+                incompatible)
             .CheckHealthAsync(new HealthCheckContext());
+    }
+
+    /// <summary>
+    /// A module that IS on the deployment and loaded, whose registration threw against this build
+    /// (#2234). Without a bucket of its own this fell through every check above it — the assembly
+    /// is present, so "absent" is false and "expected later" is false — and landed on
+    /// "every required module is present", i.e. Healthy for a replica whose feature is entirely
+    /// gone. That fall-through is the regression this pins.
+    /// </summary>
+    [Fact]
+    public async Task AnIncompatibleModule_IsUnhealthy_NotHealthy()
+    {
+        var broken = IncompatibleModule.From(
+            "MeshWeaver.AI.AzureFoundry.dll",
+            new MissingMethodException("Method not found: 'Void Ns.T..ctor(String)'."));
+
+        var result = await Check(
+            ["MeshWeaver.AI.AzureFoundry.dll"], ["MeshWeaver.AI.AzureFoundry.dll"], broken);
+
+        Assert.Equal(HealthStatus.Unhealthy, result.Status);
+        Assert.NotEqual(HealthStatus.Healthy, result.Status);
+        Assert.Contains("did not install against this platform build", result.Description);
+        Assert.Contains("incompatible", result.Data.Keys);
+    }
+
+    /// <summary>
+    /// The partner: the same declaration with nothing broken stays Healthy, so the bucket above
+    /// discriminates rather than failing every deployment that declares a required module.
+    /// </summary>
+    [Fact]
+    public async Task NothingIncompatible_StaysHealthy()
+    {
+        // A module genuinely loaded in THIS process, so it classifies Present on the same evidence
+        // production uses (ModuleActivationStatus.LoadedAssemblyNames). Declaring a name that is
+        // merely recorded would classify Absent and fail here for a reason unrelated to the bucket
+        // under test — which is exactly how this assertion misled me the first time.
+        var result = await Check(
+            ["MeshWeaver.PluginCatalog.dll"], ["MeshWeaver.PluginCatalog.dll"]);
+
+        Assert.Equal(HealthStatus.Healthy, result.Status);
     }
 
     /// <summary>Lands an activation record, with or without the bytes it points at.</summary>

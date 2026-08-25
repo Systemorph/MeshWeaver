@@ -437,8 +437,11 @@ builder.Services.AddHealthChecks()
     // 🚨 Unhealthy when a declared-required module is missing, so a rollout that would silently
     // drop a feature STALLS and the pods that still have it keep serving. Inert unless the
     // deployment declares Modules:Required.
-    .AddCheck("required_modules",
-        new Memex.Portal.Distributed.RequiredModulesHealthCheck(builder.Configuration))
+    // Resolved from DI rather than hand-constructed: it now also needs the modules that loaded but
+    // could NOT register (#2234), which MeshBuilder.InstallAssemblies registers as enumerable
+    // singletons on this very container. Constructing it by hand would silently pass an empty set —
+    // the check would go on reporting "every required module is present" for a replica missing one.
+    .AddCheck<Memex.Portal.Distributed.RequiredModulesHealthCheck>("required_modules")
     .AddCheck<Memex.Portal.Distributed.BundleAdoptionHealthCheck>("bundle_adoption")
     // 🚨 The other half of the same blindness (#1782 gap 2). Adoption's miss is invisible because
     // a lazy compile absorbs it; an entitlement answer's degradation is invisible because every
