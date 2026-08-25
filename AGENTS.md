@@ -757,7 +757,43 @@ attempt, a stale negative produces DUPLICATE DATA, not merely duplicated work.
 **Wrong:** reading content by exact path, reading state before a write, polling for job completion,
 deciding create-or-skip for a known path.
 
-`GetMeshNodeStream(path)` + `Where(...).Take(1)` is also the right primitive for **waiting for work to finish**.
+`GetMeshNodeStream(path)` + `Where(...).Take(1)` is also the right primitive for **waiting for work to finish** — for a node that **exists**.
+
+🚨 **A node that may NOT EXIST YET is the one case where neither half is enough on its own, and each
+half alone is a defect that has shipped.** Do not pick a horn:
+
+- **A point read of an ABSENT node is forbidden by the framework**, not merely slow: the owner
+  answers an authoritative routing NotFound which **terminates the stream with an error** (it cannot
+  wait for the node to appear), and that NotFound opens `MeshNodeStreamCache`'s **storm-breaker**
+  window on the path — and the breaker **fast-fails WRITES too**, so the read suppresses the write it
+  is waiting for. The breaker says so itself: *"A point node-access to a node that does not exist is
+  a defect — read optional nodes via GetQuery (empty-on-absent), not GetMeshNodeStream(exactPath)."*
+- **Reading that node's CONTENT out of a query is forbidden above** — unbounded lag.
+
+**The composition, and it is the canonical pattern — listing for EXISTENCE, stream for CONTENT:**
+
+```csharp
+hub.GetQuery(id, $"path:{parent} scope:children nodeType:X select:path")   // EXISTENCE — empty-on-absent
+    .Where(nodes => nodes.Any(n => string.Equals(n.Path, target, StringComparison.OrdinalIgnoreCase)))
+    .Take(1)
+    .SelectMany(_ => workspace.GetMeshNodeStream(target))                  // CONTENT — authoritative, live
+    .Select(node => node.ContentAs<X>(hub.JsonSerializerOptions));
+```
+
+The index **trails** the store, so "the index has seen it" implies "the store has it" — the point read
+opened on that signal can never be early, and never NotFounds. The same lag that disqualifies a query
+for CONTENT is what makes it a safe gate. Creating the node anyway? Skip the check entirely and use
+`CreateOrUpdateNodeRequest`.
+
+🚨 **This is about ONE known path whose value you are GATING on — not about node counts.** The
+worked counter-example is `src/MeshWeaver.Blazor.Portal/Chat/ThreadTokenChip.razor.cs:106`: it reads
+`content` out of the very same `{thread}/_Usage scope:children` query, **and it is correct** — it
+sums a SET to paint a total, and a briefly-stale total is cosmetic. Converting it to N point reads
+would mean N per-node hub activations per render, and on a legitimately EMPTY set (a thread with no
+rounds yet) every one is an absent-node read tripping the breaker **on the render path**. So: stale
+answer merely looks wrong on screen → query, `content` and all. Stale answer DECIDES whether
+something proceeds, passes, or is written → the owner's stream. Full pattern:
+[CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) → "An OPTIONAL node".
 
 **Free-floating words → vector search.** When a query contains bare text tokens (`laptop nodeType:Story`) AND PG is the backend AND an `IEmbeddingProvider` is registered, `PostgreSqlMeshQuery.QueryAsync` automatically routes through the HNSW cosine index instead of ILIKE substring scan. Structured-only queries (`nodeType:Story namespace:ACME`) stay on the regular SQL path. Full reference: [VectorSearch.md](src/MeshWeaver.Documentation/Data/Architecture/VectorSearch.md).
 
