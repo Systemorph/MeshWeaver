@@ -18,6 +18,15 @@ namespace MeshWeaver.Graph;
 public static class RecycleLayoutArea
 {
     /// <summary>
+    /// Where BOTH buttons land: the node's DEFAULT page (<c>/{path}</c>, empty area) — the same
+    /// rule the breadcrumbs follow, and never a hardcoded <c>Overview</c>. For a plugin node the
+    /// default page is its COVER; the Overview area is the generic raw-body dump, and sending a
+    /// user there after Cancel read as a broken page (memex, 2026-08-25: Cancel on
+    /// OpenStreetMap/Recycle landed on the un-rendered cover HTML). Pure.
+    /// </summary>
+    public static string LandingHref(string nodePath) => $"/{(nodePath ?? "").Trim('/')}";
+
+    /// <summary>
     /// Returns the Recycle menu item if the user has Update permission.
     /// Sort order 90 places it just above Delete (100).
     /// </summary>
@@ -53,7 +62,7 @@ public static class RecycleLayoutArea
     {
         var nodePath = host.Hub.Address.Path;
         var targetAddress = host.Hub.Address;
-        var overviewHref = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+        var landingHref = LandingHref(nodePath);
 
         var card = Controls.Stack
             .WithStyle("padding: 24px; max-width: 640px;")
@@ -64,7 +73,7 @@ public static class RecycleLayoutArea
                 .WithHorizontalGap(12)
                 .WithView(Controls.Button(host.Localize("common.cancel"))
                     .WithAppearance(Appearance.Neutral)
-                    .WithNavigateToHref(overviewHref))
+                    .WithNavigateToHref(landingHref))
                 .WithView(Controls.Button(host.Localize("menu.recycle"))
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.BinRecycle())
@@ -73,7 +82,7 @@ public static class RecycleLayoutArea
                         // Redirect FIRST — see the remarks above. This emission is on the wire
                         // before the dispose below is dequeued, so the client never depends on a
                         // hub that is shutting down.
-                        ctx.Host.UpdateArea(ctx.Area, new RedirectControl(overviewHref));
+                        ctx.Host.UpdateArea(ctx.Area, new RedirectControl(landingHref));
                         ctx.Host.Hub.Post(new DisposeRequest(), o => o.WithTarget(targetAddress));
                         return Task.CompletedTask;
                     })));
