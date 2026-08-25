@@ -573,3 +573,56 @@ fluent-header,
         }
 
 }
+
+/* ── The render-error placeholder ───────────────────────────────────────────────────────────────
+   Shown by every ErrorBoundary that wraps a view, an area or a dialog. It used to be styled inline
+   as `color: var(--error, #d13438)` over `rgba(209,52,56,0.08)`, which is a mid-dark red on a
+   near-transparent ground: legible on white, and dark-red-on-black in dark mode — exactly when a
+   reader most needs to read it, because the message IS the diagnosis.
+
+   Fluent's `--error` is a single value that does not flip with the theme, so the fix is not a
+   better token but a theme-aware rule. The foreground lightens in dark mode while the tinted
+   background and the border carry the "this is an error" signal in both. */
+.meshweaver-render-error {
+    padding: 0.75rem;
+    border: 1px solid rgba(209, 52, 56, 0.55);
+    border-radius: 4px;
+    background: rgba(209, 52, 56, 0.08);
+    color: #b3261e;
+    font-size: 0.875rem;
+}
+
+/* The message itself is a stack trace or an import failure — monospace, and allowed to wrap rather
+   than pushing the page sideways on a phone. */
+.meshweaver-render-error .meshweaver-render-error-detail {
+    margin-top: 0.25rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+    .meshweaver-render-error {
+        border-color: rgba(255, 138, 128, 0.45);
+        background: rgba(209, 52, 56, 0.14);
+        color: #ff9a91;
+    }
+}
+
+/* An explicit theme choice wins over the OS preference, in both directions — the portal stamps the
+   root, and a rule that only answers `prefers-color-scheme` is wrong for exactly the readers who
+   went and set the toggle. */
+:root[data-theme="dark"] .meshweaver-render-error,
+body[data-theme="dark"] .meshweaver-render-error,
+.dark .meshweaver-render-error {
+    border-color: rgba(255, 138, 128, 0.45);
+    background: rgba(209, 52, 56, 0.14);
+    color: #ff9a91;
+}
+
+:root[data-theme="light"] .meshweaver-render-error,
+body[data-theme="light"] .meshweaver-render-error {
+    border-color: rgba(209, 52, 56, 0.55);
+    background: rgba(209, 52, 56, 0.08);
+    color: #b3261e;
+}
