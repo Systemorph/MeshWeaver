@@ -144,21 +144,26 @@ public class DelegationSubThreadUsageTest(ITestOutputHelper output) : MonolithMe
         //    unsound, since Thread.IsExecuting is false for the INITIAL Idle state as well as for a
         //    finished round (the same defect fixed in OrleansSubThreadAutoResumeTest).
         //
-        //    🚨 Do NOT switch this to the node stream (#1812). That issue proposed it, on the theory
-        //    that an all-zero TokenUsage CI once timed out on was a stale CQRS projection. Measured,
-        //    it is not: this query and GetMeshNodeStream(usagePath) resolve within ±13 ms of each
-        //    other, and the point stream is the SLOWER of the two once its cold per-node hub
-        //    activation is counted. The zeros were the node's authoritative value — RecordUsage's
-        //    phase 1 wrote them — so an authoritative read returned the same zeros. Fixed on the
-        //    write side; pinned by ThreadTokenUsageTest.UsageSatelliteIsNeverObservableWithZeroTokens.
+        //    🚨 But the listing answers EXISTENCE ONLY — never the value. The query index is
+        //    eventually consistent, so waiting on CONTENT through it is waiting on an unbounded lag
+        //    (AGENTS.md → "Never Query for a Single Node's Content"; the 2026-08-25 tightening of
+        //    Doc/Architecture/CqrsAndContentAccess puts a number on it — a query's answer for one
+        //    path can be minutes old). That is the OTHER horn, and it is the one that made
+        //    ThreadTokenUsageTest a repeat CI offender (#1812, #2001, run 32876073965: "the
+        //    observable emitted nothing at all", always on a usage wait, never on a thread/cell wait
+        //    with the identical budget). So: listing for existence, then the OWNER's authoritative
+        //    GetMeshNodeStream for the value — a point read that can no longer NotFound, because by
+        //    then the node demonstrably exists. Both horns satisfied, neither rule bent.
         var usagePath = $"{subThreadPath}/{TokenUsageNodeType.SatelliteSegment}/{UsageModelKey}";
         var usage = (await Mesh.GetQuery(
                 $"usage:{subThreadPath}",
                 $"path:{subThreadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children "
-                + $"nodeType:{TokenUsageNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
-            .Select(nodes => nodes
-                .FirstOrDefault(n => string.Equals(n.Path, usagePath, StringComparison.OrdinalIgnoreCase))
-                .ContentAs<TokenUsage>(Mesh.JsonSerializerOptions))
+                + $"nodeType:{TokenUsageNodeType.NodeType} select:path")
+            .Where(nodes => nodes.Any(n =>
+                string.Equals(n.Path, usagePath, StringComparison.OrdinalIgnoreCase)))
+            .Take(1)
+            .SelectMany(_ => Mesh.GetWorkspace().GetMeshNodeStream(usagePath))
+            .Select(n => n.ContentAs<TokenUsage>(Mesh.JsonSerializerOptions))
             .Should().Within(60.Seconds())
             .Match(u => u is not null
                         && u.InputTokens == SubInTokens

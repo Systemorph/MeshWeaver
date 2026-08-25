@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Reactive.Assertions;
 using Xunit;
@@ -286,5 +288,90 @@ public class AssertionTests
         Assert.Contains("Edit, Create, Resume synchronization", ex.Message);
         Assert.Contains("3 item(s)", ex.Message);
         Assert.DoesNotContain("System.Collections.Generic.List", ex.Message);
+    }
+
+    /// <summary>
+    /// 🚨 #2243. The terminal assertions must attach their observer SYNCHRONOUSLY, on the calling
+    /// thread, before handing back the Task. "Arm the wait, then make the thing happen" is the normal
+    /// test shape, and half of what gets observed is a hot, non-replaying <c>Subject&lt;T&gt;</c> — an
+    /// emission with no observer attached is simply gone, and the assertion then waits out its ENTIRE
+    /// timeout for a second emission that is never coming. That is what
+    /// <c>MessageHubTest.ManyDistinctMissingSubscribes_DoNotWedge</c> was failing on intermittently:
+    /// the old <c>SubscribeOn(TaskPoolScheduler.Default)</c> deferred the subscribe to the thread pool,
+    /// and under full-suite pool pressure the test thread's flood — and the shed it provoked —
+    /// completed first.
+    /// <para>
+    /// The assertion is on the THREAD, not on timing, so it is deterministic: with a pool hop the
+    /// subscribe can never run on the calling thread, however lucky the scheduling.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Emit_SubscribesSynchronouslyOnTheCallingThread_SoAHotSourceCannotOutrunTheObserver()
+    {
+        var callingThread = Environment.CurrentManagedThreadId;
+        var subscribeThread = 0;
+        var hot = new Subject<int>();
+        var source = Observable.Create<int>(observer =>
+        {
+            subscribeThread = Environment.CurrentManagedThreadId;
+            return hot.Subscribe(observer);
+        });
+
+        var wait = source.Should().Within(10.Seconds()).Emit();
+
+        Assert.Equal(callingThread, subscribeThread);
+        hot.OnNext(7);                       // hot + non-replaying: lost unless the observer is already on
+        Assert.Equal(7, await wait);
+    }
+
+    /// <summary>
+    /// The other half of the same contract, and the reason the pool hop existed at all: xUnit runs
+    /// <c>async Task</c> tests under a single-threaded <c>MaxConcurrencySyncContext</c>, and a cold mesh
+    /// observable subscribed with that context ambient funnels every async continuation back onto the
+    /// one context thread (8 s versus 3 ms — AddressResolutionTest, 2026-06-15). Subscribing here would
+    /// reintroduce exactly that unless the context is suppressed for the duration of the subscribe — so
+    /// this pins BOTH the suppression and its restoration.
+    /// </summary>
+    [Fact]
+    public async Task Emit_SuppressesTheAmbientSyncContextForTheSubscribe_ThenRestoresIt()
+    {
+        var previous = SynchronizationContext.Current;
+        var probe = new SynchronizationContext();
+        SynchronizationContext.SetSynchronizationContext(probe);
+        try
+        {
+            SynchronizationContext? duringSubscribe = probe;   // sentinel — must be overwritten
+            var source = Observable.Create<int>(observer =>
+            {
+                duringSubscribe = SynchronizationContext.Current;
+                observer.OnNext(3);
+                observer.OnCompleted();
+                return Disposable.Empty;
+            });
+
+            var wait = source.Should().Within(10.Seconds()).Emit();
+
+            Assert.Null(duringSubscribe);
+            Assert.Same(probe, SynchronizationContext.Current);
+            Assert.Equal(3, await wait);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
+    /// <summary>
+    /// <c>NotEmit</c> is the window assertion, so a deferred subscribe would make it pass on a source
+    /// that emitted at the very start of the window — a false green in a negative test, which is the
+    /// worst kind. It must observe from the first instant too.
+    /// </summary>
+    [Fact]
+    public async Task NotEmit_ObservesFromTheFirstInstantOfTheWindow()
+    {
+        var hot = new Subject<int>();
+        var wait = hot.Should().NotEmit(2.Seconds());
+        hot.OnNext(1);
+        await Assert.ThrowsAnyAsync<AssertionException>(async () => await wait);
     }
 }
