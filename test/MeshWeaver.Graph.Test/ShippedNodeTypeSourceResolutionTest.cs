@@ -49,8 +49,10 @@ namespace MeshWeaver.Graph.Test;
 /// from this guard's coverage. The two shapes anyone actually authors ARE resolvable from the
 /// filesystem — <c>namespace:Source scope:subtree</c> is the node's own folder and
 /// <c>[name=]@Some/Node/Path</c> is a file or subtree in the same content tree — so both are
-/// resolved, and only an entry this cannot decide skips the node. A <c>sources</c> entry that
-/// points at nothing therefore FAILS here rather than disappearing.</para>
+/// resolved. A <c>sources</c> entry that points at nothing therefore FAILS here rather than
+/// disappearing, and so does an entry whose SHAPE this cannot resolve: it is reported, asking to
+/// be taught, because "skip only the odd entry" is the same silent-coverage-drop with a smaller
+/// blast radius. Nothing about a NodeType's <c>sources</c> list can remove it from this guard.</para>
 /// </summary>
 public class ShippedNodeTypeSourceResolutionTest
 {
@@ -87,6 +89,12 @@ public class ShippedNodeTypeSourceResolutionTest
         var offenders = new List<string>();
         foreach (var nodeType in EnumerateShippedNodeTypes(root))
         {
+            // 🚨 An entry this cannot resolve is REPORTED, not skipped. Skipping is how the guard
+            // stopped covering a NodeType silently in the first place, and "skip only the odd
+            // case" is the same failure with a smaller blast radius.
+            foreach (var entry in nodeType.UnresolvedSources)
+                offenders.Add($"  {nodeType.RelativePath}: unresolvable `sources` entry {entry}");
+
             var own = new HashSet<string>(StringComparer.Ordinal);
             foreach (var sourceRoot in nodeType.SourceRoots)
                 own.UnionWith(TypeNamesDeclaredIn(sourceRoot));
@@ -105,6 +113,9 @@ public class ShippedNodeTypeSourceResolutionTest
             + "and serves the cached error without retrying, so every page backed by it is broken "
             + "while CI stays green (#1786). Either give the NodeType a Source/ folder declaring "
             + "the type, or — if nothing is actually typed by it — stop shipping it as a NodeType. "
+            + "An `unresolvable sources entry` line means something else: the entry is a shape this "
+            + "guard cannot resolve on disk, so it is reported rather than skipped — either author "
+            + "it as `namespace:<name> …` or `@<node path>`, or teach ResolveSourceRoots the shape. "
             + "Offending files:\n"
             + string.Join("\n", offenders));
     }
@@ -149,6 +160,11 @@ public class ShippedNodeTypeSourceResolutionTest
 
         // A framework content type must resolve …
         Assert.Contains("MarkdownContent", framework);
+        // … and no shipped NodeType may carry a `sources` entry this cannot resolve. Stated as its
+        // own assertion because the failure MODE differs from a missing type: an unresolvable entry
+        // is the guard admitting it does not understand the input, and admitting it out loud is the
+        // whole point — the previous version answered that case by dropping the NodeType.
+        Assert.All(nodeTypes, n => Assert.Empty(n.UnresolvedSources));
         // … while a type that only ever lived in a sample's Source/ must NOT be mistaken for one,
         // or the invariant above would wave through exactly the #1786 shape.
         Assert.DoesNotContain("LineOfBusiness", framework);
@@ -158,7 +174,10 @@ public class ShippedNodeTypeSourceResolutionTest
     // ── the scans ────────────────────────────────────────────────────────────────────────
 
     private readonly record struct ShippedNodeType(
-        string RelativePath, IReadOnlyList<string> SourceRoots, IReadOnlyCollection<string> ContentTypes);
+        string RelativePath,
+        IReadOnlyList<string> SourceRoots,
+        IReadOnlyCollection<string> ContentTypes,
+        IReadOnlyList<string> UnresolvedSources);
 
     /// <summary>
     /// Type names the dynamic compile can see without any Source node — the framework assemblies,
@@ -241,32 +260,67 @@ public class ShippedNodeTypeSourceResolutionTest
 
     /// <summary>
     /// Resolves a NodeType's <c>sources</c> entries to filesystem roots, mirroring
-    /// <c>CodeQueryResolver</c>'s two authored shapes. Returns <c>null</c> — meaning "skip this
-    /// NodeType" — as soon as ONE entry is a query this cannot decide, because a partial
-    /// resolution would report missing types that a query it did not understand supplies.
+    /// <c>CodeQueryResolver.ParseName</c> and <c>CodeQueryResolver.Expand</c> for the two shapes
+    /// anyone authors.
+    ///
+    /// <para>🚨 An entry it cannot decide goes into <paramref name="unresolved"/> and is REPORTED,
+    /// never skipped. Returning "skip this NodeType" was the original defect; a narrower version of
+    /// it — skip only when one entry is odd — is the same defect with a smaller blast radius, and
+    /// it fails in the direction that hides things. Reporting means a `sources` shape this does not
+    /// understand fails the build asking to be taught, instead of quietly taking the whole NodeType
+    /// out of coverage.</para>
     /// </summary>
-    private static IReadOnlyList<string>? ResolveSourceRoots(
-        JsonElement sources, string nodeFolder, string? treeRoot)
+    private static IReadOnlyList<string> ResolveSourceRoots(
+        JsonElement sources, string nodeFolder, string? treeRoot,
+        string selfPath, List<string> unresolved)
     {
         var roots = new List<string>();
         foreach (var entry in sources.EnumerateArray())
         {
             if (entry.ValueKind != JsonValueKind.String)
-                return null;
-            var text = (entry.GetString() ?? string.Empty).Trim();
+            {
+                unresolved.Add($"a non-string entry ({entry.ValueKind}) — `sources` holds query strings");
+                continue;
+            }
+            var raw = (entry.GetString() ?? string.Empty).Trim();
 
-            // `name=` is display-only grouping in the GUI; the compiler strips it.
-            var eq = text.IndexOf('=');
-            if (eq > 0 && NameLabelPattern.IsMatch(text[..eq]))
-                text = text[(eq + 1)..].Trim();
+            // ── CodeQueryResolver.ParseName, exactly: TrimEnd the candidate name, and require a
+            // non-empty body — so `shared =@X` is a NAMED entry (the space belongs to the label,
+            // not the query) and a bare `shared=` is not one. Getting either wrong silently drops
+            // an entry the compiler would have honoured (Copilot review, #2278).
+            var text = raw;
+            var eq = text.IndexOf('=', StringComparison.Ordinal);
+            if (eq > 0)
+            {
+                var candidate = text[..eq].TrimEnd();
+                var rest = text[(eq + 1)..].Trim();
+                if (rest.Length > 0 && NameLabelPattern.IsMatch(candidate))
+                    text = rest;
+            }
+
+            // `$self` is the NodeType's own path, substituted before anything else.
+            text = text.Replace("$self", selfPath, StringComparison.Ordinal).Trim();
 
             // `@Node/Path` / `@@Node/Path` — a single Code node or its subtree, absolute in the
-            // node's own content tree.
+            // node's own content tree. `TrimStart('@').TrimStart()` mirrors Expand.
             if (text.StartsWith('@'))
             {
-                var target = text.TrimStart('@');
-                if (target.Contains(':') || treeRoot is null)
-                    return null;
+                var target = text.TrimStart('@').TrimStart();
+                if (target.Length == 0)
+                {
+                    unresolved.Add($"'{raw}' — an `@` with nothing after it selects no node");
+                    continue;
+                }
+                if (target.Contains(':', StringComparison.Ordinal))
+                {
+                    unresolved.Add($"'{raw}' — an `@` carrying a full query, which needs the mesh to answer");
+                    continue;
+                }
+                if (treeRoot is null)
+                {
+                    unresolved.Add($"'{raw}' — the node file declares no `path`, so its content tree is unknown");
+                    continue;
+                }
                 roots.Add(Path.Combine(treeRoot, target.Replace('/', Path.DirectorySeparatorChar)));
                 continue;
             }
@@ -279,9 +333,11 @@ public class ShippedNodeTypeSourceResolutionTest
                 continue;
             }
 
-            return null;
+            unresolved.Add(
+                $"'{raw}' — not a relative `namespace:<name> …` and not `@<node path>`, so it is a "
+                + $"mesh query only a running mesh can answer");
         }
-        return roots.Count > 0 ? roots : null;
+        return roots;
     }
 
     private static IEnumerable<ShippedNodeType> EnumerateShippedNodeTypes(string root)
@@ -333,14 +389,17 @@ public class ShippedNodeTypeSourceResolutionTest
                 // entry this cannot decide — so declaring `sources` narrows the coverage to the
                 // entry that earned it, instead of dropping the whole NodeType silently.
                 IReadOnlyList<string> roots;
+                List<string> unresolved = [];
                 if (content.TryGetProperty("sources", out var sources)
                     && sources.ValueKind == JsonValueKind.Array
                     && sources.GetArrayLength() > 0)
                 {
-                    var resolved = ResolveSourceRoots(sources, folder, TreeRootOf(file, doc.RootElement));
-                    if (resolved is null)
-                        continue;   // a genuine mesh query — nothing trustworthy to say
-                    roots = resolved;
+                    var selfPath = doc.RootElement.TryGetProperty("path", out var p)
+                                   && p.ValueKind == JsonValueKind.String
+                        ? p.GetString() ?? string.Empty
+                        : string.Empty;
+                    roots = ResolveSourceRoots(
+                        sources, folder, TreeRootOf(file, doc.RootElement), selfPath, unresolved);
                 }
                 else
                 {
@@ -350,7 +409,8 @@ public class ShippedNodeTypeSourceResolutionTest
                 yield return new ShippedNodeType(
                     Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/'),
                     roots,
-                    named);
+                    named,
+                    unresolved);
             }
         }
     }
