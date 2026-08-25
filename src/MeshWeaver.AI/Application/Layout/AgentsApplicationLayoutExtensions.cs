@@ -9,7 +9,7 @@ namespace MeshWeaver.AI.Application.Layout;
 /// Extension methods that register the AI layout areas (agent details, agent chat,
 /// and chat navigation) with a message hub.
 /// </summary>
-public static class AIExtensions
+public static class AgentsApplicationLayoutExtensions
 {
     /// <summary>
     /// Adds the AI layout areas to the message hub by configuring its layout.
