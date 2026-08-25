@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Mesh;
@@ -180,7 +181,60 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
         var manifest = Discover(WithAssets);
 
         manifest.Stylesheets.Should().ContainSingle()
-            .Which.Should().Be($"_content/{ModuleName}/{ModuleName}.styles.css");
+            .Which.Should().MatchRegex(
+                $"^_content/{Regex.Escape(ModuleName)}/{Regex.Escape(ModuleName)}\\.[0-9a-f]{{16}}\\.styles\\.css$",
+                "the ONE module asset whose URL the platform authors carries the body's "
+                + "content fingerprint, so it can be served immutable");
+    }
+
+    /// <summary>
+    /// 🚨 The fingerprint is over the BODY, so it is what makes <c>immutable</c> honest — and it is
+    /// the only reason a module upgrade costs a viewer nothing rather than one conditional GET per
+    /// linked bundle per page render (#1974's last open gap).
+    ///
+    /// <para>Two properties, and the pair is the point: a changed bundle gets a DIFFERENT URL (so
+    /// the upgrade is picked up instantly, with no stale-cache window), and an unchanged one gets
+    /// the SAME URL (so a republish that changed nothing does not invalidate every viewer's copy —
+    /// which is exactly what a generation- or timestamp-derived token would do).</para>
+    /// </summary>
+    [Fact]
+    public void StyleBundleFingerprint_TracksTheBody_NotTheLanding()
+    {
+        var first = Discover(WithAssets).Stylesheets.Single();
+
+        // Re-landing the SAME bytes (a fresh generation directory, new mtimes) — same URL.
+        File.WriteAllText(Path.Combine(ModuleWwwroot, $"{ModuleName}.styles.css"), ".x{}");
+        Discover(WithAssets).Stylesheets.Single().Should().Be(first,
+            "identical bytes must keep the URL, or every republish invalidates every cached copy");
+
+        // Different bytes — different URL.
+        File.WriteAllText(Path.Combine(ModuleWwwroot, $"{ModuleName}.styles.css"), ".x{color:red}");
+        Discover(WithAssets).Stylesheets.Single().Should().NotBe(first,
+            "an upgraded bundle must reach the browser without waiting for a cache to expire");
+    }
+
+    /// <summary>
+    /// The fingerprinted URL is answered <c>immutable</c>; the plain <c>&lt;Name&gt;.styles.css</c>
+    /// is answered too — same body, but <c>no-cache</c>, because what THAT URL means changes with
+    /// every module upgrade.
+    ///
+    /// <para>Serving the plain path is not politeness: leaving it to fall through to the mount
+    /// would serve the LANDED file, whose host-provided <c>@import</c>s name fingerprints only the
+    /// module's own build ever had — a silent 404 per page load, which is the defect
+    /// <c>StripHostProvidedImports</c> exists to remove.</para>
+    /// </summary>
+    [Fact]
+    public void BothStyleBundleUrls_AreServedFromMemory_WithOppositeCachingPromises()
+    {
+        var manifest = Discover(WithAssets);
+        var fingerprinted = "/" + manifest.Stylesheets.Single();
+        var plain = $"/_content/{ModuleName}/{ModuleName}.styles.css";
+
+        manifest.StylesheetBodies.Should().NotBeNull();
+        manifest.StylesheetBodies![fingerprinted].Should()
+            .Be(new ModuleStylesheetResponse(".x{}", true));
+        manifest.StylesheetBodies[plain].Should()
+            .Be(new ModuleStylesheetResponse(".x{}", false));
     }
 
 
@@ -384,6 +438,55 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
         response.Content.Headers.ContentEncoding.Should().BeEmpty(
             "there is no compressed representation to announce");
         (await response.Content.ReadAsStringAsync()).Should().Be(IdentityBody);
+
+        await app.StopAsync();
+    }
+
+    /// <summary>
+    /// 🚨 Every module URL STATES its caching policy over the wire, and the two states are
+    /// opposite — which is the whole of #1974's fingerprinting gap, asserted where a browser would
+    /// see it rather than on the manifest.
+    ///
+    /// <para><b>The fingerprinted bundle</b> is <c>immutable</c>: its URL encodes its bytes, so a
+    /// viewer who has it never asks again and an upgrade arrives instantly under a new URL.
+    /// <b>Everything else</b> is <c>no-cache</c> — a pack hard-codes
+    /// <c>_content/&lt;Name&gt;/&lt;file&gt;</c> in its own component source, so the host cannot
+    /// fingerprint it and must not claim it is immutable.</para>
+    ///
+    /// <para>The <c>no-cache</c> is not a downgrade from silence, it is the fix for it: with NO
+    /// <c>Cache-Control</c> (what plain <c>UseStaticFiles</c> emits) a browser applies HEURISTIC
+    /// freshness off <c>Last-Modified</c> and may serve an upgraded module's JS from cache without
+    /// revalidating at all. Stating <c>no-cache</c> makes the conditional GET happen, so the new
+    /// bytes cannot be missed.</para>
+    /// </summary>
+    [Fact]
+    public async Task ModuleAssets_StateTheirCachingPolicy_ImmutableOnlyWhereFingerprinted()
+    {
+        var manifest = Discover(WithAssets);
+        var fingerprinted = "/" + manifest.Stylesheets.Single();
+
+        await using var app = BuildHost();
+        await app.StartAsync();
+        var client = app.GetTestClient();
+
+        var bundle = await client.GetAsync(fingerprinted);
+        bundle.StatusCode.Should().Be(HttpStatusCode.OK,
+            "App.razor links exactly this URL off the manifest");
+        bundle.Headers.CacheControl!.ToString().Should().Contain("immutable",
+            "the URL carries the body's content hash, so the bytes behind it can never change");
+
+        var plain = await client.GetAsync($"/_content/{ModuleName}/{ModuleName}.styles.css");
+        plain.StatusCode.Should().Be(HttpStatusCode.OK,
+            "the plain path is answered from memory too — never from the landed file, whose "
+            + "host-provided @imports point at fingerprints only the module's build ever had");
+        plain.Headers.CacheControl!.NoCache.Should().BeTrue(
+            "what THIS URL means changes with every module upgrade");
+
+        var script = await client.GetAsync($"/_content/{ModuleName}/PackView.razor.js");
+        script.StatusCode.Should().Be(HttpStatusCode.OK);
+        script.Headers.CacheControl!.NoCache.Should().BeTrue(
+            "a pack authors this URL itself, so the host cannot fingerprint it — and saying "
+            + "nothing would let a heuristic cache serve the pre-upgrade file");
 
         await app.StopAsync();
     }

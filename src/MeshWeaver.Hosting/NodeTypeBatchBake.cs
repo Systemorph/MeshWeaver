@@ -71,22 +71,26 @@ internal static class NodeTypeBatchBake
     /// <see cref="MeshQueryRequest.Limit"/> and <see cref="ParsedQuery.Limit"/> null. "No limit"
     /// is NOT read the same way by every backend: the in-memory
     /// <c>StorageAdapterMeshQueryProvider</c> (<c>LoadCap</c>) and the per-schema
-    /// <c>PostgreSqlMeshQuery</c> treat it as UNBOUNDED, but the cross-schema fan-out that serves
-    /// an UNPINNED query on Postgres substitutes a hard default of 50
-    /// (<c>PostgreSqlCrossSchemaQueryProvider.QueryAcrossSchemasAsync</c>). <c>nodeType:Code</c>
+    /// <c>PostgreSqlMeshQuery</c> treat it as UNBOUNDED, but the cross-schema fan-out that served
+    /// an UNPINNED query on Postgres substituted a hard default of 50. <c>nodeType:Code</c>
     /// carries no <c>namespace:</c>/<c>path:</c>, so it is exactly that unpinned shape — and on
     /// memex-cloud 2026-08-11 the batch resolved 50 Code nodes out of thousands and compiled 169
     /// of 237 types against NOTHING. A test mesh has fewer than 50 Code nodes, so the cap never
     /// bound and every test stayed green.</para>
     ///
+    /// <para>🚨 That substitution is gone — it lived on a paging fan-out shape no runtime caller
+    /// could reach, deleted in #2048 — so an unpinned query stating no limit is unbounded on
+    /// Postgres too now. The explicit ceiling below stays anyway, for the reason in the next
+    /// paragraph, which never depended on it.</para>
+    ///
     /// <para><b>Why a number and not "unbounded".</b> Unbounded is not honoured uniformly (above),
-    /// and it cannot be reached by paging either: <c>public.search_across_schemas</c> takes a LIMIT
-    /// but no OFFSET, and its <c>ORDER BY n.last_modified DESC</c> is not a total order, so a
-    /// Skip/Limit loop over it would silently drop and duplicate rows across pages — worse than one
-    /// big page. So discovery states its ceiling EXPLICITLY (every backend honours an explicit
-    /// <c>limit:</c>) and then ASSERTS it was not reached. A mesh that genuinely exceeds this many
-    /// Code nodes gets a loud discovery failure and the activation-driven sweep — slower, correct,
-    /// and impossible to mistake for a content verdict.</para>
+    /// and it cannot be recovered by paging either: the cross-schema fan-out's
+    /// <c>ORDER BY n.last_modified DESC</c> is not a total order, so a Skip/Limit loop over it
+    /// would silently drop and duplicate rows across pages — worse than one big page. So discovery
+    /// states its ceiling EXPLICITLY (every backend honours an explicit <c>limit:</c>) and then
+    /// ASSERTS it was not reached. A mesh that genuinely exceeds this many Code nodes gets a loud
+    /// discovery failure and the activation-driven sweep — slower, correct, and impossible to
+    /// mistake for a content verdict.</para>
     /// </summary>
     internal const int SourceDiscoveryLimit = 25_000;
 
