@@ -114,11 +114,33 @@ public static class ModuleLoadReport
                      + $"store holds a NEWER, DIFFERENT copy at {shadowed.Path} "
                      + $"(mvid={Format(shadowed.Mvid)}, written={Format(shadowed.WrittenUtc)}). "
                      + "This portal is serving the older pack — a fix that merged, built and landed can "
-                     + "be invisible here. A baseline Modules:Assemblies entry resolves to the image "
-                     + "copy and dedupes the store entry away by name; delist it from "
-                     + "Modules:Assemblies to let the landed generation win.");
+                     + $"be invisible here. {Remediation(line.Source)}");
         }
     }
+
+    /// <summary>
+    /// What to actually DO about a shadowed pack — which differs by the lane the entry came from,
+    /// because the two lanes are shadowed for different reasons.
+    ///
+    /// <para>🚨 One remediation for both would be wrong for one of them, and a warning that names
+    /// the wrong fix is worse than one that names none: a store-installed module is not listed in
+    /// <c>Modules:Assemblies</c> at all, so telling an operator to delist it sends them looking for
+    /// a line that does not exist.</para>
+    /// </summary>
+    private static string Remediation(string source) =>
+        string.Equals(source, ModuleActivationSources.Store, StringComparison.Ordinal)
+            // The sidecar's Directory pointer names the generation to load. A newer generation on
+            // disk means landing wrote the bytes but this entry is still pointing at the previous
+            // one — the pointer write is the half that did not land.
+            ? "This entry is store-installed, so its activation.json Directory pointer — not "
+              + "Modules:Assemblies — decides which generation loads, and it still names the older "
+              + "one. Re-install the module so activation records the newer generation."
+            // The baseline lane: ResolveModulePath's landed probe looks in the fixed
+            // modules/<Name>/ folder, which generation landing never writes, so the image copy wins
+            // — and the sidecar entry that WOULD have named the generation was deduped away by name.
+            : "A baseline Modules:Assemblies entry resolves to the image copy and dedupes the store "
+              + "entry away by name; delist it from Modules:Assemblies to let the landed generation "
+              + "win.";
 
     /// <summary>
     /// The newest copy of <paramref name="name"/> under <c>{moduleRoot}/modules/</c> that is neither
