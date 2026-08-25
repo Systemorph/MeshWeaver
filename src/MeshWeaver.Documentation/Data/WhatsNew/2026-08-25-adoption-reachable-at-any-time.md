@@ -2,7 +2,7 @@
 Name: A type that was already built no longer gets rebuilt on first open
 Category: Fix
 Description: Opening a page whose type had never been touched on this instance used to start a fresh compile even when the deployment already shipped that assembly — the prebuilt build is now looked for at that moment too, not only at startup and install.
-Icon: ArrowDownload
+Icon: TopSpeed
 Order: -20260825
 ---
 
