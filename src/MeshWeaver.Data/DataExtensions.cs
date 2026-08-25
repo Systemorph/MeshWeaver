@@ -222,6 +222,7 @@ public static class DataExtensions
                 typeof(SubscribeAck),
                 typeof(UnsubscribeRequest),
                 typeof(StreamErrorEvent),
+                typeof(StreamEndedEvent),
                 typeof(GetDomainTypesRequest),
                 typeof(DomainTypesResponse),
                 typeof(TypeDescription),
@@ -3043,12 +3044,49 @@ public static class DataExtensions
     private const int AutocompleteAggregateTopN = 200;
 
     /// <summary>
+    /// How long the merged snapshot must stay unchanged before it counts as settled. Short enough
+    /// to feel instant in a composer, long enough for a second provider's first real snapshot to
+    /// land after the seeded empty one.
+    /// </summary>
+    private static readonly TimeSpan AutocompleteSettleWindow = TimeSpan.FromMilliseconds(150);
+
+    /// <summary>
+    /// The answer deadline. A provider that keeps emitting (a live catalog under load) never goes
+    /// quiet, so at this point the best snapshot so far is the answer.
+    /// </summary>
+    private static readonly TimeSpan AutocompleteAnswerDeadline = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// The floor: if the combined stream never produced ANYTHING — a provider that emits neither a
+    /// snapshot nor an error, against the contract in <see cref="AutocompleteSnapshots.Empty"/> —
+    /// an empty response still goes out. Deliberately later than
+    /// <see cref="AutocompleteAnswerDeadline"/> so a real snapshot always wins the race.
+    /// </summary>
+    private static readonly TimeSpan AutocompleteSilenceFloor = TimeSpan.FromMilliseconds(2500);
+
+    /// <summary>
     /// Handles the one-shot <see cref="AutocompleteRequest"/> by aggregating the SNAPSHOT streams of
     /// every registered <see cref="IAutocompleteProvider"/>. CombineLatest + merge (see
-    /// <see cref="AutocompleteSnapshots.Combine"/>); the SETTLED snapshot is taken (LastAsync) and a
-    /// single <see cref="AutocompleteResponse"/> posted. Progressive consumers use the
-    /// <see cref="AutocompleteReference"/> workspace stream instead. Each provider's <c>OnError</c> is
-    /// swallowed to an empty snapshot so one bad provider doesn't stall the CombineLatest.
+    /// <see cref="AutocompleteSnapshots.Combine"/>), then ONE <see cref="AutocompleteResponse"/> is
+    /// posted. Progressive consumers use the <see cref="AutocompleteReference"/> workspace stream
+    /// instead. Each provider's <c>OnError</c> is swallowed to an empty snapshot so one bad provider
+    /// doesn't stall the CombineLatest.
+    ///
+    /// <para>🚨 <b>"Settled" is a QUIET PERIOD, never completion.</b> This used to take
+    /// <c>LastAsync()</c>, which emits only when the combined stream COMPLETES — and a provider
+    /// backed by mesh data never completes: it is a live subscription, which is the whole point of
+    /// the snapshot model (<c>SkillAutocompleteProvider</c> composes ObserveSkillQueries →
+    /// ObserveSnapshot → Switch; every one of those is endless by design). So on any hub with such a
+    /// provider registered the handler ran, returned <c>Processed</c> in ~27 ms, and posted NOTHING
+    /// — the caller waited out its timeout with no error anywhere. Verified from the message trace:
+    /// <c>HUB_HANDLE_END … Result: Processed</c> followed by silence, and no response post from that
+    /// hub (issue #2276).</para>
+    ///
+    /// <para>The three ways this now always answers, first one wins: the snapshot goes quiet for
+    /// <see cref="AutocompleteSettleWindow"/>; the deadline arrives and we answer with the best
+    /// snapshot so far; or no provider ever produced anything, in which case an empty response goes
+    /// out rather than nothing at all. A one-shot request must produce exactly one answer — never
+    /// a hang, which is indistinguishable from "still thinking".</para>
     /// </summary>
     private static IMessageDelivery HandleAutocompleteRequest(
         IMessageHub hub,
@@ -3058,12 +3096,20 @@ public static class DataExtensions
         var query = request.Message.Query;
         var contextPath = request.Message.Context;
 
-        AutocompleteSnapshots.Combine(
+        // ONE upstream subscription shared by the three racers below — RefCount, so the providers'
+        // queries are not issued twice.
+        var combined = AutocompleteSnapshots.Combine(
                 providers.Select(p => p.GetItems(query, contextPath)
                     .Catch<IReadOnlyCollection<AutocompleteItem>, Exception>(
                         _ => Observable.Return(AutocompleteSnapshots.Empty))),
                 AutocompleteAggregateTopN)
-            .LastAsync()
+            .Publish()
+            .RefCount();
+
+        Observable.Amb(
+                combined.Throttle(AutocompleteSettleWindow).Take(1),
+                combined.Sample(AutocompleteAnswerDeadline).Take(1),
+                Observable.Timer(AutocompleteSilenceFloor).Select(_ => AutocompleteSnapshots.Empty))
             .Subscribe(
                 snapshot =>
                 {
