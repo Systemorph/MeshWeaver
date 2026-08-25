@@ -400,9 +400,26 @@ public static class ShippedPrebuiltBundles
                 }
                 if (manifest!.Assemblies is not { Count: > 0 } assemblies)
                 {
-                    logger?.LogWarning(
-                        "ShippedPrebuiltBundles: bundle {Bundle} carries no assemblies (or no "
-                        + "readable manifest) — nothing to adopt", Path.GetFileName(bundlePath));
+                    // 🚨 On a require-prebuilt mesh an empty bundle is an ERROR, loudly named: the
+                    // types it should have covered will not compile here (that is the flag's whole
+                    // point), so "nothing to adopt" is not a degraded-but-fine state — it is the
+                    // distribution lane shipping a hollow artifact, and the fix is a rebake of the
+                    // bundle for this identity, never anything on this mesh. The sweep itself
+                    // continues either way: one hollow bundle must not stop the good ones from
+                    // seeding (#2193 §A).
+                    if (PrebuiltAssemblySeeder.RequirePrebuilt(mesh.ServiceProvider))
+                        logger?.LogError(
+                            "ShippedPrebuiltBundles: bundle {Bundle} carries no assemblies (or no "
+                            + "readable manifest) and this mesh sets {Key} — the types it should "
+                            + "cover on framework {Identity} will NOT compile here. Fix: rebake and "
+                            + "republish the bundle for this framework identity (MeshWeaver#2193).",
+                            Path.GetFileName(bundlePath),
+                            PrebuiltAssemblySeeder.RequirePrebuiltConfigKey,
+                            PrebuiltAssemblySeeder.LiveFrameworkMvid);
+                    else
+                        logger?.LogWarning(
+                            "ShippedPrebuiltBundles: bundle {Bundle} carries no assemblies (or no "
+                            + "readable manifest) — nothing to adopt", Path.GetFileName(bundlePath));
                     return Observable.Return(default(SeedTally));
                 }
 
