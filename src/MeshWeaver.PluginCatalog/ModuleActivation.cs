@@ -91,8 +91,7 @@ public sealed record ModuleActivationList
 }
 
 /// <summary>
-/// Plain-file persistence of the module-activation list: <c>modules/activation.json</c>, beside
-/// the module folders it describes.
+/// Plain-file persistence of the module-activation list, beside the module folders it describes.
 ///
 /// <para><b>Why a sidecar file and not a mesh node:</b> the list is consumed at BOOT, in
 /// <c>ConfigureMemexMesh</c>, BEFORE the DI container exists — before any storage provider is
@@ -102,14 +101,55 @@ public sealed record ModuleActivationList
 /// the landing service writes both in the same operation onto the same volume, so a
 /// restore/copy of the deployment's file tree carries both or neither.</para>
 ///
+/// <para>🚨 <b>ONE FILE PER MODULE — never one shared mutable index (#2090, #2189).</b> The
+/// activation record used to be a single <c>modules/activation.json</c> that every writer
+/// read-modify-wrote. On the RWX <c>/data</c> volume every portal replica shares, that single
+/// mutable cell has two defects no retry can fix:</para>
+/// <list type="number">
+///   <item><b>Lost updates.</b> Replica A reads [Y], adds X, writes [Y,X]; replica B concurrently
+///     reads [Y], adds Z, writes [Y,Z] — and X is gone, silently. A busy republish (30+ modules
+///     after a release) is exactly this shape.</item>
+///   <item><b>Replace-in-place races every reader.</b> The write is a rename over the live file.
+///     On SMB the server refuses a rename whose target another client holds open
+///     (<c>SHARING_VIOLATION</c> → <c>Access to the path '…/activation.json' is denied</c>, the
+///     409s of #2090), and a reader whose <c>File.Exists</c> hit the CIFS attribute cache opens
+///     into the replace window and gets <c>ENOENT</c> — reported as a CORRUPT sidecar, which
+///     collapsed the whole list to empty and booted the pod with NO store modules at all
+///     (#2189).</item>
+/// </list>
+/// <para>So the contended cell is removed rather than guarded: each module owns
+/// <c>modules/activation.d/&lt;Name&gt;.json</c> and a writer touches ONLY its own file. Two
+/// landings of DIFFERENT modules now share no path at all — no contention, and lost updates are
+/// structurally impossible. Two landings of the SAME module are inherently ordered work whose
+/// last-writer-wins is the correct answer, and can no longer cost any OTHER module its entry.
+/// A per-entry file that cannot be read costs exactly that one entry, reported loudly, instead of
+/// the whole deployment's module set.</para>
+///
+/// <para><b>The legacy aggregate file is still READ, never written by the runtime lane.</b>
+/// <c>modules/activation.json</c> is what deployments already on disk carry, so
+/// <see cref="Read"/> unions it under the per-module files (a per-module file WINS by name — an
+/// uninstall recorded there must beat a stale enabled row in the aggregate). Nothing on the
+/// landing path writes it any more, which is what takes the contention to zero.</para>
+///
 /// <para>All IO here is plain and synchronous by design — boot-time (pre-DI, pre-IoPool) callers
 /// use it directly; runtime callers go through <see cref="ModuleLandingService"/>, which runs
 /// these on its bounded IO pool.</para>
 /// </summary>
 public static class ModuleActivationSidecar
 {
-    /// <summary>The sidecar's file name inside the <c>modules/</c> folder.</summary>
+    /// <summary>The legacy aggregate file's name inside the <c>modules/</c> folder. Read for
+    /// deployments that already carry one; never written by the landing lane.</summary>
     public const string FileName = "activation.json";
+
+    /// <summary>The per-module entry directory inside <c>modules/</c>. One file per module,
+    /// so concurrent writers of different modules never share a path.</summary>
+    public const string EntriesDirectoryName = "activation.d";
+
+    /// <summary>The restart-required marker's file name inside <see cref="EntriesDirectoryName"/>.
+    /// A marker rather than a field, for the same reason the entries are split: setting it is a
+    /// create and clearing it is a delete, and neither is a read-modify-write of a file some other
+    /// replica is reading.</summary>
+    public const string PendingRestartMarkerName = ".pending-restart";
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -117,48 +157,271 @@ public static class ModuleActivationSidecar
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>The sidecar's full path for a deployment rooted at
+    /// <summary>The legacy aggregate file's full path for a deployment rooted at
     /// <paramref name="baseDirectory"/> (normally <c>AppContext.BaseDirectory</c>).</summary>
     public static string SidecarPath(string baseDirectory) =>
         Path.Combine(baseDirectory, "modules", FileName);
 
+    /// <summary>The per-module entry directory for a deployment rooted at
+    /// <paramref name="baseDirectory"/>.</summary>
+    public static string EntriesDirectory(string baseDirectory) =>
+        Path.Combine(baseDirectory, "modules", EntriesDirectoryName);
+
+    /// <summary>The file one module's activation entry lives in — the ONLY path a landing of that
+    /// module writes.</summary>
+    public static string EntryPath(string baseDirectory, string moduleName) =>
+        Path.Combine(EntriesDirectory(baseDirectory), moduleName + ".json");
+
+    /// <summary>The restart-required marker's full path.</summary>
+    public static string PendingRestartMarkerPath(string baseDirectory) =>
+        Path.Combine(EntriesDirectory(baseDirectory), PendingRestartMarkerName);
+
     /// <summary>
-    /// Reads the activation list. A missing file is the normal fresh-deployment state and reads
-    /// as the empty list; a CORRUPT file reads as the empty list too — the deployment must boot
-    /// (baseline modules unaffected) — but reports through <paramref name="onCorrupt"/> so the
-    /// skip is loud, never silent.
+    /// Reads the activation list: the legacy aggregate file unioned with every per-module entry
+    /// file, the per-module file winning by name.
+    ///
+    /// <para>An ABSENT file — either kind — is the normal fresh-deployment state and contributes
+    /// nothing, silently. An UNREADABLE one is reported through <paramref name="onCorrupt"/> and
+    /// contributes nothing, so the skip is loud rather than silent — but 🚨 it no longer costs the
+    /// OTHER entries: one bad file used to collapse the entire answer to the empty list, which is
+    /// how a transient SMB read fault booted a pod with none of its store modules (#2189). The
+    /// caller still gets everything that WAS readable, plus one report per file that was not.</para>
     /// </summary>
     public static ModuleActivationList Read(string baseDirectory, Action<string>? onCorrupt = null)
     {
-        var path = SidecarPath(baseDirectory);
-        if (!File.Exists(path))
-            return new ModuleActivationList();
+        var legacy = ReadLegacy(baseDirectory, onCorrupt);
+        var byName = new Dictionary<string, ModuleActivationEntry>(StringComparer.OrdinalIgnoreCase);
+        var order = new List<string>();
+
+        void Accept(ModuleActivationEntry entry)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Name))
+                return;
+            if (!byName.ContainsKey(entry.Name))
+                order.Add(entry.Name);
+            byName[entry.Name] = entry;
+        }
+
+        foreach (var entry in legacy.Entries)
+            Accept(entry);
+        // Per-module files last: a record written by the landing lane WINS over whatever the
+        // frozen aggregate still says about that name (an uninstall must beat a stale enabled row).
+        // Sorted so the union is deterministic regardless of directory-enumeration order.
+        foreach (var entry in ReadEntryFiles(baseDirectory, onCorrupt))
+            Accept(entry);
+
+        return new ModuleActivationList
+        {
+            Entries = [.. order.Select(name => byName[name])],
+            // The marker is authoritative; the legacy flag is honoured once, for a deployment
+            // upgrading with the flag still set. Boot clears both.
+            PendingRestart = File.Exists(PendingRestartMarkerPath(baseDirectory)) || legacy.PendingRestart,
+        };
+    }
+
+    /// <summary>
+    /// Records ONE module's activation entry — the only write the landing lane performs, and the
+    /// reason concurrent landings of different modules cannot contend or lose each other's work.
+    /// Atomic: serialized to a temp file in the same directory, then renamed into place.
+    /// </summary>
+    public static void WriteEntry(string baseDirectory, ModuleActivationEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        // 🚨 The name BECOMES a path here, so it is validated here — not only in the landing
+        // service that happens to be today's caller. A record file is derived from the module
+        // name, and a name carrying a separator or '..' would write wherever it points.
+        if (string.IsNullOrWhiteSpace(entry.Name)
+            || entry.Name is "." or ".."
+            || entry.Name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || entry.Name.Contains('/') || entry.Name.Contains('\\'))
+            throw new ArgumentException(
+                $"'{entry.Name}' is not a valid module name — an activation record is a file named "
+                + "after its module.", nameof(entry));
+        WriteAtomic(EntryPath(baseDirectory, entry.Name), JsonSerializer.Serialize(entry, Json));
+    }
+
+    /// <summary>
+    /// Raises or clears the deployment's restart-required marker. A create and a delete — never a
+    /// read-modify-write — so it adds no contention of its own. Clearing a marker that is already
+    /// gone is a no-op, which is what makes several replicas booting at once benign.
+    /// </summary>
+    public static void SetPendingRestart(string baseDirectory, bool pending)
+    {
+        var marker = PendingRestartMarkerPath(baseDirectory);
+        if (pending)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+            // Create-if-absent. Never a rewrite: a second replica raising the same marker must not
+            // rename over a file the first is holding.
+            if (!File.Exists(marker))
+                File.Open(marker, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite).Dispose();
+            return;
+        }
+
         try
         {
-            return JsonSerializer.Deserialize<ModuleActivationList>(File.ReadAllText(path), Json)
+            File.Delete(marker);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Another replica is clearing the same marker, or the volume is momentarily read-only.
+            // The flag is a hint; activation itself never depends on it.
+        }
+
+        // One-time carry-over: a deployment upgrading with the flag still set in the frozen
+        // aggregate would otherwise read PendingRestart forever. Rewritten only while it is
+        // actually set, so this converges after the first boot and never becomes a hot write.
+        var legacyPath = SidecarPath(baseDirectory);
+        if (!File.Exists(legacyPath))
+            return;
+        var legacy = ReadLegacy(baseDirectory, null);
+        if (!legacy.PendingRestart)
+            return;
+        try
+        {
+            WriteAtomic(legacyPath, JsonSerializer.Serialize(legacy with { PendingRestart = false }, Json));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Best effort, exactly as before: on a read-only /app the flag simply stays set.
+        }
+    }
+
+    /// <summary>
+    /// Writes the WHOLE list — the administrative/bulk form, used to seed or rewrite a
+    /// deployment's activation state wholesale (and by tests to arrange one).
+    ///
+    /// <para>🚨 Not the landing lane's write: this rewrites every module's record, which is
+    /// precisely the read-modify-write of shared state that #2090 was. Runtime callers use
+    /// <see cref="WriteEntry"/>. Bulk means bulk — the per-module directory is made to match the
+    /// list exactly, so an entry dropped from the list is dropped from disk.</para>
+    /// </summary>
+    public static void Write(string baseDirectory, ModuleActivationList list)
+    {
+        ArgumentNullException.ThrowIfNull(list);
+        var entries = EntriesDirectory(baseDirectory);
+        Directory.CreateDirectory(entries);
+
+        var keep = list.Entries
+            .Where(e => !string.IsNullOrWhiteSpace(e.Name))
+            .ToDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var file in Directory.EnumerateFiles(entries, "*.json").ToArray())
+            if (!keep.ContainsKey(Path.GetFileNameWithoutExtension(file)))
+                File.Delete(file);
+
+        foreach (var entry in keep.Values)
+            WriteEntry(baseDirectory, entry);
+
+        // The aggregate is superseded by what was just written per module. Leaving a stale copy
+        // behind would resurrect entries this call removed.
+        var legacyPath = SidecarPath(baseDirectory);
+        if (File.Exists(legacyPath))
+            File.Delete(legacyPath);
+
+        SetPendingRestart(baseDirectory, list.PendingRestart);
+    }
+
+    private static ModuleActivationList ReadLegacy(string baseDirectory, Action<string>? onCorrupt)
+    {
+        var path = SidecarPath(baseDirectory);
+        try
+        {
+            // 🚨 The READ is inside the try, not before it. Only genuine ABSENCE is silent
+            // (TryReadAllText); every other failure — an SMB sharing violation or lease conflict
+            // arriving as IOException/UnauthorizedAccessException just as much as a parse error —
+            // must be REPORTED and skipped, never allowed to escape. Boot calls this un-wrapped, so
+            // an escaping exception would take the portal down over a transient volume blip: worse
+            // than the silence this whole change exists to remove.
+            var text = TryReadAllText(path);
+            if (text is null)
+                return new ModuleActivationList();
+            return JsonSerializer.Deserialize<ModuleActivationList>(text, Json)
                    ?? new ModuleActivationList();
         }
         catch (Exception ex)
         {
             onCorrupt?.Invoke(
                 $"Module activation sidecar '{path}' could not be read ({ex.GetType().Name}: "
-                + $"{ex.Message}) — booting with the appsettings baseline only. Store-installed "
-                + "modules will NOT load until the sidecar is repaired or the modules are "
+                + $"{ex.Message}) — the entries it holds are skipped. Store-installed modules "
+                + "recorded there will NOT load until the file is repaired or the modules are "
                 + "re-installed.");
             return new ModuleActivationList();
         }
     }
 
-    /// <summary>
-    /// Writes the activation list atomically: serialize to a temp file in the same directory,
-    /// then rename over the target — a crash mid-write can never leave a half-written sidecar.
-    /// </summary>
-    public static void Write(string baseDirectory, ModuleActivationList list)
+    private static IEnumerable<ModuleActivationEntry> ReadEntryFiles(
+        string baseDirectory, Action<string>? onCorrupt)
     {
-        var path = SidecarPath(baseDirectory);
+        var directory = EntriesDirectory(baseDirectory);
+        string[] files;
+        try
+        {
+            files = Directory.Exists(directory)
+                ? [.. Directory.EnumerateFiles(directory, "*.json").OrderBy(f => f, StringComparer.Ordinal)]
+                : [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            onCorrupt?.Invoke(
+                $"Module activation entries under '{directory}' could not be listed "
+                + $"({ex.GetType().Name}: {ex.Message}) — store-installed modules will NOT load "
+                + "until the volume is readable again.");
+            yield break;
+        }
+
+        foreach (var file in files)
+        {
+            ModuleActivationEntry? entry;
+            try
+            {
+                var text = TryReadAllText(file);
+                if (text is null)
+                    // Vanished between the listing and the read — another replica re-landing that
+                    // very module. Its next read sees the new file; nothing else is affected, which
+                    // is the whole point of one file per module.
+                    continue;
+                entry = JsonSerializer.Deserialize<ModuleActivationEntry>(text, Json);
+            }
+            // 🚨 EVERY failure, not only a parse error. An SMB sharing violation or lease conflict
+            // arrives as IOException/UnauthorizedAccessException, and letting it escape would fail
+            // the WHOLE activation read — restoring the exact all-or-nothing behaviour this change
+            // removes, and crashing boot, which calls Read un-wrapped. It costs the one module it
+            // names, loudly. Deliberately NOT retried: the contended window is now a single
+            // module's own record being replaced, and a retry loop here would be a band-aid over a
+            // condition the next boot resolves on its own.
+            catch (Exception ex)
+            {
+                onCorrupt?.Invoke(
+                    $"Module activation entry '{file}' could not be read ({ex.GetType().Name}: "
+                    + $"{ex.Message}) — that ONE module is skipped; re-install it to repair the "
+                    + "entry. Every other activation entry is unaffected.");
+                continue;
+            }
+            if (entry is not null && !string.IsNullOrWhiteSpace(entry.Name))
+                yield return entry;
+        }
+    }
+
+    /// <summary>Reads a file, answering null for "not there" — including the ENOENT a concurrent
+    /// rename produces on SMB, which is genuinely absence and never corruption.</summary>
+    private static string? TryReadAllText(string path)
+    {
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    private static void WriteAtomic(string path, string content)
+    {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(list, Json));
+        File.WriteAllText(temp, content);
         File.Move(temp, path, overwrite: true);
     }
 }
