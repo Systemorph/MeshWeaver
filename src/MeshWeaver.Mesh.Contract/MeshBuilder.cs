@@ -136,19 +136,6 @@ public record MeshBuilder
                 services.AddSingleton(new InstalledModuleAssembly(assembly));
             return services;
         });
-        // Every incompatible module is visible to any host that wants to surface it, alongside the
-        // stderr line already written and the Modules:Required verdict computed from it. A skip
-        // nobody can see is the shape that forges correct-looking bugs.
-        if (incompatible.Count > 0)
-        {
-            ConfigureServices(services =>
-            {
-                foreach (var module in incompatible)
-                    services.AddSingleton(module);
-                return services;
-            });
-        }
-
         MeshNodes.AddRange(pending.SelectMany(p => InstallServices(p.Nodes)));
 
         // Register address types from attributes
@@ -188,8 +175,24 @@ public record MeshBuilder
             }
             catch (Exception exception)
             {
-                ReportIncompatible(module.Assembly.Location, exception);
+                incompatible.Add(ReportIncompatible(module.Assembly.Location, exception));
             }
+        }
+
+        // 🚨 Registered AFTER the fold, not before it. A module can fail in either half — while its
+        // contributions are materialised, or while its BuilderConfigurations run — and registering
+        // early captured only the first. The second would have been written to stderr and then
+        // dropped, so /health and RequiredModuleStatus would report a replica missing that module's
+        // features as healthy: the exact invisible-skip this record exists to prevent, reintroduced
+        // one code path over.
+        if (incompatible.Count > 0)
+        {
+            result.ConfigureServices(services =>
+            {
+                foreach (var module in incompatible)
+                    services.AddSingleton(module);
+                return services;
+            });
         }
         return result;
     }
