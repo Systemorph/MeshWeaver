@@ -1570,7 +1570,11 @@ internal static class NodeTypeEnrichmentHelpers
                         instanceHub.RegisterForDisposal(ArmStaleAssemblySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
                             instanceHub, nodeType, boundAssemblyPath, logger,
-                            guards: NodeTypeCompilationHelpers.GuardsOf(meshHub)));
+                            guards: NodeTypeCompilationHelpers.GuardsOf(meshHub),
+                            // Deployment policy, resolved off the MESH hub's configuration: a
+                            // production portal opts into convergence (auto-recycle), everything
+                            // else keeps the offer. See AutoRecycleConfigKey.
+                            autoRecycle: AutoRecycleOnStaleBuild(meshHub)));
                     }
                     catch (Exception ex)
                     {
@@ -1584,10 +1588,12 @@ internal static class NodeTypeEnrichmentHelpers
 
     /// <summary>
     /// Watcher core of <see cref="WithStaleAssemblySelfHeal"/>, split out so the firing contract is
-    /// unit-testable without building a hub (<c>StaleAssemblySelfHealWatcherTest</c>). Posts exactly
-    /// ONE self-<see cref="DisposeRequest"/> (<c>Take(1)</c>) when the NodeType publishes a USABLE
-    /// build whose <see cref="NodeTypeDefinition.LatestAssemblyPath"/> differs from
-    /// <paramref name="boundAssemblyPath"/>.
+    /// unit-testable without building a hub (<c>StaleAssemblySelfHealWatcherTest</c>). Fires exactly
+    /// ONCE (<c>Take(1)</c>) when the NodeType publishes a USABLE build whose
+    /// <see cref="NodeTypeDefinition.LatestAssemblyPath"/> differs from
+    /// <paramref name="boundAssemblyPath"/> — publishing the <see cref="StaleBuildOffer"/> banner
+    /// by default, or posting the self-<see cref="DisposeRequest"/> when the deployment opted into
+    /// convergence (<paramref name="autoRecycle"/>, from <see cref="AutoRecycleConfigKey"/>).
     ///
     /// <para>Unsettled states, non-<see cref="NodeTypeDefinition"/> content, and republications of
     /// the SAME assembly are ignored — the last of those is what keeps an unrelated node write from
@@ -1601,7 +1607,8 @@ internal static class NodeTypeEnrichmentHelpers
         string boundAssemblyPath,
         ILogger? logger,
         IScheduler? scheduler = null,
-        NodeTypeCompilationHelpers.BuildGuards? guards = null)
+        NodeTypeCompilationHelpers.BuildGuards? guards = null,
+        bool autoRecycle = false)
         // 🚨 ContentAs, never `is NodeTypeDefinition` (#1669): the type node reaches this stream
         // in UN-MATERIALIZED JSON shape whenever the publication just crossed a sync stream — the
         // normal shape for exactly the emission this watcher exists to catch. A CLR type test is
@@ -1628,17 +1635,39 @@ internal static class NodeTypeEnrichmentHelpers
                 x =>
                 {
                     var published = x.Def?.LatestAssemblyPath;
+                    // 🚨 The DEPLOYMENT decides between the two terminal behaviours
+                    // (AutoRecycleConfigKey):
+                    //
+                    // CONVERGE (production portals): post the self-DisposeRequest, so the update
+                    // that published this build ENDS with every instance serving it. This is the
+                    // pre-banner behaviour, re-admitted only behind the guards that did not exist
+                    // when it was removed — the assembly-path gate, the settle-window throttle,
+                    // and Take(1) — so a publish burst costs each instance at most ONE recycle,
+                    // and an unrelated node write costs nothing. Without it, prod after a package
+                    // update is a mixture of old and new assemblies for as long as viewers do not
+                    // click (the 2026-08-25 Store outage).
+                    if (autoRecycle)
+                    {
+                        logger?.LogInformation(
+                            "Stale-build convergence: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — auto-recycling instance '{InstancePath}' ({ConfigKey}=true)",
+                            nodeType, published, boundAssemblyPath, instanceHub.Address,
+                            AutoRecycleConfigKey);
+                        instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                        return;
+                    }
+
                     logger?.LogInformation(
                         "Stale-build offer: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — offering instance '{InstancePath}' a recycle",
                         nodeType, published, boundAssemblyPath, instanceHub.Address);
-                    // 🚨 OFFER, never an automatic restart. This used to post a self-DisposeRequest
-                    // here, so every live instance of the type recycled on every publish —
-                    // publication frequency became restart frequency, and a user mid-edit lost
-                    // their hub without asking. Publishing the offer instead puts a banner above
-                    // the instance's (still working) content and lets the user choose. Stated
+                    // 🚨 OFFER as the DEFAULT. The unconditional self-DisposeRequest that once
+                    // lived here recycled every live instance on every publish — publication
+                    // frequency became restart frequency, and a user mid-edit lost their hub
+                    // without asking. Publishing the offer instead puts a banner above the
+                    // instance's (still working) content and lets the user choose. Stated
                     // consequence: an instance whose viewer never clicks keeps serving the OLDER
                     // assembly indefinitely — safe, since that build worked, but "published" no
-                    // longer implies "every instance is running it".
+                    // longer implies "every instance is running it"; a deployment whose invariant
+                    // is convergence opts into the branch above instead.
                     instanceHub.Get<BehaviorSubject<StaleBuildOffer?>>()
                         ?.OnNext(new StaleBuildOffer(nodeType, published, boundAssemblyPath));
                 },
@@ -2008,6 +2037,40 @@ internal static class NodeTypeEnrichmentHelpers
     /// case this whole watcher exists for is unaffected in substance.</para>
     /// </summary>
     private static readonly TimeSpan AssemblySettleWindow = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Deployment opt-in that turns the stale-build OFFER into an automatic self-recycle: when a
+    /// NodeType publishes a new usable build, instances converge onto it by themselves instead of
+    /// waiting for a viewer to click the banner (<see cref="StaleBuildBanner"/>).
+    ///
+    /// <para>🚨 <b>Default OFF — the banner stays the default.</b> The auto-recycle this key
+    /// re-enables was removed once because it fired per PUBLICATION: every instance of a type
+    /// restarted on every publish, and a user mid-edit lost their hub. The guards that exist now
+    /// make the opted-in behaviour a different animal: the gate is the published ASSEMBLY PATH
+    /// (an unrelated node write cannot fire it), the <see cref="AssemblySettleWindow"/> collapses
+    /// an install's publish burst into one recycle, and <c>Take(1)</c> bounds the cost at one
+    /// recycle per bound assembly. A PRODUCTION portal sets this to <c>true</c> because its
+    /// invariant is "after an update, everything serves the new build" (the 2026-08-25 Store
+    /// outage: green recompiles, every instance banner-stale, the store page wedged until a manual
+    /// recycle); an authoring/dev mesh keeps the default and decides per page.</para>
+    /// </summary>
+    public const string AutoRecycleConfigKey = "Modules:AutoRecycleOnStaleBuild";
+
+    /// <summary>Reads <see cref="AutoRecycleConfigKey"/> off the hub's configuration — absent or
+    /// unparseable means OFF, the banner default. Never throws.</summary>
+    internal static bool AutoRecycleOnStaleBuild(IMessageHub hub)
+    {
+        try
+        {
+            var value = hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Configuration.IConfiguration>()?[AutoRecycleConfigKey];
+            return bool.TryParse(value, out var parsed) && parsed;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     /// <param name="activityPath">
     /// The NodeType's <see cref="NodeTypeDefinition.LastCompilationActivityPath"/>, when

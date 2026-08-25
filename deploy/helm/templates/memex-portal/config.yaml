@@ -319,6 +319,15 @@ data:
   {{- if hasKey .Values.config.memex_portal "Modules__Required__4" }}
   Modules__Required__4: "{{ .Values.config.memex_portal.Modules__Required__4 }}"
   {{- end }}
+  # Convergence policy (MeshWeaver#2192): when a NodeType publishes a usable build, instances
+  # self-recycle onto it instead of waiting behind the "Recycle" banner. Off = the image default
+  # (banner). A self-updating portal that leaves this off chooses unbounded in-memory assembly
+  # generations on its type-hosting silos — the 2026-08-25 degradation (MeshWeaver#2194):
+  # superseded AssemblyLoadContexts stay rooted by serving instances, 17-20 GB + GC-bound while
+  # still Ready. Emitted only when a deployment sets it, like the Required list above.
+  {{- if hasKey .Values.config.memex_portal "Modules__AutoRecycleOnStaleBuild" }}
+  Modules__AutoRecycleOnStaleBuild: "{{ .Values.config.memex_portal.Modules__AutoRecycleOnStaleBuild }}"
+  {{- end }}
   # ---- OpenAI-compatible provider (self-hosted / local: Ollama, vLLM, LM Studio, …) ----
   # Generic OpenAI-wire endpoint. Set Endpoint + Models (+ ApiKey in secrets) to seed a
   # provider + LanguageModel nodes pointing at any OpenAI-compatible gateway. Empty = inert.

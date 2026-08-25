@@ -308,4 +308,91 @@ public class StaleAssemblySelfHealWatcherTest
 
         AssertNoOffer(offers);
     }
+
+    // ───────────────────────────── the convergence opt-in (Modules:AutoRecycleOnStaleBuild)
+
+    /// <summary>
+    /// The instance hub with its Post spec pinned, for the auto-recycle branch.
+    /// <c>Configure()</c> records the spec WITHOUT NSubstitute's auto-value provider —
+    /// <c>IMessageDelivery</c> carries an internal member, so auto-substituting Post's return
+    /// type throws at proxy generation (the OverlaySelfHealWatcherTest idiom).
+    /// </summary>
+    private static IMessageHub BuildAutoRecycleHub(
+        out List<StaleBuildOffer?> offers, out Func<Func<PostOptions, PostOptions>?> capturedOptions)
+    {
+        var hub = BuildInstanceHub(out offers);
+        Func<PostOptions, PostOptions>? captured = null;
+        hub.Configure()
+            .Post(Arg.Any<DisposeRequest>(),
+                Arg.Do<Func<PostOptions, PostOptions>>(f => captured = f))
+            .Returns((IMessageDelivery<DisposeRequest>?)null);
+        capturedOptions = () => captured;
+        return hub;
+    }
+
+    /// <summary>
+    /// 🚨 The convergence contract (memex 2026-08-25: a package update recompiled the Store green
+    /// while every serving instance stayed on the previous assembly behind the banner, and the
+    /// store page stayed wedged until a manual recycle). A deployment that opted in
+    /// (<c>Modules:AutoRecycleOnStaleBuild</c>) must converge WITHOUT a viewer's click: exactly one
+    /// self-<see cref="DisposeRequest"/>, addressed to the instance itself, no banner offer —
+    /// and the same guards as the offer path (settle window, Take(1)) still bound it.
+    /// </summary>
+    [Fact]
+    public void AutoRecycle_PostsExactlyOneSelfDispose_AndNoOffer()
+    {
+        var hub = BuildAutoRecycleHub(out var offers, out var capturedOptions);
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler,
+            autoRecycle: true);
+
+        typeStream.OnNext(TypeNode(version: 12, assemblyPath: "TestData_StaleAssemblyType/v12-abc-222222222222.dll"));
+        // Inside the settle window nothing may be disposed — an install's publish burst must not
+        // put DisposeRequests through hubs mid-read (the #1343 regression, same guard as the offer).
+        hub.DidNotReceive().Post(Arg.Any<DisposeRequest>(), Arg.Any<Func<PostOptions, PostOptions>>());
+
+        Settle(scheduler);
+        hub.Received(1).Post(Arg.Any<DisposeRequest>(), Arg.Any<Func<PostOptions, PostOptions>>());
+        AssertNoOffer(offers);
+
+        // The dispose must target the instance ITSELF — the RecycleLayoutArea idiom. Derive
+        // expected from the SAME base options so the auto-generated MessageId doesn't perturb
+        // record equality (the OverlaySelfHealWatcherTest idiom).
+        var options = capturedOptions();
+        options.Should().NotBeNull("the post must carry explicit options targeting the instance");
+        var baseOptions = new PostOptions(new Address("TestData/sender"));
+        options!(baseOptions).Should().Be(baseOptions.WithTarget(new Address(InstancePath)),
+            "the convergence recycle must target the instance hub's own address");
+
+        // Take(1): a later build does not recycle again off this binding — the recycled instance
+        // re-enriches against the new path, which arms the NEXT watcher with the new baseline.
+        typeStream.OnNext(TypeNode(version: 13, assemblyPath: "TestData_StaleAssemblyType/v13-abc-333333333333.dll"));
+        Settle(scheduler);
+        hub.Received(1).Post(Arg.Any<DisposeRequest>(), Arg.Any<Func<PostOptions, PostOptions>>());
+    }
+
+    /// <summary>
+    /// The anti-bounce half holds under convergence too: republishing the SAME assembly — the
+    /// release-request stamp / release-notes / pin-edit writes — must not recycle anything, or the
+    /// opt-in reintroduces exactly the restart storm that got the unguarded auto-recycle removed.
+    /// </summary>
+    [Fact]
+    public void AutoRecycle_RepublishingTheSameAssembly_DoesNotRecycle()
+    {
+        var hub = BuildAutoRecycleHub(out var offers, out _);
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler,
+            autoRecycle: true);
+
+        for (var version = 11; version <= 14; version++)
+            typeStream.OnNext(TypeNode(version, assemblyPath: BoundAssembly));
+        Settle(scheduler);
+
+        hub.DidNotReceive().Post(Arg.Any<DisposeRequest>(), Arg.Any<Func<PostOptions, PostOptions>>());
+        AssertNoOffer(offers);
+    }
 }
