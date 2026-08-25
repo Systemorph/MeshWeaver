@@ -113,6 +113,14 @@ public sealed class SkillFileParser : IFileFormatParser
     /// <see cref="SkillDefinition"/> — the only evidence that an unresolved blob really is a skill
     /// definition rather than some other shape that would deserialize into an empty one.
     /// </summary>
+    /// <remarks>
+    /// 🚨 Both arms read the discriminator with a TRY, never a coercion. <c>CanSerialize</c> is
+    /// called by <see cref="FileFormatParserRegistry.GetSerializerFor"/> with no catch around it, so
+    /// a throw here would take down a sync-back rather than merely declining the file — and
+    /// <c>JsonNode.GetValue&lt;string&gt;()</c> throws whenever <c>$type</c> is present but is not a
+    /// JSON string (Copilot review, #2284). Content this parser cannot interpret must always DECLINE,
+    /// which is the same rule as the summary above: never clobber what you did not understand.
+    /// </remarks>
     private static bool DeclaresSkillDefinition(object? content) => content switch
     {
         JsonElement { ValueKind: JsonValueKind.Object } je =>
@@ -121,7 +129,9 @@ public sealed class SkillFileParser : IFileFormatParser
             && IsSkillDefinitionDiscriminator(t.GetString()),
         System.Text.Json.Nodes.JsonObject jo =>
             jo.TryGetPropertyValue("$type", out var t)
-            && IsSkillDefinitionDiscriminator(t?.GetValue<string>()),
+            && t is System.Text.Json.Nodes.JsonValue v
+            && v.TryGetValue<string>(out var discriminator)
+            && IsSkillDefinitionDiscriminator(discriminator),
         _ => false,
     };
 

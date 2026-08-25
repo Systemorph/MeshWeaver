@@ -203,4 +203,39 @@ public class SkillFileParserTest
         new SkillFileParser().CanSerialize(stale).Should().BeFalse();
         WithSkillParser().GetSerializerFor(stale).Should().BeOfType<MarkdownFileParser>();
     }
+
+    /// <summary>
+    /// Content this parser cannot interpret must DECLINE, never throw.
+    /// <see cref="FileFormatParserRegistry.GetSerializerFor"/> calls <c>CanSerialize</c> with no
+    /// catch around it, so a throw would take down a sync-back for the whole node rather than
+    /// handing the file to the next parser — a strictly worse outcome than the one this parser
+    /// exists to prevent. The shapes below are the ones that reach it from a real mesh: a
+    /// discriminator that is not a string at all (Copilot review, #2284), and no discriminator.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"$type": 42, "instructions": "x"}""")]
+    [InlineData("""{"$type": {"nested": true}}""")]
+    [InlineData("""{"$type": null}""")]
+    [InlineData("""{"instructions": "no discriminator at all"}""")]
+    public void AnUninterpretableContentPayload_Declines_ItNeverThrows(string json)
+    {
+        foreach (object content in new object[]
+                 {
+                     System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json),
+                     System.Text.Json.Nodes.JsonNode.Parse(json)!,
+                 })
+        {
+            var node = new MeshNode("probe", "Hosting/Skill")
+            {
+                NodeType = SkillNodeType.NodeType,
+                Content = content,
+            };
+
+            Action probe = () => new SkillFileParser().CanSerialize(node);
+
+            probe.Should().NotThrow(
+                $"a {content.GetType().Name} whose $type cannot be read as a string must decline");
+            new SkillFileParser().CanSerialize(node).Should().BeFalse();
+        }
+    }
 }
