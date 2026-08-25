@@ -168,6 +168,28 @@ jobs:
   #
   # Cost when it misses: one ~15 s job (checkout + one ls-remote) in front of a
   # ~22 min suite. Cost when it hits: the whole suite, skipped.
+  record-signatures:
+    name: "Public record signatures (binary compatibility)"
+    timeout-minutes: 8
+    runs-on: ubuntu-latest
+    # 🚨 Runs on PRs only, and deliberately does NOT depend on precheck: this is a DIFF gate, so
+    # a tree that is already green elsewhere still has to answer "is this change binary-breaking
+    # for a consumer compiled earlier?" — a question no repo-local suite can answer.
+    if: github.event_name == 'pull_request'
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        # The gate compares HEAD against the merge base, so the base commit must be present.
+        fetch-depth: 0
+    - name: "Prove the gate is not vacuous"
+      run: python3 scripts/check-record-signatures.py --self-test
+    - name: "Refuse a binary-breaking primary-constructor change"
+      run: |
+        set -euo pipefail
+        base="origin/${{ github.base_ref }}"
+        git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        python3 scripts/check-record-signatures.py --base "$base"
+
   precheck:
     name: "Check for an already-green tree"
     timeout-minutes: 5
