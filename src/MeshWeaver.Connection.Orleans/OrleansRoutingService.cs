@@ -336,15 +336,37 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             {
                 if (result.State == MessageDeliveryState.Failed)
                 {
-                    // Grain returned a non-transient failure (e.g., node doesn't exist).
                     // Preserve the RoutingGrain's message so the GUI's
                     // IsExpectedUserActionFailure classifier can match it.
                     var failureMessage = result.Properties.TryGetValue("Error", out var errObj) && errObj is string errStr
                         ? errStr
                         : $"Delivery failed to {address}";
-                    logger.LogWarning("Orleans: delivery FAILED for {MessageType} to {Address}: {FailureMessage}",
-                        msgType, address, failureMessage);
-                    SendDeliveryFailure(delivery, failureMessage);
+                    // 🚨 NOT every Failed result is terminal, and assuming so cost this project the
+                    // shard-0 Orleans flake cluster. This comment used to read "Grain returned a
+                    // non-transient failure (e.g. node doesn't exist)" and SendDeliveryFailure
+                    // defaults to the TERMINAL ErrorType.Failed — so a delivery that raced a target
+                    // hub's disposal came back Failed("Hub is shutting down"), and this line
+                    // relabelled a documented TRANSIENT rejection as terminal.
+                    //
+                    // The hub's own NACK (MessageService.NackThroughParent) says ShuttingDown and
+                    // travels via the parent; this path says Failed and travels via the mesh hub.
+                    // TWO answers for one request with contradictory classification, and Observe
+                    // resolves on whichever lands first — so a caller that correctly retries only
+                    // on ShuttingDown gave up at random. That is
+                    // OrleansMeshTests.HubWorksAfterDisposal failing in ~1.7 s with the right prose
+                    // and the wrong ErrorType, which read as a timing flake for months because the
+                    // WINNER of the race varied while both answers were always sent.
+                    //
+                    // Classifying by message text is the codebase's existing contract for exactly
+                    // this, not an invention: AreaErrorClassifier.IsTransientHubFailure,
+                    // MeshNodeStreamCache.IsTransientOwnerFailure and RoutingGrain.IsTransientFailure
+                    // all already treat "is shutting down" as retry-worthy, and NackThroughParent's
+                    // own comment calls the wording CONTRACT. This makes the fourth layer agree with
+                    // the other three rather than contradict them.
+                    var failureErrorType = ClassifyRoutedFailure(failureMessage);
+                    logger.LogWarning("Orleans: delivery FAILED for {MessageType} to {Address}: {FailureMessage} (as {ErrorType})",
+                        msgType, address, failureMessage, failureErrorType);
+                    SendDeliveryFailure(delivery, failureMessage, failureErrorType);
                 }
                 else
                 {
@@ -442,6 +464,35 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             or global::Orleans.Runtime.OrleansMessageRejectionException
             || (ex.InnerException != null && IsTransientFailure(ex.InnerException));
     }
+
+    /// <summary>
+    /// How the SENDER should read a delivery the grain returned <see cref="MessageDeliveryState.Failed"/>:
+    /// <see cref="ErrorType.ShuttingDown"/> when the target hub said it is going away,
+    /// <see cref="ErrorType.Failed"/> (terminal) otherwise.
+    ///
+    /// <para>🚨 <b>These are two different statements deserving two different policies</b>, and
+    /// collapsing them into the terminal default is what made
+    /// <c>OrleansMeshTests.HubWorksAfterDisposal</c> a member of the shard-0 flake cluster.
+    /// "No node found" says the address does not exist, so retrying forever is a message storm.
+    /// "Hub X is shutting down" says the address EXISTS and is coming back — a per-node hub recycle
+    /// is a routine lifecycle event — so a terminal verdict makes every correct caller give up on
+    /// an address that answers moments later.</para>
+    ///
+    /// <para>Classifying on the message TEXT is this codebase's established contract for exactly
+    /// this decision, not an invention here: <c>AreaErrorClassifier.IsTransientHubFailure</c>,
+    /// <c>MeshNodeStreamCache.IsTransientOwnerFailure</c> and <c>RoutingGrain.IsTransientFailure</c>
+    /// all match the same phrase, and <c>MessageService.NackThroughParent</c> documents the wording
+    /// as CONTRACT ("MUST NOT CONTAIN any marker … notably 'is shutting down'"). This makes the
+    /// fourth layer agree with the other three instead of contradicting them — which matters
+    /// because the hub ALSO answers, via its parent, with <see cref="ErrorType.ShuttingDown"/>:
+    /// whichever of the two answers wins the race, the caller now reads the same verdict.</para>
+    /// </summary>
+    /// <param name="failureMessage">The message lifted from the failed delivery's <c>Error</c> property.</param>
+    internal static ErrorType ClassifyRoutedFailure(string? failureMessage) =>
+        !string.IsNullOrEmpty(failureMessage)
+        && failureMessage.Contains("is shutting down", StringComparison.OrdinalIgnoreCase)
+            ? ErrorType.ShuttingDown
+            : ErrorType.Failed;
 
     /// <summary>
     /// The LOCAL route for <paramref name="address"/>, or null when this silo hosts no hub there —
