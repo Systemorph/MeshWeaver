@@ -9,6 +9,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 
+using MeshWeaver.Hosting.AspNetCore.Portal.Authentication;
+
 namespace MeshWeaver.Blazor.Portal.Authentication;
 
 /// <summary>
