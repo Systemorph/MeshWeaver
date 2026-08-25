@@ -99,6 +99,12 @@ internal static class NodeTypeCompilationHelpers
         // The adoption interlock (#1763) — absent on a host that never composed AddGraph's
         // registry, in which case the kickoff behaves exactly as it did before.
         var adoptionRegistry = hub.ServiceProvider.GetService<NodeTypeAdoptionRegistry>();
+        // On-demand adoption attempts (#1782 gap 4) are started from INSIDE the watcher's
+        // callback, so they are not part of any pipeline the returned disposable already covers.
+        // Each is bounded and self-completing, but an untracked subscription still roots the hub
+        // for the length of its timeout after disposal — so they are tracked here and removed on
+        // completion, which keeps the composite from growing one entry per compile miss.
+        var onDemandAdoptionSubs = new CompositeDisposable();
         // The live build guards (#1664 step 11, #1707 slice 2) — the per-type dependency-record
         // resolver plus the legacy installed-module fingerprint — join HasUsableBuild /
         // HasStaleFrameworkBuild below so a module-only update re-drives the compile the same
@@ -308,18 +314,32 @@ internal static class NodeTypeCompilationHelpers
                         return;
                     }
 
-                    prebuiltConsumer.SeedForTypes([hubPath])
+                    var attempt = new SingleAssignmentDisposable();
+                    onDemandAdoptionSubs.Add(attempt);
+                    attempt.Disposable = prebuiltConsumer.SeedForTypes([hubPath])
                         .Take(1)
                         .Timeout(OnDemandAdoptionBudget)
-                        .Catch<int, Exception>(ex =>
+                        .SelectMany(AdoptionLanded)
+                        .Catch<bool, Exception>(ex =>
                         {
                             logger?.LogWarning(ex,
                                 "Compile watcher: on-demand prebuilt adoption for {HubPath} failed — "
                                 + "compiling instead.", hubPath);
-                            return Observable.Return(0);
+                            return Observable.Return(false);
                         })
+                        .Finally(() => onDemandAdoptionSubs.Remove(attempt))
                         .Subscribe(
-                            AfterAdoption,
+                            landed =>
+                            {
+                                if (!landed)
+                                {
+                                    DispatchOrPark();
+                                    return;
+                                }
+                                logger?.LogInformation(
+                                    "Compile watcher: {HubPath} adopted a prebuilt assembly on demand — "
+                                    + "settling without a Roslyn pass.", hubPath);
+                            },
                             ex =>
                             {
                                 logger?.LogWarning(ex,
@@ -330,43 +350,39 @@ internal static class NodeTypeCompilationHelpers
                     return;
 
                     // 🚨 Trust the STAMP, never the reported count. A consumer that reports an
-                    // adoption it did not actually write back would leave this type at Pending
-                    // for ever, and a STRANDED type is the one outcome worse than a redundant
-                    // compile: every settle-waiter (get_diagnostics, the compile tool,
-                    // WaitForLatestRelease) hangs to its timeout, and the instance pages hang
-                    // with them. So an adoption only counts when the node ITSELF now satisfies
-                    // HasUsableBuild — the same predicate the compile decision uses. Anything
-                    // else compiles.
-                    void AfterAdoption(int adopted)
+                    // adoption it never wrote back would leave this type at Pending for ever, and
+                    // a STRANDED type is the one outcome worse than a redundant compile: every
+                    // settle-waiter (get_diagnostics, the compile tool, WaitForLatestRelease)
+                    // hangs to its timeout, and the instance pages hang with them. So an adoption
+                    // counts only when the node ITSELF then satisfies HasUsableBuild — the same
+                    // predicate the compile decision uses. Anything else compiles.
+                    IObservable<bool> AdoptionLanded(int adopted)
                     {
                         if (adopted <= 0)
                         {
                             logger?.LogDebug(
-                                "Compile watcher: no prebuilt assembly available for {HubPath} on demand — "
-                                + "compiling.", hubPath);
-                            DispatchOrPark();
-                            return;
+                                "Compile watcher: no prebuilt assembly available for {HubPath} on "
+                                + "demand — compiling.", hubPath);
+                            return Observable.Return(false);
                         }
 
-                        ownStream
+                        return ownStream
                             .Where(n => n?.ContentAs<NodeTypeDefinition>(
                                             hub.JsonSerializerOptions, logger) is { } adoptedDef
                                         && HasUsableBuild(n, adoptedDef, GuardsOf(hub)))
                             .Take(1)
+                            .Select(_ => true)
                             .Timeout(AdoptionStampBudget)
-                            .Subscribe(
-                                _ => logger?.LogInformation(
-                                    "Compile watcher: {HubPath} adopted {Adopted} prebuilt assembly(ies) "
-                                    + "on demand — settling without a Roslyn pass.", hubPath, adopted),
-                                _ =>
-                                {
-                                    logger?.LogWarning(
-                                        "Compile watcher: {HubPath} reported {Adopted} adopted assembly(ies) "
-                                        + "but the node still has no usable build {Budget}s later — compiling "
-                                        + "instead, because a stranded type is worse than a redundant compile.",
-                                        hubPath, adopted, AdoptionStampBudget.TotalSeconds);
-                                    DispatchOrPark();
-                                });
+                            .Catch<bool, Exception>(_ =>
+                            {
+                                logger?.LogWarning(
+                                    "Compile watcher: {HubPath} reported {Adopted} adopted "
+                                    + "assembly(ies) but the node still has no usable build "
+                                    + "{Budget}s later — compiling instead, because a stranded type "
+                                    + "is worse than a redundant compile.",
+                                    hubPath, adopted, AdoptionStampBudget.TotalSeconds);
+                                return Observable.Return(false);
+                            });
                     }
 
                     void DispatchOrPark()
@@ -897,7 +913,7 @@ internal static class NodeTypeCompilationHelpers
 
         return new CompositeDisposable(
             watcherSub, firstBuildKickoffSub, recoveryKickoffSub, frameworkStaleKickoffSub,
-            failedVerdictKickoffSub, stuckDiagnosticSub);
+            failedVerdictKickoffSub, stuckDiagnosticSub, onDemandAdoptionSubs);
     }
 
     /// <summary>
