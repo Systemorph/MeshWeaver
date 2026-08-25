@@ -1766,7 +1766,18 @@ internal static class NodeTypeCompilationHelpers
         // 🅿️ Committing the flip — and ONLY now — claim the one-shot admission, so the compile
         // watcher's parked short-circuit lets this Pending emission through. The park itself is
         // never touched.
-        parkRegistry?.AdmitOneRetry(hubPath);
+        //
+        // 🚨 …and ONLY while the type is actually PARKED. An admission for an un-parked type is
+        // never consumed — the short-circuit it exists to pass is not taken — so it would sit in
+        // the registry until some LATER park, where a stray Pending flip could spend it and get
+        // through the very containment this restores. That case is the common one, not a corner:
+        // a failure that predates this PROCESS is not in the (in-memory) registry at all. Gating
+        // here makes the leak impossible rather than merely unlikely, because it establishes
+        // "an admission implies a standing park" — and every path that REMOVES a park (Unpark,
+        // OnCompileSucceeded) clears admissions with it, so no admission can outlive the park it
+        // was granted against.
+        if (parkRegistry?.IsParked(hubPath) == true)
+            parkRegistry.AdmitOneRetry(hubPath);
         return curr with
         {
             Content = d with

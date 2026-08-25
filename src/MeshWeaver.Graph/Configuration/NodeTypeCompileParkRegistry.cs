@@ -187,6 +187,13 @@ public sealed class NodeTypeCompileParkRegistry
     /// widens nothing: exactly one Pending flip gets through, every later stray trigger still
     /// short-circuits on the park that never moved. A DELIBERATE retry keeps using
     /// <see cref="Unpark"/> — a human asking for a build really is clearing the failure.</para>
+    ///
+    /// <para>🚨 <b>Grant this ONLY while <see cref="IsParked"/> is true.</b> An admission for an
+    /// un-parked type is never consumed (the short-circuit it exists to pass is not taken) and
+    /// would linger until some LATER park, where a stray trigger could spend it. Callers gate on
+    /// the park, which establishes "an admission implies a standing park"; both paths that remove
+    /// a park (<see cref="Unpark"/>, <see cref="OnCompileSucceeded"/>) clear admissions with it,
+    /// so an admission can never outlive the park it was granted against.</para>
     /// </summary>
     public void AdmitOneRetry(string nodeTypePath) => _retryAdmissions[nodeTypePath] = 0;
 
