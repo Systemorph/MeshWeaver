@@ -61,4 +61,25 @@ public record ChangeItem<TStream>(
         : this(Value, null, StreamId, ChangeType.Full, Version, null)
     { }
 
+    /// <summary>
+    /// Hash derived from the change's own identity fields — deliberately NOT from
+    /// <see cref="Value"/>.
+    /// <para>
+    /// 🚨 <see cref="Value"/> is the whole synchronized state (typically an
+    /// <see cref="EntityStore"/>, or the stream state of an arbitrary <typeparamref name="TStream"/>).
+    /// The record-synthesized hash walked it, which made <c>ChangeItem</c> the third layer of the
+    /// unbounded <c>InstanceCollection → EntityStore → ChangeItem → InstanceCollection</c> hash
+    /// recursion that killed pods with an uncatchable StackOverflowException (#2170/#2171), and
+    /// made a single hash O(the entire object graph) on a hot path.
+    /// </para>
+    /// <para>
+    /// The four fields used are all part of the synthesized <c>Equals</c>, so the hash/equals
+    /// contract holds: equal change items agree on them and therefore hash equal. Value-based
+    /// <c>Equals</c> is intentionally left untouched — the <c>SetCurrent</c> dedup that suppresses
+    /// re-emission of an identical re-synced store depends on it.
+    /// </para>
+    /// </summary>
+    /// <returns>A bounded, cycle-free hash code.</returns>
+    public override int GetHashCode() =>
+        HashCode.Combine(StreamId, ChangedBy, ChangeType, Version);
 }
