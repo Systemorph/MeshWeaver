@@ -156,7 +156,7 @@ mesh.Query<MeshNode>(
 
 | Question | `select:` clause |
 |---|---|
-| "Does it exist?" | `select:path` |
+| "Does anything MATCH?" (a set — never one known path) | `select:path` |
 | "Is anything stale?" | `select:path,version` |
 | "Render a tree / list / picker" | `select:path,name,nodeType,icon` |
 | "Show last-modified column" | `select:path,name,lastModified` |
@@ -208,6 +208,31 @@ example), and scope ids per module — `uw-nodes-in:{ns}`, never a bare `nodes-i
 module will also mint.
 
 The recompile design that this rule supports is described in [NodeTypeCompilation](/Doc/Architecture/NodeTypeCompilation) — the NodeType keeps a `{sourcePath → version}` snapshot from the synced query, and a divergent emission triggers re-fetch and recompile. Nothing in the catalog row's `Content` is consulted.
+
+### 🚨 Never query to ask "does this path exist?" — a stale negative redoes finished work
+
+Same shape as staleness below, and it bites harder because the answer is acted on by *writers*. The
+query index trails the durable store by design, so a `search`/`path:` probe can answer "absent" for a
+node that exists — measured 2026-08-25 (#2229): a `search` reported two just-minted `_App` tiles
+missing while a direct read returned both, minutes after they landed.
+
+| Question | Read it with |
+|---|---|
+| "Does `{partition}/_App/{id}` exist?" | `GetMeshNodeStream(path)` / a direct path read |
+| "Should I create it, or is it already there?" | Neither — use [`CreateOrUpdateNodeRequest`](#upserts-createorupdatenoderequest--single-verb-no-delete-then-create), which reads persistence itself |
+| "Which children does this parent have?" | A query — a stale negative in a listing is harmless |
+
+**Severity depends on the write the check guards**, and it is worth knowing which case you are in:
+
+- The write target is **path-deterministic and idempotent** (`{viewer}/_App/{packageId}`, an install
+  whose copy plan skips by path): a stale negative costs a **redundant write or a repeated sweep** —
+  expensive and confusing, never corrupting. Both audited plugin-side guards are this shape.
+- The write mints a **new id per attempt**: a stale negative produces **duplicate DATA**. Treat any
+  such guard as a defect.
+
+The compounding case to watch for: a write whose *reply* was lost looks identical to a write that
+never happened, and a query that then answers "absent" appears to confirm it. On 2026-08-25 that pair
+armed two mesh-wide sweeps forty seconds apart. Check existence by path before retrying anything.
 
 ### 🚨 Staleness lives on the owner — never query to check "is this stale?"
 
@@ -710,7 +735,8 @@ return request.Processed();   // handler returns immediately
 | Intent | Primitive |
 |---|---|
 | List nodes under X (paths / metadata only) | `mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(...))` — project to `Path` / `Name` / etc. **never read `.Content`** |
-| Does node X exist? | `Query` + check `Items.Count` |
+| Does **anything match** a predicate? | `Query` + check `Items.Count` |
+| Does node X (a KNOWN path) exist? | `workspace.GetMeshNodeStream(X)` — a query's negative can be minutes stale, and a caller that writes on it redoes finished work ([why](#-never-query-to-ask-does-this-path-exist--a-stale-negative-redoes-finished-work)). Creating it anyway? `CreateOrUpdateNodeRequest` — no check needed |
 | Give me node X's MeshNode (live) | `workspace.GetMeshNodeStream(X)` — the **only** non-stale read path |
 | Give me node X's MeshNode (once) | `workspace.GetMeshNodeStream(X).Where(n => n is not null).Take(1).Timeout(...)` |
 | Keep me updated on node X's MeshNode | `workspace.GetMeshNodeStream(X)` — stay subscribed (no `.Take(1)`) |
