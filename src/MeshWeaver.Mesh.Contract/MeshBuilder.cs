@@ -7,6 +7,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Features;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting")]
@@ -30,6 +31,40 @@ public record MeshBuilder
     }
 
     private List<MeshNode> MeshNodes { get; } = new();
+
+    /// <summary>
+    /// The deployment's configuration, when the caller supplied it — the surface an
+    /// assembly-attribute module needs to answer a question whose answer is a CONFIG value.
+    ///
+    /// <para>🚨 A module contributes through <see cref="MeshNodeProviderAttribute"/> at INSTALL
+    /// time, and until now that was a blind spot: <c>MeshWeaver.Social</c> records it as
+    /// "there is no IConfiguration instance at install time", which is why it binds through the
+    /// options pipeline instead. Options work when the answer is needed at RESOLVE time. They do
+    /// not work when it is needed to BUILD something — e.g. whether a type-definition node is
+    /// <c>IsDefinitionOnly</c>, an <c>init</c> property fixed when the node is constructed, and
+    /// getting it wrong makes a partition root permanently unrecoverable (#902).</para>
+    ///
+    /// <para><c>null</c> when nothing supplied one — a bespoke host, a test fixture, or a direct
+    /// <see cref="InstallAssemblies"/>. A module reading this MUST treat null as "not configured"
+    /// and fall back to the same default it would have used with an absent key, never to a guess:
+    /// the value it is deciding is usually one where a wrong answer is silent.</para>
+    /// </summary>
+    public IConfiguration? Configuration { get; private set; }
+
+    /// <summary>
+    /// Supplies the deployment configuration that <see cref="Configuration"/> exposes to
+    /// attribute-carried module contributions. Called for you by
+    /// <c>MeshBuilderModuleActivation.InstallConfiguredModules</c>, which already holds it;
+    /// a bespoke host that installs modules by hand can call it directly.
+    /// </summary>
+    /// <param name="configuration">The configuration to expose. Never null.</param>
+    /// <returns>The builder for method chaining.</returns>
+    public MeshBuilder WithConfiguration(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        Configuration = configuration;
+        return this;
+    }
 
     /// <summary>
     /// Resolves one <c>Modules:Assemblies</c> entry to an assembly path. Rooted paths pass
