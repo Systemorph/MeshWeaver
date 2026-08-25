@@ -305,6 +305,50 @@ on:
 > `gh api repos/Systemorph/<repo>/dispatches -f event_type=meshweaver-framework-released -f 'client_payload[version]=<released version>'`.
 > Firing without a payload is how a "remedy" turns into a red bake that changes nothing.
 
+### The release EVENT — pushed, but from memex, and now failable
+
+The pull above is the guarantee. Since 2026-08-23 it is also **broadcast**, so the wave is prompt
+instead of arriving up to a schedule interval late — and the broadcast is placed so that neither
+objection to `notify-dependents` comes back:
+
+```
+CD (this repo)                       memex (the control instance)          the node repos
+──────────────                       ────────────────────────────          ──────────────
+promote ✅                            WebhookInbox: Hosting/PlatformBuilds
+   │                                        │  (allowlist + size cap only)
+   └─ notify-platform-update ──POST────────▶│
+      HMAC-SHA256 over the RAW body         ├─ PlatformBuildInboxWatcher verifies the HMAC
+      (secrets.PLATFORM_WEBHOOK_SECRET)     │     against Hosting:PlatformWebhookSecret
+                                            ├─ PlatformPinUpdater → MW_IMAGE_DIGEST bump PRs
+                                            └─ FrameworkReleaseBroadcaster ──dispatch──▶ ✅ rebake
+                                                 (the GitHub App memex already holds for GitSync)
+```
+
+- **No credential in the release path.** The platform holds no write access to any satellite and no
+  PAT; it signs one POST. The fan-out uses the App memex already has.
+- **No list in this repo.** The subscriber set lives in memex's own Hosting fleet registry. The
+  vestigial `BAKE_SUBSCRIBER_REPOS` repo variable was **deleted on 2026-08-25** — a leftover that
+  looks like the live subscriber list is worse than none.
+
+🚨 **The notify job is a GATE, not a reporter (#2235).** It was written reporter-class — "losing one
+notification costs one delayed rebake wave" — with an input-shaped `if [ -z "$SECRET" ] … exit 0`
+and a `::warning::` on every non-2xx. Result: **zero releases broadcast between 2026-08-22 and
+2026-08-25, and a green tick on every promote.** Now `preflight` asserts `PLATFORM_WEBHOOK_URL` +
+`PLATFORM_WEBHOOK_SECRET` RED naming what to provision, every non-2xx is `exit 1` with a message
+naming which of the three causes it is, and both jobs are in `alert-on-failure`'s `needs` so the
+failure is filed rather than merely rendered. It runs after `promote`, so failing it cannot
+unpublish anything — the images ship and the installs still self-update; what changes is that
+"nobody was told" stops looking like success. `PlatformReleaseNotifyGuard`
+(`test/MeshWeaver.Documentation.Test`) pins all of it.
+
+🚨 **A 2xx still does NOT prove the wave ran.** The inbox is deliberately dumb, so 2xx means
+*stored*. The half CD cannot see is the shared HMAC: an unset or mismatched
+`Hosting:PlatformWebhookSecret` on the control instance (Key Vault → `Hosting-PlatformWebhookSecret`;
+see `deploy/aks/envs/example/secretproviderclass.yaml`) makes the watcher drop every delivery as
+unverifiable, and the POST still answers 2xx. The close condition for the mechanism is therefore
+observed on the SATELLITES — a `repository_dispatch` run plus the `MW_IMAGE_DIGEST` bump PR — never
+a green tick in CD.
+
 Provisioning state (2026-08-17): the satellites' **publish** credentials ARE provisioned. The Azure
 managed identity `github-actions-bake` (in the cluster's resource group) holds *Storage File Data
 Privileged Contributor* on the portals' storage account, carries **8 federated credentials — the
