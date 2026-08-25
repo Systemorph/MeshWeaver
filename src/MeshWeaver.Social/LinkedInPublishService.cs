@@ -75,26 +75,38 @@ public sealed class LinkedInPublishService
         var text = textOverride ?? Prop(postNode, "body") ?? Prop(postNode, "text");
         var profilePath = ProfilePathOf(postNode);
         if (string.IsNullOrWhiteSpace(profilePath))
-            return PublishNodeOutcome.Fail("profile-path-missing");
+            return await RefuseAsync(postNode, "profile-path-missing", ct);
         if (string.IsNullOrWhiteSpace(text))
-            return PublishNodeOutcome.Fail("empty-text");
+            return await RefuseAsync(postNode, "empty-text", ct);
 
         var credential = await ReadOwnCredentialAsync(profilePath!, ct);
         if (credential is null)
-            return PublishNodeOutcome.Fail("not-connected");
+            return await RefuseAsync(postNode, "not-connected", ct);
         if (!HasPublishScope(credential))
-            return PublishNodeOutcome.Fail("missing-w_member_social-reconnect");
+            return await RefuseAsync(postNode, "missing-w_member_social-reconnect", ct);
 
         var outcome = await LinkedInPostsApi.PublishAsync(client, credential, text!, visibility, apiVersion, ct);
 
+        // 🚨 The publish result is written back WITH the reason, both ways (issue #50). On success
+        // the recorded reason is CLEARED — a post that is live must not keep explaining a failure
+        // it recovered from. On refusal the reason is the whole point: without it the post reads
+        // "Failed" and says nothing about why, which is the silence this write exists to break.
         var updates = outcome.Success
             ? new Dictionary<string, object?>
             {
                 ["status"] = "Published",
                 ["publishedUrn"] = outcome.Urn,
                 ["publishedAt"] = DateTimeOffset.UtcNow,
+                [PostPublishProblem.ErrorKey] = null,
+                [PostPublishProblem.AttemptedAtKey] = null,
             }
-            : new Dictionary<string, object?> { ["status"] = "Failed" };
+            : new Dictionary<string, object?>
+            {
+                ["status"] = "Failed",
+                [PostPublishProblem.ErrorKey] =
+                    PostPublishProblem.Explain(ShortReason(outcome.Error), outcome.StatusCode),
+                [PostPublishProblem.AttemptedAtKey] = DateTimeOffset.UtcNow,
+            };
         await WriteBackAsync(postNode, updates, ct);
 
         return outcome.Success
@@ -204,14 +216,36 @@ public sealed class LinkedInPublishService
         }
     }
 
+    /// <summary>
+    /// Records a PRE-PUBLISH refusal on the post and returns it. Every gate below the access check
+    /// goes through here: the post is the only place its owner will ever look, and until this
+    /// existed a scheduled post refused for a missing credential sat past its slot in complete
+    /// silence (issue #50). <c>HttpAttempted</c> stays false — nothing was sent to LinkedIn.
+    /// </summary>
+    private async Task<PublishNodeOutcome> RefuseAsync(MeshNode postNode, string reason, CancellationToken ct)
+    {
+        await WriteBackAsync(postNode, new Dictionary<string, object?>
+        {
+            [PostPublishProblem.ErrorKey] = PostPublishProblem.Explain(reason),
+            [PostPublishProblem.AttemptedAtKey] = DateTimeOffset.UtcNow,
+        }, ct);
+        return PublishNodeOutcome.Fail(reason);
+    }
+
     private async Task WriteBackAsync(MeshNode postNode, IReadOnlyDictionary<string, object?> updates, CancellationToken ct)
     {
         try
         {
-            var content = ContentToDict(postNode);
-            foreach (var kv in updates)
-                content[kv.Key] = kv.Value;
-            var updated = postNode with { Content = content };
+            // 🚨 JSON, not a Dictionary, and the post's own $type is CARRIED OVER (issue #52).
+            // Handing the mesh a Dictionary as content makes the polymorphic converter stamp the
+            // dictionary's CLR collection name as the discriminator and DROP the payload's own —
+            // so every publish and every engagement refresh used to leave the post untyped, i.e.
+            // reading as empty for the very page that shows the result. See NodeContentJson.
+            var updated = postNode with
+            {
+                Content = NodeContentJson.Merge(
+                    postNode.Content, PostPublishProblem.PostContentType, updates),
+            };
             await _mesh.CreateOrUpdateNode(updated).FirstAsync().ToTask(ct);
         }
         catch (Exception ex)
@@ -237,18 +271,6 @@ public sealed class LinkedInPublishService
     }
 
     private static readonly JsonSerializerOptions CredentialJsonOptions = new() { PropertyNameCaseInsensitive = true };
-
-    private static Dictionary<string, object?> ContentToDict(MeshNode node)
-    {
-        var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        if (node.Content is null)
-            return dict;
-        var je = node.Content is JsonElement e ? e : JsonSerializer.SerializeToElement(node.Content, node.Content.GetType());
-        if (je.ValueKind == JsonValueKind.Object)
-            foreach (var p in je.EnumerateObject())
-                dict[p.Name] = p.Value.Clone();
-        return dict;
-    }
 
     /// <summary>
     /// The profile a post publishes as. Reads <c>profilePath</c> (the legacy compiled-in

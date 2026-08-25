@@ -273,19 +273,21 @@ public static class LinkedInPageSyncEndpoints
                     Name = Title(post.Text),
                     NodeType = "Systemorph/Post",
                     State = MeshNodeState.Active,
-                    Content = new Dictionary<string, object?>
-                    {
-                        ["$type"] = "SocialMediaPost",
-                        ["title"] = Title(post.Text),
-                        ["body"] = post.Text,
-                        ["profilePath"] = page,
-                        ["platform"] = "LinkedIn",
-                        ["publishedAt"] = post.PublishedAt,
-                        ["impressions"] = stats?.Impressions ?? 0,
-                        ["likes"] = stats?.Likes ?? 0,
-                        ["comments"] = stats?.Comments ?? 0,
-                        ["mediaUrl"] = post.MediaUrl,
-                    }
+                    // JSON, not a Dictionary: a dictionary's "$type" entry is DISCARDED on write and
+                    // replaced by the dictionary's own CLR collection name, leaving the node
+                    // untyped for every reader (issue #52 — see NodeContentJson).
+                    Content = NodeContentJson.Create("SocialMediaPost",
+                    [
+                        new("title", Title(post.Text)),
+                        new("body", post.Text),
+                        new("profilePath", page),
+                        new("platform", "LinkedIn"),
+                        new("publishedAt", post.PublishedAt),
+                        new("impressions", stats?.Impressions ?? 0),
+                        new("likes", stats?.Likes ?? 0),
+                        new("comments", stats?.Comments ?? 0),
+                        new("mediaUrl", post.MediaUrl),
+                    ])
                 };
 
                 try
