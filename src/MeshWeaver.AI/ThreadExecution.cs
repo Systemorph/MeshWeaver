@@ -127,12 +127,73 @@ internal static class ThreadExecution
                 MeshWeaver.AI.Delegation.DelegationHandlers.HandleHeartbeatTick)
             .WithHandler<MeshWeaver.AI.Delegation.CancelDelegationSubThread>(
                 MeshWeaver.AI.Delegation.DelegationHandlers.HandleCancelDelegationSubThread)
-            .WithInitialization(SetThreadHubIdentity)
-            .WithInitialization(InitializeThreadLifecycle)
-            .WithInitialization(InstallCancellationWatcher)
-            .WithInitialization(InstallExecutionHub)
-            .WithInitialization(InstallSubmissionWatcher)
-            .WithInitialization(InstallHeartbeatTicker);
+            // 🚨 The OBSERVABLE overload throughout, deliberately (#1868). Every one of these six
+            // reaches hub construction on the SYNCHRONOUS overload, which runs inside
+            // MessageHubConfiguration.Build, before StartMessageProcessing:
+            // InstallExecutionHub calls GetHostedHub(…/_Exec, HostedHubCreation.Always) outright,
+            // and SetThreadHubIdentity / InitializeThreadLifecycle / InstallCancellationWatcher each
+            // resolve workspace.GetMeshNodeStream(), whose SynchronizationStream ctor ALWAYS calls
+            // GetHostedHub(sync/{clientId}, Always). So every thread hub in the product built four
+            // child hubs — and four more Autofac containers — from inside its own Build, and a
+            // disposal racing the thread hub's creation raced a TREE of constructions rather than
+            // one frame: the shape behind the whole shutdown-race family (#645/#715/#967/#1573).
+            // Threads are the hottest per-node hub in the product, so this was the biggest remaining
+            // source of that nesting.
+            //
+            // ALL SIX move together, keeping the registration ORDER intact — BuildupActions are
+            // Concat-ed on the InitializeHubRequest turn, so the owner identity is still stamped
+            // first, _Exec still exists before the submission watcher can claim a round (the
+            // eager-creation requirement documented on InstallExecutionHub), and the heartbeat
+            // ticker still comes last. The init turn runs after Build has returned and still BEFORE
+            // the Initialize gate opens, so no message can overtake them and nothing observable to
+            // a message changes. It also runs after the workspace's own data sources have been
+            // started (DataExtensions.StartDataSourcesAndOpenGate, moved by #2045), which is
+            // strictly better than subscribing a stream on a workspace that has not started its
+            // sources yet. Same shape #774 applied to MeshDataSource.SubscribeToOwnDeletion.
+            .WithInitialization(SetThreadHubIdentityInit)
+            .WithInitialization(InitializeThreadLifecycleInit)
+            .WithInitialization(InstallCancellationWatcherInit)
+            .WithInitialization(InstallExecutionHubInit)
+            .WithInitialization(InstallSubmissionWatcherInit)
+            .WithInitialization(InstallHeartbeatTickerInit);
+
+    /// <summary>Init-turn wrapper for <see cref="SetThreadHubIdentity"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the owner observation is established.</returns>
+    private static IObservable<System.Reactive.Unit> SetThreadHubIdentityInit(IMessageHub hub) =>
+        Observable.Defer(() => { SetThreadHubIdentity(hub); return Observable.Return(System.Reactive.Unit.Default); });
+
+    /// <summary>Init-turn wrapper for <see cref="InitializeThreadLifecycle"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the lifecycle observation is established.</returns>
+    private static IObservable<System.Reactive.Unit> InitializeThreadLifecycleInit(IMessageHub hub) =>
+        Observable.Defer(() => { InitializeThreadLifecycle(hub); return Observable.Return(System.Reactive.Unit.Default); });
+
+    /// <summary>Init-turn wrapper for <see cref="InstallCancellationWatcher"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the cancellation watcher is installed.</returns>
+    private static IObservable<System.Reactive.Unit> InstallCancellationWatcherInit(IMessageHub hub) =>
+        Observable.Defer(() => { InstallCancellationWatcher(hub); return Observable.Return(System.Reactive.Unit.Default); });
+
+    /// <summary>Init-turn wrapper for <see cref="InstallExecutionHub"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the <c>_Exec</c> hub exists.</returns>
+    private static IObservable<System.Reactive.Unit> InstallExecutionHubInit(IMessageHub hub) =>
+        // Defer so the work happens at SUBSCRIBE time (the init turn), not when the observable is
+        // constructed — HandleInitialize builds the whole Concat chain up front.
+        Observable.Defer(() => { InstallExecutionHub(hub); return Observable.Return(System.Reactive.Unit.Default); });
+
+    /// <summary>Init-turn wrapper for <see cref="InstallSubmissionWatcher"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the watcher is installed.</returns>
+    private static IObservable<System.Reactive.Unit> InstallSubmissionWatcherInit(IMessageHub hub) =>
+        Observable.Defer(() => { InstallSubmissionWatcher(hub); return Observable.Return(System.Reactive.Unit.Default); });
+
+    /// <summary>Init-turn wrapper for <see cref="InstallHeartbeatTicker"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the ticker is installed.</returns>
+    private static IObservable<System.Reactive.Unit> InstallHeartbeatTickerInit(IMessageHub hub) =>
+        Observable.Defer(() => { InstallHeartbeatTicker(hub); return Observable.Return(System.Reactive.Unit.Default); });
 
     /// <summary>
     /// Eagerly creates the <c>_Exec</c> hosted hub at thread hub init time and
