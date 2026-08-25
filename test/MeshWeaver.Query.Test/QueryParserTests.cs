@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -183,6 +185,65 @@ public class QueryParserTests
         result.Path.Should().Be("foo/bar");
         result.Paths.Should().BeNull();
     }
+
+    /// <summary>
+    /// 🚨 <c>path:&gt;"cursor"</c> IS THE KEYSET HALF OF PAGING — A FILTER, NEVER THE ANCHOR.
+    ///
+    /// <para>The reserved-qualifier extractor used to fold ANY <c>path:</c> token into
+    /// <see cref="ParsedQuery.Path"/>, discarding the operator: <c>path:&gt;"m"</c> silently became
+    /// the exact anchor <c>path:m</c>. Nothing exists at "m", so every backend answered ZERO ROWS —
+    /// with no error — and a walk built on the standard <c>sort:path</c> + <c>path:&gt;{cursor}</c>
+    /// pair returned page one and reported success (issue #2186). It also re-routed a mesh-wide
+    /// query onto one partition, since a set Path is what pins a query to a schema.</para>
+    ///
+    /// <para>The ordered comparisons therefore stay in the FILTER, where they become
+    /// <c>n.path &gt; 'm'</c> against the real, indexed <c>path</c> column.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("path:>\"m\"", QueryOperator.GreaterThan)]
+    [InlineData("path:>=\"m\"", QueryOperator.GreaterOrEqual)]
+    [InlineData("path:<\"m\"", QueryOperator.LessThan)]
+    [InlineData("path:<=\"m\"", QueryOperator.LessOrEqual)]
+    public void Parse_OrderedPathComparison_StaysAFilter_AndNeverAnchorsThePath(
+        string query, QueryOperator expected)
+    {
+        var result = _parser.Parse(query);
+
+        result.Path.Should().BeNull(
+            "an ordered comparison is a keyset FILTER — folding it into the path anchor silently "
+            + "turns a mesh-wide page request into an exact lookup at a path nothing lives at (#2186)");
+        result.Paths.Should().BeNull();
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Selector.Should().Be("path");
+        comparison.Condition.Operator.Should().Be(expected);
+        comparison.Condition.Value.Should().Be("m");
+    }
+
+    /// <summary>The keyset pair as a caller writes it: the sort AND the cursor filter both survive,
+    /// and the query stays unanchored so it still spans every partition.</summary>
+    [Fact]
+    public void Parse_KeysetPagingPair_KeepsBothHalves_AndStaysMeshWide()
+    {
+        var result = _parser.Parse("nodeType:User sort:path path:>\"rbuergi\" limit:3");
+
+        result.Path.Should().BeNull("the walk must remain mesh-wide, not pinned to one partition");
+        result.OrderBy!.Property.Should().Be("path");
+        result.OrderBy.Descending.Should().BeFalse();
+        result.Limit.Should().Be(3);
+        var conditions = Flatten(result.Filter!).ToList();
+        conditions.Should().Contain(c =>
+            c.Selector == "path" && c.Operator == QueryOperator.GreaterThan && c.Value == "rbuergi");
+        conditions.Should().Contain(c => c.Selector == "nodeType" && c.Value == "User");
+    }
+
+    private static IEnumerable<QueryCondition> Flatten(QueryNode node) => node switch
+    {
+        QueryComparison c => [c.Condition],
+        QueryAnd and => and.Children.SelectMany(Flatten),
+        QueryOr or => or.Children.SelectMany(Flatten),
+        _ => []
+    };
 
     [Fact]
     public void Parse_BracketList_PopulatesOrderedPaths()
