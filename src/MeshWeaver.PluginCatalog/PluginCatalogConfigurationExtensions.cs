@@ -1,3 +1,4 @@
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Graph;
@@ -96,6 +97,11 @@ public static class PluginCatalogConfigurationExtensions
                 // Resolves the effective registry token: configured token, else the stored
                 // auto-registration credential (decrypted), else empty.
                 .AddSingleton<RegistryTokenResolver>()
+                // The source-browsing seam (#2193 §C): a mesh that keeps no source nodes reads a
+                // module's source from its repo THROUGH the registry it installs from. Registered
+                // wherever the catalog is; a mesh with no registry configured resolves the
+                // browser but lists nothing, and the shell says so.
+                .AddSingleton<IModuleSourceBrowser, RegistrySourceBrowser>()
                 // Re-runs the install hooks for ALREADY-installed packages once at startup. Packages
                 // installed before hooks existed never registered their agent/skill sources, so on a
                 // live instance every user's picker is missing them — and nothing else would fix it
