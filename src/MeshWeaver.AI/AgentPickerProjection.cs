@@ -373,7 +373,7 @@ public static class AgentPickerProjection
                 $"{AgentsQueryId}|u={userPath ?? ""}|s={spacePath ?? ""}|q={Fingerprint(queries)}",
                 queries))
             .Switch()
-            .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions, locale));
+            .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions, locale, userPath, spacePath));
     }
 
     /// <summary>Deterministic short fingerprint of a resolved query set, for cache-keying the
@@ -643,10 +643,32 @@ public static class AgentPickerProjection
     /// 🌍 The viewer's language, resolved ONCE on the render turn and passed down — see
     /// <see cref="ToAgentDisplayInfo"/> for why it is an argument and not an ambient read.
     /// </param>
+    /// <param name="userPath">The viewer's home partition — its <c>{user}/Agent</c> layer wins a
+    /// slug collision (see the layer note above). Null for the programmatic generators.</param>
+    /// <param name="spacePath">The context/space path — its layer wins over any other package's.</param>
     public static IReadOnlyList<AgentDisplayInfo> ProjectAgents(
-        IEnumerable<MeshNode> snapshot, JsonSerializerOptions jsonOptions, string? locale = null)
+        IEnumerable<MeshNode> snapshot, JsonSerializerOptions jsonOptions, string? locale = null,
+        string? userPath = null, string? spacePath = null)
     {
-        var byPath = new Dictionary<string, AgentDisplayInfo>(StringComparer.Ordinal);
+        // 🚨 Collapse the registry LAYERS: one agent SLUG is one row.
+        //
+        // The registry is deliberately layered — the same agent exists as a platform default
+        // (`Agent/Tutor`), as a package's shipped copy (`Essentials/Agent/Tutor`) and as the copy
+        // plugin install rebases into the viewer's home (`{user}/Agent/Tutor`). Keying this dict by
+        // node.Path (as it was until 2026-08-25) made every layer its own dropdown row: users saw
+        // ToolsReference twice and most platform agents three times.
+        //
+        // De-duplicating by PATH was not merely untidy, it offered a choice the execution side
+        // cannot honour: an agent is ADDRESSED by its slug (handoffs, /agent, the chat chip,
+        // SetSelectedAgent), and AgentChatClient.CreateAgentsSync keys its dict on exactly that
+        // (`createdAgents.SetItem(agentConfig.Id, agent)`). Three rows sharing one slug already
+        // collapsed to ONE executable agent — whichever won a last-write-wins race.
+        //
+        // So: group by slug, and keep the MOST SPECIFIC layer (LayerRank). Ties inside one layer
+        // resolve by ordinal path, because a synced-query snapshot carries no ordering guarantee
+        // and the surviving row must not depend on arrival order.
+        var bySlug = new Dictionary<string, (AgentDisplayInfo Info, int Rank, string Path)>(
+            StringComparer.OrdinalIgnoreCase);
         foreach (var node in snapshot)
         {
             if (node.Path == null) continue;
@@ -654,8 +676,18 @@ public static class AgentPickerProjection
                 continue;
 
             var info = ToAgentDisplayInfo(node, jsonOptions, locale);
-            if (info != null)
-                byPath[node.Path] = info;
+            if (info == null) continue;
+
+            // A node whose configuration carries no slug is not addressable by one — key it by its
+            // own path so it stays a row of its own instead of collapsing with every other such node.
+            var slug = string.IsNullOrWhiteSpace(info.AgentConfiguration?.Id)
+                ? node.Path
+                : info.AgentConfiguration!.Id;
+            var rank = LayerRank(node, userPath, spacePath);
+            if (!bySlug.TryGetValue(slug, out var winner)
+                || rank < winner.Rank
+                || (rank == winner.Rank && string.CompareOrdinal(node.Path, winner.Path) < 0))
+                bySlug[slug] = (info, rank, node.Path);
         }
 
         // Group by harness (GroupName) so the picker shows major categories —
@@ -663,11 +695,33 @@ public static class AgentPickerProjection
         // contiguous (SimpleDropdown renders a header when the group key changes).
         // Alphabetical group order happens to give Claude Code, GitHub Copilot,
         // MeshWeaver; within a group, Order then Name (Assistant's order:-1 leads MeshWeaver).
-        return byPath.Values
+        return bySlug.Values
+            .Select(winner => winner.Info)
             .OrderBy(a => a.GroupName ?? Harnesses.MeshWeaver, StringComparer.OrdinalIgnoreCase)
             .ThenBy(a => a.Order)
             .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    /// <summary>
+    /// How SPECIFIC an agent node's layer is — the tie-break when one slug is shipped by several
+    /// layers. Lower wins: the viewer's own copy, then the space being chatted in, then any other
+    /// package, and last the bare platform default. Pure.
+    /// </summary>
+    private static int LayerRank(MeshNode node, string? userPath, string? spacePath)
+    {
+        var ns = node.Namespace;
+        if (!string.IsNullOrEmpty(userPath)
+            && string.Equals(ns, $"{userPath}/{AgentSubNamespace}", StringComparison.OrdinalIgnoreCase))
+            return 0;
+        if (PartitionOf(spacePath) is { Length: > 0 } space
+            && string.Equals(ns, $"{space}/{AgentSubNamespace}", StringComparison.OrdinalIgnoreCase))
+            return 1;
+        // The bare platform namespace is the LEAST specific: anything a package or a user ships
+        // under the same slug is a deliberate override of it.
+        if (string.Equals(ns, AgentRootNamespace, StringComparison.OrdinalIgnoreCase))
+            return 3;
+        return 2;
     }
 
     /// <summary>The utility model tier marks a programmatic generator agent (ThreadNamer,
