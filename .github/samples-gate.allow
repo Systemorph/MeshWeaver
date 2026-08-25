@@ -29,8 +29,15 @@ Northwind/Product compile
 # generator to be reachable from the gate host, which is a separate change.
 PensionFund/BalanceSheet compile
 
-# PensionFund idempotence — REMOVED 2026-08-25. The gate reported it STALE ("now passing —
-# remove it") and the ratchet may only shrink, so leaving it fails the gate.
-# It passes for the right reason: gate discovery now finds PensionFund's 5 NodeTypes where it
-# previously found 0, so the idempotence check runs against compiled content types for the
-# first time instead of being carried as debt for a check that never executed.
+# PensionFund idempotence — INTERMITTENT known debt. Do not remove on a single green run.
+# Removed once tonight because the gate reported it STALE ("now passing"); the very next run
+# reported it as a NEW failure. Both readings are correct — the check is nondeterministic,
+# because whether it fires depends on whether the Currency NodeType has COMPILED yet.
+#
+# The underlying defect is real and is tracked separately: the second install rewrites
+# Currency/{CHF,EUR,USD}. `Currency.DecimalPlaces` carries a C# initializer `= 2` and all
+# three instance files author `"decimalPlaces": 2`. Once the NodeType compiles, its content
+# type is registered, the installer materialises a typed `Currency` and re-serialises it, and
+# default-suppression drops the property whose value equals the type's default. The stored
+# node then differs from the authored file and the unchanged-skip misses.
+PensionFund idempotence
