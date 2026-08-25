@@ -167,8 +167,35 @@ public record InstanceCollection
                );
     }
 
-    /// <summary>Returns a hash code derived from the contained instances.</summary>
-    /// <returns>The hash code.</returns>
-    public override int GetHashCode() =>
-        Instances.Values.Select(x => x.GetHashCode()).Aggregate(0, (x, y) => x ^ y);
+    /// <summary>
+    /// Hash derived from the instance KEYS and the count — deliberately NOT from the instance
+    /// VALUES.
+    /// <para>
+    /// 🚨 <see cref="Instances"/> holds ARBITRARY user objects, and in a running mesh those
+    /// objects reach back into the store that contains this collection
+    /// (<c>InstanceCollection → EntityStore → ChangeItem → InstanceCollection</c>). Hashing the
+    /// values therefore walked an unbounded object graph and died on an uncatchable
+    /// StackOverflowException, terminating the pod (#2170/#2171). It was also O(entire graph) on
+    /// a routing hot path.
+    /// </para>
+    /// <para>
+    /// Keys are safe by construction — <see cref="Instances"/> already hashed every one of them to
+    /// store it — and they satisfy the hash/equals contract against the value-based
+    /// <see cref="Equals(InstanceCollection)"/>: equal collections hold the same keys in the same
+    /// number, hence the same hash. The XOR is order-independent, so it does not depend on
+    /// <see cref="ImmutableDictionary{TKey,TValue}"/> enumeration order. Note
+    /// <see cref="CollectionName"/> is excluded because <c>Equals</c> ignores it — including it
+    /// would break the contract.
+    /// </para>
+    /// </summary>
+    /// <returns>A bounded, cycle-free hash code.</returns>
+    public override int GetHashCode()
+    {
+        // foreach over the struct enumerator: no LINQ delegate/iterator allocation, unlike the
+        // Select+Aggregate this replaced.
+        var keyHash = 0;
+        foreach (var kvp in Instances)
+            keyHash ^= kvp.Key.GetHashCode();
+        return HashCode.Combine(keyHash, Instances.Count);
+    }
 }

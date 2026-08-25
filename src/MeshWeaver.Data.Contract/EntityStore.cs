@@ -111,12 +111,34 @@ public record EntityStore
                                              && value.Equals(x.Value));
     }
 
-    /// <summary>Returns a hash code derived from the contained collections.</summary>
-    /// <returns>The hash code.</returns>
+    /// <summary>
+    /// Hash derived from the collection NAMES and their sizes — deliberately NOT from the
+    /// contained instances.
+    /// <para>
+    /// 🚨 The previous version aggregated <c>InstanceCollection.GetHashCode()</c>, which walked
+    /// every stored instance; because a stored instance can transitively hold this very store
+    /// (<c>EntityStore → ChangeItem → InstanceCollection → EntityStore</c>), that recursion was
+    /// unbounded and killed pods with an uncatchable StackOverflowException (#2170/#2171).
+    /// </para>
+    /// <para>
+    /// It also threw <see cref="InvalidOperationException"/> ("Sequence contains no elements") for
+    /// an EMPTY store: <c>Aggregate</c> was called without a seed. An empty store now hashes
+    /// normally.
+    /// </para>
+    /// <para>
+    /// Contract-consistent with <see cref="Equals(EntityStore)"/>: equal stores hold the same
+    /// collection names, and equal <see cref="InstanceCollection"/>s hold the same number of
+    /// instances, so equal stores hash equal. The XOR is order-independent.
+    /// </para>
+    /// </summary>
+    /// <returns>A bounded, cycle-free hash code.</returns>
     public override int GetHashCode()
-        => Collections.Values
-            .Select(x => x.GetHashCode())
-            .Aggregate((x, y) => x ^ y);
+    {
+        var hash = 0;
+        foreach (var kvp in Collections)
+            hash ^= HashCode.Combine(kvp.Key, kvp.Value.Instances.Count);
+        return HashCode.Combine(hash, Collections.Count);
+    }
 
 
     internal IEnumerable<EntityUpdate> ComputeChanges(string collection, InstanceCollection updated)
