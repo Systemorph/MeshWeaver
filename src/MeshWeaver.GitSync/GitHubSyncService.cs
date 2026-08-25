@@ -580,8 +580,39 @@ public sealed class GitHubSyncService
         var contentSyncs = ContentAssetMapper.ToContentSyncs(
             spaceId, classified.Where(c => c.Asset is not null).Select(c => c.Asset!));
 
-        return classified
-            .Where(c => c.Asset is null)
+        // The adopt-only import mode (Modules:ImportSourceNodes=false, MeshWeaver#2193 §B):
+        // compile inputs (Source/, Test/) are not persisted as nodes — their compiled form is the
+        // prebuilt bundle, and the text stays browsable in the repo. Reported ONCE, with the
+        // count, on the activity (never per file — the O(n²) progress-write rule above); and the
+        // sources-skipped-but-still-compiling misconfiguration is warned about, never silent.
+        var importSourceNodes = Graph.Configuration.PrebuiltAssemblySeeder
+            .ImportSourceNodes(hub.ServiceProvider);
+        var nodeCandidates = classified.Where(c => c.Asset is null).ToArray();
+        if (!importSourceNodes)
+        {
+            var sources = nodeCandidates
+                .Where(c => NodeFileMapper.IsCompileInputPath(
+                    NodeFileMapper.RelativePath(c.File.Path, spaceId)))
+                .ToArray();
+            if (sources.Length > 0)
+            {
+                progress?.Invoke(
+                    $"{sources.Length} compile-input file(s) (Source/, Test/) were not persisted "
+                    + $"as nodes ({Graph.Configuration.PrebuiltAssemblySeeder.ImportSourceNodesConfigKey}=false) "
+                    + "— their compiled form arrives in the prebuilt bundle.",
+                    LogLevel.Information);
+                if (!Graph.Configuration.PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider))
+                    progress?.Invoke(
+                        $"{Graph.Configuration.PrebuiltAssemblySeeder.ImportSourceNodesConfigKey}=false while "
+                        + $"{Graph.Configuration.PrebuiltAssemblySeeder.RequirePrebuiltConfigKey} is not set: "
+                        + "this mesh still compiles on a miss, and a recompile of any affected type "
+                        + "will fail for lack of sources. Set both keys together (adopt-only), or neither.",
+                        LogLevel.Warning);
+                nodeCandidates = nodeCandidates.Except(sources).ToArray();
+            }
+        }
+
+        return nodeCandidates
             .Select(c => ParseFile(c.File, spaceId))
             .Merge(8)
             .ToList()

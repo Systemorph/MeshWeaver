@@ -76,4 +76,28 @@ public class NodeFileMapperTest
         Assert.Equal(("Docs", ""), (docsId, docsNs));
         Assert.Equal(("Intro", "Docs"), (introId, introNs));
     }
+
+    /// <summary>
+    /// The compile-input predicate behind <c>Modules:ImportSourceNodes=false</c> (MeshWeaver#2193
+    /// §B): only DIRECTORY segments named exactly <c>Source</c>/<c>Test</c> match — a node FILE
+    /// backing a Test/ folder is a node, and folders that merely contain the words are content.
+    /// </summary>
+    [Fact]
+    public void CompileInputPaths_AreTheSourceAndTestDirectories_Exactly()
+    {
+        // A type's own compile inputs, and a partition-shared root.
+        Assert.True(NodeFileMapper.IsCompileInputPath("Store/Plugin/Source/PluginContent.cs"));
+        Assert.True(NodeFileMapper.IsCompileInputPath("Store/Plugin/Test/PluginCoverTests.cs"));
+        Assert.True(NodeFileMapper.IsCompileInputPath("Source/Shared.cs"));
+        Assert.True(NodeFileMapper.IsCompileInputPath("Test/SharedTests.cs"));
+
+        // The node FILE backing a Test/ folder is a node, not an input.
+        Assert.False(NodeFileMapper.IsCompileInputPath("Store/Plugin/Test.json"));
+        Assert.False(NodeFileMapper.IsCompileInputPath("Store/Source.json"));
+        // Names that merely contain the words are content.
+        Assert.False(NodeFileMapper.IsCompileInputPath("Edu/Sources/Reading.md"));
+        Assert.False(NodeFileMapper.IsCompileInputPath("Edu/Testing/Intro.md"));
+        // …and the match is case-sensitive, like the layout convention itself.
+        Assert.False(NodeFileMapper.IsCompileInputPath("Edu/source/x.cs"));
+    }
 }
