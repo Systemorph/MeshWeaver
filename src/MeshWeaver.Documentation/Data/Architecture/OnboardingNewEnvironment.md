@@ -9,12 +9,20 @@ Category: Architecture
 
 A "new environment" is an additional Memex portal — its own domain, database, and
 sign-in — running on the **shared AKS cluster** (`<aks-cluster>` / `<aks-resource-group>`,
-swedencentral). Each environment lives under `deploy/aks/envs/<env>/`; the only one tracked in this
-repo is the reference template `deploy/aks/envs/example/` — per-tenant env folders are git-ignored
-because their directory names are tenant identities.
-The shared platform (cluster, ingress, Postgres server, Key Vault, ACR) is brought up
-once — see the AKS deploy runbook (`deploy/aks/DEPLOY-RUNBOOK.md` in the repository); this guide
-adds an environment on top of it.
+swedencentral).
+
+> 🚨 **This page is the MECHANISM, not the runbook.** Per-environment folders moved OUT of this
+> repository on 2026-08-08/09 (commit `a69959165`) — their directory names are tenant identities.
+> The maintained, ordered operator procedure lives in the **private `Systemorph/Memex` repository**
+> (`docs/new-deployment.md`, with the inventory in `deployments/aks/envs.json`), and that copy is
+> authoritative wherever this page and it disagree. What remains here is the part that is genuinely
+> public: what is shared vs separate, the chart's config pass-through rule, the self-update model,
+> and the gotchas. The only env folder still in this repository is the reference template
+> `deploy/aks/envs/example/`, kept as a shape to copy — **not** as the place a real environment lives.
+
+The shared platform (cluster, ingress, Postgres server, Key Vault, ACR) is brought up once — see
+the AKS deployment sample (`deploy/aks/README.md` in the repository); this guide adds an
+environment on top of it.
 
 ## Shared vs. separate
 
@@ -31,7 +39,9 @@ adds an environment on top of it.
 
 ## 1. Scaffold the env folder
 
-Copy the template folder `deploy/aks/envs/example/` to `deploy/aks/envs/<env>/`:
+Copy the reference template `deploy/aks/envs/example/` — the real env folder is created in the
+**private ops repository**, not here (see the note above). These are the files it contains and what
+each one carries:
 
 | File | What to change |
 |---|---|
@@ -84,16 +94,23 @@ PORTAL_MI_CLIENT_ID=$(az identity show -g $RG -n <portal-identity> --query clien
 
 ## 3. Deploy + issue TLS
 
+> 🚨 **The connection host is the server FQDN, not a private IP.** The servers moved on 2026-08-24,
+> and a stale private-IP address here would revert that migration. The FQDN is safe with a password:
+> `AzurePostgres.UsesManagedIdentityAuth` (`src/MeshWeaver.Hosting.PostgreSql/AzurePostgres.cs`)
+> takes the Entra-token path only when the host carries the Azure suffix **AND no password is
+> present**, so FQDN + password deliberately takes plain Npgsql with `SslMode=Require` — pinned by
+> `AzurePostgresAuthSelectionTests`.
+
 ```bash
-STAGE=$(mktemp -d); cp deploy/aks/envs/<env>/* "$STAGE"/; cp -r deploy/helm "$STAGE"/helm
-export MEMEX_PG_CONN='Host=<PG_PRIVATE_IP>;Port=5432;Username=memexadmin;Password=<PW>;Database=<env>;SslMode=Require;Trust Server Certificate=true'
+STAGE=$(mktemp -d); cp <env-folder-from-the-private-ops-repo>/* "$STAGE"/; cp -r deploy/helm "$STAGE"/helm
+export MEMEX_PG_CONN='Host=<pg-server>.postgres.database.azure.com;Port=5432;Username=memexadmin;Password=<PW>;Database=<env>;SslMode=Require;Trust Server Certificate=true'
 export IMAGE_TAG=<sha>
 ( cd "$STAGE" && az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
     --command "MEMEX_PG_CONN='$MEMEX_PG_CONN' IMAGE_TAG='$IMAGE_TAG' bash deploy.sh" --file . )
 # Verify BEFORE DNS/TLS (host still unresolved or pointing elsewhere):
 curl -sS -k -o /dev/null -w "%{http_code}\n" --resolve <host>:443:$INGRESS_IP https://<host>/
 # Then issue the cert (needs the A-record to resolve publicly):
-( cd deploy/aks/envs/<env> && az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "bash tls.sh" --file tls.sh )
+( cd <env-folder-from-the-private-ops-repo> && az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "bash tls.sh" --file tls.sh )
 ```
 
 ## Self-update: first-install checklist
@@ -307,6 +324,6 @@ for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " https://<host>/
 
 ## Related
 
-- AKS Deploy Runbook — `deploy/aks/DEPLOY-RUNBOOK.md` in the repository — the one-time shared-platform bring-up.
+- AKS deployment sample — `deploy/aks/README.md` in the repository — the one-time shared-platform bring-up (the former `DEPLOY-RUNBOOK.md` was folded into it).
 - [Memex Cloud Deployment](/Doc/Architecture/MemexCloudDeployment) · [Deployment Options](/Doc/Architecture/DeploymentOptions)
 - [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding) · [Feature Flags](/Doc/Architecture/FeatureFlags)

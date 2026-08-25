@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -390,6 +392,160 @@ public class NodeTypeCompileParkTest(ITestOutputHelper output) : MonolithMeshTes
             .IsParked(typePath).Should().BeTrue(
                 "a deterministic compile error must park the type");
         Output.WriteLine($"{typePath} settled at Error and is parked.");
+    }
+
+    // ── 🅿️ #2260 — the park is never lifted by an AUTOMATIC re-drive ────────────────────────
+    //
+    // RequirePrebuiltParkTest catches the defect only by CONSEQUENCE (it happened to read
+    // IsParked inside the un-park → re-park window). These three pin the invariant itself,
+    // directly on the re-drive's commit step, with a real registry and no timing at all.
+
+    private const string RedrivePath = $"{Partition}/RedriveCommit";
+
+    private static MeshNode SettledFailure(
+        string? failedBuildInputs, IReadOnlyDictionary<string, long>? sources,
+        CompilationStatus status = CompilationStatus.Error) =>
+        new("RedriveCommit", Partition)
+        {
+            Name = "Re-drive commit",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Configuration = "config => config",
+                CompilationStatus = status,
+                CompilationError = "the recorded verdict",
+                CurrentSourceVersions = sources,
+                FailedBuildInputs = failedBuildInputs,
+            }
+        };
+
+    /// <summary>Parks <see cref="RedrivePath"/> on a FRESH registry instance (never the mesh's —
+    /// no shared state to bleed) using the real, deterministic park path.</summary>
+    private NodeTypeCompileParkRegistry ParkedRegistry(IReadOnlyDictionary<string, long>? sources)
+    {
+        var registry = new NodeTypeCompileParkRegistry();
+        registry.OnCompileFailed(
+            Mesh, RedrivePath, "the recorded verdict", deterministic: true,
+            recipientUserId: null, sources: sources, logger: null);
+        registry.IsParked(RedrivePath).Should().BeTrue("the fixture must start from a real park");
+        return registry;
+    }
+
+    /// <summary>
+    /// 🚨 THE invariant, stated directly: <b>a park, once placed, is never removed by a re-drive
+    /// that did not observe it.</b>
+    ///
+    /// <para>The re-drive fires from a SNAPSHOT. By the time its write commits, a fresh terminal
+    /// failure may have parked the type again — which is exactly what the adopt-only gate
+    /// (<c>Modules:RequirePrebuilt</c>) does on every refused Pending flip. Committing against
+    /// that state, the re-drive declines to flip; before the fix it had ALREADY un-parked
+    /// unconditionally, so nothing re-parked afterwards and the type was left neither parked nor
+    /// re-driven — the one state the park exists to make impossible.</para>
+    /// </summary>
+    [Fact]
+    public void RedriveCommit_AgainstAVerdictFormedUnderTheLiveInputs_LeavesTheParkUntouched()
+    {
+        var sources = ImmutableDictionary<string, long>.Empty;
+        var registry = ParkedRegistry(sources);
+        // The state the re-drive is committing against: the verdict now records EXACTLY the live
+        // compile inputs, i.e. this type has already had its attempt on this deployment.
+        var curr = SettledFailure(
+            NodeTypeCompilationHelpers.BuildInputsToken(modulesHash: null, sources), sources);
+
+        var result = NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
+            curr, RedrivePath, modulesHash: null, registry);
+
+        result.Should().BeSameAs(curr, "a declined re-drive must write nothing");
+        registry.IsParked(RedrivePath).Should().BeTrue(
+            "a re-drive that does not flip the type must not remove the park it never observed — "
+            + "nothing would re-park it, and 'parked ⇒ no later trigger can storm' would be false");
+        registry.TryConsumeRetryAdmission(RedrivePath).Should().BeFalse(
+            "…and it must not leave a retry admission behind either, which a later stray Pending "
+            + "flip would consume to get through the parked short-circuit");
+    }
+
+    /// <summary>
+    /// The positive half, and the reason the fix is an ADMISSION rather than a validated un-park:
+    /// a genuinely stale verdict still gets its one fresh attempt, and the park STILL never
+    /// moves — so <c>IsParked</c> is true at every instant, including the whole
+    /// Pending → refusal → re-park round-trip that used to run un-parked.
+    /// </summary>
+    [Fact]
+    public void RedriveCommit_AgainstAGenuinelyStaleVerdict_AdmitsOneRetry_WithoutUnparking()
+    {
+        var sources = ImmutableDictionary<string, long>.Empty;
+        var registry = ParkedRegistry(sources);
+        // "never stamped" — the verdict records nothing about the inputs it was formed under.
+        var curr = SettledFailure(failedBuildInputs: null, sources);
+
+        var result = NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
+            curr, RedrivePath, modulesHash: null, registry);
+
+        var flipped = result.Content.Should().BeOfType<NodeTypeDefinition>().Subject;
+        flipped.CompilationStatus.Should().Be(CompilationStatus.Pending,
+            "a stale verdict earns exactly one fresh attempt");
+        flipped.FailedBuildInputs.Should().Be(
+            NodeTypeCompilationHelpers.BuildInputsToken(modulesHash: null, sources),
+            "the bookkeeping and the flip land TOGETHER, so the trigger is false the instant it fires");
+
+        registry.IsParked(RedrivePath).Should().BeTrue(
+            "the automatic re-drive never lifts the park — it only asks to be let through");
+        registry.TryConsumeRetryAdmission(RedrivePath).Should().BeTrue(
+            "the compile watcher's parked short-circuit consumes this admission to let the flip through");
+        registry.TryConsumeRetryAdmission(RedrivePath).Should().BeFalse(
+            "…and it is ONE-SHOT: every later trigger still meets the park");
+    }
+
+    /// <summary>
+    /// 🚨 The leak the admission could otherwise cause, pinned: on a type that is NOT parked — the
+    /// COMMON case, since a failure predating this process is not in the in-memory registry at
+    /// all — the re-drive must flip and leave NOTHING behind.
+    ///
+    /// <para>An admission granted here would never be consumed (the parked short-circuit it exists
+    /// to pass is not taken), so it would sit in the registry until some LATER park, where a stray
+    /// Pending flip could spend it and get through the very containment this PR restores. Gating
+    /// the grant on <c>IsParked</c> establishes "an admission implies a standing park", and both
+    /// park-removal paths clear admissions — so none can outlive its park.</para>
+    /// </summary>
+    [Fact]
+    public void RedriveCommit_OnATypeThatIsNotParked_FlipsAndLeavesNoAdmissionBehind()
+    {
+        var sources = ImmutableDictionary<string, long>.Empty;
+        // Never parked: exactly the "failure predates this PROCESS" shape.
+        var registry = new NodeTypeCompileParkRegistry();
+        registry.IsParked(RedrivePath).Should().BeFalse("the fixture must start un-parked");
+        var curr = SettledFailure(failedBuildInputs: null, sources);
+
+        var result = NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
+            curr, RedrivePath, modulesHash: null, registry);
+
+        result.Content.Should().BeOfType<NodeTypeDefinition>().Subject
+            .CompilationStatus.Should().Be(CompilationStatus.Pending,
+                "an un-parked stale verdict still earns its attempt — nothing is short-circuiting it");
+        registry.TryConsumeRetryAdmission(RedrivePath).Should().BeFalse(
+            "an admission is meaningful ONLY for a parked type; one granted here would never be "
+            + "consumed and would wait for a LATER park, where a stray trigger could spend it");
+    }
+
+    /// <summary>
+    /// A compile already in flight (a concurrent release request, an enrichment self-heal) —
+    /// the re-drive must write nothing, admit nothing, and leave the park exactly as it found it.
+    /// </summary>
+    [Fact]
+    public void RedriveCommit_WhileACompileIsInFlight_LeavesTheParkAndTheNodeUntouched()
+    {
+        var sources = ImmutableDictionary<string, long>.Empty;
+        var registry = ParkedRegistry(sources);
+        var curr = SettledFailure(
+            failedBuildInputs: null, sources, status: CompilationStatus.Compiling);
+
+        var result = NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
+            curr, RedrivePath, modulesHash: null, registry);
+
+        result.Should().BeSameAs(curr, "an in-flight compile must never be clobbered");
+        registry.IsParked(RedrivePath).Should().BeTrue("…and the park must survive it");
+        registry.TryConsumeRetryAdmission(RedrivePath).Should().BeFalse(
+            "no flip, no admission");
     }
 
     /// <summary>

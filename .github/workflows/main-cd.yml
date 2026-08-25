@@ -790,161 +790,14 @@ jobs:
           -p:ContainerRepository=mw-plugin-test
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
 
-  # ─────────────────────────── portal-next (Next.js) ─────────────────────────
-  # The React/Next.js portal. It is NOT a .NET project, so it cannot use the
-  # `dotnet publish -t:PublishContainer` shape the other three legs share — it builds from
-  # clients/portal-next/Dockerfile with the `clients/` directory as context (the app aliases
-  # @meshweaver/react and @meshweaver/client-web to their SOURCE trees in ../react and
-  # ../grpc-web, so the context has to span all three).
-  #
-  # 🚨 WHY THIS JOB EXISTS. Until now nothing built this image in CI: every deployment ran
-  # `memex-portal-next:guiship-20260705-2109`, a hand-tagged one-off from 2026-07-05 that drifted
-  # 11 commits behind main. Every portal-next change — the side-panel actions, the client
-  # localization, the whole React GUI half — merged to main and then simply never shipped, with no
-  # signal that it hadn't. A feature-flagged surface that silently stops receiving updates is worse
-  # than one that is switched off, because it looks live.
-  #
-  # amd64 ONLY, on purpose: every AKS node in <aks-cluster> is amd64, and the runner is amd64,
-  # so this builds natively with no QEMU emulation. memex-local builds its own arm64 image into
-  # Colima's Docker store for local dev (see clients/portal-next/DEPLOY.md), so nothing needs the
-  # arm64 variant from ACR.
-  #
-  # 🚨 Gated on `gate`, like every other leg — it used to gate on
-  # `workflow_run.conclusion == 'success'` instead. That is the umbrella conclusion the DELIVERY
-  # GATE block above exists to reject: one starved job that never ran a step poisons it, and this
-  # leg alone would then be SKIPPED while the other four shipped — silently, the exact
-  # partial-release shape of #1026. Under all-or-nothing that inconsistency would also be the one
-  # way a skipped-but-not-failed leg could block the whole set, so the two gates must agree.
-  portal-next-image:
-    name: "Build + push portal-next image"
-    needs: gate
-    if: needs.gate.outputs.publish == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    outputs:
-      version: ${{ steps.vars.outputs.version }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # Build the EXACT commit the tests passed on — not whatever main is now.
-          ref: ${{ needs.gate.outputs.sha }}
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-      # PREREQUISITE — grpc-web codegen. grpc-web/src/connection.ts imports ./gen/mesh_pb, which is
-      # GENERATED (gitignored) by `buf generate` from the mesh .proto in the .NET tree
-      # (src/MeshWeaver.Hosting.Grpc/Protos) — OUTSIDE the clients/ build context, and buf ships
-      # glibc binaries that will not run in the musl Alpine build image. So it MUST happen here, on
-      # the host, before the docker build. Without it the Next build fails with
-      # "Module not found: Can't resolve './gen/mesh_pb'".
-      - name: Generate gRPC-web client (buf)
-        run: |
-          set -euo pipefail
-          # `npm ci` — clients/grpc-web now COMMITS its package-lock.json. It used to be gitignored,
-          # which forced `npm install` here (and everywhere in clients.yml) and left this image leg
-          # floating: a caret dependency could resolve differently on any given run, so the shipped
-          # bundle was not reproducible. That is exactly how @fluentui/react-components 9.74.6 turned
-          # the Clients workflow red repo-wide on 2026-08-11 with no commit behind it.
-          npm --prefix clients/grpc-web ci --no-audit --no-fund
-          npm --prefix clients/grpc-web run gen
-          test -f clients/grpc-web/src/gen/mesh_pb.ts
-      # ⚠️ PRE-EXISTING DRIFT, deliberately left alone here: this hand-writes `3.0.0-ci.<n>` while
-      # every .NET leg computes `$(Version)` = `3.0.0-rc1.ci.<n>` (Directory.Build.props takes
-      # PlatformVersion=3.0.0-rc1 as the prefix). So portal-next's version tag has never matched
-      # its siblings'. Nothing selects it — SelfUpdateOptions only ever reads memex-portal-ai, and
-      # deployments pin portal-next explicitly — and changing a published tag shape would break
-      # whatever is pinned today, so it is reported, not silently "fixed" inside this change. The
-      # cross-image identity every leg DOES share is the short SHA, which is what verify-images
-      # and the reconciler assert on.
-      - name: Compute image version
-        id: vars
-        run: |
-          set -euo pipefail
-          echo "version=3.0.0-ci.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-      - name: Ensure Azure CLI
-        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-      - name: Azure login (OIDC)
-        uses: azure/login@v3
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: ACR login
-        run: az acr login --name meshweaver
-      # DOCKER_BUILDKIT=1 explicitly: the Dockerfile opens with `# syntax=docker/dockerfile:1` and
-      # relies on Dockerfile.dockerignore (a per-Dockerfile ignore, a BuildKit-only feature) to keep
-      # node_modules/.next/dist out of the context. Without BuildKit that ignore is silently not
-      # applied and the stale host artefacts get copied into the image.
-      #
-      # 🚨 Staging tag only, same as the .NET legs. Building locally and pushing later is not an
-      # option ACROSS jobs — the runner's image store dies with the job — so "hold the push" here
-      # means "push under a name nothing can select" exactly as it does everywhere else.
-      - name: Build portal-next
-        env:
-          DOCKER_BUILDKIT: "1"
-        run: >
-          docker build
-          --platform linux/amd64
-          -f clients/portal-next/Dockerfile
-          -t ${{ env.ACR }}/memex-portal-next:${{ needs.gate.outputs.staging_tag }}
-          clients/
-      - name: Push staging tag
-        run: docker push ${{ env.ACR }}/memex-portal-next:${{ needs.gate.outputs.staging_tag }}
+  # 🚨 portal-next is NOT built here any more. Its sources and its image lane live in
+  # MeshWeaver.Plugins (MeshWeaver#2169). It is publishable from there independently because
+  # portalNext is opt-in (chart default enabled: false) and the self-updater never rolls it —
+  # nothing waits on it, so it does not belong to this repo's all-or-nothing set.
 
-  # ──────────────────────── PROMOTE (the all-or-nothing act) ───────────────────
-  # Nothing above this line is visible to any consumer. Every leg pushed its layers under the
-  # per-run staging tag; this job — and ONLY if all five legs succeeded — applies the tags that
-  # deployments and self-updaters actually resolve.
-  #
-  # 🚨 NO `if:` beyond the gate check. The default job condition IS the policy: a job with `needs`
-  # and no always()/!cancelled() runs only when every need SUCCEEDED, and a need that was skipped
-  # or failed skips this job. Adding always()/!cancelled()/continue-on-error here would reinstate
-  # exactly the partial publish this exists to prevent.
-  #
-  # Manifest-only. `docker buildx imagetools create --tag X --tag Y <src>` re-points tags at
-  # already-pushed content — no layer moves, no rebuild. MEASURED against the real registry, tag
-  # to tag within one repository (which is all this job ever does): memex-portal-ai 2.1 s,
-  # memex-portal-next 1.9 s. The whole promotion is ~15 s of work inside a ~1 min job.
-  # (The same primitive already mirrored mw-plugin-test to GHCR, so it is proven with these
-  # credentials — and a manifest PUT is exactly the permission every leg already exercises.
-  # `az acr import` would also work server-side, but importImage/action is NOT in the AcrPush
-  # role this identity is known to hold, and discovering that on main is not a good trade.)
-  #
-  # Verified on the real registry, both shapes: promoting a multi-arch source preserves the index
-  # exactly (`application/vnd.oci.image.index.v1+json`, linux/amd64 + linux/arm64 — so
-  # verify-images' architecture assertion still passes on a promoted tag). Promoting the
-  # single-arch memex-portal-next WRAPS it in a one-entry manifest list
-  # (`…manifest.list.v2+json`), a media-type change from today's plain manifest that every OCI
-  # runtime resolves identically; nothing asserts or pins portal-next's media type.
-  #
-  # ── ORDERING IS THE ROLLBACK STORY ────────────────────────────────────────────────────────────
-  # Tagging five repositories is not one atomic act, so the design makes a mid-flight failure
-  # UNOBSERVABLE instead of adding a compensating delete that can fail on its own (and cannot
-  # restore a moving pointer anyway — untagging `latest` destroys it rather than reverting it,
-  # and needs AcrDelete, which this identity may not have).
-  #
-  #   Phase A — identity tags (<version>, <sha>) on every repo EXCEPT memex-portal-ai's version.
-  #   Phase B — moving pointers: `main` everywhere, `latest` on mw-plugin-test, the GHCR mirror.
-  #   Phase C — memex-portal-ai:<version>. ONE registry PUT, and the LAST thing this pipeline does.
-  #
-  # Phase C is the arming write and nothing else is: SelfUpdateHostedService lists tags for
-  # memex-portal-ai ONLY, picks the newest tag matching ^\d+\.\d+\.\d+, and patches the portal AND
-  # migration Deployments to it. So:
-  #   * a failure in A or B leaves NO consumer-visible partial release — no install can select a
-  #     version that was never written. The residue is inert identity/pointer tags on a commit
-  #     that did not ship; they are superseded by the next run and nothing resolves them.
-  #   * a failure IN C is a single PUT that either happened or did not — there is no half-armed
-  #     state to unwind.
-  #   * whatever the failure, `verify-images` below still fails and `alert-on-failure` still
-  #     files the issue, and the hourly reconciler re-drives HEAD.
-  # Deliberately NOT here: a cleanup pass that untags staging. It would buy nothing — accumulating
-  # tags per .NET repo per run go DOWN, 6 → 5 (staging index + its two RID variants + version +
-  # sha, versus today's version/sha indexes plus four RID-suffixed variants) — and it would add a
-  # delete permission and a second failure mode to the one job that must not have either.
   promote:
     name: "Promote: tag the full set (all-or-nothing)"
-    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image]
+    needs: [gate, portal-image, migration-image, plugin-test-image]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -954,7 +807,6 @@ jobs:
       V_PORTAL: ${{ needs.portal-image.outputs.version }}
       V_MIGRATION: ${{ needs.migration-image.outputs.version }}
       V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
-      V_NEXT: ${{ needs.portal-next-image.outputs.version }}
     steps:
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
@@ -986,13 +838,12 @@ jobs:
           }
           promote memex-migration   "$V_MIGRATION" "$SHA"
           promote mw-plugin-test    "$V_PLUGIN"    "$SHA"
-          promote memex-portal-next "$V_NEXT"      "$SHA"
           # The portal's SHA tag, but NOT its version tag — see phase C.
           promote memex-portal-ai   "$SHA"
       - name: "Phase B — moving pointers (main, latest, GHCR mirror)"
         run: |
           set -euo pipefail
-          for repo in memex-migration memex-portal-next memex-portal-ai; do
+          for repo in memex-migration memex-portal-ai; do
             echo "→ $repo: main"
             docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" "${{ env.ACR }}/$repo:$STAGING"
           done
@@ -1035,7 +886,6 @@ jobs:
             echo "- memex-portal-ai \`$V_PORTAL\`, \`$SHA\`, \`main\`"
             echo "- memex-migration \`$V_MIGRATION\`, \`$SHA\`, \`main\`"
             echo "- mw-plugin-test \`$V_PLUGIN\`, \`$SHA\`, \`main\`, \`latest\` (ACR + GHCR)"
-            echo "- memex-portal-next \`$V_NEXT\`, \`$SHA\`, \`main\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ────────── BAKE THE PLATFORM'S OWN CONTENT *IN THE SHIPPED IMAGE*, THEN PUBLISH ──────────
@@ -1493,7 +1343,7 @@ jobs:
   # question to decide whether HEAD needs reconciling; the two must never disagree.
   verify-images:
     name: "Verify every image shipped"
-    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote]
+    needs: [gate, portal-image, migration-image, plugin-test-image, promote]
     if: always() && needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1607,7 +1457,7 @@ jobs:
     # delivery-verdict is in this list ON PURPOSE: it is the job that turns the two
     # invisible do-nothing states (green-but-stuck reconcile, red-main push) into failures,
     # and a failure nobody is paged for is still invisible.
-    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote, verify-images, publish-bake, delivery-verdict]
+    needs: [gate, portal-image, migration-image, plugin-test-image, promote, verify-images, publish-bake, delivery-verdict]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1657,5 +1507,5 @@ jobs:
   # credentials — which is also why the old `az aks command invoke` deploy job was deleted: it
   # required a central service principal with per-cluster Azure RBAC (the `commandResults/read`
   # authorization failure on 2026-06-29), a model that cannot scale to installs prod doesn't manage.
-  # See SelfUpdate.md / DEPLOY-RUNBOOK.md for enabling self-update on an environment (the SA + RBAC are
+  # See deploy/aks/SELF-UPDATE.md / deploy/aks/README.md for enabling self-update on an environment (the SA + RBAC are
   # in the Helm chart; set selfUpdate.azureClientId and grant the UAMI AcrPull).
