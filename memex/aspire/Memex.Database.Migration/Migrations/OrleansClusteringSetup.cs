@@ -284,8 +284,19 @@ public static class OrleansClusteringSetup
             return;
         // Search Path may list several schemas; the FIRST is where unqualified CREATEs land, and
         // it is therefore the only one this step owns.
-        schema = schema.Split(',')[0].Trim().Trim('"');
-        if (schema.Length == 0 || string.Equals(schema, "public", StringComparison.OrdinalIgnoreCase))
+        var raw = schema.Split(',')[0].Trim();
+        if (raw.Length == 0)
+            return;
+        // 🚨 Match Postgres's OWN folding, or this creates a schema the silo cannot see. An
+        // UNQUOTED identifier is folded to lower case when the connection applies its search
+        // path, so `Search Path=Orleans` resolves to `orleans`; creating a quoted "Orleans"
+        // would make a SECOND, differently-cased schema and leave the resolved one empty. A
+        // quoted entry means the case is deliberate and is preserved verbatim.
+        var quoted = raw.Length >= 2 && raw[0] == '"' && raw[^1] == '"';
+        schema = quoted
+            ? raw[1..^1].Replace("\"\"", "\"")
+            : raw.ToLowerInvariant();
+        if (schema.Length == 0 || string.Equals(schema, "public", StringComparison.Ordinal))
             return;
         await using var create = new NpgsqlCommand(
             $"CREATE SCHEMA IF NOT EXISTS \"{schema.Replace("\"", "\"\"")}\"", conn);
