@@ -461,9 +461,34 @@ public static class PackageInstaller
     /// it LOGS the distinction it can observe instead of pretending to know which it was.</para>
     /// </summary>
     private static IObservable<Unit> WaitForGating(
-        IWorkspace workspace, string root, ILogger? logger) =>
-        workspace.GetMeshNodeStream(CoverGrantPath(root))
-            .Where(node => node is not null)
+        IMessageHub hub, string root, ILogger? logger)
+    {
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return(Unit.Default);
+
+        var grant = CoverGrantPath(root);
+        // 🚨 A children LISTING, never an exact-path stream. The grant is OPTIONAL by this
+        // method's own contract ("a partition whose node type does not gate never writes it"),
+        // and an exact-path GetMeshNodeStream on an absent node does not wait — the owner answers
+        // an authoritative routing NotFound that TERMINATES the stream, and that NotFound opens
+        // MeshNodeStreamCache's storm-breaker window on the path. The breaker fast-fails WRITES
+        // too, so this wait SUPPRESSED THE VERY WRITE IT WAS WAITING FOR: the gating pass's own
+        // CreateOrUpdateNodeRequest for the grant then never completed, and the caller sat out its
+        // full 60 s request budget. Observed as `[SYNC_STREAM] OnError … Owner={root}/_Access/
+        // Public_Access` → `No node found …` → `CreateOrUpdateNodeRequest … target <unset>` →
+        // TimeoutException → the provisioning plan failing in its create-home-root phase
+        // (Systemorph/MeshWeaver#2229 item A, reproduced on MeshWeaver.Education CI).
+        //
+        // A listing is empty-on-absent, so the watcher can be in place long before the node is
+        // written, and it is LIVE — the grant landing emits. Nothing here reads Content, so the
+        // index's lag costs at most one extra beat of waiting; existence is all this asks.
+        // See Doc/Architecture/CqrsAndContentAccess.md → "An OPTIONAL node".
+        return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{root}/_Access scope:children "
+                + $"nodeType:{AccessAssignmentNodeType.NodeType} select:path limit:{QueryLimit}"))
+            .Where(change => change.Items.Any(node =>
+                string.Equals(node.Path, grant, StringComparison.OrdinalIgnoreCase)))
             .Take(1)
             .Select(_ => Unit.Default)
             .Do(_ => logger?.LogInformation(
@@ -480,6 +505,7 @@ public static class PackageInstaller
                     root, GatingSettleTimeout.TotalSeconds);
                 return Observable.Return(Unit.Default);
             });
+    }
 
     public static IObservable<Unit> RunInstallHooks(IMessageHub hub, string partition, ILogger? logger)
     {
@@ -1417,7 +1443,7 @@ public static class PackageInstaller
                                 // that makes the partition READABLE runs off this activation, so
                                 // returning here reports a clean install over a partition whose
                                 // cover still denies every viewer. Wait for the grant itself.
-                                .SelectMany(_ => WaitForGating(workspace, root, logger))
+                                .SelectMany(_ => WaitForGating(hub, root, logger))
                                 .Select(_ => true)
                             : Observable.Return(false)))
                 .Where(warmed => warmed)
