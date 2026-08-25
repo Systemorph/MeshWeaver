@@ -1,11 +1,14 @@
-namespace MeshWeaver.AI;
+namespace MeshWeaver.Mesh.Security;
 
 /// <summary>
-/// Encrypts / decrypts the literal credential stored on a
-/// <see cref="ModelProviderConfiguration.ApiKey"/> before it is persisted to
-/// (and read back from) the mesh — i.e. Postgres. Answers "is it safe to keep
-/// LLM keys in PG": with a master key configured the value at rest is AES-256-GCM
-/// ciphertext, so a DB / backup leak alone yields no usable key.
+/// Encrypts / decrypts a literal credential before it is persisted to (and read back from) the
+/// mesh — i.e. Postgres. Answers "is it safe to keep secrets in PG": with a master key configured
+/// the value at rest is AES-256-GCM ciphertext, so a DB / backup leak alone yields no usable key.
+///
+/// <para>Callers today: a model provider's <c>ApiKey</c>, a GitHub PAT
+/// (<c>GitHubCredential</c>), the Entra EA credential, and the plugin catalog's sync-token
+/// signing key. It lives in the platform rather than with any one of them precisely because it
+/// is none of their concern — see Systemorph/MeshWeaver#2276.</para>
 ///
 /// <para>Backward compatible: <see cref="Protect"/> is idempotent and
 /// <see cref="Unprotect"/> passes through any value not carrying the

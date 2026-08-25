@@ -1420,7 +1420,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <item><c>/login gateway &lt;base-url&gt; &lt;token&gt;</c> — a gateway/proxy (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL).</item>
     /// <item><c>/logout</c> — forget the stored credential.</item>
     /// </list>
-    /// The credential is encrypted at rest (<see cref="MeshWeaver.AI.IProviderKeyProtector"/>) and stored as
+    /// The credential is encrypted at rest (<see cref="MeshWeaver.Mesh.Security.IProviderKeyProtector"/>) and stored as
     /// the harness's <c>ModelProvider</c> node at <c>{user}/_Memex/{harnessId}</c> — the SAME path
     /// <c>ChatClientCredentialResolver.ResolveConnectCredential</c> reads, so writer and reader agree.
     /// </summary>
@@ -1698,7 +1698,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
         }
         var providerPath = $"{MeshWeaver.AI.ModelProviderNodeType.UserNamespacePath(owner)}/{harness.Id}";
-        var protector = Hub.ServiceProvider.GetService<MeshWeaver.AI.IProviderKeyProtector>();
+        var protector = Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Security.IProviderKeyProtector>();
         var stored = protector is null ? credential : protector.Protect(credential);
         var node = MeshWeaver.Mesh.MeshNode.FromPath(providerPath) with
         {
