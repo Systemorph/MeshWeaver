@@ -533,6 +533,28 @@ failed at 20 s — widening a wait is not a repair for an unbounded lag.
 [`CreateOrUpdateNodeRequest`](#upserts-createorupdatenoderequest--single-verb-no-delete-then-create),
 which reads persistence itself.
 
+🚨 **Do not over-apply this to a genuine SET — the worked counter-example is
+`src/MeshWeaver.Blazor.Portal/Chat/ThreadTokenChip.razor.cs:106`.** That chip reads `content` out of
+the very same `{thread}/_Usage scope:children` query this section just told you not to read a value
+from, **and it is correct.** It is summing a SET — every `_Usage/{model}` child — to paint a total.
+A briefly-stale total is a cosmetic artefact on screen; nothing decides anything on it.
+
+"Fixing" it into N point reads would be strictly worse in two ways: N per-node hub activations on
+every chat render, and — on a set that is legitimately EMPTY, i.e. a thread with no rounds yet —
+every one of those is an **absent-node point read**, which is the storm breaker in the first row
+above, now firing on the render path.
+
+So the rule is not about how many nodes you read. **It is about whether a stale answer DECIDES
+anything:**
+
+| The value… | Read it from |
+|---|---|
+| is displayed, and a stale one merely looks briefly wrong | the query, `content` and all |
+| **gates** something — a wait passes, a branch is taken, a write happens | the OWNER's `GetMeshNodeStream` |
+
+`ThreadTokenUsageTest` was in the second row and using the first row's primitive. The chip is in the
+first row and using it correctly. Same query, opposite verdicts.
+
 ---
 
 ## Live updates — stay subscribed on `GetMeshNodeStream`
