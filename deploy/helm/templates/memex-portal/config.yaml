@@ -269,6 +269,37 @@ data:
   Anthropic__Models__1: "{{ .Values.config.memex_portal.Anthropic__Models__1 }}"
   Anthropic__Models__2: "{{ .Values.config.memex_portal.Anthropic__Models__2 }}"
   AzureFoundry__Endpoint: "{{ .Values.config.memex_portal.AzureFoundry__Endpoint }}"
+  # ── OpenRouter models ────────────────────────────────────────────────────────
+  # 🚨 The FOURTH occurrence of the defect this file already warns about two blocks below
+  # (#1925, and #1778/#1780 before it): every OpenRouter__Models__N was set in both
+  # overlays and rendered by NOTHING, so the keys reached no container and no error was
+  # raised anywhere. The catalog is seeded from these keys by BuiltInLanguageModelProvider
+  # (an IStaticNodeProvider), so the effect was a portal whose model list silently did not
+  # match the reviewed configuration — and, worse, a re-render would have DROPPED the two
+  # models that were live, leaving no OpenRouter models at all.
+  #
+  # Written out INDEX BY INDEX, never a range, per this ConfigMap's contract: it names every
+  # key explicitly so that what reaches a container is reviewable here. Adding a model means
+  # adding a line — that cost is the point.
+  #
+  # An unset index renders "" and is inert: the seeder skips empty entries, so the list may
+  # be shorter than the slots. Extend the range when an environment needs more.
+  OpenRouter__Models__0: "{{ .Values.config.memex_portal.OpenRouter__Models__0 }}"
+  OpenRouter__Models__1: "{{ .Values.config.memex_portal.OpenRouter__Models__1 }}"
+  OpenRouter__Models__2: "{{ .Values.config.memex_portal.OpenRouter__Models__2 }}"
+  OpenRouter__Models__3: "{{ .Values.config.memex_portal.OpenRouter__Models__3 }}"
+  OpenRouter__Models__4: "{{ .Values.config.memex_portal.OpenRouter__Models__4 }}"
+  OpenRouter__Models__5: "{{ .Values.config.memex_portal.OpenRouter__Models__5 }}"
+  OpenRouter__Models__6: "{{ .Values.config.memex_portal.OpenRouter__Models__6 }}"
+  OpenRouter__Models__7: "{{ .Values.config.memex_portal.OpenRouter__Models__7 }}"
+  OpenRouter__Models__8: "{{ .Values.config.memex_portal.OpenRouter__Models__8 }}"
+  OpenRouter__Models__9: "{{ .Values.config.memex_portal.OpenRouter__Models__9 }}"
+  OpenRouter__Models__10: "{{ .Values.config.memex_portal.OpenRouter__Models__10 }}"
+  OpenRouter__Models__11: "{{ .Values.config.memex_portal.OpenRouter__Models__11 }}"
+  OpenRouter__Models__12: "{{ .Values.config.memex_portal.OpenRouter__Models__12 }}"
+  OpenRouter__Models__13: "{{ .Values.config.memex_portal.OpenRouter__Models__13 }}"
+  OpenRouter__Models__14: "{{ .Values.config.memex_portal.OpenRouter__Models__14 }}"
+  OpenRouter__Models__15: "{{ .Values.config.memex_portal.OpenRouter__Models__15 }}"
   AzureFoundry__Models__0: "{{ .Values.config.memex_portal.AzureFoundry__Models__0 }}"
   AzureFoundry__Models__1: "{{ .Values.config.memex_portal.AzureFoundry__Models__1 }}"
   AzureFoundry__Models__2: "{{ .Values.config.memex_portal.AzureFoundry__Models__2 }}"
@@ -318,6 +349,15 @@ data:
   {{- end }}
   {{- if hasKey .Values.config.memex_portal "Modules__Required__4" }}
   Modules__Required__4: "{{ .Values.config.memex_portal.Modules__Required__4 }}"
+  {{- end }}
+  # Convergence policy (MeshWeaver#2192): when a NodeType publishes a usable build, instances
+  # self-recycle onto it instead of waiting behind the "Recycle" banner. Off = the image default
+  # (banner). A self-updating portal that leaves this off chooses unbounded in-memory assembly
+  # generations on its type-hosting silos — the 2026-08-25 degradation (MeshWeaver#2194):
+  # superseded AssemblyLoadContexts stay rooted by serving instances, 17-20 GB + GC-bound while
+  # still Ready. Emitted only when a deployment sets it, like the Required list above.
+  {{- if hasKey .Values.config.memex_portal "Modules__AutoRecycleOnStaleBuild" }}
+  Modules__AutoRecycleOnStaleBuild: "{{ .Values.config.memex_portal.Modules__AutoRecycleOnStaleBuild }}"
   {{- end }}
   # ---- OpenAI-compatible provider (self-hosted / local: Ollama, vLLM, LM Studio, …) ----
   # Generic OpenAI-wire endpoint. Set Endpoint + Models (+ ApiKey in secrets) to seed a

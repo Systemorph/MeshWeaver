@@ -415,6 +415,25 @@ kubectl get deploy memex-portal-deployment -n <env> \
 volume silently misaligns an environment and a cluster can run an older volume set while the chart
 in git looks right. Diff live mounts against the chart after every deploy.
 
+### Degraded-but-Ready replica — intermittent hangs, `kubectl top` divergence
+
+Symptom: some requests hang or serve garbled state while most succeed, typically after a burst of
+content syncs or a scheduled bake. Cause class (2026-08-25, MeshWeaver#2194): each NodeType
+publication mints a new AssemblyLoadContext and serving instances stay on the OLD build behind the
+Recycle banner, so every superseded ALC stays rooted — the type-hosting silos climb to tens of GB
+and go GC-bound while still answering `/alive` (both post-startup probes), so Kubernetes never
+pulls them from rotation.
+
+```bash
+az aks command invoke -g <rg> -n <cluster> --command "kubectl top pods -n <ns> --no-headers"
+```
+
+One or two pods far above their siblings in BOTH memory and CPU = this. Remedy: `kubectl delete
+pod` the outliers (grace-drain; the Deployment replaces them). Prevention: enable
+`Modules:AutoRecycleOnStaleBuild` (MeshWeaver#2192) so instances converge onto each newly
+published build and old ALCs collect — mechanism in
+`src/MeshWeaver.Documentation/Data/Architecture/NodeTypeCompilation.md`.
+
 ## Known gaps / follow-ups
 - **Dump mount not applied to the live clusters** (2026-07-28): all three namespaces carry the dump
   env vars while no pod mounts `/data/dumps`, so every production `exit=139` so far produced no
