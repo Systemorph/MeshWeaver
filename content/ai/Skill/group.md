@@ -121,9 +121,16 @@ existing user → membership now; unknown → invitation + `AddToGroup` subscrip
 # 🚨 Email caveat — verify it actually sends
 
 The invitation email only goes out when the portal has **`Email:Enabled = true`** (Microsoft Graph
-`Mail.Send`). It defaults to **false** → `NoOpEmailSender` just logs. If email is off, the invitation
-still authorises onboarding and the durable grant still fires — but **no email is sent**; tell the user
-rather than reporting a phantom send. Check the deployment's `Email__Enabled`.
+`Mail.Send`) **AND** the `MeshWeaver.Mail.MicrosoftGraph` module landed. `Email:Enabled` defaults to
+**false** → `NoOpEmailSender` just logs. If email is off, the invitation still authorises onboarding
+and the durable grant still fires — but **no email is sent**; tell the user rather than reporting a
+phantom send. Check the deployment's `Email__Enabled`.
+
+`Enabled=true` with the module ABSENT is a **refused** configuration, not a working one: the
+invitation emailer does not start and logs an error naming the missing module, so the invitation
+stays un-emailed (`EmailSentAt` null) and goes out by itself once the module lands. It used to be
+stamped as sent while nothing was delivered (#2023) — if you see that on an old record, the
+invitation was never actually emailed.
 
 # Verify — never declare done without this
 
