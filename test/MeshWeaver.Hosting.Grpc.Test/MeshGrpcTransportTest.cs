@@ -420,6 +420,96 @@ public class MeshGrpcTransportTest(ITestOutputHelper output) : MonolithMeshTestB
         await connectB;
     }
 
+    /// <summary>
+    /// 🚨 <b>A client that went away is not a service-method failure</b> — issues #2138 / #2139.
+    ///
+    /// <para>The server-streaming <c>Connect</c> holds the call open while a background pump drains
+    /// the connection's channel to the response stream. When the client drops mid-stream, gRPC
+    /// finalises the HTTP request and answers the pump's next write with
+    /// <c>InvalidOperationException("Can't write the message because the request is complete.")</c>.
+    /// The pump had no guard, so that exception escaped through <c>Connect</c>'s <c>await pump</c>
+    /// and <c>Grpc.AspNetCore.Server.ServerCallHandler</c> logged
+    /// <c>fail: Error when executing service method 'Connect'</c> — a routine browser disconnect
+    /// filed as a service fault, with a stack trace pointing at our own frames.</para>
+    ///
+    /// <para><b>Fail-without:</b> this test's <c>await connect</c> throws that
+    /// InvalidOperationException. The client is already gone; there is nothing to fail.</para>
+    /// </summary>
+    [Fact]
+    public async Task Connect_survives_the_client_disconnect_race_on_the_write_pump()
+    {
+        var hub = Mesh;
+        var registry = hub.ServiceProvider.GetRequiredService<GrpcConnectionRegistry>();
+        var service = new MeshGrpcService(hub, registry);
+        var participant = new Address(GrpcHostingExtensions.NodeAddressType, Guid.NewGuid().ToString("N"));
+
+        // The response stream of a call whose request the client already completed: every write
+        // raises gRPC's own sentinel, exactly as HttpContextStreamWriter.WriteCoreAsync does.
+        var gone = new ThrowingStreamWriter<ServerFrame>(
+            () => new InvalidOperationException("Can't write the message because the request is complete."));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var connect = service.Connect(
+            new ConnectRequest { Address = JsonSerializer.Serialize(participant, hub.JsonSerializerOptions) },
+            gone,
+            new FakeServerCallContext(new Metadata(), cts.Token));
+
+        // The connect ack is the frame that races the disconnect — wait until the pump has tried it.
+        await gone.Attempted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+
+        await connect; // must COMPLETE, not throw: the call is over, and that is not an error.
+    }
+
+    /// <summary>
+    /// The bound on the fix: only a write that failed BECAUSE THE CALL IS OVER is benign. gRPC
+    /// raises <see cref="InvalidOperationException"/> for one other reason — two writes pending on
+    /// one response stream — and that would mean a second writer got hold of a stream this service
+    /// guarantees has exactly one. It must still fault the call.
+    /// </summary>
+    [Fact]
+    public async Task A_write_failure_that_is_not_the_disconnect_race_still_faults_the_call()
+    {
+        var hub = Mesh;
+        var registry = hub.ServiceProvider.GetRequiredService<GrpcConnectionRegistry>();
+        var service = new MeshGrpcService(hub, registry);
+        var participant = new Address(GrpcHostingExtensions.PythonAddressType, Guid.NewGuid().ToString("N"));
+
+        var broken = new ThrowingStreamWriter<ServerFrame>(
+            () => new InvalidOperationException("Only one write can be pending at a time."));
+        var inbound = Channel.CreateUnbounded<ClientFrame>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var open = service.Open(new ChannelStreamReader<ClientFrame>(inbound.Reader), broken,
+            new FakeServerCallContext(new Metadata(), cts.Token));
+        await inbound.Writer.WriteAsync(new ClientFrame
+        {
+            Connect = JsonSerializer.Serialize(participant, hub.JsonSerializerOptions)
+        }, cts.Token);
+
+        await broken.Attempted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // End the call NORMALLY (the client half-closes; the token never fires), so the only reason
+        // the pump could have failed is the fault itself.
+        inbound.Writer.Complete();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => open);
+    }
+
+    /// <summary>A response stream that refuses every write with a chosen exception.</summary>
+    private sealed class ThrowingStreamWriter<T>(Func<Exception> failure) : IServerStreamWriter<T>
+    {
+        /// <summary>Completes on the first write attempt — the moment the race is live.</summary>
+        public TaskCompletionSource Attempted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public WriteOptions? WriteOptions { get; set; }
+
+        public Task WriteAsync(T message)
+        {
+            Attempted.TrySetResult();
+            throw failure();
+        }
+    }
+
     // Read the next outbound frame, failing fast with a clear locus instead of hanging to the watchdog.
     private static async Task<ServerFrame> NextFrame(CapturingStreamWriter<ServerFrame> writer, string step, TimeSpan timeout)
     {

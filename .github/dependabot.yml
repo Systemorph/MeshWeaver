@@ -27,11 +27,6 @@ updates:
   # suppress the same packages everywhere else. It has its own config below.
   - package-ecosystem: npm
     directories:
-      - "/clients/react"
-      - "/clients/grpc-web"
-      - "/clients/typescript"
-      - "/clients/portal-next"
-      - "/clients/portal"
     schedule:
       interval: weekly
       day: monday

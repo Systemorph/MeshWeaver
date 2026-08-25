@@ -3,13 +3,36 @@
 #                        chart Deployment/StatefulSet into an HA, persistent
 #                        AKS workload.
 #
-# The ../helm chart ships replicas: 1 with emptyDir volumes. Rather than fork the
-# chart, apply these patches AFTER `helm install`:
+# 🚨 LEGACY - DO NOT APPLY. Kept for the one thing the chart still does not cover
+# (the zone-spread topologySpreadConstraints, below); everything else here is now
+# rendered by the chart, and re-applying this patch RE-CREATES A PRODUCTION OUTAGE.
+#
+# What changed. The header below was written when ../helm shipped `replicas: 1` with
+# emptyDir volumes, so the documented procedure was to `kubectl patch` afterwards:
 #
 #   kubectl patch deployment memex-portal-deployment -n memex \
-#     --type strategic --patch-file portal-ha-patch.yaml
+#     --type strategic --patch-file portal-ha-patch.yaml       # <- DO NOT
 #   kubectl patch statefulset memex-postgres-statefulset -n memex \
-#     --type strategic --patch-file postgres-pvc-patch.yaml
+#     --type strategic --patch-file postgres-pvc-patch.yaml    # <- DO NOT
+#
+# Neither is true any more, and both are now harmful:
+#
+#   * VOLUMES: `persistence:` in deploy/aks/values.aks.yaml supplies a claimName per
+#     drive and the chart mounts each directly. The bolt-on patch was replaced
+#     precisely because any UNPATCHED apply silently reverted /data to emptyDir,
+#     wiping the assembly / NuGet / DataProtection caches on every restart in the gap.
+#
+#   * REPLICAS: KEDA owns the count (keda.enabled: true, minReplicas: 2), and the
+#     chart therefore OMITS spec.replicas entirely so the HPA is the single writer.
+#     Writing `replicas: 2` back in makes helm and the HPA fight over one field -
+#     invariant #1 of deploy/aks/scripts/check-chart-invariants.sh ("spec.replicas is
+#     ABSENT when a ScaledObject exists"), a gate that exists because the chart
+#     described exactly this contradiction in git for a month and produced a
+#     PRODUCTION 503 on 2026-08-14.
+#
+# Want the zone spread? Put topologySpreadConstraints in your values overlay or make
+# it a chart change. Never hand-patch the Deployment. See deploy/aks/README.md ->
+# "Do NOT apply portal-ha-patch.yaml".
 #
 # This document is the PORTAL patch. (Postgres patch is the next file.)
 #

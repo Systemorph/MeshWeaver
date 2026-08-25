@@ -232,13 +232,21 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
 
-    private static (string Namespace, string Id) SplitPath(string normalizedPath)
-    {
-        var lastSlash = normalizedPath.LastIndexOf('/');
-        var ns = lastSlash > 0 ? normalizedPath[..lastSlash] : "";
-        var id = lastSlash > 0 ? normalizedPath[(lastSlash + 1)..] : normalizedPath;
-        return (ns, id);
-    }
+    // 🚨 THERE IS NO POSITIONAL (namespace, id) SPLIT OF A PATH — an id may contain '/'.
+    //
+    // Every row addressed by path is matched on the STORED `path` column (a
+    // `GENERATED ALWAYS AS (CASE WHEN namespace = '' THEN id ELSE namespace || '/' || id END)
+    // STORED` column present, and indexed, on mesh_nodes AND every satellite table). Splitting
+    // "Provider/OpenRouter/z-ai/glm-5.2" at the LAST slash looks for
+    // (namespace='Provider/OpenRouter/z-ai', id='glm-5.2') while the row stored is
+    // (namespace='Provider/OpenRouter', id='z-ai/glm-5.2') — no row matches, the read yields null,
+    // and DELETE reports `NodeNotFound` for a node `get` resolves in the same breath (issue #2212).
+    //
+    // Slash-bearing ids are not an accident: EVERY LanguageModel node's id is the provider's wire id
+    // (`z-ai/glm-5.3`, `anthropic/claude-opus-5`, `openai/gpt-5.2`), so before this no model node
+    // could be deleted through the API or MCP at all. `path` is the only decomposition-free way to
+    // address a row, it is what the caller actually holds, and it is indexed — so it is also the
+    // cheapest. Do NOT reintroduce a split here or in any other adapter.
 
     // null Select → caller didn't project → fetch all columns (existing behavior).
     // non-null Select → caller opted into projection → fetch column only if listed.
@@ -310,8 +318,21 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     }
 
     /// <summary>Bounded exponential backoff for the transient-read retry: 200ms, 400ms, 800ms (capped).</summary>
-    internal static TimeSpan TransientReadBackoff(int attempt)
+    internal static TimeSpan TransientReadBackoffBase(int attempt)
         => TimeSpan.FromMilliseconds(Math.Min(200 * Math.Pow(2, attempt), 800));
+
+    /// <summary>
+    /// <see cref="TransientReadBackoffBase"/> JITTERED by up to ±40% — the delay actually used.
+    ///
+    /// <para>🚨 The jitter earns its place on the DEADLOCK arm of the classifier (<c>40P01</c>,
+    /// <c>40001</c>). Postgres picks a deadlock victim precisely because two transactions took
+    /// overlapping locks in opposite orders at the same moment; waking both after an identical
+    /// 200 ms re-creates that same moment, and they deadlock again on every attempt until the
+    /// bound is spent. Spreading the wake-ups is what turns a bounded retry into one that
+    /// converges. (Harmless for the connectivity arm — a dropped connection does not care.)</para>
+    /// </summary>
+    internal static TimeSpan TransientReadBackoff(int attempt)
+        => TransientReadBackoffBase(attempt) * (0.6 + Random.Shared.NextDouble() * 0.8);
 
     /// <summary>
     /// Wraps a cold read observable with a bounded exponential-backoff retry that fires ONLY on
@@ -366,17 +387,14 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         if (string.IsNullOrEmpty(normalizedPath))
             return null;
 
-        var (ns, id) = SplitPath(normalizedPath);
-
         var table = ResolveTable(normalizedPath);
         try
         {
             await using var cmd = _dataSource.CreateCommand(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
                 $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)}, {ExcludeCol(table)} " +
-                $"FROM {table} WHERE namespace = $1 AND id = $2");
-            cmd.Parameters.AddWithValue(ns);
-            cmd.Parameters.AddWithValue(id);
+                $"FROM {table} WHERE path = $1");
+            cmd.Parameters.AddWithValue(normalizedPath);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
@@ -406,9 +424,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// Batched override of <see cref="IStorageAdapter.ReadMany"/> — multi-path
     /// probes (URL resolver's <c>path:a|b|c</c> longest-prefix search,
     /// activity bulk reads) become ONE SQL query instead of N. Groups input
-    /// paths by (table, namespace) so a mixed batch with rows in different
-    /// tables / namespaces still runs as one query per (table, namespace)
-    /// group rather than per-path.
+    /// paths by TABLE so a mixed batch with rows in different tables still runs
+    /// as one query per table rather than per-path, matching on the indexed
+    /// <c>path</c> column (never a positional namespace/id split — see
+    /// <see cref="NormalizePath"/>'s note and issue #2212).
     /// </summary>
     // Pump inside the IIoPool (InvokeStream) — never Observable.Create(async ...),
     // which starts the pump (incl. the synchronous grouping prologue and the
@@ -423,40 +442,30 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        // Normalize + drop empties up front. Group by (table, namespace)
-        // so each PG round-trip is `WHERE namespace = $1 AND id IN (...)`
-        // — the cheapest shape for the indexed (namespace, id) PK.
+        // Normalize + drop empties up front. Group by TABLE so each PG round-trip is
+        // `WHERE path = ANY($1)` against the per-table `path` index. Grouping by
+        // (table, namespace) and matching `id IN (...)` was the batched form of the
+        // positional-split defect — a slash-bearing id was looked up under the wrong
+        // namespace and silently answered "absent" (issue #2212).
         var groups = paths
             .Select(NormalizePath)
             .Where(p => !string.IsNullOrEmpty(p))
-            .Select(p =>
-            {
-                var (ns, id) = SplitPath(p);
-                var table = ResolveTable(p);
-                return (table, ns, id);
-            })
-            .GroupBy(t => (t.table, t.ns))
+            .Distinct(StringComparer.Ordinal)
+            .GroupBy(p => ResolveTable(p), StringComparer.Ordinal)
             .ToList();
 
         foreach (var group in groups)
         {
-            var table = group.Key.table;
-            var ns = group.Key.ns;
-            var ids = group.Select(t => t.id).Distinct(StringComparer.Ordinal).ToArray();
-            if (ids.Length == 0)
+            var table = group.Key;
+            var groupPaths = group.ToArray();
+            if (groupPaths.Length == 0)
                 continue;
 
-            // Build the parameter placeholder list ($2, $3, …) for the
-            // IN clause; the first parameter is the namespace.
-            var placeholders = string.Join(", ",
-                Enumerable.Range(2, ids.Length).Select(i => $"${i}"));
             await using var cmd = _dataSource.CreateCommand(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
                 $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)}, {ExcludeCol(table)} " +
-                $"FROM {table} WHERE namespace = $1 AND id IN ({placeholders})");
-            cmd.Parameters.AddWithValue(ns);
-            foreach (var id in ids)
-                cmd.Parameters.AddWithValue(id);
+                $"FROM {table} WHERE path = ANY($1)");
+            cmd.Parameters.AddWithValue(groupPaths);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
@@ -908,13 +917,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         if (string.IsNullOrEmpty(normalizedPath))
             return 0;
 
-        var (ns, id) = SplitPath(normalizedPath);
-
         var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
-            $"DELETE FROM {table} WHERE namespace = $1 AND id = $2");
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(id);
+            $"DELETE FROM {table} WHERE path = $1");
+        cmd.Parameters.AddWithValue(normalizedPath);
 
         return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
@@ -923,7 +929,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     // connection-pool size, NOT the cap-1 write pool (which would serialise it behind writes).
     /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-        => _readPool.Invoke(ct => ListChildPathsAsyncCore(parentPath, ct))
+        => WithTransientRetry(() => _readPool.Invoke(ct => ListChildPathsAsyncCore(parentPath, ct)), "ListChildPaths")
             .Catch<(IEnumerable<string>, IEnumerable<string>), Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []))
                 : Observable.Throw<(IEnumerable<string>, IEnumerable<string>)>(ex));
@@ -964,9 +970,18 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// node-less intermediate segments (<c>{path}/_Thread/{id}</c>,
     /// <c>{nodeType}/Release/{version}</c>) — exactly the rows that survived (issue #839).
     /// An absent (never-provisioned) schema means nothing to enumerate → empty.
+    ///
+    /// <para>🚨 Wrapped in <see cref="WithTransientRetry{T}"/> like every other read, and issue
+    /// #2158 is what happens when it is not. This UNION spans the partition's primary table and
+    /// every satellite, and it runs as the planning step of a recursive DELETE — so it is one of
+    /// the likeliest reads in the system to be chosen as a Postgres deadlock victim
+    /// (<c>40P01</c>) by a concurrent writer on an overlapping subtree. A deadlock is not a
+    /// failure, it is Postgres electing a loser and rolling it back atomically precisely SO THAT
+    /// the loser can retry; un-retried it aborted the whole user-facing delete with
+    /// <c>partial-deleted=0</c> and no hint that trying again would work.</para>
     /// </summary>
     public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
-        => _readPool.Invoke(ct => ListDescendantPathsAsyncCore(rootPath, ct))
+        => WithTransientRetry(() => _readPool.Invoke(ct => ListDescendantPathsAsyncCore(rootPath, ct)), "ListDescendantPaths")
             .Catch<IReadOnlyCollection<string>, Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<IReadOnlyCollection<string>>([])
                 : Observable.Throw<IReadOnlyCollection<string>>(ex));
@@ -1043,13 +1058,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         if (string.IsNullOrEmpty(normalizedPath))
             return false;
 
-        var (ns, id) = SplitPath(normalizedPath);
-
         var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
-            $"SELECT 1 FROM {table} WHERE namespace = $1 AND id = $2 LIMIT 1");
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(id);
+            $"SELECT 1 FROM {table} WHERE path = $1 LIMIT 1");
+        cmd.Parameters.AddWithValue(normalizedPath);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         return await reader.ReadAsync(ct).ConfigureAwait(false);

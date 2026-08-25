@@ -147,18 +147,34 @@ public static class MemexConfiguration
             .GetSection(EmailOptions.SectionName)
             .Get<EmailOptions>() ?? new EmailOptions();
         services.AddSingleton(emailOptions);
-        if (emailOptions.Enabled)
-        {
-            // Executive Assistant: per-user JUST-IN-TIME delegated Graph access (the user consents to the
-            // EA touching THEIR OWN mailbox only when they first use the tool — no standing app
-            // permission). EaGraphAuth drives the consent/token flow; it is raw OAuth over HTTP, so it
-            // stays HERE with its consent controller — the EA's mailbox TOOLS (which do use the Graph
-            // SDK) ride the MeshWeaver.Mail.MicrosoftGraph module and depend only on this seam.
-            services.AddHttpClient<IEaGraphAuth, Authentication.EaGraphAuth>();
-            // The notification triage runner (escalates in-app notifications to email/Teams per each
-            // recipient's NotificationRules) rides the MeshWeaver.Notifications.Channels module
-            // (Modules:Assemblies); its hosted service self-skips unless Email:Enabled.
-        }
+        // The notification triage runner (escalates in-app notifications to email/Teams per each
+        // recipient's NotificationRules) rides the MeshWeaver.Notifications.Channels module
+        // (Modules:Assemblies); its hosted service self-skips unless Email:Enabled.
+
+        // Executive Assistant: per-user JUST-IN-TIME delegated Graph access (the user consents to the
+        // EA touching THEIR OWN mailbox only when they first use the tool — no standing app
+        // permission). EaGraphAuth drives the consent/token flow; it is raw OAuth over HTTP, so it
+        // stays HERE with its consent controller — the EA's mailbox TOOLS (which do use the Graph
+        // SDK) ride the MeshWeaver.Mail.MicrosoftGraph module and depend only on this seam.
+        //
+        // 🚨 UNCONDITIONAL, and it must stay that way. EaConsentController is registered by
+        // AddControllers().AddApplicationPart(...) below — which discovers controllers by TYPE, with
+        // no idea what any of them needs — so /auth/ea/connect and /auth/ea/callback are routed on
+        // EVERY deployment. Gating this one registration on Email:Enabled therefore did not disable
+        // the endpoint; it left it routed with an unresolvable dependency, and MVC's activator threw
+        // "Unable to resolve service for type 'MeshWeaver.Mesh.IEaGraphAuth' while attempting to
+        // activate 'EaConsentController'" — a deterministic 500 on the consent flow, in memex prod
+        // (issue #2218). A controller and its dependencies are one unit: whatever routes the one
+        // must register the other.
+        //
+        // Nothing is enabled by registering it. The descriptor is inert (a typed HttpClient factory
+        // registration does no work until something resolves it), and IEaGraphAuth carries its own
+        // honest feature probe: EaGraphAuth.IsConfigured reads Authentication:Microsoft
+        // ClientId/ClientSecret — the credentials the DELEGATED flow actually needs, which are not
+        // what Email:Enabled describes (that gates the SYSTEM mailbox's app-permission sender). The
+        // controller checks IsConfigured first and answers 400 "not configured", which is the honest
+        // answer for a deployment that has not set up the EA — instead of a 500 that reads as a bug.
+        services.AddHttpClient<IEaGraphAuth, Authentication.EaGraphAuth>();
 
         // 🚨 TryAdd, deliberately. The Graph sender lives in the MeshWeaver.Mail.MicrosoftGraph
         // module, which registers it with a plain AddSingleton. The pairing is ORDER-INDEPENDENT:
@@ -167,6 +183,13 @@ public static class MemexConfiguration
         // Graph sender wins; module absent ⇒ this no-op keeps OutboundEmailSender and
         // InvitationEmailSender — both of which GetRequiredService<IEmailSender> — resolvable
         // instead of throwing at startup.
+        //
+        // 🚨 Resolvable is NOT the same as able to send, and conflating the two was #2023: with
+        // Email:Enabled=true and the module absent, this fallback used to report success for every
+        // send, so OutboundEmailSender stamped queued mail New → Sending → Sent while nothing left
+        // the process. Both halves of that are now refused — the no-op fails loudly on this
+        // configuration (NoOpEmailSender), and the two watchers decline to start at all
+        // (EmailDeliveryGuard), leaving mail visibly queued instead of falsely delivered.
         services.TryAddSingleton<IEmailSender, NoOpEmailSender>();
 
         // Inbound email→agent channel (intake). Mail is treated as a chat device: each inbound email
@@ -441,6 +464,61 @@ public static class MemexConfiguration
     }
 
     /// <summary>
+    /// Says out loud, once at startup, which ACTIVATED modules did not host-load here (#2093).
+    ///
+    /// <para>🚨 <b>Why this cannot be left to the module's own code.</b> A module that does not load
+    /// runs nothing — including anything that would have complained. <c>MapMeshModuleEndpoints</c>
+    /// scans only LOADED assemblies, so an activated endpoint provider that never made it into the
+    /// process contributes no routes and its whole HTTP surface answers 404 for the pod's lifetime,
+    /// with no exception, no warning and nothing to grep. On memex.systemorph that was <c>/mcp</c>,
+    /// dead through two clean rolling restarts while <c>/health</c> and <c>/readyz</c> were 200 and
+    /// the activation record cheerfully listed the module as installed. Absence of evidence read as
+    /// evidence of absence, again.</para>
+    ///
+    /// <para>The two cases are reported differently because the remedies are: a module whose bytes
+    /// are on the volume is one restart from working, while a module whose landed assembly is GONE
+    /// is a half-completed landing that no restart repairs — that one is an ERROR naming the
+    /// re-install. Same reader, same wording, as the <c>pending_module_activation</c> health check,
+    /// so the pod log and the probe can never disagree.</para>
+    /// </summary>
+    private static void ReportUnloadedActivatedModules(WebApplication app)
+    {
+        var logger = app.Services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("MeshWeaver.PluginCatalog.ModuleActivation");
+        // 🚨 CONSTRUCTED, not resolved — deliberately. PendingModuleActivations is registered in
+        // the MESH container (AddPluginCatalog), which is why every other caller reaches it through
+        // `hub.ServiceProvider` and guards with GetService. Asking `app.Services` for it would
+        // throw at startup on any host where the two containers differ — a diagnostic that CRASHES
+        // the portal it exists to inform is worse than the silence it replaces. Constructing costs
+        // nothing and cannot differ: the reader is a stateless file reader that starts nothing and
+        // writes nothing, and the registration is this same one-liner over the same resolved
+        // module root.
+        var report = new PendingModuleActivations(app.Configuration).Read();
+
+        if (report.IsUndetermined)
+        {
+            logger.LogError(
+                "Module endpoint contributions mapped, but this pod cannot say whether an "
+                + "activated module failed to load: {Reason}", report.Describe());
+            return;
+        }
+
+        if (report.HasUnresolvable)
+            logger.LogError(
+                "🚨 {Count} ACTIVATED module(s) are not loaded in this process and NO RESTART will "
+                + "load them — any HTTP endpoint, view or provider they contribute is silently "
+                + "absent (a 404 with no error) until the package is re-installed: {Detail}",
+                report.Unresolvable.Count,
+                ModuleActivationStatus.DescribeUnresolvable(report.Unresolvable));
+
+        if (report.HasPending)
+            logger.LogWarning(
+                "{Count} activated module(s) are landed but not loaded in this process — whatever "
+                + "they contribute (endpoints included) is absent until a restart: {Detail}",
+                report.Pending.Count, ModuleActivationStatus.Describe(report.Pending));
+    }
+
+    /// <summary>
     /// Fails fast on the content-storage configuration that GUARANTEES silent data loss (issue #435):
     /// a DEPLOYED (non-development) <c>FileSystem</c> content store whose <c>BasePath</c> is empty or
     /// relative. Such a path resolves against the container's ephemeral working directory (<c>/app</c>),
@@ -456,6 +534,7 @@ public static class MemexConfiguration
     /// <exception cref="InvalidOperationException">
     /// Thrown when a non-development FileSystem content store has an empty or relative <c>BasePath</c>.
     /// </exception>
+
     public static void ValidateContentStorageDurability(
         ContentCollectionConfig? contentStorageConfig, bool isDevelopment)
     {
@@ -623,11 +702,15 @@ public static class MemexConfiguration
             // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
             // consume the pending flag so the step-10 signal reads current. Best-effort: on a
             // read-only app filesystem the flag simply stays set (cosmetic), and boot proceeds.
+            // 🚨 Clears the MARKER, never rewrites the activation record (#2090). Rewriting the
+            // whole list here meant every replica's boot read-modify-wrote a file the other
+            // replicas were reading — on a rolling restart that is several writers and several
+            // readers on one SMB file at once, which is how a boot read came back
+            // FileNotFoundException and the pod started with NONE of its store modules (#2189).
             if (persistedActivation.PendingRestart)
                 try
                 {
-                    ModuleActivationSidecar.Write(moduleRoot,
-                        persistedActivation with { PendingRestart = false });
+                    ModuleActivationSidecar.SetPendingRestart(moduleRoot, false);
                 }
                 catch (Exception ex)
                 {
@@ -1375,6 +1458,14 @@ public static class MemexConfiguration
         // MeshEndpointProviderAttribute maps its routes here — authenticated by default, loud
         // startup failure on route collisions. Delisting a module removes its routes wholesale.
         app.MapMeshModuleEndpoints();
+        // 🚨 …and SAY SO when an activated module contributed nothing because it never host-loaded
+        // (#2093). MapMeshModuleEndpoints can only scan assemblies that ARE loaded, so a module the
+        // activation record says is ON but whose bytes never reached this process contributes zero
+        // routes — and its whole HTTP surface 404s for the pod's entire lifetime with no error
+        // anywhere. That is exactly how /mcp went dark on memex.systemorph while the portal was
+        // otherwise healthy and two clean restarts changed nothing. The report is the same one the
+        // health check renders, so the pod log and /health never tell different stories.
+        ReportUnloadedActivatedModules(app);
 
         // First-startup auto-registration — POST /api/instances/register. A new deployment presents
         // an admin-minted bootstrap key (mwr_) and receives its own instance key (mwi_) once;

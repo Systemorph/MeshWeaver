@@ -102,7 +102,19 @@ public static class UserNodeType
     {
         Name = "User",
         Icon = "/static/NodeTypeIcons/person.svg",
-        NodeType = NodeType,
+        // 🚨 A NodeType DECLARATION declares itself a NodeType — never the type it declares.
+        // This node used to carry `NodeType = "User"`, i.e. it claimed to BE a user, and every
+        // `nodeType:User` query in the mesh therefore returned it alongside the real accounts.
+        // It has no email, so the portal's user DIRECTORY (UserIdentityCache, whose whole job is
+        // email → mesh user) tried to read it as a `User` and logged
+        // `As<User> for User: value is NodeTypeDefinition` on EVERY index snapshot — 355k+
+        // occurrences in production (Systemorph/MeshWeaver#2160/#2161/#2162). The same collision
+        // made AI-source installs resolve a partition literally named "User" (`42P01: relation
+        // "user.mesh_nodes" does not exist`) and, for the VUser twin, left a stray `vuser`
+        // partition behind. Declaration nodes are identified mesh-wide by
+        // `NodeType == MeshNode.NodeTypePath` (CreatableTypesProvider, MeshNodeLayoutAreas'
+        // `-nodeType:NodeType` exclusions) — say so, exactly as Space/Release/Build do.
+        NodeType = MeshNode.NodeTypePath,
         ExcludeFromContext = new HashSet<string> { "search", "content" },
         // Post-v10 design: User nodes live at the ROOT namespace (path={userId}),
         // each user gets their own per-user partition. The previous design parked

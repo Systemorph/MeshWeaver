@@ -11,7 +11,7 @@ This guide explains how to stand up the Memex portal on a **private** Azure Kube
 
 > **Conventions.** Examples use placeholder names — domain `portal.example.com`, registry `meshweaver`, resource group `<aks-resource-group>`. Substitute your own values. **Sensitive values** (IP addresses, tenant/app GUIDs, passwords, client secrets) appear as `<placeholders>`; never commit real ones — keep them in Key Vault.
 >
-> The exact, ordered command sequence lives in `deploy/aks/DEPLOY-RUNBOOK.md` (in the repository). This document is the architecture and operations layer around it.
+> The exact, ordered command sequence lives in `deploy/aks/README.md` (in the repository) — the public, self-contained AKS deployment sample, which `DEPLOY-RUNBOOK.md` was folded into. This document is the architecture and operations layer around it.
 
 > **Deployment model.** One Aspire AppHost (`deploy/aspire/Memex.Deploy.AppHost`) describes the workload from published images. The Aspire **Kubernetes publisher** generates the Helm chart (`deploy/helm`). The AKS *platform* — cluster, Postgres, VPN, TLS — is Bicep plus a thin overlay.
 
@@ -139,7 +139,9 @@ Parameters live in `deploy/aks/infra/main.parameters.json`:
 - `postgresHighAvailability` — enable for production.
 - `gatewaySku` — use an AZ SKU such as `VpnGw1AZ`.
 
-The Postgres connection uses the **private IP + password + SSL** (`SslMode=Require;Trust Server Certificate=true`). Do not use the public FQDN form — a `database.azure.com` hostname routes the portal into its managed-identity-token branch, which does not match a password server.
+The Postgres connection uses the **server FQDN + password + SSL** (`Host=<pg-server>.postgres.database.azure.com;…;SslMode=Require;Trust Server Certificate=true`). The servers moved to the FQDN on 2026-08-24.
+
+> 🚨 This page previously said the opposite — *"do not use the public FQDN form, a `database.azure.com` hostname routes the portal into its managed-identity-token branch"* — and that would now talk an operator out of the correct configuration. It stopped being true with `9e468aa70`: `AzurePostgres.UsesManagedIdentityAuth` (`src/MeshWeaver.Hosting.PostgreSql/AzurePostgres.cs`) takes the Entra-token path only when the host carries the Azure suffix **AND no password is present**, so FQDN + password deliberately takes plain Npgsql. `AzurePostgresAuthSelectionTests` pins exactly that case.
 
 ---
 
@@ -150,13 +152,13 @@ The Postgres connection uses the **private IP + password + SSL** (`SslMode=Requi
 1. Creates the namespace and RWX PVCs.
 2. Runs `helm upgrade --install` with `deploy/helm` + `values.aks.yaml` + `values.deploy.yaml`.
 3. Scales the chart's in-cluster Postgres to 0 (you use the Flexible Server).
-4. Runs `kubectl set image` to the shared ACR.
-5. Patches the portal to 1 replica with the Azure Files mounts.
+4. Runs `kubectl set image` on the **portal** Deployment to the shared ACR.
+5. Patches the portal to 1 replica (the Azure Files mounts render from the chart itself — `persistence:` in `values.aks.yaml` — so there is no volume patch any more).
 6. **Patches the connection-string secret** to the external Postgres.
 
 > **Known chart-generation gaps** (fix at the AddMemex generator):
 > - The chart's `secrets.yaml` hardcodes the in-cluster Postgres connection string → `deploy.sh` patches it post-install.
-> - Step 4's `kubectl set image deployment/memex-migration-deployment` is a **legacy leftover** and is why `deploy.sh` guards it with `|| true`. The chart renders the migration as a run-once **Job** (`memex-migration-<Release.Revision>`), so that line targets a Deployment the chart no longer creates. The migration actually runs from the `helm upgrade` in step 2.
+> - `deploy.sh` used to carry TWO commands against a `memex-migration-deployment` — a `set image` and a `rollout restart` — and only the first was guarded with `|| true`; the second printed an error on every documented deploy. Both are gone (#1788): the chart renders the migration as a run-once **Job** (`memex-migration-<Release.Revision>`), so there is no such Deployment. The migration runs from the `helm upgrade` in step 2; override its image through the chart (`--set migration.image=…`), never with `kubectl set image`.
 
 > 🚨 **A migration `CrashLoopBackOff` is NOT harmless.** Earlier revisions of this chart rendered the
 > migration as a Deployment, which restarted the process after each clean `exit 0`. Every run rebuilds

@@ -143,8 +143,33 @@ public static class BuildNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<BuildState>())
             .AddDefaultLayoutAreas()
-            .WithInitialization(hub => hub.RegisterForDisposal(InstallClaimArbiter(hub)))
+            // 🚨 The OBSERVABLE overload, deliberately (#1868). InstallClaimArbiter resolves the
+            // hub's own node stream (workspace.GetMeshNodeStream() → SynchronizationStream..ctor →
+            // GetHostedHub(sync/{clientId}, HostedHubCreation.Always)), so on the SYNCHRONOUS
+            // overload it constructed a hub — and a second container — from inside
+            // MessageHubConfiguration.Build, before StartMessageProcessing and before the
+            // workspace's own data sources had been started on the init turn. The observable
+            // overload runs on the InitializeHubRequest turn, after Build returns and still before
+            // the Initialize gate opens, so the arbiter's triggers are wired against a workspace
+            // that is actually running.
+            .WithInitialization(StartClaimArbiter)
     };
+
+    /// <summary>
+    /// Installs the claim arbiter on the hub's INIT TURN and couples it to the hub's lifetime.
+    /// A static method group, so <c>WithInitialization</c>'s delegate-identity idempotency still
+    /// collapses repeat registrations from composed configurators.
+    /// </summary>
+    /// <param name="hub">The Build node's own hub.</param>
+    /// <returns>An observable that completes once the arbiter is installed.</returns>
+    private static IObservable<Unit> StartClaimArbiter(IMessageHub hub) =>
+        // Defer so the work happens at SUBSCRIBE time (the init turn), not when the observable is
+        // constructed — HandleInitialize builds the whole Concat chain up front.
+        Observable.Defer(() =>
+        {
+            hub.RegisterForDisposal(InstallClaimArbiter(hub));
+            return Observable.Return(Unit.Default);
+        });
 
     /// <summary>
     /// The claim arbiter — runs on each Build node's OWN hub.
