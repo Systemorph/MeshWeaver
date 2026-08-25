@@ -1,4 +1,8 @@
-import { ensureHighlightJs, initializeThemeUpdates } from '../highlightUtils.js';
+// highlightUtils and the vendored libs are shared static assets of MeshWeaver.Blazor (which this
+// view pack references); this module serves from _content/MeshWeaver.Blazor.Views/Components/, so
+// they must be addressed across packages — a same-package relative path 404s and a failed static
+// import takes the WHOLE module down ("Importing a module script failed" on every markdown page).
+import { ensureHighlightJs, initializeThemeUpdates } from '../../MeshWeaver.Blazor/highlightUtils.js';
 
 let _containerEl = null;
 let _resizeHandler = null;
@@ -145,7 +149,7 @@ function ensureMermaidLoaded() {
     if (window.mermaid) return Promise.resolve();
     return new Promise((resolve, reject) => {
         const script = document.createElement('script');
-        script.src = '_content/MeshWeaver.Blazor.Views/lib/mermaid/mermaid.min.js'; // vendored, pinned 11.12.1
+        script.src = '_content/MeshWeaver.Blazor/lib/mermaid/mermaid.min.js'; // vendored, pinned 11.12.1
         script.onload = () => setTimeout(resolve, 100);
         script.onerror = reject;
         document.head.appendChild(script);
@@ -204,7 +208,7 @@ export async function renderMathBlocks(contentEl) {
         };
 
         const script = document.createElement('script');
-        script.src = '_content/MeshWeaver.Blazor.Views/lib/mathjax/tex-svg.js'; // vendored, pinned 3.2.2
+        script.src = '_content/MeshWeaver.Blazor/lib/mathjax/tex-svg.js'; // vendored, pinned 3.2.2
 
         const loaded = await new Promise(resolve => {
             script.onload = () => resolve(true);
