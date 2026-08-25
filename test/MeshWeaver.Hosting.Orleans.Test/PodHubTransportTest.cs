@@ -76,7 +76,10 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     [Fact(Timeout = 180_000)]
     public async Task SiloHostedHub_ReceivesDelivery_EvenWithItsStreamSubscriptionGone()
     {
-        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(150)).Token;
+        // Disposed: this overload arms an internal timer, and an undisposed source keeps it
+        // alive past the test (Copilot review, #2268).
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        var ct = deadline.Token;
         var cluster = fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the delivery has to CROSS silos, or "
             + "the sender's own local route short-circuits and the router is never involved");
@@ -146,7 +149,10 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     [Fact(Timeout = 180_000)]
     public async Task AddressThatMovesSilos_ConvergesOnItsNewOwner()
     {
-        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(150)).Token;
+        // Disposed: this overload arms an internal timer, and an undisposed source keeps it
+        // alive past the test (Copilot review, #2268).
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        var ct = deadline.Token;
         var cluster = fixture.Cluster;
         var address = new Address("client", $"moving-{Guid.NewGuid():N}");
 
@@ -235,7 +241,10 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     [Fact(Timeout = 180_000)]
     public async Task CrossSiloNack_ReachesASenderWhoseStreamSubscriptionIsGone()
     {
-        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(150)).Token;
+        // Disposed: this overload arms an internal timer, and an undisposed source keeps it
+        // alive past the test (Copilot review, #2268).
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        var ct = deadline.Token;
         var cluster = fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the NACK has to CROSS silos — a "
             + "co-hosted sender is answered on the local route and never reaches the leg under test");
