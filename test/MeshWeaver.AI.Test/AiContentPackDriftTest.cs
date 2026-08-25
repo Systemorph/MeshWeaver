@@ -29,8 +29,9 @@ namespace MeshWeaver.AI.Test;
 /// into a public repository — that difference is a deliberate <b>sanitisation</b>, not drift, and it
 /// is the one divergence that must be preserved forever. So the guard does two things a diff cannot:
 /// it pins the reconciliation point (<c>TestData/AiContentPackSync.json</c>) so a core edit has to
-/// state what it did about the master, and it refuses any content carrying an identifier that must
-/// never appear in public.</para>
+/// state what it did about the master, and it refuses any file <b>in this section</b> carrying an
+/// identifier that must never appear in public. Everything below is scoped to
+/// <c>content/ai/**</c> — this is a mirror guard, not a repository-wide secret scan.</para>
 ///
 /// <para><b>The forbidden identifiers are stored as HASHES</b>, and a hit is reported by
 /// <c>file:line</c> only — never by echoing the token. A deny-list that spells the name out, or a
@@ -239,11 +240,17 @@ public class AiContentPackDriftTest
         }
     }
 
-    // ── 4. Nothing in the public repo may name a customer ─────────────────────
+    // ── 4. Nothing in the mirrored content section may name a customer ────────
 
     /// <summary>
     /// 🚨 THE LEAK GUARD. Reported as <c>file:line</c> and nothing else — echoing the token would
     /// publish it in the CI log of a public repository, which is the thing being prevented.
+    ///
+    /// <para><b>Scope, stated precisely because the gap matters:</b> this scans
+    /// <c>content/ai/**</c> and nothing else. That is the surface this guard is about — the tree
+    /// that MIRRORS the private pack, where a copy-the-master-over is the way a customer name
+    /// gets in. It is NOT a repository-wide secret scan, and must not be read as one; a name
+    /// pasted into a `.cs` file elsewhere is not covered here.</para>
     /// </summary>
     [Fact]
     public void NoForbiddenIdentifier_AppearsInTheContentSection()
