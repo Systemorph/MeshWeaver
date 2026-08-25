@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <!-- Core MeshWeaver -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
     <!-- MeshWeaver.Blazor.Analysis is deliberately NOT referenced (#1974): it ships via the
          modules/<Name>/ closure layout in MeshModulesPublish.targets and activates via
          Modules:Assemblies. Its static web assets reach the browser through the module
@@ -51,11 +52,13 @@
          it so a rollout that lost the pack stalls on readiness instead of shipping blank edit
          forms. A reference here would put the DLL back in the app closure, where the module
          landing refuses the same-identity module (409 on every instance). -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
     <!-- MeshWeaver.Blazor.Graph is deliberately NOT referenced (the EntityViews/#1974 shape): its
          GraphViewsViewPackModuleAttribute registers the node views when the DLL is listed under
          Modules:Assemblies; the bits ship via the modules/<Name>/ lane. Blazor.Portal REMAINS a
          compiled reference for now — it is SHELL infrastructure (PortalLayoutBase, auth,
          viewport), tracked for extraction as #2169 Phase B3. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.SignalR\MeshWeaver.Hosting.SignalR.csproj" />
