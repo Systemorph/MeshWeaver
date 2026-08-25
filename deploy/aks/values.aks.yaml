@@ -286,6 +286,13 @@ config:
     # newest image immediately (the startup pass), and `gh workflow run
     # main-cd.yml --ref main` bypasses the batch window.
     SelfUpdate__MinRollInterval: "01:00:00"
+    # Converge instances onto every newly published NodeType build (MeshWeaver#2192).
+    # A prod portal's invariant is "after an update, everything serves the new build" —
+    # leaving the banner default meant every publication wave stacked one more rooted
+    # assembly generation on the type-hosting silos until they went GC-bound at 17-20 GB
+    # while still Ready (2026-08-25, MeshWeaver#2194). Applies fleet-wide: every AKS
+    # portal self-updates its catalog, so every one needs the convergence policy.
+    Modules__AutoRecycleOnStaleBuild: "true"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # ---- AI model providers (templated by the chart) ------------------------
     # These seed the system model catalog on deploy (BuiltInLanguageModelProvider
