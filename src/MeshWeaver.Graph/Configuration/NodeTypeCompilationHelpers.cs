@@ -366,10 +366,20 @@ internal static class NodeTypeCompilationHelpers
                             return Observable.Return(false);
                         }
 
+                        // 🚨 The watcher's OWN `guards`, never a fresh GuardsOf(hub). BuildGuards
+                        // exists so "which live environment" can never fork between the checks in
+                        // one handler, and it is resolved once per watcher install for exactly
+                        // that reason. Re-resolving here would judge the adopted build against a
+                        // snapshot the kickoff that flipped this type to Pending never saw — a
+                        // decision taken against one observed state while the effect commits
+                        // against another. It also rebuilds the dependency-id resolver and the
+                        // module MVID map on every attempt, for nothing: adoption stamps assembly
+                        // coordinates on the NODE, and changes no part of the environment these
+                        // guards describe.
                         return ownStream
                             .Where(n => n?.ContentAs<NodeTypeDefinition>(
                                             hub.JsonSerializerOptions, logger) is { } adoptedDef
-                                        && HasUsableBuild(n, adoptedDef, GuardsOf(hub)))
+                                        && HasUsableBuild(n, adoptedDef, guards))
                             .Take(1)
                             .Select(_ => true)
                             .Timeout(AdoptionStampBudget)
