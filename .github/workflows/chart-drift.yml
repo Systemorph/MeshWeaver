@@ -59,8 +59,8 @@ name: Chart Drift
 #      days while the truth was one API call away, so state it exactly: the secret was created
 #      2026-08-17T11:12:42Z (`gh api repos/Systemorph/MeshWeaver/actions/secrets/…` reports the
 #      same value for created_at and updated_at, i.e. it has never been re-set), and EVERY run
-#      since — the 11:12:53Z dispatch that followed it by eleven seconds, then nine consecutive
-#      schedules through 2026-08-25 — has died at the same place:
+#      since — the 11:12:53Z dispatch that followed it by eleven seconds, then eight consecutive
+#      schedules through 2026-08-25; nine runs, no exceptions — has died at the same place:
 #
 #          ##[error]secrets.MEMEX_DEPLOY_REPO_TOKEN is set but GitHub rejects it
 #                   (HTTP 401, Bad credentials).
