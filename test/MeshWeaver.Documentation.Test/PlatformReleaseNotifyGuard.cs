@@ -55,10 +55,17 @@ public class PlatformReleaseNotifyGuard
         Assert.Contains("exit 1", preflight, StringComparison.Ordinal);
         Assert.Contains("::error", preflight, StringComparison.Ordinal);
 
-        // It asserts; it does not decide whether to run. An `if:` here would make the assertion
-        // itself skippable — the trapdoor one level up.
-        Assert.DoesNotContain("\n    if:", preflight, StringComparison.Ordinal);
         Assert.DoesNotContain("continue-on-error", preflight, StringComparison.Ordinal);
+
+        // 🚨 It asserts; it does not decide whether to run — with ONE exemption, and the exemption
+        // has a shape. A condition on the EVENT (a fork's PR run, which GitHub withholds org
+        // secrets from by design) is legitimate and is the only reason this job may be skipped. A
+        // condition asking whether the input EXISTS is the trapdoor one level up: it makes the
+        // assertion itself skippable, and on the checks page the two render identically.
+        var condition = SectionAfter(preflight, "\n    if:");
+        Assert.DoesNotContain("secrets.", condition, StringComparison.Ordinal);
+        Assert.DoesNotContain("vars.", condition, StringComparison.Ordinal);
+        Assert.Contains("github.event", condition, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -161,6 +168,16 @@ public class PlatformReleaseNotifyGuard
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>Everything from <paramref name="marker"/> to the next key at the same indent — for
+    /// judging a multi-line YAML value in isolation.</summary>
+    private static string SectionAfter(string body, string marker)
+    {
+        var start = body.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"'{marker.Trim()}' is gone from the preflight job in {Workflow}.");
+        var next = NextAtIndent(body, start + marker.Length, "\n    ");
+        return next < 0 ? body[start..] : body[start..next];
+    }
 
     /// <summary>Everything from a job's key to the next job key at the same indent.</summary>
     private static string JobBlock(string body, string jobKey)
