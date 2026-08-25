@@ -1,3 +1,7 @@
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -100,5 +104,74 @@ public class UserIdentityLookupClassifierTest
         Assert.False(lookup.IsUnavailable);
         Assert.Null(lookup.Node);
         Assert.Null(lookup.UnavailableReason);
+    }
+
+    // ---- THE WAIT: UntilDetermined must be LISTENING before it takes its first reading ----
+
+    /// <summary>
+    /// 🚨 #2031 / #2185. <see cref="UserIdentityLookup.UntilDetermined"/> exists to cover the window
+    /// between a caller's own unavailable lookup and this subscription — and it used to be written
+    /// <c>indexChanged.Select(_ =&gt; lookup()).StartWith(lookup())</c>, which gets the order exactly
+    /// backwards. <c>StartWith</c>'s argument is evaluated while the chain is being BUILT, and
+    /// <c>Concat</c> subscribes to the change feed only after the prepended value is delivered, so the
+    /// window was moved rather than closed.
+    ///
+    /// <para><b>Why that is fatal rather than merely unlucky.</b> The index is a hot, non-replaying
+    /// stream that fires once per APPLIED snapshot. A mesh that has finished writing never fires
+    /// again, so a lost emission has no second chance: the observable never emits at all, and the
+    /// caller reports a 60 s <c>TimeoutException</c> — not a wrong answer, which is precisely the
+    /// signature of both open issues (full-assembly only, green in isolation, because in isolation
+    /// the snapshot lands long after the subscribe and cannot fall in the window).</para>
+    ///
+    /// <para><b>Why this is deterministic and not a timing test.</b> Firing the index change from
+    /// INSIDE the first reading reproduces the exact interleaving a preemption on a loaded shard
+    /// produces — the snapshot landing between "take the reading" and "start listening" — with no
+    /// sleeps, no scheduler and no load. Under the old order the emission has no observer and is
+    /// dropped; under the fixed order the subscription is already live and sees it.</para>
+    /// </summary>
+    [Fact]
+    public async Task UntilDetermined_SeesAnIndexChangeThatLandsWhileTheFirstReadingIsBeingTaken()
+    {
+        var indexChanged = new Subject<Unit>();   // hot + non-replaying, exactly like IndexChanged
+        var node = User("rbuergi");
+        var hydrated = false;
+
+        UserIdentityLookup Lookup()
+        {
+            if (hydrated)
+                return UserIdentityLookup.Classify(node, hydrated: true, subscriptionFailure: null);
+
+            // The snapshot lands DURING the first reading: applied first (so a re-ask would now
+            // succeed), then announced — the same order UserIdentityCache.Apply uses.
+            hydrated = true;
+            indexChanged.OnNext(Unit.Default);
+            return UserIdentityLookup.Classify(hit: null, hydrated: false, subscriptionFailure: null);
+        }
+
+        var determined = await UserIdentityLookup.UntilDetermined(indexChanged, Lookup)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
+
+        Assert.False(determined.IsUnavailable);
+        Assert.Same(node, determined.Node);
+    }
+
+    /// <summary>
+    /// The ordinary path stays ordinary: an index that is already determinate at subscribe time is
+    /// answered from the first reading, without waiting for any change at all.
+    /// </summary>
+    [Fact]
+    public async Task UntilDetermined_AnswersFromTheFirstReading_WhenTheIndexIsAlreadyDeterminate()
+    {
+        var node = User("rbuergi");
+        var determined = await UserIdentityLookup
+            .UntilDetermined(Observable.Never<Unit>(),
+                () => UserIdentityLookup.Classify(node, hydrated: true, subscriptionFailure: null))
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
+
+        Assert.Same(node, determined.Node);
     }
 }
