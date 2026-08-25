@@ -65,7 +65,7 @@ public class AgentFileParser : IFileFormatParser
     public MeshNode? Parse(string filePath, string content, string relativePath)
     {
         // Derive id and namespace from path
-        var (id, ns) = DeriveIdAndNamespace(relativePath, filePath);
+        var (id, ns) = MarkdownNodePath.DeriveIdAndNamespace(relativePath);
 
         // Parse markdown to extract YAML front matter
         var document = Markdig.Markdown.Parse(content, Pipeline);
@@ -398,34 +398,6 @@ public class AgentFileParser : IFileFormatParser
         // Check for agent-specific properties
         return element.TryGetProperty("instructions", out _) &&
                (element.TryGetProperty("delegations", out _) || element.TryGetProperty("isDefault", out _));
-    }
-
-    private static (string Id, string? Namespace) DeriveIdAndNamespace(string relativePath, string filePath)
-    {
-        // Remove extension and normalize
-        var pathWithoutExt = relativePath;
-        if (pathWithoutExt.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-            pathWithoutExt = pathWithoutExt[..^3];
-
-        pathWithoutExt = pathWithoutExt.Trim('/').Replace('\\', '/');
-
-        var lastSlash = pathWithoutExt.LastIndexOf('/');
-        if (lastSlash < 0)
-            return (pathWithoutExt, null);
-
-        var ns = pathWithoutExt[..lastSlash];
-        var id = pathWithoutExt[(lastSlash + 1)..];
-
-        // index.md represents the parent directory node, not a child called "index"
-        if (id.Equals("index", StringComparison.OrdinalIgnoreCase))
-        {
-            var parentSlash = ns.LastIndexOf('/');
-            if (parentSlash < 0)
-                return (ns, null);
-            return (ns[(parentSlash + 1)..], ns[..parentSlash]);
-        }
-
-        return (id, ns);
     }
 
     /// <summary>
