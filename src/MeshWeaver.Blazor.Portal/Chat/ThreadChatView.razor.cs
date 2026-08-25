@@ -89,6 +89,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private ElementReference _pickerWidget;
     private bool _focusPickerOnRender;
 
+    /// <summary>
+    /// 🚨 The counterpart of <see cref="_focusPickerOnRender"/>, and the whole of issue #2217.
+    /// Opening the picker deliberately moves keyboard focus OFF Monaco; every close path must move
+    /// it back, or the composer is left looking active with focus on an element that was just
+    /// removed from the DOM. Keystrokes only Monaco acts on then reach nothing at all — most
+    /// visibly <b>Shift+Enter</b>, whose newline comes from a Monaco command
+    /// (<c>MonacoEditorView.razor.js</c> <c>addCommand(Shift|Enter)</c>) and not from any browser
+    /// default. That is exactly the reported symptom: "Shift+Enter sometimes does nothing", where
+    /// "sometimes" is "whenever a / or @ picker was open just before" — and typing looks fine
+    /// because clicking into the composer to type re-focuses it (<c>FocusComposerAsync</c>).
+    /// Set by <see cref="DismissWidget"/> / <see cref="SelectFromPicker"/>, consumed in
+    /// <c>OnAfterRenderAsync</c> — the same declare-then-apply shape the picker's own focus uses.
+    /// </summary>
+    private bool _focusComposerOnRender;
+
     private bool _isDisposed;
     private IDisposable? _navContextSubscription;
     private NavigationContext? _currentNavContext;
@@ -1420,7 +1435,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <item><c>/login gateway &lt;base-url&gt; &lt;token&gt;</c> — a gateway/proxy (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL).</item>
     /// <item><c>/logout</c> — forget the stored credential.</item>
     /// </list>
-    /// The credential is encrypted at rest (<see cref="MeshWeaver.AI.IProviderKeyProtector"/>) and stored as
+    /// The credential is encrypted at rest (<see cref="MeshWeaver.Mesh.Security.IProviderKeyProtector"/>) and stored as
     /// the harness's <c>ModelProvider</c> node at <c>{user}/_Memex/{harnessId}</c> — the SAME path
     /// <c>ChatClientCredentialResolver.ResolveConnectCredential</c> reads, so writer and reader agree.
     /// </summary>
@@ -1698,7 +1713,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
         }
         var providerPath = $"{MeshWeaver.AI.ModelProviderNodeType.UserNamespacePath(owner)}/{harness.Id}";
-        var protector = Hub.ServiceProvider.GetService<MeshWeaver.AI.IProviderKeyProtector>();
+        var protector = Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Security.IProviderKeyProtector>();
         var stored = protector is null ? credential : protector.Protect(credential);
         var node = MeshWeaver.Mesh.MeshNode.FromPath(providerPath) with
         {
@@ -2032,6 +2047,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <summary>Surface a status / error line under the chat input (replaces the old command status callback).</summary>
     private void ShowSkillStatus(string message, bool isError)
     {
+        // A status line replaces an open picker — the keyboard goes back to the composer with it
+        // (issue #2217; see _focusComposerOnRender).
+        _focusComposerOnRender |= pendingPicker is not null;
         pendingPicker = null;
         pickerNodes = [];
         lastCommandStatus = message;
@@ -2050,6 +2068,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private void DismissWidget()
     {
+        // Give the keyboard back to the composer the picker took it from — see
+        // _focusComposerOnRender (issue #2217). Only when a picker was actually open, so a
+        // defensive call never steals focus from whatever holds it.
+        _focusComposerOnRender |= pendingPicker is not null;
         pendingPicker = null;
         pickerNodes = [];
         StateHasChanged();
@@ -2105,6 +2127,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             _focusPickerOnRender = false;
             try { await _pickerWidget.FocusAsync(); }
             catch { /* widget may not be in the DOM yet — harmless */ }
+        }
+        // …and the way back. The picker took focus off Monaco when it opened; now that it is gone
+        // the composer must get it back, or every keystroke Monaco alone handles — Shift+Enter's
+        // newline above all — lands on a detached element and does nothing (issue #2217).
+        // Guarded on the picker being closed so a re-open in the same batch still wins.
+        if (_focusComposerOnRender && pendingPicker is null)
+        {
+            _focusComposerOnRender = false;
+            await FocusComposerAsync();
         }
         // Focus the inner element via the ElementReference (an awaitable ValueTask) rather than the
         // component's own FocusAsync() — that overload is `async void` (await base.Element.FocusAsync()),
@@ -2443,6 +2474,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         WriteComposerSelection(picker.ComposerField, node.Path);
         lastCommandStatus = $"{picker.Title}: {node.Name ?? node.Id}";
         lastCommandStatusIsError = false;
+        // Committing a pick returns the user to typing — so return the keyboard too. Without this
+        // the next Shift+Enter goes nowhere (issue #2217; see _focusComposerOnRender).
+        _focusComposerOnRender |= pendingPicker is not null;
         pendingPicker = null;
         pickerNodes = [];
         StateHasChanged();

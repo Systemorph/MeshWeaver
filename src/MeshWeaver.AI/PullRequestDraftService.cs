@@ -1,33 +1,12 @@
-using System.Reactive.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
-using MeshWeaver.AI;
+using MeshWeaver.GitSync;
 using MeshWeaver.Reactive;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using System.Reactive.Linq;
+using System.Text.RegularExpressions;
+using System.Text;
 
-namespace MeshWeaver.GitSync;
-
-/// <summary>The AI-suggested draft for a pull request — a title and a markdown body.</summary>
-public record PullRequestDraft(string Title, string Body);
-
-/// <summary>
-/// Drafts a pull-request title + body from the change context (the Space name/summary,
-/// the head vs base branch). Implementations delegate to the existing AI agent surface —
-/// never a hand-rolled LLM HTTP call. Reactive: emits exactly once on success, OnError on
-/// failure (no model configured, empty response, network error).
-/// </summary>
-public interface IPullRequestDraftService
-{
-    /// <summary>
-    /// Produces a suggested PR title + body. <paramref name="spaceName"/> /
-    /// <paramref name="spaceSummary"/> describe what changed; <paramref name="headBranch"/> /
-    /// <paramref name="baseBranch"/> are the PR's branches.
-    /// </summary>
-    IObservable<PullRequestDraft> DraftAsync(
-        string spaceName, string? spaceSummary, string headBranch, string baseBranch,
-        CancellationToken ct = default);
-}
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Default <see cref="IPullRequestDraftService"/> — spins up a fresh <see cref="AgentChatClient"/>

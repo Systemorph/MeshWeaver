@@ -28,8 +28,8 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// of <see cref="AccessContext.TimeZoneId"/> and <see cref="AccessContext.Locale"/>
 /// (<see cref="MeshUserProjection"/>). It used to issue a bare <c>nodeType:User</c> query with no
 /// limit. That query carries no <c>path:</c> and no <c>namespace:</c>, so on Postgres it is the
-/// UNPINNED shape served by <c>PostgreSqlCrossSchemaQueryProvider</c>, which answers a request that
-/// states no limit with a PAGE: the 50 most recently modified matches, ordered
+/// UNPINNED shape served by <c>PostgreSqlCrossSchemaQueryProvider</c>, which at the time answered a
+/// request stating no limit with a PAGE: the 50 most recently modified matches, ordered
 /// <c>last_modified DESC</c>. Every other user was silently absent from the directory.</para>
 ///
 /// <para><b>Why it is invisible, and why it gets worse on its own.</b> A missing row makes
@@ -110,6 +110,15 @@ public class UserDirectoryCompletenessTests(PostgreSqlFixture fixture, ITestOutp
     /// The regression itself, end to end: a user buried under more recently modified ones is still
     /// found by the directory, and their stored zone still reaches the <see cref="AccessContext"/>.
     /// Before the fix the lookup answered a determinate <c>Unknown</c> and the projection never ran.
+    ///
+    /// <para>🚨 <b>What this test can and cannot fail on, stated so nobody mistakes it for a
+    /// falsification of <c>Complete()</c>.</b> The 50-row page that caused #1936 lived on a paging
+    /// fan-out overload no runtime caller could reach; it is deleted (#2048), so removing
+    /// <c>.Complete()</c> from <c>DirectoryQuery</c> leaves this test PASSING — only the property
+    /// assertion above fails. That is the correct division of labour and not a gap to paper over:
+    /// this test pins the end-to-end BEHAVIOUR (a buried user resolves, zone and all), the property
+    /// test pins the DECLARATION, and neither pretends to reproduce a truncation the runtime no
+    /// longer performs.</para>
     /// </summary>
     [Fact(Timeout = 180_000)]
     public async Task AUserOutsideTheMostRecentlyModifiedPage_StillResolvesTheirProfile()

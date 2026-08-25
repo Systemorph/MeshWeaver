@@ -84,11 +84,15 @@ public sealed class ScheduledSocialPublishHandler(
 
         var scheduler = subscription.CreatedBy;
         if (UnusableScheduler(scheduler) is { } refusal)
-            return Observable.Throw<MeshNode>(new InvalidOperationException(
-                $"Event subscription {subscription.Id} cannot publish: {refusal} The credential is "
-                + "chosen by the post's authorPath, so an un-gated timed publish could go out through "
-                + "a profile whoever scheduled it may not use. Refusing is the only safe answer to "
-                + "\"whose account does this post on?\"."));
+            return RecordThenThrow(
+                postPath!,
+                PostPublishProblem.SchedulerUnknownCode,
+                statusCode: 0,
+                new InvalidOperationException(
+                    $"Event subscription {subscription.Id} cannot publish: {refusal} The credential is "
+                    + "chosen by the post's authorPath, so an un-gated timed publish could go out through "
+                    + "a profile whoever scheduled it may not use. Refusing is the only safe answer to "
+                    + "\"whose account does this post on?\"."));
 
         var service = new LinkedInPublishService(
             hub, meshService, hub.ServiceProvider.GetService<ILogger<LinkedInPublishService>>());
@@ -117,15 +121,55 @@ public sealed class ScheduledSocialPublishHandler(
                 ? hub.GetMeshNode(postPath!, TimeSpan.FromSeconds(10))
                     .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
                     .Select(node => node ?? Placeholder(postPath!))
-                : Observable.Throw<MeshNode>(new InvalidOperationException(
-                    $"Scheduled publish of '{postPath}' was refused: {outcome.Reason ?? "unknown"}"
-                    + (outcome.StatusCode > 0 ? $" (HTTP {outcome.StatusCode})" : string.Empty)
-                    + (outcome.HttpAttempted
-                        ? string.Empty
-                        : " — a pre-publish gate short-circuited before any LinkedIn call."))))))
+                // 🚨 A refusal is recorded ON THE POST before it is thrown (issue #50). The thrown
+                // reason lands on the subscription in the ADMIN partition, which the member who
+                // scheduled the post cannot read — so from their side the post simply sat past its
+                // slot saying nothing. LinkedInPublishService records the same reason for the gates
+                // it owns; this covers the ones it does not reach and is idempotent either way.
+                : RecordThenThrow(
+                    postPath!,
+                    PostPublishProblem.CodeOf(outcome.Reason),
+                    outcome.StatusCode,
+                    new InvalidOperationException(
+                        $"Scheduled publish of '{postPath}' was refused: {outcome.Reason ?? "unknown"}"
+                        + (outcome.StatusCode > 0 ? $" (HTTP {outcome.StatusCode})" : string.Empty)
+                        + (outcome.HttpAttempted
+                            ? string.Empty
+                            : " — a pre-publish gate short-circuited before any LinkedIn call."))))))
             .Do(_ => logger?.LogInformation(
                 "Scheduled publish of {Path} succeeded (subscription {Id})", postPath, subscription.Id));
     }
+
+    /// <summary>
+    /// Records <paramref name="reasonCode"/> on the post, then fails with <paramref name="error"/> —
+    /// the reason the person sees and the reason the operator sees, in that order.
+    ///
+    /// <para>🚨 <b>The throw is unconditional.</b> <see cref="PostPublishProblem.Record"/> completes
+    /// EMPTY when the post already says exactly this, so a bare <c>SelectMany</c> onto the throw
+    /// would swallow the failure whole and the runner would mark the subscription <c>Fired</c> —
+    /// a refused publish reported as a successful one, which is worse than the silence being fixed
+    /// here. <c>IgnoreElements().Concat(throw)</c> is what makes the failure independent of whether
+    /// the diagnostic write had anything to do.</para>
+    ///
+    /// <para>A failure of the diagnostic write itself is logged and DISCARDED for the same reason:
+    /// it must never REPLACE the reason it was describing.</para>
+    /// </summary>
+    /// <param name="postPath">The post to record the problem on.</param>
+    /// <param name="reasonCode">The stable problem code the post should carry.</param>
+    /// <param name="statusCode">The HTTP status LinkedIn answered with, or 0 when it did not.</param>
+    /// <param name="error">The failure to raise once the problem is recorded.</param>
+    private IObservable<MeshNode> RecordThenThrow(
+        string postPath, string reasonCode, int statusCode, Exception error) =>
+        PostPublishProblem.Record(hub, postPath, reasonCode, statusCode, DateTimeOffset.UtcNow, logger)
+            .IgnoreElements()
+            .Catch<MeshNode, Exception>(writeEx =>
+            {
+                logger?.LogWarning(writeEx,
+                    "Could not record the publish refusal on {Path} — the refusal itself still stands",
+                    postPath);
+                return Observable.Empty<MeshNode>();
+            })
+            .Concat(Observable.Throw<MeshNode>(error));
 
     /// <summary>
     /// Re-reads the post and completes only if it STILL wants publishing. Emits nothing useful; it
@@ -156,6 +200,11 @@ public sealed class ScheduledSocialPublishHandler(
     /// <summary>
     /// Why <paramref name="scheduler"/> may not be published as, or null when it is a real person.
     ///
+    /// <para>Public because <see cref="ScheduledPostWatcher"/> asks the SAME question before it
+    /// arms a timer. A timer armed for an identity this method would reject is a timer that fires
+    /// and refuses — the post shows as scheduled, its slot passes, and nothing happens. Arming and
+    /// firing must therefore agree on what a usable scheduler is, and there is one definition.</para>
+    ///
     /// <para>🚨 <b>A present CreatedBy is not enough.</b> The watcher takes it from the post's
     /// <c>lastModifiedBy</c>, and that is <see cref="WellKnownUsers.System"/> whenever the node was
     /// last written by the platform itself — a GitSync, an import, a migration. Impersonating THAT
@@ -164,7 +213,7 @@ public sealed class ScheduledSocialPublishHandler(
     /// for every system-written post. Hub principals (<c>sync/…</c>, <c>mesh/…</c>, address-shaped
     /// and never a user id) are refused for the same reason.</para>
     /// </summary>
-    private static string? UnusableScheduler(string? scheduler)
+    public static string? UnusableScheduler(string? scheduler)
     {
         if (string.IsNullOrWhiteSpace(scheduler))
             return "it names no CreatedBy, so there is no identity to publish as.";
