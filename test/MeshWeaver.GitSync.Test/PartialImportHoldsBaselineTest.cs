@@ -78,6 +78,27 @@ public class PartialImportHoldsBaselineTest
         GitHubSyncService.MayAdvanceBaseline(Result("Imported", preserved: 3)).Should().BeFalse();
     }
 
+    /// <summary>
+    /// 🚨 A BLOCKED create is not a failure, and the boundary is deliberate. <c>#2211</c>'s
+    /// <c>ImportedWithBlockedCreates</c> means a node the repo declares was refused by an operator's
+    /// own <c>SyncBehavior</c> claim — declining it IS the instruction, so the mesh is intentionally
+    /// not identical to the repo and the baseline must still advance. Holding it would freeze every
+    /// Space that decouples a subtree at the commit where it first did so.
+    ///
+    /// <para>Stated here so the two outcomes cannot later be folded together on the grounds that
+    /// both are "not a clean Imported". The re-attempt that outcome wants is the activity MARKER's
+    /// job (a Warning rather than a Succeeded fingerprint), not the sync pointer's.</para>
+    /// </summary>
+    [Fact]
+    public void ABlockedCreate_IsNotAFailure_AndStillAdvancesTheBaseline()
+    {
+        GitHubSyncService.MayAdvanceBaseline(Result("ImportedWithBlockedCreates"))
+            .Should().BeTrue();
+        // …but a blocked-create import that ALSO failed a file holds it, on the failure.
+        GitHubSyncService.MayAdvanceBaseline(Result("ImportedWithBlockedCreates", failed: 1))
+            .Should().BeFalse();
+    }
+
     [Fact]
     public void FailuresAndPreservedAreIndependentReasons()
     {

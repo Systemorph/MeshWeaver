@@ -1,6 +1,7 @@
 ﻿using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.AI;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Services;
@@ -9,6 +10,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
@@ -69,6 +71,12 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// Provides the current user's access context (e.g. their object id).
     /// </summary>
     [Inject] protected AccessService AccessService { get; set; } = null!;
+
+    /// <summary>
+    /// Circuit-scoped error surface — a failed page-level action reports here and
+    /// <c>PortalErrorModal</c> raises the modal, rather than the failure being swallowed.
+    /// </summary>
+    [Inject] protected PortalErrorSink ErrorSink { get; set; } = null!;
 
     /// <summary>
     /// Cascading authentication state; used to gate side-panel content for anonymous circuits.
@@ -474,7 +482,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// Handles a click on a dynamic menu item.
     /// Uses Href for absolute navigation when set, otherwise constructs URL from Area.
     /// </summary>
-    private void HandleMenuItemClick(NodeMenuItemDefinition item)
+    private async Task HandleMenuItemClick(NodeMenuItemDefinition item)
     {
         isNodeMenuOpen = false;
         isMeshMenuOpen = false;
@@ -486,10 +494,40 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             OpenNewThreadInMain();
             return;
         }
+        // COMMAND entries run here, on the circuit — BEFORE the Href branch, which for an action is
+        // only the landing page / the fallback for a renderer that does not know the id.
+        if (item.IsAction && await TryRunMenuActionAsync(item))
+            return;
         if (!string.IsNullOrEmpty(item.Href))
             NavigationManager.NavigateTo(item.Href);
         else
             NavigateToArea(item.Area);
+    }
+
+    /// <summary>
+    /// Runs a <see cref="NodeMenuItemDefinition.Action"/> command on the CIRCUIT. Returns false for
+    /// an id this renderer does not know, so the caller falls through to the href — a menu entry
+    /// must never become a no-op just because it was authored against a newer portal.
+    /// </summary>
+    private async Task<bool> TryRunMenuActionAsync(NodeMenuItemDefinition item)
+    {
+        switch (item.Action)
+        {
+            case MenuActions.Recycle:
+                // The action's Href IS the landing page (see NodeMenuItemDefinition.Action), so the
+                // target path is exactly what LandingHref produced. Fall back to the current
+                // namespace when a provider emitted no href.
+                var target = string.IsNullOrEmpty(item.Href)
+                    ? NavigationService.CurrentNamespace ?? ""
+                    : item.Href.Trim('/');
+                await RunRecycleAsync(target);
+                return true;
+            default:
+                Logger.LogWarning(
+                    "Menu entry '{Label}' carries action '{Action}', which this portal does not "
+                    + "implement — falling back to navigation.", item.Label, item.Action);
+                return false;
+        }
     }
 
     /// <summary>
@@ -607,6 +645,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             {
                 // Circuit disconnected during initialization
             }
+
+            // 🚨 First render, not OnInitialized: the recycle flow raises a dialog, and the
+            // FluentDialogProvider it needs is a CHILD of this very component — at OnInitialized it
+            // has not been rendered yet, so the dialog would have nowhere to go.
+            CheckRecycleUrl(NavigationManager.Uri);
         }
     }
 
@@ -724,6 +767,163 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         ChatHintActive = false;
     }
 
+    // ───────────────────────────── Recycle: a PAGE-level action ─────────────────────────────
+    // 🚨 The whole flow lives HERE, on the circuit, because the shell is the one thing that
+    // survives the hub it tears down (#2202). Recycle used to be a confirmation layout area
+    // HOSTED ON THE TARGET HUB: its confirm button pushed a RedirectControl into the area stream
+    // and then posted DisposeRequest to that same hub, so the redirect had to outrun a teardown of
+    // the stream carrying it — it did not, and the button read as dead. Afterwards the landing page
+    // came back as a per-area refresh mosaic, every module faulting and re-subscribing on its own
+    // ("refresh is a matter of the page, not each module").
+    //
+    // Two doors, ONE implementation:
+    //   • the node menu's ♻️ entry, an ACTION (MenuActions.Recycle) — no navigation at all;
+    //   • the /{path}/Recycle URL, which the stale-build banner links to and people bookmark.
+    // Both land in RunRecycleAsync, which confirms on the circuit, recycles through the CIRCUIT's
+    // hub, waits for the address to answer again, and then performs ONE page-level reload.
+
+    /// <summary>The path currently being recycled, or null. Guards against a second confirm while a
+    /// recycle is in flight — including the URL door firing again on the navigation we ourselves
+    /// perform.</summary>
+    private string? _recyclingPath;
+
+    /// <summary>The in-flight recycle's subscription, held so circuit teardown cancels it. It can
+    /// legitimately live for the whole recycle budget, and a completion callback marshalled onto a
+    /// disposed component is the post-teardown straggler class.</summary>
+    private IDisposable? _recycleSubscription;
+
+    /// <summary>
+    /// Runs the page-level flow when <paramref name="uri"/> is a <c>/{path}/Recycle</c> URL.
+    /// The area behind it renders only a passive "Recycling…" card, so nothing races the teardown.
+    /// </summary>
+    private void CheckRecycleUrl(string uri)
+    {
+        var relative = NavigationManager.ToBaseRelativePath(uri);
+        var cut = relative.IndexOfAny(['?', '#']);
+        if (cut >= 0)
+            relative = relative[..cut];
+        // Cheap string pre-filter so an ordinary navigation costs nothing.
+        if (RecycleLayoutArea.TryGetTargetFromUrl(relative) is not { Length: > 0 })
+            return;
+
+        // 🚨 Resolve the viewer HERE, on the circuit thread, and carry the id explicitly through the
+        // Rx hops below. AccessService.CircuitContext is an AsyncLocal that resolves ONLY on the
+        // circuit's own thread and is documented to be wiped by "a deferred sync write, an Rx
+        // continuation" — which is precisely what the resolver's and the permission fold's
+        // Subscribe callbacks are. The parameterless CheckPermission(path, permission) overload
+        // calls ResolveUserId INTERNALLY, so composing it inside the resolver's callback would have
+        // read a wiped AsyncLocal, fallen back to WellKnownUsers.Anonymous, and silently denied the
+        // URL door to everyone — a fail-closed that looks identical to "you lack Update".
+        var viewerId = CircuitUser.ResolveUserId(AccessService);
+        if (string.IsNullOrEmpty(viewerId))
+        {
+            Logger.LogInformation(
+                "Recycle URL '{Url}' ignored — no circuit user resolved (anonymous circuit).", relative);
+            return;
+        }
+        // 🚨 …then ASK THE RESOLVER, because the string is not the decision. A node may itself be
+        // called "…/Recycle", and then this URL is that node's own page, not a request to recycle
+        // its parent. ResolveNavigationPath is the same resolution AreaPage performs, so the door
+        // opens exactly when the page really is rendering a node's Recycle AREA.
+        PathResolver.ResolveNavigationPath(relative)
+            .Take(1)
+            .Subscribe(
+                resolution =>
+                {
+                    if (resolution is null
+                        || !string.Equals(resolution.Remainder?.Trim('/'), MeshNodeLayoutAreas.RecycleArea,
+                            StringComparison.OrdinalIgnoreCase))
+                        return;
+                    var target = resolution.Prefix.Trim('/');
+                    if (target.Length == 0)
+                        return;
+                    // The URL is a door into the same command the menu entry runs, so it needs the
+                    // same gate. The menu entry is withheld server-side without Permission.Update
+                    // (RecycleLayoutArea.GetMenuItem), but a URL is typed, linked and bookmarked —
+                    // nothing withholds it. Fail CLOSED: a check that faults, or never answers,
+                    // does not open the dialog. The EXPLICIT-userId overload — see above.
+                    Hub.CheckPermission(target, viewerId, Permission.Update)
+                        .Take(1)
+                        .Subscribe(
+                            allowed =>
+                            {
+                                if (allowed)
+                                    InvokeAsync(() => RunRecycleAsync(target));
+                                else
+                                    Logger.LogInformation(
+                                        "Recycle URL for '{Path}' ignored — the viewer lacks Update on it.",
+                                        target);
+                            },
+                            ex => Logger.LogWarning(ex,
+                                "Recycle URL for '{Path}' ignored — the permission check did not answer.",
+                                target));
+                },
+                ex => Logger.LogWarning(ex,
+                    "Recycle URL '{Url}' ignored — path resolution did not answer.", relative));
+    }
+
+    /// <summary>
+    /// Confirm → recycle → ONE page-level reload. Every step runs on the circuit; nothing here
+    /// depends on the hub being torn down.
+    /// </summary>
+    private async Task RunRecycleAsync(string targetPath)
+    {
+        if (string.IsNullOrEmpty(targetPath) || _recyclingPath is not null)
+            return;
+
+        var landing = RecycleLayoutArea.LandingHref(targetPath);
+
+        // The framework's own confirmation — raised by the page's FluentDialogProvider, so it is
+        // owned by the circuit and cannot be torn down by the recycle it is confirming.
+        var dialog = await DialogService.ShowMessageBoxAsync(new DialogParameters<MessageBoxContent>
+        {
+            Content = new MessageBoxContent
+            {
+                Title = AccessService.Localize("ui.recycleConfirmTitle"),
+                MarkupMessage = new MarkupString(System.Net.WebUtility.HtmlEncode(
+                    AccessService.Localize("ui.recycleConfirmBody"))),
+            },
+            PrimaryAction = AccessService.Localize("menu.recycle"),
+            SecondaryAction = AccessService.Localize("common.cancel"),
+        });
+        var result = await dialog.Result;
+        if (result.Cancelled)
+        {
+            // Cancel from the URL door has somewhere to go (the node's own page); from the menu the
+            // user is already where they were, and NavigateTo to the same URL is a no-op reload we
+            // do not want. Only leave the Recycle URL.
+            if (RecycleLayoutArea.TryGetTargetFromUrl(
+                    NavigationManager.ToBaseRelativePath(NavigationManager.Uri)) is not null)
+                NavigationManager.NavigateTo(landing);
+            return;
+        }
+
+        _recyclingPath = targetPath;
+
+        // 🚨 Hub is the CIRCUIT's hub — never the target's. Reactive + Subscribe, never awaited:
+        // RecycleNode posts the DisposeRequest and then rides the framework's own recycling-aware
+        // read until the address answers from a FRESH activation.
+        _recycleSubscription?.Dispose();
+        _recycleSubscription = Hub.RecycleNode(targetPath).Subscribe(
+            _ => InvokeAsync(() =>
+            {
+                _recyclingPath = null;
+                // forceLoad: the page-level refresh the maintainer asked for. One reload against an
+                // already-re-activated hub, instead of N modules each discovering the teardown.
+                NavigationManager.NavigateTo(landing, forceLoad: true);
+            }),
+            ex => InvokeAsync(() =>
+            {
+                _recyclingPath = null;
+                Logger.LogWarning(ex, "Recycle of '{Path}' did not settle within the budget", targetPath);
+                // Surfaced, never swallowed: the dispose WAS posted, so the node may still be
+                // mid-recycle — say so rather than dropping the user on a page we cannot vouch for.
+                ErrorSink.Report(string.Format(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    AccessService.Localize("ui.recycleFailed"), targetPath, ex.Message));
+            }));
+    }
+
 
     /// <summary>
     /// Collapses the side pane when the MAIN view navigates to a thread node. Fired on the real
@@ -746,6 +946,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
         CheckChatHint(e.Location);
+        CheckRecycleUrl(e.Location);
         if (!isAuthenticated || !SidePanelState.IsVisible || string.IsNullOrEmpty(SidePanelState.ContentPath))
             return;
         var path = NavigationManager.ToBaseRelativePath(e.Location);
@@ -1128,6 +1329,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         _aiMenuSubscription?.Dispose();
         _gitHubMenuSubscription?.Dispose();
         _topBarMenusSubscription?.Dispose();
+        // An in-flight recycle can legitimately outlive the circuit that asked for it — the
+        // teardown it is waiting on is exactly the kind of thing a user navigates away from. Its
+        // completion callback marshals onto THIS component, so it must not survive it.
+        _recycleSubscription?.Dispose();
         foreach (var subscription in _contributedMenuSubscriptions.Values)
             subscription.Dispose();
         _contributedMenuSubscriptions.Clear();

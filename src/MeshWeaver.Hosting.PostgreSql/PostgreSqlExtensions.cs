@@ -158,19 +158,26 @@ public static class PostgreSqlExtensions
         dataSourceBuilder.UseVector();
         var dataSource = dataSourceBuilder.Build();
 
-        var embeddingProvider = services.BuildServiceProvider().GetService<IEmbeddingProvider>();
-        var storageAdapter = new PostgreSqlStorageAdapter(dataSource, embeddingProvider);
+        // 🚨 The adapter is built from the REAL container, never from a
+        // services.BuildServiceProvider() taken mid-registration. That shortcut builds a SECOND,
+        // throwaway container: IEmbeddingProvider is registered by AddEmbeddings, so whether this
+        // adapter got one came down to whether the host happened to call AddEmbeddings BEFORE this
+        // method — and when it did, the adapter held a DUPLICATE singleton, not the one every other
+        // consumer resolves. Both are invisible: semantic search silently degrades to the ILIKE
+        // substring scan (issue #1642's real user-visible shape).
+        services.AddSingleton(sp =>
+            new PostgreSqlStorageAdapter(dataSource, sp.GetService<IEmbeddingProvider>()));
 
         // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up.
         // Same instance under IVectorSearchProvider so the search box / MCP find / agent
         // tools route through HNSW cosine similarity when bare-text tokens are present.
         services.AddSingleton<PostgreSqlMeshQuery>(sp =>
             new PostgreSqlMeshQuery(
-                storageAdapter,
+                sp.GetRequiredService<PostgreSqlStorageAdapter>(),
                 sp.GetService<AccessService>(),
                 meshConfiguration: null,
                 excludedNamespaces: null,
-                embeddingProvider: embeddingProvider,
+                embeddingProvider: sp.GetService<IEmbeddingProvider>(),
                 ioPoolRegistry: sp.GetService<IoPoolRegistry>()));
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
         services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
@@ -179,7 +186,7 @@ public static class PostgreSqlExtensions
         // NoOpVersionQuery TryAdd (in AddCoreAndWrapperServices) no-ops.
         services.AddSingleton<IVersionQuery>(_ => new PostgreSqlVersionQuery(dataSource, opts.Schema));
 
-        services.AddPersistence(storageAdapter);
+        services.AddPersistence(sp => sp.GetRequiredService<PostgreSqlStorageAdapter>());
 
         // Register access control and activity store
         services.TryAddSingleton(new PostgreSqlAccessControl(dataSource));
@@ -203,20 +210,19 @@ public static class PostgreSqlExtensions
         dataSourceBuilder.UseVector();
         var dataSource = dataSourceBuilder.Build();
 
-        var embeddingProvider = services.BuildServiceProvider().GetService<IEmbeddingProvider>();
-        var storageAdapter = new PostgreSqlStorageAdapter(dataSource, embeddingProvider);
-
-        // Register concrete adapter type for change listener
-        services.AddSingleton(storageAdapter);
+        // Concrete adapter type, built from the REAL container — see the same-shape comment in
+        // AddPostgreSqlPersistence for why this is not services.BuildServiceProvider().
+        services.AddSingleton(sp =>
+            new PostgreSqlStorageAdapter(dataSource, sp.GetService<IEmbeddingProvider>()));
 
         // PostgreSqlMeshQuery + IVectorSearchProvider — same instance.
         services.AddSingleton<PostgreSqlMeshQuery>(sp =>
             new PostgreSqlMeshQuery(
-                storageAdapter,
+                sp.GetRequiredService<PostgreSqlStorageAdapter>(),
                 sp.GetService<AccessService>(),
                 meshConfiguration: null,
                 excludedNamespaces: null,
-                embeddingProvider: embeddingProvider,
+                embeddingProvider: sp.GetService<IEmbeddingProvider>(),
                 ioPoolRegistry: sp.GetService<IoPoolRegistry>()));
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
         services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<PostgreSqlMeshQuery>());
@@ -226,13 +232,14 @@ public static class PostgreSqlExtensions
         services.AddSingleton<IVersionQuery>(_ => new PostgreSqlVersionQuery(dataSource, opts.Schema));
 
         // Register core persistence services (IStorageAdapter, IStorageService, etc.)
-        services.AddPersistence(storageAdapter);
+        services.AddPersistence(sp => sp.GetRequiredService<PostgreSqlStorageAdapter>());
 
         // Register the Change Listener — feeds the adapter's Changes feed.
         services.AddSingleton(sp =>
         {
             var logger = sp.GetService<ILogger<PostgreSqlChangeListener>>();
-            return new PostgreSqlChangeListener(dataSource, storageAdapter.ChangeObserver, logger);
+            return new PostgreSqlChangeListener(
+                dataSource, sp.GetRequiredService<PostgreSqlStorageAdapter>().ChangeObserver, logger);
         });
 
         // Register access control and activity store

@@ -132,26 +132,26 @@ public static class SnowflakeExtensions
         var capabilities = new SnowflakeCapabilityHolder();
         services.AddSingleton(capabilities);
 
-        // Mirrors the PG simple overload's eager-instance shape (incl. its acknowledged
-        // BuildServiceProvider wart) — this overload serves tests/monolith bring-up where
-        // the embedding provider is registered before persistence.
-        var embeddingProvider = services.BuildServiceProvider().GetService<IEmbeddingProvider>();
-        var storageAdapter = new SnowflakeStorageAdapter(
-            source, embeddingProvider, capabilities: capabilities, options: opts);
-        services.AddSingleton(storageAdapter);
+        // Mirrors the PG simple overload — and, like it, resolves the optional IEmbeddingProvider
+        // from the REAL container rather than a services.BuildServiceProvider() taken
+        // mid-registration. The old shape made "does this adapter have embeddings?" depend on
+        // whether the host called AddEmbeddings before or after this method, and gave the adapter a
+        // duplicate singleton when it did — a silent degrade to lexical search either way (#1642).
+        services.AddSingleton(sp => new SnowflakeStorageAdapter(
+            source, sp.GetService<IEmbeddingProvider>(), capabilities: capabilities, options: opts));
 
         services.AddSingleton<SnowflakeMeshQuery>(sp =>
             new SnowflakeMeshQuery(
-                storageAdapter,
+                sp.GetRequiredService<SnowflakeStorageAdapter>(),
                 sp.GetService<AccessService>(),
                 meshConfiguration: null,
                 excludedNamespaces: null,
-                embeddingProvider: embeddingProvider,
+                embeddingProvider: sp.GetService<IEmbeddingProvider>(),
                 ioPoolRegistry: sp.GetService<IoPoolRegistry>()));
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<SnowflakeMeshQuery>());
         services.AddSingleton<IVectorSearchProvider>(sp => sp.GetRequiredService<SnowflakeMeshQuery>());
 
-        services.AddPersistence(storageAdapter);
+        services.AddPersistence(sp => sp.GetRequiredService<SnowflakeStorageAdapter>());
 
         services.TryAddSingleton(new SnowflakeAccessControl(
             source, schemaName: opts.Schema, centralSchema: opts.Schema,
