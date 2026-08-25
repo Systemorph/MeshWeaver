@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net.Sockets;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
@@ -84,7 +85,113 @@ public class PostgreSqlTransientRetryTest
     [InlineData(3, 800)] // capped
     [InlineData(5, 800)] // capped
     public void Backoff_IsBoundedExponential(int attempt, int expectedMs) =>
-        Assert.Equal(expectedMs, (int)PostgreSqlStorageAdapter.TransientReadBackoff(attempt).TotalMilliseconds);
+        Assert.Equal(expectedMs, (int)PostgreSqlStorageAdapter.TransientReadBackoffBase(attempt).TotalMilliseconds);
+
+    /// <summary>
+    /// The delay actually used is the base JITTERED by ±40%, and the jitter is load-bearing for the
+    /// deadlock arm (40P01/40001): two transactions that deadlocked did so because they collided at
+    /// the same instant, so waking both after an identical delay re-creates the collision on every
+    /// attempt. Pinned as a BAND, and as "successive draws are not all identical" — an
+    /// implementation that quietly dropped the jitter would satisfy the band but not the spread.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 200)]
+    [InlineData(1, 400)]
+    [InlineData(2, 800)]
+    public void Backoff_IsJitteredWithinBand(int attempt, int baseMs)
+    {
+        var draws = Enumerable.Range(0, 50)
+            .Select(_ => PostgreSqlStorageAdapter.TransientReadBackoff(attempt).TotalMilliseconds)
+            .ToArray();
+
+        Assert.All(draws, ms =>
+        {
+            Assert.InRange(ms, baseMs * 0.6, baseMs * 1.4);
+        });
+        Assert.True(draws.Distinct().Count() > 1, "the backoff must actually vary, or it is not jitter");
+    }
+
+    // ---- Concurrent-DDL race classifier (issue #2130) ----
+    //
+    // `CREATE SCHEMA IF NOT EXISTS` is NOT atomic against a concurrent creator: the existence check
+    // and the pg_namespace insert are separate steps under no common lock, so the loser's insert
+    // violates the SYSTEM CATALOG unique index. Production evidence is verbatim
+    // `23505: duplicate key value violates unique constraint "pg_namespace_nspname_index"`, which
+    // silently dropped four package installs. It must classify as the retryable race it is.
+
+    private static PostgresException PgWithConstraint(string sqlState, string constraint, string message) =>
+        new(message, "ERROR", "ERROR", sqlState, constraintName: constraint);
+
+    [Theory]
+    [InlineData("pg_namespace_nspname_index")]   // CREATE SCHEMA IF NOT EXISTS — the observed one
+    [InlineData("pg_type_typname_nsp_index")]    // CREATE TABLE IF NOT EXISTS
+    [InlineData("pg_class_relname_nsp_index")]   // CREATE INDEX IF NOT EXISTS
+    [InlineData("pg_extension_name_index")]      // CREATE EXTENSION IF NOT EXISTS
+    public void CatalogUniqueViolation_IsATransientDdlRace(string constraint) =>
+        Assert.True(PostgreSqlPartitionStorageProvider.IsTransientDdlRace(
+            PgWithConstraint("23505", constraint,
+                $"duplicate key value violates unique constraint \"{constraint}\"")));
+
+    /// <summary>
+    /// A server with <c>Include Error Detail=false</c> redacts DETAIL — the prod shape — but the
+    /// constraint still names itself in the message, so the fallback path must recognise it.
+    /// </summary>
+    [Fact]
+    public void CatalogUniqueViolation_IsRecognisedFromTheMessage_WhenConstraintFieldIsAbsent() =>
+        Assert.True(PostgreSqlPartitionStorageProvider.IsTransientDdlRace(
+            new PostgresException(
+                "duplicate key value violates unique constraint \"pg_namespace_nspname_index\"",
+                "ERROR", "ERROR", "23505")));
+
+    /// <summary>
+    /// 🚨 The scoping that keeps this from being a blanket retry: an APPLICATION unique violation is
+    /// a real error and must propagate. Only a `pg_*` system-catalog constraint means "another
+    /// session concurrently created the same catalog object".
+    /// </summary>
+    [Theory]
+    [InlineData("mesh_nodes_pkey")]
+    [InlineData("searchable_schemas_pkey")]
+    [InlineData("uq_user_email")]
+    public void ApplicationUniqueViolation_IsNotATransientDdlRace(string constraint) =>
+        Assert.False(PostgreSqlPartitionStorageProvider.IsTransientDdlRace(
+            PgWithConstraint("23505", constraint,
+                $"duplicate key value violates unique constraint \"{constraint}\"")));
+
+    [Theory]
+    [InlineData("42P06")] // duplicate_schema
+    [InlineData("42P07")] // duplicate_table
+    [InlineData("42710")] // duplicate_object
+    [InlineData("42723")] // duplicate_function
+    [InlineData("40P01")] // deadlock_detected
+    [InlineData("40001")] // serialization_failure
+    public void DuplicateObjectStates_AreTransientDdlRaces(string sqlState) =>
+        Assert.True(PostgreSqlPartitionStorageProvider.IsTransientDdlRace(Pg(sqlState)));
+
+    [Theory]
+    [InlineData("42883")] // undefined_function — the proc is missing; a REAL failure (#1369's inducer)
+    [InlineData("42P01")] // undefined_table
+    [InlineData("42501")] // insufficient_privilege
+    [InlineData("42601")] // syntax_error
+    public void RealDdlErrors_AreNotTransientDdlRaces(string sqlState) =>
+        Assert.False(PostgreSqlPartitionStorageProvider.IsTransientDdlRace(Pg(sqlState)));
+
+    /// <summary>
+    /// The #2132 shape: Npgsql wraps a mid-read connection drop as <c>NpgsqlException</c> around
+    /// <c>EndOfStreamException</c> ("Attempted to read past the end of the stream"). It is NOT a
+    /// <see cref="PostgresException"/>, so no SqlState filter can see it — the cross-schema fan-out
+    /// must still classify it as transient and retry rather than fault the area render.
+    /// </summary>
+    [Fact]
+    public void NpgsqlExceptionWrappingEndOfStream_IsTransient() =>
+        Assert.True(PostgreSqlStorageAdapter.IsTransientConnectionFault(
+            new NpgsqlException("Exception while reading from stream",
+                new System.IO.EndOfStreamException("Attempted to read past the end of the stream."))));
+
+    [Fact]
+    public void NpgsqlExceptionWrappingTimeout_IsTransient() =>
+        Assert.True(PostgreSqlStorageAdapter.IsTransientConnectionFault(
+            new NpgsqlException("Exception while reading from stream",
+                new TimeoutException("Timeout during reading attempt"))));
 
     // ---- Retry policy behaviour (deterministic: immediate scheduler + zero backoff) ----
 
