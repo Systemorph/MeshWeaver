@@ -481,7 +481,79 @@ workspace.GetMeshNodeStream(path)
         ex => logger.LogWarning(ex, "read failed for {Path}", path));
 ```
 
-No `Query`, no `await`, no `FromAsync` bridge, no separate request type. The owning hub activates on subscribe, the first emission is its authoritative current state, and `Take(1)` completes the subscription. (For an optional node that may not exist, don't point an exact-path stream at it — read via a query, which is empty-on-absent; an exact-path subscribe to a missing node NotFound-storms the owner.)
+No `Query`, no `await`, no `FromAsync` bridge, no separate request type. The owning hub activates on subscribe, the first emission is its authoritative current state, and `Take(1)` completes the subscription.
+
+That is the read for a node that **exists**. A node that may not exist yet is a different problem, and it has its own pattern — the next section.
+
+---
+
+### 🚨 An OPTIONAL node: listing for EXISTENCE, stream for CONTENT
+
+Two rules on this page pull in opposite directions the moment the node might not be there yet, and
+**each one, followed alone, is a real defect that has shipped**:
+
+| If you… | …you hit |
+|---|---|
+| point `GetMeshNodeStream(exactPath)` at an **absent** node | The owner answers an authoritative routing **NotFound**, which **terminates the stream with an error** — it cannot wait for the node to appear. Worse, that NotFound opens `MeshNodeStreamCache`'s **storm-breaker** window on that path, and the breaker **fast-fails WRITES too** — so the read suppresses the very write it is waiting for. |
+| read a known path's **`Content`** out of a query | The index is eventually consistent; a query's answer for one path can be **minutes** old. Waiting on a VALUE through it is waiting on an unbounded lag. |
+
+So do not pick a horn. **Compose them** — the listing answers *whether it is there*, the owner's
+stream answers *what it says*:
+
+```csharp
+// EXISTENCE — a children LISTING. Empty-on-absent, so the watcher may be in place long before
+// the node is written, and a stale negative only means waiting a beat longer. select:path —
+// nothing here reads Content.
+hub.GetQuery($"usage:{parentPath}", $"path:{parentPath}/_Usage scope:children nodeType:TokenUsage select:path")
+    .Where(nodes => nodes.Any(n => string.Equals(n.Path, target, StringComparison.OrdinalIgnoreCase)))
+    .Take(1)
+    // CONTENT — the OWNER's authoritative stream, opened only now that the node demonstrably
+    // exists, so it can neither NotFound nor trip the storm breaker. Live (no Take): later
+    // writes to the same node keep arriving.
+    .SelectMany(_ => workspace.GetMeshNodeStream(target))
+    .Select(node => node.ContentAs<TokenUsage>(hub.JsonSerializerOptions))
+    .Where(u => u is not null)
+    .Subscribe(u => { /* … */ }, ex => logger.LogWarning(ex, "usage read failed for {Path}", target));
+```
+
+Why the ordering is sound rather than merely convenient: the listing is served by the index, which
+**trails** the durable store. So "the index has seen it" implies "the store has it" — the point read
+opened on that signal cannot be early. The lag that makes a query useless for CONTENT is exactly
+what makes it safe as a gate for the point read.
+
+**This is not hypothetical, and it has cost real time in both directions.** `ThreadTokenUsageTest`
+used a point read, hit `No node found at …/_Usage/…` under load — an error, not a timeout, so no
+budget could save it (#1040) — and was moved wholesale onto the query. It then became a repeat CI
+offender on the *other* horn: #1812, #2001, and run `32876073965` are all "the observable emitted
+nothing at all" on a **usage** wait, never on the thread/cell waits carrying the identical budget in
+the same test methods. #2001's fix widened every budget from 10 s to 20 s and the same assertion
+failed at 20 s — widening a wait is not a repair for an unbounded lag.
+
+**Creating it anyway?** Then you need no existence check at all — use
+[`CreateOrUpdateNodeRequest`](#upserts-createorupdatenoderequest--single-verb-no-delete-then-create),
+which reads persistence itself.
+
+🚨 **Do not over-apply this to a genuine SET — the worked counter-example is
+`src/MeshWeaver.Blazor.Portal/Chat/ThreadTokenChip.razor.cs:106`.** That chip reads `content` out of
+the very same `{thread}/_Usage scope:children` query this section just told you not to read a value
+from, **and it is correct.** It is summing a SET — every `_Usage/{model}` child — to paint a total.
+A briefly-stale total is a cosmetic artefact on screen; nothing decides anything on it.
+
+"Fixing" it into N point reads would be strictly worse in two ways: N per-node hub activations on
+every chat render, and — on a set that is legitimately EMPTY, i.e. a thread with no rounds yet —
+every one of those is an **absent-node point read**, which is the storm breaker in the first row
+above, now firing on the render path.
+
+So the rule is not about how many nodes you read. **It is about whether a stale answer DECIDES
+anything:**
+
+| The value… | Read it from |
+|---|---|
+| is displayed, and a stale one merely looks briefly wrong | the query, `content` and all |
+| **gates** something — a wait passes, a branch is taken, a write happens | the OWNER's `GetMeshNodeStream` |
+
+`ThreadTokenUsageTest` was in the second row and using the first row's primitive. The chip is in the
+first row and using it correctly. Same query, opposite verdicts.
 
 ---
 
@@ -738,6 +810,7 @@ return request.Processed();   // handler returns immediately
 | Does **anything match** a predicate? | `Query` + check `Items.Count` |
 | Does node X (a KNOWN path) exist? | `workspace.GetMeshNodeStream(X)` — a query's negative can be minutes stale, and a caller that writes on it redoes finished work ([why](#-never-query-to-ask-does-this-path-exist--a-stale-negative-redoes-finished-work)). Creating it anyway? `CreateOrUpdateNodeRequest` — no check needed |
 | Give me node X's MeshNode (live) | `workspace.GetMeshNodeStream(X)` — the **only** non-stale read path |
+| Give me node X, which **may not exist yet** | Children LISTING (`select:path`) for existence, then `GetMeshNodeStream(X)` for content ([pattern](#-an-optional-node-listing-for-existence-stream-for-content)). Neither half alone: a point read of an absent node NotFounds AND storm-breaks the writer; a query's `Content` for one path can be minutes stale |
 | Give me node X's MeshNode (once) | `workspace.GetMeshNodeStream(X).Where(n => n is not null).Take(1).Timeout(...)` |
 | Keep me updated on node X's MeshNode | `workspace.GetMeshNodeStream(X)` — stay subscribed (no `.Take(1)`) |
 | Patch node X | `workspace.GetMeshNodeStream(X).Update(node => updated).Subscribe(...)` |

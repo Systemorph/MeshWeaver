@@ -401,6 +401,52 @@ public class OverlaySelfHealWatcherTest
     }
 
     /// <summary>
+    /// 🚨 A FAULTED TYPE STREAM must not kill the watcher (#1701, point 4) — that is the state it
+    /// exists to watch out of.
+    ///
+    /// <para>The type stream is the shared <c>MeshNodeStreamCache</c> handle, and it delivers
+    /// <c>OnError</c> whenever the NodeType is not readable from here: absent on this replica
+    /// (<c>DeliveryFailureException: No node found at 'Store/Plugin'</c> — the exact capture in the
+    /// issue) or its owner mid-recycle. Rx <c>Merge</c> propagates a fault from ANY source and
+    /// unsubscribes ALL of them, so one such error used to tear down the version route, the grace
+    /// route AND the re-read ladder together: the watcher hit its terminal error arm and was dead
+    /// from birth, meaning "self-heal on type arrival" silently did not exist for the absent-type
+    /// case at all.</para>
+    ///
+    /// <para>The distinction from <see cref="FaultedReRead_DoesNotEndTheLadder"/> is where the fault
+    /// is injected: that one faults a LADDER RUNG (already guarded, per-rung); this one faults the
+    /// STREAM, which was not. Both must leave the ladder running and still heal.</para>
+    /// </summary>
+    [Fact]
+    public void FaultedTypeStream_DoesNotKillTheWatcher_AndTheLadderStillHeals()
+    {
+        var hub = BuildInstanceHub(out _);
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        var reads = 0;
+
+        using var watcher = NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal(
+            typeStream, hub, NodeTypePath, typeVersionAtOverlay: null, logger: null, scheduler,
+            guards: null,
+            reRead: () => ++reads == 1
+                // Not there yet on the first rung — the same "absent" state the stream faulted on.
+                ? Observable.Empty<MeshNode?>()
+                : Observable.Return<MeshNode?>(TypeNode(version: 4711, usable: true)));
+
+        // The type is not readable from here: the cache classifies it as a negative and forwards
+        // OnError to every subscriber. Pre-fix this killed advanced + graced + the ladder at once.
+        typeStream.OnError(new InvalidOperationException("No node found at 'TestData/SelfHealType'."));
+
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(46).Ticks);
+        reads.Should().Be(1, "the ladder must still be armed after the type stream faulted");
+        AssertNoDispose(hub);
+
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(91).Ticks);
+        reads.Should().Be(2);
+        AssertDisposedExactlyOnce(hub);
+    }
+
+    /// <summary>
     /// An EMPTY authoritative read — no node at that path — is not a heal signal either.
     /// </summary>
     [Fact]

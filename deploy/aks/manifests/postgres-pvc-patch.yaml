@@ -2,8 +2,16 @@
 # postgres-pvc-patch.yaml — Bind the Postgres StatefulSet to a real PVC and add
 #                           the pgBackRest WAL-archive volume + sidecar.
 #
-# The chart's StatefulSet uses emptyDir for /var/lib/postgresql/data (DATA LOSS
-# on restart). This patch:
+# 🚨 LEGACY for the PVC half - DO NOT APPLY it for that reason. When this was
+# written the chart's StatefulSet used emptyDir for /var/lib/postgresql/data (DATA
+# LOSS on restart); it now declares `volumeClaimTemplates: memex-pgdata` (RWO, 10Gi)
+# itself, so the binding below is redundant. And on the default AKS path the
+# in-cluster Postgres is not used at all - every namespace runs against the Azure
+# Postgres Flexible Server and the StatefulSet is scaled to 0. The pgBackRest
+# sidecar half is still real, and is wired by deploy/aks/README.md -> "PITR backups
+# with pgBackRest". See also "Do NOT apply portal-ha-patch.yaml" there.
+#
+# This patch:
 #   - replaces the data emptyDir with the memex-pgdata PVC (managed-csi, RWO)
 #   - mounts a shared "pgbackrest" emptyDir for the spool/socket so the sidecar
 #     and the postgres container share pgBackRest's stanza working dir

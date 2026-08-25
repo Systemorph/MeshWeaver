@@ -258,11 +258,30 @@ internal static class NodeTypeCompilationHelpers
 
                     if (parkRegistry?.IsParked(hubPath) == true)
                     {
-                        logger?.LogDebug(
-                            "Compile watcher: {HubPath} is PARKED (terminal compile failure) — " +
-                            "skipping recompile, serving cached error", hubPath);
-                        SettleAsError(parkRegistry.GetParkedError(hubPath));
-                        return;
+                        // 🅿️ …unless THIS Pending flip is the one sanctioned automatic retry
+                        // (#2260). The failed-verdict re-drive used to un-park so its flip would
+                        // not be swallowed here — which left the type un-parked for the whole
+                        // round-trip until a second failure re-parked it, and un-parked FOREVER
+                        // whenever the re-drive's own re-check then declined to flip. It now asks
+                        // for a one-shot ADMISSION instead, so the park never moves and the
+                        // containment guarantee ("parked ⇒ no later trigger can storm") holds at
+                        // every instant. Consuming the admission is what lets this single flip
+                        // through; every other trigger still takes the short-circuit below.
+                        if (parkRegistry.TryConsumeRetryAdmission(hubPath))
+                        {
+                            logger?.LogDebug(
+                                "Compile watcher: {HubPath} is PARKED but this Pending flip carries the "
+                                + "sanctioned one-shot retry admission — letting it through WITHOUT "
+                                + "un-parking (the park holds for every other trigger).", hubPath);
+                        }
+                        else
+                        {
+                            logger?.LogDebug(
+                                "Compile watcher: {HubPath} is PARKED (terminal compile failure) — " +
+                                "skipping recompile, serving cached error", hubPath);
+                            SettleAsError(parkRegistry.GetParkedError(hubPath));
+                            return;
+                        }
                     }
 
                     // 🚨 THE ADOPT-ONLY GATE (Modules:RequirePrebuilt, MeshWeaver#2193 §A). On a
@@ -711,43 +730,16 @@ internal static class NodeTypeCompilationHelpers
                         liveInputs, total, NodeTypeCompileParkRegistry.MaxAutomaticFailureRedrives,
                         def.CompilationError ?? "(none recorded)");
 
-                    // 🅿️ Un-park FIRST (in-memory + synchronous, so it happens-before the Pending
-                    // emission the compile watcher observes), exactly as the sources watcher's
-                    // parked auto-retry does — otherwise the parked short-circuit would swallow the
-                    // flip and re-settle it to Error. This does not weaken the park: the predicate
-                    // above is false for a type parked in THIS process under THESE inputs, so a
-                    // broken type whose inputs have not moved is never woken.
-                    parkRegistry?.Unpark(hubPath);
                     var redriveAccess = hub.ServiceProvider.GetService<AccessService>();
                     using var systemScope = redriveAccess?.ImpersonateAsSystem();
-                    workspace.GetMeshNodeStream().Update(curr =>
-                    {
-                        if (curr?.Content is not NodeTypeDefinition d) return curr!;
-                        // Never clobber an in-flight compile (a concurrent release request or
-                        // enrichment self-heal may already have flipped Pending/Compiling).
-                        if (d.CompilationStatus is CompilationStatus.Pending
-                                                or CompilationStatus.Compiling)
-                            return curr;
-                        // Re-check inside the lambda — a genuine compile may have settled between
-                        // the outer Where and this write.
-                        if (!HasStaleFailureVerdict(d, guards.ModulesHash)) return curr;
-                        return curr with
-                        {
-                            Content = d with
-                            {
-                                // 🚨 The bookkeeping and the flip land TOGETHER. Stamping the live
-                                // inputs here — not only in ApplyCompileFailure — is what makes the
-                                // re-drive unable to schedule another pass even if the compile
-                                // never writes back at all (process death mid-compile, the parked
-                                // re-settle, a poisoned content read).
-                                FailedBuildInputs = BuildInputsToken(
-                                    guards.ModulesHash, d.CurrentSourceVersions),
-                                CompilationStatus = CompilationStatus.Pending
-                            }
-                        };
-                    }).Subscribe(_ => { },
-                        ex => logger?.LogWarning(ex,
-                            "Failed-verdict re-drive: Update failed for {HubPath}", hubPath));
+                    // 🅿️ The park is NOT lifted here (#2260). Admission and flip are one decision
+                    // and they commit together, inside the lambda — see ApplyFailedVerdictRedrive.
+                    workspace.GetMeshNodeStream()
+                        .Update(curr => ApplyFailedVerdictRedrive(
+                            curr, hubPath, guards.ModulesHash, parkRegistry))
+                        .Subscribe(_ => { },
+                            ex => logger?.LogWarning(ex,
+                                "Failed-verdict re-drive: Update failed for {HubPath}", hubPath));
                 },
                 ex => logger?.LogWarning(ex,
                     "Failed-verdict re-drive: own-stream subscription faulted for {HubPath} — a "
@@ -1695,10 +1687,14 @@ internal static class NodeTypeCompilationHelpers
     /// Error was baked into a committed file — differs from any live token, which is precisely the
     /// one-off recovery those nodes need.</para>
     ///
-    /// <para><see cref="CompilationStatus.Unavailable"/> is included: it records that a compile
-    /// never reached a verdict at all, so it is even less of a reason to stop trying than an
-    /// Error. (<c>NodeTypeContractHandler.EnsureCompileDispatched</c> already re-drives it on the
-    /// next REQUEST; this adds the activation-time path, under the same bound.)</para>
+    /// <para><see cref="CompilationStatus.Unavailable"/> is included, and — unlike an Error — it
+    /// does NOT have to wait for the compile inputs to change. It records that a compile never
+    /// reached a verdict at all, so it is even less of a reason to stop trying than an Error, and
+    /// the input token cannot express the thing that actually changed (a recycling address came
+    /// back). Requiring a token change made this branch unreachable for the #1701 shape: a
+    /// package-root recycle moves no framework, no module and no source.
+    /// (<c>NodeTypeContractHandler.EnsureCompileDispatched</c> already re-drives it on the next
+    /// REQUEST; this adds the activation-time path, under the same <b>count</b> bound.)</para>
     ///
     /// <para>🚨 <b>Never re-drive from an UNESTABLISHED source set.</b> On a cold activation the
     /// sources watcher has not written <see cref="NodeTypeDefinition.CurrentSourceVersions"/> yet,
@@ -1720,10 +1716,99 @@ internal static class NodeTypeCompilationHelpers
         && string.IsNullOrEmpty(def.LatestAssemblyPath)
         // The source set must be ESTABLISHED before it can be compared — see above.
         && def.CurrentSourceVersions is not null
-        && !string.Equals(
-            def.FailedBuildInputs,
-            BuildInputsToken(modulesHash, def.CurrentSourceVersions),
-            StringComparison.Ordinal);
+        && (
+            // 🚨 An UNAVAILABLE verdict is stale ON ITS OWN — the inputs are irrelevant, because the
+            // inputs were never the reason (#1701). Unavailable records "we never found out": the
+            // compile did not run, or it read an address that was recycling. Re-asking is the ONLY
+            // way to find out, and the input token cannot express "the mesh has settled down" — a
+            // package-root recycle changes no framework, no module and no source, so gating the
+            // re-drive on the token made "Retry the read" advice that nothing could follow, exactly
+            // as #1701 reports. The three existing bounds still apply and are what keeps this from
+            // becoming a poll: the flip to Pending stamps the live token in the same write, the
+            // DistinctUntilChanged upstream collapses repeats, and MaxAutomaticFailureRedrives caps
+            // the process at five attempts before giving up LOUDLY. An address that never comes back
+            // therefore costs five compiles and one error line, not a loop.
+            def.CompilationStatus is CompilationStatus.Unavailable
+            || !string.Equals(
+                def.FailedBuildInputs,
+                BuildInputsToken(modulesHash, def.CurrentSourceVersions),
+                StringComparison.Ordinal));
+
+    /// <summary>
+    /// 🅿️ THE failed-verdict re-drive's COMMIT step (#2260) — the whole decision, including the
+    /// retry ADMISSION, as one function of the node state it commits against. Passed as the
+    /// <c>Update</c> lambda so it runs on the data source's action block, exactly once, immediately
+    /// before the write it produces.
+    ///
+    /// <para><b>Two defects this shape closes, both in the old
+    /// <c>parkRegistry.Unpark(hubPath); …Update(…)</c> pair.</b></para>
+    ///
+    /// <para>(1) <b>An un-park decided from a SNAPSHOT.</b> The subscriber's emission is a snapshot;
+    /// by the time the body ran, a terminal failure could have parked the type again
+    /// (<c>NodeTypeCompileParkRegistry.ParkAndNotify</c> is the only writer of that entry). The
+    /// un-park removed a park the decision never observed — and, when the lambda's own re-checks
+    /// then declined to flip, NOTHING re-parked afterwards. The type ended up neither parked nor
+    /// re-driven: exactly the state the park exists to make impossible. Here every early return
+    /// leaves the registry untouched, so the registry is only ever touched by a re-drive that is,
+    /// in the same committed state, genuinely flipping the type back to Pending.</para>
+    ///
+    /// <para>(2) <b>Un-parking at all.</b> Even a perfectly-validated un-park leaves the type
+    /// un-parked for the whole Pending → refusal → re-park round-trip, and any trigger arriving in
+    /// that window is admitted. Under <c>Modules:RequirePrebuilt</c> that window opened on EVERY
+    /// refusal. The re-drive never needed the failure cleared — only its one flip let through — so
+    /// it asks for a one-shot <c>AdmitOneRetry</c> and <see cref="NodeTypeCompileParkRegistry.IsParked"/>
+    /// stays true at every instant. The admission still happens-before the Pending emission the
+    /// compile watcher observes (this lambda runs ahead of the commit), which is what the old
+    /// hoisted-out un-park was buying.</para>
+    /// </summary>
+    /// <param name="curr">The node state this write is committing against (authoritative).</param>
+    /// <param name="hubPath">The NodeType's path.</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the compile inputs.</param>
+    /// <param name="parkRegistry">The park registry, or <c>null</c> on a host that has none.</param>
+    /// <returns><paramref name="curr"/> unchanged when the re-drive declines; otherwise the node
+    /// flipped to <see cref="CompilationStatus.Pending"/> with the live inputs stamped.</returns>
+    internal static MeshNode ApplyFailedVerdictRedrive(
+        MeshNode curr, string hubPath, string? modulesHash,
+        NodeTypeCompileParkRegistry? parkRegistry)
+    {
+        if (curr?.Content is not NodeTypeDefinition d) return curr!;
+        // Never clobber an in-flight compile (a concurrent release request or
+        // enrichment self-heal may already have flipped Pending/Compiling).
+        if (d.CompilationStatus is CompilationStatus.Pending
+                                or CompilationStatus.Compiling)
+            return curr;
+        // Re-check against the state being committed — a genuine compile may have settled, or a
+        // fresh terminal failure may have re-parked, between the outer Where and this write.
+        if (!HasStaleFailureVerdict(d, modulesHash)) return curr;
+        // 🅿️ Committing the flip — and ONLY now — claim the one-shot admission, so the compile
+        // watcher's parked short-circuit lets this Pending emission through. The park itself is
+        // never touched.
+        //
+        // 🚨 …and ONLY while the type is actually PARKED. An admission for an un-parked type is
+        // never consumed — the short-circuit it exists to pass is not taken — so it would sit in
+        // the registry until some LATER park, where a stray Pending flip could spend it and get
+        // through the very containment this restores. That case is the common one, not a corner:
+        // a failure that predates this PROCESS is not in the (in-memory) registry at all. Gating
+        // here makes the leak impossible rather than merely unlikely, because it establishes
+        // "an admission implies a standing park" — and every path that REMOVES a park (Unpark,
+        // OnCompileSucceeded) clears admissions with it, so no admission can outlive the park it
+        // was granted against.
+        if (parkRegistry?.IsParked(hubPath) == true)
+            parkRegistry.AdmitOneRetry(hubPath);
+        return curr with
+        {
+            Content = d with
+            {
+                // 🚨 The bookkeeping and the flip land TOGETHER. Stamping the live
+                // inputs here — not only in ApplyCompileFailure — is what makes the
+                // re-drive unable to schedule another pass even if the compile
+                // never writes back at all (process death mid-compile, the parked
+                // re-settle, a poisoned content read).
+                FailedBuildInputs = BuildInputsToken(modulesHash, d.CurrentSourceVersions),
+                CompilationStatus = CompilationStatus.Pending
+            }
+        };
+    }
 
     /// <summary>
     /// THE terminal stamp of a SUCCESSFUL compile — the exact field set
@@ -1822,6 +1907,26 @@ internal static class NodeTypeCompilationHelpers
         };
 
     /// <summary>
+    /// <c>true</c> when <paramref name="error"/> says the compile never reached a VERDICT — the
+    /// source set could not be established (<see cref="SourceDiscoveryUnavailableException"/>) or a
+    /// mesh address the compile had to read was RECYCLING for the reader's whole budget
+    /// (<see cref="AddressRecyclingException"/>). Both are availability facts about the mesh, never
+    /// statements about the code.
+    ///
+    /// <para>🚨 One predicate, two consumers, and they MUST agree (#1701).
+    /// <see cref="ApplyCompileFailure"/> uses it to stamp <see cref="CompilationStatus.Unavailable"/>
+    /// instead of <see cref="CompilationStatus.Error"/>; the terminal outcome handler in
+    /// <see cref="RunCompile"/> uses it to skip <c>NodeTypeCompileParkRegistry.OnCompileFailed</c>
+    /// entirely. When only the first honoured the distinction, three recycling reads parked the
+    /// type, the compile watcher's parked short-circuit re-settled it as <c>Error</c>, and — since
+    /// the only automatic un-park is a SOURCE change, which a recycle never produces — it stayed
+    /// there until a human pressed Compile. Duplicating the type test at both sites is how they
+    /// drifted apart in the first place, so there is deliberately exactly one.</para>
+    /// </summary>
+    internal static bool IsAvailabilityNonVerdict(Exception? error) =>
+        error is SourceDiscoveryUnavailableException or AddressRecyclingException;
+
+    /// <summary>
     /// THE terminal stamp of a FAILED compile — the exact field set <see cref="RunCompile"/>'s
     /// write-back has always applied on failure, extracted for the same one-stamp-shape reason
     /// as <see cref="ApplyCompileSuccess"/>.
@@ -1846,7 +1951,7 @@ internal static class NodeTypeCompilationHelpers
         string? modulesHash = null)
         => def with
         {
-            CompilationStatus = error is SourceDiscoveryUnavailableException or AddressRecyclingException
+            CompilationStatus = IsAvailabilityNonVerdict(error)
                 ? CompilationStatus.Unavailable
                 : CompilationStatus.Error,
             CompilationError = SummarizeCompileError(result, error),
@@ -2171,10 +2276,35 @@ internal static class NodeTypeCompilationHelpers
                     // (RequestedReleaseBy, set by the Compile-gated Create Release action) is the
                     // bell to notify; a System first-build / seed compile has none → the
                     // notification becomes a satellite of the failing type instead.
+                    //
+                    // 🚨 …EXCEPT an AVAILABILITY non-verdict, which is not a compile failure at all
+                    // and must never consume the park budget (#1701). `SourceDiscoveryUnavailable`
+                    // and `AddressRecycling` both mean the compile never REACHED a verdict — the
+                    // source set could not be established, or a mesh address the compile reads was
+                    // recycling for the reader's whole budget. `ApplyCompileFailure` already stamps
+                    // those as `CompilationStatus.Unavailable` rather than `Error`, precisely
+                    // because they say nothing about the code. Feeding them to `OnCompileFailed`
+                    // threw that distinction away one layer down: the registry only receives a
+                    // string plus `deterministic:false`, so three recycling reads in a row parked
+                    // the type — and a parked type is then re-settled by the watcher's park
+                    // short-circuit as `CompilationStatus.Error`, the "compile=FAILED(Error)"
+                    // verdict #1701 reports for all 33 types of a package whose ROOT was merely
+                    // recycling. Worse, the only automatic un-park is "the SOURCES changed", and a
+                    // recycle changes no source — so the park was permanent until someone pressed
+                    // Compile. Not counting it is the fix: the type stays `Unavailable`, which the
+                    // failed-verdict re-drive treats as stale and retries under its own bounds.
                     if (parkRegistry is not null)
                     {
                         if (ok)
                             parkRegistry.OnCompileSucceeded(hubPath);
+                        else if (IsAvailabilityNonVerdict(outcome.Error))
+                        {
+                            logger?.LogInformation(
+                                "Compile for {HubPath} reached NO VERDICT ({Type}) — an availability fact, "
+                                + "not a compile failure: it does not count towards the park budget and the "
+                                + "type is left at Unavailable for the automatic re-drive to retry. {Error}",
+                                hubPath, outcome.Error!.GetType().Name, outcome.Error.Message);
+                        }
                         else
                         {
                             var hasRoslynErrors =

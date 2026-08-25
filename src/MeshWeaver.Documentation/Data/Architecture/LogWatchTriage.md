@@ -42,6 +42,43 @@ answers again. Nothing is lost — delivery is just delayed.
 The portal owns everything *after* detection, because that is where the mesh, the agents and the
 GitHub App credential already live.
 
+## Line → burst: reconstruction is PER POD, and a bodyless burst is never a fault
+
+A .NET console error is several *lines* — the `fail:` header, the message, then the stack trace —
+and the CRI log format stamps **each line** with its own timestamp. The query is deliberately
+namespace-wide (a line filter would return headers without their stack traces, `LokiQuery`), so what
+comes back is every replica's output **merged by timestamp**. A burst whose header and trace fall in
+different milliseconds therefore has any other pod's line from in between sorted right into the
+middle of it.
+
+🚨 **So the burst grouper reconstructs per pod, never over the merged sequence.** It used to end a
+burst at the first line that came from somewhere else, and that is how production filed two
+unactionable tickets in a week:
+
+| Where the cut landed | What the incident carried | Filed as |
+|---|---|---|
+| after the header | nothing at all | #2222 — "an Error with no message, exception, or stack" |
+| after the message | message, no exception, no frame | #2153 — "logs a bare Unexpected error with no exception attached" |
+
+#2153 is worth reading twice: the call site *does* pass its exception to `LogError(ex, …)` and
+always did. The exception was lost in the READER. `RedLogBurstReconstructionTest` pins both shapes on
+the incidents' own lines.
+
+**A burst that arrives bodyless anyway is not fingerprinted.** With no message, no exception and no
+frame, its only possible identity is `(category, event id)` — a token that names a component and no
+defect, into which every later bodyless capture from that site would fold. `BurstAggregator` keeps
+those out of the reports and surfaces them on `BurstAggregation.HeaderOnly` instead, and the watcher:
+
+- **recovers the recoverable ones** — a burst still open at the window's edge (`AtWindowEdge`) has
+  its body on the other side of `end`, where the grouper has no header to attach it to. The cursor
+  resumes **at that header** so the next poll reads the burst whole. Terminating by construction: the
+  rewind lands the cursor *on* the header, so a burst that is still bodyless next time is genuinely
+  bodyless and falls through;
+- **reports the rest once per namespace**, naming the categories
+  (`LogPipelineGap.HeaderOnlyReport`) — the same pattern as the truncated-window and lost-window
+  findings. Nothing is dropped silently; what changes is that the finding is about the capture, which
+  is what it actually is.
+
 ## One fault, one ticket
 
 The fingerprint (`StructuralLogIncidentIdentity.Compute`) identifies **the fault, not the reporter**.
@@ -344,6 +381,37 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
 
 Then browse `Admin/_LogIncident` in the portal — every incident links to the ticket it opened and
 to the triage thread that wrote it.
+
+## What belongs at `fail:` — a cancellation and a disconnect do not
+
+Everything red becomes a ticket, so **the level a call site chooses is a ticketing decision**, not a
+verbosity knob (AGENTS.md: never edit a level to dial a debugging session up or down; fix it
+permanently, with the reason, or leave it). Two outcomes are routinely mistaken for faults, and both
+produced steady ticket streams:
+
+| Outcome | Why it is not a fault | Where |
+|---|---|---|
+| **Cooperative cancellation** — the caller went away, a partition cleanup cascaded, the host is shutting down, the I/O pool drained | Nothing failed and nothing was written. `MeshWeaver.Mesh.CreateNode` logged 491 of these in three days (#2152); `MeshWeaver.Mesh.MeshNode` logged `[DeleteNode] unexpected … partial-deleted=0` (#2182) — a counter that says the node was never touched. | `CancellationClassifier.IsCooperativeCancellation` |
+| **A client that disconnected mid-stream** | gRPC finalises the request and answers the next write with `InvalidOperationException("Can't write the message because the request is complete.")`; the client is already gone (#2138 / #2139). | `MeshGrpcService.WritePumpAsync` |
+
+🚨 **The rule is narrow on purpose, and the exceptions to it are the point:**
+
+- **`catch (OperationCanceledException)` is NOT the rule.** A **timeout** raised on a token is the
+  same CLR type and IS a fault. .NET marks it by hanging a `TimeoutException` off the cancellation
+  (an `HttpClient` timeout is verbatim `TaskCanceledException(…, new TimeoutException())`), and
+  `CancellationClassifier` refuses to call that benign. Classifying by the CONDITION rather than the
+  type is what keeps "cancellation is benign" from silently becoming "storage timeouts are benign".
+- **A cancellation that arrives AFTER work landed stays LOUD.** A delete cancelled with
+  `partial-deleted > 0` really did leave the subtree torn — that is the case the old wording was
+  borrowing its urgency from, and it keeps `Error` plus the count.
+- **The caller is still answered, and answered accurately.** Both handlers reply with the
+  `Unavailable` rejection reason ("not evaluated; retrying is meaningful"), never `Unknown`, and an
+  error string that says *cancelled* rather than *unexpected error*. Downgrading a level is never
+  licence to swallow an outcome.
+- **The exception still rides along.** The benign line is `LogDebug(ex, …)`, and it states the token
+  state that made it benign rather than asserting it (`CancellationClassifier.Describe`).
+
+`CancellationIsNotAFaultTest` pins both directions, including the timeout impostor.
 
 ## What this is not
 

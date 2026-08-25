@@ -23,11 +23,36 @@ public record LogLine(DateTimeOffset Timestamp, string? Namespace, string? Pod, 
 /// <param name="TotalLines">Every line the query returned, red or not.</param>
 /// <param name="FoldedSites">How many log sites exceeded the per-site variant budget and were
 /// collapsed onto a single site-level incident.</param>
+/// <param name="HeaderOnly">The red bursts that arrived as a console header and NOTHING else. They
+/// are deliberately NOT in <paramref name="Reports"/> — a burst with no message, no exception and no
+/// frame can only fingerprint on its category and event id, which is a token that names a component
+/// and no defect (#2222). They are surfaced here instead so the caller can recover the ones that are
+/// recoverable and REPORT the ones that are not, rather than either fabricating an incident or
+/// dropping them in silence.</param>
 public record BurstAggregation(
     ImmutableList<LogIncidentReport> Reports,
     int RedBursts,
     int TotalLines,
-    int FoldedSites);
+    int FoldedSites,
+    ImmutableList<HeaderOnlyBurst> HeaderOnly);
+
+/// <summary>
+/// A red burst whose console header was all that reached the aggregator.
+/// </summary>
+/// <param name="Timestamp">The header line's timestamp.</param>
+/// <param name="Pod">The pod that emitted it.</param>
+/// <param name="Category">The log category from the header.</param>
+/// <param name="AtWindowEdge">
+/// True when this was the LAST burst its pod produced in the window — i.e. the body may simply not
+/// have been read yet, because the window ended between the header and the lines that follow it. A
+/// caller holding a cursor can recover that burst whole by resuming at <paramref name="Timestamp"/>
+/// instead of at the window's end; anything else here genuinely had no body.
+/// </param>
+public record HeaderOnlyBurst(
+    DateTimeOffset Timestamp,
+    string? Pod,
+    string Category,
+    bool AtWindowEdge);
 
 /// <summary>
 /// Turns a flat batch of log lines into one <see cref="LogIncidentReport"/> per distinct
@@ -71,7 +96,18 @@ public record BurstAggregation(
 public static class BurstAggregator
 {
     /// <summary>A header line plus the continuation lines that belong to it.</summary>
-    private record RawBurst(DateTimeOffset Timestamp, string? Namespace, string? Pod, ImmutableList<string> Lines);
+    /// <param name="Timestamp">The header line's timestamp.</param>
+    /// <param name="Namespace">The namespace label.</param>
+    /// <param name="Pod">The pod label.</param>
+    /// <param name="Lines">The header line and its continuation lines.</param>
+    /// <param name="LastForPod">True when no further burst from this pod followed in the window —
+    /// so a body that is missing here may simply be on the other side of the window's edge.</param>
+    private record RawBurst(
+        DateTimeOffset Timestamp,
+        string? Namespace,
+        string? Pod,
+        ImmutableList<string> Lines,
+        bool LastForPod = false);
 
     /// <summary>One parsed burst, with both identities it could be filed under.</summary>
     private record KeyedBurst(RawBurst Raw, LogLineParser.ParsedBurst Parsed, string Fingerprint, string SiteFold);
@@ -97,6 +133,7 @@ public static class BurstAggregator
         ArgumentNullException.ThrowIfNull(entries);
 
         var keyed = new List<KeyedBurst>();
+        var headerOnly = ImmutableList.CreateBuilder<HeaderOnlyBurst>();
         foreach (var raw in SplitBursts(entries))
         {
             if (LogLineParser.Parse(raw.Lines) is not { } parsed)
@@ -104,6 +141,17 @@ public static class BurstAggregator
             if (ignoreCategories?.Any(prefix =>
                     parsed.Category.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) == true)
                 continue;
+
+            // 🚨 A burst that is nothing but its console header carries no diagnostic at all, and
+            // hashing it would key an incident on the category and event id alone — the degenerate
+            // fingerprint of #2222, into which every later bodyless capture from that site would
+            // fold. It is reported as what it is (a capture with no body) rather than as a fault.
+            if (parsed.IsHeaderOnly)
+            {
+                headerOnly.Add(new HeaderOnlyBurst(
+                    raw.Timestamp, raw.Pod, parsed.Category, raw.LastForPod));
+                continue;
+            }
 
             var burst = LogLineParser.ToBurst(parsed);
             keyed.Add(new KeyedBurst(raw, parsed,
@@ -164,9 +212,12 @@ public static class BurstAggregator
 
         return new BurstAggregation(
             reports.Values.OrderBy(r => r.FirstSeen).ToImmutableList(),
-            keyed.Count,
+            // Bodyless bursts WERE red bursts — they are counted here even though they open no
+            // incident, so "N fingerprints from M red bursts" stays an honest ratio.
+            keyed.Count + headerOnly.Count,
             entries.Count,
-            folded.Count);
+            folded.Count,
+            headerOnly.ToImmutable());
     }
 
     /// <summary>The log sites whose distinct-fingerprint count exceeds the budget.</summary>
@@ -180,16 +231,39 @@ public static class BurstAggregator
                 .ToImmutableHashSet(StringComparer.Ordinal);
 
     /// <summary>
-    /// Re-attaches each red header to the continuation lines that followed it. A line starts a new
-    /// burst when it is itself a red header, or when it carries any other console level prefix
-    /// (<c>info:</c>, <c>warn:</c>, …) — that prefix means the previous burst has ended, and the
-    /// line is dropped because it is not red.
+    /// Re-attaches each red header to the continuation lines that followed it — <b>per pod</b>.
+    ///
+    /// <para>🚨 <b>The query is namespace-wide, so the lines of one burst are NOT adjacent</b>
+    /// (#2153, #2222). Every replica writes to its own stream, the CRI log format stamps each LINE
+    /// with its own timestamp, and the collector merges those streams by timestamp — so a burst
+    /// whose header and stack trace fall in different milliseconds has any other pod's line from the
+    /// millisecond in between sorted right into the middle of it. Reconstructing over the merged
+    /// sequence therefore CUT bursts at an arbitrary point and threw the rest away: the header alone
+    /// ("no message, no exception, no stack" — #2222), or the header plus the message with the
+    /// exception line lost ("a bare Unexpected error with no exception attached" — #2153, whose call
+    /// site does pass its exception to <c>LogError</c> and always did). Both filed as incidents that
+    /// named a component and no defect.</para>
+    ///
+    /// <para>A pod's own lines ARE in order within its stream, so grouping by pod first makes the
+    /// reconstruction immune to whatever else the namespace was writing at the same moment. Bursts
+    /// come back ordered by their header timestamp, as the callers downstream expect.</para>
+    ///
+    /// <para>Within one pod a line still starts a new burst when it is itself a red header, or when
+    /// it carries any other console level prefix (<c>info:</c>, <c>warn:</c>, …) — that prefix means
+    /// the previous burst has ended, and the line is dropped because it is not red.</para>
     /// </summary>
-    private static IEnumerable<RawBurst> SplitBursts(IReadOnlyList<LogLine> entries)
+    private static IEnumerable<RawBurst> SplitBursts(IReadOnlyList<LogLine> entries) =>
+        entries
+            .GroupBy(entry => entry.Pod ?? string.Empty, StringComparer.Ordinal)
+            .SelectMany(SplitPodBursts)
+            .OrderBy(burst => burst.Timestamp);
+
+    /// <summary>Reconstructs the bursts of ONE pod, whose lines are already in emission order.</summary>
+    private static IEnumerable<RawBurst> SplitPodBursts(IEnumerable<LogLine> podEntries)
     {
         RawBurst? current = null;
 
-        foreach (var entry in entries)
+        foreach (var entry in podEntries)
         {
             var line = entry.Line.TrimEnd('\r', '\n');
 
@@ -205,8 +279,8 @@ public static class BurstAggregator
             if (current is null)
                 continue;
 
-            // A different pod's line, or a non-red level header, ends the burst.
-            if (!string.Equals(current.Pod, entry.Pod, StringComparison.Ordinal) || IsLevelHeader(line))
+            // A non-red level header from this pod ends the burst.
+            if (IsLevelHeader(line))
             {
                 yield return current;
                 current = null;
@@ -216,8 +290,10 @@ public static class BurstAggregator
             current = current with { Lines = current.Lines.Add(line) };
         }
 
+        // The last burst this pod opened in the window: its body may simply be on the other side of
+        // the window's edge, which is what LastForPod tells the caller.
         if (current is not null)
-            yield return current;
+            yield return current with { LastForPod = true };
     }
 
     /// <summary>True for any <c>xxxx: </c> console level prefix — the marker that a new log event began.</summary>

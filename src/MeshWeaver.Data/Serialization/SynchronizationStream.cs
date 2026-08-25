@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Messaging;
@@ -1611,6 +1612,37 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
 
     internal StreamConfiguration<TStream> Configuration { get; }
 
+    /// <summary>
+    /// 🚨 REFERENCE identity — deliberately NOT the record-synthesized structural equality.
+    /// <para>
+    /// A stream is a LIVE object, not a value: it owns a <see cref="ReplaySubject{T}"/>, mutable
+    /// <c>current</c> state, a hosted hub, subscriptions and disposal state. Two distinct stream
+    /// instances are never "the same stream", so reference identity IS the correct semantics
+    /// (the synthesized version already behaved this way in practice — each instance carries its
+    /// own <see cref="Store"/> subject, compared by reference).
+    /// </para>
+    /// <para>
+    /// It is also the only SAFE semantics. The synthesized <c>GetHashCode</c>/<c>Equals</c> walk
+    /// every instance field, including <see cref="Configuration"/> — and
+    /// <see cref="StreamConfiguration{TStream}.Stream"/> points straight back here. That closed a
+    /// cycle <c>SynchronizationStream.GetHashCode → StreamConfiguration.GetHashCode →
+    /// EqualityComparer&lt;ISynchronizationStream&lt;TStream&gt;&gt;.Default.GetHashCode(Stream) →
+    /// …</c> with no base case, so ANY hash of a stream instance (a dictionary key, a log scope,
+    /// a HashSet) recursed until the process died on an uncatchable StackOverflowException
+    /// (#2163/#2164/#2172/#2173/#2174/#2175 — repeated pod kills in prod).
+    /// </para>
+    /// </summary>
+    /// <param name="other">The stream to compare against.</param>
+    /// <returns>True only when <paramref name="other"/> is this very instance.</returns>
+    public virtual bool Equals(SynchronizationStream<TStream>? other) => ReferenceEquals(this, other);
+
+    /// <summary>
+    /// Reference-identity hash — see <see cref="Equals(SynchronizationStream{TStream})"/> for why
+    /// structural hashing of a stream is both wrong and fatal.
+    /// </summary>
+    /// <returns>The runtime identity hash of this instance.</returns>
+    public override int GetHashCode() => RuntimeHelpers.GetHashCode(this);
+
 
     /// <summary>
     /// Disposes the stream: completes the underlying store and tears down the hosted hub.
@@ -1873,4 +1905,50 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     public StreamConfiguration<TStream> WithDeferredInitialization(
         string gateName, Predicate<IMessageDelivery> allowDuringInit)
         => this with { DeferredInitialization = true, DeferredGateName = gateName, DeferredGatePredicate = allowDuringInit };
+
+    /// <summary>
+    /// 🚨 Compares this configuration's OWN values; the <see cref="Stream"/> back-pointer
+    /// participates BY REFERENCE and is never traversed structurally.
+    /// <para>
+    /// <see cref="Stream"/> points back at the stream that OWNS this configuration
+    /// (<c>new StreamConfiguration&lt;TStream&gt;(this)</c>), so letting the record-synthesized
+    /// members walk it closes an unbounded cycle through
+    /// <see cref="SynchronizationStream{TStream}"/> — the StackOverflow that killed portal pods
+    /// (#2163/#2164/#2172/#2173/#2174/#2175). The owning stream is part of this configuration's
+    /// IDENTITY, not of its value, which is exactly what reference comparison expresses.
+    /// </para>
+    /// </summary>
+    /// <param name="other">The configuration to compare against.</param>
+    /// <returns>True if both configurations belong to the same stream and carry the same settings.</returns>
+    public virtual bool Equals(StreamConfiguration<TStream>? other) =>
+        other is not null
+        && (ReferenceEquals(this, other)
+            || (ReferenceEquals(Stream, other.Stream)
+                && ClientId == other.ClientId
+                && Equals(Subscriber, other.Subscriber)
+                && NullReturn == other.NullReturn
+                && RunsAsInfrastructure == other.RunsAsInfrastructure
+                && DeferredInitialization == other.DeferredInitialization
+                && DeferredGateName == other.DeferredGateName
+                && Equals(Initialization, other.Initialization)
+                && Equals(ObservableInitialization, other.ObservableInitialization)
+                && Equals(ExceptionCallback, other.ExceptionCallback)
+                && Equals(DeferredGatePredicate, other.DeferredGatePredicate)));
+
+    /// <summary>
+    /// Hash over this configuration's own settings plus the owning stream's REFERENCE identity —
+    /// never a structural walk of <see cref="Stream"/>. See
+    /// <see cref="Equals(StreamConfiguration{TStream})"/>. The delegate-valued settings are
+    /// deliberately omitted (equal configurations still hash equal, which is all the contract asks).
+    /// </summary>
+    /// <returns>A bounded, cycle-free hash code.</returns>
+    public override int GetHashCode() =>
+        HashCode.Combine(
+            RuntimeHelpers.GetHashCode(Stream),
+            ClientId,
+            Subscriber,
+            NullReturn,
+            RunsAsInfrastructure,
+            DeferredInitialization,
+            DeferredGateName);
 }
