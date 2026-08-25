@@ -245,7 +245,13 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         try
         {
             var mine = new DirectoryInfo(dir)
-                .EnumerateFiles("*", SearchOption.TopDirectoryOnly)
+                // The glob NARROWS, it never decides: a legacy directory can hold thousands of
+                // files from generations this process must not touch, and listing all of them on an
+                // Azure Files share once per compile is a real cost for a set that is empty by
+                // construction on a freshly-rolled image. Attribution stays entirely with
+                // AssemblyCacheFileName.Parse plus the tag equality below, which is what keeps this
+                // and the generation sweep agreeing on which names this store wrote.
+                .EnumerateFiles($"*-{FrameworkTag}-*", SearchOption.TopDirectoryOnly)
                 .Select(f => (File: f, Identity: AssemblyCacheFileName.Parse(f.Name)))
                 .Where(x => x.Identity is { } id
                             && string.Equals(id.Tag, FrameworkTag, StringComparison.OrdinalIgnoreCase))
