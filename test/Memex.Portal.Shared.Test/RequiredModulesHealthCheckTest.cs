@@ -80,6 +80,24 @@ public class RequiredModulesHealthCheckTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 A gate must not read its own input silently. Everything declared is accounted for, so the
+    /// verdicts alone would read Healthy — but a record that could not be read means the evidence
+    /// behind that answer is partial, and the reassuring answer must not stand on partial evidence.
+    /// </summary>
+    [Fact]
+    public async Task AnUnreadableActivationRecord_IsDEGRADED_EvenWhenNothingLooksMissing()
+    {
+        Directory.CreateDirectory(ModuleActivationSidecar.EntriesDirectory(root));
+        File.WriteAllText(ModuleActivationSidecar.EntryPath(root, "MeshWeaver.Broken"), "{ not json");
+
+        var result = await Check(required: [], baseline: []);
+
+        Assert.Equal(HealthStatus.Degraded, result.Status);
+        Assert.Contains("could not be read", result.Description);
+        Assert.NotEmpty(Assert.IsType<string[]>(result.Data["unreadableActivationRecords"]));
+    }
+
+    /// <summary>
     /// 🚨 THE TEETH. The image's own <c>Modules:Assemblies</c> claims the pack and the image does
     /// not carry it. Nothing on this deployment can produce it and the previous pods still have it,
     /// so readiness must FAIL and hold the rollout.
