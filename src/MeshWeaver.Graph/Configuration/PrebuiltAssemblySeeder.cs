@@ -54,6 +54,24 @@ public static class PrebuiltAssemblySeeder
     }
 
     /// <summary>
+    /// The NAMED refusal a require-prebuilt mesh parks a NodeType with when it would otherwise
+    /// compile on a miss (the compile watcher's adopt-only gate): what is missing, for which
+    /// lane, what publishes it, how to retry. One shape for the whole family — the same facts the
+    /// install-lane <see cref="PrebuiltRequiredException"/> names — so an operator reads the same
+    /// sentence whichever seam refused. The package is the type's partition root (the node-repo
+    /// layout: <c>{Package}/{Type}</c>). Pure.
+    /// </summary>
+    public static string RequiredParkReason(string nodeTypePath)
+    {
+        var slash = nodeTypePath.IndexOf('/');
+        var package = slash > 0 ? nodeTypePath[..slash] : nodeTypePath;
+        return $"{RequirePrebuiltConfigKey}: NodeType '{nodeTypePath}' has no adopted assembly for "
+            + $"framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live}, and this mesh does not "
+            + $"compile module content. Publish or rebake package '{package}' for this framework "
+            + "identity and architecture, then request a release to retry (MeshWeaver#2193 §A).";
+    }
+
+    /// <summary>
     /// Why a prebuilt assembly may NOT be adopted, or null when it may.
     ///
     /// <para>🚨 This is the whole safety argument, kept as one pure function so it can be tested
