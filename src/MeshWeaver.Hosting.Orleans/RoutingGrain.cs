@@ -720,13 +720,25 @@ internal class RoutingGrain(
         // LANDS or ANSWERS. "The sender was told" is now a fact this line can establish rather than
         // an assumption it had to make.
         //
-        // The stream publish stays as the fallback for exactly the two cases BuildPodHubRoute
-        // documents — a previous-release pod that has not claimed itself yet (the roll window), and
-        // a hub owned by an Orleans CLIENT process, which cannot host a grain — and it keeps its
-        // subscriber probe, so even the fallback says loudly when it cannot deliver.
+        // The stream publish stays as the fallback for the two cases BuildPodHubRoute documents —
+        // a previous-release pod that has not claimed itself yet (the roll window), and a hub owned
+        // by an Orleans CLIENT process, which cannot host a grain — plus a sender whose address type
+        // is not stream-routed at all. It keeps its subscriber probe, so even the fallback says
+        // loudly when it cannot deliver.
         var senderPath = delivery.Sender.ToString();
 
-        Observable
+        // The pod-hub transport serves exactly the stream-routed address types, so ask only for
+        // those. A grain-hosted sender has no pod-hub activation by construction, and probing for
+        // one would mint an activation per failed delivery only to have it answer PodHubNotHere and
+        // deactivate — churn on precisely the path a NotFound storm hammers. The same O(1) set
+        // lookup RouteMessage branches on, so the two agree by construction.
+        if (!meshConfig.StreamRoutedAddressTypes.Contains(delivery.Sender.Type))
+        {
+            SubscribeNack(PublishFailureOverStream());
+            return;
+        }
+
+        SubscribeNack(Observable
             .Defer(() => grainFactory.GetGrain<IPodHubGrain>(senderPath).Deliver(failureDelivery).ToObservable())
             .Select(_ =>
             {
@@ -735,20 +747,28 @@ internal class RoutingGrain(
                 return Unit.Default;
             })
             .Catch<Unit, Exception>(ex => IsPodHubNotHere(ex)
-                ? PublishFailureOverStream()
-                : LogUndeliverableNack(ex))
-            .Subscribe(
+                ? Observable.Defer(() =>
+                {
+                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_POD_HUB_NOT_HERE id={delivery.Id} sender={delivery.Sender}");
+                    return PublishFailureOverStream();
+                })
+                : LogUndeliverableNack(ex)));
+        return;
+
+        // The NACK is fire-and-forget by nature — there is no NACK for a NACK — so the one thing a
+        // subscriber owes is that a fault reaching here is never swallowed.
+        void SubscribeNack(IObservable<Unit> nack) =>
+            nack.Subscribe(
                 _ => { },
                 ex => logger.LogWarning(ex,
                     "[ROUTE] Failed to deliver {ErrorType} failure to sender {Sender}", errorType, delivery.Sender));
-        return;
 
-        // The one-release / Orleans-client fallback, unchanged in behaviour: probe first so an
-        // undeliverable NACK is LOUD, then publish anyway (the probe is check-then-act, and a
-        // subscriber that attaches in the gap would otherwise lose an answer we could deliver).
+        // The one-release / Orleans-client fallback, and the only path for a sender the pod-hub
+        // transport cannot serve: probe first so an undeliverable NACK is LOUD, then publish anyway
+        // (the probe is check-then-act, and a subscriber that attaches in the gap would otherwise
+        // lose an answer we could deliver).
         IObservable<Unit> PublishFailureOverStream()
         {
-            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_POD_HUB_NOT_HERE id={delivery.Id} sender={delivery.Sender}");
             var senderStream = streamProvider.GetStream<IMessageDelivery>(senderPath);
             return HasLiveSubscriber(
                     TryGetSubscriptionManager(streamProvider), senderStream.StreamId, senderPath, logger, SubscriberProbeTimeout)
