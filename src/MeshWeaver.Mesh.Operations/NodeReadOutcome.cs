@@ -1,7 +1,7 @@
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.Mesh.Operations;
 
 /// <summary>
 /// The outcome of ONE bounded node read — the seam that keeps "we could not find out" apart from

@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Operations;
 using System.ComponentModel;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
@@ -64,7 +65,7 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         logger.LogInformation("AddComment on {Path}: text='{SelectedText}', comment='{Comment}'",
             documentPath, selectedText, commentText);
 
-        var resolvedInput = MeshOperations.ResolveContextPath(chat, documentPath);
+        var resolvedInput = AgentChatPaths.ResolveContextPath(chat, documentPath);
         var resolvedPath = MeshOperations.ResolvePath(resolvedInput);
 
         // Read the document off the hub scheduler, then fan into hub.Observe(...).
@@ -163,7 +164,7 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         logger.LogInformation("SuggestEdit on {Path}: original='{Original}', new='{New}'",
             documentPath, originalText, newText);
 
-        var resolvedInput = MeshOperations.ResolveContextPath(chat, documentPath);
+        var resolvedInput = AgentChatPaths.ResolveContextPath(chat, documentPath);
         var resolvedPath = MeshOperations.ResolvePath(resolvedInput);
 
         // Probe existence first — the single most common agent mistake is passing a display name

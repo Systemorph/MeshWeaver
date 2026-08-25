@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Operations;
 using System;
 using Xunit;
 

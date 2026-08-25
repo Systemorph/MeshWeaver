@@ -102,6 +102,7 @@
          Modules:Assemblies -> MarkdownExportProviderAttribute. Only the wire contract stays in
          the app closure (via MeshWeaver.Blazor -> MeshWeaver.Markdown.Export.Contract). -->
     <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Operations\MeshWeaver.Mesh.Operations.csproj" />
     <!-- The AI provider packs — MeshWeaver.AI.OpenAI, .AzureFoundry, .ClaudeCode, .Copilot — are
          deliberately NOT referenced (#1644 step 2): they ship via the modules/<Name>/ closure
          layout in MeshModulesPublish.targets and activate via Modules:Assemblies -> each pack's

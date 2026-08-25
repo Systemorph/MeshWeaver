@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.AI.Delegation;
+using MeshWeaver.Mesh.Operations;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Layout;
 using Microsoft.Extensions.AI;

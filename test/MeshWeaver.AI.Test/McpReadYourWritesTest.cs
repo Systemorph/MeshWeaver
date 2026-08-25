@@ -1,5 +1,6 @@
 ﻿#pragma warning disable CS1591
 
+using MeshWeaver.Mesh.Operations;
 using System;
 using System.Collections.Generic;
 using System.IO;

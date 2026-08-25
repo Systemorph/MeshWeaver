@@ -29,7 +29,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.Mesh.Operations;
 
 /// <summary>
 /// Shared mesh operations for AI agents and MCP tools.
@@ -149,18 +149,21 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Resolves a path relative to the current chat context.
+    /// Resolves a path relative to a caller's context path.
     /// Absolute paths (starting with @/ or /) are returned as-is.
-    /// Relative paths (e.g., @content:file.docx, @MyChild) are prepended with the chat's context path.
+    /// Relative paths (e.g., @content:file.docx, @MyChild) are prepended with <paramref name="contextPath"/>.
     /// Call this before <see cref="ResolvePath"/> whenever a tool accepts a user-supplied path
     /// — otherwise relative paths or bare names get shipped to the mesh unchanged and fail to route.
+    ///
+    /// <para>Takes the context as a STRING rather than the chat that carries it: the resolution is
+    /// pure path arithmetic and the only thing it ever read off a chat was
+    /// <c>chat.Context?.Context</c>. Keeping the parameter primitive is what lets this whole class
+    /// live in the platform while agent chat lives in a module — see issue #2276.</para>
     /// </summary>
-    public static string ResolveContextPath(IAgentChat chat, string path)
+    public static string ResolveContextPath(string? contextPath, string path)
     {
         if (string.IsNullOrEmpty(path))
             return path;
-
-        var contextPath = chat.Context?.Context;
 
         // Strip surrounding quotes (autocomplete wraps spaced paths in quotes)
         if (path.Length >= 2 && path[0] == '"' && path[^1] == '"')
@@ -2090,7 +2093,13 @@ public class MeshOperations
     /// on 0 matches and <see cref="AmbiguousAnchorException"/> on an ambiguous match without
     /// <paramref name="replaceAll"/>.
     /// </summary>
-    internal static string AnchoredReplace(
+    /// <param name="text">The live content to edit.</param>
+    /// <param name="oldText">The anchor — the exact text to replace.</param>
+    /// <param name="newText">The replacement text.</param>
+    /// <param name="replaceAll">When true, every occurrence is replaced instead of refusing an ambiguous match.</param>
+    /// <param name="replacements">Receives the number of occurrences actually replaced.</param>
+    /// <returns>The edited content.</returns>
+    public static string AnchoredReplace(
         string text, string oldText, string newText, bool replaceAll, out int replacements)
     {
         var count = CountOccurrences(text, oldText);
@@ -4357,7 +4366,7 @@ public class MeshOperations
 /// caller's read and the write turn (or never existed). Carries the live content's length so the
 /// tool error can tell the agent what it was checked against.
 /// </summary>
-internal sealed class AnchorNotFoundException : InvalidOperationException
+public sealed class AnchorNotFoundException : InvalidOperationException
 {
     /// <summary>Creates the exception, recording the live content's length.</summary>
     public AnchorNotFoundException(int contentLength)
@@ -4373,7 +4382,7 @@ internal sealed class AnchorNotFoundException : InvalidOperationException
 /// text to replace occurs more than once in the LIVE content and <c>replaceAll</c> was not set —
 /// replacing an arbitrary occurrence would corrupt the document.
 /// </summary>
-internal sealed class AmbiguousAnchorException : InvalidOperationException
+public sealed class AmbiguousAnchorException : InvalidOperationException
 {
     /// <summary>Creates the exception, recording how many occurrences were found.</summary>
     public AmbiguousAnchorException(int occurrenceCount)

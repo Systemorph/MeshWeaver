@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Operations;
 using MeshWeaver.AI;
 using MeshWeaver.ContentCollections.Indexing;
 using Xunit;
