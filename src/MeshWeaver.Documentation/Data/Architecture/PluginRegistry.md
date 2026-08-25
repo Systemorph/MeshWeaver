@@ -375,3 +375,9 @@ plugins repo with its one credential. The registry adds the *fan-out*: git → r
 once) → many installations (credential-free, over HTTP). See [Plugins](/Doc/Architecture/Plugins) for
 the node-native plugin model and [Static Repo Import](/Doc/Architecture/StaticRepoImport) for the
 import pipeline both paths share.
+
+## Related
+
+- @../RepositoryTopology — why credential encapsulation is a *general* rule: the plugins repo is private, so access to any of its content is mediated by this registry rather than by GitHub credentials handed to each consumer.
+- @../Plugins — the node-native plugin model this registry serves.
+- @../StaticRepoImport — the import pipeline both the registry and direct GitSync share.
