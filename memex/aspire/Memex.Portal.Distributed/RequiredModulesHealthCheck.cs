@@ -49,7 +49,12 @@ public sealed class RequiredModulesHealthCheck(IConfiguration configuration) : I
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
         var moduleRoot = ModuleRoot.Resolve(configuration);
-        var activation = ModuleActivationSidecar.Read(moduleRoot);
+        // 🚨 A gate must not read its own input silently. An unreadable activation record cannot
+        // make this probe pass — a required store module would classify as "not installed", which
+        // is still Degraded and still named — but it WOULD give the wrong reason, and "I could not
+        // read the record" is the one an operator can act on. So it rides in the payload.
+        var unreadable = new List<string>();
+        var activation = ModuleActivationSidecar.Read(moduleRoot, unreadable.Add);
 
         // The SAME resolution and the SAME gates the boot path used, asked the same way — a probe
         // that answered differently from the log line that preceded it would be worse than no probe.
@@ -72,6 +77,7 @@ public sealed class RequiredModulesHealthCheck(IConfiguration configuration) : I
             ["missing"] = absent.Select(v => v.Entry).ToArray(),
             ["expected"] = expected.Select(v => v.Entry).ToArray(),
             ["detail"] = verdicts.Select(v => $"{v.Name} [{v.State}]: {v.Reason}").ToArray(),
+            ["unreadableActivationRecords"] = unreadable.ToArray(),
         };
 
         if (absent.Count > 0)
@@ -90,7 +96,14 @@ public sealed class RequiredModulesHealthCheck(IConfiguration configuration) : I
                 + RequiredModuleStatus.Describe(expected),
                 data: data));
 
-        return Task.FromResult(HealthCheckResult.Healthy("every required module is present", data));
+        // Every required module IS accounted for, so nothing is missing — but if a record could
+        // not be read, say so rather than let the reassuring answer stand on partial evidence.
+        return Task.FromResult(unreadable.Count > 0
+            ? HealthCheckResult.Degraded(
+                "every required module is present, but "
+                + $"{unreadable.Count} activation record(s) could not be read: "
+                + string.Join("; ", unreadable), data: data)
+            : HealthCheckResult.Healthy("every required module is present", data));
 
         IEnumerable<string?> Values(string key) =>
             configuration.GetSection(key).GetChildren().Select(child => child.Value);
