@@ -441,6 +441,53 @@ public static class MemexConfiguration
     }
 
     /// <summary>
+    /// Says out loud, once at startup, which ACTIVATED modules did not host-load here (#2093).
+    ///
+    /// <para>🚨 <b>Why this cannot be left to the module's own code.</b> A module that does not load
+    /// runs nothing — including anything that would have complained. <c>MapMeshModuleEndpoints</c>
+    /// scans only LOADED assemblies, so an activated endpoint provider that never made it into the
+    /// process contributes no routes and its whole HTTP surface answers 404 for the pod's lifetime,
+    /// with no exception, no warning and nothing to grep. On memex.systemorph that was <c>/mcp</c>,
+    /// dead through two clean rolling restarts while <c>/health</c> and <c>/readyz</c> were 200 and
+    /// the activation record cheerfully listed the module as installed. Absence of evidence read as
+    /// evidence of absence, again.</para>
+    ///
+    /// <para>The two cases are reported differently because the remedies are: a module whose bytes
+    /// are on the volume is one restart from working, while a module whose landed assembly is GONE
+    /// is a half-completed landing that no restart repairs — that one is an ERROR naming the
+    /// re-install. Same reader, same wording, as the <c>pending_module_activation</c> health check,
+    /// so the pod log and the probe can never disagree.</para>
+    /// </summary>
+    private static void ReportUnloadedActivatedModules(WebApplication app)
+    {
+        var logger = app.Services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("MeshWeaver.PluginCatalog.ModuleActivation");
+        var report = app.Services.GetRequiredService<PendingModuleActivations>().Read();
+
+        if (report.IsUndetermined)
+        {
+            logger.LogError(
+                "Module endpoint contributions mapped, but this pod cannot say whether an "
+                + "activated module failed to load: {Reason}", report.Describe());
+            return;
+        }
+
+        if (report.HasUnresolvable)
+            logger.LogError(
+                "🚨 {Count} ACTIVATED module(s) are not loaded in this process and NO RESTART will "
+                + "load them — any HTTP endpoint, view or provider they contribute is silently "
+                + "absent (a 404 with no error) until the package is re-installed: {Detail}",
+                report.Unresolvable.Count,
+                ModuleActivationStatus.DescribeUnresolvable(report.Unresolvable));
+
+        if (report.HasPending)
+            logger.LogWarning(
+                "{Count} activated module(s) are landed but not loaded in this process — whatever "
+                + "they contribute (endpoints included) is absent until a restart: {Detail}",
+                report.Pending.Count, ModuleActivationStatus.Describe(report.Pending));
+    }
+
+    /// <summary>
     /// Fails fast on the content-storage configuration that GUARANTEES silent data loss (issue #435):
     /// a DEPLOYED (non-development) <c>FileSystem</c> content store whose <c>BasePath</c> is empty or
     /// relative. Such a path resolves against the container's ephemeral working directory (<c>/app</c>),
@@ -456,6 +503,7 @@ public static class MemexConfiguration
     /// <exception cref="InvalidOperationException">
     /// Thrown when a non-development FileSystem content store has an empty or relative <c>BasePath</c>.
     /// </exception>
+
     public static void ValidateContentStorageDurability(
         ContentCollectionConfig? contentStorageConfig, bool isDevelopment)
     {
@@ -623,11 +671,15 @@ public static class MemexConfiguration
             // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
             // consume the pending flag so the step-10 signal reads current. Best-effort: on a
             // read-only app filesystem the flag simply stays set (cosmetic), and boot proceeds.
+            // 🚨 Clears the MARKER, never rewrites the activation record (#2090). Rewriting the
+            // whole list here meant every replica's boot read-modify-wrote a file the other
+            // replicas were reading — on a rolling restart that is several writers and several
+            // readers on one SMB file at once, which is how a boot read came back
+            // FileNotFoundException and the pod started with NONE of its store modules (#2189).
             if (persistedActivation.PendingRestart)
                 try
                 {
-                    ModuleActivationSidecar.Write(moduleRoot,
-                        persistedActivation with { PendingRestart = false });
+                    ModuleActivationSidecar.SetPendingRestart(moduleRoot, false);
                 }
                 catch (Exception ex)
                 {
@@ -1375,6 +1427,14 @@ public static class MemexConfiguration
         // MeshEndpointProviderAttribute maps its routes here — authenticated by default, loud
         // startup failure on route collisions. Delisting a module removes its routes wholesale.
         app.MapMeshModuleEndpoints();
+        // 🚨 …and SAY SO when an activated module contributed nothing because it never host-loaded
+        // (#2093). MapMeshModuleEndpoints can only scan assemblies that ARE loaded, so a module the
+        // activation record says is ON but whose bytes never reached this process contributes zero
+        // routes — and its whole HTTP surface 404s for the pod's entire lifetime with no error
+        // anywhere. That is exactly how /mcp went dark on memex.systemorph while the portal was
+        // otherwise healthy and two clean restarts changed nothing. The report is the same one the
+        // health check renders, so the pod log and /health never tell different stories.
+        ReportUnloadedActivatedModules(app);
 
         // First-startup auto-registration — POST /api/instances/register. A new deployment presents
         // an admin-minted bootstrap key (mwr_) and receives its own instance key (mwi_) once;

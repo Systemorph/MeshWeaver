@@ -69,10 +69,13 @@ public static class MeshBuilderModuleActivation
         // The loud half. Absent-and-required is reported at boot as well as by the health check, so
         // it is in the pod log the operator already has open — not only behind a probe endpoint.
         foreach (var missing in MissingRequired(configuration, MeshBuilder.ResolveModulePath, File.Exists))
-            report($"REQUIRED module '{missing}' is NOT present. This deployment declares it under "
-                + $"{RequiredKey}, so whatever it provides is missing and that is a fault, not a "
-                + "choice. The host is starting anyway — a host that will not start is worse — but a "
-                + "readiness probe wired to RequiredModulesAbsent will hold the rollout.");
+            report($"REQUIRED module '{missing}' does NOT resolve from this image. This deployment "
+                + $"declares it under {RequiredKey}, so whatever it provides is missing. The host is "
+                + "starting anyway — a host that will not start is worse. The readiness probe then "
+                + "separates the two cases the boot path cannot: a pack this image claims under "
+                + $"{AssembliesKey} and lost HOLDS the rollout, while a store-delivered module the "
+                + "registry has not landed yet is reported degraded and named (it is not something "
+                + "a held rollout could deliver).");
 
         return resolved.Length == 0 ? builder : builder.InstallAssemblies(resolved);
     }
