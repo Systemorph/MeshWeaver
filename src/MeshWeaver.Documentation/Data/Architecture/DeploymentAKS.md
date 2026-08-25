@@ -318,6 +318,14 @@ Note the tension with §2: because the chart's migration is a Job created per He
 ## Diagnostics (private cluster)
 
 - Logs: `az aks command invoke … --command "kubectl -n <NS> logs deployment/memex-portal-deployment --tail=120"`. Note: the Azure CLI can crash on non-ASCII (`→`) in log output on Windows (cp1252) — pipe through `tr -cd '\11\12\15\40-\176'` **inside** the `--command` so az only receives printable text.
+- **Intermittent hangs while most requests succeed** (portal recently synced or baked): suspect a
+  degraded-but-Ready replica, not a global wedge — after startup, readiness and liveness both watch
+  the light `/alive`, so a GC-bound pod never leaves rotation on its own. Run
+  `az aks command invoke … --command "kubectl top pods -n <NS> --no-headers"`; one or two pods far
+  above their siblings in BOTH memory and CPU is the superseded-NodeType-build (ALC) accumulation of
+  issue #2194 — `kubectl delete pod` the outliers (grace-drain; the Deployment replaces them).
+  Mechanism and the convergence key that prevents it:
+  [NodeTypeCompilation](/Doc/Architecture/NodeTypeCompilation).
 - A `MESHWEAVER_MSG_TRACE=1` env var on the portal Deployment turns on the message-flow trace (`/tmp/meshweaver-msg-trace.log` in the pod). Toggling it restarts the pod; remove it (`kubectl set env … MESHWEAVER_MSG_TRACE-`) when done — it writes per-message and adds lock/IO overhead.
 
 ---

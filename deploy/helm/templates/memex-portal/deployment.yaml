@@ -241,6 +241,13 @@ spec:
             # because the STARTUP probe below already holds readiness on /health until the mesh is up
             # (so no 502 to a booting pod); once up, /alive keeps a serving pod in rotation and never
             # flaps it out. (Fixed live 2026-07-21; it regressed because the fix wasn't in this chart.)
+            # ⚠️ The trade's blind spot (2026-08-25, MeshWeaver#2194): a pod that degrades AFTER
+            # startup — e.g. GC-bound at 20 GB from superseded-NodeType-build (ALC) accumulation —
+            # still answers /alive, so it stays in rotation serving hung requests until a human
+            # reads `kubectl top`. Accepted here: the fix is convergence
+            # (Modules:AutoRecycleOnStaleBuild, MeshWeaver#2192), not a heavier probe; a cheap
+            # progress-aware check is an open design item on #2194. Do NOT "fix" this by pointing
+            # readiness back at /health — that re-creates the death-spiral above.
             httpGet: { path: /alive, port: 8080 }
             periodSeconds: 10
             timeoutSeconds: 5
