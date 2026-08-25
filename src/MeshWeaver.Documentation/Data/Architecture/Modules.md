@@ -89,10 +89,27 @@ container builds) and fed to `MeshBuilder.InstallAssemblies` as one list:
 1. **The `Modules:Assemblies` appsettings baseline** — the DLLs the image ships with; the list is
    the operator's on/off switch for first-party packs, exactly as before. A baseline entry that
    fails to load fails loudly at startup, never silently.
-2. **The persisted activation list** — `modules/activation.json`, a sidecar file beside the module
-   folders, written by the runtime landing service (`ModuleLandingService`) when a compiled module
-   is installed from the Store. Each entry records the module name, its source, the install
-   record's mesh path, and the framework MVID the landed assemblies were built against.
+2. **The persisted activation record** — one file per module under `modules/activation.d/`, written
+   by the runtime landing service (`ModuleLandingService`) when a compiled module is installed from
+   the Store. Each entry records the module name, its source, the install record's mesh path, its
+   generation directory, its declared platform floor, and the framework MVID the landed assemblies
+   were built against. The legacy aggregate `modules/activation.json` is still READ (deployments
+   already carry one) and a per-module file wins over it by name; nothing writes it any more.
+
+   > 🚨 **Why one file per module and not one index.** Every portal replica mounts the same RWX
+   > `/data`, and a republish after a release pushes 30+ modules concurrently. A single mutable
+   > index that each landing read, appended to and renamed over has two failure modes no retry
+   > fixes: concurrent landings of *different* modules **lose each other's entries** (last writer
+   > wins the whole list), and the rename **contends for the file's SMB lease** with every other
+   > reader and writer of that one path — `Access to the path '/data/modules/activation.json' is
+   > denied` on the write side (HTTP 409), and a `FileNotFoundException` on the read side from
+   > opening into the replace window, which the reader then reported as a corrupt sidecar and
+   > **booted the pod with no store modules at all**. Sharding by module removes the shared cell:
+   > two writers of different modules share no path, so neither outcome is possible. The
+   > restart-required flag is a marker FILE (`activation.d/.pending-restart`) for the same reason —
+   > setting it is a create and clearing it is a delete, never a read-modify-write. And a record
+   > that cannot be read now costs exactly that one module, reported by name, instead of collapsing
+   > the whole answer to the empty list.
 
 The union dedupes by module name (a store install of an already-baseline module contributes
 nothing). **Activation is restart-based**: landing a module writes its assemblies into
