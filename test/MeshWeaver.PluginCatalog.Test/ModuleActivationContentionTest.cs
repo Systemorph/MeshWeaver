@@ -238,6 +238,22 @@ public class ModuleActivationContentionTest : IDisposable
             "the record the landing lane wrote is the current one");
     }
 
+    /// <summary>
+    /// 🚨 The module name BECOMES a path, so it is refused at the writer rather than trusted from
+    /// whichever caller got there. A record file named after its module is a path-traversal surface
+    /// the moment a name can carry a separator.
+    /// </summary>
+    [Theory]
+    [InlineData("../escape")]
+    [InlineData("dir/child")]
+    [InlineData("..")]
+    [InlineData("  ")]
+    public void AModuleNameThatIsNotAFileName_IsRefused(string name)
+    {
+        Assert.Throws<ArgumentException>(() =>
+            ModuleActivationSidecar.WriteEntry(root, new ModuleActivationEntry { Name = name }));
+    }
+
     /// <summary>An absent record is the fresh-deployment state: empty, and SILENT. It must never
     /// be reported as unreadable — that is the noise that made #2189's real signal unreadable.</summary>
     [Fact]
