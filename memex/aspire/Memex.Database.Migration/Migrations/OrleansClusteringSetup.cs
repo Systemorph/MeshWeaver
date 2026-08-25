@@ -48,6 +48,16 @@ public static class OrleansClusteringSetup
         await using var conn = new NpgsqlConnection(orleansConnectionString);
         await conn.OpenAsync();
 
+        // 🚨 The SCHEMA must exist before anything else, because every gate below asks
+        // `current_schema()` — which resolves through the connection's Search Path. Point the
+        // connection at a schema that does not exist and current_schema() falls back to public:
+        // the gates then read PUBLIC's tables, conclude "already present", and the Orleans tables
+        // are silently created in (or read from) the wrong schema. This is what makes
+        // "Orleans lives in the MESH database, in its own schema" a safe shape — one database per
+        // instance, so two deployments sharing a server can never merge into one cluster even
+        // though ClusterId is a fixed constant.
+        await EnsureSchemaExistsAsync(conn, orleansConnectionString, logger);
+
         // Phase 1 — membership (OrleansQuery + the membership tables). Must run first: the
         // persistence script INSERTs its query texts INTO OrleansQuery.
         if (await TableExistsAsync(conn, "orleansquery"))
@@ -257,6 +267,32 @@ public static class OrleansClusteringSetup
             + "WHERE table_name = @t AND table_schema = current_schema())", conn);
         check.Parameters.AddWithValue("t", tableName);
         return (bool)(await check.ExecuteScalarAsync())!;
+    }
+
+    /// <summary>
+    /// Creates the schema named by the connection string's <c>Search Path</c>, when it names one
+    /// other than <c>public</c>. Orleans' own scripts are verbatim Microsoft SQL with unqualified
+    /// table names, so the SEARCH PATH is the only seam that can place them — and Postgres will
+    /// not create a schema on demand. Idempotent (<c>CREATE SCHEMA IF NOT EXISTS</c>), and a no-op
+    /// for the dedicated-database shape that names no search path.
+    /// </summary>
+    private static async Task EnsureSchemaExistsAsync(
+        NpgsqlConnection conn, string connectionString, ILogger logger)
+    {
+        var schema = new NpgsqlConnectionStringBuilder(connectionString).SearchPath;
+        if (string.IsNullOrWhiteSpace(schema))
+            return;
+        // Search Path may list several schemas; the FIRST is where unqualified CREATEs land, and
+        // it is therefore the only one this step owns.
+        schema = schema.Split(',')[0].Trim().Trim('"');
+        if (schema.Length == 0 || string.Equals(schema, "public", StringComparison.OrdinalIgnoreCase))
+            return;
+        await using var create = new NpgsqlCommand(
+            $"CREATE SCHEMA IF NOT EXISTS \"{schema.Replace("\"", "\"\"")}\"", conn);
+        await create.ExecuteNonQueryAsync();
+        logger.LogInformation(
+            "[OrleansClustering] Schema '{Schema}' ensured — Orleans tables live beside the mesh "
+            + "data in this database, isolated by schema.", schema);
     }
 
     /// <summary>
