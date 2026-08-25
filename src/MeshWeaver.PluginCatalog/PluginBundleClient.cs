@@ -161,11 +161,11 @@ public sealed class PluginBundleClient
                     // exactly why the arm64 lane went unnoticed. Naming both architectures makes the
                     // miss diagnosable from one log line.
                     _logger?.LogInformation(
-                        "Prebuilt assemblies at {Registry} are not adoptable: {Reason} — compiling. "
+                        "Prebuilt assemblies at {Registry} are not adoptable: {Reason} — {Consequence}. "
                         + "The registry bakes {RegistryArchitecture}; this instance is "
                         + "{LiveArchitecture}. Adoption needs a bake published for THIS lane; "
                         + "re-publishing another lane's bytes under this identity is never the fix.",
-                        _registryUrl, reason,
+                        _registryUrl, reason, MissConsequence("compiling"),
                         index.Architecture ?? "(an architecture it does not state)",
                         ReleaseArchitecture.Live);
                     return Miss(pluginId, BundleAdoptionKind.FrameworkDeclined, reason);
@@ -185,12 +185,13 @@ public sealed class PluginBundleClient
                     // log worth reading.
                     _logger?.LogWarning(
                         "Bundle for {Plugin}: {Registry} does not advertise it on framework "
-                        + "{Identity}/{Architecture} — it will be COMPILED here. Either that "
+                        + "{Identity}/{Architecture} — {Consequence}. Either that "
                         + "registry has no install record and no published module for it, or its "
                         + "index is filtered by this instance's grant. {Advertised} package(s) are "
                         + "advertised to this instance.",
                         pluginId, _registryUrl, PrebuiltAssemblySeeder.LiveFrameworkMvid,
-                        ReleaseArchitecture.Live, index.Bundles?.Count ?? 0);
+                        ReleaseArchitecture.Live, MissConsequence("it will be COMPILED here"),
+                        index.Bundles?.Count ?? 0);
                     return Miss(pluginId, BundleAdoptionKind.NotAdvertised,
                         $"{_registryUrl} advertises {index.Bundles?.Count ?? 0} package(s) to this "
                         + "instance, and this is not one of them");
@@ -223,6 +224,13 @@ public sealed class PluginBundleClient
                 pluginId, kind.ToString(), reason)));
         return Observable.Return(0);
     }
+
+    /// <summary>The consequence half of a miss LOG LINE, truthful per mode: a default mesh
+    /// compiles, a require-prebuilt mesh fails the adoption right after the line (#2198 review).</summary>
+    private string MissConsequence(string defaultConsequence) =>
+        _requirePrebuilt
+            ? "the adoption FAILS here (" + PrebuiltAssemblySeeder.RequirePrebuiltConfigKey + ")"
+            : defaultConsequence;
 
     /// <summary>The one message shape for every <see cref="PrebuiltAssemblySeeder.RequirePrebuiltConfigKey"/>
     /// refusal on this lane — package, registry, identity/architecture, miss kind, fix. Pure.</summary>
@@ -414,8 +422,8 @@ public sealed class PluginBundleClient
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
                 _logger?.LogInformation(
-                    "No prebuilt bundle for {Plugin}@{Version} at {Registry} — will compile",
-                    pluginId, version, _registryUrl);
+                    "No prebuilt bundle for {Plugin}@{Version} at {Registry} — {Consequence}",
+                    pluginId, version, _registryUrl, MissConsequence("will compile"));
                 return new FetchResult(null, BundleAdoptionKind.NotServed,
                     $"the registry advertises {pluginId}@{version} but serves no bytes for "
                     + $"{PrebuiltAssemblySeeder.LiveFrameworkMvid}/{ReleaseArchitecture.Live}");
@@ -428,8 +436,8 @@ public sealed class PluginBundleClient
                 // it always works; turning a distribution hiccup into an install failure trades a
                 // slow success for a hard error.
                 _logger?.LogWarning(
-                    "Bundle fetch for {Plugin}@{Version} failed ({Status}) — will compile",
-                    pluginId, version, (int)resp.StatusCode);
+                    "Bundle fetch for {Plugin}@{Version} failed ({Status}) — {Consequence}",
+                    pluginId, version, (int)resp.StatusCode, MissConsequence("will compile"));
                 return new FetchResult(null, BundleAdoptionKind.FetchFailed,
                     $"HTTP {(int)resp.StatusCode} from {_registryUrl}");
             }
@@ -455,8 +463,8 @@ public sealed class PluginBundleClient
                 if (PrebuiltAssemblySeeder.DeclineReason(manifest?.FrameworkMvid) is { } reason)
                 {
                     _logger?.LogInformation(
-                        "Bundle for {Plugin} DECLINED whole: {Reason} — compiling instead",
-                        pluginId, reason);
+                        "Bundle for {Plugin} DECLINED whole: {Reason} — {Consequence}",
+                        pluginId, reason, MissConsequence("compiling instead"));
                     return Miss(pluginId, BundleAdoptionKind.BundleDeclined, reason);
                 }
 
@@ -467,12 +475,16 @@ public sealed class PluginBundleClient
                 // normal behaviour rather than a regression in the distribution lane.
                 if (manifest?.Misses is { Count: > 0 } misses)
                 {
+                    // The consequence half of the line must tell the truth PER MODE: on a default
+                    // mesh the unresolved types compile here; on a require-prebuilt mesh the very
+                    // next statement fails the adoption instead (Copilot on #2198).
                     _logger?.LogWarning(
                         "Bundle for {Plugin}: the registry could resolve NO artifact for {Missed} "
-                        + "NodeType(s) on framework {Identity}/{Architecture} — they will be "
-                        + "compiled here: {Misses}",
+                        + "NodeType(s) on framework {Identity}/{Architecture} — {Consequence}: {Misses}",
                         pluginId, misses.Count, PrebuiltAssemblySeeder.LiveFrameworkMvid,
-                        ReleaseArchitecture.Live, string.Join(" | ", misses));
+                        ReleaseArchitecture.Live,
+                        MissConsequence("they will be compiled here"),
+                        string.Join(" | ", misses));
                     // 🚨 PARTIAL coverage fails a require-prebuilt mesh just like a whole-bundle
                     // miss, and it fails BEFORE any of the resolved assemblies are seeded: the
                     // unresolved types would otherwise compile at first access — the exact silent
@@ -487,7 +499,8 @@ public sealed class PluginBundleClient
                 if (assemblies.Count == 0)
                 {
                     _logger?.LogInformation(
-                        "Bundle for {Plugin} carried no assemblies — compiling instead", pluginId);
+                        "Bundle for {Plugin} carried no assemblies — {Consequence}", pluginId,
+                        MissConsequence("compiling instead"));
                     return Miss(pluginId, BundleAdoptionKind.NoAssemblies,
                         "the bundle carried no assemblies");
                 }
