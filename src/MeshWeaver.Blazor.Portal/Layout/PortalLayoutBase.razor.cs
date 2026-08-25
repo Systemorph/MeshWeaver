@@ -805,6 +805,22 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         // Cheap string pre-filter so an ordinary navigation costs nothing.
         if (RecycleLayoutArea.TryGetTargetFromUrl(relative) is not { Length: > 0 })
             return;
+
+        // 🚨 Resolve the viewer HERE, on the circuit thread, and carry the id explicitly through the
+        // Rx hops below. AccessService.CircuitContext is an AsyncLocal that resolves ONLY on the
+        // circuit's own thread and is documented to be wiped by "a deferred sync write, an Rx
+        // continuation" — which is precisely what the resolver's and the permission fold's
+        // Subscribe callbacks are. The parameterless CheckPermission(path, permission) overload
+        // calls ResolveUserId INTERNALLY, so composing it inside the resolver's callback would have
+        // read a wiped AsyncLocal, fallen back to WellKnownUsers.Anonymous, and silently denied the
+        // URL door to everyone — a fail-closed that looks identical to "you lack Update".
+        var viewerId = CircuitUser.ResolveUserId(AccessService);
+        if (string.IsNullOrEmpty(viewerId))
+        {
+            Logger.LogInformation(
+                "Recycle URL '{Url}' ignored — no circuit user resolved (anonymous circuit).", relative);
+            return;
+        }
         // 🚨 …then ASK THE RESOLVER, because the string is not the decision. A node may itself be
         // called "…/Recycle", and then this URL is that node's own page, not a request to recycle
         // its parent. ResolveNavigationPath is the same resolution AreaPage performs, so the door
@@ -825,8 +841,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
                     // same gate. The menu entry is withheld server-side without Permission.Update
                     // (RecycleLayoutArea.GetMenuItem), but a URL is typed, linked and bookmarked —
                     // nothing withholds it. Fail CLOSED: a check that faults, or never answers,
-                    // does not open the dialog.
-                    Hub.CheckPermission(target, Permission.Update)
+                    // does not open the dialog. The EXPLICIT-userId overload — see above.
+                    Hub.CheckPermission(target, viewerId, Permission.Update)
                         .Take(1)
                         .Subscribe(
                             allowed =>
