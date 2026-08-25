@@ -87,9 +87,43 @@ public record MeshBuilder
         // consults the module's deps.json, so nothing probes modules/<Name>/runtimes/<rid>/native/.
         // Subscribed here — before anything from a module folder is loaded — and idempotent.
         ModuleNativeAssets.EnsureRegistered();
-        var assemblies = assemblyLocations
-            .Select(Assembly.LoadFrom)
-            .ToArray();
+
+        // 🚨 Per-module isolation (#2234). One module that cannot install against THIS build must
+        // cost that module's contribution and nothing else. It used to cost the process: a landed
+        // AzureFoundry built against a 9-parameter record ctor met an image carrying the
+        // 8-parameter one, the MissingMethodException escaped this method, and every replacement
+        // pod aborted ~2 s into boot with no application logging (the pipeline is not up yet) —
+        // memex-cloud could not start a pod for ~90 minutes.
+        //
+        // Everything an attribute can THROW from is materialised here, before any builder state is
+        // mutated, so a module that fails leaves no half-applied configuration behind. The lambdas
+        // are the hazard: `a.Nodes` is what constructs the objects whose ctor may have moved.
+        var pending = new List<PendingModuleInstall>();
+        var incompatible = new List<IncompatibleModule>();
+        foreach (var location in assemblyLocations)
+        {
+            try
+            {
+                var assembly = Assembly.LoadFrom(location);
+                var moduleAttributes = assembly.GetCustomAttributes<MeshNodeProviderAttribute>().ToArray();
+                pending.Add(new PendingModuleInstall(
+                    assembly,
+                    moduleAttributes.SelectMany(a => a.Nodes).ToArray(),
+                    moduleAttributes.SelectMany(a => a.AddressTypes).ToArray(),
+                    moduleAttributes.SelectMany(a => a.HubConfigurations).ToArray(),
+                    moduleAttributes.SelectMany(a => a.DefaultNodeHubConfigurations).ToArray(),
+                    moduleAttributes.SelectMany(a => a.BuilderConfigurations).ToArray()));
+            }
+            catch (Exception exception)
+            {
+                incompatible.Add(ReportIncompatible(location, exception));
+            }
+        }
+
+        // Only the modules that actually installed are recorded as installed. A skewed one is
+        // deliberately NOT in this list: it contributes no nodes, and letting it into the in-mesh
+        // compile reference set would hand every dynamic NodeType the same broken signatures.
+        var assemblies = pending.Select(p => p.Assembly).ToArray();
         // Record every installed module for the runtime surfaces that must SEE modules the way
         // they see the platform: the in-mesh compile reference set (a module leaving the publish
         // closure leaves TRUSTED_PLATFORM_ASSEMBLIES, so compilation composes TPA + these) and
@@ -102,13 +136,10 @@ public record MeshBuilder
                 services.AddSingleton(new InstalledModuleAssembly(assembly));
             return services;
         });
-        var attributes = assemblies
-            .SelectMany(a => a.GetCustomAttributes<MeshNodeProviderAttribute>())
-            .ToArray();
-        MeshNodes.AddRange(attributes.SelectMany(a => InstallServices(a.Nodes)));
+        MeshNodes.AddRange(pending.SelectMany(p => InstallServices(p.Nodes)));
 
         // Register address types from attributes
-        var addressTypes = attributes.SelectMany(a => a.AddressTypes).ToArray();
+        var addressTypes = pending.SelectMany(p => p.AddressTypes).ToArray();
         if (addressTypes.Length > 0)
         {
             ConfigureHub(config =>
@@ -121,18 +152,75 @@ public record MeshBuilder
         // Attribute-carried hub configuration — the surfaces a boot-loaded pack needs beyond
         // root DI: the mesh hub's own configuration and the every-per-node-hub chain
         // (Courses/Observability-shaped packs register types + default areas there).
-        foreach (var hubConfiguration in attributes.SelectMany(a => a.HubConfigurations))
+        foreach (var hubConfiguration in pending.SelectMany(p => p.HubConfigurations))
             ConfigureHub(hubConfiguration);
-        foreach (var nodeHubConfiguration in attributes.SelectMany(a => a.DefaultNodeHubConfigurations))
+        foreach (var nodeHubConfiguration in pending.SelectMany(p => p.DefaultNodeHubConfigurations))
             ConfigureDefaultNodeHub(nodeHubConfiguration);
 
         // Attribute-carried BUILDER configuration — the full-surface hook. Applied last so a
         // builder-level hook observes the attribute's own nodes/services, mirroring the order a
         // compiled-in caller would get from `builder.InstallAssemblies(...).AddX()`. MeshBuilder
         // methods mutate this instance and return it, so the fold cannot lose configuration.
-        return attributes
-            .SelectMany(a => a.BuilderConfigurations)
-            .Aggregate(this, (builder, configure) => configure(builder));
+        //
+        // Folded per MODULE rather than over one flat list: these run arbitrary module code, so a
+        // throw here is the same hazard as the materialisation above and must cost only its own
+        // module. The fold keeps the builder from the last SUCCESSFUL configuration, so a module
+        // that throws midway cannot strand the chain.
+        var result = this;
+        foreach (var module in pending)
+        {
+            try
+            {
+                result = module.BuilderConfigurations.Aggregate(result, (builder, configure) => configure(builder));
+            }
+            catch (Exception exception)
+            {
+                incompatible.Add(ReportIncompatible(module.Assembly.Location, exception));
+            }
+        }
+
+        // 🚨 Registered AFTER the fold, not before it. A module can fail in either half — while its
+        // contributions are materialised, or while its BuilderConfigurations run — and registering
+        // early captured only the first. The second would have been written to stderr and then
+        // dropped, so /health and RequiredModuleStatus would report a replica missing that module's
+        // features as healthy: the exact invisible-skip this record exists to prevent, reintroduced
+        // one code path over.
+        if (incompatible.Count > 0)
+        {
+            result.ConfigureServices(services =>
+            {
+                foreach (var module in incompatible)
+                    services.AddSingleton(module);
+                return services;
+            });
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// One module's contributions, materialised before any builder state is touched.
+    /// </summary>
+    private sealed record PendingModuleInstall(
+        Assembly Assembly,
+        IReadOnlyCollection<MeshNode> Nodes,
+        IReadOnlyCollection<KeyValuePair<string, Type>> AddressTypes,
+        IReadOnlyCollection<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations,
+        IReadOnlyCollection<Func<MessageHubConfiguration, MessageHubConfiguration>> DefaultNodeHubConfigurations,
+        IReadOnlyCollection<Func<MeshBuilder, MeshBuilder>> BuilderConfigurations);
+
+    /// <summary>
+    /// Records a module that could not install, and writes it to stderr.
+    ///
+    /// <para>🚨 stderr, not a logger: this runs BEFORE the logging pipeline exists, which is
+    /// exactly why #2234's crash left a container log containing only the createdump DSO listing
+    /// and cost most of a day to diagnose. The one channel that works at this point is the one the
+    /// container captures.</para>
+    /// </summary>
+    private static IncompatibleModule ReportIncompatible(string entry, Exception exception)
+    {
+        var module = IncompatibleModule.From(entry, exception);
+        Console.Error.WriteLine($"[MeshWeaver.Mesh.IncompatibleModule] {module.Report()}");
+        return module;
     }
 
     private IEnumerable<MeshNode> InstallServices(IEnumerable<MeshNode> nodes)
