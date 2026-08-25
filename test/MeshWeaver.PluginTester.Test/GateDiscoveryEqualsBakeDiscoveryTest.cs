@@ -65,6 +65,22 @@ public class GateDiscoveryEqualsBakeDiscoveryTest(ITestOutputHelper output)
         NodeTypeTemplate.Replace("%ID%", id, StringComparison.Ordinal)
             .Replace("%NS%", ns, StringComparison.Ordinal);
 
+    /// <summary>
+    /// The same node, written with a <c>//</c> comment and a trailing comma. Both are accepted by
+    /// the installer (<c>JsonFileParser</c>) and by the bake (<c>TreeNodeLoader</c>) because both
+    /// opt into <c>JsonCommentHandling.Skip</c> + <c>AllowTrailingCommas</c> — and both are
+    /// REJECTED by <c>JsonDocumentOptions</c> defaults, which is how a second #2063 gets in.
+    /// </summary>
+    private static string TolerantNodeTypeJson(string id, string ns)
+    {
+        var body = NodeTypeJson(id, ns);
+        // `{"$type"` → `{ // comment \n "$type"`, and a trailing comma before the final brace.
+        return "// a node file may carry comments\n"
+            + body[..^1].Replace(",\"includeGlobalTypes\":true", ",\"includeGlobalTypes\":true,",
+                StringComparison.Ordinal)
+            + "}";
+    }
+
     /// <summary>An ordinary node that is NOT a NodeType — neither half may discover it.</summary>
     private const string MarkdownNodeJson =
         """{"$type":"MeshNode","id":"Readme","namespace":"Widget","path":"Widget/Readme","name":"Readme","nodeType":"Markdown","state":"Active","content":{"$type":"MarkdownContent","markdown":"hello"}}""";
@@ -89,6 +105,13 @@ public class GateDiscoveryEqualsBakeDiscoveryTest(ITestOutputHelper output)
             // 3. A nested BOM'd type: the PensionFund shape (BOM'd types in a subfolder), so the
             //    path mapping is exercised on a BOM'd file and not only the BOM strip.
             WriteFileWithBom(root, "Widget/Nested/Deep.json", NodeTypeJson("Deep", "Widget/Nested"));
+
+            // 3b. 🚨 PARSER TOLERANCES. A comment and a trailing comma are accepted by the
+            //     installer and by the bake, and rejected by JsonDocumentOptions DEFAULTS. Taking
+            //     the defaults in the gate's discovery is the same drift as the BOM, one tolerance
+            //     later — caught in review on #2063, not by this test, which is exactly why the
+            //     shape is pinned here now.
+            WriteFile(root, "Widget/Tolerant.json", TolerantNodeTypeJson("Tolerant", "Widget"));
 
             // 4. 🚨 THE EXCLUSIONS. A NodeType-shaped .json under content/** is a content ASSET,
             //    not a node: PackageInstaller.NodePathForFile returns null for it, so it is never
@@ -140,7 +163,7 @@ public class GateDiscoveryEqualsBakeDiscoveryTest(ITestOutputHelper output)
             // halves regressing together — two empty sets are equal too, which is exactly the
             // vacuous green this test exists to make impossible.
             Assert.Equal(
-                new[] { "Widget/Bommed", "Widget/Nested/Deep", "Widget/Thing" },
+                new[] { "Widget/Bommed", "Widget/Nested/Deep", "Widget/Thing", "Widget/Tolerant" },
                 gateDiscovered);
         }
         finally

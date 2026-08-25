@@ -262,6 +262,23 @@ public static class PluginGateRunner
             Configuration?.Contains("WithView(\"Tests\"", StringComparison.Ordinal) == true;
     }
 
+    /// <summary>
+    /// Document-parse tolerances for a node file — the same copy <c>JsonFileParser.Parse</c> and
+    /// <c>TreeNodeLoader.ContentJsonDocument</c> both make, off the hub's own options.
+    ///
+    /// <para>🚨 <b>The defaults are a drift, not a neutral choice.</b> <see cref="JsonDocumentOptions"/>
+    /// defaults REJECT comments and trailing commas. A node file carrying either parses under the
+    /// installer and under the bake — both opt in — and would have thrown here, landing in the
+    /// <c>catch (JsonException)</c> and vanishing from the gate's view: the identical
+    /// discovered-by-one-half defect as the BOM, one parser tolerance later (Copilot review on
+    /// #2063). Every tolerance this parse does NOT share with the installer is a future #2063.</para>
+    /// </summary>
+    private static readonly JsonDocumentOptions NodeJsonDocument = new()
+    {
+        CommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
+
     // The package's NodeType nodes (content.$type == NodeTypeDefinition), from the raw files.
     //
     // 🚨 EVERY file-shaped decision here is DELEGATED, never re-implemented — this half of CI has
@@ -302,8 +319,10 @@ public static class PluginGateRunner
             string? configuration;
             try
             {
-                // The SAME BOM-tolerant read TreeNodeLoader and FileFormatParserRegistry make.
-                using var doc = JsonDocument.Parse(FileFormatParserRegistry.WithoutBom(file.Content));
+                // The SAME read TreeNodeLoader and JsonFileParser make — BOM-stripped AND
+                // comment/trailing-comma tolerant.
+                using var doc = JsonDocument.Parse(
+                    FileFormatParserRegistry.WithoutBom(file.Content), NodeJsonDocument);
                 if (doc.RootElement.ValueKind != JsonValueKind.Object
                     || !doc.RootElement.TryGetProperty("content", out var content)
                     || content.ValueKind != JsonValueKind.Object
