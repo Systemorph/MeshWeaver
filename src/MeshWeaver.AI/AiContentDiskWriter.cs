@@ -1,6 +1,6 @@
 using System.Reactive.Linq;
 using System.Text.Json;
-using MeshWeaver.AI;
+using MeshWeaver.GitSync;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Persistence.Parsers;
@@ -10,7 +10,7 @@ using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.GitSync;
+namespace MeshWeaver.AI;
 
 /// <summary>Outcome of an AI-content sync-back: how many Agent/Skill files were written, repo-relative.</summary>
 public sealed record AiContentSyncResult(int AgentsWritten, int SkillsWritten, IReadOnlyList<string> Files)
