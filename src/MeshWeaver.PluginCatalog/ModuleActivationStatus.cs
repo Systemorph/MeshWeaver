@@ -51,12 +51,66 @@ public static class ModuleActivationStatus
     /// leaves this question entirely). The gate is a parameter for the same reason boot's is:
     /// production passes <see cref="ModulePlatformFloor.DeclineReason(string?)"/>, and there is
     /// never a second notion of the module platform requirement.</para>
+    ///
+    /// <para>🚨 And an entry whose LANDED BYTES ARE GONE is not pending either — it is
+    /// <see cref="Unresolvable"/> (#2093). Same reason, sharper: "pending" promises that a restart
+    /// activates this, and boot skips an entry whose DLL is missing exactly as loudly as a held
+    /// one. Reporting it as pending is a promise every restart breaks and none of them clears —
+    /// and it is the state that took <c>/mcp</c> down for a pod's whole lifetime while every
+    /// surface said "restart required". The two must render differently because the ACTIONS
+    /// differ: wait for the restart, versus re-install the package.</para>
     /// </summary>
     /// <param name="activation">The persisted activation list.</param>
     /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
     /// <param name="platformGate">Returns WHY a recorded platform FLOOR is not satisfied by the
     /// running platform, or null when it is (an absent floor is always satisfied).</param>
+    /// <param name="landedDllExists">Whether the entry's landed DLL is actually on the volume —
+    /// production passes <see cref="ModuleActivationBoot.LandedModuleDllExists"/>, the SAME check
+    /// boot gates on, so this report can never promise a restart boot would not honour.</param>
     public static ImmutableList<PendingModuleActivation> NotYetLoaded(
+        ModuleActivationList activation,
+        IReadOnlySet<string> loadedAssemblyNames,
+        Func<string?, string?> platformGate,
+        Func<ModuleActivationEntry, bool> landedDllExists)
+    {
+        ArgumentNullException.ThrowIfNull(landedDllExists);
+        return AwaitingLoad(activation, loadedAssemblyNames, platformGate)
+            .Where(landedDllExists)
+            .Select(Describe)
+            .ToImmutableList();
+    }
+
+    /// <summary>
+    /// The enabled, floor-satisfied entries that are not loaded here AND whose landed DLL is not on
+    /// the volume — activated modules a restart will NOT bring up (#2093).
+    ///
+    /// <para>This is the state behind an endpoint module that 404s for a pod's whole lifetime: the
+    /// activation record says the module is on, so every NodeType-facing surface treats it as
+    /// installed, while its assembly was never host-loaded and so contributed no routes. It has
+    /// exactly one remedy — re-install the package — and the whole defect was that nothing
+    /// anywhere said so.</para>
+    /// </summary>
+    /// <param name="activation">The persisted activation list.</param>
+    /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
+    /// <param name="platformGate">The one platform floor gate.</param>
+    /// <param name="landedDllExists">Whether the entry's landed DLL is on the volume.</param>
+    public static ImmutableList<PendingModuleActivation> Unresolvable(
+        ModuleActivationList activation,
+        IReadOnlySet<string> loadedAssemblyNames,
+        Func<string?, string?> platformGate,
+        Func<ModuleActivationEntry, bool> landedDllExists)
+    {
+        ArgumentNullException.ThrowIfNull(landedDllExists);
+        return AwaitingLoad(activation, loadedAssemblyNames, platformGate)
+            .Where(entry => !landedDllExists(entry))
+            .Select(Describe)
+            .ToImmutableList();
+    }
+
+    private static PendingModuleActivation Describe(ModuleActivationEntry entry) =>
+        new(entry.Name, entry.PackagePath, entry.Version);
+
+    private static IEnumerable<ModuleActivationEntry> AwaitingLoad(
         ModuleActivationList activation,
         IReadOnlySet<string> loadedAssemblyNames,
         Func<string?, string?> platformGate)
@@ -69,9 +123,7 @@ public static class ModuleActivationStatus
             .Where(entry => entry.Enabled
                 && !string.IsNullOrWhiteSpace(entry.Name)
                 && !loadedAssemblyNames.Contains(entry.Name)
-                && platformGate(entry.MinMeshVersion) is null)
-            .Select(entry => new PendingModuleActivation(entry.Name, entry.PackagePath, entry.Version))
-            .ToImmutableList();
+                && platformGate(entry.MinMeshVersion) is null);
     }
 
     /// <summary>
@@ -125,7 +177,34 @@ public static class ModuleActivationStatus
 
         return $"{names.Length} module(s) are landed but not yet loaded in this process — "
             + "a restart activates them: "
-            + string.Join(", ", names.Take(Math.Max(1, maxNamed)))
-            + (names.Length > maxNamed ? $", …(+{names.Length - maxNamed})" : string.Empty);
+            + Name(names, maxNamed);
     }
+
+    /// <summary>
+    /// One human-readable line naming the ACTIVATED modules a restart will not fix — the other
+    /// half of the report, kept separate because the remedy is different (#2093).
+    /// </summary>
+    /// <param name="unresolvable">The activated entries whose landed bytes are absent.</param>
+    /// <param name="maxNamed">How many are named before the line truncates.</param>
+    public static string DescribeUnresolvable(
+        IReadOnlyCollection<PendingModuleActivation> unresolvable, int maxNamed = 10)
+    {
+        ArgumentNullException.ThrowIfNull(unresolvable);
+        if (unresolvable.Count == 0)
+            return "no module activation is unresolvable";
+
+        var names = unresolvable
+            .Select(p => p.Name)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return $"{names.Length} module(s) are ACTIVATED but their landed assemblies are absent — "
+            + "a restart will NOT load them and anything they contribute (endpoints included) "
+            + "stays missing; re-install the package: "
+            + Name(names, maxNamed);
+    }
+
+    private static string Name(string[] names, int maxNamed) =>
+        string.Join(", ", names.Take(Math.Max(1, maxNamed)))
+        + (names.Length > maxNamed ? $", …(+{names.Length - maxNamed})" : string.Empty);
 }

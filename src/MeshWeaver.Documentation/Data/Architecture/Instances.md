@@ -72,9 +72,14 @@ provisioned with the deploy tooling, not from the running app — the company in
 1. Add the namespace to `portalNamespaces` in `deploy/aks/infra/main.bicep` (creates its federated
    credential + AcrPull) and redeploy the identity module.
 2. Create the instance's **database** on the shared `<pg-server>` server.
-3. Author `deploy/aks/envs/<env>/values.<env>.yaml` (git-ignored: host, `MEMEX_DATABASENAME`, TLS
-   secret, AI + auth config, `selfUpdate.azureClientId`).
-4. `deploy/aks/envs/<env>/deploy.sh` — helm install + PVCs + KV `SecretProviderClass` + ingress + TLS.
+3. Author the env's `values.<env>.yaml` (host, `MEMEX_DATABASENAME`, TLS secret, AI + auth config,
+   `selfUpdate.azureClientId`).
+4. Run the env's `deploy.sh` — helm install + PVCs + KV `SecretProviderClass` + ingress + TLS.
+
+> 🚨 **Env folders live in the PRIVATE `Systemorph/Memex` repository**, not under
+> `deploy/aks/envs/<env>/` — they moved out on 2026-08-08/09 because their directory names are
+> tenant identities. The maintained, ordered procedure is `docs/new-deployment.md` there;
+> `deploy/aks/envs/example/` in this repository is the reference template only.
 5. Wire sign-in redirect URIs + invitation/email config for the new domain.
 
 **Delete** an instance:

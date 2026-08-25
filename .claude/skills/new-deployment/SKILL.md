@@ -63,9 +63,12 @@ Two orderings are not negotiable, and both fail *silently* when you get them wro
 
 ## The steps
 
-Full runbook with commands: **`docs/new-deployment.md` in `Systemorph/Memex`** (private). Generic
-mechanism: [OnboardingNewEnvironment.md](../../../src/MeshWeaver.Documentation/Data/Architecture/OnboardingNewEnvironment.md)
-and [DEPLOY-RUNBOOK.md](../../../deploy/aks/DEPLOY-RUNBOOK.md).
+🚨 **The maintained runbook is `docs/new-deployment.md` in `Systemorph/Memex`** (private) — it is
+authoritative wherever it and anything here disagree, and the table below is a map of the steps,
+NOT a copy of them. Do not restate its commands here: two copies of a procedure drift, and the one
+in the public repo is the one nobody updates. Generic mechanism (public):
+[OnboardingNewEnvironment.md](../../../src/MeshWeaver.Documentation/Data/Architecture/OnboardingNewEnvironment.md).
+Shared-platform bring-up (public sample): [deploy/aks/README.md](../../../deploy/aks/README.md).
 
 | # | Step | Gets it wrong how |
 |---|---|---|
@@ -73,7 +76,7 @@ and [DEPLOY-RUNBOOK.md](../../../deploy/aks/DEPLOY-RUNBOOK.md).
 | 2 | `az postgres flexible-server db create -d <env>` on `memexaks-pg` | migrating? **reuse the source master key** or every `enc:` provider key is undecryptable |
 | 3 | DNS A-record → the **shared** ingress IP | pointing at a per-env IP that doesn't exist |
 | 4 | Entra app (multi-tenant) + Key Vault secrets `<env>-*` | invitation-only is the gate, not the audience |
-| 5 | `deploy/aks/envs/<env>/` scaffold + `deploy.sh` | see traps below |
+| 5 | Env-folder scaffold + `deploy.sh` — **in the PRIVATE ops repo**, not `deploy/aks/envs/<env>/` (folders moved out 2026-08-08/09, `a69959165`); `deploy/aks/envs/example/` here is only the shape to copy | see traps below |
 | 6 | **Plugins** → `/plugins` skill | new deployment starts with none |
 | 7 | `tls.sh` | needs step 3 resolving publicly |
 | 8 | Register the GitHub Environment on `Systemorph/Memex` | otherwise it's untracked |
