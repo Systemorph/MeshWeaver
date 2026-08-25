@@ -414,7 +414,13 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         var firstRowMs = -1L;
         // Set only when the probe row exists — i.e. matches were genuinely dropped.
         var truncated = false;
-        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        // Transient-fault retry on the OPEN (see ExecuteReaderWithTransientRetryAsync). The primary
+        // fan-out has the same exposure as the satellite one in #2132: a dropped connection or a
+        // 40P01 while planning a UNION over every partition schema is a momentary condition, and
+        // un-retried it faulted the whole area render. Nothing is swallowed — an exhausted or
+        // non-transient fault still propagates.
+        await using var reader = await ExecuteReaderWithTransientRetryAsync(
+            cmd, "search_across_schemas", ct).ConfigureAwait(false);
         // 🚨 try/FINALLY, not a call after the loop. A caller that stops enumerating early — a
         // `.Take(n)`, a `break`, a cancellation, or a throw out of ReadMeshNode — disposes the
         // iterator without ever reaching code placed after the `while`. The slow fan-out would then
@@ -696,6 +702,47 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         }
     }
 
+    /// <summary>
+    /// Bounded retry budget for a TRANSIENT fan-out fault — matches the storage adapter's read
+    /// retry (<c>PostgreSqlStorageAdapter.MaxTransientReadRetries</c>), and for the same reason:
+    /// short enough that four attempts stay well inside a render's budget.
+    /// </summary>
+    private const int MaxTransientQueryRetries = 3;
+
+    /// <summary>
+    /// Runs the command and streams its rows, distinguishing THREE outcomes that used to be two
+    /// (issue #2132).
+    ///
+    /// <list type="number">
+    ///   <item><b><c>42P01</c> undefined_table → empty, and that is AUTHORITATIVE.</b> The
+    ///     satellite table genuinely does not exist in one of the targeted schemas, so there are
+    ///     genuinely no rows. Unchanged.</item>
+    ///   <item><b>A TRANSIENT fault → retry, bounded.</b> An <c>NpgsqlException</c> wrapping
+    ///     <c>EndOfStreamException</c> ("Attempted to read past the end of the stream" — the
+    ///     connection dropped mid-read) or <c>TimeoutException</c>, and <c>PostgresException</c>
+    ///     <c>40P01</c>/<c>40001</c>, are momentary conditions that a re-run resolves. These were
+    ///     the 171 occurrences across every memex-portal replica that put an error panel on
+    ///     Timeline / Comments / Preview / Catalog.</item>
+    ///   <item><b>Anything else, and an exhausted transient → PROPAGATE.</b></item>
+    /// </list>
+    ///
+    /// <para>🚨 Widening the <c>42P01</c> catch to swallow a transient as "no rows" — the obvious
+    /// way to stop the area failing — is the ONE thing this must not do. It would hand the view a
+    /// well-formed EMPTY result that is indistinguishable from an authoritative one, so a
+    /// momentary connection blip would silently render "no comments", "no timeline entries", "the
+    /// catalog is empty" as fact. A failure the user can see (LayoutAreaHost already renders an
+    /// error control into the failed area) is strictly better than a lie; the cure for the blip is
+    /// the retry above, not the swallow.</para>
+    ///
+    /// <para>The retry is only ever taken BEFORE the first row is yielded. Once a row has left this
+    /// method a re-execution would duplicate it, so a mid-stream fault past that point propagates
+    /// even when it is transient.</para>
+    ///
+    /// <para>🚨 ONE <c>attempts</c> counter spans BOTH legs (open and stream), rather than a budget
+    /// per leg. Nested budgets MULTIPLY — 4 opens × 4 reads — which is how a "bounded" retry quietly
+    /// becomes a 16-attempt, multi-second stall inside a render. The bound here is exactly
+    /// <see cref="MaxTransientQueryRetries"/> retries in total, however they are distributed.</para>
+    /// </summary>
     private async IAsyncEnumerable<MeshNode> EnumerateReaderOrEmptyOnMissingRelationAsync(
         Npgsql.NpgsqlCommand cmd,
         JsonSerializerOptions options,
@@ -703,43 +750,110 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         string tableName,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        Npgsql.NpgsqlDataReader reader;
-        try { reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false); }
-        catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01")
-        {
-            _logger?.LogDebug(
-                "[CrossSchema] Skipping satellite query — {Schemas} schemas missing {Table}: {Error}",
-                schemas.Count, tableName, ex.Message);
-            yield break;
-        }
-
-        await using var _disposeReader = reader;
+        var yieldedAny = false;
+        var attempts = 0;
         while (true)
         {
-            bool hasNext;
-            try { hasNext = await reader.ReadAsync(ct).ConfigureAwait(false); }
+            Npgsql.NpgsqlDataReader? reader = null;
+            var retryAfter = TimeSpan.Zero;
+            try { reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false); }
             catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01")
             {
                 _logger?.LogDebug(
-                    "[CrossSchema] Skipping satellite query mid-stream — {Table} missing in some schema: {Error}",
-                    tableName, ex.Message);
+                    "[CrossSchema] Skipping satellite query — {Schemas} schemas missing {Table}: {Error}",
+                    schemas.Count, tableName, ex.Message);
                 yield break;
             }
-            if (!hasNext) break;
-
-            MeshNode? node;
-            try { node = ReadMeshNode(reader, options); }
-            catch (Exception ex)
+            catch (Exception ex) when (PostgreSqlStorageAdapter.IsTransientConnectionFault(ex)
+                                       && attempts < MaxTransientQueryRetries)
             {
-                // Per-row defence: a malformed reader value (corrupt vector,
-                // unparseable timestamp, etc.) must not take down the entire
-                // UNION. Log + skip.
-                _logger?.LogWarning(ex,
-                    "[CrossSchema] Skipping unreadable row in {Table}: {Error}",
-                    tableName, ex.Message);
+                retryAfter = PostgreSqlStorageAdapter.TransientReadBackoff(attempts);
+                LogTransientRetry(ex, tableName, attempts++, retryAfter);
+            }
+
+            if (reader is null)
+            {
+                await Task.Delay(retryAfter, ct).ConfigureAwait(false);
                 continue;
             }
-            yield return node;
+
+            // Streaming leg. `restart` is set only by a transient fault that arrived before any row
+            // was yielded — the one case a re-execution cannot duplicate anything.
+            var restart = false;
+            await using (reader)
+            {
+                while (true)
+                {
+                    bool hasNext;
+                    try { hasNext = await reader.ReadAsync(ct).ConfigureAwait(false); }
+                    catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01")
+                    {
+                        _logger?.LogDebug(
+                            "[CrossSchema] Skipping satellite query mid-stream — {Table} missing in some schema: {Error}",
+                            tableName, ex.Message);
+                        yield break;
+                    }
+                    catch (Exception ex) when (!yieldedAny
+                                               && PostgreSqlStorageAdapter.IsTransientConnectionFault(ex)
+                                               && attempts < MaxTransientQueryRetries)
+                    {
+                        retryAfter = PostgreSqlStorageAdapter.TransientReadBackoff(attempts);
+                        LogTransientRetry(ex, tableName, attempts++, retryAfter);
+                        restart = true;
+                        break;
+                    }
+                    if (!hasNext) break;
+
+                    MeshNode? node;
+                    try { node = ReadMeshNode(reader, options); }
+                    catch (Exception ex)
+                    {
+                        // Per-row defence: a malformed reader value (corrupt vector,
+                        // unparseable timestamp, etc.) must not take down the entire
+                        // UNION. Log + skip.
+                        _logger?.LogWarning(ex,
+                            "[CrossSchema] Skipping unreadable row in {Table}: {Error}",
+                            tableName, ex.Message);
+                        continue;
+                    }
+                    yieldedAny = true;
+                    yield return node;
+                }
+            }
+
+            if (!restart) yield break;
+            await Task.Delay(retryAfter, ct).ConfigureAwait(false);
+        }
+    }
+
+    private void LogTransientRetry(Exception ex, string what, int attempt, TimeSpan delay) =>
+        _logger?.LogWarning(ex,
+            "[CrossSchema] transient DB fault on {What} fan-out, attempt {Attempt}/{Max}, retrying in {Delay}ms",
+            what, attempt + 1, MaxTransientQueryRetries, delay.TotalMilliseconds);
+
+    /// <summary>
+    /// Opens the command's reader, retrying ONLY on
+    /// <see cref="PostgreSqlStorageAdapter.IsTransientConnectionFault"/> (dropped connection,
+    /// read timeout, <c>40P01</c>/<c>40001</c>) up to <see cref="MaxTransientQueryRetries"/> times
+    /// with the same jittered backoff the storage adapter's reads use. Every other error —
+    /// <c>42P01</c> included — propagates untouched to the caller's own handling, so this can
+    /// never turn a real fault into an empty result. Safe by construction: no row has been read
+    /// yet, so a re-execution cannot duplicate anything.
+    /// </summary>
+    private async Task<Npgsql.NpgsqlDataReader> ExecuteReaderWithTransientRetryAsync(
+        Npgsql.NpgsqlCommand cmd, string what, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            TimeSpan retryAfter;
+            try { return await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false); }
+            catch (Exception ex) when (PostgreSqlStorageAdapter.IsTransientConnectionFault(ex)
+                                       && attempt < MaxTransientQueryRetries)
+            {
+                retryAfter = PostgreSqlStorageAdapter.TransientReadBackoff(attempt);
+                LogTransientRetry(ex, what, attempt, retryAfter);
+            }
+            await Task.Delay(retryAfter, ct).ConfigureAwait(false);
         }
     }
 

@@ -49,7 +49,25 @@ export interface MenuItemDef {
   tooltip?: string;
   order?: number;
   children?: MenuItemDef[];
+  /**
+   * NodeMenuItemDefinition.Action — the wire-safe id of a COMMAND this entry runs, instead of
+   * navigating. See MENU_ACTIONS. An action entry still carries `href`: for an action that is where
+   * the page LANDS once the command completes, which is also the graceful degradation for a client
+   * that does not implement the id (it navigates there rather than to a dead area URL).
+   */
+  action?: string;
 }
+
+/** NodeMenuItemDefinition.Action ids this client implements (MeshWeaver.Mesh.MenuActions). */
+export const MENU_ACTIONS = {
+  /**
+   * Tear down the node's hub. 🚨 Run by the PAGE, never by navigating to the node's own
+   * `/Recycle` area: that area is hosted on the hub it kills, so its confirm+redirect raced its own
+   * dispose (#2202). This client has no page-level recycle yet, so the entry falls through to its
+   * href — the node's own page — instead of pretending to have recycled anything.
+   */
+  recycle: "recycle",
+} as const;
 
 /** NodeMenuItemDefinition.SeparatorArea — a divider, never activatable. */
 export const SEPARATOR_AREA = "_separator";
@@ -105,6 +123,7 @@ function toMenuItem(raw: Json): MenuItemDef | null {
     tooltip: str(o.tooltip) || undefined,
     order: typeof o.order === "number" ? o.order : 0,
     children: children && children.length > 0 ? children : undefined,
+    action: str(o.action) || undefined,
   };
 }
 
@@ -274,6 +293,14 @@ export function HeaderMenus() {
       // Imperative actions (no Href): the AI menu's "New thread" opens the chat panel fresh.
       if (item.area === AI_NEW_THREAD_ACTION) {
         sidePanel.openNewThread();
+        return;
+      }
+      // A COMMAND this client does not implement must still go SOMEWHERE sensible — it falls through
+      // to `href`, which for an action entry is the landing page (see MenuItemDef.action). Never to
+      // `/{node}/{area}`: for an action that area is either dead or, worse, the very page whose
+      // hosting-on-the-doomed-hub the action exists to replace.
+      if (item.action && !item.href) {
+        console.warn(`Menu action '${item.action}' is not implemented by this client and carries no href.`);
         return;
       }
       if (item.href) {

@@ -71,12 +71,22 @@ public sealed class LokiClient(HttpClient http, IIoPool pool, ILogger<LokiClient
     private static string? Label(LokiStream stream, string name) =>
         stream.Stream is not null && stream.Stream.TryGetValue(name, out var value) ? value : null;
 
+    // 🚨 Full precision on the WINDOW BOUNDS too, for the same reason FromNanos keeps it. This used
+    // to truncate to milliseconds while the cursor it is formatting carries 100ns ticks, so every
+    // poll re-read up to a millisecond of lines it had already processed — harmless (the fingerprint
+    // dedups) but it quietly contradicted the guarantee the cursor is supposed to give. Ticks × 100
+    // stays inside Int64 until the year 2262, the same bound Unix-nanosecond timestamps have.
     private static string Nanos(DateTimeOffset value) =>
-        (value.ToUnixTimeMilliseconds() * 1_000_000L).ToString(CultureInfo.InvariantCulture);
+        ((value - DateTimeOffset.UnixEpoch).Ticks * 100L).ToString(CultureInfo.InvariantCulture);
 
+    // 🚨 100ns ticks, NOT milliseconds. Loki stamps every line to the nanosecond and the merge below
+    // sorts on this value; truncating to a millisecond threw away the ordering between lines written
+    // inside the same millisecond, which is most of a stack trace. The burst grouper reconstructs per
+    // pod so it no longer depends on the cross-stream order, but a cursor advanced to a truncated
+    // timestamp also silently re-reads part of the window — keep the precision the store gave us.
     private static DateTimeOffset FromNanos(string value) =>
         long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var nanos)
-            ? DateTimeOffset.FromUnixTimeMilliseconds(nanos / 1_000_000L)
+            ? DateTimeOffset.UnixEpoch.AddTicks(nanos / 100L)
             : DateTimeOffset.UtcNow;
 
     // ── Loki's wire shape ────────────────────────────────────────────────────
