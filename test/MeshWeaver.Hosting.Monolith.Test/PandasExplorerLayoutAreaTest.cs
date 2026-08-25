@@ -203,5 +203,11 @@ public class PandasExplorerLayoutAreaTest : MonolithMeshTestBase
                             + $"({hopsLeft - 1} hop(s) left)");
                         return Rendered(areaPath, client: null, hopsLeft - 1);
                     })
-                    : Observable.Empty<UiControl?>());
+                    // Hops exhausted: pass the redirect THROUGH rather than completing empty. It
+                    // never matches a caller's predicate, so the wait still fails on its budget —
+                    // but the failure keeps naming what was actually last seen ("Last of N
+                    // emission(s) was: RedirectControl … Href = …"), which is the line that made
+                    // #2155 diagnosable in the first place. An empty completion would report only
+                    // that nothing arrived.
+                    : Observable.Return(c));
 }
