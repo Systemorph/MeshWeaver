@@ -39,6 +39,13 @@ namespace MeshWeaver.Graph.Configuration;
 /// only if the sources changed" path). The registry is mesh-scoped and held in
 /// memory, so a process restart also clears it — a redeployed fix recompiles fresh.</para>
 ///
+/// <para>🅿️ <b>An AUTOMATIC re-drive does NOT un-park (#2260).</b> The failed-verdict kickoff
+/// (#1793) takes its one fresh attempt through <see cref="AdmitOneRetry"/> instead: the park entry
+/// stays, so <see cref="IsParked"/> is true at every instant and there is no window in which a
+/// broken type reads as un-parked and a stray trigger is admitted. Lifting the park is reserved
+/// for the two events that genuinely END the failure — a human-requested build and a successful
+/// compile.</para>
+///
 /// <para>Mesh-scoped singleton (registered in <c>AddGraph</c>): one instance shared by
 /// every per-NodeType hub, with instance maps only — NO static state.</para>
 /// </summary>
@@ -59,6 +66,11 @@ public sealed class NodeTypeCompileParkRegistry
     // (diagnostic). Proves boundedness: a parked type holds at its small attempt count
     // instead of climbing on every access.
     private readonly ConcurrentDictionary<string, int> _attempts = new();
+
+    // 🅿️ #2260 — ONE-SHOT RETRY ADMISSIONS. An AUTOMATIC re-drive needs its single fresh attempt
+    // to reach the compile watcher without being swallowed by the parked short-circuit; it does
+    // NOT need — and must not have — the park itself lifted. See AdmitOneRetry.
+    private readonly ConcurrentDictionary<string, byte> _retryAdmissions = new();
 
     /// <summary>Record that a real Roslyn compile was kicked off for the NodeType.</summary>
     public void RecordAttempt(string nodeTypePath) =>
@@ -156,11 +168,49 @@ public sealed class NodeTypeCompileParkRegistry
         return true;
     }
 
+    /// <summary>
+    /// 🅿️ #2260 — admit ONE sanctioned automatic retry through the compile watcher's parked
+    /// short-circuit, WITHOUT un-parking.
+    ///
+    /// <para><b>Why this exists.</b> The automatic re-drives (the failed-verdict kickoff) used to
+    /// call <see cref="Unpark"/> so their <c>CompilationStatus = Pending</c> flip would not be
+    /// swallowed by the short-circuit. That conflates two different things — "this terminal
+    /// failure is cleared" and "let this one flip through" — and it costs the guarantee the park
+    /// exists for: between the un-park and the re-park that follows a second refusal, the type is
+    /// NOT parked, so every reader (<c>IsParked</c>, the framework-stale kickoff's guard, the
+    /// adopt-only refusal's own test) can observe an un-parked broken type, and any trigger
+    /// arriving in that window is admitted. On a mesh that sets <c>Modules:RequirePrebuilt</c> the
+    /// window opens on EVERY refusal, because the refusal's settle records no verdict inputs and
+    /// therefore always reads as "never attempted".</para>
+    ///
+    /// <para>An admission is one-shot (<see cref="TryConsumeRetryAdmission"/> removes it), so it
+    /// widens nothing: exactly one Pending flip gets through, every later stray trigger still
+    /// short-circuits on the park that never moved. A DELIBERATE retry keeps using
+    /// <see cref="Unpark"/> — a human asking for a build really is clearing the failure.</para>
+    ///
+    /// <para>🚨 <b>Grant this ONLY while <see cref="IsParked"/> is true.</b> An admission for an
+    /// un-parked type is never consumed (the short-circuit it exists to pass is not taken) and
+    /// would linger until some LATER park, where a stray trigger could spend it. Callers gate on
+    /// the park, which establishes "an admission implies a standing park"; both paths that remove
+    /// a park (<see cref="Unpark"/>, <see cref="OnCompileSucceeded"/>) clear admissions with it,
+    /// so an admission can never outlive the park it was granted against.</para>
+    /// </summary>
+    public void AdmitOneRetry(string nodeTypePath) => _retryAdmissions[nodeTypePath] = 0;
+
+    /// <summary>
+    /// Consume a pending one-shot admission (see <see cref="AdmitOneRetry"/>). <c>true</c> when
+    /// this Pending flip IS the sanctioned automatic retry and must be let through the parked
+    /// short-circuit; <c>false</c> for every other trigger.
+    /// </summary>
+    public bool TryConsumeRetryAdmission(string nodeTypePath) =>
+        _retryAdmissions.TryRemove(nodeTypePath, out _);
+
     /// <summary>A compile succeeded — clear any parked failure / retry budget for the type.</summary>
     public void OnCompileSucceeded(string nodeTypePath)
     {
         _parked.TryRemove(nodeTypePath, out _);
         _failureCounts.TryRemove(nodeTypePath, out _);
+        _retryAdmissions.TryRemove(nodeTypePath, out _);
         // The automatic re-drive CONVERGED, so its budget is spent and returned: a type that
         // breaks again later gets a fresh set of attempts rather than inheriting a used-up one.
         ClearFailureRedrives(nodeTypePath);
@@ -186,6 +236,9 @@ public sealed class NodeTypeCompileParkRegistry
         if (_parked.TryRemove(nodeTypePath, out _))
             _attempts.TryRemove(nodeTypePath, out _);
         _failureCounts.TryRemove(nodeTypePath, out _);
+        // An un-parked type needs no admission — and a leftover one would let a later stray
+        // trigger through the short-circuit if the type parks again.
+        _retryAdmissions.TryRemove(nodeTypePath, out _);
     }
 
     /// <summary>
@@ -239,7 +292,20 @@ public sealed class NodeTypeCompileParkRegistry
         IReadOnlyDictionary<string, long>? sources, string? recipientUserId, ILogger? logger)
     {
         if (!_parked.TryAdd(nodeTypePath, new ParkedCompileFailure(error, DateTimeOffset.UtcNow, sources)))
-            return; // already parked — do not re-notify
+        {
+            // 🅿️ Already parked — an ADMITTED automatic retry (AdmitOneRetry) re-failed, which is
+            // now the normal shape: the park is never lifted for one, so the second refusal lands
+            // here rather than adding a fresh entry. REFRESH the record in place so the cached
+            // error and — decisively — the source snapshot describe the LATEST verdict:
+            // ShouldRetryForSourceChange compares that snapshot against the live one, and a stale
+            // snapshot would keep re-arming the source-change retry against a source set nothing
+            // has actually changed. Compare-and-replace, never a blind write: a concurrent Unpark
+            // (a human pressing Compile) must not be resurrected by this refresh.
+            if (_parked.TryGetValue(nodeTypePath, out var standing))
+                _parked.TryUpdate(
+                    nodeTypePath, standing with { Error = error, Sources = sources }, standing);
+            return; // …and never re-notify: a broken type yields exactly one notification.
+        }
 
         logger?.LogError(
             "NodeType '{NodeTypePath}' PARKED after compile failure — further activations serve the " +

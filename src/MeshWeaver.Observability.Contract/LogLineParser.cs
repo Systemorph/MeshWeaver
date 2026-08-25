@@ -61,7 +61,28 @@ public static partial class LogLineParser
         string? ExceptionType,
         string? TopFrame,
         string? ExceptionMessage = null,
-        string NormalizedDetail = "");
+        string NormalizedDetail = "")
+    {
+        /// <summary>
+        /// True when the burst arrived as its console HEADER and nothing else — no message, no
+        /// exception, no stack frame.
+        ///
+        /// <para>🚨 <b>This is not a fault report and must never be fingerprinted</b> (#2222). The
+        /// identity of a bodyless burst can only be its category and event id, so every future
+        /// bodyless capture from that site collapses onto the same token — a fingerprint that names
+        /// a component and no defect, and a ticket nobody can act on. It used to look substantive
+        /// because the parser fabricated a message out of the header line itself; it no longer
+        /// does, so "there was nothing in the body" is now a state a caller can see and refuse.</para>
+        ///
+        /// <para>The body goes missing for exactly two reasons, and both are about the CAPTURE, not
+        /// the code: the burst's continuation lines were separated from their header before it got
+        /// here (see <c>BurstAggregator.SplitBursts</c>, which reconstructs per pod for that
+        /// reason), or the call site really did log an empty message with no exception — which is a
+        /// defect at that call site, not an incident to triage.</para>
+        /// </summary>
+        public bool IsHeaderOnly =>
+            Message.Length == 0 && ExceptionType is null && TopFrame is null;
+    }
 
     /// <summary>
     /// True when <paramref name="line"/> opens a red burst (<c>fail:</c> / <c>crit:</c>), with the
@@ -105,10 +126,16 @@ public static partial class LogLineParser
 
         // The message is everything before the exception line (the logged text); a burst that is
         // nothing but an exception falls back to the exception line itself.
+        //
+        // 🚨 A burst with NO body at all keeps an EMPTY message (#2222). It used to fall back to the
+        // console header — "MeshWeaver.Layout.Composition.LayoutAreaHost[0]" — which made a capture
+        // that carried no diagnostic whatsoever look like a burst with a message, and produced a
+        // fingerprint keyed on nothing but the category and the event id. Saying "there was nothing
+        // here" is what lets the aggregator refuse to ticket it; see <see cref="ParsedBurst.IsHeaderOnly"/>.
         var message = string.Join(' ', exceptionIndex < 0 ? body.Take(1) : body.Take(exceptionIndex))
             .Trim();
-        if (message.Length == 0)
-            message = exceptionIndex >= 0 ? body[exceptionIndex] : header;
+        if (message.Length == 0 && exceptionIndex >= 0)
+            message = body[exceptionIndex];
 
         // 🚨 A call site that interpolates the exception INTO its message — `LogError("… after {Ms}ms:
         // {Exception}", …)` — leaves no own-line exception header, so the rule above finds nothing,

@@ -17,6 +17,25 @@ namespace MeshWeaver.Mesh;
 public interface IEmailSender
 {
     /// <summary>
+    /// Whether this sender ACTUALLY DELIVERS mail — false for a sender whose contract is to
+    /// report success without sending (the host's no-op).
+    ///
+    /// <para>🚨 This exists because "a sender is registered" and "mail can be delivered" were the
+    /// same question for exactly as long as the only real sender was compiled in. Once the Graph
+    /// sender moved into the <c>MeshWeaver.Mail.MicrosoftGraph</c> module, a deployment could have
+    /// <c>Email:Enabled=true</c> AND resolve the no-op — and every queued mail was then stamped
+    /// <c>Sent</c> while nothing left the process. Undeliverable mail marked delivered is silent
+    /// data loss, and the only thing that separates it from a working install is this flag
+    /// (#2023).</para>
+    ///
+    /// <para>Defaults to <c>true</c>: a sender says it cannot deliver only when it genuinely
+    /// cannot, so a third-party implementation that forgets this member is treated as a real
+    /// sender — the safe direction, because a real sender wrongly reported as a no-op would refuse
+    /// mail that would have gone out.</para>
+    /// </summary>
+    bool DeliversMail => true;
+
+    /// <summary>
     /// Sends an HTML email. The returned observable is cold — the send runs on Subscribe and
     /// emits a single <c>true</c> on success, or surfaces the failure via OnError.
     /// </summary>

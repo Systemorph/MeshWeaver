@@ -46,7 +46,9 @@ public static class VUserNodeType
     {
         Name = "Virtual User",
         Icon = "/static/NodeTypeIcons/person.svg",
-        NodeType = NodeType,
+        // A declaration declares itself a NodeType, never the type it declares — see the note on
+        // UserNodeType.CreateMeshNode for what `NodeType = "VUser"` here cost in production.
+        NodeType = MeshNode.NodeTypePath,
         ExcludeFromContext = new HashSet<string> { "search", "content" },
         Content = new NodeTypeDefinition { DefaultNamespace = "VUser", RestrictedToNamespaces = ["VUser"] },
         HubConfiguration = config => config

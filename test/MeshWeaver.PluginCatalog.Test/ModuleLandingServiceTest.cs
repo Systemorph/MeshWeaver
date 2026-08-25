@@ -34,6 +34,12 @@ public class ModuleLandingServiceTest : IDisposable
 
     public ModuleLandingServiceTest() => Directory.CreateDirectory(baseDirectory);
 
+    /// <summary>The module GENERATION folders under <c>modules/</c> — everything except the
+    /// activation record's own directory, which is bookkeeping and never a landed module.</summary>
+    private string[] GenerationDirectories() =>
+        [.. Directory.GetDirectories(Path.Combine(baseDirectory, "modules"))
+            .Where(dir => Path.GetFileName(dir) != ModuleActivationSidecar.EntriesDirectoryName)];
+
     public void Dispose()
     {
         if (Directory.Exists(baseDirectory))
@@ -94,7 +100,7 @@ public class ModuleLandingServiceTest : IDisposable
         var dir = ModuleLandingService.ModuleDirectoryFor(baseDirectory, "Acme.Widgets", entry);
         File.ReadAllBytes(Path.Combine(dir, "Acme.Widgets.dll"))
             .Should().Equal([9, 9], "the pointer moves to the fresh generation");
-        Directory.GetDirectories(Path.Combine(baseDirectory, "modules"))
+        GenerationDirectories()
             .Should().HaveCount(2,
                 "the superseded generation SURVIVES the landing path — a running pod may hold "
                 + "it open; boot GC reclaims it once nothing references it");
@@ -268,7 +274,7 @@ public class ModuleLandingServiceTest : IDisposable
 
         await service.RemoveModule("Acme.Widgets").FirstAsync().ToTask();
 
-        Directory.GetDirectories(Path.Combine(baseDirectory, "modules"))
+        GenerationDirectories()
             .Should().BeEmpty("uninstall deletes the landed generation (best-effort here; on a "
                 + "shared volume a loaded copy survives to boot GC)");
         var list = ModuleActivationSidecar.Read(baseDirectory);
