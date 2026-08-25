@@ -219,22 +219,16 @@ internal static class NodeTypeCompilationHelpers
                     // through InstallReleaseRequestWatcher, which un-parks BEFORE promoting to
                     // Pending — so this guard never blocks a legitimate retry, only a stray
                     // re-trigger (a persisted-Compiling recovery kickoff, a legacy direct flip).
-                    if (parkRegistry?.IsParked(hubPath) == true)
+                    // 🅿️ Wedge-close: a Pending flip we refuse to dispatch was already WRITTEN to
+                    // the node. Without a settle write-back the type would sit at Pending forever —
+                    // every settle-waiter (get_diagnostics' / the compile tool's Where(Ok|Error),
+                    // WaitForLatestRelease) hangs to its timeout and the stray trigger never
+                    // reaches a sink. Re-settle Pending → Error with the given reason so the
+                    // trigger is answered (bounded, no Roslyn). Same fire-and-forget UpdateOwn
+                    // shape as the kickoffs below; System scope because re-settling framework
+                    // state is infrastructure, not a user write.
+                    void SettleAsError(string? reason)
                     {
-                        logger?.LogDebug(
-                            "Compile watcher: {HubPath} is PARKED (terminal compile failure) — " +
-                            "skipping recompile, serving cached error", hubPath);
-                        // 🅿️ Wedge-close: the Pending flip we refuse to dispatch was already
-                        // WRITTEN to the node. Without a settle write-back the type would sit
-                        // at Pending forever — every settle-waiter (get_diagnostics' / the
-                        // compile tool's Where(Ok|Error), WaitForLatestRelease) hangs to its
-                        // timeout and the stray trigger never reaches a sink. Re-settle
-                        // Pending → Error with the CACHED parked error so the trigger is
-                        // answered (bounded, no Roslyn) while the park stays in place. Same
-                        // fire-and-forget UpdateOwn shape as the kickoffs below; System scope
-                        // because re-settling framework state is infrastructure, not a user
-                        // write.
-                        var parkedError = parkRegistry.GetParkedError(hubPath);
                         using (accessService?.ImpersonateAsSystem())
                             workspace.GetMeshNodeStream().Update(curr =>
                             {
@@ -250,7 +244,7 @@ internal static class NodeTypeCompilationHelpers
                                     Content = parkedDef with
                                     {
                                         CompilationStatus = CompilationStatus.Error,
-                                        CompilationError = parkedError
+                                        CompilationError = reason
                                             ?? parkedDef.CompilationError
                                             ?? "Compilation is parked after a terminal failure; request a release (Compile) to retry."
                                     }
@@ -260,6 +254,54 @@ internal static class NodeTypeCompilationHelpers
                                 ex => logger?.LogWarning(ex,
                                     "Compile watcher: failed to re-settle parked {HubPath} from Pending to Error",
                                     hubPath));
+                    }
+
+                    if (parkRegistry?.IsParked(hubPath) == true)
+                    {
+                        logger?.LogDebug(
+                            "Compile watcher: {HubPath} is PARKED (terminal compile failure) — " +
+                            "skipping recompile, serving cached error", hubPath);
+                        SettleAsError(parkRegistry.GetParkedError(hubPath));
+                        return;
+                    }
+
+                    // 🚨 THE ADOPT-ONLY GATE (Modules:RequirePrebuilt, MeshWeaver#2193 §A). On a
+                    // mesh that requires prebuilt assemblies, a Pending flip on a type WITHOUT a
+                    // usable build — first access, a release request, a self-heal kick, a
+                    // framework-stale rebuild — must never reach Roslyn. Every route into a compile
+                    // passes through this handler (a deliberate retry un-parks and then lands
+                    // HERE), so this is the one place that turns "compile on a miss" into a
+                    // PARKED, named refusal: the type settles at Error with a message that says
+                    // what is missing (the assembly for this identity/architecture), what
+                    // publishes it (the package's bundle for this lane) and how to retry — and
+                    // every instance page renders that reason through the compilation-error
+                    // overlay instead of hanging on a compile that would not have been allowed.
+                    // Parking (deterministic — the same miss reproduces until a bundle lands)
+                    // keeps the refusal bounded and visible, exactly like a terminal source error;
+                    // the park registry's attempt counter stays at ZERO, the observable proof no
+                    // Roslyn pass ever started.
+                    if (PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider))
+                    {
+                        var reason = PrebuiltAssemblySeeder.RequiredParkReason(hubPath);
+                        logger?.LogError(
+                            "Compile watcher: {HubPath} has no adopted assembly and this mesh sets {Key} — " +
+                            "PARKING with a named refusal instead of compiling. {Reason}",
+                            hubPath, PrebuiltAssemblySeeder.RequirePrebuiltConfigKey, reason);
+                        // The registry is resolved from the hub's services HERE, exactly as the
+                        // real dispatch does — the watcher's own handle is only ever probed
+                        // null-safely and must not be the thing the park depends on. The park
+                        // carries the type's CURRENT source snapshot so the sources watcher does
+                        // not read "sources changed since the park" against a null baseline and
+                        // un-park into a park/un-park ping-pong; a genuine later source edit
+                        // still re-drives (and is refused again, named, by this gate).
+                        var registry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>()
+                            ?? parkRegistry;
+                        var pendingDef = pendingNode!.ContentAs<NodeTypeDefinition>(
+                            hub.JsonSerializerOptions, logger);
+                        registry?.OnCompileFailed(
+                            hub, hubPath, reason, deterministic: true,
+                            recipientUserId: null, sources: pendingDef?.CurrentSourceVersions, logger);
+                        SettleAsError(reason);
                         return;
                     }
 
