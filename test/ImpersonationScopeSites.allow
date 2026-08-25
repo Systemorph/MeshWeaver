@@ -56,7 +56,6 @@ src/MeshWeaver.Graph/Configuration/NodeTypeCompilationActivity.cs	2
 src/MeshWeaver.Graph/Configuration/NodeTypeCompilationHelpers.cs	3
 src/MeshWeaver.Graph/Configuration/NodeTypeCompileState.cs	1
 src/MeshWeaver.Graph/Configuration/NodeTypeContractHandler.cs	1
-src/MeshWeaver.Graph/Configuration/NodeTypeEnrichmentHelpers.cs	1
 src/MeshWeaver.Graph/Configuration/PartitionDropPostDeletionHandler.cs	1
 src/MeshWeaver.Graph/Configuration/SpaceNodeType.cs	1
 src/MeshWeaver.Graph/Configuration/WebhookEventNodeType.cs	1

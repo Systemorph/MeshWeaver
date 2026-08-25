@@ -80,14 +80,14 @@ public sealed class AiSourcesInstallHook(IMessageHub hub) : IPartitionInstallHoo
             .Select(nodes => (IReadOnlyList<string>)nodes
                 .Select(n => n.Id)
                 .Where(id => !string.IsNullOrEmpty(id))
-                // 🚨 Drop the NodeType DECLARATION node. `User` is self-typed — the node that
-                // DEFINES the type carries `nodeType: User` too — so a pathless `nodeType:User`
-                // query returns it alongside the real accounts. Treated as a user it resolves to a
-                // partition literally named "User", which no instance provisions, and every install
-                // logged `42P01: relation "user.mesh_nodes" does not exist` once per package. The
-                // per-user Catch swallowed it, so the only visible trace was the noise — and a
-                // stray `vuser` partition on any instance where the same query shape ran for VUser.
-                .Where(id => !string.Equals(id, UserNodeType, StringComparison.OrdinalIgnoreCase))
+                // The hand-rolled `id != "User"` filter that used to sit here is GONE with its
+                // cause: the `User` declaration node carried `nodeType: User`, so a pathless
+                // `nodeType:User` query returned it alongside the real accounts and every install
+                // logged `42P01: relation "user.mesh_nodes" does not exist` for a partition
+                // literally named "User". Declarations now declare themselves
+                // (`NodeType = MeshNode.NodeTypePath`, UserNodeType.CreateMeshNode), so this query
+                // returns accounts only — and NodeTypeDeclarationSelfTypingTest keeps it that way
+                // for every built-in type, not just the two this filter happened to name.
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList());
 
