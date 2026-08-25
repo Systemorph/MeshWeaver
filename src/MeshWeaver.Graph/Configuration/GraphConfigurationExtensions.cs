@@ -96,6 +96,24 @@ public static class GraphConfigurationExtensions
             // set (empty when no modules) — stamped by compile write-backs as CompiledModulesHash.
             builder.ConfigureServices(s => s.AddSingleton<InstalledModulesFingerprint>());
 
+            // Encryption-at-rest for stored credentials: a model provider's ApiKey, a GitHub PAT,
+            // the Entra EA credential, the plugin catalog's sync-token signing key. Registered
+            // HERE rather than with any one of those, because every one of them is optional and
+            // the protector is not — it rode AddModelProviderType(), i.e. AddAI(). That held only
+            // while AI shipped in every image; the moment the engine leaves for a module (#2276) a
+            // deployment without it would resolve NO protector, and every consumer's optional
+            // GetService() null-check would then store its secret in PLAINTEXT without a word.
+            //
+            // With no master key configured (Ai:KeyProtection:MasterKey) both are pure
+            // passthrough, so registering unconditionally changes nothing for a deployment that
+            // has not set one. Swap in a KMS/Key Vault IMasterKeyProvider to harden.
+            builder.ConfigureServices(s =>
+            {
+                s.TryAddSingleton<IMasterKeyProvider, ConfigMasterKeyProvider>();
+                s.TryAddSingleton<IProviderKeyProtector, ProviderKeyProtector>();
+                return s;
+            });
+
             // The static-repo importer runs its bulk create/upsert traffic on a DEDICATED
             // hub (import/{meshHubId}) so it never floods the root mesh hub's action block —
             // the router must stay free (prod 2026-06-11 wedge). Declare its address-type as
