@@ -17,7 +17,14 @@ import yaml
 # `.Values.config.<component>.<KEY>` — the ONLY shape the chart uses to read a config key.
 # check-values-are-read.sh asserts that up front (no `range` over a config section, no
 # `index .Values.config …`), so a key absent from this set is read by nothing, full stop.
-READ_RE = re.compile(r"\.Values\.config\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)")
+#
+# The optional `)` is not cosmetic: the chart also writes the nil-safe form
+# `(.Values.config.memex_portal).Deployment__Orleans__Clustering` (secrets.yaml, the migration
+# Job), and a key that appeared ONLY that way would be reported as orphaned — a FALSE ALARM on a
+# key that is read perfectly well. A gate that cries wolf gets switched off, so it must match
+# every shape the chart actually uses, not the tidiest one.
+READ_RE = re.compile(
+    r"\.Values\.config\.([A-Za-z_][A-Za-z0-9_]*)\)?\.([A-Za-z_][A-Za-z0-9_]*)")
 
 chart_dir, *values_paths = sys.argv[1:]
 
