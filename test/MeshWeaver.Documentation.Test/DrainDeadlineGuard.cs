@@ -36,6 +36,13 @@ public class DrainDeadlineGuard
     private const string Deployment = "deploy/helm/templates/memex-portal/deployment.yaml";
     private const string Values = "deploy/helm/values.yaml";
 
+    /// <summary>Where the drain endpoint the preStop loop probes is actually mapped.</summary>
+    private const string ServiceDefaults = "memex/aspire/Memex.Portal.ServiceDefaults/ServiceDefaults.cs";
+
+    /// <summary>The base image the chart's default portal image is built on — where the probe tool
+    /// preStop shells out to has to actually exist.</summary>
+    private const string PortalBaseImage = "deploy/base-images/portal-ai/Dockerfile";
+
     /// <summary>
     /// The host's own shutdown budget (<c>Memex.Portal.Distributed/Program.cs</c>). The margin
     /// exists to make room for exactly this, so it must not be smaller.
@@ -112,6 +119,106 @@ public class DrainDeadlineGuard
             $"{Deployment} must keep terminationGracePeriodSeconds derived from "
             + "portal.drainSeconds — the preStop deadline is computed against it, so a second "
             + "source for the ceiling makes the margin meaningless.");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The chart must probe a URL the code actually answers on.</b>
+    ///
+    /// <para>Everything above is arithmetic INSIDE the chart. This is the other half of #1971 —
+    /// the agreement between the chart and the process — and it is the half that has already
+    /// broken once: the preStop hook probed with <c>wget</c>, which is absent from the image, so
+    /// the loop could never succeed and EVERY termination hung to the grace ceiling. Nothing
+    /// failed; a chart and a container image simply disagreed.</para>
+    ///
+    /// <para>The same disagreement is available in two more places, and both are just as silent.
+    /// preStop probes with <c>curl -sf -m 5 -o /dev/null</c>, which cannot tell a 404 from a 503
+    /// from a refused connection — all three read as "not drained yet, keep waiting". So renaming
+    /// the route, or moving the app off the probed port, does not error: it makes every roll sit
+    /// out its whole drain window and then cut every open session at the deadline. The path and
+    /// port are therefore part of the chart↔code contract, and this pins them to the one place
+    /// each is declared. (What the endpoint ANSWERS — 200 drained / 503 with the count, and
+    /// without a session — is pinned over real HTTP by <c>DrainEndpointTest</c>.)</para>
+    /// </summary>
+    [Fact]
+    public void ThePreStopProbe_TargetsARouteTheCodeMaps_OnThePortTheContainerServes()
+    {
+        var root = FindRepoRoot();
+        var deployment = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Deployment)));
+
+        var probe = Regex.Match(deployment, @"curl[^\n]*?http://127\.0\.0\.1:(?<port>\d+)(?<path>/\S*)");
+        Assert.True(probe.Success,
+            $"{Deployment}'s preStop must probe the drain endpoint over loopback HTTP so this "
+            + "guard can read the port and path it targets. If the probe shape changes, update "
+            + "this guard deliberately — do not let it stop matching.");
+
+        var path = probe.Groups["path"].Value.TrimEnd(';');
+        var port = probe.Groups["port"].Value;
+
+        var serviceDefaults = File.ReadAllText(Path.Combine(root, ServiceDefaults));
+        Assert.True(
+            serviceDefaults.Contains($"MapGet(\"{path}\"", StringComparison.Ordinal),
+            $"{Deployment}'s preStop probes '{path}', but {ServiceDefaults} does not map that "
+            + "route. curl -sf reads the resulting 404 as 'still draining', so the drain would "
+            + "silently run to its deadline on every roll and cut every open session (#1971).");
+
+        Assert.True(
+            serviceDefaults.Contains(".AllowAnonymous()", StringComparison.Ordinal),
+            $"the drain route must stay anonymous — a preStop exec carries no cookie and no "
+            + "token, and a 401/302 is indistinguishable from 'still draining' to curl -sf.");
+
+        // The port the container actually serves on, from the chart's own declaration of it.
+        Assert.True(
+            deployment.Contains($"containerPort: {port}", StringComparison.Ordinal),
+            $"{Deployment}'s preStop probes port {port}, which is not a containerPort this "
+            + "deployment declares. A probe of a port nothing listens on is a refused connection, "
+            + "which curl -sf reports exactly like an open session.");
+
+        var values = File.ReadAllText(Path.Combine(root, Values));
+        Assert.True(
+            Regex.IsMatch(values, $@"ASPNETCORE_HTTP_PORTS:\s*""?{Regex.Escape(port)}""?"),
+            $"{Values} must configure the portal to listen on {port} (ASPNETCORE_HTTP_PORTS) — the "
+            + "port the preStop probe targets. Two independent numbers drift, and the drift is "
+            + "invisible until a roll cuts sessions.");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The probe tool must be IN the image.</b> This is the scar itself, pinned: preStop once
+    /// probed with <c>wget</c> on the reasoning "curl is not in the base image; wget is (Debian
+    /// aspnet)" — false for the image this chart actually deploys. `while ! wget …` with no wget can
+    /// never succeed, so the loop would spin to the grace ceiling and SIGKILL, turning every single
+    /// pod termination into a thirty-minute hang. It was found by reading a running container, not
+    /// by anything that could fail.
+    ///
+    /// <para>The chart hedges with <c>command -v curl … || exit 0</c>, and that hedge is correct —
+    /// losing the session drain costs one rollout's circuits, while hanging every pod to the ceiling
+    /// costs every rollout. But a fail-open hedge is exactly the shape that makes a broken drain
+    /// SILENT, so the hedge must never be the only thing standing between the chart and the image.
+    /// This is the assertion that fails loudly instead.</para>
+    /// </summary>
+    [Fact]
+    public void ThePreStopProbeTool_IsInstalledInThePortalBaseImage()
+    {
+        var root = FindRepoRoot();
+        var preStop = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Deployment)));
+
+        var guard = Regex.Match(preStop, @"command -v (?<tool>\w+)");
+        Assert.True(guard.Success,
+            $"{Deployment}'s preStop must keep its `command -v <tool>` guard — without it, a missing "
+            + "probe tool hangs every termination to the grace ceiling instead of skipping the drain.");
+
+        var tool = guard.Groups["tool"].Value;
+        Assert.True(preStop.Contains($"{tool} -sf", StringComparison.Ordinal)
+                    || Regex.IsMatch(preStop, $@"!\s*{Regex.Escape(tool)}\b"),
+            $"{Deployment}'s preStop guards on '{tool}' but polls with something else — the guard "
+            + "then protects the wrong binary and the loop can still spin to the ceiling.");
+
+        var dockerfile = File.ReadAllText(Path.Combine(root, PortalBaseImage));
+        Assert.True(
+            Regex.IsMatch(dockerfile, $@"apt-get install[^\n]*\b{Regex.Escape(tool)}\b"),
+            $"{Deployment}'s preStop probes with '{tool}', but {PortalBaseImage} does not install "
+            + $"it. The chart's `command -v {tool} || exit 0` hedge then SKIPS the session drain on "
+            + "every roll — silently, because a skipped drain and a fast one look identical from "
+            + "outside. This is the wget defect (#1971), and it shipped once already.");
     }
 
     /// <summary>
