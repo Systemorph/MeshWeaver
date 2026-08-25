@@ -673,7 +673,11 @@ internal static class NodeTypeBatchBake
             // the compare-and-set below reads as "insert only if absent". Carried explicitly rather
             // than derived from stampedNode.Version - 1, which would silently rot if the mint
             // changed.
-            .Select(stored => (Expected: stored?.Version ?? 0, Fresh: stored ?? typeNode))
+            // 🚨 `IsInsert` is carried from `stored is null`, NOT inferred from `Expected == 0`
+            // (#2087). The two coincide today only because versions start at 1; deriving the
+            // announcement KIND from a version number is exactly the kind of silent rot the
+            // Expected note below warns about, and getting it wrong strands a path permanently.
+            .Select(stored => (Expected: stored?.Version ?? 0, IsInsert: stored is null, Fresh: stored ?? typeNode))
             .Select(read =>
             {
                 var fresh = read.Fresh;
@@ -683,7 +687,7 @@ internal static class NodeTypeBatchBake
                     logger?.LogWarning(
                         "BatchBake: {TypePath} content could not be read as NodeTypeDefinition — "
                         + "stamp skipped", typeNode.Path);
-                    return (Expected: read.Expected, Stamped: (MeshNode?)null);
+                    return (Expected: read.Expected, read.IsInsert, Stamped: (MeshNode?)null);
                 }
                 var stamped = (ok
                         // currentNodeVersion = typeNode.Version — the version the compiler's
@@ -700,7 +704,7 @@ internal static class NodeTypeBatchBake
                     // there). Written here so a per-type duration is derivable FROM THE MESH on both
                     // drivers, not just from a log line — issue #1439.
                     with { LastCompileStartedAt = startedAt };
-                return (Expected: read.Expected, Stamped: (MeshNode?)(fresh with
+                return (Expected: read.Expected, read.IsInsert, Stamped: (MeshNode?)(fresh with
                 {
                     Content = stamped,
                     Version = MeshNode.NextVersion(fresh.Version)
@@ -743,10 +747,27 @@ internal static class NodeTypeBatchBake
                                 typeNode.Path, stampedNode.Version, stamp.Expected);
                             return;
                         }
-                        // Post-commit announce, exactly as WriteAndPublishUpdated did — the
-                        // mesh-change feed is what invalidates the resolution / stream caches.
+                        // Post-commit announce — the mesh-change feed is what invalidates the
+                        // resolution / stream caches.
+                        //
+                        // 🚨 Created vs Updated is NOT cosmetic here (#2087). `WriteIfVersion` with
+                        // an expected version of 0 is an INSERT — "write only if absent" — so on a
+                        // fresh or freshly-imported partition this line lands the NodeType's very
+                        // first durable row, and it announced that CREATE as an UPDATE.
+                        // `PathResolutionService` only STALE-MARKS on Updated and keeps serving the
+                        // cached route shape (deliberately — removing on Updated was the #1172
+                        // routing/compile feedback loop); only Created/Deleted REMOVE the entry. So
+                        // a path probed while the type was still absent — which is precisely what
+                        // an installer's overlay watchers do — kept its cached miss for the life of
+                        // the process: the row is in Postgres, no hub is ever woken, the type never
+                        // comes live, and every instance typed on it wears the missing-type overlay.
+                        // That is the #817/#824 announce-loss shape reaching the mesh through a
+                        // primitive (#1424's compare-and-set) that was added without an announcement
+                        // partner.
                         if (applied is true)
-                            changeFeed?.Publish(MeshChangeEvent.Updated(stampedNode));
+                            changeFeed?.Publish(stamp.IsInsert
+                                ? MeshChangeEvent.Created(stampedNode)
+                                : MeshChangeEvent.Updated(stampedNode));
                     })
                     .Select(_ => Unit.Default))
             .Catch<Unit, Exception>(ex =>
