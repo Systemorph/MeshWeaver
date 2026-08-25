@@ -26,13 +26,19 @@ public sealed record StaleBuildOffer(
 /// Renders "a newer build of this type is available — recycle to pick it up" as an ADORNMENT above
 /// every layout area of an instance whose NodeType has since published a different assembly.
 ///
-/// <para>🚨 <b>An offer, never an automatic restart.</b> This REPLACES an auto-recycle: the
-/// stale-assembly watcher used to post a self-<c>DisposeRequest</c> the moment a type published,
-/// so every live instance of that type restarted on every publish — publication frequency became
-/// restart frequency, and a user mid-edit lost their hub without asking for it. The user now
-/// decides. The stated consequence: an instance whose viewer never clicks keeps serving the OLDER
-/// assembly indefinitely. That is deliberate and safe — the old build is a build that worked — but
-/// it does mean "published" no longer implies "every instance is running it".</para>
+/// <para>🚨 <b>An offer by default, convergence by deployment choice.</b> This REPLACED an
+/// unguarded auto-recycle: the stale-assembly watcher used to post a self-<c>DisposeRequest</c>
+/// the moment a type published, so every live instance of that type restarted on every publish —
+/// publication frequency became restart frequency, and a user mid-edit lost their hub without
+/// asking for it. The user now decides. The stated consequence: an instance whose viewer never
+/// clicks keeps serving the OLDER assembly indefinitely. That is deliberate and safe — the old
+/// build is a build that worked — but it does mean "published" no longer implies "every instance
+/// is running it", and on a production portal that inversion IS the outage (memex 2026-08-25: a
+/// package update recompiled the Store green while every serving instance stayed on the previous
+/// assembly behind this banner). A deployment whose invariant is convergence therefore opts back
+/// into the automatic recycle — now bounded by the assembly-path gate, the settle window and
+/// <c>Take(1)</c> — via <see cref="NodeTypeEnrichmentHelpers.AutoRecycleConfigKey"/>; the banner
+/// remains the default everywhere else.</para>
 ///
 /// <para>🚨 <b>Adornment, not replacement.</b> The compilation-error overlay
 /// (<c>NodeTypeEnrichmentHelpers.WithCompilationErrorOverlay</c>) SWAPS the hub's
