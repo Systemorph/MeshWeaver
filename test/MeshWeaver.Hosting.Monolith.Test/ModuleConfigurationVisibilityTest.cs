@@ -25,8 +25,16 @@ public sealed class ConfigurationVisibilityModuleAttribute : MeshNodeProviderAtt
 {
     public override IEnumerable<Func<MeshBuilder, MeshBuilder>> BuilderConfigurations =>
     [
-        builder => builder.ConfigureServices(services =>
-            services.AddSingleton(new CapturedConfiguration(builder.Configuration))),
+        builder =>
+        {
+            // 🚨 Read it HERE — at INSTALL time, inside the contribution itself. Reading it inside
+            // the ConfigureServices lambda instead would defer the read to whenever the collected
+            // service delegates are applied, so the test would pass even if the hand-off happened
+            // AFTER installation — pinning nothing about ordering, which is the whole claim.
+            var seenAtInstallTime = builder.Configuration;
+            return builder.ConfigureServices(services =>
+                services.AddSingleton(new CapturedConfiguration(seenAtInstallTime)));
+        },
     ];
 }
 
