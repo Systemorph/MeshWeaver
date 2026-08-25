@@ -184,7 +184,12 @@ public class MigrationWorkloadModelGuard
         .. Directory.EnumerateFiles(Path.Combine(root, "deploy"), "*", SearchOption.AllDirectories)
             .Where(f => f.EndsWith(".md", StringComparison.Ordinal)
                         || f.EndsWith(".sh", StringComparison.Ordinal)
-                        || f.EndsWith(".yaml", StringComparison.Ordinal)),
+                        || f.EndsWith(".yaml", StringComparison.Ordinal)
+                        // .yml as well as .yaml: deploy/ genuinely carries both (e.g.
+                        // deploy/whisper/docker-compose.yml). Scanning only one spelling
+                        // would let a reintroduced command hide in the other while this
+                        // guard still claimed "no command anywhere in the repo".
+                        || f.EndsWith(".yml", StringComparison.Ordinal)),
         .. Directory.EnumerateFiles(
                 Path.Combine(root, "src", "MeshWeaver.Documentation", "Data"),
                 "*.md", SearchOption.AllDirectories),
