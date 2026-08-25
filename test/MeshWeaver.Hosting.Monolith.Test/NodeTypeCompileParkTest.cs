@@ -497,6 +497,37 @@ public class NodeTypeCompileParkTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     /// <summary>
+    /// 🚨 The leak the admission could otherwise cause, pinned: on a type that is NOT parked — the
+    /// COMMON case, since a failure predating this process is not in the in-memory registry at
+    /// all — the re-drive must flip and leave NOTHING behind.
+    ///
+    /// <para>An admission granted here would never be consumed (the parked short-circuit it exists
+    /// to pass is not taken), so it would sit in the registry until some LATER park, where a stray
+    /// Pending flip could spend it and get through the very containment this PR restores. Gating
+    /// the grant on <c>IsParked</c> establishes "an admission implies a standing park", and both
+    /// park-removal paths clear admissions — so none can outlive its park.</para>
+    /// </summary>
+    [Fact]
+    public void RedriveCommit_OnATypeThatIsNotParked_FlipsAndLeavesNoAdmissionBehind()
+    {
+        var sources = ImmutableDictionary<string, long>.Empty;
+        // Never parked: exactly the "failure predates this PROCESS" shape.
+        var registry = new NodeTypeCompileParkRegistry();
+        registry.IsParked(RedrivePath).Should().BeFalse("the fixture must start un-parked");
+        var curr = SettledFailure(failedBuildInputs: null, sources);
+
+        var result = NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
+            curr, RedrivePath, modulesHash: null, registry);
+
+        result.Content.Should().BeOfType<NodeTypeDefinition>().Subject
+            .CompilationStatus.Should().Be(CompilationStatus.Pending,
+                "an un-parked stale verdict still earns its attempt — nothing is short-circuiting it");
+        registry.TryConsumeRetryAdmission(RedrivePath).Should().BeFalse(
+            "an admission is meaningful ONLY for a parked type; one granted here would never be "
+            + "consumed and would wait for a LATER park, where a stray trigger could spend it");
+    }
+
+    /// <summary>
     /// A compile already in flight (a concurrent release request, an enrichment self-heal) —
     /// the re-drive must write nothing, admit nothing, and leave the park exactly as it found it.
     /// </summary>
