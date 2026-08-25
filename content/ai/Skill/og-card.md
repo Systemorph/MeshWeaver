@@ -16,8 +16,8 @@ order: 40
 ### 1. Target on THIS mesh ⇒ use the mesh-node form, never the URL form
 
 ```
-@@("area:OgCard/PartnerRe/EslProposalQA")                                   ✅ mesh node
-@@("area:OgCard?url=https://this-portal/PartnerRe/EslProposalQA")           ❌ same page, via HTTP
+@@("area:OgCard/Acme/AIConsulting/FinalReport")                            ✅ mesh node
+@@("area:OgCard?url=https://this-portal/Acme/AIConsulting/FinalReport")    ❌ same page, via HTTP
 ```
 
 They look interchangeable and are not. The mesh-node form reads the node **off its stream**: no HTTP, no anonymous access, no cache, and it works for **private** nodes. The `?url=` form sends the portal out to fetch its own page **anonymously** — which returns the generic shell for every node that is not public, so the card is permanently empty and no amount of retrying changes it.
