@@ -70,6 +70,20 @@ internal static class NodeTypeCompilationHelpers
     /// </summary>
     private static int _watcherInstallCount;
 
+    /// <summary>
+    /// How long the on-demand adoption attempt (#1782 gap 4) may take before the compile
+    /// proceeds anyway. Matches the git-sync push path's budget: the sources it reads are the
+    /// same image directory and CI-published root, so the cost profile is the same.
+    /// </summary>
+    private static readonly TimeSpan OnDemandAdoptionBudget = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long to wait for an adoption's write-back to actually land on the node before
+    /// treating the reported adoption as not having happened. Short on purpose: this is a
+    /// confirmation of a write that has already been made, not a wait for work.
+    /// </summary>
+    private static readonly TimeSpan AdoptionStampBudget = TimeSpan.FromSeconds(5);
+
     public static IDisposable InstallCompileWatcher(
         IMessageHub hub,
         IWorkspace workspace,
@@ -85,6 +99,12 @@ internal static class NodeTypeCompilationHelpers
         // The adoption interlock (#1763) — absent on a host that never composed AddGraph's
         // registry, in which case the kickoff behaves exactly as it did before.
         var adoptionRegistry = hub.ServiceProvider.GetService<NodeTypeAdoptionRegistry>();
+        // On-demand adoption attempts (#1782 gap 4) are started from INSIDE the watcher's
+        // callback, so they are not part of any pipeline the returned disposable already covers.
+        // Each is bounded and self-completing, but an untracked subscription still roots the hub
+        // for the length of its timeout after disposal — so they are tracked here and removed on
+        // completion, which keeps the composite from growing one entry per compile miss.
+        var onDemandAdoptionSubs = new CompositeDisposable();
         // The live build guards (#1664 step 11, #1707 slice 2) — the per-type dependency-record
         // resolver plus the legacy installed-module fingerprint — join HasUsableBuild /
         // HasStaleFrameworkBuild below so a module-only update re-drives the compile the same
@@ -284,69 +304,182 @@ internal static class NodeTypeCompilationHelpers
                         }
                     }
 
-                    // 🚨 THE ADOPT-ONLY GATE (Modules:RequirePrebuilt, MeshWeaver#2193 §A). On a
-                    // mesh that requires prebuilt assemblies, a Pending flip on a type WITHOUT a
-                    // usable build — first access, a release request, a self-heal kick, a
-                    // framework-stale rebuild — must never reach Roslyn. Every route into a compile
-                    // passes through this handler (a deliberate retry un-parks and then lands
-                    // HERE), so this is the one place that turns "compile on a miss" into a
-                    // PARKED, named refusal: the type settles at Error with a message that says
-                    // what is missing (the assembly for this identity/architecture), what
-                    // publishes it (the package's bundle for this lane) and how to retry — and
-                    // every instance page renders that reason through the compilation-error
-                    // overlay instead of hanging on a compile that would not have been allowed.
-                    // Parking (deterministic — the same miss reproduces until a bundle lands)
-                    // keeps the refusal bounded and visible, exactly like a terminal source error;
-                    // the park registry's attempt counter stays at ZERO, the observable proof no
-                    // Roslyn pass ever started.
-                    if (PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider))
+                    // 🚨 #1782 gap 4 — ADOPTION MUST BE REACHABLE AT ANY TIME.
+                    //
+                    // Until now a prebuilt assembly could only arrive at two moments: boot
+                    // default-install, and an install / git-sync push. EVERY other route into a
+                    // compile — a first access, a release request, a self-heal kick, a
+                    // framework-stale rebuild — went straight to Roslyn (or, under
+                    // RequirePrebuilt, straight to a park) without ever asking the deployment's
+                    // bundle sources whether the assembly already existed. That was survivable
+                    // while every instance pre-baked at boot; with instance-level pre-bake gone
+                    // in favour of lazy compile-on-access (#1746) it made the fetch path
+                    // unreachable at exactly the moment it became the PRIMARY way assemblies
+                    // arrive.
+                    //
+                    // Every route into a compile converges on this handler, so this is the one
+                    // place that makes adoption universal rather than adding a fourth special
+                    // case: give the bundle sources one bounded chance HERE, before the
+                    // adopt-only gate turns a miss into a park and before any Roslyn pass.
+                    //
+                    // Bounded and never fatal, exactly like the install and push paths: a host
+                    // with no consumer registered, a source that times out, and a source that
+                    // faults all fall through to the behaviour that existed before — "the
+                    // release pipeline compiles, as it would have anyway".
+                    var prebuiltConsumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
+                    if (prebuiltConsumer is null)
                     {
-                        var reason = PrebuiltAssemblySeeder.RequiredParkReason(hubPath);
-                        logger?.LogError(
-                            "Compile watcher: {HubPath} has no adopted assembly and this mesh sets {Key} — " +
-                            "PARKING with a named refusal instead of compiling. {Reason}",
-                            hubPath, PrebuiltAssemblySeeder.RequirePrebuiltConfigKey, reason);
-                        // The registry is resolved from the hub's services HERE, exactly as the
-                        // real dispatch does — the watcher's own handle is only ever probed
-                        // null-safely and must not be the thing the park depends on. The park
-                        // carries the type's CURRENT source snapshot so the sources watcher does
-                        // not read "sources changed since the park" against a null baseline and
-                        // un-park into a park/un-park ping-pong; a genuine later source edit
-                        // still re-drives (and is refused again, named, by this gate).
-                        var registry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>()
-                            ?? parkRegistry;
-                        var pendingDef = pendingNode!.ContentAs<NodeTypeDefinition>(
-                            hub.JsonSerializerOptions, logger);
-                        registry?.OnCompileFailed(
-                            hub, hubPath, reason, deterministic: true,
-                            recipientUserId: null, sources: pendingDef?.CurrentSourceVersions, logger);
-                        SettleAsError(reason);
+                        DispatchOrPark();
                         return;
                     }
 
-                    logger?.LogDebug(
-                        "Compile watcher: saw Pending for {HubPath} — posting DispatchCompileTrigger to OWN hub (system identity)",
-                        hubPath);
-                    // 🚨 Compilation runs under SYSTEM identity — circumventing
-                    // RLS by design. The access check that gates compilation is
-                    // upstream: the user has to be permitted to flip
-                    // RequestedReleaseAt on the NodeType's MeshNode (checked by
-                    // the owning hub's AccessControl pipeline at submit time).
-                    // Once requested, the compile activity runs as
-                    // system-security so it can read every source file across
-                    // the mesh, write the activity log without per-flag RLS
-                    // probing, and emit the compiled assembly. NOT FromNode —
-                    // compile-as-the-last-editor-of-the-NodeType would deny
-                    // access to source files owned by other users.
-                    using (MeshWeaver.Mesh.Security.AccessContextScope.AsSystem(accessService))
+                    var attempt = new SingleAssignmentDisposable();
+                    onDemandAdoptionSubs.Add(attempt);
+                    attempt.Disposable = prebuiltConsumer.SeedForTypes([hubPath])
+                        .Take(1)
+                        .Timeout(OnDemandAdoptionBudget)
+                        .SelectMany(AdoptionLanded)
+                        .Catch<bool, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "Compile watcher: on-demand prebuilt adoption for {HubPath} failed — "
+                                + "compiling instead.", hubPath);
+                            return Observable.Return(false);
+                        })
+                        .Finally(() => onDemandAdoptionSubs.Remove(attempt))
+                        .Subscribe(
+                            landed =>
+                            {
+                                if (!landed)
+                                {
+                                    DispatchOrPark();
+                                    return;
+                                }
+                                logger?.LogInformation(
+                                    "Compile watcher: {HubPath} adopted a prebuilt assembly on demand — "
+                                    + "settling without a Roslyn pass.", hubPath);
+                            },
+                            ex =>
+                            {
+                                logger?.LogWarning(ex,
+                                    "Compile watcher: on-demand prebuilt adoption for {HubPath} faulted — "
+                                    + "compiling instead.", hubPath);
+                                DispatchOrPark();
+                            });
+                    return;
+
+                    // 🚨 Trust the STAMP, never the reported count. A consumer that reports an
+                    // adoption it never wrote back would leave this type at Pending for ever, and
+                    // a STRANDED type is the one outcome worse than a redundant compile: every
+                    // settle-waiter (get_diagnostics, the compile tool, WaitForLatestRelease)
+                    // hangs to its timeout, and the instance pages hang with them. So an adoption
+                    // counts only when the node ITSELF then satisfies HasUsableBuild — the same
+                    // predicate the compile decision uses. Anything else compiles.
+                    IObservable<bool> AdoptionLanded(int adopted)
                     {
-                        // Fire-and-forget. ActionBlock picks it up and runs
-                        // HandleDispatchCompile on the hub's thread; the
-                        // delivery.AccessContext is stamped with system identity
-                        // so every downstream write inside the activity bypasses
-                        // RLS.
-                        hub.Post(new DispatchCompileTrigger(pendingNode!),
-                            o => o.WithTarget(hub.Address));
+                        if (adopted <= 0)
+                        {
+                            logger?.LogDebug(
+                                "Compile watcher: no prebuilt assembly available for {HubPath} on "
+                                + "demand — compiling.", hubPath);
+                            return Observable.Return(false);
+                        }
+
+                        // 🚨 The watcher's OWN `guards`, never a fresh GuardsOf(hub). BuildGuards
+                        // exists so "which live environment" can never fork between the checks in
+                        // one handler, and it is resolved once per watcher install for exactly
+                        // that reason. Re-resolving here would judge the adopted build against a
+                        // snapshot the kickoff that flipped this type to Pending never saw — a
+                        // decision taken against one observed state while the effect commits
+                        // against another. It also rebuilds the dependency-id resolver and the
+                        // module MVID map on every attempt, for nothing: adoption stamps assembly
+                        // coordinates on the NODE, and changes no part of the environment these
+                        // guards describe.
+                        return ownStream
+                            .Where(n => n?.ContentAs<NodeTypeDefinition>(
+                                            hub.JsonSerializerOptions, logger) is { } adoptedDef
+                                        && HasUsableBuild(n, adoptedDef, guards))
+                            .Take(1)
+                            .Select(_ => true)
+                            .Timeout(AdoptionStampBudget)
+                            .Catch<bool, Exception>(_ =>
+                            {
+                                logger?.LogWarning(
+                                    "Compile watcher: {HubPath} reported {Adopted} adopted "
+                                    + "assembly(ies) but the node still has no usable build "
+                                    + "{Budget}s later — compiling instead, because a stranded type "
+                                    + "is worse than a redundant compile.",
+                                    hubPath, adopted, AdoptionStampBudget.TotalSeconds);
+                                return Observable.Return(false);
+                            });
+                    }
+
+                    void DispatchOrPark()
+                    {
+                        // 🚨 THE ADOPT-ONLY GATE (Modules:RequirePrebuilt, MeshWeaver#2193 §A). On a
+                        // mesh that requires prebuilt assemblies, a Pending flip on a type WITHOUT a
+                        // usable build — first access, a release request, a self-heal kick, a
+                        // framework-stale rebuild — must never reach Roslyn. Every route into a compile
+                        // passes through this handler (a deliberate retry un-parks and then lands
+                        // HERE), so this is the one place that turns "compile on a miss" into a
+                        // PARKED, named refusal: the type settles at Error with a message that says
+                        // what is missing (the assembly for this identity/architecture), what
+                        // publishes it (the package's bundle for this lane) and how to retry — and
+                        // every instance page renders that reason through the compilation-error
+                        // overlay instead of hanging on a compile that would not have been allowed.
+                        // Parking (deterministic — the same miss reproduces until a bundle lands)
+                        // keeps the refusal bounded and visible, exactly like a terminal source error;
+                        // the park registry's attempt counter stays at ZERO, the observable proof no
+                        // Roslyn pass ever started.
+                        if (PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider))
+                        {
+                            var reason = PrebuiltAssemblySeeder.RequiredParkReason(hubPath);
+                            logger?.LogError(
+                                "Compile watcher: {HubPath} has no adopted assembly and this mesh sets {Key} — " +
+                                "PARKING with a named refusal instead of compiling. {Reason}",
+                                hubPath, PrebuiltAssemblySeeder.RequirePrebuiltConfigKey, reason);
+                            // The registry is resolved from the hub's services HERE, exactly as the
+                            // real dispatch does — the watcher's own handle is only ever probed
+                            // null-safely and must not be the thing the park depends on. The park
+                            // carries the type's CURRENT source snapshot so the sources watcher does
+                            // not read "sources changed since the park" against a null baseline and
+                            // un-park into a park/un-park ping-pong; a genuine later source edit
+                            // still re-drives (and is refused again, named, by this gate).
+                            var registry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>()
+                                ?? parkRegistry;
+                            var pendingDef = pendingNode!.ContentAs<NodeTypeDefinition>(
+                                hub.JsonSerializerOptions, logger);
+                            registry?.OnCompileFailed(
+                                hub, hubPath, reason, deterministic: true,
+                                recipientUserId: null, sources: pendingDef?.CurrentSourceVersions, logger);
+                            SettleAsError(reason);
+                            return;
+                        }
+
+                        logger?.LogDebug(
+                            "Compile watcher: saw Pending for {HubPath} — posting DispatchCompileTrigger to OWN hub (system identity)",
+                            hubPath);
+                        // 🚨 Compilation runs under SYSTEM identity — circumventing
+                        // RLS by design. The access check that gates compilation is
+                        // upstream: the user has to be permitted to flip
+                        // RequestedReleaseAt on the NodeType's MeshNode (checked by
+                        // the owning hub's AccessControl pipeline at submit time).
+                        // Once requested, the compile activity runs as
+                        // system-security so it can read every source file across
+                        // the mesh, write the activity log without per-flag RLS
+                        // probing, and emit the compiled assembly. NOT FromNode —
+                        // compile-as-the-last-editor-of-the-NodeType would deny
+                        // access to source files owned by other users.
+                        using (MeshWeaver.Mesh.Security.AccessContextScope.AsSystem(accessService))
+                        {
+                            // Fire-and-forget. ActionBlock picks it up and runs
+                            // HandleDispatchCompile on the hub's thread; the
+                            // delivery.AccessContext is stamped with system identity
+                            // so every downstream write inside the activity bypasses
+                            // RLS.
+                            hub.Post(new DispatchCompileTrigger(pendingNode!),
+                                o => o.WithTarget(hub.Address));
+                        }
                     }
                 },
             hub.Address,
@@ -782,7 +915,7 @@ internal static class NodeTypeCompilationHelpers
 
         return new CompositeDisposable(
             watcherSub, firstBuildKickoffSub, recoveryKickoffSub, frameworkStaleKickoffSub,
-            failedVerdictKickoffSub, stuckDiagnosticSub);
+            failedVerdictKickoffSub, stuckDiagnosticSub, onDemandAdoptionSubs);
     }
 
     /// <summary>

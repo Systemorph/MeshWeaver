@@ -254,6 +254,47 @@ none; the engine's package closure still rides the app via other references). Be
 DLL exists nowhere else, the closure lane also lays it into a plain build's output
 (`bin/…/modules/`), keeping `dotnet run` on a host working without a publish step.
 
+### 🚨 Which COPY loaded — the boot report (#2223)
+
+Two `modules/` trees are legitimate at once: the image publishes baseline packs beside the app, and
+a store install LANDS its bytes as a fresh generation under the deployment's writable, pod-shared
+root (`modules/<Name>@<id>/`). So "the pack" is not a place — and until this report existed nothing
+said which of them a running portal had actually loaded.
+
+Measured on memex-cloud 2026-08-25: the portal ran an image built from the fix's own merge commit,
+the store held **two** newer copies of `MeshWeaver.Blazor.Views` that both contained the fix, and
+`/proc/1/maps` showed the process had mapped the **image** copy — which did not. Every lane was
+green. The mechanism is not a bug in any single step:
+
+1. a **baseline** `Modules:Assemblies` entry resolves through `MeshBuilder.ResolveModulePath`, whose
+   probes are landed root → image → app closure;
+2. the landed probe looks in the fixed `modules/<Name>/`, which generation landing never writes, so
+   it misses and the image copy wins;
+3. the sidecar entry that *would* have named the generation is deduped away by name, silently,
+   because the baseline already claimed it (`ComputeEffectiveModuleEntries`).
+
+`ModuleLoadReport` (`src/MeshWeaver.PluginCatalog/ModuleLoadReport.cs`) makes that visible. At boot,
+immediately before `InstallAssemblies`, it emits one `[ModuleLoad]` line per pack — name, source
+(`appsettings` / `store`), the **exact path being loaded**, its MVID and its last-write time — and a
+`STALE PACK` warning when the store holds a copy of the same module that is both **newer** and
+carries a **different MVID**. Two copies with the same MVID are the same bytes in two places and
+warn nothing, or the line would be noise.
+
+It reports the array it is HANDED, so the line and the load cannot disagree; the acceptance is
+literally that the path in `/proc/1/maps` equals the path the line named:
+
+```bash
+kubectl exec -n <ns> <pod> -c memex-portal -- sh -c \
+  'cat /proc/1/maps | grep -o "[^ ]*Blazor.Views.dll" | sort -u'
+kubectl logs -n <ns> <pod> -c memex-portal | grep '\[ModuleLoad\]'
+```
+
+🚨 **It warns; it never refuses to start.** Which copy *ought* to win is an open policy question, and
+a pod that dies on the answer cannot be given the module that fixes it — the same deadlock as a
+registry that cannot start delivering the module breaking it. The remedy the warning names is a
+deployment decision: delist the pack from `Modules:Assemblies` so the landed generation stops being
+shadowed.
+
 ### Native assets — `runtimes/<rid>/native/` (#1728)
 
 A module is loaded with `Assembly.LoadFrom`, which never consults the module's own `deps.json`, so

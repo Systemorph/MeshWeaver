@@ -21,9 +21,14 @@ public class AiContentSyncBackTest(ITestOutputHelper output) : MonolithMeshTestB
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddSkillType()   // serves the built-in skills (Skill/*), the enumeration target
+            // AddAI registers the disk writer: writing the Agent/Skill partitions back to a
+            // content/ai section is an AI-content feature that happens to target a git checkout,
+            // so it rides AI rather than GitSync (#2276). GitSync still supplies the repo client
+            // the writer resolves the section root from.
+            .AddAI()
             .ConfigureServices(s =>
             {
-                s.AddGitHubSyncServices();   // registers AiContentDiskWriter
+                s.AddGitHubSyncServices();
                 return s;
             });
 

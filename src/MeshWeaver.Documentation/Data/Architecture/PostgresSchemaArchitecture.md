@@ -197,7 +197,7 @@ The `public` schema plays a single, well-defined role: it holds the cross-partit
 | Table | Purpose |
 |---|---|
 | `partition_access` | Binary "user X has any access to partition P" gate. PK `(user_id, partition)`. Populated by per-schema `rebuild_user_effective_permissions`. |
-| `searchable_schemas` | Schemas that cross-schema search (`search_across_schemas`) iterates over. Repopulated on every migration run. |
+| `searchable_schemas` | Schemas the cross-schema UNION fans out over. Repopulated on every migration run. |
 | `node_type_permissions` | 🪦 **Legacy, always empty, read by nothing** (issue #953). Kept for one release only so a rolling deploy's older replicas don't fault on the table name; a follow-up migration drops it. See "Why there is no node-type public read" below. |
 | `user_effective_permissions` and `_shadow` | Denormalised cache of every `(user, path-prefix, permission)` tuple. The shadow is rebuilt then atomically swapped (`PostgreSqlSchemaInitializer.cs:542`). |
 | `change_logs` | Partition-level change feed. |
@@ -256,7 +256,9 @@ No row here means the user cannot read **anything** in the partition, regardless
 **Gate 2 — node gate**
 A matching row in `{schema}.user_effective_permissions` with the longest-prefix match against the node's path, folded per subject and OR'd across subjects. There is **no bypass** of this gate.
 
-Cross-schema search (`public.search_across_schemas`) iterates `searchable_schemas`, applies both gates per schema, and returns only rows where both pass. See `PostgreSqlSchemaInitializer.cs:34`.
+Cross-schema search iterates `searchable_schemas`, applies both gates per schema, and returns only rows where both pass. The runtime builds that UNION in C# — `PostgreSqlSqlGenerator.GenerateCrossSchemaSelectQuery`, one branch per schema carrying the per-schema `user_effective_permissions` clause.
+
+> 🚨 **`public.search_across_schemas` is no longer called by the portal.** The plpgsql function still exists (an older replica mid-rollout still calls it, so it is not dropped), and it enforces the same two gates — see `PostgreSqlSchemaInitializer.cs:74`. But it backed a *second* fan-out shape whose only distinctive behaviour was clipping an unlimited query at 50 rows, and no runtime caller ever reached it: `PostgreSqlPartitionedMeshQuery.EnumerateFanOutAsync` has only ever taken the table-name overload. That overload was deleted in #2048 — two independent access-control implementations for one logical query, one of them unexercised, is where a security fix lands on the wrong copy.
 
 ### Why there is no node-type public read
 
