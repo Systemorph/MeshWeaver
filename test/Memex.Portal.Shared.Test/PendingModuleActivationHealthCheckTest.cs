@@ -147,6 +147,49 @@ public class PendingModuleActivationHealthCheckTest : IDisposable
         Assert.Equal(HealthStatus.Healthy, result.Status);
     }
 
+    /// <summary>
+    /// 🚨 #2093. An ACTIVATED module whose landed assembly is gone is Degraded like a pending one —
+    /// but it must say something DIFFERENT, because the remedy is different. The old surface told
+    /// an operator "a restart activates them" about a module no restart could ever load, which is
+    /// how <c>/mcp</c> stayed 404 through two clean rolling restarts while every probe was green.
+    /// </summary>
+    [Fact]
+    public async Task AnActivatedModuleWhoseBytesAreGone_SaysReinstall_NotRestart()
+    {
+        ModuleActivationSidecar.Write(root, new ModuleActivationList
+        {
+            Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Mcp", Enabled = true }],
+        });
+        // Deliberately no modules/MeshWeaver.Mcp/MeshWeaver.Mcp.dll.
+
+        var result = await Check();
+
+        Assert.Equal(HealthStatus.Degraded, result.Status);
+        Assert.Contains("MeshWeaver.Mcp", result.Description);
+        Assert.Contains("re-install", result.Description);
+        Assert.DoesNotContain("a restart activates them", result.Description);
+    }
+
+    /// <summary>The partner direction: the SAME record, with its bytes on the volume, is the
+    /// ordinary pending restart and says so. The two must never render the same.</summary>
+    [Fact]
+    public async Task ThatSameModule_WithItsBytesOnTheVolume_SaysARestartActivatesIt()
+    {
+        ModuleActivationSidecar.Write(root, new ModuleActivationList
+        {
+            Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Mcp", Enabled = true }],
+        });
+        Directory.CreateDirectory(Path.Combine(root, "modules", "MeshWeaver.Mcp"));
+        File.WriteAllBytes(
+            Path.Combine(root, "modules", "MeshWeaver.Mcp", "MeshWeaver.Mcp.dll"), [1]);
+
+        var result = await Check();
+
+        Assert.Equal(HealthStatus.Degraded, result.Status);
+        Assert.Contains("a restart activates them", result.Description);
+        Assert.DoesNotContain("re-install", result.Description);
+    }
+
     [Fact]
     public async Task ALandingSetsIt_AndTheSurfaceSeesIt_WithoutAnInMemoryHandoff()
     {

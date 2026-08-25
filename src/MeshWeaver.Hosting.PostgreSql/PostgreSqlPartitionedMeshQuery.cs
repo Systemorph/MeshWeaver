@@ -451,18 +451,38 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
             // Subscribe to the feed BEFORE the initial query so a write landing during the
             // fan-out's I/O window is captured rather than dropped (the merged feed is a plain
             // Subject with no buffering) — same race-fix as PostgreSqlMeshQuery / the pedestrian.
+            //
+            // 🚨 ONE subscription for the query's whole lifetime — it buffers into the backlog
+            // until Initial, then routes into the live buffer. Never a SECOND subscription
+            // attached at Initial with this one disposed: that handoff drops a notification
+            // permanently, because IsolatedChangeFeed snapshots its observer list BEFORE
+            // delivering, so a write published just before the live subscription was attached
+            // reaches only the early observer — which by then sees initialDone == true and
+            // discards it — while the live observer was never in that snapshot. Nothing
+            // re-triggers the re-query, so the row stays invisible to that subscription for its
+            // whole life. Reproduced and measured in MeshWeaver.AI.Test (#1040, #1812, #2001).
             var earlyBacklog = new List<DataChangeNotification>();
             var earlyLock = new object();
             var initialDone = false;
-            var earlySubscription = feed.Where(IsRelevant).Subscribe(n =>
+            // Published under `earlyLock` in the same critical section that sets initialDone.
+            IObserver<DataChangeNotification>? liveBuffer = null;
+            disposables.Add(feed.Where(IsRelevant).Subscribe(n =>
             {
+                IObserver<DataChangeNotification>? live;
                 lock (earlyLock)
                 {
                     if (!initialDone)
+                    {
                         earlyBacklog.Add(n);
+                        return;
+                    }
+                    live = liveBuffer;
                 }
-            });
-            disposables.Add(earlySubscription);
+                if (live is null)
+                    return;
+                try { live.OnNext(n); }
+                catch (ObjectDisposedException) { }
+            }));
 
             disposables.Add(RunQuery().Subscribe(
                 initialResults =>
@@ -487,12 +507,11 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
                     // is not the same object.
                     var innerBuffer = new System.Reactive.Subjects.Subject<DataChangeNotification>();
                     var changeBuffer = System.Reactive.Subjects.Subject.Synchronize(innerBuffer);
-                    // 🚨 ORDER MATTERS. CompositeDisposable disposes in INSERTION order, so the
-                    // feeding subscription must be registered BEFORE the buffer it writes into —
-                    // the other way round, teardown disposes changeBuffer while the subscription
-                    // is still live and a write in that window calls OnNext on a disposed Subject
+                    // 🚨 ORDER MATTERS. CompositeDisposable disposes in INSERTION order, and the
+                    // ONE feeding subscription was registered above, BEFORE this buffer — the
+                    // other way round, teardown disposes changeBuffer while the subscription is
+                    // still live and a write in that window calls OnNext on a disposed Subject
                     // (the ObjectDisposedException that starved the $security-access fold, #889).
-                    disposables.Add(feed.Where(IsRelevant).Subscribe(changeBuffer));
                     disposables.Add(innerBuffer);
                     // One re-query per relevant change, serialised via Concat so currentItems is
                     // never raced. No debounce: a batching window is exactly the gap in which a
@@ -507,12 +526,12 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
                     {
                         backlog = earlyBacklog.ToArray();
                         earlyBacklog.Clear();
+                        liveBuffer = changeBuffer;
                         initialDone = true;
                         // Same instant, for IsRelevant's lock-free read: from here on a delete is
                         // classified against the (now existing) result set instead of blanket-kept.
                         Volatile.Write(ref initialEstablished, 1);
                     }
-                    earlySubscription.Dispose();
 
                     observer.OnNext(Change(QueryChangeType.Initial, initialItems));
 
@@ -876,13 +895,16 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
 
         // 🚨 Carry the REQUEST-level limit into the parsed query — the same propagation the
         // per-schema delegate does (PostgreSqlMeshQuery: `if (request.Limit.HasValue) parsedQuery =
-        // parsedQuery with { Limit = request.Limit }`). Without it, `request.Limit` was silently
-        // DROPPED on the unpinned path: QueryAcrossSchemasAsync reads only ParsedQuery.Limit and
-        // substitutes a hard default of 50, so a caller asking for 500 across partitions got 50 and
-        // had no way to tell (issue #1216 — the batch bake's global `nodeType:Code` fetch is exactly
-        // this shape and resolved 50 Code nodes out of thousands). A request that states no limit at
-        // all still gets the fan-out's default: an unanchored UNION over every partition schema
-        // needs SOME bound, and changing that default is a separate decision.
+        // parsedQuery with { Limit = request.Limit }`). Without it, `request.Limit` is silently
+        // DROPPED on the unpinned path — QueryAcrossSchemasAsync reads only ParsedQuery.Limit — so
+        // a caller asking for 500 across partitions would get whatever the query STRING said, and
+        // have no way to tell (issue #1216 — the batch bake's global `nodeType:Code` fetch is
+        // exactly this shape).
+        // 🚨 A request that states no limit at all now gets EVERY match. The fan-out overload this
+        // method calls applies no default clip, and the paging overload that did substitute 50 is
+        // deleted (#2048) — it had no runtime caller, and a silent default is the defect #1216 and
+        // #1326 were filed against. If a bound is ever wanted for an unanchored UNION, it belongs
+        // on this ONE shape and it has to be LOUD.
         // 🚨 Propagate the request limit WHATEVER its sign, including the non-positive "no clip"
         // encoding (MeshQueryRequest.NoLimit). It used to be dropped for `<= 0` because a zero
         // reached SQL as a literal `LIMIT 0` — ZERO ROWS for a caller that asked for everything —

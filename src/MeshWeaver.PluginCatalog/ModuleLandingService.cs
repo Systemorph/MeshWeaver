@@ -46,9 +46,15 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para><b>Reactive surface, pooled IO.</b> Both operations return cold
 /// <see cref="IObservable{T}"/>s whose file IO runs on this service's own cap-1
-/// <see cref="IoPool"/> — the one sanctioned bounded-IO primitive — so concurrent landings (and
-/// their sidecar read-modify-writes) serialize without a hand-rolled gate, and nothing blocks a
-/// hub scheduler. Mesh-scoped singleton: the pool dies with the mesh.</para>
+/// <see cref="IoPool"/> — the one sanctioned bounded-IO primitive — so concurrent landings
+/// serialize without a hand-rolled gate, and nothing blocks a hub scheduler. Mesh-scoped
+/// singleton: the pool dies with the mesh.</para>
+///
+/// <para><b>Cross-REPLICA safety is structural, not a gate (#2090).</b> The pool bounds one
+/// process; <c>/data</c> is shared by every portal replica. So the activation record is one file
+/// PER MODULE (<see cref="ModuleActivationSidecar"/>) and a landing writes only its own — two
+/// replicas landing different modules share no path, cannot lose each other's entry, and never
+/// contend for one file's SMB lease.</para>
 /// </summary>
 public sealed class ModuleLandingService : IDisposable
 {
@@ -107,9 +113,11 @@ public sealed class ModuleLandingService : IDisposable
         return removed;
     }
 
-    // Cap 1 deliberately: LandModule/RemoveModule each read-modify-write the shared
-    // activation.json sidecar, and the cap IS the serialization — no lock, no semaphore
-    // outside the sealed IoPool primitive. Landing is rare and short; 1 costs nothing.
+    // Cap 1 deliberately: landing writes files and the cap IS the in-process serialization — no
+    // lock, no semaphore outside the sealed IoPool primitive. Landing is rare and short; 1 costs
+    // nothing. 🚨 It is NOT what makes the activation record safe: this pool bounds ONE process,
+    // and /data is shared by every replica. Cross-process safety comes from the record's SHAPE —
+    // one file per module (ModuleActivationSidecar), so concurrent writers never share a path.
     private readonly IoPool pool = new(1);
     private readonly string baseDirectory;
     private readonly ILogger<ModuleLandingService>? logger;
@@ -356,8 +364,6 @@ public sealed class ModuleLandingService : IDisposable
             throw;
         }
 
-        var list = ModuleActivationSidecar.Read(baseDirectory,
-            msg => logger?.LogError("{Message}", msg));
         var entry = new ModuleActivationEntry
         {
             Name = name,
@@ -369,17 +375,21 @@ public sealed class ModuleLandingService : IDisposable
             Enabled = true,
             Directory = generation,
         };
-        ModuleActivationSidecar.Write(baseDirectory, list with
-        {
-            Entries = list.Entries
-                .RemoveAll(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase))
-                .Add(entry),
-            // A HELD landing does not raise the restart signal: a restart cannot activate it (the
-            // boot gate skips the entry until the platform satisfies its floor), so "restart
-            // required" would be a prompt no restart can clear. The platform update that DOES
-            // satisfy the floor is itself a restart, which activates the entry with no flag.
-            PendingRestart = held is null || list.PendingRestart,
-        });
+        // 🚨 THIS MODULE'S OWN FILE, and nothing else (#2090). The landing used to read the whole
+        // shared activation index, append to it and rename the result over the live file — a
+        // read-modify-write of state every replica shares on the RWX /data volume. Two concurrent
+        // landings of DIFFERENT modules therefore raced: the later write silently dropped the
+        // earlier module's entry, and the rename itself contended for the SMB lease on the one hot
+        // file ('Access to the path …/activation.json is denied' → HTTP 409). Writing only
+        // activation.d/<Name>.json removes the shared cell instead of guarding it — different
+        // modules no longer share a path at all.
+        ModuleActivationSidecar.WriteEntry(baseDirectory, entry);
+        // A HELD landing does not raise the restart signal: a restart cannot activate it (the boot
+        // gate skips the entry until the platform satisfies its floor), so "restart required"
+        // would be a prompt no restart can clear. The platform update that DOES satisfy the floor
+        // is itself a restart, which activates the entry with no flag.
+        if (held is null)
+            ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
 
         if (held is null)
             logger?.LogInformation(
@@ -413,13 +423,12 @@ public sealed class ModuleLandingService : IDisposable
                 + "publish-laid-out module folders are managed by the deployment, not uninstall.");
 
         // The generation pointer is CLEARED on uninstall — a disabled entry must not keep its
-        // directory 'referenced', or boot GC could never reclaim it.
-        ModuleActivationSidecar.Write(baseDirectory, list with
-        {
-            Entries = list.Entries.Replace(existing,
-                existing with { Enabled = false, Directory = null }),
-            PendingRestart = true,
-        });
+        // directory 'referenced', or boot GC could never reclaim it. Written to THIS module's own
+        // file, never through the shared index (#2090): an uninstall racing another module's
+        // landing used to drop whichever entry lost.
+        ModuleActivationSidecar.WriteEntry(baseDirectory,
+            existing with { Enabled = false, Directory = null });
+        ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
 
         // Best-effort immediate delete: on a shared volume the files of a LOADED module refuse
         // deletion (SMB keeps them open) — that is fine, the cleared pointer above makes the

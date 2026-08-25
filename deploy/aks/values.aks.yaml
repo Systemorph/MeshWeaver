@@ -185,7 +185,7 @@ config:
     #      the serving pod can be deleted first, so the gate reports and the outage
     #      happens anyway — false confidence.
     # The chart renders 1 and 3 correctly; a per-env patch or a hand `kubectl` can
-    # still override them, so CHECK before trusting the gate (DEPLOY-RUNBOOK §7).
+    # still override them, so CHECK before trusting the gate (README.md, "Operating it").
     #
     # Failure mode if the gate DOES fire on a real regression: a stalled rollout
     # with the old image still serving — no outage, but self-update stops

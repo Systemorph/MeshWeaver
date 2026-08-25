@@ -1,16 +1,18 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
+using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Memex.Portal.Distributed;
 
 /// <summary>
-/// Fails readiness when a module this deployment declares under <c>Modules:Required</c> is not
-/// present in the image.
+/// Reports what this deployment can and cannot serve of the modules it declares under
+/// <c>Modules:Required</c> — and, crucially, tells the two apart (#2089).
 ///
 /// <para><b>The hole this closes.</b> A listed-but-absent module is SKIPPED at boot, deliberately —
 /// a host that will not start is worse than one missing a feature, and that rule is what stopped the
@@ -19,35 +21,108 @@ namespace Memex.Portal.Distributed;
 /// carries a pack, land it where the package was never installed, and charts go blank, maps go
 /// blank, voice goes mute — behind one stderr line and a green rollout.</para>
 ///
-/// <para>🚨 <b>Unhealthy, not Degraded — and that difference IS the gate.</b> Readiness failing on
-/// the new pods means Kubernetes holds the old ReplicaSet in service: the rollout stalls instead of
+/// <para>🚨 <b>Unhealthy for a LOST PACK — and that difference IS the gate.</b> When the image's own
+/// <c>Modules:Assemblies</c> names a required module the image does not actually carry, readiness
+/// fails: Kubernetes holds the old ReplicaSet in service, so the rollout stalls instead of
 /// completing into a portal that cannot do what it did yesterday. Degraded would be visible and
-/// useless — the bad build would take over while a dashboard turned amber. This is the one case
-/// where refusing traffic is the kinder answer, because the pods that still have the module are
-/// right there, already serving.</para>
+/// useless there — the bad build would take over while a dashboard turned amber. This is the one
+/// case where refusing traffic is the kinder answer, because the pods that still have the module
+/// are right there, already serving.</para>
+///
+/// <para>🚨 <b>Degraded for a STORE-DELIVERED one — and that is not leniency.</b> A module the
+/// image never claimed to ship cannot be produced by holding the rollout: the registry that must
+/// serve it is itself a portal downstream of this very deploy. Reporting it Unhealthy wedged both
+/// prod rollouts on 2026-08-23 with no remedy but blanking <c>Modules__Required__0..4</c> on the
+/// live deployment. So it is Degraded — which is NOT Healthy: the module is named in the payload
+/// and in the message together with which of the four states it is in (never installed / landed and
+/// awaiting a restart / landing incomplete / held above the platform floor) and what to do about
+/// it. An operator can always separate "required, and nothing here can produce it" from "expected,
+/// and here is exactly what it waits on".</para>
 ///
 /// <para>It reports only what the deployment ITSELF declared required, so it is inert by default:
-/// no <c>Modules:Required</c> means nothing to fail on, and today's behaviour is unchanged.</para>
+/// no <c>Modules:Required</c> means nothing to report.</para>
 /// </summary>
-public sealed class RequiredModulesHealthCheck(IConfiguration configuration) : IHealthCheck
+public sealed class RequiredModulesHealthCheck(
+    IConfiguration configuration,
+    IEnumerable<IncompatibleModule> incompatibleModules) : IHealthCheck
 {
     /// <inheritdoc />
     public Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
-        // The SAME pure rule the boot path used, asked the same way — a probe that answered
-        // differently from the log line that preceded it would be worse than no probe.
-        var missing = MeshBuilderModuleActivation.MissingRequired(
-            configuration, MeshBuilder.ResolveModulePath, File.Exists);
+        var moduleRoot = ModuleRoot.Resolve(configuration);
+        // 🚨 A gate must not read its own input silently. An unreadable activation record cannot
+        // make this probe pass — a required store module would classify as "not installed", which
+        // is still Degraded and still named — but it WOULD give the wrong reason, and "I could not
+        // read the record" is the one an operator can act on. So it rides in the payload.
+        var unreadable = new List<string>();
+        var activation = ModuleActivationSidecar.Read(moduleRoot, unreadable.Add);
 
-        if (missing.Length == 0)
-            return Task.FromResult(HealthCheckResult.Healthy("every required module is present"));
+        // The SAME resolution and the SAME gates the boot path used, asked the same way — a probe
+        // that answered differently from the log line that preceded it would be worse than no probe.
+        var verdicts = RequiredModuleStatus.Classify(
+            Values(MeshBuilderModuleActivation.RequiredKey),
+            Values(MeshBuilderModuleActivation.AssembliesKey),
+            ModuleActivationStatus.LoadedAssemblyNames(),
+            entry => File.Exists(MeshBuilder.ResolveModulePath(entry)),
+            activation,
+            entry => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, entry),
+            ModulePlatformFloor.DeclineReason,
+            [.. incompatibleModules]);
 
-        var data = new Dictionary<string, object> { ["missing"] = missing };
-        return Task.FromResult(HealthCheckResult.Unhealthy(
-            $"{missing.Length} required module(s) absent: {string.Join(", ", missing)}. "
-            + "This image does not ship them and no install landed them — the features they provide "
-            + "are gone. Install the packages, or delist them from Modules:Required.",
-            data: data));
+        var absent = RequiredModuleStatus.Absent(verdicts);
+        var expected = RequiredModuleStatus.ExpectedLater(verdicts);
+        var incompatible = RequiredModuleStatus.Incompatible(verdicts);
+
+        // 🚨 Both lists ship in the payload whatever the verdict, so an operator reading /health
+        // never has to infer which bucket a module fell into from the status alone.
+        var data = new Dictionary<string, object>
+        {
+            ["missing"] = absent.Select(v => v.Entry).ToArray(),
+            ["expected"] = expected.Select(v => v.Entry).ToArray(),
+            ["incompatible"] = incompatible.Select(v => v.Entry).ToArray(),
+            ["detail"] = verdicts.Select(v => $"{v.Name} [{v.State}]: {v.Reason}").ToArray(),
+            ["unreadableActivationRecords"] = unreadable.ToArray(),
+        };
+
+        // 🚨 BEFORE the absent/expected buckets, and Unhealthy on purpose. Without this the verdict
+        // falls through to "every required module is present" — the assembly IS on the deployment,
+        // so nothing above it is false — and a replica whose feature is entirely missing reports
+        // Healthy. Stalling here preserves the previous generation, which still has the module
+        // working, and this is a fault the deployment can actually fix by moving both halves.
+        if (incompatible.Count > 0)
+            return Task.FromResult(HealthCheckResult.Unhealthy(
+                $"{incompatible.Count} required module(s) are present but did not install against "
+                + "this platform build, so their features are absent: "
+                + RequiredModuleStatus.Describe(incompatible),
+                data: data));
+
+        if (absent.Count > 0)
+            return Task.FromResult(HealthCheckResult.Unhealthy(
+                $"{absent.Count} required module(s) the image is supposed to ship are absent: "
+                + RequiredModuleStatus.Describe(absent)
+                + (expected.Count > 0
+                    ? $". Also awaiting the store lane: {RequiredModuleStatus.Describe(expected)}"
+                    : string.Empty),
+                data: data));
+
+        if (expected.Count > 0)
+            return Task.FromResult(HealthCheckResult.Degraded(
+                $"{expected.Count} required module(s) are store-delivered and not here yet — the "
+                + "features they provide are missing until the module lane catches up: "
+                + RequiredModuleStatus.Describe(expected),
+                data: data));
+
+        // Every required module IS accounted for, so nothing is missing — but if a record could
+        // not be read, say so rather than let the reassuring answer stand on partial evidence.
+        return Task.FromResult(unreadable.Count > 0
+            ? HealthCheckResult.Degraded(
+                "every required module is present, but "
+                + $"{unreadable.Count} activation record(s) could not be read: "
+                + string.Join("; ", unreadable), data: data)
+            : HealthCheckResult.Healthy("every required module is present", data));
+
+        IEnumerable<string?> Values(string key) =>
+            configuration.GetSection(key).GetChildren().Select(child => child.Value);
     }
 }

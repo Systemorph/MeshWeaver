@@ -124,6 +124,8 @@ public class MessageService : IMessageService
     private readonly SyncDelivery postPipeline;
     private readonly AsyncDelivery deliveryPipeline;
     private readonly CancellationTokenSource hangDetectionCts = new();
+    /// <summary>0 until <see cref="Dispose"/> has been entered; the CAS that makes it idempotent.</summary>
+    private int disposed;
     private readonly ConcurrentDictionary<string, Predicate<IMessageDelivery>> gates;
     private readonly Lock gateStateLock = new();
 
@@ -239,13 +241,42 @@ public class MessageService : IMessageService
         var stillClosed = string.Join(",", gates.Keys);
         var reason = $"Message hub {Address} failed to initialize in {hub.Configuration.StartupTimeout} — gates still closed: [{stillClosed}]";
         logger.LogError(reason);
-        foreach (var (_, tracker) in deferredDeliveries)
+        DrainDeferredDeliveries(delivery => ReportFailure(delivery.WithProperty("Error", reason)));
+    }
+
+    /// <summary>
+    /// Answers and retires every delivery currently parked behind the gates — the ONE drain shared
+    /// by <see cref="NotifyStartupFailure"/>, <see cref="FailDeferredBacklog"/> and
+    /// <see cref="Dispose"/>.
+    ///
+    /// <para>🚨 <c>TryRemove</c> IS THE CLAIM, and that is the whole point of this method (issue
+    /// #2176). All three sites used to iterate <see cref="deferredDeliveries"/> and cancel + dispose
+    /// each tracker IN PLACE, removing nothing until a trailing <c>Clear()</c>. So an entry stayed
+    /// visible — and already disposed — for the rest of the loop, and every other path that retires
+    /// a deferral (<see cref="ProcessDeferredMessage"/> draining it, the
+    /// <see cref="ScheduleDeferralTimeout"/> continuation firing on the ThreadPool, or another of
+    /// these three drains) could claim the same tracker and cancel it a second time. That is a
+    /// double dispose of a <see cref="CancellationTokenSource"/>, i.e.
+    /// <c>ObjectDisposedException: The CancellationTokenSource has been disposed.</c> thrown out of
+    /// <c>Dispose()</c> itself and logged by the hub as <c>Error during shutdown of hub …</c>
+    /// (prod, memex-cloud, hub <c>Store/Catalog</c>, 2026-08-24). Removing first makes exactly one
+    /// caller the owner of any given tracker, so the cancel + dispose can only ever run once.</para>
+    ///
+    /// <para>There is deliberately no trailing <c>Clear()</c>. Clearing dropped anything added
+    /// during the loop WITHOUT answering it — the silent abandonment this whole path exists to
+    /// prevent. A deferral arriving after the snapshot keeps its own timeout tracker and is retired
+    /// by whichever claimant reaches it next.</para>
+    /// </summary>
+    private void DrainDeferredDeliveries(Action<IMessageDelivery> answer)
+    {
+        foreach (var id in deferredDeliveries.Keys)
         {
+            if (!deferredDeliveries.TryRemove(id, out var tracker))
+                continue; // someone else owns this tracker — it will answer and dispose it
             tracker.TimeoutCts.Cancel();
             tracker.TimeoutCts.Dispose();
-            ReportFailure(tracker.Delivery.WithProperty("Error", reason));
+            answer(tracker.Delivery);
         }
-        deferredDeliveries.Clear();
     }
 
     /// <summary>
@@ -351,13 +382,7 @@ public class MessageService : IMessageService
     /// </summary>
     private void FailDeferredBacklog(string reason)
     {
-        foreach (var (_, tracker) in deferredDeliveries)
-        {
-            tracker.TimeoutCts.Cancel();
-            tracker.TimeoutCts.Dispose();
-            AnswerUnreleasableDelivery(tracker.Delivery, reason);
-        }
-        deferredDeliveries.Clear();
+        DrainDeferredDeliveries(delivery => AnswerUnreleasableDelivery(delivery, reason));
         // The parked turns are the same deliveries, already answered — running them later
         // (a subsequent OpenGate, the disposal drain) would answer them a second time.
         lock (turnGate)
@@ -1233,12 +1258,33 @@ public class MessageService : IMessageService
     private void ScheduleDeferralTimeout(IMessageDelivery delivery)
     {
         var cts = new CancellationTokenSource();
-        deferredDeliveries[delivery.Id] = (delivery, cts);
+        var tracker = (delivery, cts);
+
+        // 🚨 RETIRE THE DISPLACED TRACKER. This write used to be a bare indexer assignment, so a
+        // re-deferred id (a repost keeps its Id) silently orphaned the previous tracker: with the
+        // pair-exact claim below, the old timer's TryRemove now correctly fails and returns — which
+        // means NOTHING would ever cancel or dispose it, and its CancellationTokenSource plus a live
+        // 30 s Task.Delay would linger to the deadline. TryRemove IS the claim here too (the same
+        // discipline DrainDeferredDeliveries uses), so exactly one caller retires it. Cancelling
+        // makes the displaced timer's continuation see IsCanceled and return without touching
+        // anything, so the dispose that follows is safe.
+        if (deferredDeliveries.TryRemove(delivery.Id, out var displaced))
+        {
+            displaced.TimeoutCts.Cancel();
+            displaced.TimeoutCts.Dispose();
+        }
+        deferredDeliveries[delivery.Id] = tracker;
         _ = Task.Delay(DeferralTimeout, cts.Token).ContinueWith(t =>
         {
             if (t.IsCanceled) return;
-            if (!deferredDeliveries.TryRemove(delivery.Id, out var tracker)) return;
-            tracker.TimeoutCts.Dispose();
+            // 🚨 PAIR-EXACT claim, not TryRemove(id). The dictionary is written with the INDEXER, so
+            // a delivery deferred twice under the same id (a repost) replaces the entry — and a
+            // by-key removal here would hand this stale timer the LIVE tracker and dispose a
+            // CancellationTokenSource its owner is still using. Same double-dispose class as #2176,
+            // one level down. Removing the exact (delivery, cts) pair means this timer can only
+            // ever retire the tracker it armed.
+            if (!deferredDeliveries.TryRemove(new(delivery.Id, tracker))) return;
+            cts.Dispose();
             var stillClosed = string.Join(",", gates.Keys);
             // 🚨 Unavailable, not the default Unknown. A hub that has not opened its init gates is
             // still STARTING — the read reached no verdict and the same request will succeed once
@@ -1822,6 +1868,18 @@ public class MessageService : IMessageService
     /// </summary>
     public void Dispose()
     {
+        // 🚨 IDEMPOTENT — a second call must be a no-op, not a second teardown. MessageHub reaches
+        // here from TWO places: the ShutDown phase of HandleShutdownCore and the watchdog's
+        // force-teardown, which can both run for one hub. The second pass re-cancelled an already
+        // disposed hangDetectionCts and re-disposed the storm breaker; both throw
+        // ObjectDisposedException and were only invisible because they sit inside catch-and-log
+        // blocks — i.e. the .NET IDisposable contract was being met by a swallow.
+        if (Interlocked.CompareExchange(ref disposed, 1, 0) != 0)
+        {
+            logger.LogDebug("Message service in {Address} already disposed — ignoring", Address);
+            return;
+        }
+
         var totalStopwatch = Stopwatch.StartNew();
         logger.LogDebug("Starting disposal of message service in {Address}", Address);
         // Open all remaining initialization gates to release any buffered messages
@@ -1867,17 +1925,18 @@ public class MessageService : IMessageService
         //
         // The NACK is transient (ErrorType.ShuttingDown) — a recycled address reactivates on
         // the next access, so the sender must read this as "ask again", never as "gone".
-        foreach (var (_, tracker) in deferredDeliveries)
-        {
-            tracker.TimeoutCts.Cancel();
-            tracker.TimeoutCts.Dispose();
-            NackThroughParent(tracker.Delivery,
-                $"Hub {Address} was disposed while {tracker.Delivery.Message.GetType().Name} "
-                + $"(id={tracker.Delivery.Id}) was still deferred behind its initialization gates "
+        //
+        // 🚨 The drain CLAIMS each tracker with TryRemove before touching it — see
+        // DrainDeferredDeliveries. Cancelling in place, as this loop used to, let the deferral
+        // timeout continuation (or a gate drain) dispose the same CancellationTokenSource
+        // concurrently, and this Cancel() then threw ObjectDisposedException out of Dispose itself
+        // — logged as "Error during shutdown of hub …" (issue #2176).
+        DrainDeferredDeliveries(delivery =>
+            NackThroughParent(delivery,
+                $"Hub {Address} was disposed while {delivery.Message.GetType().Name} "
+                + $"(id={delivery.Id}) was still deferred behind its initialization gates "
                 + $"[{string.Join(",", gates.Keys)}] — the message was never processed. The address "
-                + "may reactivate (recycle / restart); retry to get the authoritative answer.");
-        }
-        deferredDeliveries.Clear();
+                + "may reactivate (recycle / restart); retry to get the authoritative answer."));
 
         // No buffers to Complete — ScheduleNotify drops post-shutdown messages and the
         // pump drains whatever is already queued.

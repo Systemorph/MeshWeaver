@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -75,12 +76,26 @@ public readonly record struct UserIdentityLookup(MeshNode? Node, string? Unavail
     /// (<see cref="UserIdentityCache.IndexChanged"/>) and re-asks the same
     /// <see cref="Classify"/> question. Same chain, one extra lap.</para>
     ///
-    /// <para><b>The <c>StartWith</c> closes the sample-then-subscribe race.</b> A caller reaches
-    /// here BECAUSE its own <see cref="UserIdentityCache.Lookup"/> came back unavailable; between
-    /// that call and this subscription the snapshot may already have landed, and its emission would
-    /// be gone. Re-asking at subscribe time (inside
-    /// <see cref="Observable.Defer{TResult}(Func{IObservable{TResult}})"/>, so it is
-    /// per-subscription and not captured once) means the window cannot swallow the answer.</para>
+    /// <para><b>🚨 Listen FIRST, then take the reading — never the other way round.</b> A caller
+    /// reaches here BECAUSE its own <see cref="UserIdentityCache.Lookup"/> came back unavailable;
+    /// between that call and this subscription the snapshot may already have landed, and
+    /// <see cref="UserIdentityCache.IndexChanged"/> is a HOT, non-replaying stream, so that emission
+    /// is simply gone. Re-asking at subscribe time is what covers that window — but only if the
+    /// change feed is already subscribed when the re-ask happens.</para>
+    /// <para>This used to be <c>indexChanged.Select(_ =&gt; lookup()).StartWith(lookup())</c>, which
+    /// gets that order exactly backwards: <c>StartWith</c>'s argument is evaluated while the chain is
+    /// being BUILT, and <c>Concat</c> only subscribes to the change feed after the prepended value has
+    /// been delivered. So the window was never closed, merely moved — from "before the caller's own
+    /// lookup" to "between the re-ask and the subscribe", a handful of instructions that one
+    /// preemption on a loaded machine is enough to stretch across. Lose that emission and there is no
+    /// second chance: the index fires once per applied snapshot, and a mesh that has finished writing
+    /// never fires again. The observable then never emits — which is a 60 s
+    /// <see cref="TimeoutException"/> at the caller and NOT a wrong answer, exactly the shape of
+    /// #2031 / #2185 (full-assembly only, green in isolation).</para>
+    /// <para>Hence <see cref="Observable.Create{TResult}(Func{IObserver{TResult}, IDisposable})"/>
+    /// with the order spelled out rather than implied by an operator's argument-evaluation order:
+    /// subscribe, then read. <c>Observer.Synchronize</c> serialises the two producers, since the
+    /// index applies its snapshot on the query's thread while the reading is taken on this one.</para>
     ///
     /// <para><b><c>Take(1)</c> is sanctioned here</b> and is not the live-view mistake: this
     /// restores a ONE-SHOT resolution that the success path also performs exactly once. It is not
@@ -108,7 +123,32 @@ public readonly record struct UserIdentityLookup(MeshNode? Node, string? Unavail
         ArgumentNullException.ThrowIfNull(indexChanged);
         ArgumentNullException.ThrowIfNull(lookup);
         return Observable
-            .Defer(() => indexChanged.Select(_ => lookup()).StartWith(lookup()))
+            .Create<UserIdentityLookup>(observer =>
+            {
+                // 🚨 The order of these two statements IS the fix — see the remarks. The change
+                // feed is hot and fires once per applied snapshot, so an emission that lands
+                // before the subscription exists is unrecoverable.
+                var serialized = Observer.Synchronize(observer);
+                var changes = indexChanged.Select(_ => lookup()).Subscribe(serialized);
+                try
+                {
+                    serialized.OnNext(lookup());
+                }
+                catch (Exception ex)
+                {
+                    // Subscribing FIRST means the feed subscription already exists when the reading
+                    // is taken, so a throwing lookup must not simply propagate out of this factory:
+                    // `changes` would never be returned, and a live subscription to a hot,
+                    // process-wide stream that nobody holds re-invokes `lookup()` for the life of
+                    // the cache. Tear it down and report the fault as the sequence's own OnError,
+                    // which is what the old Defer/StartWith shape got for free by not having
+                    // subscribed yet.
+                    changes.Dispose();
+                    serialized.OnError(ex);
+                    return Disposable.Empty;
+                }
+                return changes;
+            })
             .Where(l => !l.IsUnavailable)
             .Take(1);
     }
@@ -209,14 +249,19 @@ public sealed class UserIdentityCache : IDisposable
         // not shorten a list, it changes who the portal thinks you are.
         //
         //   • Complete() — the query is UNPINNED (no path:/namespace:), so on Postgres it is
-        //     served by the cross-schema fan-out, which answers a request that states no limit
-        //     with a PAGE: the 50 most recently modified matches, ordered last_modified DESC
-        //     (PostgreSqlCrossSchemaQueryProvider.DefaultFanOutLimit). Every user outside that
-        //     page fell out of the index. And because a User node's last_modified only moves when
-        //     the PROFILE is written, the omission is self-reinforcing: the longer you go without
-        //     editing your profile, the more certainly you are missing — the identical shape as
-        //     #1216 (baked 237 NodeTypes against 50 Code nodes) and #1326 (9 of 43 Spaces
-        //     permanently stale). This is an ENUMERATION, so it says so.
+        //     served by the cross-schema fan-out. When that fan-out substituted a 50-row default
+        //     for a request stating no limit, every user outside the 50 most recently modified
+        //     matches fell out of the index — and because a User node's last_modified only moves
+        //     when the PROFILE is written, the omission was self-reinforcing: the longer you went
+        //     without editing your profile, the more certainly you were missing (the identical
+        //     shape as #1216 and #1326).
+        //     🚨 That default is GONE (#2048 deleted the paging fan-out shape, which no runtime
+        //     caller could reach), so this call no longer changes what THIS query returns — and
+        //     saying so is the point, because a call credited with a truncation the runtime does
+        //     not perform is one nobody can test. It stays because it is the DECLARATION that this
+        //     read is an enumeration: it overrides any limit that reaches the request, and it is
+        //     what a future bound would have to honour. UserDirectoryCompletenessTests pins it as
+        //     a property of the query, which is where it is falsifiable.
         //   • AsSystem() — the directory is process-wide and is consumed to resolve the CALLING
         //     user's own identity, so it must not be scoped to whichever caller happened to
         //     resolve this singleton first. MeshService.StampViewer pins the viewer from the

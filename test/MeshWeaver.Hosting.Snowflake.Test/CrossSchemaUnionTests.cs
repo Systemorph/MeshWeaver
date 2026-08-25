@@ -28,10 +28,12 @@ namespace MeshWeaver.Hosting.Snowflake.Test;
 /// <see cref="SnowflakeCrossSchemaQueryProvider.QueryAcrossSchemasAsync"/> (renamed
 /// <c>CrossSchema_SearchAcrossSchemas_*</c>), with the registry populated in
 /// <c>public.searchable_schemas</c> exactly like PG and read back via
-/// <see cref="SnowflakeCrossSchemaQueryProvider.GetSearchableSchemasAsync"/>. The proc's
-/// implicit <c>main_node = path</c> / <c>last_modified DESC</c> / <c>LIMIT 50</c> defaults are
-/// reproduced by the provider itself. The PG twin's <c>SearchableSchemasSyncThrottleTests</c>
-/// scenarios are folded in at the bottom (same throttle, same <c>ActualSyncCount</c> hook).</para>
+/// <see cref="SnowflakeCrossSchemaQueryProvider.GetSearchableSchemasAsync"/>. 🚨 These run through
+/// the TABLE-NAME overload, which is what <c>SnowflakePartitionedMeshQuery.EnumerateFanOutAsync</c>
+/// takes for every unpinned query and, since #2048, the only cross-schema shape either backend
+/// carries: the paging overload that reproduced the proc's <c>LIMIT 50</c> default had no runtime
+/// caller and is deleted. The PG twin's <c>SearchableSchemasSyncThrottleTests</c> scenarios are
+/// folded in at the bottom (same throttle, same <c>ActualSyncCount</c> hook).</para>
 /// </summary>
 [Collection("Snowflake")]
 public class CrossSchemaUnionTests
@@ -159,8 +161,8 @@ public class CrossSchemaUnionTests
             .Collect(ct).Should().Within(30.Seconds()).Emit();
 
     // The provider replacement for PG's CallSearchAcrossSchemas: schemas come from the
-    // searchable_schemas registry (like the proc re-reading it) and the proc's orderBy/limit
-    // defaults are reproduced inside QueryAcrossSchemasAsync.
+    // searchable_schemas registry, and the fan-out clips only what the caller asked for — there
+    // is no default limit on the shape the runtime takes (#2048).
     private Task<List<MeshNode>> SearchAcrossSchemas(
         ParsedQuery query, string? userId, CancellationToken ct)
         => SearchAcrossSchemasAsync(query, userId, ct)
@@ -312,7 +314,7 @@ public class CrossSchemaUnionTests
         }
     }
 
-    // ── Cross-schema UNION: QueryAcrossSchemasAsync (PG: the search_across_schemas proc) ──
+    // ── Cross-schema UNION: QueryAcrossSchemasAsync over mesh_nodes (the runtime shape) ──
 
     [Fact(Timeout = 60000)]
     public async Task CrossSchema_SearchAcrossSchemas_ReturnsAllOrgs()
@@ -325,7 +327,7 @@ public class CrossSchemaUnionTests
         var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
         await PopulateSearchableSchemas(schemas, ct);
 
-        // Empty filter (PG passed whereClause '') — provider applies the proc's defaults.
+        // Empty filter — every node in every registered schema, unclipped.
         var results = await SearchAcrossSchemas(ParsedQuery.Empty, null, ct);
 
         results.Should().NotBeEmpty("the cross-schema UNION should return nodes from all schemas");
@@ -596,7 +598,11 @@ public class CrossSchemaUnionTests
         var schemas = await provider.GetSearchableSchemasAsync(ct);
 
         var results = new List<MeshNode>();
-        await foreach (var node in provider.QueryAcrossSchemasAsync(query, _options, schemas, userId, ct))
+        // The table-name overload — the one SnowflakePartitionedMeshQuery.EnumerateFanOutAsync
+        // takes for every unpinned query, and since #2048 the only cross-schema shape there is.
+        await foreach (var node in provider.QueryAcrossSchemasAsync(
+                           query, _options, schemas, "mesh_nodes",
+                           userId, activityUserId: null, ct))
             results.Add(node);
         return results;
     }
