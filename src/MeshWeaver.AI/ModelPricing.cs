@@ -128,6 +128,7 @@ public static class ModelPricing
             ["deepseek/deepseek-v4-pro"] = new(0.5262m, 1.0524m, Usd),
             ["x-ai/grok-4.6"] = new(2.0m, 6.0m, Usd),
             ["qwen/qwen3-max"] = new(0.78m, 3.9m, Usd),
+            ["qwen/qwen3.6-35b-a3b"] = new(0.14m, 1.0m, Usd),  // the chat tier — fast MoE (~3B active)
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
