@@ -1620,27 +1620,98 @@ internal static class ThreadExecution
                 // doesn't track history at all. So if every round only sent the
                 // new user message, the agent would never see prior turns —
                 // ChatHistoryTest catches exactly this regression.
+                //
+                // 🚨 #2226 — NO OUTER `.Timeout(...)` HERE, deliberately. The loader carries its own
+                // STAGED budget: 10 s for the thread node, then `cellTimeout` (5 s) per cell fanned
+                // out in parallel. An outer 5 s bound was therefore strictly SMALLER than the budget
+                // it wrapped, so on exactly the threads the issue reports — long conversations whose
+                // cells are cold — it pre-empted a load that was still legitimately in progress and
+                // replaced the loader's own descriptive failure with `.Timeout()`'s message-less
+                // "The operation has timed out." That bare TimeoutException, with no inner exception
+                // and no application stack frame, IS the log signature #2226 was opened on. A second
+                // bound over an operation that already bounds itself cannot make anything safer; it
+                // can only report a failure that had not happened yet. (This is not "widening a
+                // timeout to make it pass" — the inner budgets are unchanged; the contradictory
+                // outer one is deleted.)
                 return LoadFullConversationHistoryFromMesh(parentHub, threadPath,
                         excludeUserMessageId: request.UserMessageId,
                         excludeResponseMessageId: responseMsgId,
                         logger)
                     .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(5))
-                    .Catch<IReadOnlyList<ChatMessage>, Exception>(ex =>
-                    {
-                        // 🚨 LOUD log — history-load failure means the agent sees
-                        // truncated context (or nothing) for this round. Continue with
-                        // empty so the round doesn't wedge, but surface the failure so
-                        // CI surfaces the actual cause (per-cell timeout / stream error)
-                        // instead of producing a wrong-content assertion downstream.
-                        logger.LogError(ex,
-                            "[ThreadExec] HISTORY_LOAD_FAILED threadPath={ThreadPath} — proceeding with EMPTY history; agent will see only the new user message",
-                            threadPath);
-                        return Observable.Return<IReadOnlyList<ChatMessage>>(Array.Empty<ChatMessage>());
-                    })
-                    .SelectMany(history =>
+                    .Select(h => (History: h, LoadError: (Exception?)null))
+                    // 🚨 #2226 — CARRY the fault; never substitute an empty history for a failed one.
+                    // This used to `.Catch(→ Array.Empty)` and continue: the agent then answered a
+                    // long-running thread as if it were brand new, and the round settled COMPLETED,
+                    // so nothing downstream — not the user, not the parent of a delegation, not any
+                    // automation reading the node — could tell a context-less answer from a correct
+                    // one. A silent wrong answer is strictly worse than a failed round, so the fault
+                    // rides through to the terminal Error write below.
+                    .Catch<(IReadOnlyList<ChatMessage> History, Exception? LoadError), Exception>(ex =>
+                        Observable.Return<(IReadOnlyList<ChatMessage> History, Exception? LoadError)>(
+                            (Array.Empty<ChatMessage>(), ex)))
+                    .SelectMany(loaded =>
                 {
-                    var chatHistory = history.ToImmutableList();
+                    // 🛑 #2226 — HISTORY COULD NOT BE LOADED. "No history" and "could not load the
+                    // history" are different facts and must not share a code path. Fail the round
+                    // with a message that says so, exactly like the NO_USABLE_MODEL branch below:
+                    // response cell → Status=Error, thread → Idle, parent + notification signalled
+                    // so a delegating parent never waits on a round that will not run.
+                    if (loaded.LoadError is not null)
+                    {
+                        // 🌍 The user reads localized prose off the round's own AccessContext —
+                        // explicit locale, never ambient CultureInfo (a round hops schedulers). The
+                        // exception itself stays on the LogError, which is where an operator looks.
+                        var historyError = LocalizationCatalog.Get(
+                            "chat.historyLoadFailed", userAccessContext?.Locale);
+                        logger.LogError(loaded.LoadError,
+                            "[ThreadExec] HISTORY_LOAD_FAILED threadPath={ThreadPath} responseId={ResponseId} "
+                            + "— FAILING the round; refusing to answer without the thread's prior turns",
+                            threadPath, responseMsgId);
+                        // 🚨 The per-round CLI harness client (Claude Code / Copilot) is created
+                        // ABOVE the history load and is normally disposed in the round's `finally` —
+                        // which this early return skips. Dispose it HERE, or every failed history
+                        // load leaks one harness client (and, for the process-backed harnesses, the
+                        // process behind it). The cached AgentChatClient is deliberately NOT disposed:
+                        // it is reused across rounds. (Same reasoning as the finally block below;
+                        // the NO_USABLE_MODEL early return is exempt because its guard already
+                        // establishes harnessClient == null.)
+                        if (harnessClient is IDisposable historyHd) historyHd.Dispose();
+                        else if (harnessClient is IAsyncDisposable historyHad) _ = historyHad.DisposeAsync();
+                        var historyDone = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
+                        PushToResponseMessage(
+                            $"*Error: {historyError}*",
+                            ImmutableList<ToolCallEntry>.Empty, ImmutableList<NodeChangeEntry>.Empty,
+                            request.AgentName, effectiveModel ?? request.ModelName,
+                            completedAt: DateTime.UtcNow,
+                            status: ThreadMessageStatus.Error,
+                            summary: historyError,
+                            harness: request.Harness,
+                            requestedModelName: substitutedFrom).Subscribe(
+                            _ => { },
+                            ex => execLogger?.LogWarning(ex,
+                                "PushToResponseMessage(HistoryLoadFailed) failed for {ThreadPath}", threadPath));
+                        UpdateThreadExecution(t => t.ResetExecution() with { Summary = historyError }).Subscribe(
+                            _ => { },
+                            ex =>
+                            {
+                                execLogger?.LogWarning(ex,
+                                    "UpdateThreadExecution(HistoryLoadFailed): stream.Update failed for {ThreadPath}",
+                                    threadPath);
+                                historyDone.OnError(ex);
+                            },
+                            () =>
+                            {
+                                historyDone.OnNext(System.Reactive.Unit.Default);
+                                historyDone.OnCompleted();
+                            });
+                        NotifyParentCompletion(parentHub, threadPath, historyError, false,
+                            ImmutableList<NodeChangeEntry>.Empty);
+                        EmitCompletionNotification(parentHub, threadPath, historyError, request.AgentName,
+                            succeeded: false);
+                        return historyDone;
+                    }
+
+                    var chatHistory = loaded.History.ToImmutableList();
 
                     var toolCallLog = ImmutableList<ToolCallEntry>.Empty;
                 var nodeChangeLog = ImmutableList<NodeChangeEntry>.Empty;
@@ -2765,6 +2836,19 @@ internal static class ThreadExecution
                         var providerStatus = ProviderFailureClassifier.TryGetProviderStatus(ex);
                         var providerMessage = providerStatus switch
                         {
+                            // 🪙 #2233 — the two refusals the OpenAI/OpenRouter transport actually
+                            // returns on this portal. Both used to fall through to `ex.Message`,
+                            // which is the SDK's raw "HTTP 402 (: )" banner plus the provider's
+                            // English body: unreadable, untranslated, and (for 402) advice the
+                            // end-user cannot act on. They are separated from 429 because the
+                            // remedies differ — 402 needs credit, 404 needs a config change, and
+                            // neither is fixed by "submit again later".
+                            402 => LocalizationCatalog.Get(
+                                "chat.modelQuotaExhausted", userAccessContext?.Locale,
+                                servingModel ?? "(default)"),
+                            404 => LocalizationCatalog.Get(
+                                "chat.modelNotFound", userAccessContext?.Locale,
+                                servingModel ?? "(default)"),
                             429 => LocalizationCatalog.Get(
                                 "chat.modelRateLimited", userAccessContext?.Locale,
                                 servingModel ?? "(default)"),
