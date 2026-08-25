@@ -466,7 +466,13 @@ public static class PersistenceExtensions
         this IServiceCollection services,
         Func<IServiceProvider, IStorageAdapter> storageAdapterFactory)
     {
-        services.AddSingleton(storageAdapterFactory);
+        // 🚨 The service type is EXPLICIT. `AddSingleton(factory)` has two applicable overloads for a
+        // typed `Func<IServiceProvider, IStorageAdapter>` variable — the factory overload
+        // (TService = IStorageAdapter) and the implementation-INSTANCE overload
+        // (TService = Func<IServiceProvider, IStorageAdapter>, i.e. registering the delegate itself
+        // as the service). Both compile. Picking the second would leave IStorageAdapter
+        // unregistered, which is this PR's whole bug class arriving through the fix for it.
+        services.AddSingleton<IStorageAdapter>(storageAdapterFactory);
 
         // Register common services and wrapper services
         return services.AddCoreAndWrapperServices();
