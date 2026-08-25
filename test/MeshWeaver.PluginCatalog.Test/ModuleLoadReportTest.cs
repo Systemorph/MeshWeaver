@@ -211,6 +211,51 @@ public class ModuleLoadReportTest : IDisposable
         rendered.Info.Should().ContainSingle().Which.Should().Contain(landed);
     }
 
+    /// <summary>
+    /// 🚨 The remediation must match the LANE, because the two lanes are shadowed for different
+    /// reasons — and a warning that names the wrong fix is worse than one that names none. A
+    /// store-installed module is not listed in <c>Modules:Assemblies</c> at all, so "delist it"
+    /// sends the operator hunting for a line that does not exist; what decides its generation is
+    /// the sidecar's own <c>Directory</c> pointer.
+    ///
+    /// <para>Reachable in practice: landing writes a fresh generation and THEN moves the pointer,
+    /// so a landing whose pointer write did not land leaves exactly this — newer bytes on disk,
+    /// an entry still naming the previous generation. (Boot's GC would normally collect an
+    /// unreferenced generation, but it is skip-on-locked.)</para>
+    /// </summary>
+    [Fact]
+    public void The_remediation_names_the_lane_that_actually_decides_which_generation_loads()
+    {
+        var older = PlacePack(storeRoot, $"{PackName}@old", OldBytes, new DateTime(2026, 8, 25, 10, 35, 0, DateTimeKind.Utc));
+        var newer = PlacePack(storeRoot, $"{PackName}@new", NewBytes, new DateTime(2026, 8, 25, 13, 53, 0, DateTimeKind.Utc));
+
+        // A STORE entry still pointing at the older generation while newer bytes sit beside it.
+        var resolved = ResolveAsBootDoes(
+            [],
+            new ModuleActivationList
+            {
+                Entries = [new ModuleActivationEntry { Name = PackName, Directory = $"{PackName}@old" }],
+            });
+        resolved[0].Path.Should().Be(older);
+
+        var storeLines = ModuleLoadReport.Describe(storeRoot, resolved);
+        storeLines[0].Source.Should().Be(ModuleActivationSources.Store);
+        storeLines[0].Shadowed!.Path.Should().Be(newer);
+
+        var storeWarning = Render(storeLines).Warnings.Should().ContainSingle().Subject;
+        storeWarning.Should().Contain("activation.json")
+            .And.Contain("Re-install the module");
+        storeWarning.Should().NotContain("delist it from Modules:Assemblies",
+            "a store-installed module has no Modules:Assemblies line to delist");
+
+        // …and the BASELINE lane still gets the remediation that is right for it.
+        var baselineLines = ModuleLoadReport.Describe(
+            storeRoot, [(new EffectiveModule(PackName + ".dll", null), older)]);
+        var baselineWarning = Render(baselineLines).Warnings.Should().ContainSingle().Subject;
+        baselineWarning.Should().Contain("delist it from Modules:Assemblies");
+        baselineWarning.Should().NotContain("activation.json");
+    }
+
     private static (System.Collections.Generic.List<string> Info, System.Collections.Generic.List<string> Warnings)
         Render(System.Collections.Generic.IEnumerable<ModuleLoadLine> lines)
     {
