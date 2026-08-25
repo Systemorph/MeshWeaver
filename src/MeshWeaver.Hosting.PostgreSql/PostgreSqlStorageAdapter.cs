@@ -232,13 +232,21 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
 
-    private static (string Namespace, string Id) SplitPath(string normalizedPath)
-    {
-        var lastSlash = normalizedPath.LastIndexOf('/');
-        var ns = lastSlash > 0 ? normalizedPath[..lastSlash] : "";
-        var id = lastSlash > 0 ? normalizedPath[(lastSlash + 1)..] : normalizedPath;
-        return (ns, id);
-    }
+    // 🚨 THERE IS NO POSITIONAL (namespace, id) SPLIT OF A PATH — an id may contain '/'.
+    //
+    // Every row addressed by path is matched on the STORED `path` column (a
+    // `GENERATED ALWAYS AS (CASE WHEN namespace = '' THEN id ELSE namespace || '/' || id END)
+    // STORED` column present, and indexed, on mesh_nodes AND every satellite table). Splitting
+    // "Provider/OpenRouter/z-ai/glm-5.2" at the LAST slash looks for
+    // (namespace='Provider/OpenRouter/z-ai', id='glm-5.2') while the row stored is
+    // (namespace='Provider/OpenRouter', id='z-ai/glm-5.2') — no row matches, the read yields null,
+    // and DELETE reports `NodeNotFound` for a node `get` resolves in the same breath (issue #2212).
+    //
+    // Slash-bearing ids are not an accident: EVERY LanguageModel node's id is the provider's wire id
+    // (`z-ai/glm-5.3`, `anthropic/claude-opus-5`, `openai/gpt-5.2`), so before this no model node
+    // could be deleted through the API or MCP at all. `path` is the only decomposition-free way to
+    // address a row, it is what the caller actually holds, and it is indexed — so it is also the
+    // cheapest. Do NOT reintroduce a split here or in any other adapter.
 
     // null Select → caller didn't project → fetch all columns (existing behavior).
     // non-null Select → caller opted into projection → fetch column only if listed.
@@ -366,17 +374,14 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         if (string.IsNullOrEmpty(normalizedPath))
             return null;
 
-        var (ns, id) = SplitPath(normalizedPath);
-
         var table = ResolveTable(normalizedPath);
         try
         {
             await using var cmd = _dataSource.CreateCommand(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
                 $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)}, {ExcludeCol(table)} " +
-                $"FROM {table} WHERE namespace = $1 AND id = $2");
-            cmd.Parameters.AddWithValue(ns);
-            cmd.Parameters.AddWithValue(id);
+                $"FROM {table} WHERE path = $1");
+            cmd.Parameters.AddWithValue(normalizedPath);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
@@ -406,9 +411,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// Batched override of <see cref="IStorageAdapter.ReadMany"/> — multi-path
     /// probes (URL resolver's <c>path:a|b|c</c> longest-prefix search,
     /// activity bulk reads) become ONE SQL query instead of N. Groups input
-    /// paths by (table, namespace) so a mixed batch with rows in different
-    /// tables / namespaces still runs as one query per (table, namespace)
-    /// group rather than per-path.
+    /// paths by TABLE so a mixed batch with rows in different tables still runs
+    /// as one query per table rather than per-path, matching on the indexed
+    /// <c>path</c> column (never a positional namespace/id split — see
+    /// <see cref="NormalizePath"/>'s note and issue #2212).
     /// </summary>
     // Pump inside the IIoPool (InvokeStream) — never Observable.Create(async ...),
     // which starts the pump (incl. the synchronous grouping prologue and the
@@ -423,40 +429,30 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        // Normalize + drop empties up front. Group by (table, namespace)
-        // so each PG round-trip is `WHERE namespace = $1 AND id IN (...)`
-        // — the cheapest shape for the indexed (namespace, id) PK.
+        // Normalize + drop empties up front. Group by TABLE so each PG round-trip is
+        // `WHERE path = ANY($1)` against the per-table `path` index. Grouping by
+        // (table, namespace) and matching `id IN (...)` was the batched form of the
+        // positional-split defect — a slash-bearing id was looked up under the wrong
+        // namespace and silently answered "absent" (issue #2212).
         var groups = paths
             .Select(NormalizePath)
             .Where(p => !string.IsNullOrEmpty(p))
-            .Select(p =>
-            {
-                var (ns, id) = SplitPath(p);
-                var table = ResolveTable(p);
-                return (table, ns, id);
-            })
-            .GroupBy(t => (t.table, t.ns))
+            .Distinct(StringComparer.Ordinal)
+            .GroupBy(p => ResolveTable(p), StringComparer.Ordinal)
             .ToList();
 
         foreach (var group in groups)
         {
-            var table = group.Key.table;
-            var ns = group.Key.ns;
-            var ids = group.Select(t => t.id).Distinct(StringComparer.Ordinal).ToArray();
-            if (ids.Length == 0)
+            var table = group.Key;
+            var groupPaths = group.ToArray();
+            if (groupPaths.Length == 0)
                 continue;
 
-            // Build the parameter placeholder list ($2, $3, …) for the
-            // IN clause; the first parameter is the namespace.
-            var placeholders = string.Join(", ",
-                Enumerable.Range(2, ids.Length).Select(i => $"${i}"));
             await using var cmd = _dataSource.CreateCommand(
                 $"SELECT id, namespace, name, description, node_type, category, icon, display_order, " +
                 $"last_modified, version, state, content, desired_id, main_node, {SyncBehaviorCol(table)}, {AuthorCols(table)}, {ExcludeCol(table)} " +
-                $"FROM {table} WHERE namespace = $1 AND id IN ({placeholders})");
-            cmd.Parameters.AddWithValue(ns);
-            foreach (var id in ids)
-                cmd.Parameters.AddWithValue(id);
+                $"FROM {table} WHERE path = ANY($1)");
+            cmd.Parameters.AddWithValue(groupPaths);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
@@ -908,13 +904,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         if (string.IsNullOrEmpty(normalizedPath))
             return 0;
 
-        var (ns, id) = SplitPath(normalizedPath);
-
         var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
-            $"DELETE FROM {table} WHERE namespace = $1 AND id = $2");
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(id);
+            $"DELETE FROM {table} WHERE path = $1");
+        cmd.Parameters.AddWithValue(normalizedPath);
 
         return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
@@ -1043,13 +1036,10 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         if (string.IsNullOrEmpty(normalizedPath))
             return false;
 
-        var (ns, id) = SplitPath(normalizedPath);
-
         var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
-            $"SELECT 1 FROM {table} WHERE namespace = $1 AND id = $2 LIMIT 1");
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(id);
+            $"SELECT 1 FROM {table} WHERE path = $1 LIMIT 1");
+        cmd.Parameters.AddWithValue(normalizedPath);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         return await reader.ReadAsync(ct).ConfigureAwait(false);

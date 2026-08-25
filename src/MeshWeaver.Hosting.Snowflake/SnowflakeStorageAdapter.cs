@@ -242,14 +242,13 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
 
-    /// <summary>Splits a normalized path into (namespace, id) on the last slash.</summary>
-    private static (string Namespace, string Id) SplitPath(string normalizedPath)
-    {
-        var lastSlash = normalizedPath.LastIndexOf('/');
-        var ns = lastSlash > 0 ? normalizedPath[..lastSlash] : "";
-        var id = lastSlash > 0 ? normalizedPath[(lastSlash + 1)..] : normalizedPath;
-        return (ns, id);
-    }
+    // 🚨 THERE IS NO POSITIONAL (namespace, id) SPLIT OF A PATH — an id may contain '/'. Rows are
+    // addressed on the REAL `path` column (maintained on write by ComputePath, PG's generated
+    // column's twin), never by splitting at the last slash: "Provider/OpenRouter/z-ai/glm-5.2"
+    // splits to (namespace='Provider/OpenRouter/z-ai', id='glm-5.2') while the stored row is
+    // (namespace='Provider/OpenRouter', id='z-ai/glm-5.2') — nothing matches, and DELETE then
+    // reports NodeNotFound for a node a read resolves (issue #2212; every LanguageModel id is
+    // {vendor}/{model}). Kept in lock-step with PostgreSqlStorageAdapter.
 
     /// <summary>
     /// The generation semantics of the REAL <c>path</c> column (PG declares it
@@ -360,8 +359,6 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         if (string.IsNullOrEmpty(normalizedPath))
             return null;
 
-        var (ns, id) = SplitPath(normalizedPath);
-
         var table = ResolveTable(normalizedPath);
         try
         {
@@ -369,9 +366,8 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
             await using var cmd = connection.CreateCommand();
             cmd.CommandText =
                 $"SELECT {NodeColumns}, {SyncBehaviorCol(table)} " +
-                $"FROM {table} WHERE \"namespace\" = :ns AND \"id\" = :id";
-            SnowflakeConnectionSource.AddParam(cmd, "ns", ns, DbType.String);
-            SnowflakeConnectionSource.AddParam(cmd, "id", id, DbType.String);
+                $"FROM {table} WHERE \"path\" = :path";
+            SnowflakeConnectionSource.AddParam(cmd, "path", normalizedPath, DbType.String);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
@@ -407,18 +403,13 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        // Normalize + drop empties up front. Group by (table, namespace) so each round-trip is
-        // `WHERE "namespace" = :ns AND "id" IN (...)` — the cheapest shape for the (namespace, id) key.
+        // Normalize + drop empties up front. Group by TABLE so each round-trip is
+        // `WHERE "path" IN (...)` — never a positional namespace/id split (issue #2212).
         var groups = paths
             .Select(NormalizePath)
             .Where(p => !string.IsNullOrEmpty(p))
-            .Select(p =>
-            {
-                var (ns, id) = SplitPath(p);
-                var table = ResolveTable(p);
-                return (table, ns, id);
-            })
-            .GroupBy(t => (t.table, t.ns))
+            .Distinct(StringComparer.Ordinal)
+            .GroupBy(p => ResolveTable(p), StringComparer.Ordinal)
             .ToList();
 
         if (groups.Count == 0)
@@ -427,20 +418,18 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         await using var connection = await _source.OpenAsync(ct).ConfigureAwait(false);
         foreach (var group in groups)
         {
-            var table = group.Key.table;
-            var ns = group.Key.ns;
-            var ids = group.Select(t => t.id).Distinct(StringComparer.Ordinal).ToArray();
-            if (ids.Length == 0)
+            var table = group.Key;
+            var groupPaths = group.ToArray();
+            if (groupPaths.Length == 0)
                 continue;
 
-            var placeholders = string.Join(", ", Enumerable.Range(0, ids.Length).Select(i => $":id{i}"));
+            var placeholders = string.Join(", ", Enumerable.Range(0, groupPaths.Length).Select(i => $":path{i}"));
             await using var cmd = connection.CreateCommand();
             cmd.CommandText =
                 $"SELECT {NodeColumns}, {SyncBehaviorCol(table)} " +
-                $"FROM {table} WHERE \"namespace\" = :ns AND \"id\" IN ({placeholders})";
-            SnowflakeConnectionSource.AddParam(cmd, "ns", ns, DbType.String);
-            for (var i = 0; i < ids.Length; i++)
-                SnowflakeConnectionSource.AddParam(cmd, $"id{i}", ids[i], DbType.String);
+                $"FROM {table} WHERE \"path\" IN ({placeholders})";
+            for (var i = 0; i < groupPaths.Length; i++)
+                SnowflakeConnectionSource.AddParam(cmd, $"path{i}", groupPaths[i], DbType.String);
 
             // Open the reader in its own try/catch: `yield return` can't live inside a
             // catch-bearing try, so the open is separated from the read loop. An absent table
@@ -939,8 +928,6 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         if (string.IsNullOrEmpty(normalizedPath))
             return 0;
 
-        var (ns, id) = SplitPath(normalizedPath);
-
         var rawTable = ResolveRawTable(normalizedPath);
         var table = QualifyTable(rawTable);
         await using var connection = await _source.OpenAsync(ct).ConfigureAwait(false);
@@ -953,9 +940,8 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
             {
                 await using var select = connection.CreateCommand();
                 select.CommandText =
-                    $"SELECT \"node_type\" FROM {table} WHERE \"namespace\" = :ns AND \"id\" = :id";
-                SnowflakeConnectionSource.AddParam(select, "ns", ns, DbType.String);
-                SnowflakeConnectionSource.AddParam(select, "id", id, DbType.String);
+                    $"SELECT \"node_type\" FROM {table} WHERE \"path\" = :path";
+                SnowflakeConnectionSource.AddParam(select, "path", normalizedPath, DbType.String);
                 var value = await select.ExecuteScalarAsync(ct).ConfigureAwait(false);
                 nodeType = value is null or DBNull ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
             }
@@ -970,9 +956,8 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         int deletedRows;
         await using (var cmd = connection.CreateCommand())
         {
-            cmd.CommandText = $"DELETE FROM {table} WHERE \"namespace\" = :ns AND \"id\" = :id";
-            SnowflakeConnectionSource.AddParam(cmd, "ns", ns, DbType.String);
-            SnowflakeConnectionSource.AddParam(cmd, "id", id, DbType.String);
+            cmd.CommandText = $"DELETE FROM {table} WHERE \"path\" = :path";
+            SnowflakeConnectionSource.AddParam(cmd, "path", normalizedPath, DbType.String);
             deletedRows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
@@ -989,9 +974,8 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
                 await using var mirror = connection.CreateCommand();
                 mirror.CommandText =
                     $"DELETE FROM {SnowflakeIdentifiers.Qualify(AuthSchemaName, "mesh_nodes")} " +
-                    "WHERE \"namespace\" = :ns AND \"id\" = :id";
-                SnowflakeConnectionSource.AddParam(mirror, "ns", ns, DbType.String);
-                SnowflakeConnectionSource.AddParam(mirror, "id", id, DbType.String);
+                    "WHERE \"path\" = :path";
+                SnowflakeConnectionSource.AddParam(mirror, "path", normalizedPath, DbType.String);
                 await mirror.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (IsUndefinedObject(ex))
@@ -1126,14 +1110,11 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
         if (string.IsNullOrEmpty(normalizedPath))
             return false;
 
-        var (ns, id) = SplitPath(normalizedPath);
-
         var table = ResolveTable(normalizedPath);
         await using var connection = await _source.OpenAsync(ct).ConfigureAwait(false);
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = $"SELECT 1 FROM {table} WHERE \"namespace\" = :ns AND \"id\" = :id LIMIT 1";
-        SnowflakeConnectionSource.AddParam(cmd, "ns", ns, DbType.String);
-        SnowflakeConnectionSource.AddParam(cmd, "id", id, DbType.String);
+        cmd.CommandText = $"SELECT 1 FROM {table} WHERE \"path\" = :path LIMIT 1";
+        SnowflakeConnectionSource.AddParam(cmd, "path", normalizedPath, DbType.String);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         return await reader.ReadAsync(ct).ConfigureAwait(false);
