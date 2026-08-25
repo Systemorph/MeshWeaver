@@ -1,4 +1,4 @@
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;

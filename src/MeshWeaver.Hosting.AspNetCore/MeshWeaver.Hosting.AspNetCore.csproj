@@ -18,6 +18,16 @@
          below the transports so MCP, REST, gRPC and the headless sidecar cannot drift apart. The
          reference is what lets the resolver stay platform-side now that MCP is a module. -->
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <!-- Portal/ holds the non-visual portal infrastructure lifted out of MeshWeaver.Blazor: the
+         middleware, caches and accessors the PLATFORM depends on, which merely happened to live in
+         the Blazor project. Not one of them imports MeshWeaver.Blazor or
+         Microsoft.AspNetCore.Components — they were already Blazor-free, which is what made the
+         lift a pure move. These two references are the only ones the move adds:
+           ContentCollections — ArticleExtensions
+           Layout             — PortalErrorSink -->
+    <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Markdown.Export.Contract\MeshWeaver.Markdown.Export.Contract.csproj" />
   </ItemGroup>
 
 </Project>
