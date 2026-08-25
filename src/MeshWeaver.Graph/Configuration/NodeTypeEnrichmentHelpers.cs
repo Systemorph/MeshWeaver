@@ -145,10 +145,17 @@ internal static class NodeTypeEnrichmentHelpers
             {
                 UserId = WellKnownUsers.System,
             };
-            return Observable.Using(
-                    () => (meshHub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem())
-                          ?? System.Reactive.Disposables.Disposable.Empty,
-                    _ => queryCore.Query<MeshNode>(probeRequest, meshHub.JsonSerializerOptions))
+            // 🚨 RunAsSystem, never `Observable.Using(access.ImpersonateAsSystem, …)` (#1790).
+            // Impersonation is an AsyncLocal store/restore pair, and Rx runs the resource factory
+            // on the SUBSCRIBING thread while disposing it when the inner observable TERMINATES —
+            // the owning hub's response thread for a cross-hub query. The subscriber was therefore
+            // left latched as `system-security`, and this probe is subscribed from an activation
+            // that continues doing work afterwards. RunAsSystem seals both ends inside the one
+            // Subscribe, and delivers every notification under the subscriber's OWN identity.
+            // This was the last site on ImpersonationScopeSites.allow for this file — the line is
+            // deleted rather than lowered, which is the only direction that ratchet may move.
+            return meshHub.ServiceProvider.GetService<AccessService>()
+                .RunAsSystem(() => queryCore.Query<MeshNode>(probeRequest, meshHub.JsonSerializerOptions))
                 .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
                 .Take(1)
                 .Timeout(NodeTypeProbeTimeout)
