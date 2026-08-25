@@ -1667,6 +1667,16 @@ internal static class ThreadExecution
                             "[ThreadExec] HISTORY_LOAD_FAILED threadPath={ThreadPath} responseId={ResponseId} "
                             + "— FAILING the round; refusing to answer without the thread's prior turns",
                             threadPath, responseMsgId);
+                        // 🚨 The per-round CLI harness client (Claude Code / Copilot) is created
+                        // ABOVE the history load and is normally disposed in the round's `finally` —
+                        // which this early return skips. Dispose it HERE, or every failed history
+                        // load leaks one harness client (and, for the process-backed harnesses, the
+                        // process behind it). The cached AgentChatClient is deliberately NOT disposed:
+                        // it is reused across rounds. (Same reasoning as the finally block below;
+                        // the NO_USABLE_MODEL early return is exempt because its guard already
+                        // establishes harnessClient == null.)
+                        if (harnessClient is IDisposable historyHd) historyHd.Dispose();
+                        else if (harnessClient is IAsyncDisposable historyHad) _ = historyHad.DisposeAsync();
                         var historyDone = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
                         PushToResponseMessage(
                             $"*Error: {historyError}*",
