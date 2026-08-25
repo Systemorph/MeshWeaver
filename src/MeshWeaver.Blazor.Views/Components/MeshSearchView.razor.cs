@@ -1454,9 +1454,17 @@ public partial class MeshSearchView
                     // row stay squeezed at the minmax floor instead of sharing the row. auto-fit
                     // collapses them and lets the real cards expand — the cap still holds, because a
                     // track can never be narrower than 100/cols per cent (#2181).
+                    //
+                    // 🚨 INVARIANT, not the ambient culture. This is CSS, not prose: the grid
+                    // template is parsed by the browser, which accepts only "33.3", never the
+                    // "33,3" a comma-decimal culture would render — and an unparseable
+                    // grid-template-columns is DROPPED silently, taking the whole column cap with
+                    // it. The ambient culture on Blazor Server is the container's and unrelated to
+                    // any viewer (AGENTS.md: never resolve formatting from CurrentCulture), so this
+                    // was one deployment locale away from breaking every capped card grid.
                     var pct = 100.0 / cols;
-                    parts.Add(
-                        $"grid-template-columns: repeat(auto-fit, minmax(max({pct:F1}% - 8px, {floor}px), 1fr));");
+                    parts.Add(FormattableString.Invariant(
+                        $"grid-template-columns: repeat(auto-fit, minmax(max({pct:F1}% - 8px, {floor}px), 1fr));"));
                 }
             }
             else if (BoundMinItemWidth is > 0)
@@ -1472,8 +1480,10 @@ public partial class MeshSearchView
                 parts.Add($"grid-template-columns: repeat(auto-fill, minmax({floor}px, 1fr));");
             }
             // WithGridSpacing is authored in px by every call site; unset keeps the stylesheet gap.
+            // Invariant for the same reason as the template above — LayoutGridSkin.Spacing is
+            // `object?`, so a caller may box a non-integer and a comma decimal would void the rule.
             if (ViewModel?.Grid is { } grid && grid.Spacing > 0)
-                parts.Add($"gap: {grid.Spacing}px;");
+                parts.Add(FormattableString.Invariant($"gap: {grid.Spacing}px;"));
             return string.Join(" ", parts);
         }
     }
