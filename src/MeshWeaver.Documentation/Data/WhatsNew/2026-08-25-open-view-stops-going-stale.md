@@ -15,11 +15,10 @@ full browser reload or recycling the node. Several people concluded their edit h
 made it a second time.
 
 The page was not broken and had not failed to render. It was reading from a live connection to the
-node whose *other end had quietly gone away* — released while idle, or closed when the node's hub
-was recycled or restarted. The server ended its half and told the page nothing at all, so the page
-went on showing the last thing it had ever been sent, with no error and nothing to notice.
+node whose *other end had quietly been closed* — released while the page sat idle, or closed when
+someone else stopped watching. The server closed its half and told the page nothing at all, so the
+page went on showing the last thing it had ever been sent, with no error and nothing to notice.
 
-Now the end of that connection is announced. A page whose live feed has been closed underneath it
-learns so immediately and re-establishes it, so the next change — and every change after — arrives
-the way it always should have. Nothing polls and nothing retries on a timer: the closing is the
-signal.
+Now that closing is announced. A page whose live feed has been closed underneath it learns so
+immediately and re-establishes it, so the next change — and every change after — arrives the way it
+always should have. Nothing polls and nothing retries on a timer: the closing itself is the signal.

@@ -51,42 +51,6 @@ public static class JsonSynchronizationStream
     /// </summary>
     private const int MaxHostLookupDepth = 8;
 
-    /// <summary>
-    /// 🚨 The hub to post a <see cref="StreamEndedEvent"/> from — <paramref name="owner"/> itself
-    /// when it is healthy, otherwise the nearest ancestor that can still route.
-    ///
-    /// <para>The announcement fires from the stream's disposal, and the case that matters most is
-    /// the OWNING hub tearing down (an idle deactivation, a recycle, a restart) — which disposes
-    /// its hosted <c>sync/</c> hubs from the <c>DisposeHostedHubs</c> phase, by which point the
-    /// owner's own <c>MessageService</c> refuses new posts. Announcing from the owner alone
-    /// therefore works for the tidy single-stream unsubscribe and is SILENT on the exact path
-    /// production takes: measured, with <c>OwnerHubTeardown_ReEstablishesTheSubscription_…</c>
-    /// timing out for its full budget while the tidy case passed.</para>
-    ///
-    /// <para>The parent (a per-node hub's mesh hub) is alive throughout its child's teardown and
-    /// routes by address, so the message lands. When the WHOLE tree is going down nothing here is
-    /// live, the walk finds nobody, and the caller posts from the owner and logs the failure at
-    /// Debug — correct: the process is leaving anyway.</para>
-    ///
-    /// <para>Depth-capped, and it stops on a SELF-PARENT: <c>Configuration.ParentHub</c> resolves
-    /// <c>IMessageHub</c> from the parent DI scope, which for a root hub is the hub itself — the
-    /// same trap <c>LocalInstanceOf</c> documents, where an unguarded walk spins forever.</para>
-    /// </summary>
-    private static IMessageHub AnnouncingHub(IMessageHub owner)
-    {
-        var h = owner;
-        for (var depth = 0; depth < MaxHostLookupDepth; depth++)
-        {
-            if (h.RunLevel <= MessageHubRunLevel.Started && h is not MessageHub { IsDisposing: true })
-                return h;
-            var parent = h.Configuration.ParentHub;
-            if (parent is null || ReferenceEquals(parent, h))
-                break;
-            h = parent;
-        }
-        return owner;
-    }
-
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
     // Mesh.Contract in the project graph and cannot reference it. Same literal
     // recognized by AccessService.ImpersonateAsSystem and PostgreSqlMeshQuery's
@@ -1149,12 +1113,31 @@ public static class JsonSynchronizationStream
         // 🚨 It hangs off RegisterForDisposal, NOT an onCompleted arm on the forwarding
         // subscription above, and that distinction is the whole fix. Store.OnCompleted() runs only
         // when SynchronizationStream.Dispose() is called — but the ordinary route is the sync HUB
-        // being disposed directly (WithHandler<UnsubscribeRequest> does exactly `hub.Dispose()`,
-        // and an owner tearing down disposes its hosted sync hubs), which walks
-        // `streamDisposables` and NEVER completes the store. An onCompleted arm is therefore silent
-        // on the common path — measured: the repro test still timed out with one wired.
-        // RegisterForDisposal fires on BOTH routes, and it is the exact mirror of how the CLIENT
-        // already announces its own end (CreateExternalClient's UnsubscribeRequest registration).
+        // being disposed directly (WithHandler<UnsubscribeRequest> does exactly `hub.Dispose()`),
+        // which walks `streamDisposables` and NEVER completes the store. An onCompleted arm is
+        // therefore silent on the common path — measured: the repro test still timed out with one
+        // wired. RegisterForDisposal fires on both routes, and it is the exact mirror of how the
+        // CLIENT already announces its own end (CreateExternalClient's UnsubscribeRequest
+        // registration).
+        //
+        // 🚨🚨 SCOPE, AND IT IS LOAD-BEARING: this covers the end of a stream on a HEALTHY owner —
+        // an UnsubscribeRequest, an idle release, an explicit stream disposal. It deliberately does
+        // NOT fire while the OWNING hub is tearing down, and the guard below is not defensive
+        // tidiness — it is the fix for a regression this announcement caused.
+        //
+        // The first version reached UP the hub tree for an ancestor that could still route, so the
+        // announcement would escape even a dying owner. On Orleans that RESURRECTS the activation
+        // it is trying to say goodbye for: routing a message to a deactivating grain re-activates
+        // it. OrleansGrainTeardownStragglerTest deactivates a grain and waits for its activation to
+        // leave the silo catalog; with the ancestor post it never left, and the test timed out at
+        // its full 30 s. OrleansMeshTests.HubWorksAfterDisposal failed the same way — the address
+        // stayed in shutdown past the probe budget. Three CI shards, run 32886635560, reproduced
+        // locally.
+        //
+        // So a tearing-down owner stays SILENT, exactly as before this change. That subscriber is
+        // not abandoned: an owner going away is precisely the case the recycle re-arm
+        // (rejectedByRecycle → OwnerTeardownSettled → Resubscribe) and the change-feed latch
+        // already handle. A hub must speak only for itself, and never while it is dying.
         //
         // Not a watchdog: nothing polls, nothing is on a timer, and this fires exactly once per
         // real end. StreamEndedEvent is [CanBeIgnored] precisely because one common case is the
@@ -1163,16 +1146,27 @@ public static class JsonSynchronizationStream
         // costs nothing.
         reduced.RegisterForDisposal(new AnonymousDisposable(() =>
         {
+            // 🚨🚨 ONLY the owner announces, and ONLY while the owner can still route. When the
+            // OWNING hub is itself tearing down this is a deliberate NO-OP — see the note above.
+            if (hub.RunLevel > MessageHubRunLevel.Started || hub is MessageHub { IsDisposing: true })
+            {
+                logger.LogDebug(
+                    "Owner {Owner} is tearing down (RunLevel={RunLevel}); not announcing the end of "
+                    + "stream {StreamId} to {Subscriber} — the subscriber recovers through the "
+                    + "recycle re-arm / change-feed latch instead",
+                    hub.Address, hub.RunLevel, request.StreamId, request.Subscriber);
+                return;
+            }
             try
             {
-                AnnouncingHub(hub).Post(new StreamEndedEvent(request.StreamId),
+                hub.Post(new StreamEndedEvent(request.StreamId),
                     o => o.WithTarget(request.Subscriber));
             }
             catch (Exception ex)
             {
-                // Best-effort by construction: when the WHOLE tree is going down there is no live
-                // hub left to route from and the announcement is correctly lost — the process is
-                // leaving anyway. Debug, not swallowed silence.
+                // Best-effort: the owner can begin winding down between the probe above and the
+                // post. Debug, not swallowed silence — the subscriber's fallback is the
+                // pre-existing change-feed latch, exactly as before this announcement existed.
                 logger.LogDebug(ex,
                     "Owner {Owner} could not announce the end of stream {StreamId} to {Subscriber}",
                     hub.Address, request.StreamId, request.Subscriber);
