@@ -4,7 +4,7 @@ using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
-using MeshWeaver.Blazor.Infrastructure; // PortalApplication
+using MeshWeaver.Hosting.AspNetCore.Portal; // PortalApplication
 using MeshWeaver.Mesh.Security;         // ApiToken (the minted token content)
 using MeshWeaver.Messaging;             // AccessService / AccessContext
 using Microsoft.AspNetCore.Authorization;

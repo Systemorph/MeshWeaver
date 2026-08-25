@@ -1267,7 +1267,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 Logger.LogWarning("[ThreadChat:{InstanceId}] Submit failed: {Error}", _instanceId, err);
                 // SURFACE the submit failure (modal) instead of just clearing the spinner — a silent
                 // reset is the "message vanished, no idea why" symptom.
-                Services.GetService<MeshWeaver.Blazor.Infrastructure.PortalErrorSink>()
+                Services.GetService<MeshWeaver.Hosting.AspNetCore.Portal.PortalErrorSink>()
                     ?.Report($"Couldn't send your message: {err}");
                 showSubmissionProgress = false;
                 lastSubmittedText = null;

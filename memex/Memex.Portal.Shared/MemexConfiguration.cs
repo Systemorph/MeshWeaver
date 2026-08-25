@@ -7,7 +7,7 @@ using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Hosting.Grpc;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;

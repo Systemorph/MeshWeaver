@@ -2,7 +2,7 @@ using System.Reactive.Subjects;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Blazor.Infrastructure;
+namespace MeshWeaver.Hosting.AspNetCore.Portal;
 
 /// <summary>
 /// Circuit-scoped bridge that surfaces failed posts ORIGINATING FROM THE PORTAL HUB to the

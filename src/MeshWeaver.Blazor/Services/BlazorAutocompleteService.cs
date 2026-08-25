@@ -1,6 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Blazor.Components.Monaco;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
