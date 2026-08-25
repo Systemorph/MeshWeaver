@@ -156,7 +156,7 @@ mesh.Query<MeshNode>(
 
 | Question | `select:` clause |
 |---|---|
-| "Does it exist?" | `select:path` |
+| "Does anything MATCH?" (a set — never one known path) | `select:path` |
 | "Is anything stale?" | `select:path,version` |
 | "Render a tree / list / picker" | `select:path,name,nodeType,icon` |
 | "Show last-modified column" | `select:path,name,lastModified` |
@@ -735,7 +735,8 @@ return request.Processed();   // handler returns immediately
 | Intent | Primitive |
 |---|---|
 | List nodes under X (paths / metadata only) | `mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(...))` — project to `Path` / `Name` / etc. **never read `.Content`** |
-| Does node X exist? | `Query` + check `Items.Count` |
+| Does **anything match** a predicate? | `Query` + check `Items.Count` |
+| Does node X (a KNOWN path) exist? | `workspace.GetMeshNodeStream(X)` — a query's negative can be minutes stale, and a caller that writes on it redoes finished work ([why](#-never-query-to-ask-does-this-path-exist--a-stale-negative-redoes-finished-work)). Creating it anyway? `CreateOrUpdateNodeRequest` — no check needed |
 | Give me node X's MeshNode (live) | `workspace.GetMeshNodeStream(X)` — the **only** non-stale read path |
 | Give me node X's MeshNode (once) | `workspace.GetMeshNodeStream(X).Where(n => n is not null).Take(1).Timeout(...)` |
 | Keep me updated on node X's MeshNode | `workspace.GetMeshNodeStream(X)` — stay subscribed (no `.Take(1)`) |
