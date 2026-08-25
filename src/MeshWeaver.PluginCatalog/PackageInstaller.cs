@@ -1997,13 +1997,14 @@ public static class PackageInstaller
     {
         _ = batchSize; // node-repo installs are ordered (bucketed bulk saves + Concat), not fanned out
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
+        var importSourceNodes = ImportSourceNodesFor(hub, logger);
         // The CI manifest sidecar (when the package ships one) becomes the install record's diff
         // baseline — the next update touches only what its manifest diff names.
         var moduleManifest = files
             .Where(f => ModuleManifest.IsManifestPath(f.RelativePath))
             .Select(f => ModuleManifest.TryParse(f.Content, logger))
             .FirstOrDefault(m => m is not null);
-        var nodes = ParseAll(parsers, files, manifest.Id, logger);
+        var nodes = ParseAll(parsers, files, manifest.Id, logger, importSourceNodes);
 
         if (nodes.Length == 0)
             return Observable.Throw<InstallResult>(new InvalidOperationException(
@@ -2559,7 +2560,7 @@ public static class PackageInstaller
     {
 
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
-        var nodes = ParseAll(parsers, changedFiles, manifest.Id, logger);
+        var nodes = ParseAll(parsers, changedFiles, manifest.Id, logger, ImportSourceNodesFor(hub, logger));
 
         if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
             return shadowed;
@@ -2730,23 +2731,67 @@ public static class PackageInstaller
     /// nodes by design (README, manifest, `content/**` assets) are not skips and are not counted.
     /// </para>
     /// </summary>
-    private static MeshNode[] ParseAll(
-        FileFormatParserRegistry parsers, IReadOnlyList<PackageFile> files, string packageId, ILogger? logger)
+    // Internal for the ImportSourceNodesTest pin (InternalsVisibleTo).
+    internal static MeshNode[] ParseAll(
+        FileFormatParserRegistry parsers, IReadOnlyList<PackageFile> files, string packageId,
+        ILogger? logger, bool importSourceNodes = true)
     {
         var unparsed = new List<string>();
         var nodes = files
-            .Select(f => ParseCanonical(parsers, f, logger, unparsed))
+            .Select(f => ParseCanonical(parsers, f, logger, unparsed, importSourceNodes))
             .Where(n => n is not null).Select(n => n!)
             .ToArray();
+
+        // The adopt-only import mode (Modules:ImportSourceNodes=false, MeshWeaver#2193 §B):
+        // compile inputs are deliberately NOT persisted as nodes — say so ONCE, with the count,
+        // so "the sources are not on the mesh" reads as the configured policy and never as loss.
+        if (!importSourceNodes)
+        {
+            var sourceFiles = files.Count(f =>
+                !IsNotANodeFile(f.RelativePath)
+                && GitSync.NodeFileMapper.IsCompileInputPath(f.RelativePath));
+            if (sourceFiles > 0)
+                logger?.LogInformation(
+                    "Package '{Package}': {SourceFiles} compile-input file(s) (Source/, Test/) "
+                    + "were NOT persisted as nodes ({Key}=false) — their compiled form arrives in "
+                    + "the prebuilt bundle.",
+                    packageId, sourceFiles,
+                    Graph.Configuration.PrebuiltAssemblySeeder.ImportSourceNodesConfigKey);
+        }
 
         if (unparsed.Count > 0)
             logger?.LogWarning(
                 "Package '{Package}': {Skipped} of {Candidates} candidate files had no parser and "
                 + "were skipped; {Installed} nodes installed. First skipped: {Sample}.",
-                packageId, unparsed.Count, files.Count(f => !IsNotANodeFile(f.RelativePath)),
+                packageId, unparsed.Count,
+                files.Count(f => !IsNotANodeFile(f.RelativePath)
+                    && (importSourceNodes
+                        || !GitSync.NodeFileMapper.IsCompileInputPath(f.RelativePath))),
                 nodes.Length, string.Join(", ", unparsed.Take(5)));
 
         return nodes;
+    }
+
+    /// <summary>
+    /// The import-mode policy for one install run, with its one sanity warning: skipping the
+    /// sources while the mesh still COMPILES (no <see cref="Graph.Configuration.PrebuiltAssemblySeeder.RequirePrebuiltConfigKey"/>)
+    /// would fail every recompile with "no sources" — so the combination is honoured (the operator
+    /// asked) but never silent (MeshWeaver#2193 §B).
+    /// </summary>
+    private static bool ImportSourceNodesFor(IMessageHub hub, ILogger? logger)
+    {
+        var importSourceNodes =
+            Graph.Configuration.PrebuiltAssemblySeeder.ImportSourceNodes(hub.ServiceProvider);
+        if (!importSourceNodes
+            && !Graph.Configuration.PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider))
+            logger?.LogWarning(
+                "{ImportKey}=false while {RequireKey} is not set: compile inputs will not be "
+                + "persisted, but this mesh still compiles on a miss — a recompile of any affected "
+                + "type will fail for lack of sources. Set both keys together (adopt-only), or "
+                + "neither.",
+                Graph.Configuration.PrebuiltAssemblySeeder.ImportSourceNodesConfigKey,
+                Graph.Configuration.PrebuiltAssemblySeeder.RequirePrebuiltConfigKey);
+        return importSourceNodes;
     }
 
     /// <summary>
@@ -2773,9 +2818,15 @@ public static class PackageInstaller
         || ContentAssetMapper.IsContentPath(relativePath);
 
     private static MeshNode? ParseCanonical(
-        FileFormatParserRegistry parsers, PackageFile file, ILogger? logger, List<string>? unparsed = null)
+        FileFormatParserRegistry parsers, PackageFile file, ILogger? logger,
+        List<string>? unparsed = null, bool importSourceNodes = true)
     {
         if (IsNotANodeFile(file.RelativePath))
+            return null;
+        // Adopt-only import mode: a compile input is not a node candidate here at all — not
+        // parsed, not warned, not counted as a skip (ParseAll reports the policy once, with the
+        // count). See PrebuiltAssemblySeeder.ImportSourceNodesConfigKey.
+        if (!importSourceNodes && GitSync.NodeFileMapper.IsCompileInputPath(file.RelativePath))
             return null;
         var ext = System.IO.Path.GetExtension(file.RelativePath);
         var parsed = parsers.TryParse(ext, file.RelativePath, file.Content, file.RelativePath);

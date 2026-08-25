@@ -54,6 +54,37 @@ public static class PrebuiltAssemblySeeder
     }
 
     /// <summary>
+    /// The import half of the adopt-only mode (MeshWeaver#2193 §B, sequenced FIRST — a purge that
+    /// runs before imports stop re-creating source is undone by the next sync): with
+    /// <c>Modules:ImportSourceNodes</c> set to <c>false</c>, package installs and GitSync imports
+    /// SKIP persisting compile-input files (<c>Source/</c>, <c>Test/</c> —
+    /// <c>NodeFileMapper.IsCompileInputPath</c>) as mesh nodes. Their compiled form arrives in the
+    /// prebuilt bundle; the text stays in the repo, browsed through GitHub (§C), not the DB.
+    ///
+    /// <para>🚨 <b>Default ON (sources ARE imported)</b> — and only sane to turn off TOGETHER with
+    /// <see cref="RequirePrebuiltConfigKey"/>: a mesh that still compiles but no longer holds the
+    /// sources would fail every recompile. The import lanes log a loud warning on that
+    /// combination rather than guessing an intent.</para>
+    /// </summary>
+    public const string ImportSourceNodesConfigKey = "Modules:ImportSourceNodes";
+
+    /// <summary>Reads <see cref="ImportSourceNodesConfigKey"/> — absent or unparseable means ON
+    /// (sources are imported), the long-standing default. Never throws.</summary>
+    public static bool ImportSourceNodes(IServiceProvider? services)
+    {
+        try
+        {
+            var value = services?
+                .GetService<Microsoft.Extensions.Configuration.IConfiguration>()?[ImportSourceNodesConfigKey];
+            return !bool.TryParse(value, out var parsed) || parsed;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Why a prebuilt assembly may NOT be adopted, or null when it may.
     ///
     /// <para>🚨 This is the whole safety argument, kept as one pure function so it can be tested

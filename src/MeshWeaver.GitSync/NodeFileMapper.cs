@@ -83,4 +83,24 @@ public static class NodeFileMapper
         var dot = p.LastIndexOf('.');
         return dot > lastSlash ? p[..dot] : p;
     }
+
+    /// <summary>
+    /// Whether a repo file is a COMPILE INPUT by the node-repo layout — it lives under a
+    /// <c>Source/</c> or <c>Test/</c> DIRECTORY (a type's own, or a partition-shared one). These
+    /// are the files a mesh that adopts prebuilt assemblies never needs as nodes
+    /// (<c>Modules:ImportSourceNodes=false</c>, MeshWeaver#2193 §B): their compiled form arrives
+    /// in the bundle, and persisting the text only re-creates the source-in-DB surface the
+    /// adopt-only design removes.
+    ///
+    /// <para>The match is the DIRECTORY segment, exact and case-sensitive — the same
+    /// <c>/Source/</c>, <c>/Test/</c> convention the compile-input resolution and the installer's
+    /// owning-type derivation use. A FILE named <c>Test.json</c> (the node backing a
+    /// <c>Test/</c> folder) is not a compile input, and neither is a folder merely containing the
+    /// words (<c>Sources/</c>, <c>Testing/</c>). Pure.</para>
+    /// </summary>
+    public static bool IsCompileInputPath(string relativePath) =>
+        relativePath.Contains("/Source/", StringComparison.Ordinal)
+        || relativePath.Contains("/Test/", StringComparison.Ordinal)
+        || relativePath.StartsWith("Source/", StringComparison.Ordinal)
+        || relativePath.StartsWith("Test/", StringComparison.Ordinal);
 }
