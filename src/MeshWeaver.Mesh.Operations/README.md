@@ -33,6 +33,21 @@ external boundary (`.FirstAsync().ToTask()` in an MCP/REST adapter) — never in
 
 ## Reading a node that may not be there
 
-`NodeReadOutcome` keeps three answers apart — **Found**, **Absent** (a definitive negative, the only
+`NodeReadResult` keeps three answers apart — **Found**, **Absent** (a definitive negative, the only
 one that may be reported as `"Not found: …"`), and **Unavailable** (no answer was reached). A caller
 that collapses them into one `null` reports "not found" for a read that simply timed out.
+
+## The namespace is `MeshWeaver.Mesh`, and that is deliberate
+
+The assembly is new; the namespace is not. Plugin source is type-checked by two gates against two
+different frameworks — `compile-check.py --image` against core `main`, and the pack lane against the
+newest RELEASED framework (rc7, cut 2026-08-22). A brand-new namespace would resolve on neither
+until a release moved the floor, so every plugin using these types would break on the plugins repo's
+MAIN rather than on the PR that caused it.
+
+`MeshWeaver.Mesh` exists in rc7, so the move needs no cross-repo coordination at all: the one real
+consumer, `MeshWeaver.Mcp`, already carries `using MeshWeaver.Mesh;` and reaches this assembly
+transitively through its `MeshWeaver.AI` reference. Verified by building it against this branch — 0
+errors, no plugin change. `NodeReadResult` carries its new name for the same reason: at
+`MeshWeaver.Mesh.NodeReadOutcome` it would have collided with the read-classifier type already
+there.

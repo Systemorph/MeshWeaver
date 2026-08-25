@@ -1,4 +1,3 @@
-using NodeReadOutcome = MeshWeaver.Mesh.Operations.NodeReadOutcome;
 using System;
 using System.Text.Json;
 using MeshWeaver.AI;
@@ -9,7 +8,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Pins <see cref="NodeReadOutcome.FromReadFailure"/> — the point where a failed node read decides
+/// Pins <see cref="NodeReadResult.FromReadFailure"/> — the point where a failed node read decides
 /// between "there is nothing here" and "we could not find out" (issue #974, split out of #637).
 ///
 /// <para><b>The bug.</b> <c>MeshOperations.FetchNode</c> mapped every failure — and its own 10s
@@ -44,7 +43,7 @@ public class NodeReadOutcomeClassifierTest
         // The authoritative "this node does not exist" — the router resolved the address and found
         // nothing. This is the ONLY failure that may be reported as "Not found", and it must keep
         // working: a fix that made everything unavailable would be just as useless.
-        var outcome = NodeReadOutcome.FromReadFailure(
+        var outcome = NodeReadResult.FromReadFailure(
             Path, Nack($"No node found at '{Path}'.", ErrorType.NotFound));
 
         Assert.False(outcome.IsUnavailable);
@@ -58,7 +57,7 @@ public class NodeReadOutcomeClassifierTest
         // readable here for you"), so it is not an availability failure. Reporting it as one would
         // also disclose that a gated node exists at this exact path — the non-disclosure property
         // this leg has always had, and which the fix must not break.
-        var outcome = NodeReadOutcome.FromReadFailure(
+        var outcome = NodeReadResult.FromReadFailure(
             Path, new UnauthorizedAccessException("lacks Read"));
 
         Assert.False(outcome.IsUnavailable);
@@ -68,7 +67,7 @@ public class NodeReadOutcomeClassifierTest
     [Fact]
     public void ADenialNestedUnderAnotherException_IsStillAbsent()
     {
-        var outcome = NodeReadOutcome.FromReadFailure(
+        var outcome = NodeReadResult.FromReadFailure(
             Path, new InvalidOperationException("wrapped", new UnauthorizedAccessException("lacks Read")));
 
         Assert.False(outcome.IsUnavailable);
@@ -80,7 +79,7 @@ public class NodeReadOutcomeClassifierTest
     public void RequestTimeout_IsUnavailable_NotNotFound()
     {
         // 🚨 The regression pin. A read that timed out says nothing about whether the node exists.
-        var outcome = NodeReadOutcome.FromReadFailure(
+        var outcome = NodeReadResult.FromReadFailure(
             Path, new TimeoutException($"No response received in hub … target {Path}"));
 
         Assert.True(outcome.IsUnavailable);
@@ -93,7 +92,7 @@ public class NodeReadOutcomeClassifierTest
         // A grain that idle-collected rejects the next delivery while it reactivates. The node
         // exists; the very next probe lands on the fresh activation. Calling it "not found" is how
         // a transient miss turns into a delete-and-recreate.
-        var outcome = NodeReadOutcome.FromReadFailure(
+        var outcome = NodeReadResult.FromReadFailure(
             Path,
             Nack("Forwarding failed: tried to forward message … to invalid activation. Rejecting now.",
                 ErrorType.Failed));
@@ -106,7 +105,7 @@ public class NodeReadOutcomeClassifierTest
     {
         // A delivery that raced the target hub's disposal — the address may reactivate on the very
         // next probe (ErrorType.ShuttingDown is documented as retry-worthy, never terminal).
-        var outcome = NodeReadOutcome.FromReadFailure(
+        var outcome = NodeReadResult.FromReadFailure(
             Path, Nack($"Hub '{Path}' is shutting down", ErrorType.ShuttingDown));
 
         Assert.True(outcome.IsUnavailable);
@@ -115,7 +114,7 @@ public class NodeReadOutcomeClassifierTest
     [Fact]
     public void DatabaseBlackout_IsUnavailable()
     {
-        var outcome = NodeReadOutcome.FromReadFailure(
+        var outcome = NodeReadResult.FromReadFailure(
             Path, new InvalidOperationException("Failed to connect to 10.0.0.4:5432"));
 
         Assert.True(outcome.IsUnavailable);
@@ -127,7 +126,7 @@ public class NodeReadOutcomeClassifierTest
         // 🚨 The direction of the default is itself load-bearing. An unrecognised fault is by
         // definition one nobody has reasoned about; admitting we do not know costs a retry, while
         // guessing "not found" invites deleting a node that exists.
-        var outcome = NodeReadOutcome.FromReadFailure(Path, new Exception("something new"));
+        var outcome = NodeReadResult.FromReadFailure(Path, new Exception("something new"));
 
         Assert.True(outcome.IsUnavailable);
     }
@@ -137,7 +136,7 @@ public class NodeReadOutcomeClassifierTest
     {
         // Same rule at the typed layer: only ErrorType.NotFound is a definitive absence. A generic
         // Failed NACK is an infrastructure outcome, whatever its wording happens to be.
-        var outcome = NodeReadOutcome.FromReadFailure(
+        var outcome = NodeReadResult.FromReadFailure(
             Path, Nack("Delivery to 'x' failed: something went wrong", ErrorType.Failed));
 
         Assert.True(outcome.IsUnavailable);
@@ -149,13 +148,13 @@ public class NodeReadOutcomeClassifierTest
     public void Found_CarriesTheNode_AndAbsentCarriesNothing()
     {
         var node = new MeshNode("Statement", "AgenticPension");
-        Assert.Same(node, NodeReadOutcome.Found(node).Node);
-        Assert.False(NodeReadOutcome.Found(node).IsUnavailable);
+        Assert.Same(node, NodeReadResult.Found(node).Node);
+        Assert.False(NodeReadResult.Found(node).IsUnavailable);
 
-        Assert.Null(NodeReadOutcome.Absent.Node);
-        Assert.False(NodeReadOutcome.Absent.IsUnavailable);
+        Assert.Null(NodeReadResult.Absent.Node);
+        Assert.False(NodeReadResult.Absent.IsUnavailable);
 
-        Assert.True(NodeReadOutcome.Unavailable("stalled").IsUnavailable);
-        Assert.Null(NodeReadOutcome.Unavailable("stalled").Node);
+        Assert.True(NodeReadResult.Unavailable("stalled").IsUnavailable);
+        Assert.Null(NodeReadResult.Unavailable("stalled").Node);
     }
 }

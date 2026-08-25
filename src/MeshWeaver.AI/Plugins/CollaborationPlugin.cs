@@ -1,4 +1,3 @@
-using MeshWeaver.Mesh.Operations;
 using System.ComponentModel;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;

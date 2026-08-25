@@ -1,6 +1,5 @@
 ﻿#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
-using MeshWeaver.Mesh.Operations;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System;

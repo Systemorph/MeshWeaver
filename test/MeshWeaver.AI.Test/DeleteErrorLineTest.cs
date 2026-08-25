@@ -1,4 +1,4 @@
-using MeshWeaver.Mesh.Operations;
+using MeshWeaver.Mesh;
 using System;
 using Xunit;
 

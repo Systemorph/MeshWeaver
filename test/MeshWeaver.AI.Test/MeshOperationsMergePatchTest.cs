@@ -1,6 +1,6 @@
 #pragma warning disable CS1591
 
-using MeshWeaver.Mesh.Operations;
+using MeshWeaver.Mesh;
 using System.Text.Json.Nodes;
 using MeshWeaver.AI;
 using Xunit;

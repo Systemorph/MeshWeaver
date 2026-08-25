@@ -1,4 +1,3 @@
-using MeshWeaver.Mesh.Operations;
 using System;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
