@@ -151,6 +151,36 @@ The dimension `{dim}` is configured via `PostgreSqlStorageOptions.EmbeddingDimen
 
 When `AddEmbeddings` registers nothing, `PostgreSqlMeshQuery` holds a **null** `IEmbeddingProvider`, so the vector intercept is skipped outright and the query takes the `GenerateTextSearchClause` ILIKE path. The intercept is also skipped when a provider *is* registered but returns `null` for this query (a transient failure) — same fallback, so callers get results instead of an empty page. `NullEmbeddingProvider` is the **write**-side stand-in: `PostgreSqlStorageAdapter` substitutes `NullEmbeddingProvider.Instance` when no provider is injected, and its `GenerateEmbeddingAsync` returns `null`, leaving the `embedding` column NULL. Tests that do not wire an embedding provider get the regular ILIKE behaviour automatically.
 
+### 🚨 The fallback is announced, not silent
+
+Degrading to ILIKE is a supported configuration, not a fault — but a capability that degrades in
+silence is indistinguishable from one that is broken. `TryAddEmbeddingProvider` therefore records
+the decision as a singleton **`EmbeddingCapability`** and registers `EmbeddingCapabilityReporter`,
+which writes exactly **one** `Information` line at host start, in *both* directions:
+
+```
+Semantic (vector) search ENABLED: provider=Ollama, endpoint=…, model=bge-m3, dimensions=1024.
+Semantic (vector) search DISABLED — no Embedding:Endpoint is configured. Free-text queries fall
+back to an ILIKE substring scan and content indexing stays inert; this is a supported
+configuration, not a fault.
+```
+
+A line emitted only when the capability is ON would be no better than the silence, so the disabled
+branch logs too — and names the configuration key that would turn it on (`Embedding:Endpoint`, or
+`Embedding:ApiKey` for the keyed cloud backend). Before this, an operator seeing plainly-lexical
+results could not tell "never configured" from "configured and failing", which is how issue #1642
+came to be triaged from a stack trace.
+
+`EmbeddingCapability.IsEnabled` is taken from whether a provider was *actually* created, never
+re-derived from the options — a second copy of `CreateEmbeddingProvider`'s branch logic could drift
+and then advertise a capability the host does not have.
+
+🚨 **Do not "fix" the null by registering `NullEmbeddingProvider` as a default.** The PRESENCE of an
+`IEmbeddingProvider` registration is the capability signal every consumer reads — both storage
+backends resolve it with `GetService`, and the content-indexing module's resolve-time `enabledWhen`
+gate asks the same question. A Null default answers *yes* on a host that has no embeddings, which
+lights the indexing pipeline up against an embedder that can never embed.
+
 ---
 
 ## Provider backends

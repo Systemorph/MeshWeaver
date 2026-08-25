@@ -442,6 +442,36 @@ public static class PersistenceExtensions
         return services.AddCoreAndWrapperServices();
     }
 
+    /// <summary>
+    /// Adds a custom storage adapter built LAZILY from the real container, with in-memory
+    /// persistence service.
+    ///
+    /// <para>🚨 Prefer this over the instance overload whenever the adapter needs anything else out
+    /// of DI. The instance overload forces the caller to have the adapter's dependencies in hand at
+    /// REGISTRATION time, and the shortcut that reaches for — <c>services.BuildServiceProvider()</c>
+    /// mid-registration — silently builds a SECOND, throwaway container: anything registered after
+    /// that line is invisible to it, and any singleton it does resolve is a duplicate of the one the
+    /// real container will hand everyone else. Both PostgreSQL simple-persistence lanes and the
+    /// Snowflake one read their optional <c>IEmbeddingProvider</c> that way, so the adapter took a
+    /// null (or a second instance) purely because of registration ORDER.</para>
+    ///
+    /// <para>The version-writing/write-guard decorator chain resolves the last
+    /// <see cref="IStorageAdapter"/> registration whether it is an instance or a factory, so nothing
+    /// downstream can tell the difference.</para>
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="storageAdapterFactory">Builds the adapter from the real service provider.</param>
+    /// <returns>The service collection for chaining.</returns>
+    public static IServiceCollection AddPersistence(
+        this IServiceCollection services,
+        Func<IServiceProvider, IStorageAdapter> storageAdapterFactory)
+    {
+        services.AddSingleton(storageAdapterFactory);
+
+        // Register common services and wrapper services
+        return services.AddCoreAndWrapperServices();
+    }
+
     // AddPersistence(IServiceCollection, IStorageService) deleted in the cull —
     // IStorageService is gone. Callers register an IStorageAdapter directly
     // and call AddCoreAndWrapperServices().
