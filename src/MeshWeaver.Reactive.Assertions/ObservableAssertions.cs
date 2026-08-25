@@ -1,4 +1,3 @@
-using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 
@@ -42,22 +41,37 @@ public static class ObservableAssertionExtensions
 /// Fluent assertions over a reactive stream. Each terminal method subscribes, waits (up to the
 /// timeout) for the relevant emission, and asserts — so test bodies stay declarative.
 /// <para>
-/// The wait is the sanctioned test-edge Rx→Task bridge: the source is <c>SubscribeOn</c>'d onto the
-/// thread pool, filtered, <c>Take(1)</c>'d, bounded with <c>Timeout</c>, and bridged via <c>.ToTask()</c> —
+/// The wait is the sanctioned test-edge Rx→Task bridge: the source is subscribed synchronously off the
+/// ambient sync-context, filtered, <c>Take(1)</c>'d, bounded with <c>Timeout</c>, and bridged via <c>.ToTask()</c> —
 /// never a thread-blocking <see cref="System.Threading.ManualResetEventSlim"/> + <c>Wait</c>. Each terminal
 /// assertion returns a <see cref="System.Threading.Tasks.Task"/> the test body <c>await</c>s; the bridge
 /// lives in the assertion, never the test body. <c>Within(...)</c> stays synchronous — it only configures
 /// the timeout for the rest of the chain.
 /// </para>
 /// <para>
-/// 🚨 The <see cref="System.Reactive.Concurrency.TaskPoolScheduler"/> <c>SubscribeOn</c> is load-bearing,
-/// not cosmetic. xUnit runs <c>async Task</c> tests under a single-threaded <c>MaxConcurrencySyncContext</c>
-/// (<c>maxParallelThreads: 1</c>). If a cold mesh observable is subscribed directly on that thread, the
-/// mesh's async continuations get funnelled back onto the one sync-context thread and serialise/starve —
-/// a path that profiled at 8 s versus 3 ms when the same subscribe ran off the context
-/// (AddressResolutionTest, 2026-06-15). Subscribing on the pool keeps every mesh round-trip on the thread
-/// pool where it belongs; only the final awaited result hops back to the test. Do NOT remove the
-/// <c>SubscribeOn</c>.
+/// 🚨 The subscribe happens SYNCHRONOUSLY, on the calling thread, before the returned
+/// <see cref="System.Threading.Tasks.Task"/> is handed back — see
+/// <c>SubscribeHereOffSyncContext</c> below. A test that arms an assertion and then makes the thing
+/// happen is the normal shape, and half of what it observes is a HOT source (a bare
+/// <c>Subject&lt;T&gt;</c> such as <c>MessageStormBreaker.AggregateSheds</c>) whose emission is simply
+/// GONE if no observer is attached yet. This used to be <c>SubscribeOn(TaskPoolScheduler.Default)</c>,
+/// which deferred the subscribe to the thread pool: the test thread raced ahead, the source emitted into
+/// a subject with no observer, and the assertion then waited out its full timeout against a stream that
+/// would never emit again (#2243 — <c>ManyDistinctMissingSubscribes_DoNotWedge</c>, intermittently, only
+/// under full-suite ThreadPool pressure).
+/// </para>
+/// <para>
+/// 🚨 What the pool hop was actually FOR is preserved, and preserved is the operative word. xUnit runs
+/// <c>async Task</c> tests under a single-threaded <c>MaxConcurrencySyncContext</c>
+/// (<c>maxParallelThreads: 1</c>). If a cold mesh observable is subscribed with that context ambient, the
+/// mesh's async continuations get captured and funnelled back onto the one sync-context thread, where they
+/// serialise and starve — a path that profiled at 8 s versus 3 ms when the same subscribe ran off the
+/// context (AddressResolutionTest, 2026-06-15). It was never the pool THREAD that fixed that; it was the
+/// absence of the ambient context on it. So the subscribe now runs here with
+/// <see cref="System.Threading.SynchronizationContext"/> suppressed and restored around it: continuations
+/// created during the subscribe capture <c>null</c> and land on the pool exactly as before, while the
+/// observer is attached in time to see a synchronous emission. Do NOT reintroduce <c>SubscribeOn</c>, and
+/// do NOT drop the suppression.
 /// </para>
 /// </summary>
 /// <typeparam name="T">The element type of the observed stream.</typeparam>
@@ -114,7 +128,7 @@ public class ObservableAssertions<T>
         {
             // Same sentinel discipline as WaitForFirst: only the WAIT's own timeout maps
             // to "did not"; a source-thrown TimeoutException surfaces via "errored:".
-            await _subject.SubscribeOn(TaskPoolScheduler.Default)
+            await SubscribeHereOffSyncContext(_subject)
                 .IgnoreElements()
                 .Timeout(_timeout, Observable.Defer(() =>
                     Observable.Throw<T>(new AssertionWaitTimeoutException())))
@@ -148,7 +162,7 @@ public class ObservableAssertions<T>
             // failure; if the window elapses with nothing (Timeout), the source completes empty,
             // or the source errors before emitting, the assertion holds — mirroring the original
             // "no positive signal => pass" semantics.
-            observed = await _subject.SubscribeOn(TaskPoolScheduler.Default)
+            observed = await SubscribeHereOffSyncContext(_subject)
                 .Take(1).Timeout(within).ToTask();
             emitted = true;
         }
@@ -198,7 +212,7 @@ public class ObservableAssertions<T>
             // run 31407254207: an Interval-based poll "completed" — Interval never completes).
             // ToList reports empty completion as DATA (an empty list), so the only exceptions
             // left in flight are the sentinel and genuine source errors.
-            matched = await source.SubscribeOn(TaskPoolScheduler.Default)
+            matched = await SubscribeHereOffSyncContext(source)
                 .Take(1)
                 .ToList()
                 .Timeout(_timeout, Observable.Defer(() =>
@@ -220,6 +234,38 @@ public class ObservableAssertions<T>
                 $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it completed without one. {seen.Describe(predicate is not null)}");
         return matched[0];
     }
+
+    /// <summary>
+    /// Subscribes to <paramref name="source"/> on the CALLING thread — synchronously, so the observer
+    /// is attached before the terminal assertion returns its <see cref="System.Threading.Tasks.Task"/> — with the ambient
+    /// <see cref="SynchronizationContext"/> suppressed for the duration of the subscribe.
+    /// <para>
+    /// Both halves are load-bearing and neither can be dropped for the other; see the class remarks.
+    /// Synchronous attach is what makes an assertion armed BEFORE the trigger able to observe a hot,
+    /// non-replaying <c>Subject&lt;T&gt;</c> (#2243). Suppressing the context is what keeps a cold mesh
+    /// observable's async continuations off xUnit's single-threaded <c>MaxConcurrencySyncContext</c>,
+    /// which is the property the old <c>SubscribeOn(TaskPoolScheduler.Default)</c> was really buying
+    /// (AddressResolutionTest, 2026-06-15). The context is restored in a <c>finally</c>, so a throwing
+    /// subscribe cannot leave the test thread contextless.
+    /// </para>
+    /// </summary>
+    private static IObservable<TSource> SubscribeHereOffSyncContext<TSource>(IObservable<TSource> source)
+        => Observable.Create<TSource>(observer =>
+        {
+            var ambient = SynchronizationContext.Current;
+            if (ambient is null)
+                return source.Subscribe(observer);
+
+            SynchronizationContext.SetSynchronizationContext(null);
+            try
+            {
+                return source.Subscribe(observer);
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(ambient);
+            }
+        });
 
     /// <summary>
     /// Private sentinel thrown by the assertion's own <c>Timeout</c> operator so a
