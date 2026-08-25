@@ -188,9 +188,15 @@ public static class PluginBundleEndpoints
 
                 BundleReader.Manifest? manifest;
                 IReadOnlyList<BundleReader.ModuleFile> files;
+                IReadOnlyList<BundleReader.ModuleAsset> assets;
                 try
                 {
                     (manifest, files) = BundleReader.ReadModule(bytes);
+                    // Inside the SAME guard: a bundle whose assemblies read cleanly can still carry
+                    // a corrupt asset entry, and reading that outside here would throw out of the
+                    // handler as a 500 — telling the publisher "the server broke" for what is
+                    // simply an unreadable upload, the case this catch already classifies.
+                    assets = BundleReader.ReadModuleAssets(bytes);
                 }
                 catch (Exception exception)
                 {
@@ -201,7 +207,20 @@ public static class PluginBundleEndpoints
 
                 var (accepted, decline) = ModulePublish.Validate(
                     plugin, manifest, files, http.Request.Query["version"],
-                    http.Request.Query["packagePath"]);
+                    http.Request.Query["packagePath"],
+                    // 🚨 THE SHELF MUST CARRY THE ASSETS TOO. A consumer never reads this upload's
+                    // archive — it fetches what the shelf holds — so an asset dropped at the
+                    // warehouse door is unreachable for every instance downstream, however complete
+                    // the packed bundle was. Both halves of this were already built (Validate takes
+                    // them, Accepted carries them, ShelveModule lands them); only these two
+                    // arguments were missing, and that is why every landed view pack held
+                    // assemblies and no wwwroot: DefaultViews' bundle declares 254 static assets
+                    // and its landed generation had 11 files with no wwwroot, EntityViews' scoped
+                    // CSS 404'd in production from #2188 on, and the Views/Graph image copies were
+                    // the only reason a portal was styled at all (#2221). Same read the consumer's
+                    // own landing does (PluginBundleClient.LandFromBundle), so shelf and adopt
+                    // place byte-identical content.
+                    assets);
                 if (accepted is null)
                 {
                     logger?.LogWarning("Module publish for {Plugin} REFUSED: {Reason}", plugin, decline);
@@ -225,7 +244,8 @@ public static class PluginBundleEndpoints
                         frameworkMvid: accepted.FrameworkMvid,
                         packagePath: accepted.PackagePath,
                         version: accepted.Version,
-                        minMeshVersion: accepted.MinMeshVersion)
+                        minMeshVersion: accepted.MinMeshVersion,
+                        staticAssets: accepted.StaticAssets)
                         .FirstAsync().ToTask(ct);
                 }
                 catch (Exception exception)
@@ -867,8 +887,9 @@ public static class PluginBundleEndpoints
                         string.Join(" | ", misses.Take(MissesReported)));
 
                 return assemblies.SelectMany(found => ModuleFiles(rootHub, package)
-                    .Select(moduleFiles =>
-                        BuildResult(package, found, moduleFiles, identity, architecture, misses)));
+                    .Select(module =>
+                        BuildResult(package, found, module.Files, module.Assets,
+                            identity, architecture, misses)));
             });
     }
 
@@ -947,12 +968,14 @@ public static class PluginBundleEndpoints
     /// serve — the bundle then simply has no module section, which a consumer reads as "nothing
     /// to land".
     /// </summary>
-    private static IObservable<IReadOnlyList<string>> ModuleFiles(
+    private static IObservable<(IReadOnlyList<string> Files,
+        IReadOnlyList<(string RelativePath, string FullPath)> Assets)> ModuleFiles(
         IMessageHub rootHub, BundleEntry package)
     {
         var landing = rootHub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null || string.IsNullOrWhiteSpace(package.Module))
-            return Observable.Return<IReadOnlyList<string>>([]);
+            return Observable.Return<(IReadOnlyList<string> Files,
+                IReadOnlyList<(string RelativePath, string FullPath)> Assets)>(([], []));
 
         var logger = rootHub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger(typeof(PluginBundleEndpoints));
@@ -960,13 +983,13 @@ public static class PluginBundleEndpoints
         return landing.GetActivation().Take(1)
             .Select(activation =>
             {
-                var (files, decline) = ModuleBundleSource.Collect(
+                var (files, assets, decline) = ModuleBundleSource.Collect(
                     landing.BaseDirectory, package.Module!, activation);
                 if (decline is not null)
                     logger?.LogInformation(
                         "Plugin bundles: {Plugin} declares module '{Module}' but it is not served: {Reason}",
                         package.PluginId, package.Module, decline);
-                return files;
+                return (Files: files, Assets: assets);
             });
     }
 
@@ -994,6 +1017,7 @@ public static class PluginBundleEndpoints
         BundleEntry package,
         IReadOnlyList<(string NodePath, string? Path, IReadOnlyDictionary<string, string>? Dependencies)> assemblies,
         IReadOnlyList<string> moduleFiles,
+        IReadOnlyList<(string RelativePath, string FullPath)> moduleAssets,
         string identity,
         string architecture,
         IReadOnlyList<string> misses)
@@ -1022,6 +1046,19 @@ public static class PluginBundleEndpoints
             var local = moduleFile;
             entries.Add(new NuGetPackageWriter.Entry(
                 NuGetPackageWriter.ModuleEntryPathFor(Path.GetFileName(local)),
+                () => File.OpenRead(local)));
+        }
+
+        // The module's STATIC WEB ASSETS ride under their own folder, keeping the relative path a
+        // component's _content/<pack>/… URL asks for. Without this the serve path re-creates the
+        // defect the publish path was just fixed for (#2221): the shelf would hold a complete pack
+        // and hand consumers an assemblies-only bundle, so every downstream portal renders
+        // unstyled while the registry's own copy looks fine.
+        foreach (var (relativePath, fullPath) in moduleAssets)
+        {
+            var local = fullPath;
+            entries.Add(new NuGetPackageWriter.Entry(
+                NuGetPackageWriter.ModuleAssetEntryPathFor(relativePath),
                 () => File.OpenRead(local)));
         }
 
@@ -1060,6 +1097,12 @@ public static class PluginBundleEndpoints
                         assemblyName = package.Module,
                         assemblies = moduleFiles.Select(Path.GetFileName).ToArray(),
                         minMeshVersion = package.MinMeshVersion,
+                        // Declared, never inferred from the archive — BundleReader.ReadModuleAssets
+                        // reads THIS list and treats a declared-but-absent entry as an incomplete
+                        // bundle, the same all-or-nothing rule the assemblies follow.
+                        staticAssets = moduleAssets.Count == 0
+                            ? null
+                            : moduleAssets.Select(a => a.RelativePath).ToArray(),
                     },
             },
             new JsonSerializerOptions

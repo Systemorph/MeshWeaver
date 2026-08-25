@@ -99,7 +99,7 @@ public class PendingLandingTest : IDisposable
             }],
         };
 
-        var (files, decline) = ModuleBundleSource.Collect(
+        var (files, _, decline) = ModuleBundleSource.Collect(
             root, "MeshWeaver.Widget", activation);
 
         Assert.Null(decline);
@@ -113,7 +113,7 @@ public class PendingLandingTest : IDisposable
     {
         Write("MeshWeaver.Widget", "MeshWeaver.Widget.dll", "CURRENT");
 
-        var (files, decline) = ModuleBundleSource.Collect(
+        var (files, _, decline) = ModuleBundleSource.Collect(
             root, "MeshWeaver.Widget", new ModuleActivationList());
 
         Assert.Null(decline);
