@@ -62,7 +62,7 @@ public class AiResolutionSeamAuditTest
         ("src/MeshWeaver.AI/Stores/MeshAgentSkillsSource.cs", "ObserveSkillQueries("),
         ("src/MeshWeaver.AI/Completion/SkillAutocompleteProvider.cs", "SkillQueries("),
         ("src/MeshWeaver.AI/AgentPickerProjection.cs", "ObserveModelQueries("),
-        ("src/MeshWeaver.Blazor.Portal/Chat/ThreadChatView.razor.cs", "ObserveModels(workspace, Hub, Hub.ServiceProvider"),
+        ("src/MeshWeaver.Blazor.Portal/Chat/ThreadChatView.razor.cs", "ObserveResolvedModels("),
         ("src/MeshWeaver.AI/AiSettingsNodeType.cs", "AiSourceCatalog.Resolve("),
     };
 

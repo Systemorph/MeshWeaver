@@ -573,9 +573,11 @@ public static class AgentPickerProjection
     /// The SETTINGS-AWARE model pipeline: the user's resolved model sources
     /// (<see cref="AiSettingsNodeType.ObserveModelQueries"/>) drive the registry snapshot, so the
     /// picker lists exactly what the user's AI Settings say — and re-resolves when they change.
-    /// Prefer this over the raw-context overload in every user-facing surface.
+    /// Prefer this over <see cref="ObserveModels"/> in every user-facing surface. Deliberately NOT
+    /// an overload of that name: landed plugin sources cref <c>ObserveModels</c> unqualified, and
+    /// overloading it turns their docs into CS0419 under warnings-as-errors.
     /// </summary>
-    public static IObservable<IReadOnlyList<ModelInfo>> ObserveModels(
+    public static IObservable<IReadOnlyList<ModelInfo>> ObserveResolvedModels(
         IWorkspace workspace, IMessageHub hub, IServiceProvider services, string? user,
         string? currentPath = null, string? nodeTypePath = null,
         IReadOnlyList<string>? selectedProviderPaths = null)
