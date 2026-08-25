@@ -1,8 +1,16 @@
-FutuRe/AmericasIns/LineOfBusiness compile
-FutuRe/AmericasIns/TransactionMapping compile
-FutuRe/AsiaRe/LineOfBusiness compile
-FutuRe/AsiaRe/TransactionMapping compile
-FutuRe/EuropeRe/LineOfBusiness compile
-FutuRe/EuropeRe/TransactionMapping compile
-Northwind/AnalyticsCatalog compile
-Northwind/Product compile
+# Known-debt ratchet for the samples gate. EMPTY = no known debt: every failure is a NEW failure.
+# It may only shrink — an entry whose check starts passing is STALE and fails the run.
+#
+# Emptied 2026-08-25 (#1786). It was seeded with eight entries; all eight are now gone, for two
+# different reasons that are worth keeping apart:
+#   * FutuRe/{AmericasIns,AsiaRe,EuropeRe}/{LineOfBusiness,TransactionMapping} — retired as
+#     NodeTypes by b63fbf057 (they are Markdown nodes now), so their entries named a scope the
+#     gate no longer reports on. That reads as `Unverifiable`, which is WARNED and never failed —
+#     i.e. six lines that could sit here for ever describing debt that no longer exists.
+#   * Northwind/AnalyticsCatalog — DashboardLayoutAreas referenced four classes by their old
+#     `*Views` names (`OrderViews`, `SalesViews`, `SupplierViews`, `ProductViews`); the real
+#     classes are `*LayoutAreas`.
+#   * Northwind/Product — ProductContent's `[Dimension(typeof(Supplier))]` / `typeof(Category)`
+#     name records that live in Northwind/AnalyticsCatalog/Source, which the default source query
+#     (`namespace:<node>/Source scope:subtree`) cannot reach; Product.json now declares the two
+#     `shared=@…` sources entries that pull exactly those two files in.

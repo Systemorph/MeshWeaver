@@ -17,9 +17,9 @@ name: Chart Drift
 #   * check-chart-drift.sh itself treats an unreadable cluster as FAILURE, never as "no drift",
 #     and refuses to report success unless it actually compared a minimum number of fields.
 #
-# ⚠️ EXPECT THIS WORKFLOW TO BE RED UNTIL TWO THINGS ARE PROVISIONED. That is the design, not a
-# defect: the honest report of "drift detection is not wired up" is a failing check that names the
-# missing pieces, not a green one that checked nothing.
+# ⚠️ EXPECT THIS WORKFLOW TO BE RED UNTIL ITEM 3 IS FIXED. That is the design, not a defect: the
+# honest report of "drift detection is not wired up" is a failing check that names the missing
+# piece, not a green one that checked nothing.
 #
 #   1. [DONE 2026-08-17] AKS command access for the CI identity. This item was written from an
 #      ASSUMPTION — that the AZURE_* OIDC identity had ACR rights only — and the assumption was
@@ -48,11 +48,33 @@ name: Chart Drift
 #
 #      Regenerate after any deliberate helm change, or the gate compares against a stale intent.
 #
-#   3. [OUTSTANDING] A fine-grained read-only PAT for Systemorph/Memex (Contents: Read-only, nothing
-#      else) added as secrets.MEMEX_DEPLOY_REPO_TOKEN. A PAT cannot be minted through the API or
-#      CLI, so this step is necessarily manual. Do NOT substitute the existing broad `GH_PAT` (it
-#      widens what this job can reach for no benefit), and do NOT move the overlays into this public
-#      repo to dodge the token — that would publish the deployment inventory.
+#   3. [OUTSTANDING — but NOT for the reason this line used to give] A fine-grained read-only PAT
+#      for Systemorph/Memex (Contents: Read-only, nothing else) as secrets.MEMEX_DEPLOY_REPO_TOKEN.
+#      A PAT cannot be minted through the API or CLI, so this step is necessarily manual. Do NOT
+#      substitute the existing broad `GH_PAT` (it widens what this job can reach for no benefit),
+#      and do NOT move the overlays into this public repo to dodge the token — that would publish
+#      the deployment inventory.
+#
+#      🚨 THE SECRET IS PROVISIONED AND HAS NEVER WORKED. This item read "unprovisioned" for eight
+#      days while the truth was one API call away, so state it exactly: the secret was created
+#      2026-08-17T11:12:42Z (`gh api repos/Systemorph/MeshWeaver/actions/secrets/…` reports the
+#      same value for created_at and updated_at, i.e. it has never been re-set), and EVERY run
+#      since — the 11:12:53Z dispatch that followed it by eleven seconds, then nine consecutive
+#      schedules through 2026-08-25 — has died at the same place:
+#
+#          ##[error]secrets.MEMEX_DEPLOY_REPO_TOKEN is set but GitHub rejects it
+#                   (HTTP 401, Bad credentials).
+#
+#      So the remaining action is RE-MINT, not provision: the stored value authenticates as
+#      nothing. 401 (not 403, not 404) rules out both scope and org approval — GitHub answers 404
+#      for a repo a valid token may not read and 403 for a valid token pending owner approval, and
+#      this is neither. What is left is a value that is not a token: revoked, expired, truncated on
+#      copy, or never the token at all (a clipboard-piped `gh secret set` stores whatever was on
+#      the clipboard). Re-mint at https://github.com/settings/personal-access-tokens and store it
+#      again; the probe below re-checks it on the next run and says which of 401/403/404 remains.
+#
+#      Do not read the daily red as "items 1 and 2 are also outstanding" — they are done, and
+#      preflight simply never gets far enough to exercise them.
 #
 # Until 3 lands, every run fails with the list above and nobody is misled about whether the cluster
 # matches the chart. Drift found by a run that DOES complete is reported the same way: red, with
@@ -154,6 +176,30 @@ jobs:
               echo "  a clipboard-piped 'gh secret set' stores whatever was on the clipboard — or the"
               echo "  token was revoked, expired, or truncated on copy. Re-mint at"
               echo "  https://github.com/settings/personal-access-tokens and store it again."
+              echo
+              # 🚨 SAY WHAT IS ACTUALLY STORED. This branch fired every day from 2026-08-17 to
+              # 2026-08-25 with the four lines above and nothing changed, because "not a usable
+              # token" does not tell an operator WHICH mistake they made — and the two commonest
+              # are both mechanical and both invisible in the Actions UI, which renders every
+              # secret as ***. These are DERIVED facts (a length bucket, a prefix CLASS, a
+              # whitespace yes/no); none of them prints, or narrows, the value itself.
+              n=${#MEMEX_DEPLOY_REPO_TOKEN}
+              case "$MEMEX_DEPLOY_REPO_TOKEN" in
+                github_pat_*) shape="fine-grained PAT (github_pat_…) — the right kind" ;;
+                ghp_*)        shape="classic PAT (ghp_…) — works, but scope it down to a fine-grained PAT" ;;
+                gho_*|ghu_*|ghs_*|ghr_*)
+                              shape="an OAuth/app/refresh token (gho_/ghu_/ghs_/ghr_…), NOT a PAT — these expire fast" ;;
+                *)            shape="NO recognised GitHub token prefix — this is very likely not a token at all" ;;
+              esac
+              echo "  What is stored: $n characters, $shape."
+              case "$MEMEX_DEPLOY_REPO_TOKEN" in
+                *[[:space:]]*)
+                  echo "  🚨 It CONTAINS WHITESPACE. That alone produces this 401: the value goes"
+                  echo "     straight into an Authorization header, and a trailing newline from"
+                  echo "     'gh secret set NAME < token.txt' malforms it. Re-store with"
+                  echo "     'printf %s \"\$TOKEN\" | gh secret set MEMEX_DEPLOY_REPO_TOKEN' — printf,"
+                  echo "     not echo, and no here-string." ;;
+              esac
               exit 1 ;;
             403)
               echo "::error::secrets.MEMEX_DEPLOY_REPO_TOKEN is refused (HTTP 403)."
