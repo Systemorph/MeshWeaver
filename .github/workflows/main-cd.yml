@@ -226,6 +226,17 @@ jobs:
   # next release.
   preflight:
     name: "Assert the inputs exist"
+    # 🚨 The ONE sanctioned condition, and it is a check on the EVENT — never on whether a secret is
+    # set. It is byte-identical to `gate`'s below, and it is here for the same reason: `workflow_run`
+    # fires for EVERY completion of Build-and-Test, PRs included, and GitHub withholds org secrets
+    # from a FORK by design. Without this a fork's PR would light up a red CD run asserting inputs
+    # it can never be given — the one legitimate exemption AGENTS.md carves out, expressed once, on
+    # the event. It costs nothing in coverage: a run this skips is a run where `gate` publishes
+    # nothing either, so there is no path on which CD acts without having been preflighted.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
