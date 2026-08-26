@@ -419,8 +419,8 @@ data:
   # the WHOLE array — so ONE unconstructable plugin strips EVERY custom tool from EVERY agent, and
   # the log names the wrong victim ("Plugin 'ExecutiveAssistant' failed to resolve … ->
   # WebSearchPlugin"). memex.systemorph.com lost every agent tool exactly this way after its first
-  # chart-driven deploy (2026-08-20 → 2026-08-22, ~100 failures/24h); memex-cloud and atioz were
-  # unaffected only because no chart had ever rendered their ConfigMap. This is the same rule the
+  # chart-driven deploy (2026-08-20 → 2026-08-22, ~100 failures/24h); memex-cloud was
+  # unaffected only because no chart had ever rendered its ConfigMap. This is the same rule the
   # OpenAICompatible__DiscoverModels note above states: `default ""` is safe ONLY for keys whose
   # consumer reads them as strings. Guarded rather than `default "None"` so an instance that
   # configures no web search renders no WebSearch keys at all — the shape the two healthy
@@ -465,7 +465,7 @@ data:
   # a `helm upgrade` then reverts. Same defect the plugin-catalog keys below carried, with a
   # nastier symptom: a missing App identity does not error, it makes every GitHub read fall back
   # to ANONYMOUS, and anonymous against a PRIVATE repo is a 404 — which renders as an EMPTY
-  # STORE. atioz sat exactly there (private Systemorph/MeshWeaver.Plugins, no App identity):
+  # STORE. One portal sat exactly there (private Systemorph/MeshWeaver.Plugins, no App identity):
   # zero catalog entries, and every Provision click failing at the Import phase, leaving a
   # content-less stub root behind.
   GitHub__App__ClientId: "{{ .Values.config.memex_portal.GitHub__App__ClientId | default "" }}"

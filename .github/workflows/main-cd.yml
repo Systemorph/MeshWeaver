@@ -1526,9 +1526,41 @@ jobs:
           COMPLETE: ${{ needs.gate.outputs.complete }}
           GREEN: ${{ needs.gate.outputs.green }}
           SHORT: ${{ needs.gate.outputs.short_sha }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
+          UPSTREAM_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
-          echo "reason=$REASON publish=$PUBLISH complete=$COMPLETE green=$GREEN sha=$SHORT"
+          echo "gate=$GATE_RESULT reason=$REASON publish=$PUBLISH complete=$COMPLETE green=$GREEN sha=$SHORT"
+
+          # 🚨 THIS JOB MUST NOT PASS ON AN EMPTY VERDICT.
+          #
+          # Both guards below compare REASON against a literal. When `gate` is SKIPPED every
+          # `needs.gate.outputs.*` is the EMPTY STRING, so neither comparison can match, and this
+          # job printed "not publishing was the correct answer" and exited 0 having evaluated
+          # NOTHING. Measured 2026-08-26: run 32914425222 reported `reason= publish= complete=
+          # green= sha=` and a green tick, while every image job read `skipped`. A no-op and a
+          # real delivery were indistinguishable on the wall — which is exactly how a merged fix
+          # sat unshipped while its instance waited for it.
+          #
+          # That is the repo's own CI invariant (#3/#4) turned inward: a gate that CANNOT run must
+          # not look like a gate that passed. So classify the three cases explicitly.
+          if [ -z "$REASON" ]; then
+            # (a) LEGITIMATE no-op: CD fires on every completed Build-and-Test, and `gate` is
+            # deliberately conditioned to push-on-main. A PR run reaching here is expected, and
+            # saying so is not the same as claiming a delivery.
+            if [ "$GATE_RESULT" = "skipped" ] \
+               && [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] \
+               && { [ "$UPSTREAM_EVENT" != "push" ] || [ "$UPSTREAM_BRANCH" != "main" ]; }; then
+              echo "not applicable — upstream was '${UPSTREAM_EVENT}' on '${UPSTREAM_BRANCH}', not a push to main. No delivery was due, and none is claimed."
+              exit 0
+            fi
+            # (b) EVERYTHING ELSE with no verdict is the invisible state this job exists to catch:
+            # the gate errored, was cancelled, or ran and produced no outputs at all. Reporting
+            # success here is the failure mode, not the safe default.
+            echo "::error::the delivery gate produced NO verdict (gate=${GATE_RESULT}, event=${GITHUB_EVENT_NAME}, upstream='${UPSTREAM_EVENT}' on '${UPSTREAM_BRANCH}'), so this run cannot say whether delivery was due. Refusing to report success on an unevaluated gate — a CD run that checked nothing must never be indistinguishable from one that delivered."
+            exit 1
+          fi
 
           if [ "$REASON" = "reconcile" ] && [ "$PUBLISH" != "true" ] \
              && [ "$COMPLETE" = "false" ] && [ "$GREEN" = "true" ]; then
