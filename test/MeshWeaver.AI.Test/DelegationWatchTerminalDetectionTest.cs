@@ -1,7 +1,9 @@
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging.Serialization;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
@@ -37,7 +39,19 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class DelegationWatchTerminalDetectionTest
 {
-    private static readonly JsonSerializerOptions Options = new();
+    // 🚨 Copilot review on PR #2326: must mirror the SAME naming/enum shape
+    // hub.JsonSerializerOptions actually produces in production
+    // (MeshWeaver.Messaging.Hub.SerializationExtensions.CreateSerializationConfiguration —
+    // PropertyNamingPolicy = CamelCase, EnumMemberJsonStringEnumConverter<TEnum>), not just
+    // whatever a bare `new JsonSerializerOptions()` happens to do. A default-options JsonElement
+    // uses PascalCase property names and raw-int enum values — a shape a real degraded read from
+    // a properly-configured hub never actually takes — so without this the test could pass while
+    // silently not exercising the real on-wire form ContentAs<MeshThread> has to recover.
+    private static readonly JsonSerializerOptions Options = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new EnumMemberJsonStringEnumConverter<MeshWeaver.AI.ThreadExecutionStatus>() }
+    };
 
     /// <summary>
     /// Same shape <see cref="MeshNode.Content"/> takes when it arrives as untyped JSON — the
