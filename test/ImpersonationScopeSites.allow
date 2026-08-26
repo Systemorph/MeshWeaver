@@ -4,6 +4,13 @@
 #
 #     Observable.Using(() => access.ImpersonateAsSystem(), _ => work)
 #
+# …including the shapes that wear a helper's name. `AccessContextScope.AsSystem(x)` IS
+# `x.ImpersonateAsSystem()` and `AccessContextScope.FromNode(node, x)` IS `x.SwitchAccessContext(owner)`,
+# so both count. The guard only sees a factory whose text contains one of the substrings in
+# ImpersonationScopeSiteRatchetGuard.ScopeFactories — that list is LOAD-BEARING: a new identity-scope
+# helper named after none of them is invisible, which is how 19 sites across 10 files went uncounted
+# until #2441. Add the name there in the same change that introduces the helper.
+#
 # Impersonation is an AsyncLocal store/restore pair. Rx runs the resource factory on the
 # SUBSCRIBING thread and disposes the resource when the inner observable TERMINATES — for a
 # cross-hub call, the owning hub's response thread. The subscriber is therefore left running as
@@ -30,8 +37,6 @@
 #
 # format: <path>	<count>
 
-memex/Memex.Client/Prefs/PreferencesService.cs	2
-memex/Memex.Client/Services/DeviceOnboarding.cs	1
 memex/Memex.Portal.Shared/Api/SeoEndpoints.cs	1
 memex/Memex.Portal.Shared/Authentication/ApiTokenService.cs	1
 memex/Memex.Portal.Shared/Authentication/BootstrapController.cs	1
@@ -42,12 +47,8 @@ memex/Memex.Portal.Shared/Authentication/OnboardingMiddleware.cs	1
 memex/Memex.Portal.Shared/Authentication/UserOnboardingService.cs	3
 memex/Memex.Portal.Shared/Email/InvitationEmailSender.cs	2
 memex/Memex.Portal.Shared/Email/OutboundEmailSender.cs	1
-memex/Memex.Portal.Shared/Models/ModelProviderService.cs	1
-memex/Memex.Portal.Shared/Pages/Onboarding.razor	1
 memex/Memex.Portal.Shared/Settings/InboxSettingsTab.cs	1
-src/MeshWeaver.AI.OpenAI/OpenAICompatibleModelSync.cs	1
 src/MeshWeaver.AI/ChatClientCredentialResolver.cs	2
-src/MeshWeaver.Blazor.Portal/Chat/ThreadChatView.razor.cs	1
 src/MeshWeaver.GitSync/GitHubSyncService.cs	2
 src/MeshWeaver.GitSync/GitHubWebhookProcessor.cs	4
 src/MeshWeaver.Graph/Configuration/CellSurfaceAssemblyProvider.cs	2
@@ -70,11 +71,7 @@ src/MeshWeaver.Hosting/NodeUpdatePipeline.cs	1
 src/MeshWeaver.InstanceSync/InstanceSyncCoordinator.cs	1
 src/MeshWeaver.InstanceSync/InstanceSyncService.cs	1
 src/MeshWeaver.InstanceSync/InstanceSyncWorker.cs	1
-src/MeshWeaver.Kernel.Hub/ActivityLogLogger.cs	1
-src/MeshWeaver.Mail.MicrosoftGraph/EmailInboundProcessor.cs	2
 src/MeshWeaver.Mesh.Contract/MeshExtensions.cs	1
-src/MeshWeaver.Observability/LogIncidentControlPlane.cs	1
-src/MeshWeaver.Observability/LogIncidentIngestService.cs	1
 src/MeshWeaver.PluginCatalog/InstanceAutoRegistrationService.cs	6
 src/MeshWeaver.PluginCatalog/InstanceComboReader.cs	1
 src/MeshWeaver.PluginCatalog/ModuleDiscoveryService.cs	4
@@ -82,5 +79,4 @@ src/MeshWeaver.PluginCatalog/PackageInstaller.cs	10
 src/MeshWeaver.PluginCatalog/PackageUpdateReconciler.cs	2
 src/MeshWeaver.PluginCatalog/PluginUpdateWatcher.cs	1
 src/MeshWeaver.PluginCatalog/RegistrationKeyService.cs	1
-src/MeshWeaver.Teams/TeamsInboundProcessor.cs	1
 tools/MeshWeaver.PluginTester/PluginGateRunner.cs	1
