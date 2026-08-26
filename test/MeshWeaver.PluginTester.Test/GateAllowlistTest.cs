@@ -192,6 +192,19 @@ public class GateAllowlistTest
     }
 
     [Fact]
+    public void ToString_RendersTheEntryExactlyAsTheAllowFileHasIt()
+    {
+        // The gate prints entries in its diagnostics, and an operator reading that output is looking
+        // for the LINE TO EDIT. A rendering that drops the marker does not match the file and cannot
+        // be pasted back into it.
+        var plain = GateAllowlist.Parse(["Claims idempotence"]).Entries.Single();
+        var flappy = GateAllowlist.Parse(["Claims idempotence intermittent"]).Entries.Single();
+
+        Assert.Equal("Claims idempotence", plain.ToString());
+        Assert.Equal("Claims idempotence intermittent", flappy.ToString());
+    }
+
+    [Fact]
     public void Parse_RejectsAnUnknownThirdToken()
     {
         // A typo in the marker must not silently degrade to a plain entry — that would restore the

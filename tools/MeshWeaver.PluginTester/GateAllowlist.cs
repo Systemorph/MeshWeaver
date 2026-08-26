@@ -20,7 +20,6 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
     /// <summary>The empty list — every failure is a new failure.</summary>
     public static readonly GateAllowlist Empty = new([]);
 
-    /// <summary>The valid check names, package-level and type-level.</summary>
     /// <summary>
     /// Optional third token marking an entry whose check FLAPS. Such an entry is exempt from
     /// stale-detection: passing once does not prove the debt is paid, so the ratchet must not
@@ -40,6 +39,7 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
     /// </summary>
     public const string IntermittentMarker = "intermittent";
 
+    /// <summary>The valid check names, package-level and type-level.</summary>
     public static readonly IReadOnlySet<string> Checks =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             { "install", "idempotence", "compile", "render", "tests" };
@@ -139,7 +139,16 @@ public sealed record AllowEntry(string Scope, string Check)
         && string.Equals(Check, check, StringComparison.OrdinalIgnoreCase);
 
     /// <inheritdoc />
-    public override string ToString() => $"{Scope} {Check}";
+    /// <summary>
+    /// The entry as it appears in the allow file — INCLUDING the intermittent marker. The gate
+    /// prints entries in its diagnostics ("unverifiable allow entry …: {entry}"), and an operator
+    /// reading that output is looking for the line to edit; a rendering that drops the marker does
+    /// not match the file and cannot be copy-pasted back into it.
+    /// </summary>
+    public override string ToString() =>
+        Intermittent
+            ? $"{Scope} {Check} {GateAllowlist.IntermittentMarker}"
+            : $"{Scope} {Check}";
 }
 
 /// <summary>One observed failure: where, which check, and the detail text.</summary>
@@ -184,9 +193,10 @@ public sealed record GateVerdict(
             // This never hides a NEW failure: an intermittent entry still only suppresses the
             // scope/check it names, and a failure it does not name is still a new failure. What it
             // gives up is stale-detection for that one line, which is the whole point.
-            if (entry.Intermittent && Passed(report, entry))
+            var passed = Passed(report, entry);
+            if (entry.Intermittent && passed)
                 continue;
-            (Passed(report, entry) ? stale : unverifiable).Add(entry);
+            (passed ? stale : unverifiable).Add(entry);
         }
         return new GateVerdict(newFailures, knownDebt, stale, unverifiable);
     }
