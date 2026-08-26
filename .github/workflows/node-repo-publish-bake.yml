@@ -282,15 +282,21 @@ jobs:
           [ -n "${ACR_PASSWORD:-}" ]           || missing+=("acr-password (secret) — registry password for that user")
           [ -n "${BAKE_PUBLISH_TARGETS:-}" ]   || missing+=("bake-publish-targets (input, from the caller's repo VARIABLE) — the portals' Azure Files targets, whitespace-separated <account>/<share>[/<base-path>]")
           if [ -n "${STAGE_MODULES:-}" ]; then
-            [ -n "${STAGE_APP_ID:-}" ]  || missing+=("stage-repo-app-id (secret) — app id of a GitHub App that can read the stage repo (stage-modules is set)")
-            [ -n "${STAGE_APP_KEY:-}" ] || missing+=("stage-repo-app-private-key (secret) — that App's private key, PEM (stage-modules is set)")
-            # 🚨 If this fires on a dependabot PR, the secrets exist but in the WRONG STORE.
-            # GitHub hands a dependabot-triggered run the Dependabot secret store, never the
-            # Actions one, so a value provisioned only for normal runs is simply absent here and
-            # every dependabot PR stays red forever (#2249). Provision the same pair under
+            stage_missing=0
+            [ -n "${STAGE_APP_ID:-}" ]  || { stage_missing=1; missing+=("stage-repo-app-id (secret) — app id of a GitHub App that can read the stage repo (stage-modules is set)"); }
+            [ -n "${STAGE_APP_KEY:-}" ] || { stage_missing=1; missing+=("stage-repo-app-private-key (secret) — that App's private key, PEM (stage-modules is set)"); }
+            # 🚨 Gated on the STAGE credentials specifically, never on "any input is missing".
+            # This hint names one cause, so it must only fire for the input that has that cause:
+            # a missing acr-password is not a Dependabot-store problem, and a hint that says it is
+            # sends the next person to the wrong settings page (Copilot review, #2310).
+            #
+            # When it DOES fire, the secrets usually exist — in the WRONG STORE. GitHub hands a
+            # dependabot-triggered run the Dependabot secret store, never the Actions one, so a
+            # value provisioned only for push runs is simply absent here and every dependabot PR
+            # stays red forever (#2249). Provision the same pair under
             # Settings -> Secrets and variables -> Dependabot in the CALLING repo.
-            if [ "${GITHUB_ACTOR:-}" = "dependabot[bot]" ] && [ ${#missing[@]} -gt 0 ]; then
-              echo "::warning::Secret source for this run is the DEPENDABOT store, not Actions."
+            if [ "$stage_missing" = "1" ] && [ "${GITHUB_ACTOR:-}" = "dependabot[bot]" ]; then
+              echo "::warning::This run reads the DEPENDABOT secret store, not Actions. stage-repo-app-id/stage-repo-app-private-key must be provisioned there too (#2249)."
             fi
           fi
           # 🚨 Declaring dependents is declaring an OBLIGATION: those repos exit on their own
