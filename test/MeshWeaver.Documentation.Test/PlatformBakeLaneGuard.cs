@@ -65,20 +65,28 @@ public class PlatformBakeLaneGuard
         // the opposite of the invariant: it would demand that the arm64 leg pull amd64 bytes.
         //
         // Both halves are checked, because either alone is satisfiable while the invariant is gone:
-        //   (a) the matrix must declare the platforms as LITERALS — `${{ matrix.docker_platform }}`
-        //       with no matrix behind it, or one fed from an expression, is an inherited pin
-        //       wearing an explicit pin's clothes;
+        //   (a) the LANES must name their platforms as LITERALS — `${{ matrix.docker_platform }}`
+        //       with nothing behind it, or a value fed from an expression, is an inherited pin
+        //       wearing an explicit pin's clothes. The lane list is composed in the `gate` job
+        //       (publish-bake's matrix is `fromJSON(needs.gate.outputs.bake_arches)`, because
+        //       `matrix` is not an available context in `jobs.<id>.if` and gating a leg there is a
+        //       startup failure, not a false condition), so this half reads the whole WORKFLOW —
+        //       and it is exactly what fails if that step is ever deleted and the matrix goes
+        //       empty. Both YAML (`docker_platform: linux/amd64`) and JSON
+        //       (`"docker_platform":"linux/amd64"`) spellings count, so moving the list between
+        //       the two forms is not a regression;
         //   (b) EVERY container command that materialises image bytes (run / pull / create) must
         //       carry that pin — one unpinned `docker run` is enough to bake against the runner's
         //       own architecture, which is exactly the silent form of this defect.
-        var declaredPlatforms = Regex.Matches(job, @"docker_platform:\s*(\S+)")
+        var workflow = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow)));
+        var declaredPlatforms = Regex.Matches(workflow, @"docker_platform""?\s*:\s*""?([^""\s,}]+)")
             .Select(m => m.Groups[1].Value.Trim())
             .Distinct()
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToArray();
         Assert.True(declaredPlatforms.SequenceEqual(new[] { "linux/amd64", "linux/arm64" }),
-            $"'{JobName}' in {Workflow} must declare its bake platforms as literals in the matrix "
-            + "(docker_platform: linux/amd64 and linux/arm64), one leg per architecture. Found: ["
+            $"{Workflow} must name the bake lanes' platforms as literals (docker_platform "
+            + "linux/amd64 and linux/arm64), one lane per architecture. Found: ["
             + string.Join(", ", declaredPlatforms) + "]. A bake is an ABI claim about BYTES, so each "
             + "leg must be taken ON the architecture it describes; publishing one architecture's "
             + "bytes under the other's identity is the adopt-what-you-did-not-resolve defect "
