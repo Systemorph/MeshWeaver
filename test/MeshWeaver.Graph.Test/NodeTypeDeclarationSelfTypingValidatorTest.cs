@@ -127,6 +127,35 @@ public class NodeTypeDeclarationSelfTypingValidatorTest(ITestOutputHelper output
             + "cross-hub writer must not be able to smuggle the collision past the guard");
     }
 
+    /// <summary>
+    /// Hand-authored JSON (an MCP write, in particular) is not guaranteed to use the framework's
+    /// own "Namespace.Type" $type convention — it may carry the full CLR AssemblyQualifiedName
+    /// shape instead ("Namespace.Type, AssemblyName, Version=…"). Flagged in review (#2378): a
+    /// naive EndsWith(".NodeTypeDefinition") check fails on this shape, since it ends with
+    /// ", AssemblyName" — which would let the guard fail OPEN for exactly this kind of write.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ACrossHubWrite_CarryingTheAssemblyQualifiedDiscriminatorShape_IsAlsoRejected()
+    {
+        var content = JsonSerializer.Deserialize<JsonElement>(
+            """
+            {"$type":"MeshWeaver.Graph.Configuration.NodeTypeDefinition, MeshWeaver.Graph, Version=1.0.0.0",
+             "description":"a widget type"}
+            """);
+
+        var result = await Guard
+            .Validate(new NodeValidationContext
+            {
+                Operation = NodeOperation.Create,
+                Node = DeclarationNode("Widget", content),
+            })
+            .Should().Emit();
+
+        result.IsValid.Should().BeFalse(
+            "an assembly-qualified $type discriminator must be recognised as declaration content "
+            + "too, or a hand-authored/MCP write in this shape slips the guard entirely");
+    }
+
     /// <summary>The guard must not widen into rejecting ordinary instances of ordinary types.</summary>
     [Fact(Timeout = 30000)]
     public async Task AnOrdinaryInstanceWrite_IsUnaffected()

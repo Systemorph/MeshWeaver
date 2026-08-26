@@ -84,8 +84,26 @@ public sealed class NodeTypeDeclarationSelfTypingValidator : INodeValidator
         _ => false,
     };
 
-    private static bool IsNodeTypeDefinitionDiscriminator(string? discriminator) =>
-        !string.IsNullOrEmpty(discriminator)
-        && (string.Equals(discriminator, nameof(Configuration.NodeTypeDefinition), StringComparison.Ordinal)
-            || discriminator.EndsWith("." + nameof(Configuration.NodeTypeDefinition), StringComparison.Ordinal));
+    /// <summary>
+    /// True when <paramref name="discriminator"/> names <see cref="Configuration.NodeTypeDefinition"/>
+    /// — as a bare short name, a namespace-qualified name, OR the full CLR
+    /// <c>AssemblyQualifiedName</c> shape (<c>"Namespace.Type, AssemblyName, Version=…"</c>).
+    /// Hand-authored JSON (including MCP writes) is not guaranteed to use the framework's own
+    /// "Namespace.Type" convention — an assembly-qualified <c>$type</c> that the framework's own
+    /// writers never produce would otherwise fail the <c>EndsWith</c> check (it ends with
+    /// <c>", AssemblyName"</c>, not <c>".NodeTypeDefinition"</c>) and let the guard fail OPEN.
+    /// </summary>
+    private static bool IsNodeTypeDefinitionDiscriminator(string? discriminator)
+    {
+        if (string.IsNullOrEmpty(discriminator))
+            return false;
+
+        // Strip a trailing assembly qualifier ("…, AssemblyName, Version=…, Culture=…, …") before
+        // comparing the type-name portion — comma-separated, never present in the bare/namespaced
+        // shapes this compares against.
+        var typeName = discriminator.Split(',')[0].Trim();
+
+        return string.Equals(typeName, nameof(Configuration.NodeTypeDefinition), StringComparison.Ordinal)
+            || typeName.EndsWith("." + nameof(Configuration.NodeTypeDefinition), StringComparison.Ordinal);
+    }
 }
