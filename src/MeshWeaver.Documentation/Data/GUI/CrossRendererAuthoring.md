@@ -100,10 +100,8 @@ A new control is not done when the Blazor view renders. The definition of done:
 5. **The React Native pack**: the `rnPack` entry plus its own parity test
    (`MeshWeaver.Plugins/app/react-native/src/parity.test.ts`). RN consumes the shared renderer core, so most
    controls are a thin mapping; native-feeling leaves (HTML, editors) have RN-specific views.
-6. **MAUI** (optional but cheap): a `MauiViewRegistry.Register<XControl, XView>()` entry — see
-   [MAUI Data Binding](/Doc/GUI/DataBindingMaui).
-7. **Localization** of any user-visible strings per rule 4 — both catalogs, both homes.
-8. **A gallery/doc page** under `Doc/GUI` with an executable `--render` cell, so the control is
+6. **Localization** of any user-visible strings per rule 4 — both catalogs, both homes.
+7. **A gallery/doc page** under `Doc/GUI` with an executable `--render` cell, so the control is
    discoverable and its example is compiled and rendered by the doc gate on every PR.
 
 For steps 4–5 the wire shape matters: the client sees your control as camelCase JSON with a

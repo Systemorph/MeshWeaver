@@ -112,9 +112,6 @@ WEIGHTS=$(cat <<'EOF'
 1 MeshWeaver.Reactive.Assertions.Test
 1 MeshWeaver.DataSetReader.Test
 1 MeshWeaver.Markdown.Collaboration.Test
-1 MeshWeaver.Maui.E2E.Test
-1 MeshWeaver.Maui.Abstractions.Test
-1 MeshWeaver.Maui.Integration.Test
 1 MeshWeaver.PluginImage.Test
 1 MeshWeaver.Hosting.Snowflake.Test
 1 MeshWeaver.Connection.SignalR.Test
