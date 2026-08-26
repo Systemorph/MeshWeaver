@@ -298,8 +298,33 @@ jobs:
       # JOB anyone can read in the run summary, not a conclusion buried in this job's log.
       complete: ${{ steps.acr.outputs.complete }}
       green: ${{ steps.required.outputs.green }}
+      # The architectures publish-bake runs a lane for — see that job's matrix.
+      bake_arches: ${{ steps.arches.outputs.json }}
     steps:
       - uses: actions/checkout@v7
+      # ─────────── Which architectures get a bake lane ───────────
+      # 🚨 This belongs in a JOB OUTPUT, not in publish-bake's `if:`. `matrix` is not an available
+      # context in `jobs.<id>.if`, so gating a leg there is not a false condition — it is an
+      # invalid workflow, and GitHub answers it with a startup failure that publishes nothing at
+      # all. Emitting the leg list here means a disabled architecture simply has no lane.
+      #
+      # amd64 is unconditional: it is what every AKS node runs. arm64 rides BAKE_ARM64 until a
+      # green arm64 publication has been observed, after which the flag and this branch go away
+      # and the list becomes both legs, always.
+      - name: "Decide which architectures get a bake lane"
+        id: arches
+        env:
+          BAKE_ARM64: ${{ vars.BAKE_ARM64 }}
+        run: |
+          set -euo pipefail
+          x64='{"arch":"linux-x64","docker_platform":"linux/amd64","runner":"ubuntu-latest"}'
+          arm='{"arch":"linux-arm64","docker_platform":"linux/arm64","runner":"ubuntu-24.04-arm"}'
+          if [ "${BAKE_ARM64:-}" = "true" ]; then json="[$x64,$arm]"; else json="[$x64]"; fi
+          # Fail loudly on malformed JSON rather than letting fromJSON blow up in the consumer,
+          # where the error names the expression and not the line that built it.
+          printf '%s' "$json" | jq -e . > /dev/null
+          echo "json=$json" >> "$GITHUB_OUTPUT"
+          echo "bake lanes: $json"
       - name: "Resolve the target commit"
         id: target
         env:
@@ -1033,17 +1058,25 @@ jobs:
     # delivery-verdict reads `needs.publish-bake.result`, which for a matrix is the AGGREGATE, and
     # whether a continue-on-error leg reports `success` THERE is a GitHub semantic I could not
     # verify from here. Being wrong about it would red-line delivery of the architecture the whole
-    # fleet runs — so the default keeps this workflow byte-identical in behaviour to today (a
-    # skipped leg cannot fail an aggregate), and turning arm64 on is one deliberate repo-variable
-    # flip whose FIRST run someone watches, rather than a surprise discovered in production.
+    # fleet runs — so the default keeps this workflow byte-identical in behaviour to today, and
+    # turning arm64 on is one deliberate repo-variable flip whose FIRST run someone watches,
+    # rather than a surprise discovered in production.
     #
     # This is a feature flag on a NEW publication lane, not a gate skipping its own inputs
     # (AGENTS.md): with the flag off nothing anywhere claims arm64 is covered — arm64 installs
     # compile at boot exactly as they always have, and the compile is itself the honest signal.
     # Delete the flag once a green arm64 publication has been observed.
-    if: >-
-      needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
-      && (matrix.arch == 'linux-x64' || vars.BAKE_ARM64 == 'true')
+    #
+    # 🚨 The flag is applied by BUILDING THE MATRIX, never by a job-level `if:`. `matrix` is not
+    # an available context in `jobs.<id>.if` (only `github`, `inputs`, `needs`, `vars`), so
+    # `if: … && matrix.arch == 'linux-x64'` is not a condition that evaluates false — it is an
+    # INVALID WORKFLOW. GitHub answers a startup failure: zero jobs, zero steps, and a run that
+    # reads as an ordinary red. On main that is not one red leg, it is the whole of Continuous
+    # Delivery refusing to start — no portal image, no bake, nothing published, for every commit
+    # until it is reverted. Selecting the legs upstream is also strictly better than skipping one:
+    # a disabled arm64 leg does not EXIST, so it cannot contribute a grey tick to an aggregate
+    # `needs.publish-bake.result` that something downstream reads as evidence.
+    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     # ═══════════ ONE LANE PER ARCHITECTURE (#1728 "just give path to correct arch") ═══════════
     # A bake is an ABI claim about BYTES, and the bytes differ per architecture: four reference
     # assemblies genuinely differ between the amd64 and arm64 variants of one image, so each
@@ -1060,14 +1093,14 @@ jobs:
       # 🚨 An arm64 failure must never cancel the amd64 leg: amd64 is what every AKS node runs.
       fail-fast: false
       matrix:
-        include:
-          - arch: linux-x64
-            docker_platform: linux/amd64
-            runner: ubuntu-latest
-          - arch: linux-arm64
-            docker_platform: linux/arm64
-            # Free for public repositories, which this repo is; no larger-runner configuration.
-            runner: ubuntu-24.04-arm
+        # The legs come from `gate`, which owns every other publish decision in this workflow and
+        # is already a dependency here. It emits the amd64 leg unconditionally and appends the
+        # arm64 one only when BAKE_ARM64 is set (arm64 runners are `ubuntu-24.04-arm`, free for
+        # public repositories, which this repo is). Composing the list there rather than filtering
+        # it here keeps ONE definition of each leg — a `matrix.arch` list plus a static `include`
+        # would not filter at all, since an `include` entry whose value for an original matrix key
+        # matches no combination ADDS a combination rather than being dropped.
+        include: ${{ fromJSON(needs.gate.outputs.bake_arches) }}
     runs-on: ${{ matrix.runner }}
     # 🚨 The arm64 leg is LOUD BUT NON-BLOCKING, and this is not a skip-trapdoor (AGENTS.md).
     # delivery-verdict consumes `needs.publish-bake.result`, which for a matrix is the AGGREGATE —

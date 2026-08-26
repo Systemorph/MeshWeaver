@@ -331,8 +331,11 @@ same commit shipped:
 The two hosts therefore resolved `sd0d0daa…` and `s377941f…` for one commit. The same four
 reference assemblies also differ between the **amd64 and arm64 variants of one multi-arch image**,
 so a multi-arch image carries two identities and a bake is valid for the architecture it was taken
-on. Every AKS node is amd64, so the platform bake is pinned to `--platform linux/amd64`; an arm64
-install resolves the other identity and compiles locally.
+on. That is why `publish-bake` is a matrix with **one lane per architecture**, each pinning
+`--platform` to its own leg's value and running on that architecture: each lane publishes the
+bytes it actually produced, under the identity those bytes resolve. Until then only amd64 was
+baked — every AKS node is amd64 — and an arm64 install resolved the other identity and compiled
+every NodeType at boot.
 
 None of this is a defect in the identity — it is the identity doing its job. A bake is an ABI
 claim about *bytes*, and bytes from another compilation are not the bytes a pod loaded. The
@@ -416,10 +419,13 @@ MSB4019 error, not a manifest that silently never appears.
    assemblies the target does not record, because "the hashes differ" is not actionable and the real
    defect was eight named assemblies.
 
-Both pulls pin `--platform linux/amd64`, out loud: the identity is per-architecture, so comparing
-across legs would be meaningless. That per-arch split is the *second* independent way to mint an
-unread address — `memex.localhost` is arm64 while the CI bake publishes amd64 — and the same guard
-covers it, because it compares the values two concrete hosts resolve.
+Both pulls pin `--platform` to **this lane's** architecture, out loud — never the runner's
+default: the identity is per-architecture, so comparing across legs would be meaningless. The bake
+above pinned the same value, which is what makes the two sides of this comparison describe the same
+bytes. Before the lane was split per architecture that per-arch difference was the *second*
+independent way to mint an unread address (`memex.localhost` is arm64 while the bake published
+amd64); the same guard covers it either way, because it compares the values two concrete hosts
+resolve rather than assuming which architecture either of them is.
 
 🚨 **The fix direction is always "give the host the reference back", never "shrink the canonical
 list".** Removing a name would make the two hosts agree by making the identity blind to that
