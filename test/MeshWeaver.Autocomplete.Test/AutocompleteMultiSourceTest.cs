@@ -6,6 +6,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.AI;   // MeshOperations — its namespace is a frozen binary contract (#2370)
 using MeshWeaver.Reactive;
 using Memex.Portal.Shared;
 using MeshWeaver.ContentCollections;
@@ -241,7 +242,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     [InlineData("three")]
     public void FuzzyScorer_AnyWordInFilename_RanksDocumentFirst(string query)
     {
-        var scorer = new AI.Completion.FuzzyScorer();
+        var scorer = new Data.Completion.FuzzyScorer();
 
         var items = new[]
         {

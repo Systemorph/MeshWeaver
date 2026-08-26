@@ -1,13 +1,10 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reactive.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
-using NSubstitute;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -41,136 +38,100 @@ namespace MeshWeaver.Graph.Test;
 /// <para>The fix: short-circuit the fast path when the node already carries a
 /// <c>HubConfiguration</c> — re-enriching an already-enriched node cannot
 /// produce a different result within the same slow-path window.</para>
+///
+/// <para>🚨 Drives <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/> against a REAL mesh
+/// hub (<see cref="MonolithMeshTestBase"/>) — never a mocked one (Systemorph/MeshWeaver#1810:
+/// AGENTS.md forbids mocking <c>IMessageHub</c>). With a real hub — which always has
+/// <c>IMeshQueryCore</c> registered — a NodeType with no registration and no persisted node hits
+/// the FAST existence probe (<c>NodeTypeProbeTimeout</c> = 3 s), not the 30-60 s slow path: the
+/// probe answers "nothing there" in well under a second and the code applies the SAME
+/// compilation-error overlay (with <c>HubConfiguration</c> set) that the slow-path timeout would
+/// have produced. That overlay is what makes the double-enrichment short-circuit
+/// (<c>if (node.HubConfiguration != null) return node;</c>) the property under test here — the
+/// real "unregistered NodeType" failure mode, not an artifact of a hub missing a DI registration.
+/// </para>
 /// </summary>
-public class NodeTypeEnrichmentDoubleCallTest
+public class NodeTypeEnrichmentDoubleCallTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     /// <summary>
-    /// Slow-path timeout inside <see cref="NodeTypeEnrichmentHelpers"/>. Mirrored
-    /// here so the assertion budgets stay in lock-step with the production
-    /// constant.
+    /// The fast-probe budget (mirrors <c>NodeTypeEnrichmentHelpers.NodeTypeProbeTimeout</c> = 3s)
+    /// plus observation slack. Kept tight so a regression shows up immediately rather than as a
+    /// "slow test".
     /// </summary>
-    private static readonly TimeSpan SlowPathTimeout = TimeSpan.FromSeconds(30);
-
-    /// <summary>
-    /// What we tolerate per single slow-path invocation: the timeout itself plus
-    /// observation slack. Kept tight so a regression shows up immediately rather
-    /// than as a "slow test".
-    /// </summary>
-    private static readonly TimeSpan SingleSlowPathBudget = SlowPathTimeout + TimeSpan.FromSeconds(5);
-
-    /// <summary>
-    /// Stand-in <see cref="IMeshNodeStreamCache"/> whose <see cref="GetStream"/>
-    /// returns <see cref="Observable.Never{T}"/> — a NodeType MeshNode that
-    /// never lands a settled compile state, exactly the prod symptom.
-    /// </summary>
-    private sealed class HangingStreamCache : IMeshNodeStreamCache
-    {
-        public int GetStreamCalls { get; private set; }
-        public IObservable<MeshNode> GetStream(string path)
-        {
-            GetStreamCalls++;
-            return Observable.Never<MeshNode>();
-        }
-        public IObservable<MeshNode> Update(string path, Func<MeshNode, MeshNode> update)
-            => Observable.Never<MeshNode>();
-        public IObservable<MeshNode> GetStream(string path, System.Text.Json.JsonSerializerOptions options)
-            => GetStream(path);
-        public IObservable<MeshNode> Update(string path, Func<MeshNode, MeshNode> update, System.Text.Json.JsonSerializerOptions options)
-            => Update(path, update);
-        public IObservable<MeshNode> Overwrite(string path, MeshNode node, System.Text.Json.JsonSerializerOptions options)
-            => Observable.Never<MeshNode>();
-        public void Invalidate(string path) { }
-        public bool ReleaseIfUnwatched(string path) => false;
-        public IObservable<IEnumerable<MeshNode>>? GetQuery(object id) => null;
-        public IObservable<IEnumerable<MeshNode>> GetQuery(object id, System.Text.Json.JsonSerializerOptions options, params string[] queries)
-            => Observable.Never<IEnumerable<MeshNode>>();
-    }
-
-    private static (IMessageHub Hub, HangingStreamCache Cache) BuildMeshHub()
-    {
-        var cache = new HangingStreamCache();
-        var services = new ServiceCollection()
-            .AddSingleton<IMeshNodeStreamCache>(cache)
-            .BuildServiceProvider();
-        var hub = Substitute.For<IMessageHub>();
-        hub.ServiceProvider.Returns(services);
-        return (hub, cache);
-    }
+    private static readonly TimeSpan SingleProbeBudget = TimeSpan.FromSeconds(3) + TimeSpan.FromSeconds(5);
 
     private static MeshConfiguration EmptyMeshConfiguration() =>
         new(Array.Empty<MeshNode>());
 
     /// <summary>
-    /// Prod-shape repro. A dynamic NodeType whose compile never settles drives
-    /// the slow path; the catalog enriches the instance once (returns an
-    /// already-enriched node with a compilation-error overlay HubConfiguration
-    /// but no AssemblyLocation), then the per-grain factory enriches it a
-    /// second time. Total wall time MUST stay within a single slow-path window
-    /// — a second 30 s timeout pushes the activation past the
-    /// <c>MessageHubGrain.DeliverMessage</c> WaitAsync(30 s) and looks like a
-    /// dead grain to every caller (which is exactly the prod symptom).
+    /// Prod-shape repro, adapted to a real mesh's FAST path: a NodeType with no static
+    /// registration and no persisted node at that path drives the existence-probe overlay; the
+    /// catalog enriches the instance once (returns an already-enriched node with a
+    /// compilation-error overlay HubConfiguration but no AssemblyLocation), then the per-grain
+    /// factory enriches it a second time. Total wall time MUST stay within roughly ONE probe
+    /// window — a second probe (or worse, a second slow-path wait) pushes the activation past the
+    /// caller's timeout and looks like a dead grain to every caller (the prod symptom this repro
+    /// is named for, just triggered by the probe path instead of the slow path on a real mesh).
     /// </summary>
-    [Fact(Timeout = 90_000)]
-    public async Task DoubleEnrichment_StaysWithinOneSlowPathTimeout()
+    [Fact(Timeout = 30_000)]
+    public async Task DoubleEnrichment_StaysWithinOneProbeWindow()
     {
-        var (hub, _) = BuildMeshHub();
         var cfg = EmptyMeshConfiguration();
 
-        var bareInstance = new MeshNode("Events", "Systemorph")
+        var bareInstance = new MeshNode("instance1", TestPartition)
         {
-            NodeType = "Systemorph/EventCalendar",
+            // Deliberately unregistered — no AddXxxType() call anywhere in this mesh's
+            // configuration, and no node persisted at this path either.
+            NodeType = $"{TestPartition}/NoSuchEventCalendarType",
         };
 
         var sw = Stopwatch.StartNew();
 
-        // Pass 1 — catalog-side enrichment via INodeConfigurationResolver. Slow
-        // path fires (custom NodeType, no static fast path), times out at 30 s,
-        // returns the compilation-error overlay node.
+        // Pass 1 — catalog-side enrichment via INodeConfigurationResolver. The fast existence
+        // probe finds nothing registered, applies the compilation-error overlay.
         var afterCatalog = await NodeTypeEnrichmentHelpers
-            .EnrichWithNodeType(hub, cfg, compilationService: null, bareInstance)
+            .EnrichWithNodeType(Mesh, cfg, compilationService: null, bareInstance)
             .Take(1)
-            .Should().Within(SingleSlowPathBudget).Emit("the slow path must always emit — fall back to overlay");
+            .Should().Within(SingleProbeBudget).Emit("the probe path must always emit — fall back to overlay");
 
         var afterPass1 = sw.Elapsed;
-        afterCatalog.Should().NotBeNull("the slow path must always emit — fall back to overlay");
+        afterCatalog.Should().NotBeNull("the probe path must always emit — fall back to overlay");
         afterCatalog.HubConfiguration.Should().NotBeNull(
             "WithCompilationErrorOverlay always sets HubConfiguration so callers can build the hub");
 
         // Pass 2 — MessageHubGrain hands the catalog-enriched node back into
-        // ResolveHubConfigurationObservable → EnrichWithNodeType. The bug: the
-        // line-39 fast path requires AssemblyLocation, the overlay sets none,
-        // and the slow path runs a SECOND 30 s window.
+        // ResolveHubConfigurationObservable → EnrichWithNodeType. The double-enrichment
+        // short-circuit (node.HubConfiguration != null) must return it UNCHANGED and
+        // SYNCHRONOUSLY — never re-probing, never re-entering the slow path.
         await NodeTypeEnrichmentHelpers
-            .EnrichWithNodeType(hub, cfg, compilationService: null, afterCatalog)
+            .EnrichWithNodeType(Mesh, cfg, compilationService: null, afterCatalog)
             .Take(1)
-            .Should().Within(SingleSlowPathBudget).Emit();
+            .Should().Within(500.Milliseconds()).Emit();
 
         sw.Stop();
 
         sw.Elapsed.Should().BeLessThan(
-            SingleSlowPathBudget,
+            SingleProbeBudget,
             "double enrichment must not double the wall time — re-enriching an already-enriched node " +
-            $"is what makes the prod grain miss its DeliverMessage WaitAsync({SlowPathTimeout.TotalSeconds:0}s) deadline. " +
-            $"Pass 1 alone took {afterPass1.TotalSeconds:0.0}s.");
+            $"is what makes the prod grain miss its activation deadline. Pass 1 alone took {afterPass1.TotalSeconds:0.0}s.");
     }
 
     /// <summary>
     /// Direct probe of the fast-path semantic the prod fix turns on: an
     /// already-enriched node (HubConfiguration set, AssemblyLocation null —
     /// the WithCompilationErrorOverlay shape) re-entered into
-    /// <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/> must NOT
-    /// touch the stream cache. If it does, a hung NodeType compile turns every
-    /// downstream re-enrichment into a fresh 30 s wait — the bug.
+    /// <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/> must NOT touch any mesh service
+    /// at all. If it does, a hung/absent NodeType turns every downstream re-enrichment into a
+    /// fresh probe (or worse, the 30-60s slow path) — the bug.
     /// </summary>
     [Fact(Timeout = 10_000)]
-    public async Task PreEnrichedNode_DoesNotReEnterSlowPath()
+    public async Task PreEnrichedNode_DoesNotReEnterTheProbeOrSlowPath()
     {
-        var (hub, cache) = BuildMeshHub();
         var cfg = EmptyMeshConfiguration();
 
-        var preEnriched = new MeshNode("Events", "Systemorph")
+        var preEnriched = new MeshNode("instance1", TestPartition)
         {
-            NodeType = "Systemorph/EventCalendar",
+            NodeType = $"{TestPartition}/NoSuchEventCalendarType",
             // The shape WithCompilationErrorOverlay produces: HubConfiguration set
             // (so the caller can instantiate a hub), but no NodeTypeDefinition
             // Content because no DLL was actually emitted.
@@ -179,7 +140,7 @@ public class NodeTypeEnrichmentDoubleCallTest
 
         var sw = Stopwatch.StartNew();
         var result = await NodeTypeEnrichmentHelpers
-            .EnrichWithNodeType(hub, cfg, compilationService: null, preEnriched)
+            .EnrichWithNodeType(Mesh, cfg, compilationService: null, preEnriched)
             .Take(1)
             .Should().Within(5.Seconds()).Emit();
         sw.Stop();
@@ -187,10 +148,8 @@ public class NodeTypeEnrichmentDoubleCallTest
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(500),
             "an already-enriched node must short-circuit synchronously — anything else " +
             "means EnrichWithNodeType is going to redo work whose answer can't change inside " +
-            "this slow-path window, the very pattern that caused the prod 60 s activation hang.");
+            "this window, the very pattern that caused the prod 60 s activation hang.");
         result.HubConfiguration.Should().NotBeNull(
             "the fast path must preserve the HubConfiguration the caller already resolved");
-        cache.GetStreamCalls.Should().Be(0,
-            "the slow path must not be entered for a node that already carries a HubConfiguration");
     }
 }

@@ -149,15 +149,47 @@ public static class ActivityRunner
                     // Cancel watcher: RequestedStatus = Cancelled trips the command's token
                     // (Activity Control Plane). Subscribed for the life of the run; disposed on
                     // completion.
-                    var cancelWatch = workspace.GetMeshNodeStream(activityPath)
+                    //
+                    // 🚨 Gated on an EXACT-PATH query first, never a bare exact-path subscribe AND
+                    // never a children listing. STEP 1 above (CreateNode) proves the activity is
+                    // PERSISTED, not that it is ROUTABLE — the read route can answer an authoritative
+                    // NotFound for a path whose write has already landed (Systemorph/MeshWeaver#2229
+                    // item A: "the create SUCCEEDS and the REPLY is lost" / reads that lie for minutes
+                    // under load). An exact-path GetMeshNodeStream hitting that NotFound TERMINATES the
+                    // stream with an error — and this subscribe had no onError, so an unhandled
+                    // OnError rethrows on whatever thread is delivering it.
+                    //
+                    // `path:{x}` with no `scope:` qualifier is QueryScope.Exact, whose contract for an
+                    // absent path is "answered ZERO ROWS with no error" — empty-on-absent, no routing
+                    // NotFound, no storm-breaker window, same as a listing. UNLIKE a `scope:children …`
+                    // listing, it cannot page past the one row it can return — `_Activity` is
+                    // explicitly un-pruned (StaticRepoImport.md), so it grows without bound, and a
+                    // children listing anchored at the CONTAINER can miss this activity once the
+                    // partition has enough of them (the same false "not there yet" this fix exists to
+                    // remove, reintroduced by a rarer route). See PackageInstaller.WaitForGating and
+                    // CqrsAndContentAccess.md → "An OPTIONAL node".
+                    //
+                    // No `select:` projection: MeshNode.Path is COMPUTED (Namespace + "/" + Id), so a
+                    // projection omitting either input yields an empty path — the query below relies
+                    // on Count, not a path comparison, but the same trap applies to any `select:`
+                    // added here later.
+                    var cancelWatch = meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                            $"path:{activityPath} nodeType:Activity"))
+                        .Where(change => change.Items.Count > 0)
+                        .Take(1)
+                        .SelectMany(_ => workspace.GetMeshNodeStream(activityPath))
                         .Select(n => n.ContentAs<ActivityLog>(hub.JsonSerializerOptions)?.RequestedStatus)
                         .Where(s => s == ActivityStatus.Cancelled)
                         .Take(1)
-                        .Subscribe(_ =>
-                        {
-                            logger?.LogInformation("Activity {Path} cancel requested", activityPath);
-                            try { cts.Cancel(); } catch { /* already disposed */ }
-                        });
+                        .Subscribe(
+                            _ =>
+                            {
+                                logger?.LogInformation("Activity {Path} cancel requested", activityPath);
+                                try { cts.Cancel(); } catch { /* already disposed */ }
+                            },
+                            ex => logger?.LogDebug(ex,
+                                "Activity {Path} cancel-watch could not attach; cancel requests will not be observed",
+                                activityPath));
 
                     var ctx = new ActivityContext(activityPath, cts.Token,
                         (msg, level) => Append(workspace, accessService, owner, activityPath, msg, level, logger));

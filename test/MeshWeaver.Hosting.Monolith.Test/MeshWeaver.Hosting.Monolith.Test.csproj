@@ -16,7 +16,6 @@
         <PackageReference Include="UglyToad.PdfPig" />
       <!-- Direct on purpose: the app closure no longer carries the view packs (#2169 Phase B) —
            tests that exercise pack types reference them like any other pack test. -->
-      <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
       <ProjectReference Include="..\..\src\MeshWeaver.Social\MeshWeaver.Social.csproj" />
   </ItemGroup>
     <ItemGroup>

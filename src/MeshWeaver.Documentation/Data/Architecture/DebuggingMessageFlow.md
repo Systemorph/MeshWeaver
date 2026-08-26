@@ -64,7 +64,7 @@ Two sanctioned paths to raise verbosity:
 | Context | What to edit |
 |---|---|
 | Test debugging session | `test/<Suite>/bin/Debug/net10.0/appsettings.json` (or the shared `test/appsettings.json` at the runtime location). `reloadOnChange: true` is wired, so the level flips mid-run without a rebuild. **Revert before committing.** |
-| Production debugging session | `memex/aspire/Memex.Portal.Distributed/appsettings.json` under the top-level `Logging:LogLevel`. That gates what reaches stdout, which Promtail ships to Loki. |
+| Production debugging session | `../MeshWeaver.Plugins/src/Memex.Portal.Distributed/appsettings.json` under the top-level `Logging:LogLevel`. That gates what reaches stdout, which Promtail ships to Loki. |
 
 If a `Log*` call is genuinely too noisy or too quiet at its current level, fix it permanently with a commit explaining the cost/value trade-off — never sneak it in alongside an unrelated change.
 

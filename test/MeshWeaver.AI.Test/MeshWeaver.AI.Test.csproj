@@ -44,4 +44,15 @@
     <Content Include="..\..\samples\Graph\Data\**\*" LinkBase="TestData" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="TestData\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- 🚨 The static-collections guard FOLLOWS its subject (#2276). It discovers assemblies at
+         RUNTIME (Directory.EnumerateFiles(AppContext.BaseDirectory, "MeshWeaver.*.dll")), so it only
+         covers what is in the running test's bin — which is why MeshWeaver.PathResolution.Test used
+         to carry a ProjectReference to MeshWeaver.AI purely to place AI.dll beside it. Dropping that
+         reference would have silently ended AI's coverage: the guard would still pass, having stopped
+         looking. Linking the one file here keeps AI scanned by the same rules, with no duplicated
+         logic, and it travels with this project when the engine leaves. -->
+    <Compile Include="..\MeshWeaver.PathResolution.Test\NoStaticCollectionsTest.cs"
+             Link="Guards\NoStaticCollectionsTest.cs" />
+  </ItemGroup>
 </Project>

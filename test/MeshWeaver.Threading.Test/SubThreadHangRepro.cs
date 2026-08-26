@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
@@ -7,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -141,23 +143,43 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
         // sub-thread hub activated and its WatchForExecution started the
         // agent. The hanging IChatClient takes over from here.
         //
-        // 🚨 Race: WaitForDelegationPath returns as soon as the parent's
-        // tool call has DelegationPath stamped (synchronous), but
-        // ExecuteDelegationAsync's meshService.CreateNode(subThreadNode) is
-        // fire-and-forget — the per-node hub may not have activated yet.
-        // GetMeshNodeStream surfaces "missing satellite" as OnError
-        // (DeliveryFailureException) almost immediately (post-2026-05-24
-        // cache change f103be08a). .Catch+Defer retries with backoff so
-        // we wait for the create to land instead of failing fast.
-        var subThread = await Observable.Defer(() =>
-                workspace.GetMeshNodeStream(subThreadPath)
-                    .Select(n => n.Content as MeshThread)
-                    .Where(t => t is { IsExecuting: true })
-                    .Take(1))
-            .Catch<MeshThread?, Exception>(_ =>
-                Observable.Empty<MeshThread?>().Delay(200.Milliseconds()))
-            .Repeat()
-            .Should().Within(15.Seconds()).Emit();
+        // 🚨 Race: WaitForDelegationPath returns as soon as the parent's tool call has
+        // DelegationPath stamped (synchronous), but ExecuteDelegationAsync's
+        // meshService.CreateNode(subThreadNode) is fire-and-forget — the sub-thread node may not
+        // exist yet. That is exactly AGENTS.md's "a node that may NOT EXIST YET" case, and the
+        // canonical composition is the one below: the keyed GetQuery listing for EXISTENCE
+        // (empty-on-absent, live — the index trails the store, so "the index has seen it" implies
+        // "the store has it"), and only THEN the owner's stream for CONTENT.
+        //
+        // 🚨 NEVER `Defer(...).Catch(...).Repeat()` here — that shape is issue #2341, and it kills
+        // the whole test HOST rather than failing this test:
+        //   * `Catch` only intercepts OnError. A point read of the not-yet-created node
+        //     COMPLETES without emitting (measured: 460 000 subscribes in 8.4 s, zero OnError),
+        //     so the 200 ms backoff never ran and `Repeat` re-subscribed at ~54 kHz — a busy-wait
+        //     that burns a core and, on a 4-vCPU runner, starves the very hub that has to create
+        //     the node it is waiting for.
+        //   * Rx subscribes SYNCHRONOUSLY, so that loop runs inside the assertion's `.ToTask()`
+        //     call. The `await` is never reached, which puts it out of reach of EVERY timeout in
+        //     the harness: `.Within(...)`, `[Fact(Timeout)]`, `methodTimeout`, and
+        //     MonolithMeshTestBase's hard-deadline watchdog all need the method to return or to
+        //     park at an await. The host therefore never finishes and CI's per-project
+        //     `timeout 8m` kills it — exit=124, no .trx, no failing test named, whole shard red
+        //     (12 occurrences in ~15 h across 5 branches and main, 2026-08-25/26).
+        //
+        // The GetQuery id embeds the sub-thread path, which is per-run. "Never compose an id per
+        // call" guards against a production caller minting a new synced query on a hot path; here
+        // the call happens once and the registry entry lives on this [Fact]'s own mesh, which is
+        // disposed at teardown.
+        var subThreadParent = subThreadPath[..subThreadPath.LastIndexOf('/')];
+        var subThread = await client
+            .GetQuery($"subthread-exists:{subThreadPath}",
+                $"path:{subThreadParent} scope:children select:path")
+            .Where(nodes => nodes.Any(n =>
+                string.Equals(n.Path, subThreadPath, StringComparison.OrdinalIgnoreCase)))
+            .Take(1)
+            .SelectMany(_ => workspace.GetMeshNodeStream(subThreadPath))
+            .Select(n => n.ContentAs<MeshThread>(client.JsonSerializerOptions))
+            .Should().Within(15.Seconds()).Match(t => t is { IsExecuting: true });
         subThread!.IsExecuting.Should().BeTrue();
         Output.WriteLine($"Sub-thread reached IsExecuting=true at {DateTime.UtcNow:O}");
 
@@ -178,15 +200,13 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
         // The wait window: 30s watchdog + 15s slack for propagation through
         // parent stream emission → sub-thread cancel watcher → CTS cancel →
         // streaming loop exit → terminal Status flip. 45s total.
-        var settled = await Observable.Defer(() =>
-                workspace.GetMeshNodeStream(subThreadPath)
-                    .Select(n => n.Content as MeshThread)
-                    .Where(t => t is { IsExecuting: false })
-                    .Take(1))
-            .Catch<MeshThread?, Exception>(_ =>
-                Observable.Empty<MeshThread?>().Delay(500.Milliseconds()))
-            .Repeat()
-            .Should().Within(45.Seconds()).Emit();
+        //
+        // No existence gate and no retry here: the wait above already read the node off its
+        // owner, so the point stream is the authoritative live read AGENTS.md prescribes — and
+        // the `Catch(...).Repeat()` this replaces is the #2341 busy-wait (see above).
+        var settled = await workspace.GetMeshNodeStream(subThreadPath)
+            .Select(n => n.ContentAs<MeshThread>(client.JsonSerializerOptions))
+            .Should().Within(45.Seconds()).Match(t => t is { IsExecuting: false });
 
         settled!.IsExecuting.Should().BeFalse(
             "FIX: sub-thread settled within the 30s watchdog + 15s propagation " +
@@ -454,3 +474,4 @@ public class SubThreadHangRepro(ITestOutputHelper output) : MonolithMeshTestBase
 
     #endregion
 }
+
