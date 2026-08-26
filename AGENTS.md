@@ -232,9 +232,11 @@ so never relax it. Three consequences that trip people up, all SILENT:
 3. 🚨 **Back-to-back merges CANCEL each other's main run, so a merge burst publishes NOTHING.**
    `dotnet-test.yml`'s concurrency group is `build-test-${{ … || github.ref }}` — every push to main
    groups as `refs/heads/main`, so each merge cancels the in-flight run for the previous one (#2316,
-   which buys ~28% of runner demand and is worth keeping). But CD needs a run that **completes**:
-   a `cancelled` run never fires `workflow_run`. So during a burst main carries no completed run at
-   all, and every intermediate publish that "would have happened" simply does not. Observed
+   which buys ~28% of runner demand and is worth keeping). CD **does** still fire on those runs —
+   `main-cd.yml` subscribes with `types: [completed]`, and a cancelled run is "completed" — but its
+   delivery gate keys on the required check **`Consolidate test results` reaching `success` for that
+   SHA**, which a cancelled run never produces. So CD wakes, decides "nothing will be built", and
+   every intermediate publish that "would have happened" simply does not. Observed
    2026-08-26: #2316 merged at 12:55:25Z and main's next **five** runs were cancelled back-to-back,
    leaving 45 minutes with no completed run and no publish.
 
