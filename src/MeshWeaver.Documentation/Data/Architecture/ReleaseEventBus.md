@@ -1,17 +1,8 @@
 ---
-Title: "The release event bus"
-Abstract: >
-  How a release in any repo becomes a fact every other repo can act on: memex ingests release
-  events, stores them as persistent mesh nodes, and dependent repos QUERY that state rather than
-  accumulating events. The bus is the mesh; the webhook is only a wake-up.
-Thumbnail: "release-bus.png"
-Published: "2026-08-26"
-VideoRef: ""
-VideoTitle: ""
-Tags:
-  - Architecture
-  - Release
-  - CI
+Name: The Release Event Bus
+Category: Architecture
+Description: How a release in any repository becomes a fact every other repository can query — memex ingests release events as persistent mesh nodes, and dependents read that state instead of accumulating events
+Icon: ArrowSync
 ---
 
 # The release event bus
