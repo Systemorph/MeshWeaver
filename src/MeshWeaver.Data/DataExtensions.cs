@@ -1263,37 +1263,24 @@ public static class DataExtensions
                             ?.CreateLogger("MeshWeaver.Data.MergeGuard"),
                         hubPath);
 
-                    // 🚨 #2305 — ANY refused key aborts the WHOLE apply, not just an all-refused
-                    // one (the original #648 backstop below only caught the case where NOTHING
-                    // landed). The writer's update lambda computed every changed field as ONE
-                    // ATOMIC intent (e.g. ThreadExecution.PushToResponseMessage sets Status AND
-                    // Text together) — applying only the unconflicted subset and acking Success
-                    // lands a self-contradictory partial state (a Completed response cell still
-                    // holding the "Generating response…" placeholder: Status landed cleanly, Text
-                    // was refused because the owner's live text had already moved past the
-                    // writer's stale base) and, because the ack lies "success", the caller's
-                    // retry-on-Conflict machinery never fires to repair it. Refuse the ENTIRE
-                    // patch — commit nothing, not even the fields that merged cleanly — and NACK
-                    // Conflict so UpdateRemote's existing rebase-and-retry re-diffs the whole
-                    // lambda against fresh state and lands every field together next attempt.
-                    if (refusedKeys > 0)
-                    {
-                        AckOnce(false, new MeshNodeError(
-                            MeshNodeErrorCode.Conflict, hubPath,
-                            $"cross-hub write refused: {refusedKeys} field(s) changed on the owner "
-                            + "since the writer's base — re-read and re-apply"));
-                        return;
-                    }
-
-                    // 🚨 No-change backstop: a patch whose every value already matches the live
-                    // state must NOT bump the version or commit — the version bump below would
-                    // otherwise MANUFACTURE the difference that makes it look like a change. On
-                    // THIS deferred path a no-op commit also never emits, so the post-commit
-                    // subscription would time out and NACK a write that in fact succeeded. Ack
-                    // success up front against the untouched state.
+                    // 🚨 No-change backstop (same rule as ApplyMeshNodePatchInTurn): a patch whose
+                    // every value already matches the live state must NOT bump the version or
+                    // commit — the version bump below would otherwise MANUFACTURE the difference
+                    // that makes it look like a change. On THIS deferred path a no-op commit also
+                    // never emits, so the post-commit subscription would time out and NACK a write
+                    // that in fact succeeded. Ack success up front against the untouched state —
+                    // 🚨 UNLESS the merge REFUSED keys and nothing landed: then the caller's write
+                    // provably did not happen, and acking Success is the #648 acked-write-loss.
+                    // NACK with Conflict so the caller re-reads and re-applies.
                     if (System.Text.Json.Nodes.JsonNode.DeepEquals(preMergeNode, currentNode))
                     {
-                        AckOnce(true);
+                        if (refusedKeys > 0)
+                            AckOnce(false, new MeshNodeError(
+                                MeshNodeErrorCode.Conflict, hubPath,
+                                $"cross-hub write refused: {refusedKeys} field(s) changed on the owner "
+                                + "since the writer's base and nothing was applied — re-read and re-apply"));
+                        else
+                            AckOnce(true);
                         return;
                     }
 
@@ -1614,28 +1601,6 @@ public static class DataExtensions
                     var preMergeNode = currentNode.DeepClone().AsObject();
                     var refusedKeys = ApplyMeshNodeMerge(currentNode, patchNode, isMeshNode: true,
                         request.Message, jsonOpts, mergeGuardLogger, hubPath);
-                    // 🚨 #2305 — ANY refused key aborts the WHOLE turn, not just an all-refused one
-                    // (the #648 backstop below only caught the case where NOTHING landed). The
-                    // writer's update lambda computed every changed field as ONE ATOMIC intent
-                    // (e.g. ThreadExecution.PushToResponseMessage sets Status AND Text together)
-                    // — committing only the unconflicted subset and acking Success lands a
-                    // self-contradictory partial state: a Completed response cell still holding
-                    // the "Generating response…" placeholder, because Status (unconflicted) landed
-                    // while Text (refused — the owner's live text had already moved past the
-                    // writer's stale base) was silently dropped, and the lying "success" ack meant
-                    // the caller's retry-on-Conflict machinery never fired to repair it. Refuse the
-                    // ENTIRE turn — commit nothing this action-block pass, not even the fields
-                    // that merged cleanly — and NACK Conflict so UpdateRemote's existing
-                    // rebase-and-retry re-diffs the whole lambda against fresh state and lands
-                    // every field together on the next attempt.
-                    if (refusedKeys > 0)
-                    {
-                        AckOnce(false, new MeshNodeError(
-                            MeshNodeErrorCode.Conflict, hubPath,
-                            $"cross-hub write refused: {refusedKeys} field(s) changed on the owner "
-                            + "since the writer's base — re-read and re-apply"));
-                        return null;
-                    }
                     // 🚨 Owner-side no-change backstop: a patch whose every value already matches
                     // the live node (an MCP patch re-asserting current state, an importer
                     // re-writing unchanged content) must NOT bump the Version, persist a history
@@ -1643,9 +1608,18 @@ public static class DataExtensions
                     // otherwise manufacture the difference. Ack success with the untouched state;
                     // the no-emission path is already handled (AckOnce latches, postSub timeout
                     // dedupes) exactly like the NotFound no-op above.
+                    // 🚨 #648 invariant: a merge that REFUSED keys and changed nothing must NOT
+                    // ack Success — the caller's write provably did not land. NACK with Conflict
+                    // so the caller re-reads and re-applies instead of believing the lie.
                     if (System.Text.Json.Nodes.JsonNode.DeepEquals(preMergeNode, currentNode))
                     {
-                        AckOnce(true);
+                        if (refusedKeys > 0)
+                            AckOnce(false, new MeshNodeError(
+                                MeshNodeErrorCode.Conflict, hubPath,
+                                $"cross-hub write refused: {refusedKeys} field(s) changed on the owner "
+                                + "since the writer's base and nothing was applied — re-read and re-apply"));
+                        else
+                            AckOnce(true);
                         return null;
                     }
                     // The OWNER bumps the Version on apply (same rule as the deferred path).
