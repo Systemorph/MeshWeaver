@@ -571,14 +571,6 @@ internal static class NodeTypeEnrichmentHelpers
     }
 
     /// <summary>
-    /// How long the pre-overlay confirmation read may take before the activation gives up on it and
-    /// binds what the stream said. Deliberately small: this read is EXTRA evidence on a branch that
-    /// already has a graceful sink (the overlay), so it must never become a second way for an
-    /// activation to hang. Failing to confirm costs the pre-#2409 behaviour, never a dead hub.
-    /// </summary>
-    private static readonly TimeSpan OverlayConfirmationTimeout = TimeSpan.FromSeconds(10);
-
-    /// <summary>
     /// Re-reads the NodeType from STORAGE before an instance is committed to the
     /// compilation-in-progress overlay, and returns whichever node is authoritative.
     ///
@@ -604,7 +596,7 @@ internal static class NodeTypeEnrichmentHelpers
     ///
     /// <para>Returns <paramref name="fromStream"/> unchanged when this host registers no query core
     /// (a unit-test hub), when storage has no node at that path, or when the read does not answer
-    /// inside <see cref="OverlayConfirmationTimeout"/> — the last of which is logged, because
+    /// inside <see cref="NodeTypeProbeTimeout"/> — the last of which is logged, because
     /// "we could not check" and "we checked and it is compiling" must not look alike.</para>
     /// </summary>
     private static IObservable<MeshNode> ConfirmInFlightAgainstStorage(
@@ -616,7 +608,11 @@ internal static class NodeTypeEnrichmentHelpers
 
         return reRead()
             .Take(1)
-            .Timeout(OverlayConfirmationTimeout)
+            // Same budget as the existence probe, because it is the same shape: one lookup on
+            // the activation path. Not a new number to tune — this read is EXTRA evidence on a
+            // branch that already has a graceful sink, so it must never become a second way for
+            // an activation to hang. Failing to confirm costs the pre-#2409 behaviour.
+            .Timeout(NodeTypeProbeTimeout)
             .Select(authoritative =>
             {
                 var chosen = PreferAuthoritative(fromStream, authoritative);
