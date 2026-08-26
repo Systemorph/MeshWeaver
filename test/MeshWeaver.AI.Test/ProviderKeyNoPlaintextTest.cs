@@ -6,7 +6,9 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
-using Memex.Portal.Shared.Models;
+using MeshWeaver.AI.Portal;             // ModelProviderService — moved here from
+                                        // Memex.Portal.Shared.Models with the portal split.
+using MeshWeaver.Mesh.Security;         // IProviderKeyProtector (cref below)
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.Configuration;
