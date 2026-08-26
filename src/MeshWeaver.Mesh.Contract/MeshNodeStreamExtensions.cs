@@ -2009,6 +2009,14 @@ public static class MeshNodeStreamExtensions
             // "indeterminate ⇒ treat as absent").
             var shuttingDownNacks = 0;
             Exception? lastRecyclingNack = null;
+            // 🚨 The DISTINCT owner activations seen across the re-probe loop — the datum that
+            // separates the two failures this loop can end in, which have opposite fixes:
+            // ONE hub wedged in teardown (every probe hits the same corpse; the address never
+            // reactivates) versus a RECYCLE STORM (each probe hits a fresh activation that dies
+            // before it can answer). "Still recycling after 110 probes" says nothing about which
+            // (#2025) and cost a full CI cycle to not answer. The NACK carries an activation id
+            // (MessageService), so counting distinct NACK texts counts activations.
+            var owners = new HashSet<string>(StringComparer.Ordinal);
             var reProbePacing = new SerialDisposable();
             // SerialDisposable, not a bare IDisposable: the ShuttingDown re-probe below REPLACES this
             // subscription, and assigning into a SerialDisposable that has already been disposed
@@ -2042,11 +2050,14 @@ public static class MeshNodeStreamExtensions
             // GetMeshNode); Throw callers get the error surfaced.
             void EmitRecyclingExhausted()
             {
+                int distinctOwners;
+                lock (owners) distinctOwners = owners.Count;
                 var error = new AddressRecyclingException(
                     $"GetMeshNode('{path}'): the owning hub was still recycling (ShuttingDown) after "
                     + $"{Volatile.Read(ref shuttingDownNacks)} probe(s) over {started.Elapsed.TotalSeconds:F1}s "
                     + $"(budget {budget.TotalSeconds:F0}s) — the address is recycling, NOT absent. "
-                    + "Surfacing rather than returning null, which the caller cannot tell apart from "
+                    + RecyclingShape(distinctOwners)
+                    + " Surfacing rather than returning null, which the caller cannot tell apart from "
                     + "'node not found'. Retry the read once the address has reactivated.",
                     lastRecyclingNack);
                 try
@@ -2275,6 +2286,17 @@ public static class MeshNodeStreamExtensions
                                 if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
                                 {
                                     lastRecyclingNack = ex;
+                                    // Extract just the activation TOKEN, never the whole message (#2376
+                                    // Copilot review): a NACK's text can carry per-DELIVERY noise (a
+                                    // request id, a type name) that differs on every retry even against
+                                    // the SAME activation, and comparing whole strings would then count
+                                    // one wedged owner as a false storm. A NACK with no token at all
+                                    // (a site that has not been taught to embed one yet) contributes
+                                    // nothing to the set rather than a guess — RecyclingShape(0) says
+                                    // nothing, which is honest; miscounting would not be.
+                                    var ownerTag = ExtractActivationTag(ex.Message);
+                                    if (ownerTag is not null)
+                                        lock (owners) owners.Add(ownerTag);
                                     var probes = Interlocked.Increment(ref shuttingDownNacks);
                                     if (!cts.IsCancellationRequested && Volatile.Read(ref emitted) == 0)
                                     {
@@ -2349,6 +2371,60 @@ public static class MeshNodeStreamExtensions
     /// never this constant — bounds the loop.
     /// </summary>
     private static readonly TimeSpan RecyclingReProbePace = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Names WHICH recycling failure this was, from the number of distinct owner activations that
+    /// NACKed — the one thing a probe count cannot tell you, and the thing that decides where to
+    /// look next (#2025).
+    ///
+    /// <para>One activation across every probe means the address never came back: a hub wedged in
+    /// teardown, so look at its disposal. Many means the address DID come back, repeatedly, and
+    /// each successor died before it could answer: a recycle storm, so look at whatever is asking
+    /// for the recycles — a NodeType republishing, an overlay self-heal watcher firing per
+    /// publication. Those have opposite fixes, and the previous message ("still recycling after
+    /// 110 probes") was consistent with both.</para>
+    /// </summary>
+    /// <param name="distinctOwners">Distinct owner activations observed across the re-probe loop.</param>
+    /// <returns>One sentence naming the shape, or an empty string when nothing was observed.</returns>
+    internal static string RecyclingShape(int distinctOwners) => distinctOwners switch
+    {
+        <= 0 => string.Empty,
+        1 => " Every probe was answered by the SAME owner activation, so the address never "
+             + "reactivated — look at that hub's DISPOSAL (a teardown that never completes), not "
+             + "at whoever asked for the recycle.",
+        _ => $" The probes were answered by {distinctOwners} DISTINCT owner activations, so the "
+             + "address did reactivate and each successor died before it could answer — a recycle "
+             + "STORM. Look at whatever is requesting the recycles (a NodeType republishing, a "
+             + "self-heal watcher firing per publication), not at any single hub's disposal.",
+    };
+
+    /// <summary>
+    /// Extracts the <c>activation #XXXXXXXX</c> token a ShuttingDown NACK embeds (MessageService's
+    /// <c>ActivationTag()</c>), or <c>null</c> when the NACK carries none.
+    ///
+    /// <para>🚨 Deliberately NOT "compare the whole message" (#2376 Copilot review, #2025). A
+    /// NACK's text can carry per-DELIVERY noise — a request id, a type name — that differs on
+    /// every retry even against the SAME activation, so treating the whole string as the owner key
+    /// over-counts a single wedged owner into a false STORM verdict. Extracting just the stable
+    /// token, and returning <c>null</c> (excluded from the owner count, never guessed) when a NACK
+    /// site has not been taught to embed one, keeps the count accurate in both directions: never
+    /// inflated by per-delivery text, never fabricated from a NACK that carries no identity at
+    /// all.</para>
+    /// </summary>
+    /// <param name="message">A <see cref="DeliveryFailureException"/> message from a ShuttingDown NACK.</param>
+    /// <returns>The hex activation id, or <c>null</c> when the message carries none.</returns>
+    internal static string? ExtractActivationTag(string message)
+    {
+        const string marker = "activation #";
+        var start = message.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+            return null;
+        start += marker.Length;
+        var end = start;
+        while (end < message.Length && Uri.IsHexDigit(message[end]))
+            end++;
+        return end > start ? message[start..end] : null;
+    }
 }
 
 /// <summary>
