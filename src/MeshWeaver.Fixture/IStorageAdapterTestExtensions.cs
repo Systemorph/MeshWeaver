@@ -31,6 +31,51 @@ public static class IStorageAdapterTestExtensions
     public static IObservable<MeshNode?> SaveNode(this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options)
         => adapter.Write(node, options);
 
+    /// <summary>
+    /// Synchronous seed bridge, for use from a <c>ConfigureMesh(MeshBuilder)</c> override —
+    /// synchronous by framework contract, called during test construction before any async
+    /// lifecycle hook exists, so there is no `await`-able call site to bridge from. In practice
+    /// this is always called against an in-memory adapter (e.g.
+    /// <c>MeshWeaver.Hosting.Persistence.InMemoryStorageAdapter</c>), typed against the
+    /// <see cref="IStorageAdapter"/> interface here so <c>MeshWeaver.Fixture</c> does not need a
+    /// reference to <c>MeshWeaver.Hosting</c>.
+    ///
+    /// <para>🚨 This is NOT a <c>.FirstAsync().ToTask().GetAwaiter().GetResult()</c> bridge (#2013).
+    /// That shape parks the calling thread in a native wait until the Task completes — safe only
+    /// while the source happens to complete synchronously, which is a property of today's
+    /// implementation, not a guarantee, and was flagged as the first place to look when a wedge
+    /// with no failing test recurs. This helper never blocks at all: it subscribes directly (no
+    /// Task in between) and asserts, loudly and by name, that the write already landed by the time
+    /// <c>Subscribe</c> returns — which holds for an in-memory adapter backed by
+    /// <c>Observable.Defer</c> + <c>Observable.Return</c>, both synchronous on the calling thread
+    /// with no scheduler indirection. If that invariant is ever broken (or this is pointed at an
+    /// adapter that genuinely goes async), this throws a named exception pointing at the seeded
+    /// path instead of hanging the shard for 8 minutes with no failing test recorded.</para>
+    /// </summary>
+    public static void SaveNodeSynchronously(
+        this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options)
+    {
+        var completed = false;
+        Exception? failure = null;
+        // Explicit onError (never the throwing default-stub) so a fault surfaces as OUR named
+        // exception with the seeded path, not a raw rethrow on whatever thread raised it. Disposing
+        // right after Subscribe returns — success, failure, or neither — stops a subscription that
+        // turned out to be genuinely async instead of leaving it running in the background after
+        // this method has already thrown "did not complete synchronously".
+        var subscription = adapter.Write(node, options)
+            .Subscribe(_ => completed = true, ex => failure = ex);
+        subscription.Dispose();
+
+        if (failure is not null)
+            throw new InvalidOperationException($"Synchronous seed of '{node.Path}' failed.", failure);
+        if (!completed)
+            throw new InvalidOperationException(
+                $"Synchronous seed of '{node.Path}' did not complete synchronously on Subscribe. "
+                + "InMemoryStorageAdapter.Write must stay Observable.Defer + Observable.Return "
+                + "(no scheduler indirection) for ConfigureMesh-time seeding via "
+                + "SaveNodeSynchronously to be safe — see #2013.");
+    }
+
     /// <summary>Legacy alias for tests: <c>SaveNodeAsync</c> → <c>Write</c>.</summary>
     public static Task<MeshNode?> SaveNodeAsync(this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
         => adapter.Write(node, options).FirstAsync().ToTask(ct);

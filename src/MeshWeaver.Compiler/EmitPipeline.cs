@@ -82,7 +82,7 @@ public static class EmitPipeline
     /// <c>MeshNodeCompilationService</c> — the only place that also has the exception, its stack
     /// and the source-discovery report (which queries ran, which Code nodes matched). Logging the
     /// same diagnostics here as well double-counted EVERY compile failure in production: the ~150
-    /// ERROR lines/24h across the memex/memex-cloud/atioz portals were ~72 real failures logged
+    /// ERROR lines/24h across the production portals were ~72 real failures logged
     /// twice, and the duplicate came FIRST — context-free and exception-free, so red-log
     /// fingerprinting (which keys on category+eventId+exception+frame) filed it as a second,
     /// distinct fault whose only visible frame was the emit path. That is what made a plain
@@ -408,7 +408,7 @@ public static class EmitPipeline
     /// bounded, stateless and timer-free: three synchronous attempts, then a loud terminal
     /// failure. A deterministic compile error is explicitly NOT retried. Its counterfactual is a
     /// permanently poisoned NodeType (prod AgenticPension/Datenpunkt, 2026-06-22), not a slower
-    /// recovery. Evidence that it is not masking anything: across memex + memex-cloud + atioz it
+    /// recovery. Evidence that it is not masking anything: across every production portal it
     /// has fired ZERO times in 7 days (31M log lines) — every ERROR the compile service emits in
     /// production is a genuine Roslyn diagnostic, never a lost write.</para>
     /// </summary>

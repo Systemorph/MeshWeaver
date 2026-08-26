@@ -6,7 +6,7 @@ using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using MeshWeaver.AI;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Hosting.Grpc;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Documentation;
@@ -365,12 +365,8 @@ public static class MemexConfiguration
             // import — no regression. Default Helm sets ["Doc","Agent","Provider","Harness","Skill"].
             var syncPartitions = features.StaticRepoSync.Partitions
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            // AI content is served as a UNIT: if the config names ANY AI partition, serve them ALL
-            // (Agent/Provider/Harness/Skill), so an incomplete list can't leave Skill (or a future AI
-            // content type) in-memory while the rest go to the DB — and AddAI's per-type serve-from-DB
-            // gating stays consistent with the static-repo import. See MeshWeaver.AI/AiContentSources.
-            if (syncPartitions.Overlaps(AiContentSources.ContentPartitions))
-                syncPartitions.UnionWith(AiContentSources.ContentPartitions);
+            // NB: the AI partitions are expanded to the whole bundle by the AI module itself
+            // (AiMeshModuleAttribute.ServeFromPartitions), next to the sources that rule gates.
             IReadOnlySet<string> serveFromPartition = syncPartitions;
 
             MeshBuilder mb = builder
@@ -434,17 +430,15 @@ public static class MemexConfiguration
                 // as seeded UiContribution nodes — same lane a plugin's AI-menu entry (or a whole
                 // TopBar-declared menu) arrives through. Only the imperative "New thread" stays
                 // compiled (AiMenuItems).
-                .AddAiMenuContributions()
                 .AddSpaceType()
                 // Generic webhook inbox: the WebhookEvent node type behind
                 // POST /api/hooks/{target} (allowlisted via WebhookInbox:Targets).
-                .AddWebhookInbox()
+                .AddWebhookInbox();
                 // Courses are fully node-native: the Edu pack owns the types (Edu/Lesson,
                 // Edu/Module, Edu/Exercise, Edu/Quiz, Edu/CourseInvite, Edu/CourseCatalog) AND
                 // the whole-course navigation (EduCourseNavigationProvider, registered per-hub
                 // by the type configuration lambdas). The compiled MeshWeaver.Courses types had
                 // zero instances in any repo or reachable mesh and are deleted.
-                .AddAI(serveFromPartition);
 
             // The gRPC mesh transport is a MODULE (MeshWeaver.Hosting.Grpc.dll under
             // Modules:Assemblies — GrpcMeshModuleAttribute folds AddGrpcHub over this builder:
@@ -609,13 +603,6 @@ public static class MemexConfiguration
                         .WithHeartBeatHandler() // silently ack heartbeats on every per-node hub
                         .AddDefaultLayoutAreas()
                         // The course-shell areas (StartExercise / GoToMyCopy / CourseNav / Learn)
-                        // ship as in-mesh source in the Edu plugin (Plugins#481) — no platform
-                        // registration remains; only the navigation contributor below is compiled.
-                        .AddThreadsLayoutArea()
-                        // Scope-tabbed AI catalogs (Agents/Skills/Providers/Models) with per-tab
-                        // create buttons — the AI-menu targets below point here. Registered on every
-                        // per-node hub so they resolve when anchored on the type roots (/Agent/AiAgents …).
-                        .AddAiCatalogLayoutAreas()
                         .AddApiTokensSettingsTab()
                         // Register your own MeshWeaver installation and get it an instance key.
                         .AddInstancesSettingsTab()

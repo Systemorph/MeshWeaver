@@ -955,7 +955,7 @@ public sealed class InstanceAutoRegistrationService(
                 // `preInstalled: false`, so an unattended boot installed 8 packages that all need
                 // the Store and never installed the Store — no install record, therefore no
                 // declared-access pass, therefore a partition only `system-security` could read,
-                // therefore no catalog page to install it from by hand. Exactly the state `atioz`
+                // therefore no catalog page to install it from by hand. Exactly the state a portal
                 // was found in on 2026-08-10. The closure is taken over the FULL catalog, so a
                 // dependency outside the selection is pulled in rather than silently ignored.
                 var withDependencies = DependencyClosure(

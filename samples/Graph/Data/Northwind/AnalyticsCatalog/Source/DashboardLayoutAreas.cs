@@ -33,25 +33,25 @@ public static class DashboardLayoutAreas
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Top 5 Orders Summary"))
-                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(OrderViews.OrderSummary))),
+                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(OrderLayoutAreas.OrderSummary))),
                 skin => skin.WithXs(12).WithSm(6)
             )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Sales by Category"))
-                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(SalesViews.SalesByCategory))),
+                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(SalesLayoutAreas.SalesByCategory))),
                 skin => skin.WithXs(12).WithSm(6)
             )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Supplier Summary"))
-                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(SupplierViews.SupplierSummary)).WithStyle(s => s.WithWidth("100%"))),
+                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(SupplierLayoutAreas.SupplierSummary)).WithStyle(s => s.WithWidth("100%"))),
                 skin => skin.WithXs(12).WithSm(6)
             )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Top Products"))
-                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(ProductViews.ProductOverview))),
+                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(ProductLayoutAreas.ProductOverview))),
                 skin => skin.WithXs(12).WithSm(6)
             );
     }
