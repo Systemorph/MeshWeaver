@@ -25,6 +25,24 @@ namespace MeshWeaver.Graph;
 ///   editing surfaces can fire in rapid succession; the inbox serialises them
 ///   per node without blocking the workspace pipeline.</item>
 /// </list>
+///
+/// <para>🚨 <b>#2087 — a genuine CREATE announces on <see cref="IMeshChangeFeed"/>.</b>
+/// An "add" here is add-relative-to-THIS-source-instance, not necessarily globally new (see the
+/// comment on the add-classification below): a reactivated hub can re-classify its own
+/// already-durable node as an "add" too. Only the genuinely-new case (the incoming node's
+/// <see cref="MeshNode.Version"/> is 0 — never minted before) publishes
+/// <see cref="MeshChangeEvent.Created"/> via <see cref="StorageAdapterChangeFeedExtensions.WriteAndPublishCreated"/>;
+/// a re-add of already-durable content stays a bare write, exactly as before — the row was
+/// already reachable, and announcing it again would double-fire every subscriber that treats
+/// Created as "this happened right now" (e.g. <c>AccessGrantNotifier</c>, the invite
+/// <c>EventSubscription</c>s) on every idle-recycle. Without this, a genuinely new node whose
+/// FIRST durable write lands here (its own per-node hub's create-flush racing
+/// <see cref="Initialize"/>'s durable-seed read — see <c>ApplyUpdateViaStream</c> in
+/// <c>MeshExtensions.cs</c>, "how imported nodes land when the create race is lost") is invisible
+/// to the mesh that wrote it: <c>PathResolutionService</c>'s cache never learns the path exists,
+/// and routing answers <c>No node found at '…'</c> for the life of the process — the #817/#824
+/// announce-loss class. Deletes have no such ambiguity (a path leaving the collection is always a
+/// genuine delete) and always announce via <see cref="StorageAdapterChangeFeedExtensions.DeleteAndPublish"/>.</para>
 /// </summary>
 public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSource>
 {
@@ -61,7 +79,10 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     // so we don't write the same row twice when the workspace pipeline
     // fires UpdateImpl multiple times in quick succession.
     private static readonly TimeSpan DebounceInterval = TimeSpan.FromMilliseconds(200);
-    private readonly ConcurrentDictionary<string, MeshNode> _pendingSaves = new();
+    // Value carries whether the queued node was GENUINELY new (Version 0 before stamping) at
+    // enqueue time — see the #2087 doc note on the class. Preserved through to the flush so the
+    // announce decision doesn't have to re-derive it from the (already re-stamped) node.
+    private readonly ConcurrentDictionary<string, (MeshNode Node, bool IsInsert)> _pendingSaves = new();
     private readonly ConcurrentBag<string> _pendingDeletes = new();
     private Timer? _debounceTimer;
     private readonly object _timerLock = new();
@@ -126,6 +147,12 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     // OWNING hub's own load was the one seam still missing from that list.
     private readonly Mesh.Services.IMeshContentTypeRegistry? _contentTypeRegistry;
 
+    // Resolved once at construction — see StorageAdapterChangeFeedExtensions.WriteAndPublishCreated
+    // / DeleteAndPublish, used by FlushPendingWrites to announce genuine creates/deletes (#2087).
+    // May be null (a fixture that never registered a feed); the extension helpers treat that as a
+    // no-op publish, so the storage write still runs and emits as usual.
+    private readonly IMeshChangeFeed? _changeFeed;
+
     internal MeshNodeTypeSource(
         IWorkspace workspace,
         object dataSource,
@@ -167,6 +194,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             .GetService<RecentlyDeletedRegistry>();
         _contentTypeRegistry = workspace.Hub.ServiceProvider
             .GetService<Mesh.Services.IMeshContentTypeRegistry>();
+        _changeFeed = workspace.Hub.ServiceProvider.GetService<IMeshChangeFeed>();
         _logger?.LogDebug("MeshNodeTypeSource: Created for hubPath={HubPath} (routingSuppliedStream={Supplied})",
             hubPath, ownNodeStream != null);
 
@@ -365,6 +393,12 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             // reactivation, and off the per-activation hub clock it stamped a REGRESSED value
             // that the debounce flush then wrote over the durable row — the write-rollback of
             // #325 through the create path.
+            //
+            // 🚨 #2087: the SAME "Version 0 ⇒ genuinely new" test decides whether the flush
+            // announces this write on IMeshChangeFeed (see FlushPendingWrites) — captured here,
+            // BEFORE the node is re-stamped below, since the stamped copy always carries a
+            // non-zero version and would erase the distinction.
+            var isInsert = node.Version == 0;
             // For the OWN node, lift to _ownNodeVersionFloor: the highest own-node version this
             // hub has adopted (activation seed, durable-truth rebase). A cache-seeded re-add can
             // carry a version BELOW the floor; saving that carried version is the backward write
@@ -373,11 +407,12 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             var addFloor = string.Equals(node.Path, _hubPath, StringComparison.OrdinalIgnoreCase)
                 ? Math.Max(node.Version, Volatile.Read(ref _ownNodeVersionFloor))
                 : node.Version;
-            return node with { Version = addFloor > 0 ? addFloor : MeshNode.NextVersion(0) };
+            var stamped = node with { Version = addFloor > 0 ? addFloor : MeshNode.NextVersion(0) };
+            return (Node: stamped, IsInsert: isInsert);
         }).ToArray();
 
-        foreach (var node in stampedAdds)
-            _pendingSaves[node.Path] = node;
+        foreach (var entry in stampedAdds)
+            _pendingSaves[entry.Node.Path] = entry;
 
         // 🚨 The stamped version goes into the SNAPSHOT this diff bookkeeping keeps
         // (_lastSaved, below), not just the save queue. Otherwise the snapshot and the durable
@@ -391,7 +426,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             instances = instances with
             {
                 Instances = instances.Instances.SetItems(
-                    stampedAdds.Select(n => new KeyValuePair<object, object>(n.Id, n)))
+                    stampedAdds.Select(n => new KeyValuePair<object, object>(n.Node.Id, n.Node)))
             };
 
         // 🚨 Advance the version of an UPDATED node whose incoming version did NOT already
@@ -594,10 +629,10 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // collection, so re-resolving the path against it makes the flush write what the node
         // actually IS at flush time; the queued snapshot is only the fallback for a node that has
         // since left the collection.
-        var saves = new List<MeshNode>();
+        var saves = new List<(MeshNode Node, bool IsInsert)>();
         foreach (var key in _pendingSaves.Keys.ToArray())
-            if (_pendingSaves.TryRemove(key, out var node))
-                saves.Add(CurrentStateFor(node));
+            if (_pendingSaves.TryRemove(key, out var entry))
+                saves.Add((CurrentStateFor(entry.Node), entry.IsInsert));
 
         var deletes = new List<string>();
         while (_pendingDeletes.TryTake(out var path))
@@ -610,8 +645,18 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             saves.Count, deletes.Count, _hubPath);
 
         var options = _workspace.Hub.JsonSerializerOptions;
-        var saveOps = saves.Select(node =>
-            _persistenceCore.Write(node, options)
+        // 🚨 #2087: only a GENUINE create (IsInsert — see the comment on stampedAdds in
+        // UpdateImpl) announces on IMeshChangeFeed. A re-add of already-durable content (the
+        // idle-recycle reclassification) stays a bare write — the row was already reachable, so
+        // announcing it again would double-fire every Created subscriber (AccessGrantNotifier,
+        // the invite EventSubscriptions) on every reactivation.
+        var saveOps = saves.Select(entry =>
+        {
+            var node = entry.Node;
+            var writeObs = entry.IsInsert
+                ? _persistenceCore.WriteAndPublishCreated(node, options, _changeFeed)
+                : _persistenceCore.Write(node, options);
+            return writeObs
                 .Select(saved =>
                 {
                     // MonotonicWriteGuard refusal: the stored row is AHEAD of what this hub
@@ -648,10 +693,13 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                     _logger?.LogError(ex, "MeshNodeTypeSource: SAVE FAILED for {Path} (version={Version})",
                         node.Path, node.Version);
                     return Observable.Return(System.Reactive.Unit.Default);
-                }));
+                });
+        });
 
+        // Deletes have no add/re-add ambiguity — a path leaving the collection is always a
+        // genuine delete — so always announce (#2087).
         var deleteOps = deletes.Select(path =>
-            _persistenceCore.Delete(path)
+            _persistenceCore.DeleteAndPublish(path, _changeFeed)
                 .Select(deleted =>
                 {
                     _logger?.LogDebug("MeshNodeTypeSource: Deleted {Path}", deleted);
