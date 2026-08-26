@@ -1300,7 +1300,6 @@ jobs:
           PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
           [ -f "$PLUGINS/plugin-gate.allow" ] || { echo "::error::plugins-repo/plugin-gate.allow is missing — the known-debt ratchet the plugin bake is configured against. Refusing to bake without it."; exit 1; }
           PLUGINS_SHA="$(git -C "$PLUGINS" rev-parse HEAD)"
-          echo "plugins_sha=$PLUGINS_SHA" >> "$GITHUB_OUTPUT"
           BAKE_PLUGINS="$RUNNER_TEMP/bake-plugins"
           rm -rf "$BAKE_PLUGINS"; mkdir -p "$BAKE_PLUGINS"; chmod 777 "$BAKE_PLUGINS"
           echo "── baking /plugins (every module) against $IMAGE at plugins $PLUGINS_SHA"
