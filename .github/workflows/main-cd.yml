@@ -1632,13 +1632,23 @@ jobs:
           PUBLISH: ${{ needs.gate.outputs.publish }}
           REASON: ${{ needs.gate.outputs.reason }}
           SHORT: ${{ needs.gate.outputs.short_sha }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          PROMOTE_RESULT: ${{ needs.promote.result }}
         run: |
-          if [ "$PUBLISH" = "true" ]; then
+          # 🚨 NO-OP is keyed on the gate having been SKIPPED — never on an empty reason. An empty
+          # reason is ALSO what a gate that errored, was cancelled, or produced no outputs looks
+          # like, and this step runs under `if: always()`, so labelling that "NO-OP" would stamp a
+          # broken run with the one label that says nothing was due. (Caught in review.)
+          if [ "$GATE_RESULT" = "skipped" ]; then
+            echo "### ⚪ NO-OP — the gate did not run: not a push to main, so no delivery was due" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; then
             echo "### ✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
-          elif [ -z "$REASON" ]; then
-            echo "### ⚪ NO-OP — not a push to main; no delivery was due" >> "$GITHUB_STEP_SUMMARY"
-          else
+          elif [ "$PUBLISH" = "true" ]; then
+            echo "### ❌ DELIVERY FAILED for \`${SHORT}\` — the gate decided to publish but promote=${PROMOTE_RESULT}; see the leg check above" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "$REASON" ]; then
             echo "### 🕐 NO PUBLISH for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ❌ INCONCLUSIVE — gate=${GATE_RESULT} produced no verdict; this run is red above" >> "$GITHUB_STEP_SUMMARY"
           fi
 
   alert-on-failure:
