@@ -199,20 +199,74 @@ public interface IMessageDelivery
                 // Names only: Enum.TryParse also accepts a NUMERIC string and will happily mint an
                 // undefined member from it, so IsDefined is the gate, not decoration.
                 return Enum.TryParse(name, ignoreCase: true, out errorType) && Enum.IsDefined(errorType);
-            case int or long or short or byte:
-                errorType = (ErrorType)Convert.ToInt32(value);
-                return Enum.IsDefined(errorType);
+            case int number:
+                return TryReadErrorTypeNumber(number, out errorType);
+            case long number:
+                return TryReadErrorTypeNumber(number, out errorType);
+            case short number:
+                return TryReadErrorTypeNumber(number, out errorType);
+            case byte number:
+                return TryReadErrorTypeNumber(number, out errorType);
             case System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.String } json:
                 return TryReadErrorType(json.GetString(), out errorType);
-            case System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.Number } json
-                when json.TryGetInt32(out var number):
-                errorType = (ErrorType)number;
-                return Enum.IsDefined(errorType);
+            case System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.Number } json:
+                return json.TryGetInt64(out var raw)
+                    ? TryReadErrorTypeNumber(raw, out errorType)
+                    : Fail(out errorType);
             default:
-                errorType = default;
-                return false;
+                return Fail(out errorType);
+        }
+
+        static bool Fail(out ErrorType errorType)
+        {
+            errorType = default;
+            return false;
         }
     }
+
+    /// <summary>
+    /// An integral value read as an <see cref="ErrorType"/>, range-checked FIRST.
+    ///
+    /// <para>🚨 Deliberately not <c>Convert.ToInt32</c>: that THROWS <see cref="OverflowException"/>
+    /// on an out-of-range value, and this runs on the error-REPORTING path — the one place a throw
+    /// is worst, because it replaces a failure that was about to be described with a different,
+    /// undescribed one. An unreadable value is "no verdict was reached", which is exactly what the
+    /// caller's fallback is for.</para>
+    /// </summary>
+    private static bool TryReadErrorTypeNumber(long value, out ErrorType errorType)
+    {
+        errorType = default;
+        if (value is < int.MinValue or > int.MaxValue)
+            return false;
+        errorType = (ErrorType)(int)value;
+        return Enum.IsDefined(errorType);
+    }
+
+    /// <summary>
+    /// The failure TEXT recorded by <see cref="Failed(string)"/>, or null when this delivery carries
+    /// none — so a caller can tell "no message was recorded" from an empty one and supply its own
+    /// description.
+    ///
+    /// <para>Tolerant of the round-trip for the same reason <see cref="GetFailureErrorType"/> is:
+    /// <c>Properties</c> values come back re-materialised from JSON, and options WITHOUT
+    /// <c>ObjectPolymorphicConverter</c> leave a string as an untyped <c>JsonElement</c>. Reading
+    /// only the CLR <see cref="string"/> silently loses the message — which costs twice over at a
+    /// routing site, because the text is BOTH the sender's diagnostic AND the fallback the
+    /// classification rule matches on when the failing site recorded no verdict.</para>
+    /// </summary>
+    /// <returns>The recorded failure text, or null.</returns>
+    string? GetFailureMessage() =>
+        Properties.TryGetValue(nameof(Error), out var value)
+            ? value switch
+            {
+                string text => text,
+                System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.String } json
+                    => json.GetString(),
+                // Anything else recorded under this key is not a message. Null, so the caller
+                // describes the failure itself rather than printing a type name at a user.
+                _ => null,
+            }
+            : null;
 
     /// <summary>
     /// Returns a copy of this delivery with a single property set.

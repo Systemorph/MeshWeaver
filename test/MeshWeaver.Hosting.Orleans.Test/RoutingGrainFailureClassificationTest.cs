@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Concurrency;
+using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -141,6 +142,23 @@ public class RoutingGrainFailureClassificationTest
             + "PingRequest; the address may reactivate (recycle / restart). Rejecting now."));
 
         Assert.Equal(ErrorType.ShuttingDown, Assert.Single(nacks).Type);
+    }
+
+    /// <summary>
+    /// The same round-trip degradation applies to the failure TEXT, and at this site it costs twice:
+    /// the sender loses its diagnostic AND the classification fallback loses the phrase it matches
+    /// on, so an unclassified teardown rejection would read terminal again.
+    /// </summary>
+    [Fact]
+    public void ATeardownRejectionWhoseTextArrivedAsUntypedJson_IsStillReadAndStillTransient()
+    {
+        using var doc = JsonDocument.Parse("\"Hub app/Kernel is shutting down. Rejecting now.\"");
+        var nacks = RouteFailure(
+            Delivery().Failed("placeholder").WithProperty("Error", doc.RootElement.Clone()));
+
+        var nack = Assert.Single(nacks);
+        Assert.Equal("Hub app/Kernel is shutting down. Rejecting now.", nack.Message);
+        Assert.Equal(ErrorType.ShuttingDown, nack.Type);
     }
 
     /// <summary>
