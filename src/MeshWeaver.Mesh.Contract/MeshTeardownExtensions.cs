@@ -123,7 +123,7 @@ public static class MeshTeardownExtensions
         //     the drains so a subscriber that proceeds on it (scope disposal, ALC unload, next
         //     test's mesh) never runs concurrently with surviving teardown work — and the report
         //     tells it when that guarantee could NOT be kept.
-        var report = new TeardownReport(leakedIoLeaves);
+        var report = new TeardownReport(leakedIoLeaves, true /* the async dispose queue is gone (#2442); this arg is binary-compat residue */);
         teardownSignal?.SignalCompleted(report);
         return report;
     }
