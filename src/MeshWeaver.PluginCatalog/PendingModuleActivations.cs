@@ -39,6 +39,28 @@ public sealed record ModuleActivationReport(
     /// The FAULT half of the report — a restart does not clear it.</summary>
     public bool HasUnresolvable => !IsUndetermined && !Unresolvable.IsEmpty;
 
+    /// <summary>
+    /// Whether the install record at <paramref name="packagePath"/> landed a module that has not
+    /// loaded in this process — the per-PACKAGE question a package card asks so it can say "restart
+    /// required to finish activating this" instead of a bare "installed" (#1979).
+    ///
+    /// <para>Lives on the REPORT rather than only on the reader so a surface rendering many cards
+    /// answers them all from ONE read of the activation record, instead of re-reading it per card.
+    /// <see cref="PendingModuleActivations.IsPendingForPackage"/> is the same rule with the read
+    /// attached — one rule, two entry points, so their answers cannot diverge.</para>
+    ///
+    /// <para>🚨 Returns <c>false</c> when the state is UNDETERMINED, and that is deliberate: this
+    /// answers a per-package question whose only honest fallback is "I have nothing to say about
+    /// this package". An unreadable activation record is an OPERATOR signal — the health check
+    /// reports it, where it is actionable — and putting "restart required" on every package card
+    /// because a file would not parse is noise a buyer cannot act on.</para>
+    /// </summary>
+    /// <param name="packagePath">The install record's mesh path. Blank matches nothing; it is not a
+    /// wildcard, so a card with no path to match on cannot inherit another package's restart.</param>
+    /// <returns>True when a restart of THIS process would activate a module this package landed.</returns>
+    public bool IsPendingForPackage(string? packagePath) =>
+        !IsUndetermined && ModuleActivationStatus.IsPendingForPackage(Pending, packagePath);
+
     /// <summary>The one line every surface renders, so nobody is told two different stories.</summary>
     public string Describe() =>
         UndeterminedReason is { } reason
@@ -127,10 +149,5 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// unreadable sidecar is actionable — putting "restart required" on every package card because
     /// a file could not be parsed would be noise a buyer cannot act on.</para>
     /// </summary>
-    public bool IsPendingForPackage(string? packagePath)
-    {
-        var report = Read();
-        return !report.IsUndetermined
-            && ModuleActivationStatus.IsPendingForPackage(report.Pending, packagePath);
-    }
+    public bool IsPendingForPackage(string? packagePath) => Read().IsPendingForPackage(packagePath);
 }
