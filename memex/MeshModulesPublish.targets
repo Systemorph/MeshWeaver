@@ -179,6 +179,40 @@
       <_AppPublishDir>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath('$(PublishDir)', '$(MSBuildProjectDirectory)'))))</_AppPublishDir>
     </PropertyGroup>
 
+    <!-- 🚨 ONE publish directory = ONE RID flavor, asserted before anything is laid out.
+
+         The shape this refuses (measured, Plugins CI "Build + test the portal hosts", 2026-08-26):
+         `dotnet publish -o <dir>` on a host whose csproj arms the container profile
+         (PublishProfile=DefaultContainer) and declares RuntimeIdentifiers=linux-x64;linux-arm64.
+         The SDK's _PublishMultiArchContainers then re-invokes Publish once per RID, IN PARALLEL
+         (BuildInParallel=true), each inner build inheriting every global property — including the
+         `-o` PublishDir. Result: the portable outer publish AND both per-RID publishes collapse
+         into ONE directory, so (a) the app root becomes a nondeterministic RID mix (last writer
+         wins per file — the repro left a linux-x64 apphost over linux-arm64 leftovers), and
+         (b) THREE of these module-closure lanes run over one modules/ tree, where one lane's
+         dedupe <Delete> lands between another lane's glob and its GetFileHash — the racy
+         MSB3954 "Failed to compute hash … does not exist" that is impossible to diagnose from
+         the error alone. Without `-o` the shape is fine by construction: each inner RID publish
+         defaults to its own bin/…/<rid>/publish/ (which is why main-cd is green).
+
+         The stamp records the flavor that laid this directory out; a different flavor arriving is
+         refused BEFORE it mutates anything. In the collapsed shape above the outer portable lane
+         always completes before the container target starts its inner builds, so the first inner
+         lane hits this Error deterministically — the two inner lanes racing each other can only
+         happen after the outer stamp already fired. A stale stamp from an EARLIER different-RID
+         publish into the same directory is refused too, deliberately: publish never cleans, so
+         such a directory is already a mixed-RID hazard. The `rid=` prefix keeps the portable
+         stamp non-empty so "no stamp yet" and "portable stamp" cannot be confused. -->
+    <PropertyGroup>
+      <_MeshModulesRidStampFile>$(_AppPublishDir)modules/.mesh-modules-rid</_MeshModulesRidStampFile>
+      <_MeshModulesRidStamp>rid=$(RuntimeIdentifier)</_MeshModulesRidStamp>
+      <_MeshModulesRidStampExisting Condition="Exists('$(_MeshModulesRidStampFile)')">$([System.IO.File]::ReadAllText('$(_MeshModulesRidStampFile)').Trim())</_MeshModulesRidStampExisting>
+    </PropertyGroup>
+    <Error Condition="'$(_MeshModulesRidStampExisting)' != '' And '$(_MeshModulesRidStampExisting)' != '$(_MeshModulesRidStamp)'"
+           Text="PublishMeshModules: publish directory '$(_AppPublishDir)' was laid out for '$(_MeshModulesRidStampExisting)' and this publish is '$(_MeshModulesRidStamp)' — two RID flavors must not share one publish directory. This is the multi-arch-container `-o` collapse: PublishProfile=DefaultContainer + RuntimeIdentifiers makes the SDK re-run Publish per RID in parallel, and a global -o/PublishDir funnels all of them (and their module-closure lanes) into this one folder — a nondeterministic RID mix plus the racy MSB3954 in the closure dedupe. Either pin one RID for the whole publish (-p:RuntimeIdentifier=linux-x64 --no-self-contained), or drop -o so each RID publishes to its default per-RID directory, or — if this stamp is stale from an earlier different-RID publish — clean the directory." />
+    <MakeDir Directories="$(_AppPublishDir)modules" />
+    <WriteLinesToFile File="$(_MeshModulesRidStampFile)" Lines="$(_MeshModulesRidStamp)" Overwrite="true" />
+
     <!-- Build each module (already built as part of the host's graph in the double-ship state —
          this is an incremental no-op then) and collect its primary output. Serial on purpose:
          parallel builds have wedged the shared compiler on this repo's build hosts. -->
