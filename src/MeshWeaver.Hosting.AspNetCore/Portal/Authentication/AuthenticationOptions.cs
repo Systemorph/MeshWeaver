@@ -1,4 +1,4 @@
-namespace MeshWeaver.Blazor.Portal.Authentication;
+namespace MeshWeaver.Hosting.AspNetCore.Portal.Authentication;
 
 /// <summary>
 /// Configuration options for authentication navigation.

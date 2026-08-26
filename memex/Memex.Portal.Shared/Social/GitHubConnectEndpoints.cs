@@ -6,7 +6,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
-using MeshWeaver.Blazor.Infrastructure; // PortalApplication
+using MeshWeaver.Hosting.AspNetCore.Portal; // PortalApplication
 using MeshWeaver.GitSync;
 using MeshWeaver.Messaging;             // AccessService
 using Microsoft.AspNetCore.Authentication;

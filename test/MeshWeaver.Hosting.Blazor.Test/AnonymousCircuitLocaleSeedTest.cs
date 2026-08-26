@@ -4,7 +4,7 @@ using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;

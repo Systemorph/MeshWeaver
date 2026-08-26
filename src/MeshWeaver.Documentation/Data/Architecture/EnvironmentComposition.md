@@ -60,7 +60,6 @@ Kubernetes namespace names **invert** the host names — check the row, not your
 |---|---|---|---|
 | `memex-cloud` | memex.meshweaver.cloud | **memex** | *(nothing — both flags declared, both on)* |
 | `memex` | memex.systemorph.com | **systemorph** | `features.games.enabled: false` |
-| `atioz` | atioz.meshweaver.cloud | atioz | *(its own choice)* |
 
 ```yaml
 # shared

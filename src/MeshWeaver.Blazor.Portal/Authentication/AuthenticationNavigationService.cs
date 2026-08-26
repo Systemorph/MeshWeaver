@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Options;
 
+using MeshWeaver.Hosting.AspNetCore.Portal.Authentication;
+
 namespace MeshWeaver.Blazor.Portal.Authentication;
 
 /// <summary>

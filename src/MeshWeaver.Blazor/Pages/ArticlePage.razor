@@ -1,5 +1,5 @@
 @page "/article/{**Path}"
-@using MeshWeaver.Blazor.Infrastructure
+@using MeshWeaver.Hosting.AspNetCore.Portal
 @inject PortalApplication PortalApplication
 
 <LayoutArea Address="@PortalApplication.Hub.Address" Area="Articles" Id="@Path"></LayoutArea>

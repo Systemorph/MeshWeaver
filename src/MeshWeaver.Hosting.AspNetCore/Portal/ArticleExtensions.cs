@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
 
-namespace MeshWeaver.Blazor.Infrastructure;
+namespace MeshWeaver.Hosting.AspNetCore.Portal;
 
 /// <summary>Extension methods for formatting author and article metadata.</summary>
 public static class ArticleExtensions

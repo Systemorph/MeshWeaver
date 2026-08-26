@@ -1,7 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -481,7 +481,7 @@ public class CircuitAccessHandler : CircuitHandler
     /// User node sits at its root (<c>path = username</c>). The portal's
     /// convention is <c>username == email local-part</c> (e.g.
     /// <c>rbuergi@systemorph.com → rbuergi</c>), so the local part is the
-    /// correct partition match when the <see cref="MeshWeaver.Blazor.Infrastructure.UserIdentityCache"/> hasn't
+    /// correct partition match when the <see cref="MeshWeaver.Hosting.AspNetCore.Portal.UserIdentityCache"/> hasn't
     /// hydrated yet. Falls back to the input unchanged when there's no <c>@</c>.
     /// </summary>
     private static string UsernameFromEmail(string email)
@@ -499,21 +499,21 @@ public class CircuitAccessHandler : CircuitHandler
 
     /// <summary>
     /// Synchronous email → mesh User lookup via the hot
-    /// <see cref="MeshWeaver.Blazor.Infrastructure.UserIdentityCache"/>. The cache
+    /// <see cref="MeshWeaver.Hosting.AspNetCore.Portal.UserIdentityCache"/>. The cache
     /// subscribes to <see cref="IMeshService.Query{T}"/> at startup so the
     /// lookup never bridges back to <c>Task</c> — <c>await FirstAsync()</c> on a
     /// hub-touching observable deadlocks the hub pump.
     /// </summary>
-    private MeshWeaver.Blazor.Infrastructure.UserIdentityLookup TryLoadMeshUser(string email)
+    private MeshWeaver.Hosting.AspNetCore.Portal.UserIdentityLookup TryLoadMeshUser(string email)
     {
         try
         {
-            var cache = _hub.ServiceProvider.GetService<MeshWeaver.Blazor.Infrastructure.UserIdentityCache>();
+            var cache = _hub.ServiceProvider.GetService<MeshWeaver.Hosting.AspNetCore.Portal.UserIdentityCache>();
             // No cache registered at all is a static configuration fact — there is nothing to
             // resolve from — not a transient outage, so it is Unknown, not Unavailable. Same
             // distinction UserRoleResolver draws for "no role source at all" (#970).
             return cache is null
-                ? MeshWeaver.Blazor.Infrastructure.UserIdentityLookup.Unknown
+                ? MeshWeaver.Hosting.AspNetCore.Portal.UserIdentityLookup.Unknown
                 : cache.Lookup(email);
         }
         catch (Exception ex)
@@ -522,7 +522,7 @@ public class CircuitAccessHandler : CircuitHandler
             // an availability condition; returning `null` here made it indistinguishable from
             // "this user has no mesh node".
             _logger.LogWarning(ex, "Failed to load mesh user for email {Email}", email);
-            return MeshWeaver.Blazor.Infrastructure.UserIdentityLookup.Unavailable(
+            return MeshWeaver.Hosting.AspNetCore.Portal.UserIdentityLookup.Unavailable(
                 $"user index lookup faulted: {ex.GetType().Name}: {ex.Message}");
         }
     }

@@ -1,10 +1,10 @@
 using System.Security.Claims;
-using MeshWeaver.Blazor.Portal.Authentication;
+using MeshWeaver.Hosting.AspNetCore.Portal.Authentication;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using PortalAuthOptions = MeshWeaver.Blazor.Portal.Authentication.AuthenticationOptions;
+using PortalAuthOptions = MeshWeaver.Hosting.AspNetCore.Portal.Authentication.AuthenticationOptions;
 
 namespace Memex.Portal.Shared.Authentication;
 
