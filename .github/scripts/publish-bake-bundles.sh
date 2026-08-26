@@ -278,11 +278,32 @@ for target in $BAKE_PUBLISH_TARGETS; do
   #
   # Deliberately NOT a skip and NOT a warning. A warning here would be read as noise by the one
   # run that most needs to stop, and a skip is the defect.
-  published_arch=$(az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
-    --path "$DEST/$ARCH_MARKER" --dest "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER" \
-    --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 \
-    && tr -d '[:space:]' < "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER" || echo "")
-  rm -f "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER"
+  # 🚨 EXISTENCE FIRST, and fail CLOSED. Reading the marker with `download … || echo ""` would
+  # turn every failure — a transient fault, an expired credential, a CLI error — into "no marker
+  # recorded", which is the one answer that lets the publish proceed. A guard whose error path is
+  # indistinguishable from its permissive path is not a guard.
+  arch_exists=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
+    --path "$DEST/$ARCH_MARKER" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  if [ "$arch_exists" != "true" ] && [ "$arch_exists" != "false" ]; then
+    echo "::error::could not determine whether $ACCOUNT/$SHARE holds $DEST/$ARCH_MARKER (az returned no usable answer). Refusing rather than assuming the marker is absent — that assumption is what would let one architecture overwrite another's publication."
+    exit 1
+  fi
+  published_arch=""
+  if [ "$arch_exists" = "true" ]; then
+    if ! az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
+        --path "$DEST/$ARCH_MARKER" --dest "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER" \
+        --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
+      echo "::error::$DEST/$ARCH_MARKER EXISTS under $ACCOUNT/$SHARE but could not be read. Refusing: an unreadable marker is not an absent one."
+      exit 1
+    fi
+    published_arch="$(tr -d '[:space:]' < "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER")"
+    rm -f "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER"
+    if [ -z "$published_arch" ]; then
+      echo "::error::$DEST/$ARCH_MARKER under $ACCOUNT/$SHARE is present but EMPTY — the incumbent's architecture cannot be established, so this publication cannot be proven safe. Refusing."
+      exit 1
+    fi
+  fi
   if [ -n "$published_arch" ] && [ "$published_arch" != "$BAKE_ARCHITECTURE" ]; then
     echo "::error::$ACCOUNT/$SHARE holds a publication under $DEST built for '$published_arch', but this bake is '$BAKE_ARCHITECTURE'. One framework identity cannot hold two architectures: the reference assemblies differ, so pods resolving this identity would adopt bytes they did not build against (TypeLoadException inside a collectible ALC at activation). This means the identity is architecture-INDEPENDENT — a g<sha> commit stamp rather than an s<hash> surface hash — so the two lanes need distinct identities before both can publish. Refusing rather than overwriting '$published_arch'."
     exit 1
@@ -291,11 +312,24 @@ for target in $BAKE_PUBLISH_TARGETS; do
     --path "$DEST/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
     --only-show-errors 2>/dev/null || echo false)
   # An incumbent with NO architecture marker predates this recording, and the only lane that has
-  # ever published is amd64 — so it is treated as linux-x64. A non-default bake may not overwrite
-  # what it cannot prove: fail closed rather than assume the incumbent is a peer.
-  if [ -z "$published_arch" ] && [ "$complete" = "true" ] && [ "$BAKE_ARCHITECTURE" != "linux-x64" ]; then
-    echo "::error::$ACCOUNT/$SHARE holds a COMPLETE publication under $DEST with no $ARCH_MARKER — it predates architecture recording, so it can only be the linux-x64 lane. This bake is '$BAKE_ARCHITECTURE' and would overwrite it. Republish that identity from the linux-x64 lane first (which stamps the marker), then retry."
-    exit 1
+  # ever published is amd64 — so it is treated as linux-x64.
+  if [ -z "$published_arch" ] && [ "$complete" = "true" ]; then
+    if [ "$BAKE_ARCHITECTURE" = "linux-x64" ]; then
+      # 🚨 BACKFILL, and it must happen HERE — before the sealed-skip below, which `continue`s.
+      # Without it the two rules deadlock: the arm64 lane refuses an unmarked incumbent and points
+      # at this lane to stamp it, while this lane recognises its own publication, skips, and never
+      # writes the marker — so the arm64 lane is blocked forever by an instruction that can never
+      # be carried out. Stamping is safe precisely because the refusal below is sound: only the
+      # amd64 lane has ever published, and this IS that lane.
+      az storage file upload --account-name "$ACCOUNT" --share-name "$SHARE" \
+        --path "$DEST" --source "$ARCH_MARKER_LOCAL" \
+        --auth-mode login --backup-intent --only-show-errors > /dev/null
+      echo "::notice::stamped $DEST/$ARCH_MARKER = $BAKE_ARCHITECTURE on a pre-existing publication (it predates architecture recording). Another architecture can now establish whether it may publish under this identity."
+      published_arch="$BAKE_ARCHITECTURE"
+    else
+      echo "::error::$ACCOUNT/$SHARE holds a COMPLETE publication under $DEST with no $ARCH_MARKER — it predates architecture recording, so it can only be the linux-x64 lane. This bake is '$BAKE_ARCHITECTURE' and would overwrite it. The next linux-x64 publication to this target stamps the marker automatically (even when it skips the bundles); retry after it has run."
+      exit 1
+    fi
   fi
   resealing=false
   if [ "$complete" = "true" ]; then
