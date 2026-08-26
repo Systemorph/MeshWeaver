@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh;
 using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -21,7 +22,7 @@ namespace MeshWeaver.AI.Plugins;
 /// <para>
 /// Method names mirror the MCP surface (<c>McpMeshPlugin.LspCheckNode</c> etc.) so docs
 /// and the <c>/code</c> skill's instructions can reference one set of tool names regardless of
-/// transport. Path arguments go through <see cref="MeshOperations.ResolveContextPath"/>
+/// transport. Path arguments go through <see cref="AgentChatPaths.ResolveContextPath"/>
 /// so relative paths (<c>@MyChild/...</c>) resolve against the current chat context,
 /// matching <see cref="MeshPlugin"/>'s conventions.
 /// </para>
@@ -56,8 +57,8 @@ Returns `{ok: true, diagnostics: []}` when the substituted source compiles clean
         [Description("Path of the Source Code node being edited (e.g., @ACME/Story/Source/StoryTypes.cs). If not in the current source set, the proposed code is added as a new file.")] string sourcePath,
         [Description("The proposed full source text for that file.")] string proposedCode)
         => WithContext(() => languageService!.CheckSpeculative(
-                MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, nodeTypePath)),
-                MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, sourcePath)),
+                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodeTypePath)),
+                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, sourcePath)),
                 proposedCode ?? string.Empty))
             .Select(diagnostics => FormatDiagnosticsJson(diagnostics))
             .FirstAsync().ToTask();
@@ -74,7 +75,7 @@ Returns `{ok: true|false, diagnostics: [...]}` — same shape as `LspCheckNode`.
     public Task<string> LspDiagnosticsForNode(
         [Description("Path to the NodeType (e.g., @ACME/Story).")] string nodeTypePath)
     {
-        var resolved = MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, nodeTypePath));
+        var resolved = MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodeTypePath));
         return WithContext(() => languageService!.GetDiagnostics(resolved))
             .Select(outcome => FormatDiagnosticsJson(outcome, resolved))
             .FirstAsync().ToTask();
@@ -98,8 +99,8 @@ Returns `{markdown: ""..."" }` when a symbol resolves at the position, or `{}` w
         [Description("0-based line number.")] int line,
         [Description("0-based character offset within the line.")] int character)
         => WithContext(() => languageService!.GetHover(
-                MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, nodeTypePath)),
-                MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, sourcePath)),
+                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodeTypePath)),
+                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, sourcePath)),
                 new SourcePosition(line, character)))
             .Select(hover => JsonSerializer.Serialize(
                 hover is null ? new { } : (object)new { markdown = hover.ContentMarkdown },
@@ -126,8 +127,8 @@ Returns `{items: [{label, kind, insertText, detail?, sortText?}, ...]}`. `kind` 
         [Description("0-based character offset within the line.")] int character,
         [Description("Maximum number of completions to return. Default 20.")] int max = 20)
         => WithContext(() => languageService!.GetCompletions(
-                MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, nodeTypePath)),
-                MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, sourcePath)),
+                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodeTypePath)),
+                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, sourcePath)),
                 new SourcePosition(line, character),
                 max))
             .Select(items => JsonSerializer.Serialize(

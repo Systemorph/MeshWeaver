@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -251,12 +252,27 @@ public static class ContentFileResolver
 
     /// <summary>
     /// Projects the collection configs out of the owning hub's <c>GetDataResponse</c>. The remote
-    /// form arrives as a <see cref="JsonElement"/>; <see cref="ContentCollectionConfig.IsStatic"/>
-    /// and <see cref="ContentCollectionConfig.Address"/> MUST survive that projection — without the
-    /// first, every legitimately-published remote collection fails a caller's mount check; without
-    /// the second, an inherited collection loses its owner and a child node's file resolves against
-    /// the ancestor's folder. <c>IsStatic</c> is suppressed when false, so an absent property means
-    /// false — the safe value either way.
+    /// form arrives as a <see cref="JsonElement"/>.
+    ///
+    /// <para>🚨 EVERY property of <see cref="ContentCollectionConfig"/> must survive this
+    /// projection, and <c>DocAssetWireProjectionTest.EveryConfigProperty_SurvivesTheWireProjection</c> keeps it true:
+    /// a hand-written projection that reads only the fields its author happened to need is a
+    /// SILENT truncation of the config, and the missing field surfaces far away as a failure that
+    /// names neither this method nor the property it dropped.</para>
+    ///
+    /// <para>Three of them have already cost outages. <see cref="ContentCollectionConfig.IsStatic"/>
+    /// — without it every legitimately-published remote collection fails a caller's mount check.
+    /// <see cref="ContentCollectionConfig.Address"/> — without it an inherited collection loses its
+    /// owner and a child node's file resolves against the ancestor's folder.
+    /// <see cref="ContentCollectionConfig.Settings"/> — the provider-specific payload, and for an
+    /// <c>EmbeddedResource</c> collection the ONLY thing that names the assembly and resource
+    /// prefix its files live in. Dropping it turned every doc-page image into
+    /// <c>ArgumentException: AssemblyName required for EmbeddedResource</c> raised at the far end
+    /// of the pipeline, in <see cref="EmbeddedResourceStreamProviderFactory"/> (issues #2122/#2123):
+    /// the registration DID supply the assembly, the wire read threw it away.</para>
+    ///
+    /// <para><c>IsStatic</c>/<c>IsEditable</c>/<c>ExposeInChildren</c> are suppressed when false, so
+    /// an absent property means false — the safe value for all three.</para>
     /// </summary>
     /// <param name="delivery">The response delivery, or <c>null</c>.</param>
     /// <returns>The configs, or <c>null</c> when the response carried none.</returns>
@@ -265,21 +281,74 @@ public static class ContentFileResolver
         delivery?.Message switch
         {
             GetDataResponse { Data: JsonElement je } => je.EnumerateArray()
-                .Select(e => new ContentCollectionConfig
-                {
-                    Name = e.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "",
-                    SourceType = e.TryGetProperty("sourceType", out var typeProp) ? typeProp.GetString() ?? "" : "",
-                    BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null,
-                    IsStatic = e.TryGetProperty("isStatic", out var staticProp)
-                               && staticProp.ValueKind == JsonValueKind.True,
-                    Address = e.TryGetProperty("address", out var addressProp)
-                        ? ToAddress(addressProp)
-                        : null,
-                })
+                .Select(ToConfig)
                 .ToArray(),
             GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
             _ => null
         };
+
+    /// <summary>
+    /// One wire element → one <see cref="ContentCollectionConfig"/>, every property carried across.
+    /// </summary>
+    /// <param name="e">The JSON element for a single config.</param>
+    /// <returns>The reconstructed config.</returns>
+    private static ContentCollectionConfig ToConfig(JsonElement e) =>
+        new()
+        {
+            Name = Text(e, "name") ?? "",
+            SourceType = Text(e, "sourceType") ?? "",
+            DisplayName = Text(e, "displayName"),
+            BasePath = Text(e, "basePath"),
+            Order = e.TryGetProperty("order", out var orderProp)
+                    && orderProp.ValueKind == JsonValueKind.Number
+                    && orderProp.TryGetInt32(out var order)
+                ? order
+                : 0,
+            IsEditable = Flag(e, "isEditable"),
+            IsStatic = Flag(e, "isStatic"),
+            ExposeInChildren = Flag(e, "exposeInChildren"),
+            Address = e.TryGetProperty("address", out var addressProp)
+                ? ToAddress(addressProp)
+                : null,
+            Settings = ToSettings(e),
+        };
+
+    /// <summary>Reads a string property, or <c>null</c> when absent or not a string.</summary>
+    /// <param name="e">The element to read from.</param>
+    /// <param name="name">The camel-cased wire property name.</param>
+    /// <returns>The string value, or <c>null</c>.</returns>
+    private static string? Text(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.String
+            ? prop.GetString()
+            : null;
+
+    /// <summary>Reads a boolean property; anything but an explicit <c>true</c> reads as false.</summary>
+    /// <param name="e">The element to read from.</param>
+    /// <param name="name">The camel-cased wire property name.</param>
+    /// <returns>The flag value.</returns>
+    private static bool Flag(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.True;
+
+    /// <summary>
+    /// Reads the provider-specific <c>Settings</c> map. Keys are NOT name-policy-converted on the
+    /// wire (only property names are), so <c>AssemblyName</c> comes back exactly as it was
+    /// registered. A non-string value is skipped rather than stringified — the contract is
+    /// <c>IReadOnlyDictionary&lt;string,string&gt;</c>.
+    /// </summary>
+    /// <param name="e">The element to read from.</param>
+    /// <returns>The settings, or <c>null</c> when the config carried none.</returns>
+    private static IReadOnlyDictionary<string, string>? ToSettings(JsonElement e)
+    {
+        if (!e.TryGetProperty("settings", out var settings)
+            || settings.ValueKind != JsonValueKind.Object)
+            return null;
+        var builder = ImmutableDictionary.CreateBuilder<string, string>();
+        foreach (var property in settings.EnumerateObject())
+            if (property.Value.ValueKind == JsonValueKind.String
+                && property.Value.GetString() is { } value)
+                builder[property.Name] = value;
+        return builder.Count == 0 ? null : builder.ToImmutable();
+    }
 
     /// <summary>
     /// Reads a collection config's owning address off the wire. Absent, non-string or empty ⇒

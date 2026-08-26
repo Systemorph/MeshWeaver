@@ -12,24 +12,41 @@ namespace MeshWeaver.PluginCatalog;
 /// the second as the first is exactly the gate that cannot run but looks like a gate that
 /// passed.</para>
 /// </summary>
-/// <param name="Pending">The modules landed on the volume but not loaded in this process.</param>
+/// <param name="Pending">The modules landed on the volume but not loaded in this process — a
+/// restart activates them.</param>
 /// <param name="UndeterminedReason">Why the answer is unknown, or <c>null</c> when it is known.
 /// When set, <paramref name="Pending"/> is empty and means nothing.</param>
+/// <param name="Unresolvable">🚨 The modules the activation record says are ON but whose landed
+/// assemblies are ABSENT (#2093). A restart will NOT load them — boot skips them — so they are
+/// deliberately NOT folded into <paramref name="Pending"/>: a "restart required" no restart can
+/// clear is the same lie as a green tick over a gate that never ran, and the remedy is different
+/// (re-install, not wait).</param>
 public sealed record ModuleActivationReport(
     ImmutableList<PendingModuleActivation> Pending,
-    string? UndeterminedReason = null)
+    string? UndeterminedReason = null,
+    ImmutableList<PendingModuleActivation>? Unresolvable = null)
 {
+    /// <summary>The activated modules whose bytes are gone. Never null.</summary>
+    public ImmutableList<PendingModuleActivation> Unresolvable { get; init; } = Unresolvable ?? [];
+
     /// <summary>True when this process could not establish the activation state at all.</summary>
     public bool IsUndetermined => UndeterminedReason is not null;
 
     /// <summary>True when the state is KNOWN and something is waiting on a restart.</summary>
     public bool HasPending => !IsUndetermined && !Pending.IsEmpty;
 
+    /// <summary>True when the state is KNOWN and an activated module can never load as it stands.
+    /// The FAULT half of the report — a restart does not clear it.</summary>
+    public bool HasUnresolvable => !IsUndetermined && !Unresolvable.IsEmpty;
+
     /// <summary>The one line every surface renders, so nobody is told two different stories.</summary>
     public string Describe() =>
         UndeterminedReason is { } reason
             ? "module activation state could not be determined — " + reason
-            : ModuleActivationStatus.Describe(Pending);
+            : HasUnresolvable
+                ? ModuleActivationStatus.DescribeUnresolvable(Unresolvable)
+                    + (HasPending ? "; " + ModuleActivationStatus.Describe(Pending) : string.Empty)
+                : ModuleActivationStatus.Describe(Pending);
 }
 
 /// <summary>
@@ -83,12 +100,21 @@ public sealed class PendingModuleActivations(string moduleRoot)
         if (corrupt is not null)
             return new ModuleActivationReport([], corrupt);
 
+        // 🚨 The SAME two gates boot applies, threaded here for the same reason: this report
+        // PROMISES that a restart activates what it calls pending, and only the gates boot itself
+        // uses can keep that promise. The platform floor (a HELD entry — the registry shelf,
+        // 2026-08-22) and the landed DLL's existence (#2093) each mean boot would skip the entry.
+        // The second is reported SEPARATELY rather than dropped: an activated module whose bytes
+        // are gone is a fault an operator must act on, not a quiet nothing.
+        bool LandedDllExists(ModuleActivationEntry entry) =>
+            ModuleActivationBoot.LandedModuleDllExists(ModuleRootPath, entry);
+
         return new ModuleActivationReport(
-            // The ONE platform gate (ModulePlatformFloor), threaded here as boot threads it: a
-            // HELD entry (floor above this platform — the registry shelf, 2026-08-22) must not read
-            // as "restart required", because the boot this report promises would skip it.
             ModuleActivationStatus.NotYetLoaded(
-                activation, loadedAssemblyNames, ModulePlatformFloor.DeclineReason));
+                activation, loadedAssemblyNames, ModulePlatformFloor.DeclineReason, LandedDllExists),
+            UndeterminedReason: null,
+            ModuleActivationStatus.Unresolvable(
+                activation, loadedAssemblyNames, ModulePlatformFloor.DeclineReason, LandedDllExists));
     }
 
     /// <summary>

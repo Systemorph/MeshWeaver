@@ -4,5 +4,53 @@ FutuRe/AsiaRe/LineOfBusiness compile
 FutuRe/AsiaRe/TransactionMapping compile
 FutuRe/EuropeRe/LineOfBusiness compile
 FutuRe/EuropeRe/TransactionMapping compile
-Northwind/AnalyticsCatalog compile
 Northwind/Product compile
+
+# ── PensionFund: revealed by #2063, NOT caused by it ────────────────────────────────────────────
+# PensionFund ships 72 files, 62 of them BOM'd, including all 5 of its NodeTypes. Until #2063 the
+# gate's own discovery parsed package bytes raw and dropped every BOM'd file, so this package
+# gated `0 type(s)` and reported [PASS] over nothing. Both entries below are pre-existing debt that
+# was simply never looked at — each diagnosed, neither bulk-added.
+
+# PensionFund/BalanceSheet — the legacy scope-generator `#r` cannot resolve on a gate/deploy host.
+# BalanceSheetScopes.cs:20 declares `#r "nuget:MeshWeaver.BusinessRules.Generator"`.
+# GeneratorPipeline.StripBuiltInScopeGeneratorRef removes that directive from the NuGet resolve set
+# ONLY when `BuiltInGeneratorPaths` is non-empty, i.e. when MeshWeaver.BusinessRules.Generator.dll
+# sits beside the app. BusinessRules left the platform (f7a8c086c — it ships in the
+# MeshWeaver.Plugins/BusinessRules plugin), so that list is EMPTY on this host and the strip is a
+# no-op. The directive then reaches NuGet, where NuGet.config's packageSourceMapping pins
+# `MeshWeaver.*` exclusively to the `mesh-local` source `dist/packages` — a feed #395 stopped
+# producing (dotnet-test.yml:372-377 documents that CI deliberately packs it no longer). Result:
+# NuGet.Protocol.FatalProtocolException "The local source '<repo>/dist/packages' doesn't exist".
+# Deterministic, not a flake: no `dist/packages` on any CI runner and no generator dll beside
+# mw-plugin-test. The real fix is content-side (drop the legacy `#r`; the generator is supplied via
+# `shared=@BusinessRules/Scope/Source`) and is NOT part of #2063 — it needs the plugin's scope
+# generator to be reachable from the gate host, which is a separate change.
+PensionFund/BalanceSheet compile
+
+# PensionFund idempotence — INTERMITTENT known debt. Do not remove on a single green run.
+# Removed once tonight because the gate reported it STALE ("now passing"); the very next run
+# reported it as a NEW failure. Both readings are correct — the check is nondeterministic,
+# because whether it fires depends on whether the Currency NodeType has COMPILED yet.
+#
+# The underlying defect is real and is tracked separately: the second install rewrites
+# Currency/{CHF,EUR,USD}. `Currency.DecimalPlaces` carries a C# initializer `= 2` and all
+# three instance files author `"decimalPlaces": 2`. Once the NodeType compiles, its content
+# type is registered, the installer materialises a typed `Currency` and re-serialises it, and
+# default-suppression drops the property whose value equals the type's default. The stored
+# node then differs from the authored file and the unchanged-skip misses.
+PensionFund idempotence intermittent
+
+# 🚨 The `intermittent` token above is a REAL WEAKENING, and its failure mode is social rather than
+# technical: the next person with a deterministic red they cannot fix will find this token and reach
+# for it. It is legitimate for exactly one thing — a check that FLAPS, where a single green run does
+# not prove the debt is paid. It is NOT for a failure that is merely inconvenient, hard, or someone
+# else's. Marking a deterministic failure intermittent silences the ratchet permanently and is the
+# band-aid the ratchet exists to prevent.
+#
+# It buys exemption from STALE-DETECTION and nothing else: the entry still tolerates only the
+# scope/check it names, and a failure it does not name is still a new failure.
+#
+# Before adding one, prove the flap — two runs of the same commit disagreeing, or the git history of
+# this file showing an entry dropped as stale and restored. That is what justified this one:
+# 768f9ba0b dropped it, f32047e0e restored it one commit later.

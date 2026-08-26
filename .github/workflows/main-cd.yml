@@ -207,6 +207,60 @@ jobs:
   #                   set — i.e. driven by observed state, which is what makes it a reconciler
   #                   rather than a retry.
   #
+  # ─────────────────── PREFLIGHT: assert the external inputs, RED ───────────────────
+  # 🚨 A gate NEVER tests its own inputs. Every CI input that comes from outside the tree is
+  # asserted HERE and fails RED naming exactly what to provision; no downstream job carries an
+  # input-shaped `if:` ("is the secret set?") or a `continue-on-error:` on the step that fetches
+  # its input. GitHub renders a skipped job with the same tick as a passed one, so the two shapes
+  # are how a gate reports success having verified nothing.
+  #
+  # This job exists because that is precisely what happened to the release broadcast (#2235):
+  # `notify-platform-update` opened with `if [ -z "$URL" ] || [ -z "$SECRET" ]; then … exit 0`,
+  # so an unprovisioned notify path was a NOTICE in a summary nobody reads and a green tick on
+  # every promote. The broadcast dispatched nothing for eight days and CD said "delivered" every
+  # single time.
+  #
+  # No `if:` on this job at all — not even "only when we publish". It asserts and fails; it does
+  # not decide whether to run. An hourly reconcile tick that publishes nothing still proves the
+  # notify path is provisioned, so an unset secret is found on the next tick rather than on the
+  # next release.
+  preflight:
+    name: "Assert the inputs exist"
+    # 🚨 The ONE sanctioned condition, and it is a check on the EVENT — never on whether a secret is
+    # set. It is byte-identical to `gate`'s below, and it is here for the same reason: `workflow_run`
+    # fires for EVERY completion of Build-and-Test, PRs included, and GitHub withholds org secrets
+    # from a FORK by design. Without this a fork's PR would light up a red CD run asserting inputs
+    # it can never be given — the one legitimate exemption AGENTS.md carves out, expressed once, on
+    # the event. It costs nothing in coverage: a run this skips is a run where `gate` publishes
+    # nothing either, so there is no path on which CD acts without having been preflighted.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every external input, or a red build naming what to provision
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          PLATFORM_WEBHOOK_URL: ${{ vars.PLATFORM_WEBHOOK_URL }}
+          PLATFORM_WEBHOOK_SECRET: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
+        run: |
+          missing=()
+          [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID           OIDC app registration for azure/login")
+          [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID           the Systemorph AAD tenant")
+          [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID     the subscription holding ACR meshweaver")
+          [ -n "$PLATFORM_WEBHOOK_URL" ]  || missing+=("vars.PLATFORM_WEBHOOK_URL         the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds — WITHOUT it no release event ever reaches the mesh, so the framework-release broadcast to the node repos never fires and every satellite falls back to its schedule poll")
+          [ -n "$PLATFORM_WEBHOOK_SECRET" ] || missing+=("secrets.PLATFORM_WEBHOOK_SECRET  the shared HMAC the inbox watcher verifies X-Hub-Signature-256 against. It must be BYTE-IDENTICAL to the control instance's Hosting:PlatformWebhookSecret (Key Vault -> Hosting-PlatformWebhookSecret, see deploy/aks/envs/example/secretproviderclass.yaml); a mismatch is INVISIBLE from here — the POST still answers 2xx and the watcher silently drops every delivery as unverifiable")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::CD cannot deliver a release event — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "All external inputs are present."
+
   # Every downstream job takes its commit from here, so a push run and a heal run are literally
   # the same pipeline with a different target and a different reason.
   gate:
@@ -610,6 +664,21 @@ jobs:
         with:
           # Build the EXACT commit the tests passed on — not whatever main is now.
           ref: ${{ needs.gate.outputs.sha }}
+      # 🚨 The portal HOST lives in MeshWeaver.Plugins (#2293 removed it from here). This checkout is
+      # what makes the image buildable at all; without it the publish below has no project.
+      #
+      # ref defaults to `main` and is overridable by a repo variable, mirroring the plugins lane's
+      # own MW_PLATFORM_REF. The variable does not decouple "which plugins commit shipped with which
+      # core commit" — it makes that coupling STEERABLE, so pinning to a known-good plugins commit
+      # during an incident is a variable change rather than editing this file under pressure.
+      - name: Check out MeshWeaver.Plugins (holds the portal host)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          path: plugins-repo
+          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+          fetch-depth: 1
       # The SDK container build + the publish output overflow the runner's ~14 GB; reclaim the
       # ~25 GB of preinstalled tooling a .NET build never touches (same as the test workflow).
       - name: Setup .NET
@@ -626,8 +695,23 @@ jobs:
         id: vars
         run: |
           set -euo pipefail
-          VERSION=$(dotnet msbuild memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
+          # 🚨 Read from a project that STAYS in this repo. This used to read
+          # Memex.Portal.Distributed, which moved to MeshWeaver.Plugins — and CD then failed here for
+          # every commit on main, publishing nothing, until someone noticed nothing had shipped.
+          # Version comes from the root Directory.Build.props, so ANY core project yields the same
+          # value; Mesh.Contract is picked because it is cheap and is not going anywhere.
+          #
+          # -getProperty: asks MSBuild for the COMPUTED value, deliberately not a grep of the props
+          # file: a regex keeps returning a plausible, well-formed, WRONG number after the definition
+          # moves — and that number gets published.
+          VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+          # Refuse rather than invent: an empty version becomes `:` or `latest` somewhere downstream,
+          # which is the failure where a tag exists and points at the wrong thing.
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not resolve Version from the platform checkout. Refusing to invent one."
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
       # OIDC federated login — no client secret stored. Requires a federated credential on the
@@ -674,10 +758,11 @@ jobs:
       # ships NOTHING on its own. `promote` applies version/sha/main once every leg has succeeded.
       - name: Build + push portal-ai (staging tag)
         run: >
-          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
+          -p:MeshWeaverRoot=${{ github.workspace }}
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-portal-ai
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
@@ -790,161 +875,14 @@ jobs:
           -p:ContainerRepository=mw-plugin-test
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
 
-  # ─────────────────────────── portal-next (Next.js) ─────────────────────────
-  # The React/Next.js portal. It is NOT a .NET project, so it cannot use the
-  # `dotnet publish -t:PublishContainer` shape the other three legs share — it builds from
-  # clients/portal-next/Dockerfile with the `clients/` directory as context (the app aliases
-  # @meshweaver/react and @meshweaver/client-web to their SOURCE trees in ../react and
-  # ../grpc-web, so the context has to span all three).
-  #
-  # 🚨 WHY THIS JOB EXISTS. Until now nothing built this image in CI: every deployment ran
-  # `memex-portal-next:guiship-20260705-2109`, a hand-tagged one-off from 2026-07-05 that drifted
-  # 11 commits behind main. Every portal-next change — the side-panel actions, the client
-  # localization, the whole React GUI half — merged to main and then simply never shipped, with no
-  # signal that it hadn't. A feature-flagged surface that silently stops receiving updates is worse
-  # than one that is switched off, because it looks live.
-  #
-  # amd64 ONLY, on purpose: every AKS node in <aks-cluster> is amd64, and the runner is amd64,
-  # so this builds natively with no QEMU emulation. memex-local builds its own arm64 image into
-  # Colima's Docker store for local dev (see clients/portal-next/DEPLOY.md), so nothing needs the
-  # arm64 variant from ACR.
-  #
-  # 🚨 Gated on `gate`, like every other leg — it used to gate on
-  # `workflow_run.conclusion == 'success'` instead. That is the umbrella conclusion the DELIVERY
-  # GATE block above exists to reject: one starved job that never ran a step poisons it, and this
-  # leg alone would then be SKIPPED while the other four shipped — silently, the exact
-  # partial-release shape of #1026. Under all-or-nothing that inconsistency would also be the one
-  # way a skipped-but-not-failed leg could block the whole set, so the two gates must agree.
-  portal-next-image:
-    name: "Build + push portal-next image"
-    needs: gate
-    if: needs.gate.outputs.publish == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    outputs:
-      version: ${{ steps.vars.outputs.version }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # Build the EXACT commit the tests passed on — not whatever main is now.
-          ref: ${{ needs.gate.outputs.sha }}
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-      # PREREQUISITE — grpc-web codegen. grpc-web/src/connection.ts imports ./gen/mesh_pb, which is
-      # GENERATED (gitignored) by `buf generate` from the mesh .proto in the .NET tree
-      # (src/MeshWeaver.Hosting.Grpc/Protos) — OUTSIDE the clients/ build context, and buf ships
-      # glibc binaries that will not run in the musl Alpine build image. So it MUST happen here, on
-      # the host, before the docker build. Without it the Next build fails with
-      # "Module not found: Can't resolve './gen/mesh_pb'".
-      - name: Generate gRPC-web client (buf)
-        run: |
-          set -euo pipefail
-          # `npm ci` — clients/grpc-web now COMMITS its package-lock.json. It used to be gitignored,
-          # which forced `npm install` here (and everywhere in clients.yml) and left this image leg
-          # floating: a caret dependency could resolve differently on any given run, so the shipped
-          # bundle was not reproducible. That is exactly how @fluentui/react-components 9.74.6 turned
-          # the Clients workflow red repo-wide on 2026-08-11 with no commit behind it.
-          npm --prefix clients/grpc-web ci --no-audit --no-fund
-          npm --prefix clients/grpc-web run gen
-          test -f clients/grpc-web/src/gen/mesh_pb.ts
-      # ⚠️ PRE-EXISTING DRIFT, deliberately left alone here: this hand-writes `3.0.0-ci.<n>` while
-      # every .NET leg computes `$(Version)` = `3.0.0-rc1.ci.<n>` (Directory.Build.props takes
-      # PlatformVersion=3.0.0-rc1 as the prefix). So portal-next's version tag has never matched
-      # its siblings'. Nothing selects it — SelfUpdateOptions only ever reads memex-portal-ai, and
-      # deployments pin portal-next explicitly — and changing a published tag shape would break
-      # whatever is pinned today, so it is reported, not silently "fixed" inside this change. The
-      # cross-image identity every leg DOES share is the short SHA, which is what verify-images
-      # and the reconciler assert on.
-      - name: Compute image version
-        id: vars
-        run: |
-          set -euo pipefail
-          echo "version=3.0.0-ci.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-      - name: Ensure Azure CLI
-        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-      - name: Azure login (OIDC)
-        uses: azure/login@v3
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: ACR login
-        run: az acr login --name meshweaver
-      # DOCKER_BUILDKIT=1 explicitly: the Dockerfile opens with `# syntax=docker/dockerfile:1` and
-      # relies on Dockerfile.dockerignore (a per-Dockerfile ignore, a BuildKit-only feature) to keep
-      # node_modules/.next/dist out of the context. Without BuildKit that ignore is silently not
-      # applied and the stale host artefacts get copied into the image.
-      #
-      # 🚨 Staging tag only, same as the .NET legs. Building locally and pushing later is not an
-      # option ACROSS jobs — the runner's image store dies with the job — so "hold the push" here
-      # means "push under a name nothing can select" exactly as it does everywhere else.
-      - name: Build portal-next
-        env:
-          DOCKER_BUILDKIT: "1"
-        run: >
-          docker build
-          --platform linux/amd64
-          -f clients/portal-next/Dockerfile
-          -t ${{ env.ACR }}/memex-portal-next:${{ needs.gate.outputs.staging_tag }}
-          clients/
-      - name: Push staging tag
-        run: docker push ${{ env.ACR }}/memex-portal-next:${{ needs.gate.outputs.staging_tag }}
+  # 🚨 portal-next is NOT built here any more. Its sources and its image lane live in
+  # MeshWeaver.Plugins (MeshWeaver#2169). It is publishable from there independently because
+  # portalNext is opt-in (chart default enabled: false) and the self-updater never rolls it —
+  # nothing waits on it, so it does not belong to this repo's all-or-nothing set.
 
-  # ──────────────────────── PROMOTE (the all-or-nothing act) ───────────────────
-  # Nothing above this line is visible to any consumer. Every leg pushed its layers under the
-  # per-run staging tag; this job — and ONLY if all five legs succeeded — applies the tags that
-  # deployments and self-updaters actually resolve.
-  #
-  # 🚨 NO `if:` beyond the gate check. The default job condition IS the policy: a job with `needs`
-  # and no always()/!cancelled() runs only when every need SUCCEEDED, and a need that was skipped
-  # or failed skips this job. Adding always()/!cancelled()/continue-on-error here would reinstate
-  # exactly the partial publish this exists to prevent.
-  #
-  # Manifest-only. `docker buildx imagetools create --tag X --tag Y <src>` re-points tags at
-  # already-pushed content — no layer moves, no rebuild. MEASURED against the real registry, tag
-  # to tag within one repository (which is all this job ever does): memex-portal-ai 2.1 s,
-  # memex-portal-next 1.9 s. The whole promotion is ~15 s of work inside a ~1 min job.
-  # (The same primitive already mirrored mw-plugin-test to GHCR, so it is proven with these
-  # credentials — and a manifest PUT is exactly the permission every leg already exercises.
-  # `az acr import` would also work server-side, but importImage/action is NOT in the AcrPush
-  # role this identity is known to hold, and discovering that on main is not a good trade.)
-  #
-  # Verified on the real registry, both shapes: promoting a multi-arch source preserves the index
-  # exactly (`application/vnd.oci.image.index.v1+json`, linux/amd64 + linux/arm64 — so
-  # verify-images' architecture assertion still passes on a promoted tag). Promoting the
-  # single-arch memex-portal-next WRAPS it in a one-entry manifest list
-  # (`…manifest.list.v2+json`), a media-type change from today's plain manifest that every OCI
-  # runtime resolves identically; nothing asserts or pins portal-next's media type.
-  #
-  # ── ORDERING IS THE ROLLBACK STORY ────────────────────────────────────────────────────────────
-  # Tagging five repositories is not one atomic act, so the design makes a mid-flight failure
-  # UNOBSERVABLE instead of adding a compensating delete that can fail on its own (and cannot
-  # restore a moving pointer anyway — untagging `latest` destroys it rather than reverting it,
-  # and needs AcrDelete, which this identity may not have).
-  #
-  #   Phase A — identity tags (<version>, <sha>) on every repo EXCEPT memex-portal-ai's version.
-  #   Phase B — moving pointers: `main` everywhere, `latest` on mw-plugin-test, the GHCR mirror.
-  #   Phase C — memex-portal-ai:<version>. ONE registry PUT, and the LAST thing this pipeline does.
-  #
-  # Phase C is the arming write and nothing else is: SelfUpdateHostedService lists tags for
-  # memex-portal-ai ONLY, picks the newest tag matching ^\d+\.\d+\.\d+, and patches the portal AND
-  # migration Deployments to it. So:
-  #   * a failure in A or B leaves NO consumer-visible partial release — no install can select a
-  #     version that was never written. The residue is inert identity/pointer tags on a commit
-  #     that did not ship; they are superseded by the next run and nothing resolves them.
-  #   * a failure IN C is a single PUT that either happened or did not — there is no half-armed
-  #     state to unwind.
-  #   * whatever the failure, `verify-images` below still fails and `alert-on-failure` still
-  #     files the issue, and the hourly reconciler re-drives HEAD.
-  # Deliberately NOT here: a cleanup pass that untags staging. It would buy nothing — accumulating
-  # tags per .NET repo per run go DOWN, 6 → 5 (staging index + its two RID variants + version +
-  # sha, versus today's version/sha indexes plus four RID-suffixed variants) — and it would add a
-  # delete permission and a second failure mode to the one job that must not have either.
   promote:
     name: "Promote: tag the full set (all-or-nothing)"
-    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image]
+    needs: [gate, portal-image, migration-image, plugin-test-image]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -954,7 +892,6 @@ jobs:
       V_PORTAL: ${{ needs.portal-image.outputs.version }}
       V_MIGRATION: ${{ needs.migration-image.outputs.version }}
       V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
-      V_NEXT: ${{ needs.portal-next-image.outputs.version }}
     steps:
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
@@ -986,13 +923,12 @@ jobs:
           }
           promote memex-migration   "$V_MIGRATION" "$SHA"
           promote mw-plugin-test    "$V_PLUGIN"    "$SHA"
-          promote memex-portal-next "$V_NEXT"      "$SHA"
           # The portal's SHA tag, but NOT its version tag — see phase C.
           promote memex-portal-ai   "$SHA"
       - name: "Phase B — moving pointers (main, latest, GHCR mirror)"
         run: |
           set -euo pipefail
-          for repo in memex-migration memex-portal-next memex-portal-ai; do
+          for repo in memex-migration memex-portal-ai; do
             echo "→ $repo: main"
             docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" "${{ env.ACR }}/$repo:$STAGING"
           done
@@ -1035,7 +971,6 @@ jobs:
             echo "- memex-portal-ai \`$V_PORTAL\`, \`$SHA\`, \`main\`"
             echo "- memex-migration \`$V_MIGRATION\`, \`$SHA\`, \`main\`"
             echo "- mw-plugin-test \`$V_PLUGIN\`, \`$SHA\`, \`main\`, \`latest\` (ACR + GHCR)"
-            echo "- memex-portal-next \`$V_NEXT\`, \`$SHA\`, \`main\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ────────── BAKE THE PLATFORM'S OWN CONTENT *IN THE SHIPPED IMAGE*, THEN PUBLISH ──────────
@@ -1103,6 +1038,21 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
+      # 🚨 The plugins are BUILT HERE, in the same run and against the same image as the platform's
+      # own content — maintainer decision 2026-08-26 ("run full plugin build in main memex build";
+      # "plugins should not have a lane in this sense"). One run, one framework identity, one
+      # sealed publish: a plugin bundle can no longer carry bytes from a framework that is not the
+      # one shipping (#1814's class), and its version is the version THIS run computed (#695's
+      # class — see the publish step). Same repo as portal-image's checkout; PlatformBakeLaneGuard
+      # asserts it is the only foreign repository in this file.
+      - name: Check out MeshWeaver.Plugins (every plugin is baked in this run)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          path: plugins-repo
+          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+          fetch-depth: 1
       - name: "Preflight: the publish targets must be provisioned"
         run: |
           set -euo pipefail
@@ -1342,6 +1292,73 @@ jobs:
             echo "### 🔑 Bake address verified"
             echo "- \`$BAKED\` — resolved by BOTH the bake host and the promoted \`memex-portal-ai\` image (linux/amd64)"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: "BAKE every plugin against the SAME image (compiler-driven, no mesh)"
+        env:
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
+          [ -f "$PLUGINS/plugin-gate.allow" ] || { echo "::error::plugins-repo/plugin-gate.allow is missing — the known-debt ratchet the plugin bake is configured against. Refusing to bake without it."; exit 1; }
+          PLUGINS_SHA="$(git -C "$PLUGINS" rev-parse HEAD)"
+          BAKE_PLUGINS="$RUNNER_TEMP/bake-plugins"
+          rm -rf "$BAKE_PLUGINS"; mkdir -p "$BAKE_PLUGINS"; chmod 777 "$BAKE_PLUGINS"
+          echo "── baking /plugins (every module) against $IMAGE at plugins $PLUGINS_SHA"
+          docker run --rm --init --pull never --platform linux/amd64 -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" compile /plugins \
+            --output /bake --allow /plugins/plugin-gate.allow --source-sha "$PLUGINS_SHA"
+          # Postconditions, not hopes — same as the platform bake above.
+          if [ ! -s "$BAKE_PLUGINS/framework-mvid.txt" ]; then
+            echo "::error::the plugin bake ran green but wrote no identity — the bake stage regressed."; exit 1
+          fi
+          if ! ls "$BAKE_PLUGINS"/*.zip >/dev/null 2>&1; then
+            echo "::error::the plugin bake ran green but produced no bundles — nothing could be published."; exit 1
+          fi
+          echo "BAKE_PLUGINS_DIR=$BAKE_PLUGINS" >> "$GITHUB_ENV"
+          echo "PLUGINS_SHA=$PLUGINS_SHA" >> "$GITHUB_ENV"
+          echo "plugin bake identity: $(cat "$BAKE_PLUGINS/framework-mvid.txt")"
+          ls "$BAKE_PLUGINS"/*.zip | wc -l | xargs echo "plugin bundles:"
+      - name: "GATE the plugin bake: render + execute Tests areas on the BAKED bytes"
+        env:
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
+          echo "── gating /plugins against $IMAGE, consuming the bake in /bake"
+          docker run --rm --init --pull never --platform linux/amd64 -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS_DIR:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" /plugins \
+            --allow /plugins/plugin-gate.allow --seed /bake
+      # 🚨 The whole point of building plugins HERE: their identity must be the platform's, by
+      # construction. Assert it rather than trust it — a divergence means the two bakes did not run
+      # against the same image, and publishing both would ship bundles no portal can adopt together.
+      - name: "Assert the plugin bake's identity equals the platform bake's"
+        run: |
+          set -euo pipefail
+          PLATFORM="$(tr -d '[:space:]' < "$BAKE_DIR/framework-mvid.txt")"
+          PLUGINS="$(tr -d '[:space:]' < "$BAKE_PLUGINS_DIR/framework-mvid.txt")"
+          if [ "$PLATFORM" != "$PLUGINS" ]; then
+            echo "::error::plugin bake identity ($PLUGINS) differs from the platform bake identity ($PLATFORM) in the SAME run — they did not build against the same image. Refusing to publish either."
+            exit 1
+          fi
+          echo "identities agree: $PLATFORM"
+      # 🚨 RELEASE_VERSION is REQUIRED here and is the version THIS run computed. It is not read
+      # from any manifest.lock: a bundle's version must be minted by the run that produced its
+      # bytes (Plugins#695 — a version that moves on a lock file while the bytes come from
+      # elsewhere is how an already-fixed defect kept shipping, #2356).
+      - name: "Publish the plugin bundles to every portal target (same identity, same version)"
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ -n "$RELEASE_VERSION" ] || { echo "::error::no release version from portal-image — refusing to publish plugin bundles under an unknown version (Plugins#695)."; exit 1; }
+          .github/scripts/publish-bake-bundles.sh "$BAKE_PLUGINS_DIR" "plugins" \
+            "$PLUGINS_SHA" "$RELEASE_VERSION"
+          {
+            echo "### 🧩 Plugin bundles published (built in this run)"
+            echo "- identity: \`$(cat "$BAKE_PLUGINS_DIR/framework-mvid.txt")\` (equal to the platform bake's, asserted)"
+            echo "- version: \`$RELEASE_VERSION\` (this run's, not manifest.lock)"
+            echo "- plugins commit: \`$PLUGINS_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: "Publish bundles to every portal target"
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
@@ -1418,25 +1435,55 @@ jobs:
   #   • no hand-maintained list here — the subscriber set lives in the Hosting fleet registry ON
   #     memex ("register a new repo in Hosting"), the graph memex already owns; nothing is named in
   #     this file.
+  # 🚨 `BAKE_SUBSCRIBER_REPOS` IS GONE — deleted as a repo variable on 2026-08-25, not merely
+  # unused. It survived the 2026-08-23 redesign holding one stale repo name, and a leftover
+  # variable that LOOKS like the live subscriber list is worse than none: the next person to debug
+  # a missing rebake reads it, believes the fan-out targets exactly that repo, and stops looking.
+  # If you need to know who is subscribed, ask the Hosting registry on the control instance.
   # Pull stays the fallback: each repo's `schedule` run still reads the registry
   # (`Resolve the bake target` in each ci.yml) and bakes for the identity it finds, so a lost
   # dispatch costs at most one delayed rebake wave and a repo that stops baking still shows up as an
   # instance HELD on its own UpdatePolicy. REPORTER-CLASS: the broadcast makes the wave prompt; the
   # poll makes it guaranteed.
 
-  # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (optional) ──────────────────
-  # After the release is ARMED (promote's last PUT), tell the registry instance's mesh that a new
+  # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (required) ──────────────────
+  # After the release is ARMED (promote's last PUT), tell the control instance's mesh that a new
   # platform build exists: one signed POST to the WebhookInbox target the Hosting plugin watches
-  # (Hosting/PlatformBuilds/main). The mesh side verifies the HMAC over the RAW body, starts a
-  # thread with the platform-update agent, and that agent opens the MW_IMAGE_DIGEST bump PRs on
-  # the plugin repos — the platform half of dependency maintenance (Dependabot is the ecosystem
-  # half). REPORTER-CLASS, deliberately: losing one notification costs one delayed update wave
-  # (the next green build re-notifies); it can never hide a defect, so an unconfigured or failed
-  # POST must not redden CD. Configure with repo var PLATFORM_WEBHOOK_URL + secret
-  # PLATFORM_WEBHOOK_SECRET; the NOTICE below keeps "not configured" loud in the summary.
+  # (Hosting/PlatformBuilds). The mesh side verifies the HMAC over the RAW body, runs the pin
+  # updater (the MW_IMAGE_DIGEST bump PRs on the node repos) and BROADCASTS the release to every
+  # subscriber as a `repository_dispatch` (FrameworkReleaseBroadcaster, src/MeshWeaver.GitSync) so
+  # each satellite re-bakes in seconds instead of at its next schedule poll.
+  #
+  # 🚨 THIS POST IS THE ONLY THING THAT STARTS THAT WAVE, AND IT USED TO BE UNFAILABLE (#2235).
+  # It was written REPORTER-CLASS — "losing one notification costs one delayed update wave" — and
+  # that reasoning produced exactly one observable outcome: a green tick on every promote while
+  # ZERO releases were broadcast between 2026-08-22 and 2026-08-25. Two shapes did it, and both
+  # are now gone:
+  #   * an input-shaped `if [ -z "$URL" ] || [ -z "$SECRET" ]; then ... exit 0` — a gate testing
+  #     its own inputs, which renders identically to a gate that passed. The inputs are now
+  #     asserted in `preflight`, which fails RED naming what to provision.
+  #   * a non-2xx downgraded to `::warning::`. A release event the mesh REFUSED is a wave that did
+  #     not happen; it is now `exit 1`.
+  # The pull/schedule fallback is still there and still means a single lost dispatch costs at most
+  # one delayed rebake — but "the fallback exists" is a reason to keep CD's images shipping, never
+  # a reason to stop REPORTING that delivery failed. This job runs after `promote`, so failing it
+  # cannot unpublish anything: the images are already tagged and every install still self-updates.
+  # What changes is that the failure is now visible (and filed by `alert-on-failure`) instead of
+  # being a sentence in a step summary.
+  #
+  # 🚨 WHAT A 2xx HERE DOES *NOT* PROVE. The inbox is deliberately dumb (WebhookInbox: allowlist +
+  # size cap, verifies nothing) so a 2xx means "the delivery was STORED", not "the wave ran". The
+  # half this side cannot see is the shared HMAC: if the control instance's
+  # `Hosting:PlatformWebhookSecret` is unset or differs from `secrets.PLATFORM_WEBHOOK_SECRET`,
+  # the watcher drops every delivery as unverifiable and this job still goes green. That is the
+  # residual #2235 tracks; its close condition is observing a `repository_dispatch` run on the
+  # satellites plus the MW_IMAGE_DIGEST bump PRs — never a green tick here.
   notify-platform-update:
     name: "Notify platform-update registry"
-    needs: [gate, plugin-test-image, promote]
+    # `preflight` is what guarantees URL + SECRET exist, so nothing in this job checks for them.
+    needs: [preflight, gate, plugin-test-image, promote]
+    # The ONLY condition, and it is about the RUN, not about an input: notify when this run
+    # actually published something. Never "notify if the secret happens to be set".
     if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1457,22 +1504,39 @@ jobs:
           V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
         run: |
           set -euo pipefail
-          if [ -z "${URL:-}" ] || [ -z "${SECRET:-}" ]; then
-            echo "::notice::Platform-update notify NOT CONFIGURED — set repo var PLATFORM_WEBHOOK_URL and secret PLATFORM_WEBHOOK_SECRET to enable the fleet platform-update agent."
-            echo "### ⚠️ Platform-update notify not configured (PLATFORM_WEBHOOK_URL / PLATFORM_WEBHOOK_SECRET)" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
           az acr login --name meshweaver
           # The digest of mw-plugin-test:main — the exact pin (MW_IMAGE_DIGEST) the plugin repos
           # compile against. Resolved HERE so the mesh side needs no registry credential.
           DIGEST=$(docker buildx imagetools inspect meshweaver.azurecr.io/mw-plugin-test:main --format '{{json .Manifest.Digest}}' | tr -d '"')
-          [ -n "$DIGEST" ] || { echo "::error::could not resolve mw-plugin-test:main digest"; exit 1; }
-          BODY=$(printf '{"event":"platform-build","repo":"%s","sha":"%s","version":"%s","image":"meshweaver.azurecr.io/mw-plugin-test","digest":"%s"}'             "$GITHUB_REPOSITORY" "$SHA" "$V_PLUGIN" "$DIGEST")
+          [ -n "$DIGEST" ] || { echo "::error::could not resolve mw-plugin-test:main digest — the release event would name a pin that does not exist"; exit 1; }
+          BODY=$(printf '{"event":"platform-build","repo":"%s","sha":"%s","version":"%s","image":"meshweaver.azurecr.io/mw-plugin-test","digest":"%s"}' "$GITHUB_REPOSITORY" "$SHA" "$V_PLUGIN" "$DIGEST")
           SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
-          code=$(curl -sS -o /tmp/resp -w '%{http_code}' -X POST "$URL"             -H 'Content-Type: application/json' -H "X-Hub-Signature-256: $SIG" --data "$BODY")
+          # `|| code=000` is not defensive noise: `run:` is `bash -e`, so a curl that fails at the
+          # TRANSPORT level (DNS, TLS, connection refused) would kill the step before the verdict
+          # below — failing closed, but with a bare curl error instead of the sentence naming what
+          # is wrong. The timeouts stop an unreachable instance from burning the job timeout.
+          code=$(curl -sS -o /tmp/resp -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+            -X POST "$URL" -H 'Content-Type: application/json' \
+            -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
           echo "POST $URL -> $code"; cat /tmp/resp || true
-          case "$code" in 2*) echo "### 📣 Platform build $SHA ($DIGEST) notified to the update agent" >> "$GITHUB_STEP_SUMMARY";;
-            *) echo "::warning::platform-update notify returned $code — the next green build re-notifies; investigate the registry instance if it persists.";; esac
+          case "$code" in
+            2*)
+              echo "### 📣 Release event for $SHA ($DIGEST) accepted by the inbox (HTTP $code)" >> "$GITHUB_STEP_SUMMARY"
+              echo "The mesh STORED the delivery. Whether the wave actually ran is verified on the satellites (a repository_dispatch run + the MW_IMAGE_DIGEST bump PR), never here — see #2235." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            000)
+              echo "::error::could not reach the platform-update inbox at all (DNS/TLS/connection refused). No release event was delivered, so no satellite will re-bake against $SHA until its next schedule poll."
+              exit 1
+              ;;
+            404)
+              echo "::error::the platform-update inbox answered 404. It is FAIL-CLOSED and answers 404 for BOTH an unlisted target and a wrong URL — check vars.PLATFORM_WEBHOOK_URL against the instance's WebhookInbox:Targets (deploy/aks/values.aks.yaml sets WebhookInbox__Targets__0=Hosting/PlatformBuilds). No release event was delivered."
+              exit 1
+              ;;
+            *)
+              echo "::error::the platform-update inbox refused the release event (HTTP $code). No satellite will re-bake against $SHA until its next schedule poll."
+              exit 1
+              ;;
+          esac
 
   # ─────────────────────────── DID IT ACTUALLY SHIP? ──────────────────────────
   # Belt and braces: `promote` PREVENTS a partial set, this CONFIRMS one landed. Assert the
@@ -1493,7 +1557,7 @@ jobs:
   # question to decide whether HEAD needs reconciling; the two must never disagree.
   verify-images:
     name: "Verify every image shipped"
-    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote]
+    needs: [gate, portal-image, migration-image, plugin-test-image, promote]
     if: always() && needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1563,7 +1627,10 @@ jobs:
   #     the hour — so failing there would be noise, and noise is how a real red gets ignored.
   delivery-verdict:
     name: "CD delivered, or had a good reason not to"
-    needs: [gate, promote]
+    # 🚨 Every delivery leg is a NEED, not just [gate, promote]. The verdict cannot assert that a
+    # publish actually happened while it can only see two of the nine jobs that make it happen.
+    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote,
+            publish-bake, notify-platform-update, verify-images]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1575,9 +1642,41 @@ jobs:
           COMPLETE: ${{ needs.gate.outputs.complete }}
           GREEN: ${{ needs.gate.outputs.green }}
           SHORT: ${{ needs.gate.outputs.short_sha }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
+          UPSTREAM_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
-          echo "reason=$REASON publish=$PUBLISH complete=$COMPLETE green=$GREEN sha=$SHORT"
+          echo "gate=$GATE_RESULT reason=$REASON publish=$PUBLISH complete=$COMPLETE green=$GREEN sha=$SHORT"
+
+          # 🚨 THIS JOB MUST NOT PASS ON AN EMPTY VERDICT.
+          #
+          # Both guards below compare REASON against a literal. When `gate` is SKIPPED every
+          # `needs.gate.outputs.*` is the EMPTY STRING, so neither comparison can match, and this
+          # job printed "not publishing was the correct answer" and exited 0 having evaluated
+          # NOTHING. Measured 2026-08-26: run 32914425222 reported `reason= publish= complete=
+          # green= sha=` and a green tick, while every image job read `skipped`. A no-op and a
+          # real delivery were indistinguishable on the wall — which is exactly how a merged fix
+          # sat unshipped while its instance waited for it.
+          #
+          # That is the repo's own CI invariant (#3/#4) turned inward: a gate that CANNOT run must
+          # not look like a gate that passed. So classify the three cases explicitly.
+          if [ -z "$REASON" ]; then
+            # (a) LEGITIMATE no-op: CD fires on every completed Build-and-Test, and `gate` is
+            # deliberately conditioned to push-on-main. A PR run reaching here is expected, and
+            # saying so is not the same as claiming a delivery.
+            if [ "$GATE_RESULT" = "skipped" ] \
+               && [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] \
+               && { [ "$UPSTREAM_EVENT" != "push" ] || [ "$UPSTREAM_BRANCH" != "main" ]; }; then
+              echo "not applicable — upstream was '${UPSTREAM_EVENT}' on '${UPSTREAM_BRANCH}', not a push to main. No delivery was due, and none is claimed."
+              exit 0
+            fi
+            # (b) EVERYTHING ELSE with no verdict is the invisible state this job exists to catch:
+            # the gate errored, was cancelled, or ran and produced no outputs at all. Reporting
+            # success here is the failure mode, not the safe default.
+            echo "::error::the delivery gate produced NO verdict (gate=${GATE_RESULT}, event=${GITHUB_EVENT_NAME}, upstream='${UPSTREAM_EVENT}' on '${UPSTREAM_BRANCH}'), so this run cannot say whether delivery was due. Refusing to report success on an unevaluated gate — a CD run that checked nothing must never be indistinguishable from one that delivered."
+            exit 1
+          fi
 
           if [ "$REASON" = "reconcile" ] && [ "$PUBLISH" != "true" ] \
              && [ "$COMPLETE" = "false" ] && [ "$GREEN" = "true" ]; then
@@ -1602,12 +1701,79 @@ jobs:
 
           echo "OK — either something was published, or not publishing was the correct answer."
 
+      # 🚨 THE POSITIVE CHECK: a run that DECIDED to publish must have RUN every leg.
+      #
+      # The guards above classify the gate's VERDICT. They say nothing about whether the nine jobs
+      # that carry out a delivery actually executed — and a job that `skipped` renders the same
+      # grey/green tick as one that ran, so a publish missing a leg reports success. That is the
+      # repo's own CI invariant ("a gate that cannot run must not look like a gate that passed")
+      # applied to delivery itself rather than to the decision about delivery.
+      #
+      # Named results, compared to a literal 'success': `skipped`, `cancelled` and `failure` all
+      # fail here. There is deliberately no "if it is empty, assume fine" branch — that assumption
+      # is what made the verdict pass on an empty gate output in the first place.
+      - name: A publishing run must have RUN every leg, not skipped any
+        if: needs.gate.outputs.publish == 'true'
+        env:
+          LEGS: >-
+            preflight=${{ needs.preflight.result }}
+            portal-image=${{ needs.portal-image.result }}
+            migration-image=${{ needs.migration-image.result }}
+            plugin-test-image=${{ needs.plugin-test-image.result }}
+            promote=${{ needs.promote.result }}
+            publish-bake=${{ needs.publish-bake.result }}
+            notify-platform-update=${{ needs.notify-platform-update.result }}
+            verify-images=${{ needs.verify-images.result }}
+        run: |
+          set -euo pipefail
+          bad=""
+          for kv in $LEGS; do
+            name="${kv%%=*}"; res="${kv#*=}"
+            if [ "$res" != "success" ]; then bad="$bad $name=$res"; fi
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::the gate decided to PUBLISH, but these delivery legs did not run to success:$bad. A skipped leg is not a delivery: the promote step tags all-or-nothing, so a missing leg means either no image set was published or one was published without its bake/notify. Read the named job rather than re-running."
+            exit 1
+          fi
+          echo "every delivery leg ran and succeeded: $LEGS"
+
+      # Make the outcome unmissable on the run page. A 3-second success and a 20-minute delivery
+      # are otherwise identical at a glance, which is how a merged fix sat unshipped.
+      - name: Say plainly what this run did
+        if: always()
+        env:
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+          REASON: ${{ needs.gate.outputs.reason }}
+          SHORT: ${{ needs.gate.outputs.short_sha }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          PROMOTE_RESULT: ${{ needs.promote.result }}
+        run: |
+          # 🚨 NO-OP is keyed on the gate having been SKIPPED — never on an empty reason. An empty
+          # reason is ALSO what a gate that errored, was cancelled, or produced no outputs looks
+          # like, and this step runs under `if: always()`, so labelling that "NO-OP" would stamp a
+          # broken run with the one label that says nothing was due. (Caught in review.)
+          if [ "$GATE_RESULT" = "skipped" ]; then
+            echo "### ⚪ NO-OP — the gate did not run: not a push to main, so no delivery was due" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; then
+            echo "### ✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PUBLISH" = "true" ]; then
+            echo "### ❌ DELIVERY FAILED for \`${SHORT}\` — the gate decided to publish but promote=${PROMOTE_RESULT}; see the leg check above" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "$REASON" ]; then
+            echo "### 🕐 NO PUBLISH for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ❌ INCONCLUSIVE — gate=${GATE_RESULT} produced no verdict; this run is red above" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   alert-on-failure:
     name: "Alert: CD failed on main"
     # delivery-verdict is in this list ON PURPOSE: it is the job that turns the two
     # invisible do-nothing states (green-but-stuck reconcile, red-main push) into failures,
     # and a failure nobody is paged for is still invisible.
-    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote, verify-images, publish-bake, delivery-verdict]
+    # `preflight` and `notify-platform-update` are in this list ON PURPOSE (#2235): the release
+    # event that starts the cross-repo rebake wave used to be unfailable, and a failure nobody is
+    # paged for is still invisible. A red notify job does NOT mean the images are missing —
+    # `verify-images` answers that — it means no satellite learned about them.
+    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1636,7 +1802,12 @@ jobs:
             --color B60205 --force || echo "::warning::could not ensure the ci-failure label (continuing to file the alert)"
           body="CD failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) for commit \`${HEAD_SHA}\` (entered via \`${REASON:-unknown}\`).
 
-          No complete image set was published - publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set. Triage the failed job in the linked run. The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. Close this issue once CD is green."
+          Triage the failed job in the linked run - which of the two things CD delivers is broken depends on WHICH job went red:
+
+          * an IMAGE job / promote / verify-images: no complete image set was published. Publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set.
+          * preflight / notify-platform-update: the images may be fine, but the release EVENT did not reach the control instance, so no node repo re-bakes against this commit until its own schedule poll (#2235). Read the job's ::error:: line - it names what to provision or what refused the delivery.
+
+          The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. Close this issue once CD is green."
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
             --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
@@ -1657,5 +1828,5 @@ jobs:
   # credentials — which is also why the old `az aks command invoke` deploy job was deleted: it
   # required a central service principal with per-cluster Azure RBAC (the `commandResults/read`
   # authorization failure on 2026-06-29), a model that cannot scale to installs prod doesn't manage.
-  # See SelfUpdate.md / DEPLOY-RUNBOOK.md for enabling self-update on an environment (the SA + RBAC are
+  # See deploy/aks/SELF-UPDATE.md / deploy/aks/README.md for enabling self-update on an environment (the SA + RBAC are
   # in the Helm chart; set selfUpdate.azureClientId and grant the UAMI AcrPull).

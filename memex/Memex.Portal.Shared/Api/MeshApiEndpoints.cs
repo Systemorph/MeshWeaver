@@ -1,11 +1,16 @@
+using MeshWeaver.Mesh;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
-using MeshWeaver.AI;
-using MeshWeaver.Blazor.Infrastructure; // PortalApplication
+using MeshWeaver.Hosting.AspNetCore.Portal; // PortalApplication
 using MeshWeaver.Hosting.AspNetCore;    // SessionHubResolver, McpConfiguration
 using MeshWeaver.Mesh.Security;         // WellKnownUsers
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.AI;                    // MeshOperations — the TYPE ships in
+                                        // MeshWeaver.Mesh.Operations, but its namespace is a
+                                        // FROZEN binary contract (#2370), so this import is
+                                        // load-bearing and is NOT an AI-assembly dependency.
+                                        // Removed as a 'phantom' in #2349 and restored here.
 using MeshWeaver.Messaging;             // AccessService
 using Memex.Portal.Shared.Authentication;
 using Microsoft.AspNetCore.Builder;

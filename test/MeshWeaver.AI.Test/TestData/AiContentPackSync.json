@@ -1,0 +1,250 @@
+{
+  "$comment": [
+    "PACK SYNC LEDGER for content/ai — the drift guard's pinned reconciliation point (#1627).",
+    "content/ai is a MIRROR: the served master is Systemorph/MeshWeaver.Plugins (Agent/, Skill/),",
+    "and drift runs in BOTH directions. Nothing compares the two automatically, because that repo",
+    "is PRIVATE and this one is PUBLIC — so this file records the reconciliation point instead,",
+    "and AiContentPackDriftTest fails the build when a core file moves away from it.",
+    "REGENERATE: edit the file, run the test, and paste the 'core' hash it prints into this entry",
+    "together with the state/note that says what you did about the pack master."
+  ],
+  "hash": "sha256 of the file's text as UTF-8, BOM stripped, CRLF/CR folded to LF, trailing newlines trimmed",
+  "pack": {
+    "repo": "Systemorph/MeshWeaver.Plugins",
+    "commit": "c29a0de",
+    "observed": "2026-08-25",
+    "note": "The pack half cannot be checked from this repo's CI — it is private and this repo holds no credential for it. The 'pack' hashes are an ATTESTATION of what was measured at the commit above, not something the test verifies."
+  },
+  "notes": [
+    "Skill/*.md entries have pack:null because the pack master still stores its skills as typed .json nodes (Skill/*.json), not the .md-with-front-matter format this repo uses. A byte comparison is therefore impossible for skills; only the roster and the sanitisation rules apply to them."
+  ],
+  "forbiddenIdentifiers": [
+    {
+      "sha256": "eaf8859353effdd6182703ab92af8cd88360df4d3452bd3ab27d763947ff97e5",
+      "reason": "A customer / engagement identifier that must never appear in this PUBLIC repository. Stored as a hash so listing it does not itself publish the name (#1627)."
+    }
+  ],
+  "files": [
+    {
+      "file": "Agent/Assistant.md",
+      "core": "9386bc34d4f5e60430a9f035f929c907642ddc29f6db69f6424a53e88934e6e3",
+      "pack": "4a9cb965ee065983446a9c97d275fd1d1ae6f046edcca6971898e7b76212d0b3",
+      "state": "PackAhead",
+      "note": "The pack master carries one extra skill row the core fixture does not. Reconciling it is a change to agent INSTRUCTIONS and needs its own review (#1627)."
+    },
+    {
+      "file": "Agent/CommentingReference.md",
+      "core": "8ca83e8185749880750607b29c671ea4b293d144b4b63cf5fa5b1cae67e479e6",
+      "pack": "d7db39e2185ea89e624ff01b3763b297294b31bf368d6c257bb91fef459ef175",
+      "state": "SanitisedOnly",
+      "note": "Byte-identical to the pack master EXCEPT the example namespace, which is sanitised here. This divergence is PERMANENT and must never be reconciled: the pack repo is private, this one is public.",
+      "sanitisedToken": "Acme"
+    },
+    {
+      "file": "Agent/DescriptionWriter.md",
+      "core": "28bad6b71e891f57d04d49df76119dee22328a8bccfe74a0f28579406f4befa1",
+      "pack": "28bad6b71e891f57d04d49df76119dee22328a8bccfe74a0f28579406f4befa1",
+      "state": "InSync"
+    },
+    {
+      "file": "Agent/EmailRouter.md",
+      "core": "00c014318f7a029ff9b6773bdcf5329556ec14fc361f0cf1f84d5dcecfd6afd9",
+      "pack": "00c014318f7a029ff9b6773bdcf5329556ec14fc361f0cf1f84d5dcecfd6afd9",
+      "state": "InSync"
+    },
+    {
+      "file": "Agent/ExecutiveAssistant.md",
+      "core": "3985e92e165e859ba83a8a92fba35ddb3beb2ded67d561ce5008c56e5407b9ca",
+      "pack": "3985e92e165e859ba83a8a92fba35ddb3beb2ded67d561ce5008c56e5407b9ca",
+      "state": "InSync"
+    },
+    {
+      "file": "Agent/LogTriage.md",
+      "core": "49a7468dc8910259f8ed066fdd9a2aae3f8b56133675a603a534e280dd65ef82",
+      "pack": "99769e78e6497b33b093205ec3692a81f4d21566878571c0e281fda9687e50f9",
+      "state": "CoreAhead",
+      "note": "Core documents the current incident shape (normalizedDetail / variants); the pack master still describes the earlier single-field shape. The pack is what SERVES, so production runs the older text (#1627)."
+    },
+    {
+      "file": "Agent/NodeInitializer.md",
+      "core": "4852779220d127d30d8f577cc314ec5903ec4329c0774d8c61162ad6ef06d987",
+      "pack": "4852779220d127d30d8f577cc314ec5903ec4329c0774d8c61162ad6ef06d987",
+      "state": "InSync"
+    },
+    {
+      "file": "Agent/NotificationTriage.md",
+      "core": "4787815823cff81136848cb9fa86ff6e83f55908ac15304426f4d67c67d0dc25",
+      "pack": "4787815823cff81136848cb9fa86ff6e83f55908ac15304426f4d67c67d0dc25",
+      "state": "InSync"
+    },
+    {
+      "file": "Agent/PullRequestWriter.md",
+      "core": "57ec31e3d007de116ef526e51be31a9c1d6653cd71afef866091d7152593bc24",
+      "pack": "57ec31e3d007de116ef526e51be31a9c1d6653cd71afef866091d7152593bc24",
+      "state": "InSync"
+    },
+    {
+      "file": "Agent/Researcher.md",
+      "core": "8f93b1d3644730c9340000b3bb12b5ea06ed6e656fbd0e8ad202c01c09a5bf56",
+      "pack": "8f93b1d3644730c9340000b3bb12b5ea06ed6e656fbd0e8ad202c01c09a5bf56",
+      "state": "InSync"
+    },
+    {
+      "file": "Agent/ToolsReference.md",
+      "core": "3dcd15ddf71d7bd826aa6cd054603e69902caf694d1610f12ac70805ba560b4c",
+      "pack": "3dcd15ddf71d7bd826aa6cd054603e69902caf694d1610f12ac70805ba560b4c",
+      "state": "InSync"
+    },
+    {
+      "file": "Agent/TrainingSim.md",
+      "core": "dfe6749a31fd7baf70456e904999f802021175829cf640ed1609929b14d3db98",
+      "pack": "dfe6749a31fd7baf70456e904999f802021175829cf640ed1609929b14d3db98",
+      "state": "InSync"
+    },
+    {
+      "file": "Agent/Tutor.md",
+      "core": "4112c94f27b91a6e5971358faddf5d17fc3f25b5f609f9770fe45b19b04d11df",
+      "pack": "0a66bfbb4c14c8945683295c0959fd2fe53d2a217995783d83ada935d56475e3",
+      "state": "CoreAhead",
+      "note": "Core describes the node-native course model (Edu/Module, Edu/Lesson, Edu/Exercise); the pack master still describes the retired Course/Module/ExerciseAttempt model. The pack is what SERVES (#1627)."
+    },
+    {
+      "file": "Agent/Worker.md",
+      "core": "b881490b3ca767ca11a44c6d596615ebd053ff4277e4bccc9bc613ddd05ba5a9",
+      "pack": "b881490b3ca767ca11a44c6d596615ebd053ff4277e4bccc9bc613ddd05ba5a9",
+      "state": "InSync"
+    },
+    {
+      "file": "Skill/access.md",
+      "core": "59a03986de2d1db19ded4344e2977f0f9ff21bb280abcac4c71d126b6f8a15ba",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/activity.md",
+      "core": "bf7f57e84cb72a04156978f2e51df86094526d5103e6336d7b5ebdddcd3905ac",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/agent.md",
+      "core": "01e2413079c68a57a4029ddb0973d15693238e616b76df6f0bc2352d9fe1bd86",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/clear.md",
+      "core": "2a90ffb9042d3516242ab40a21a8d4bfdfea516d03c0692dee21510ce0ec331e",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/code.md",
+      "core": "efab48644f6735f250d60f695371f797263ef5d1f22085d230c215d7c8f11aba",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/group.md",
+      "core": "c72243ed16ffa6639ad09643befeef35cef9eab20647442bc40d14489195afd9",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/harness.md",
+      "core": "302051632d744a8e3ba1cb42832aabc2211a349c2ff37227dd0984698cbc0673",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/layout-area.md",
+      "core": "36f028e569e6c5f4676349403fd337441bbc77cbc44b5deaa4ca18b0be5f8b33",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/logon-action.md",
+      "core": "fe1278b5dd8876ade6cb06e160a29d44a655fa429d690dc44b82925e4bf7a550",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/markdown.md",
+      "core": "13f81f157d0a470420d7a0276fde03ac7af7f75c3539701c7ab8e47926dbc61b",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/maui.md",
+      "core": "efe405ee0a85674daa6a117f37a61dcde4b1c901e58d1f1200810bfd345d9f99",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/model.md",
+      "core": "7ca80c6958650abec9c659e7e9455cb621352bd635d439a0adcde11004144419",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/navigate.md",
+      "core": "061abc720fdc83cff3988df322e4771d3c6e62bb3ed5a9af80f31de543368d9f",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/og-card.md",
+      "core": "a2bbc0f8ab50221f73dcd7c6e456c208c5ab191cc2ef38483c959a0597ff5e24",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/presentation.md",
+      "core": "394db08b881f6455b2b9b4561bb94ad2c00db167a89ca78413dd5be32a1d0087",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/provider-keys.md",
+      "core": "612cc0475a99ec42b2ab96ba7bed355621c7f33ff63da935a5e2267099942193",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/pull-request.md",
+      "core": "35cf06fbdd45511d3bbbd5768be5eff8ef11c72eda5847886b6e9a9bca868c31",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/share-email.md",
+      "core": "1c00fbaba9830c03605d6ee13b2173173ddc2f7c01d8c292e87f8b0da5d9c759",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/slide.md",
+      "core": "489660b1757ae81c5b93cc052de55394830bd7b5b062762b161a449da5d917f7",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/space.md",
+      "core": "4545ec6020c5b2a8054a54730075a307a288261f73903285f8eab6189cda62b8",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/thread.md",
+      "core": "ba0e046a185f456b4b58b6df3410aebc47064a753cfc7cd18359164e1137134b",
+      "pack": null,
+      "state": "PackAbsent"
+    },
+    {
+      "file": "Skill/ui-extensibility.md",
+      "core": "3e4174807ed58abbd22546ae0e494f906adc5d6ff6eb8a8e14b12352505ecbd1",
+      "pack": null,
+      "state": "PackAbsent"
+    }
+  ]
+}

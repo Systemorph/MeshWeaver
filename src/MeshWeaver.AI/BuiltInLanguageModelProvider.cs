@@ -40,6 +40,21 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
     private readonly LanguageModelCatalogOptions options;
     private readonly ILogger<BuiltInLanguageModelProvider>? logger;
 
+    /// <summary>The wire name of the platform's OpenRouter provider (<c>Provider/OpenRouter</c>).</summary>
+    public const string OpenRouterProviderName = "OpenRouter";
+
+    /// <summary>
+    /// The description a provider node is seeded with: what the source declares, else — for the
+    /// platform's OpenRouter path only — the ONE disclosure text with OpenRouter's terms link
+    /// (<see cref="AiSourceCatalog.OpenRouterDisclosure"/>). Every surface that offers the provider
+    /// renders this description; none repeats the link. Pure.
+    /// </summary>
+    public static string? ProviderDescription(string providerName, string? declared) =>
+        !string.IsNullOrWhiteSpace(declared) ? declared
+        : string.Equals(providerName, OpenRouterProviderName, StringComparison.OrdinalIgnoreCase)
+            ? AiSourceCatalog.OpenRouterDisclosure
+            : null;
+
     /// <summary>
     /// Constructs the provider from the configuration root (where each catalog source reads
     /// its endpoint/key/models) and the registered catalog options.
@@ -137,7 +152,7 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 .ToImmutableArray();
 
             // Always emit ONE ModelProvider node per source at Provider/{ProviderName},
-            // marked ExcludeThisAndChildren so the static importer CREATES it on first boot and
+            // marked ExcludeThisOnly so the static importer CREATES it on first boot and
             // NEVER overwrites it again — admin edits to endpoint/key/models survive redeploys
             // (create-if-absent). 🚨 That claim is what made a key configured AFTER the node existed
             // unable to ever reach it; the CREDENTIAL is therefore no longer this seam's business at
@@ -146,6 +161,16 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             // reads endpoint/key off the selected model's resolved provider node. ModelProvider
             // is NOT WithPublicRead, so only callers with Permission.Api see the ApiKey; the
             // _Policy below opens public READ of the (key-less) LanguageModel children.
+            //
+            // 🚨 ExcludeThisOnly, NOT ExcludeThisAndChildren (MeshWeaver#2211). The claim protects
+            // THIS node — the one an admin edits — and nothing else. Claiming the SUBTREE also
+            // claimed the LanguageModel children, so a model added to the deployment AFTER the
+            // provider node existed could never materialize: the importer skipped every child as
+            // "claimed" forever. A deployment that configured 12 OpenRouter models kept the two it
+            // was born with, permanently, and no restart or recycle could heal it. The children are
+            // configuration-derived and carry no credential — there is nothing there for an admin to
+            // own — so they sync normally: a listed id gets a node, an id dropped from configuration
+            // has its node pruned, and the deployment's model list is enforceable again.
             var providerConfig = new ModelProviderConfiguration
             {
                 Provider = source.ProviderName,
@@ -156,6 +181,10 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 // its group title, so ProviderName here published "AzureFoundry" as a user-facing
                 // heading while the source had declared "Azure Foundry" all along.
                 Label = source.EffectiveLabel,
+                // The provider's disclosure — what a user should know before using it — rendered as
+                // the node's description on every surface that offers the provider. The platform's
+                // OpenRouter path carries its terms link HERE and nowhere else.
+                Description = ProviderDescription(source.ProviderName, source.Description),
                 // 🚨 DETERMINISTIC seed timestamp — NEVER DateTimeOffset.UtcNow. The static-repo
                 // importer fingerprints this node's CONTENT (Versioned=false → contentHash). A
                 // per-enumeration UtcNow changed the content — and thus the fingerprint — on EVERY
@@ -174,21 +203,23 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             {
                 NodeType = ModelProviderNodeType.NodeType,
                 Name = source.EffectiveLabel,
+                Description = providerConfig.Description,
                 Category = "Providers",
                 // Brand logo when the provider name resolves to a known maker; the
                 // generic key SVG otherwise. Fall back to the self-contained SVG URL
                 // (not the legacy "Key" Fluent name, which MeshNodeImageHelper filters
                 // out) so node.Icon is always directly renderable. See ModelProviderIcons.
                 Icon = ModelProviderIcons.ForProvider(source.ProviderName) ?? "/static/NodeTypeIcons/key.svg",
-                // create-if-absent: importer seeds it once, then admin owns it.
-                SyncBehavior = SyncBehavior.ExcludeThisAndChildren,
+                // create-if-absent for THIS node only: importer seeds it once, then admin owns it.
+                // Its children stay synced — see the note above (#2211).
+                SyncBehavior = SyncBehavior.ExcludeThisOnly,
                 Content = providerConfig
             });
 
             // Emit a public, key-less LanguageModel child per model id at
             // Provider/{ProviderName}/{modelId}. No credential gate — the child carries
-            // NO ApiKey (it's read-only/public) and the ExcludeThisAndChildren parent protects
-            // the whole subtree from overwrite AND prune. Children keep default SyncBehavior.
+            // NO ApiKey (it's read-only/public). Children keep default SyncBehavior and are
+            // therefore fully synced: the configured model list IS the child set.
             foreach (var modelId in models)
             {
                 if (string.IsNullOrWhiteSpace(modelId)) continue;
@@ -252,6 +283,12 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
         // ALWAYS seed the read-only access policy for the catalog partition.
         yield return new MeshNode("_Policy", ModelProviderNodeType.RootNamespace)
         {
+            // 🚨 A satellite must point at its MAIN node, not at itself (#2383): the plain
+            // constructor defaults MainNode to the node's own path, which makes _Policy a main
+            // node by the catalog's definition (is:main KEEPS exactly the rows where MainNode ==
+            // Path) and lists "Access Policy" as content on every cover. New satellites:
+            // MeshNode.Satellite(id, main).
+            MainNode = ModelProviderNodeType.RootNamespace,
             NodeType = "PartitionAccessPolicy",
             Name = "Access Policy",
             Content = new PartitionAccessPolicy
@@ -290,6 +327,12 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
         if (!string.Equals(LanguageModelNodeType.RootNamespace, ModelProviderNodeType.RootNamespace, StringComparison.Ordinal))
             yield return new MeshNode("_Policy", LanguageModelNodeType.RootNamespace)
             {
+                // 🚨 A satellite must point at its MAIN node, not at itself (#2383): the plain
+                // constructor defaults MainNode to the node's own path, which makes _Policy a main
+                // node by the catalog's definition (is:main KEEPS exactly the rows where MainNode ==
+                // Path) and lists "Access Policy" as content on every cover. New satellites:
+                // MeshNode.Satellite(id, main).
+                MainNode = LanguageModelNodeType.RootNamespace,
                 NodeType = "PartitionAccessPolicy",
                 Name = "Access Policy",
                 Content = new PartitionAccessPolicy
@@ -447,6 +490,31 @@ public class LanguageModelCatalogOptions
 /// — there is NO central registry. Consumers (Models settings tab,
 /// <c>ModelProviderService.CreateProvider</c>) enumerate the live
 /// <see cref="LanguageModelCatalogOptions.Sources"/>.</para>
+///
+/// <para>🚨 <b>The primary constructor of this record is a SHIPPED BINARY CONTRACT — do not add a
+/// parameter to it, not even one with a default.</b> Provider modules
+/// (<c>MeshWeaver.AI.Anthropic</c>, <c>.OpenAI</c>, <c>.AzureFoundry</c>, <c>.ClaudeCode</c>,
+/// <c>.Copilot</c>, <c>.WebSearch</c>) are compiled separately, land at runtime under
+/// <c>/data/modules</c>, and — per <c>ModuleLandingService</c> — "bind by simple name, and their
+/// contract is API compatibility, not build identity". A call site that omits the optional
+/// arguments still emits a call to the FULL primary constructor as it stood at ITS compile time,
+/// so adding a parameter REPLACES that signature and every already-landed module fails with
+/// <c>MissingMethodException</c> the moment its type initializer runs — which aborts the host.
+/// Prefer an <c>init</c> property for new optional state; if a parameter really must be added,
+/// the OLD signature has to stay reachable, as the overload below keeps it.</para>
+///
+/// <para>This is not hypothetical. Adding <c>Description</c> here as a ninth parameter shipped
+/// green through every source-level gate (it had a default, so nothing failed to compile) and
+/// then crash-looped <c>systemorph</c> for 100 minutes on the next roll: the landed Anthropic
+/// module called the 8-argument constructor that no longer existed. The old pods kept serving,
+/// so every health probe stayed green while helm waited on a pod that could never start.</para>
+///
+/// <para><b>And the repair is additive, because REMOVING a signature is the same mistake pointing
+/// the other way.</b> Dropping <c>Description</c> back out of the primary constructor would fix
+/// every module compiled before the change and break any compiled after it — so the ninth
+/// parameter stays, and the eight-parameter form is restored beside it. Both populations bind.
+/// (<c>scripts/check-record-signatures.py</c> refuses either direction; it landed eleven hours
+/// after the break it would have caught.)</para>
 /// </summary>
 public record LanguageModelCatalogSource(
     string SectionName,
@@ -456,8 +524,32 @@ public record LanguageModelCatalogSource(
     string? DefaultEndpoint = null,
     ImmutableArray<string> DefaultModelIds = default,
     bool RequiresApiKey = true,
-    ProviderKind Kind = ProviderKind.Api)
+    ProviderKind Kind = ProviderKind.Api,
+    string? Description = null)
 {
+    /// <summary>
+    /// The eight-parameter form every AI provider module compiled before 2026-08-25 binds to.
+    ///
+    /// <para>🚨 <b>Do not delete this.</b> It is not dead code and it has no source-level callers
+    /// by design — the callers are separately-compiled assemblies in another repository that land
+    /// at runtime under <c>/data/modules</c> and bind by simple name. Removing it re-breaks them
+    /// exactly as adding the ninth parameter did, and nothing in this solution would go red.
+    /// <c>LanguageModelCatalogSourceBinaryContractTest</c> pins it.</para>
+    /// </summary>
+    public LanguageModelCatalogSource(
+        string SectionName,
+        string ProviderName,
+        int Order,
+        string? DisplayLabel,
+        string? DefaultEndpoint,
+        ImmutableArray<string> DefaultModelIds,
+        bool RequiresApiKey,
+        ProviderKind Kind)
+        : this(SectionName, ProviderName, Order, DisplayLabel, DefaultEndpoint,
+               DefaultModelIds, RequiresApiKey, Kind, null)
+    {
+    }
+
     /// <summary>Effective display label — falls back to <see cref="ProviderName"/> when not supplied.</summary>
     public string EffectiveLabel => DisplayLabel ?? ProviderName;
 

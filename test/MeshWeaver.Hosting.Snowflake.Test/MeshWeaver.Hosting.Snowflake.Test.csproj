@@ -10,7 +10,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Snowflake\MeshWeaver.Hosting.Snowflake.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />

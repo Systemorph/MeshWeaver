@@ -1,14 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
+using System.Threading.Tasks;
 using Microsoft.Reactive.Testing;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using NSubstitute;
-using NSubstitute.Extensions;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -27,7 +29,7 @@ namespace MeshWeaver.Graph.Test;
 /// <para>The contract pinned here:</para>
 /// <list type="bullet">
 ///   <item>A newly published assembly path recycles the instance <b>exactly once</b>, via a
-///     self-<see cref="DisposeRequest"/> to its OWN address (the RecycleLayoutArea idiom).</item>
+///     self-DisposeRequest to its OWN address (the RecycleLayoutArea idiom).</item>
 ///   <item>Republishing the SAME assembly must NOT fire — that is the unrelated-node-write case
 ///     (a release-request stamp, release notes, a pin edit), and firing on it would bounce every
 ///     instance of the type for nothing.</item>
@@ -38,30 +40,61 @@ namespace MeshWeaver.Graph.Test;
 ///   <item>Unsettled builds and non-<see cref="NodeTypeDefinition"/> content are ignored.</item>
 ///   <item>Disposing the watcher stops it — no post after teardown.</item>
 /// </list>
+///
+/// <para>🚨 Drives <see cref="NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal"/> against a REAL,
+/// hosted <see cref="IMessageHub"/> (<see cref="HubTestBase"/>) — never a mocked one
+/// (Systemorph/MeshWeaver#1810: AGENTS.md forbids mocking <c>IMessageHub</c>). The offer path only
+/// touches the hub's property bag (<c>Get</c>/<c>Set</c> — plain, synchronous, no message routing),
+/// so those assertions stay exactly as fast and deterministic as with a mock. The auto-recycle path
+/// posts a real self-DisposeRequest and is asserted on the REAL effect — the hub actually
+/// disposes — which is a stronger proof than an intercepted call: a mis-targeted post could never
+/// dispose THIS hub.</para>
 /// </summary>
-public class StaleAssemblySelfHealWatcherTest
+public class StaleAssemblySelfHealWatcherTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private const string NodeTypePath = "TestData/StaleAssemblyType";
     private const string InstancePath = "TestData/StaleAssemblyType/instance1";
     private const string BoundAssembly = "TestData_StaleAssemblyType/v10-abc-111111111111.dll";
 
     /// <summary>
-    /// The instance hub, plus the log of offers the watcher publishes. The watcher reads its
-    /// <see cref="BehaviorSubject{T}"/> back off the hub's property bag (<c>IMessageHub.Get</c>) —
-    /// the same bag <c>WithStaleAssemblySelfHeal</c> seeds — so stubbing Get is all the wiring the
-    /// contract needs. The subject seeds <c>null</c> (no offer), exactly as production does, which
-    /// is why the assertions below count only NON-null entries.
+    /// A real, freshly hosted instance hub at <see cref="InstancePath"/>, registered for
+    /// <see cref="NodeTypeDefinition"/> polymorphic (de)serialization (the same registration
+    /// <c>WithGraphTypes</c> applies in production) so <c>ContentAs&lt;NodeTypeDefinition&gt;</c>
+    /// round-trips real JSON, not just already-typed content.
     /// </summary>
-    private static IMessageHub BuildInstanceHub(out List<StaleBuildOffer?> offers)
+    private IMessageHub BuildHub() =>
+        Mesh.GetHostedHub(new Address(InstancePath), c => c.WithTypes(typeof(NodeTypeDefinition)));
+
+    /// <summary>
+    /// The instance hub, the log of offers the watcher publishes, and a REAL reactive signal for
+    /// "this hub has disposed" (<see cref="IMessageHub.RegisterForDisposal(Action{IMessageHub})"/>
+    /// is production infrastructure, not a mock). The watcher reads its <see cref="BehaviorSubject{T}"/>
+    /// back off the hub's property bag (<c>IMessageHub.Get</c>) — the same bag
+    /// <c>WithStaleAssemblySelfHeal</c> seeds — so seeding it here (via the REAL <c>Set</c>) is all
+    /// the wiring the contract needs. The subject seeds <c>null</c> (no offer), exactly as
+    /// production does, which is why the assertions below count only NON-null entries.
+    /// </summary>
+    private (IMessageHub Hub, List<StaleBuildOffer?> Offers, IObservable<bool> Disposed) BuildInstanceHub()
     {
-        var hub = Substitute.For<IMessageHub>();
-        hub.Address.Returns(new Address(InstancePath));
+        var hub = BuildHub();
         var subject = new BehaviorSubject<StaleBuildOffer?>(null);
-        hub.Get<BehaviorSubject<StaleBuildOffer?>>().Returns(subject);
+        hub.Set(subject);
         var observed = new List<StaleBuildOffer?>();
         subject.Subscribe(observed.Add);
-        offers = observed;
-        return hub;
+        var disposed = new ReplaySubject<bool>(1);
+        hub.RegisterForDisposal(_ =>
+        {
+            disposed.OnNext(true);
+            disposed.OnCompleted();
+        });
+        return (hub, observed, disposed);
+    }
+
+    /// <summary>Bounded wait for the real dispose signal — <c>false</c> means it never fired within the window.</summary>
+    private static async Task<bool> DisposedWithinAsync(IObservable<bool> disposed, TimeSpan window)
+    {
+        try { return await disposed.FirstAsync().Timeout(window).ToTask(); }
+        catch (TimeoutException) { return false; }
     }
 
     /// <summary>
@@ -118,9 +151,9 @@ public class StaleAssemblySelfHealWatcherTest
     /// publish. Recycling is now the USER'S click (RecycleLayoutArea), so a DisposeRequest from
     /// the watcher is a regression back to the restart storm.
     /// </summary>
-    private static void AssertNeverRecycledItself(IMessageHub hub) =>
-        hub.DidNotReceive().Post(
-            Arg.Any<DisposeRequest>(), Arg.Any<Func<PostOptions, PostOptions>>());
+    private static async Task AssertNeverRecycledItselfAsync(IObservable<bool> disposed) =>
+        (await DisposedWithinAsync(disposed, TimeSpan.FromMilliseconds(300)))
+            .Should().BeFalse("the offer path must never post a self-DisposeRequest");
 
     /// <summary>
     /// 🚨 The #1669 regression: the publication arrives in UN-MATERIALIZED JSON shape — the normal
@@ -131,11 +164,10 @@ public class StaleAssemblySelfHealWatcherTest
     /// definition via <c>ContentAs</c> and fire.
     /// </summary>
     [Fact]
-    public void UnmaterializedJsonEmission_StillOffersTheNewBuild()
+    public async Task UnmaterializedJsonEmission_StillOffersTheNewBuild()
     {
-        var hub = BuildInstanceHub(out var offers);
-        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
-        hub.JsonSerializerOptions.Returns(options);
+        var (hub, offers, disposed) = BuildInstanceHub();
+        var options = hub.JsonSerializerOptions;
         var typeStream = new Subject<MeshNode>();
         var scheduler = new TestScheduler();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
@@ -151,13 +183,13 @@ public class StaleAssemblySelfHealWatcherTest
         Settle(scheduler);
         AssertOfferedExactlyOnce(offers);
         AssertOfferNames(offers, "TestData_StaleAssemblyType/v12-abc-222222222222.dll");
-        AssertNeverRecycledItself(hub);
+        await AssertNeverRecycledItselfAsync(disposed);
     }
 
     [Fact]
-    public void NewlyPublishedAssembly_OffersTheNewBuild_ExactlyOnce()
+    public async Task NewlyPublishedAssembly_OffersTheNewBuild_ExactlyOnce()
     {
-        var hub = BuildInstanceHub(out var offers);
+        var (hub, offers, disposed) = BuildInstanceHub();
         var typeStream = new Subject<MeshNode>();
         var scheduler = new TestScheduler();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
@@ -182,7 +214,7 @@ public class StaleAssemblySelfHealWatcherTest
         Settle(scheduler);
         AssertOfferedExactlyOnce(offers);
         AssertOfferNames(offers, "TestData_StaleAssemblyType/v12-abc-222222222222.dll");
-        AssertNeverRecycledItself(hub);
+        await AssertNeverRecycledItselfAsync(disposed);
 
         // Take(1): further publications do not re-offer. The banner already says "a newer build is
         // available", which stays true; the user's recycle rebinds to whatever is newest then.
@@ -199,7 +231,7 @@ public class StaleAssemblySelfHealWatcherTest
     [Fact]
     public void RepublishingTheSameAssembly_DoesNotOffer_EvenAsTheVersionAdvances()
     {
-        var hub = BuildInstanceHub(out var offers);
+        var (hub, offers, _) = BuildInstanceHub();
         var typeStream = new Subject<MeshNode>();
         var scheduler = new TestScheduler();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
@@ -219,9 +251,9 @@ public class StaleAssemblySelfHealWatcherTest
     /// until the pods were restarted. A new assembly at an UNCHANGED version must heal.
     /// </summary>
     [Fact]
-    public void NewAssemblyAtTheSameVersion_StillOffers()
+    public async Task NewAssemblyAtTheSameVersion_StillOffers()
     {
-        var hub = BuildInstanceHub(out var offers);
+        var (hub, offers, disposed) = BuildInstanceHub();
         var typeStream = new Subject<MeshNode>();
         var scheduler = new TestScheduler();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
@@ -232,14 +264,14 @@ public class StaleAssemblySelfHealWatcherTest
 
         AssertOfferedExactlyOnce(offers);
         AssertOfferNames(offers, "TestData_StaleAssemblyType/v10-abc-999999999999.dll");
-        AssertNeverRecycledItself(hub);
+        await AssertNeverRecycledItselfAsync(disposed);
     }
 
     /// <summary>Non-definition content and unsettled builds are ignored, never fired on.</summary>
     [Fact]
     public void UnsettledAndForeignContent_AreIgnored()
     {
-        var hub = BuildInstanceHub(out var offers);
+        var (hub, offers, _) = BuildInstanceHub();
         var typeStream = new Subject<MeshNode>();
         var scheduler = new TestScheduler();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
@@ -271,7 +303,7 @@ public class StaleAssemblySelfHealWatcherTest
     [Fact]
     public void APublicationBurst_CostsExactlyOneOffer_AndOnlyAfterItGoesQuiet()
     {
-        var hub = BuildInstanceHub(out var offers);
+        var (hub, offers, _) = BuildInstanceHub();
         var typeStream = new Subject<MeshNode>();
         var scheduler = new TestScheduler();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
@@ -296,7 +328,7 @@ public class StaleAssemblySelfHealWatcherTest
     [Fact]
     public void Disposing_StopsTheWatcher()
     {
-        var hub = BuildInstanceHub(out var offers);
+        var (hub, offers, _) = BuildInstanceHub();
         var typeStream = new Subject<MeshNode>();
         var scheduler = new TestScheduler();
         var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
@@ -306,6 +338,67 @@ public class StaleAssemblySelfHealWatcherTest
         typeStream.OnNext(TypeNode(version: 12, assemblyPath: "TestData_StaleAssemblyType/v12-abc-222222222222.dll"));
         Settle(scheduler);
 
+        AssertNoOffer(offers);
+    }
+
+    // ───────────────────────────── the convergence opt-in (Modules:AutoRecycleOnStaleBuild)
+
+    /// <summary>
+    /// 🚨 The convergence contract (memex 2026-08-25: a package update recompiled the Store green
+    /// while every serving instance stayed on the previous assembly behind the banner, and the
+    /// store page stayed wedged until a manual recycle). A deployment that opted in
+    /// (<c>Modules:AutoRecycleOnStaleBuild</c>) must converge WITHOUT a viewer's click: exactly one
+    /// self-DisposeRequest, addressed to the instance itself, no banner offer — and the same
+    /// guards as the offer path (settle window, Take(1)) still bound it.
+    /// </summary>
+    [Fact]
+    public async Task AutoRecycle_PostsExactlyOneSelfDispose_AndNoOffer()
+    {
+        var (hub, offers, disposed) = BuildInstanceHub();
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler,
+            autoRecycle: true);
+
+        typeStream.OnNext(TypeNode(version: 12, assemblyPath: "TestData_StaleAssemblyType/v12-abc-222222222222.dll"));
+        // Inside the settle window nothing may be disposed — an install's publish burst must not
+        // put DisposeRequests through hubs mid-read (the #1343 regression, same guard as the offer).
+        (await DisposedWithinAsync(disposed, TimeSpan.FromMilliseconds(300))).Should().BeFalse();
+
+        Settle(scheduler);
+        // The real effect — the hub actually disposes — is a stronger proof than an intercepted
+        // Post call: a mis-targeted self-DisposeRequest could never dispose THIS hub.
+        (await DisposedWithinAsync(disposed, TimeSpan.FromSeconds(10))).Should().BeTrue(
+            "the convergence recycle must target the instance hub's own address");
+        AssertNoOffer(offers);
+
+        // Take(1): a later build does not recycle again off this binding — the recycled instance
+        // re-enriches against the new path, which arms the NEXT watcher with the new baseline.
+        typeStream.OnNext(TypeNode(version: 13, assemblyPath: "TestData_StaleAssemblyType/v13-abc-333333333333.dll"));
+        Settle(scheduler);
+    }
+
+    /// <summary>
+    /// The anti-bounce half holds under convergence too: republishing the SAME assembly — the
+    /// release-request stamp / release-notes / pin-edit writes — must not recycle anything, or the
+    /// opt-in reintroduces exactly the restart storm that got the unguarded auto-recycle removed.
+    /// </summary>
+    [Fact]
+    public async Task AutoRecycle_RepublishingTheSameAssembly_DoesNotRecycle()
+    {
+        var (hub, offers, disposed) = BuildInstanceHub();
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler,
+            autoRecycle: true);
+
+        for (var version = 11; version <= 14; version++)
+            typeStream.OnNext(TypeNode(version, assemblyPath: BoundAssembly));
+        Settle(scheduler);
+
+        await AssertNeverRecycledItselfAsync(disposed);
         AssertNoOffer(offers);
     }
 }

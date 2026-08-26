@@ -13,4 +13,4 @@ The Memex Portal loads graph nodes from `Data/` via `AddGraph()` at startup. Con
 
 ## Related Projects
 - [MeshWeaver.Graph](../../src/MeshWeaver.Graph/README.md) -- Graph node framework
-- [Memex.Portal.Monolith](../../memex/Memex.Portal.Monolith/) -- Development portal that consumes this data
+- [Memex.Portal.Monolith](https://github.com/Systemorph/MeshWeaver.Plugins/tree/main/src/Memex.Portal.Monolith) (MeshWeaver.Plugins) -- Development portal that consumes this data

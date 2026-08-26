@@ -39,6 +39,14 @@ public class ModuleActivationStatusTest : IDisposable
     /// module, and only the floor gate can keep that promise honest (2026-08-22).</summary>
     private static readonly Func<string?, string?> FloorSatisfied = _ => null;
 
+    /// <summary>The bytes-are-there half of the same promise (#2093): pending means a restart
+    /// LOADS it, which is false when the landed assembly is gone. Explicit here for the same
+    /// reason the floor gate is — production passes boot's own existence check.</summary>
+    private static readonly Func<ModuleActivationEntry, bool> BytesPresent = _ => true;
+
+    /// <summary>The opposite: the activation record says the module is on, the volume disagrees.</summary>
+    private static readonly Func<ModuleActivationEntry, bool> BytesGone = _ => false;
+
     // ── the pure derivation ─────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -54,7 +62,7 @@ public class ModuleActivationStatusTest : IDisposable
                 ],
             },
             Loaded("MeshWeaver.Loaded"),
-            FloorSatisfied);
+            FloorSatisfied, BytesPresent);
 
         pending.Should().ContainSingle();
         pending[0].Name.Should().Be("MeshWeaver.Acme");
@@ -76,7 +84,7 @@ public class ModuleActivationStatusTest : IDisposable
                 Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Acme" }],
             },
             Loaded("MeshWeaver.Something.Else"),
-            FloorSatisfied);
+            FloorSatisfied, BytesPresent);
 
         pending.Should().ContainSingle();
     }
@@ -92,7 +100,7 @@ public class ModuleActivationStatusTest : IDisposable
                     Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Acme" }],
                 },
                 Loaded("MeshWeaver.Acme"),
-                FloorSatisfied)
+                FloorSatisfied, BytesPresent)
             .Should().BeEmpty();
     }
 
@@ -106,7 +114,7 @@ public class ModuleActivationStatusTest : IDisposable
                     Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Removed", Enabled = false }],
                 },
                 Loaded(),
-                FloorSatisfied)
+                FloorSatisfied, BytesPresent)
             .Should().BeEmpty();
     }
 
@@ -129,16 +137,70 @@ public class ModuleActivationStatusTest : IDisposable
         };
 
         ModuleActivationStatus.NotYetLoaded(list, Loaded(),
-                floor => ModulePlatformFloor.DeclineReason(floor, "3.0.0-rc6"))
+                floor => ModulePlatformFloor.DeclineReason(floor, "3.0.0-rc6"), BytesPresent)
             .Should().BeEmpty(
                 "a restart cannot activate a held module — reporting it would be a permanent "
                 + "restart prompt no restart can clear");
 
         ModuleActivationStatus.NotYetLoaded(list, Loaded(),
-                floor => ModulePlatformFloor.DeclineReason(floor, "3.0.0-rc7"))
+                floor => ModulePlatformFloor.DeclineReason(floor, "3.0.0-rc7"), BytesPresent)
             .Should().ContainSingle(
                 "once the platform satisfies the floor, the restart promise is honest again")
             .Subject.Name.Should().Be("MeshWeaver.Speech");
+    }
+
+    /// <summary>
+    /// 🚨 #2093, pure. The same entry lands in EXACTLY ONE of the two buckets, decided by whether
+    /// its bytes are on the volume — and the buckets must not overlap, because the remedies are
+    /// opposite: wait for the restart, versus re-install the package. Asserted in BOTH directions,
+    /// so a derivation that always answered "pending" (today's bug) or always answered
+    /// "unresolvable" would fail.
+    /// </summary>
+    [Fact]
+    public void AnEntryIsPENDING_OrUNRESOLVABLE_ByWhetherItsBytesAreThere()
+    {
+        var list = new ModuleActivationList
+        {
+            Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Mcp", PackagePath = "Plugins/mcp" }],
+        };
+
+        ModuleActivationStatus.NotYetLoaded(list, Loaded(), FloorSatisfied, BytesPresent)
+            .Should().ContainSingle("bytes on the volume — a restart genuinely loads it");
+        ModuleActivationStatus.Unresolvable(list, Loaded(), FloorSatisfied, BytesPresent)
+            .Should().BeEmpty();
+
+        ModuleActivationStatus.NotYetLoaded(list, Loaded(), FloorSatisfied, BytesGone)
+            .Should().BeEmpty("no restart loads an assembly that is not on the volume");
+        ModuleActivationStatus.Unresolvable(list, Loaded(), FloorSatisfied, BytesGone)
+            .Should().ContainSingle().Subject.Name.Should().Be("MeshWeaver.Mcp");
+    }
+
+    /// <summary>A HELD entry is neither: the platform, not the bytes, is what it waits on, and the
+    /// platform update that satisfies the floor is itself the restart that loads it.</summary>
+    [Fact]
+    public void AHeldEntry_IsNeitherPendingNorUnresolvable()
+    {
+        var list = new ModuleActivationList
+        {
+            Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Speech", MinMeshVersion = "9.9.9" }],
+        };
+        Func<string?, string?> floorRefused = _ => "platform 1.0.0 is below the declared floor 9.9.9";
+
+        ModuleActivationStatus.NotYetLoaded(list, Loaded(), floorRefused, BytesGone).Should().BeEmpty();
+        ModuleActivationStatus.Unresolvable(list, Loaded(), floorRefused, BytesGone).Should().BeEmpty();
+    }
+
+    /// <summary>An unresolvable module must not put a restart prompt on a buyer's package card:
+    /// the card's question is "will a restart finish this install", and the answer is no.</summary>
+    [Fact]
+    public void AnUnresolvableModule_IsNotAPendingRestartForItsPackage()
+    {
+        ModuleActivationSidecar.Write(root, new ModuleActivationList
+        {
+            Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Mcp", PackagePath = "Plugins/mcp" }],
+        });
+
+        new PendingModuleActivations(root).IsPendingForPackage("Plugins/mcp").Should().BeFalse();
     }
 
     [Fact]
@@ -147,7 +209,7 @@ public class ModuleActivationStatusTest : IDisposable
         ModuleActivationStatus.NotYetLoaded(
                 new ModuleActivationList { Entries = [new ModuleActivationEntry { Name = "MeshWeaver.ACME" }] },
                 Loaded("meshweaver.acme"),
-                FloorSatisfied)
+                FloorSatisfied, BytesPresent)
             .Should().BeEmpty();
     }
 
@@ -192,6 +254,15 @@ public class ModuleActivationStatusTest : IDisposable
 
     // ── the reader, over the durable state ──────────────────────────────────────────────────────
 
+    /// <summary>Puts an entry's landed DLL where boot looks for it, so the entry is genuinely one
+    /// restart from loading rather than a record pointing at nothing.</summary>
+    private void LandBytesFor(string name, string? directory = null)
+    {
+        var dir = Path.Combine(root, "modules", directory ?? name);
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, name + ".dll"), [1]);
+    }
+
     [Fact]
     public void TheReader_ReportsWhatTheSidecarSays_AgainstThisProcess()
     {
@@ -199,13 +270,60 @@ public class ModuleActivationStatusTest : IDisposable
         {
             Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Acme", PackagePath = "Plugins/acme" }],
         });
+        LandBytesFor("MeshWeaver.Acme");
 
         var report = new PendingModuleActivations(root).Read(Loaded());
 
         report.IsUndetermined.Should().BeFalse();
         report.HasPending.Should().BeTrue();
+        report.HasUnresolvable.Should().BeFalse();
         report.Describe().Should().Contain("MeshWeaver.Acme");
         new PendingModuleActivations(root).IsPendingForPackage("Plugins/acme").Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 #2093, over the durable state. The record says the module is ON; the volume says its
+    /// assembly is not there. That is NOT "pending": no restart loads it, and boot skips it. It
+    /// must land in the OTHER bucket, or the surface makes a promise every restart breaks — which
+    /// is what let <c>/mcp</c> 404 for a whole pod lifetime while everything read "installed".
+    /// </summary>
+    [Fact]
+    public void AnActivatedEntryWhoseBytesAreGone_IsUnresolvable_NotPending()
+    {
+        ModuleActivationSidecar.Write(root, new ModuleActivationList
+        {
+            Entries = [new ModuleActivationEntry { Name = "MeshWeaver.Mcp", PackagePath = "Plugins/mcp" }],
+        });
+        // Deliberately no bytes on the volume — the half-completed landing.
+
+        var report = new PendingModuleActivations(root).Read(Loaded());
+
+        report.IsUndetermined.Should().BeFalse();
+        report.HasPending.Should().BeFalse("a restart cannot load an assembly that is not there");
+        report.HasUnresolvable.Should().BeTrue();
+        report.Unresolvable.Should().ContainSingle().Subject.Name.Should().Be("MeshWeaver.Mcp");
+        report.Describe().Should().Contain("re-install");
+        report.Describe().Should().NotContain("a restart activates them");
+    }
+
+    /// <summary>The generation directory is the ONE resolution — an entry whose bytes live in its
+    /// generation folder is pending, exactly as boot would find it.</summary>
+    [Fact]
+    public void BytesInTheEntrysGenerationDirectory_CountAsLanded()
+    {
+        ModuleActivationSidecar.Write(root, new ModuleActivationList
+        {
+            Entries =
+            [
+                new ModuleActivationEntry { Name = "MeshWeaver.Acme", Directory = "MeshWeaver.Acme@abc123" },
+            ],
+        });
+        LandBytesFor("MeshWeaver.Acme", "MeshWeaver.Acme@abc123");
+
+        var report = new PendingModuleActivations(root).Read(Loaded());
+
+        report.HasPending.Should().BeTrue();
+        report.HasUnresolvable.Should().BeFalse();
     }
 
     [Fact]

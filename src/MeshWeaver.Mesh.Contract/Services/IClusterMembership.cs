@@ -4,8 +4,17 @@ namespace MeshWeaver.Mesh.Services;
 public enum ClusterMemberState
 {
     /// <summary>
-    /// The member is running — joining, active, or shutting down. Deliberately includes the
-    /// shutting-down states: that process is still executing, so anything it holds is still held.
+    /// The cluster has POSITIVELY recorded this member as running — it became a full member and is
+    /// still executing. Deliberately includes the shutting-down states: that process is still
+    /// executing, so anything it holds is still held.
+    ///
+    /// <para>🚨 <b>Not "a row exists for it".</b> Consumers read Alive as permission-denied-forever
+    /// — <c>BuildNodeType.HolderStillHoldsIt</c> takes it to mean <i>"never take over, however old
+    /// the heartbeat looks"</i> and skips the staleness clock entirely. So a member that has NOT yet
+    /// become a full member (an Orleans silo still <c>Created</c>/<c>Joining</c>) must report
+    /// <see cref="Unknown"/>, not Alive: nothing probes such a member, so nothing will ever move it
+    /// to <see cref="Gone"/>, and calling it Alive makes every clock fallback unreachable for a
+    /// process that died mid-boot (#2076).</para>
     /// </summary>
     Alive,
 

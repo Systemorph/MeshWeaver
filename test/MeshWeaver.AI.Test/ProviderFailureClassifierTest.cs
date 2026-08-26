@@ -50,6 +50,77 @@ public class ProviderFailureClassifierTest
         {"object":"error","message":"Internal server error: 'NoneType' object has no attribute 'items'"}
         """;
 
+    /// <summary>
+    /// 🚨 #2233, verbatim from production (<c>Admin/_LogIncident/11973e8dfa3d0711</c>): the shape
+    /// <c>System.ClientModel</c> renders for a <c>ClientResultException</c>. Note what it does NOT
+    /// contain — the string "Status: ". The classifier knew only that banner, so every one of these
+    /// fell through unclassified and its English provider body was pasted into the thread.
+    /// </summary>
+    private const string CreditExhaustedDump =
+        """
+        HTTP 402 (: )
+
+        This request requires more credits, or fewer max_tokens. You requested up to 65536 tokens, but can only afford 6383. To increase, visit https://openrouter.ai/settings/credits and add more credits
+        """;
+
+    /// <summary>The other #2233 sample — a model id the provider does not serve.</summary>
+    private const string ModelNotFoundDump =
+        """
+        HTTP 404 (: 404)
+
+        Resource not found
+        """;
+
+    /// <summary>
+    /// The regression #2233 is about: an OpenAI/OpenRouter refusal must classify, and must land on
+    /// its OWN condition — 402 is not a rate limit (waiting does not help) and not a 5xx.
+    /// </summary>
+    [Fact]
+    public void ClientResultCreditDump_IsClassifiedAs402()
+    {
+        var ex = new InvalidOperationException(CreditExhaustedDump);
+        ProviderFailureClassifier.TryGetProviderStatus(ex).Should().Be(402);
+        ProviderFailureClassifier.IsQuotaExhausted(ex).Should().BeTrue();
+        ProviderFailureClassifier.IsRateLimited(ex).Should().BeFalse();
+        ProviderFailureClassifier.IsProviderUnavailable(ex).Should().BeFalse();
+        ProviderFailureClassifier.IsModelNotFound(ex).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ClientResultNotFoundDump_IsClassifiedAs404()
+    {
+        var ex = new InvalidOperationException(ModelNotFoundDump);
+        ProviderFailureClassifier.TryGetProviderStatus(ex).Should().Be(404);
+        ProviderFailureClassifier.IsModelNotFound(ex).Should().BeTrue();
+        ProviderFailureClassifier.IsQuotaExhausted(ex).Should().BeFalse();
+        ProviderFailureClassifier.IsRateLimited(ex).Should().BeFalse();
+        ProviderFailureClassifier.IsProviderUnavailable(ex).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The real one is wrapped several frames deep by the streaming pipeline before it reaches
+    /// <c>ThreadExecution</c>'s catch — the same chain rule the 429 case relies on.
+    /// </summary>
+    [Fact]
+    public void ClientResultStatusIsFoundThroughTheInnerExceptionChain()
+        => ProviderFailureClassifier.IsQuotaExhausted(
+                new InvalidOperationException("Agent invocation failed.",
+                    new InvalidOperationException(CreditExhaustedDump)))
+            .Should().BeTrue();
+
+    /// <summary>
+    /// "HTTP" without the space is the PROTOCOL VERSION, which appears in every header dump. Reading
+    /// a status out of it would classify healthy responses as failures.
+    /// </summary>
+    [Theory]
+    [InlineData("HTTP/1.1 200 OK")]
+    [InlineData("Headers:\nHTTP/2 401")]
+    [InlineData("HTTP 40213 is a support ticket, not a status")]
+    [InlineData("the HTTP spec")]
+    public void HttpBannerProbeDoesNotInventAStatus(string message)
+        => ProviderFailureClassifier.TryGetProviderStatus(new InvalidOperationException(message))
+            .Should().BeNull();
+
     [Fact]
     public void RateLimitDump_IsClassifiedAs429()
     {

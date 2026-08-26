@@ -18,6 +18,15 @@ During the double-ship transition:
 
 - **Change the module here first, then mirror the `.cs` files to the satellite verbatim** (they are
   kept byte-identical; the satellite's csproj differs — it project-references a platform checkout).
+  🚨 **The order is the whole point, and nothing enforces it.** On 2026-08-25 SocialMedia#68 fixed
+  the SATELLITE first and closed SocialMedia #50/#51/#52 on it. None of it reached production: the
+  portal loads `MeshWeaver.Social.dll` from its IMAGE, built from THIS repo (`Modules:Assemblies`),
+  while the satellite's CI only uploads its bundle as a run artifact. Three issues read CLOSED for a
+  day with the defects live — #2258 / #2261 ported them back. Neither repo's CI compares the two
+  copies, so a satellite-first change is invisible until someone notices in prod. A drift guard
+  belongs in the SATELLITE (its CI already checks this repo out at `$GITHUB_WORKSPACE/meshweaver`,
+  so it is a `diff -r` of two directories already on disk); from here it would need a cross-repo
+  checkout of a PRIVATE repo, i.e. the input-shaped gate AGENTS.md forbids.
 - **Do NOT delete this project yet.** The flip is blocked by, and its PR must resolve, ALL of:
   1. `Memex.Portal.Shared` compiles against `PlatformCredential`
      (`Social/ApiCredentialNodeType.cs` — deliberately host-side so existing credential nodes keep

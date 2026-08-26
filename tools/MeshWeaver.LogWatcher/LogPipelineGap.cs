@@ -137,6 +137,56 @@ public static class LogPipelineGap
         };
 
     /// <summary>
+    /// The incident for red bursts that reached the watcher as a console HEADER and nothing else.
+    ///
+    /// <para>🚨 <b>This exists so a bodyless capture is REPORTED rather than fingerprinted</b>
+    /// (#2222). A burst with no message, no exception and no stack frame can only key on its
+    /// category and event id, and an incident keyed on that names a component and no defect — into
+    /// which every later bodyless capture from that site then folds. So the aggregator refuses to
+    /// open one, and the fact travels here instead: ONE finding per namespace, naming the categories
+    /// it happened to, which is strictly more actionable than the degenerate ticket it replaces.</para>
+    ///
+    /// <para>Bursts still open at the window's edge are NOT counted here — the watcher holds its
+    /// cursor at their header and reads them whole on the next poll. What reaches this report is a
+    /// header whose body genuinely was not in the log: a call site that logged an empty message with
+    /// no exception, or a line the collector dropped. Both are fixable at the named category.</para>
+    /// </summary>
+    /// <param name="ns">The namespace the headers came from.</param>
+    /// <param name="count">How many bodyless bursts the window saw.</param>
+    /// <param name="categories">The distinct log categories they came from.</param>
+    /// <param name="start">The window's start.</param>
+    /// <param name="end">The window's end.</param>
+    /// <returns>The report to queue.</returns>
+    public static LogIncidentReport HeaderOnlyReport(
+        string ns, int count, IReadOnlyCollection<string> categories,
+        DateTimeOffset start, DateTimeOffset end) =>
+        new()
+        {
+            Fingerprint = $"log-burst-header-only-{ns}",
+            Category = "MeshWeaver.LogWatcher.Pipeline",
+            Severity = LogSeverity.Error,
+            NormalizedMessage =
+                $"Red log line(s) in namespace '{ns}' arrived with NO body: a 'fail:'/'crit:' header "
+                + "and no message, no exception and no stack frame. They are deliberately not "
+                + "fingerprinted — an incident keyed on category+event id alone names a component and "
+                + "no defect, and swallows every later bodyless capture from the same site. Fix it at "
+                + "the category named below: either the call site logs an empty message with no "
+                + "exception (pass the exception, or give the message a template), or its lines are "
+                + "being dropped between the pod and the log store.",
+            NormalizedDetail = "A red console header reached the watcher with no body.",
+            Namespace = ns,
+            Occurrences = count,
+            FirstSeen = start,
+            LastSeen = end,
+            Samples = ImmutableList.Create(new LogSample(
+                end,
+                null,
+                $"{count} bodyless red burst(s) in [{start:u}, {end:u}) — categories: "
+                + string.Join(", ", categories.Take(10))
+                + (categories.Count > 10 ? $" (+{categories.Count - 10} more)" : ""))),
+        };
+
+    /// <summary>
     /// The incident for a window the watcher will never read: a cursor older than
     /// <see cref="LogWatcherOptions.MaxCatchUp"/> is dragged forward, and everything between the old
     /// cursor and the new floor is skipped for good.

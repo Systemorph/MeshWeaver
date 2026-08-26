@@ -55,9 +55,11 @@ public static class WebhookInboxEndpoints
         // below still guards chunked bodies that lie about their size).
         if (request.ContentLength is > WebhookInbox.MaxBodyBytes)
             return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
-        string body;
-        using (var reader = new StreamReader(request.Body))
-            body = await reader.ReadToEndAsync(ct);
+        // 🚨 The cap the comment above always promised. Content-Length is advisory (absent on a
+        // chunked request, and a client may lie); the reader enforces the byte limit itself.
+        var body = await BoundedBody.ReadAsync(request.Body, WebhookInbox.MaxBodyBytes, ct);
+        if (body is null)
+            return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
 
         var headers = request.Headers.Select(h =>
             new KeyValuePair<string, string>(h.Key, h.Value.ToString()));

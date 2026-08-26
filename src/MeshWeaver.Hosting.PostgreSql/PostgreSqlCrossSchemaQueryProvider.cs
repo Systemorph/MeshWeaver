@@ -8,14 +8,22 @@ using Npgsql;
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
-/// PostgreSQL implementation of ICrossSchemaQueryProvider.
-/// Uses the search_across_schemas() stored procedure for single-query fan-out.
-/// Schema list is maintained in public.searchable_schemas table.
+/// PostgreSQL implementation of ICrossSchemaQueryProvider — one UNION ALL across every partition
+/// schema, generated in C# by <see cref="PostgreSqlSqlGenerator.GenerateCrossSchemaSelectQuery"/>.
+/// The schema list is maintained in <c>public.searchable_schemas</c>.
+///
+/// <para>🚨 The <c>public.search_across_schemas(...)</c> stored function is NOT used here any more.
+/// It backed a second fan-out shape that clipped an unlimited query at 50 rows, and no runtime
+/// caller ever reached it — <c>PostgreSqlPartitionedMeshQuery.EnumerateFanOutAsync</c>, the path
+/// for EVERY unpinned query, has only ever taken the table-name overload. It is deleted rather
+/// than kept "in case paging is wanted": a silent default clip is the defect #1216/#1326/#1960
+/// were filed against, and a SECOND access-control implementation that nothing exercises is a
+/// place for a security fix to land on the wrong copy (#2048). The SQL function itself stays in
+/// the schema — an older portal replica mid-rollout still calls it.</para>
 /// </summary>
 public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
 {
     private readonly NpgsqlDataSource _dataSource;
-    private readonly PostgreSqlSqlGenerator _sqlGenerator = new();
     private readonly ILogger? _logger;
 
     /// <summary>
@@ -285,189 +293,6 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         }
     }
 
-    /// <inheritdoc />
-    public async IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
-        ParsedQuery query,
-        JsonSerializerOptions options,
-        IReadOnlyList<string> schemas,
-        string? userId = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        // Build WHERE clause from parsed query (without access control or text search —
-        // access control is handled by the stored proc, text search is added below with tsvector).
-        // Strip TextSearch to avoid double ILIKE: GenerateWhereClause would add its own ILIKE,
-        // and we add a tsvector-indexed search below.
-        var queryForWhere = query with { TextSearch = null };
-        var (whereClause, parameters) = _sqlGenerator.GenerateWhereClause(queryForWhere);
-
-        // Strip "WHERE " prefix — the stored proc adds its own WHERE
-        var filterClause = whereClause.StartsWith("WHERE ")
-            ? whereClause[6..] : whereClause;
-
-        // Add scope clause (e.g., namespace:'' → n.namespace = '' for root-level nodes)
-        if (query.Path != null)
-        {
-            var (scopeClause, scopeParams) = _sqlGenerator.GenerateScopeClause(query.Path, query.Scope);
-            if (!string.IsNullOrEmpty(scopeClause))
-            {
-                if (!string.IsNullOrEmpty(filterClause))
-                    filterClause += " AND ";
-                filterClause += scopeClause;
-                foreach (var (k, v) in scopeParams)
-                    parameters[k] = v;
-            }
-        }
-
-        // Inline parameter values into the SQL string. Filter out null/empty keys
-        // defensively — a malformed parameter (rare but observed in prod when an
-        // unscoped query path adds a placeholder without a name) used to NRE here.
-        foreach (var (name, value) in parameters
-            .Where(p => !string.IsNullOrEmpty(p.Key))
-            .OrderByDescending(p => p.Key.Length))
-        {
-            var sqlValue = value switch
-            {
-                string s => $"'{EscapeSql(s)}'",
-                bool b => b ? "true" : "false",
-                int i => i.ToString(),
-                long l => l.ToString(),
-                double d => d.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                DateTimeOffset dto => $"'{dto:yyyy-MM-dd HH:mm:ss.ffffffzzz}'",
-                _ => $"'{EscapeSql(value?.ToString() ?? "")}'"
-            };
-            filterClause = filterClause.Replace(name, sqlValue);
-        }
-
-        // Add text search if present — use tsvector for indexed word matching,
-        // with ILIKE fallback for partial/path matches the tsvector misses.
-        if (!string.IsNullOrEmpty(query.TextSearch))
-        {
-            var escaped = EscapeSql(query.TextSearch);
-            // Split into words, each as prefix match (e.g., "Acme Corp" → "Acme:* & Corp:*")
-            var words = escaped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            var tsTerms = string.Join(" & ", words.Select(w => $"{w}:*"));
-
-            var tsvectorExpr = "to_tsvector('english', COALESCE(n.name,'') || ' ' || COALESCE(n.description,'') || ' ' || COALESCE(n.node_type,''))";
-            var ilikeFallback = $"COALESCE(n.name,'') || ' ' || n.path || ' ' || COALESCE(n.node_type,'')";
-
-            if (!string.IsNullOrEmpty(filterClause))
-                filterClause += " AND ";
-            // tsvector uses the GIN index; ILIKE catches path/id matches
-            filterClause += $"({tsvectorExpr} @@ to_tsquery('english', '{tsTerms}') OR {ilikeFallback} ILIKE '%{escaped}%')";
-        }
-
-        // Build ORDER BY
-        var orderBy = query.OrderBy != null
-            ? $"{PostgreSqlSqlGenerator.MapSelector(query.OrderBy.Property)} {(query.OrderBy.Descending ? "DESC" : "ASC")}"
-            : "n.last_modified DESC";
-
-        // 🚨 THREE cases, and conflating the last two is how spaces go silently stale.
-        //   • no limit stated  → DefaultFanOutLimit. An unanchored UNION over every partition
-        //     schema needs SOME bound, and a search wants a page anyway.
-        //   • MeshQueryRequest.NoLimit (non-positive) → the caller declared this an ENUMERATION,
-        //     so return every match. `LIMIT 0` / `LIMIT -1` must never reach SQL; the largest INT
-        //     is `LIMIT ALL` in practice and needs no change to the stored function.
-        //   • a positive limit → honour it.
-        var limit = query.Limit switch
-        {
-            null => DefaultFanOutLimit,
-            <= 0 => int.MaxValue,
-            var stated => stated.Value,
-        };
-        var clippedByDefault = query.Limit is null;
-
-        // 🚨 Fetch ONE row past the default so the warning below can state truncation as a FACT.
-        // "rows == the limit" does not mean rows were dropped — a query with exactly
-        // DefaultFanOutLimit matches is complete — and a warning that cries truncation on a
-        // complete result trains readers to ignore it, which is how the next real one gets missed.
-        // The probe row is read but never yielded, so the caller's result is unchanged; the cost is
-        // one row on a query that already scanned every partition schema. Only for the default
-        // clip: a stated limit is the caller's own paging (no claim to make) and NoLimit is already
-        // int.MaxValue (where +1 would overflow).
-        var fetchLimit = clippedByDefault ? limit + 1 : limit;
-
-        _logger?.LogInformation(
-            "[CrossSchema] search_across_schemas(where='{Where}', user='{User}', order='{Order}', limit={Limit})",
-            filterClause, userId, orderBy, limit);
-
-        // Call the stored procedure using named parameters
-        await using var cmd = _dataSource.CreateCommand(
-            "SELECT * FROM public.search_across_schemas(@p_where, @p_user, @p_order, @p_limit) " +
-            "AS t(id TEXT, namespace TEXT, name TEXT, node_type TEXT, category TEXT, icon TEXT, " +
-            "display_order INT, last_modified TIMESTAMPTZ, version BIGINT, state SMALLINT, " +
-            "content JSONB, desired_id TEXT, main_node TEXT)");
-        cmd.Parameters.Add(new NpgsqlParameter("@p_where", string.IsNullOrEmpty(filterClause) ? "" : filterClause));
-        cmd.Parameters.Add(new NpgsqlParameter("@p_user", (object?)userId ?? DBNull.Value));
-        cmd.Parameters.Add(new NpgsqlParameter("@p_order", orderBy));
-        cmd.Parameters.Add(new NpgsqlParameter("@p_limit", fetchLimit));
-
-        // ⏱️ TIMED, because this is the expensive shape and nothing used to measure it.
-        // search_across_schemas builds a UNION ALL over EVERY row of public.searchable_schemas,
-        // so an unanchored query (no path:/namespace: first segment) scans every partition —
-        // every plugin AND every user partition. Its cost therefore grows with the number of
-        // users on the mesh, which makes it get quietly slower over months with no code change.
-        // Log the fan-out width next to the elapsed time so a slow query says WHY it was slow;
-        // a WHERE-clause dump alone (the previous logging) cannot distinguish "bad filter" from
-        // "300 schemas". Escalates to Warning past the threshold so it shows at default level.
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var rows = 0;
-        var firstRowMs = -1L;
-        // Set only when the probe row exists — i.e. matches were genuinely dropped.
-        var truncated = false;
-        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        // 🚨 try/FINALLY, not a call after the loop. A caller that stops enumerating early — a
-        // `.Take(n)`, a `break`, a cancellation, or a throw out of ReadMeshNode — disposes the
-        // iterator without ever reaching code placed after the `while`. The slow fan-out would then
-        // go UNLOGGED, which is the one case this instrumentation exists to catch. `finally` runs on
-        // that disposal path too, so an abandoned enumeration still reports what it cost.
-        try
-        {
-            while (await reader.ReadAsync(ct).ConfigureAwait(false))
-            {
-                // The probe row proves there was more, and is NOT part of the answer.
-                if (rows == limit)
-                {
-                    truncated = true;
-                    break;
-                }
-                if (rows++ == 0)
-                    firstRowMs = sw.ElapsedMilliseconds;
-                yield return ReadMeshNode(reader, options);
-            }
-        }
-        finally
-        {
-            LogFanOutTiming("search_across_schemas", sw.ElapsedMilliseconds, firstRowMs, rows, limit);
-
-            // 🚨 A DEFAULT that clipped must never be silent. The caller stated no limit, so it
-            // cannot distinguish "these are all the matches" from "these are the 50 most recently
-            // modified matches" — and because the order is `last_modified DESC`, the rows that fall
-            // off are precisely the ones that have gone longest without being touched. That makes
-            // the omission self-reinforcing: processing a row refreshes it, so the winners stay in
-            // the window and the stragglers sink further. #1216 (batch bake saw 50 of thousands of
-            // Code nodes) and #1326 (9 of 43 Spaces never re-synced while the webhook reported
-            // success) are the same line of code seen twice. Say so, and name the cure.
-            //
-            // `truncated` is a FACT, not an inference from the row count: it is set only when a row
-            // beyond the limit actually existed. A query with exactly DefaultFanOutLimit matches is
-            // complete and stays silent.
-            if (truncated)
-                _logger?.LogWarning(
-                    "[CrossSchema] TRUNCATED at the default fan-out limit of {Limit} rows — matches "
-                    + "beyond it were DROPPED (where='{Where}', order='{Order}'). The caller stated no "
-                    + "limit, so this result is a PAGE — the most recently modified matches — not the "
-                    + "complete set, and there is no way for it to tell. If the caller enumerates the "
-                    + "result as the whole set, it must say MeshQueryRequest.Complete().",
-                    DefaultFanOutLimit, filterClause, orderBy);
-        }
-    }
-
-    /// <summary>
-    /// Rows returned to a cross-schema query that states NO limit. A page size for a search, never
-    /// a completeness guarantee — see the truncation warning in
-    /// <c>QueryAcrossSchemasAsync</c> and <c>MeshQueryRequest.Complete()</c>.
-    /// </summary>
-    internal const int DefaultFanOutLimit = 50;
 
     /// <summary>Elapsed above which a cross-schema fan-out is logged as a Warning, not Debug.</summary>
     internal const long SlowFanOutMs = 1000;
@@ -689,13 +514,85 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         // or at the first ReadAsync (when PG defers). Catch at both seams and
         // treat as no rows; the next query will see the now-existing table
         // after the write commits.
-        await foreach (var node in EnumerateReaderOrEmptyOnMissingRelationAsync(
-            cmd, options, schemas, tableName, ct).WithCancellation(ct).ConfigureAwait(false))
+        // ⏱️ TIMED, because this IS the expensive shape: an unanchored query UNIONs every row of
+        // public.searchable_schemas, so its cost grows with the number of partitions on the mesh
+        // and gets quietly slower over months with no code change. The fan-out width is logged
+        // beside the elapsed time so a slow query says WHY it was slow — a WHERE-clause dump alone
+        // cannot distinguish "bad filter" from "300 schemas".
+        //
+        // 🚨 It is measured HERE, on the overload every runtime fan-out takes
+        // (PostgreSqlPartitionedMeshQuery.EnumerateFanOutAsync → this method). It used to sit on
+        // the paging overload instead — which no request could reach — so the instrumentation for
+        // the expensive shape produced not one line in production (#2048).
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var rows = 0;
+        var firstRowMs = -1L;
+        // 🚨 try/FINALLY, not a call after the loop. A caller that stops enumerating early — a
+        // `.Take(n)`, a `break`, a cancellation, or a throw — disposes the iterator without ever
+        // reaching code placed after the `await foreach`, and the slow fan-out would go UNLOGGED:
+        // the one case this instrumentation exists to catch.
+        try
         {
-            yield return node;
+            await foreach (var node in EnumerateReaderOrEmptyOnMissingRelationAsync(
+                cmd, options, schemas, tableName, ct).WithCancellation(ct).ConfigureAwait(false))
+            {
+                if (rows++ == 0)
+                    firstRowMs = sw.ElapsedMilliseconds;
+                yield return node;
+            }
+        }
+        finally
+        {
+            // `limit` is what the caller ASKED for, not a default this method applied — there is
+            // none. `0` reads as "unbounded", which is the honest answer for an unpinned query
+            // that stated no limit: every match comes back (#2048).
+            LogFanOutTiming(
+                tableName, sw.ElapsedMilliseconds, firstRowMs, rows,
+                query.Limit is > 0 ? query.Limit.Value : 0);
         }
     }
 
+    /// <summary>
+    /// Bounded retry budget for a TRANSIENT fan-out fault — matches the storage adapter's read
+    /// retry (<c>PostgreSqlStorageAdapter.MaxTransientReadRetries</c>), and for the same reason:
+    /// short enough that four attempts stay well inside a render's budget.
+    /// </summary>
+    private const int MaxTransientQueryRetries = 3;
+
+    /// <summary>
+    /// Runs the command and streams its rows, distinguishing THREE outcomes that used to be two
+    /// (issue #2132).
+    ///
+    /// <list type="number">
+    ///   <item><b><c>42P01</c> undefined_table → empty, and that is AUTHORITATIVE.</b> The
+    ///     satellite table genuinely does not exist in one of the targeted schemas, so there are
+    ///     genuinely no rows. Unchanged.</item>
+    ///   <item><b>A TRANSIENT fault → retry, bounded.</b> An <c>NpgsqlException</c> wrapping
+    ///     <c>EndOfStreamException</c> ("Attempted to read past the end of the stream" — the
+    ///     connection dropped mid-read) or <c>TimeoutException</c>, and <c>PostgresException</c>
+    ///     <c>40P01</c>/<c>40001</c>, are momentary conditions that a re-run resolves. These were
+    ///     the 171 occurrences across every memex-portal replica that put an error panel on
+    ///     Timeline / Comments / Preview / Catalog.</item>
+    ///   <item><b>Anything else, and an exhausted transient → PROPAGATE.</b></item>
+    /// </list>
+    ///
+    /// <para>🚨 Widening the <c>42P01</c> catch to swallow a transient as "no rows" — the obvious
+    /// way to stop the area failing — is the ONE thing this must not do. It would hand the view a
+    /// well-formed EMPTY result that is indistinguishable from an authoritative one, so a
+    /// momentary connection blip would silently render "no comments", "no timeline entries", "the
+    /// catalog is empty" as fact. A failure the user can see (LayoutAreaHost already renders an
+    /// error control into the failed area) is strictly better than a lie; the cure for the blip is
+    /// the retry above, not the swallow.</para>
+    ///
+    /// <para>The retry is only ever taken BEFORE the first row is yielded. Once a row has left this
+    /// method a re-execution would duplicate it, so a mid-stream fault past that point propagates
+    /// even when it is transient.</para>
+    ///
+    /// <para>🚨 ONE <c>attempts</c> counter spans BOTH legs (open and stream), rather than a budget
+    /// per leg. Nested budgets MULTIPLY — 4 opens × 4 reads — which is how a "bounded" retry quietly
+    /// becomes a 16-attempt, multi-second stall inside a render. The bound here is exactly
+    /// <see cref="MaxTransientQueryRetries"/> retries in total, however they are distributed.</para>
+    /// </summary>
     private async IAsyncEnumerable<MeshNode> EnumerateReaderOrEmptyOnMissingRelationAsync(
         Npgsql.NpgsqlCommand cmd,
         JsonSerializerOptions options,
@@ -703,46 +600,110 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         string tableName,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        Npgsql.NpgsqlDataReader reader;
-        try { reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false); }
-        catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01")
-        {
-            _logger?.LogDebug(
-                "[CrossSchema] Skipping satellite query — {Schemas} schemas missing {Table}: {Error}",
-                schemas.Count, tableName, ex.Message);
-            yield break;
-        }
-
-        await using var _disposeReader = reader;
+        var yieldedAny = false;
+        var attempts = 0;
         while (true)
         {
-            bool hasNext;
-            try { hasNext = await reader.ReadAsync(ct).ConfigureAwait(false); }
+            Npgsql.NpgsqlDataReader? reader = null;
+            var retryAfter = TimeSpan.Zero;
+            try { reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false); }
             catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01")
             {
                 _logger?.LogDebug(
-                    "[CrossSchema] Skipping satellite query mid-stream — {Table} missing in some schema: {Error}",
-                    tableName, ex.Message);
+                    "[CrossSchema] Skipping satellite query — {Schemas} schemas missing {Table}: {Error}",
+                    schemas.Count, tableName, ex.Message);
                 yield break;
             }
-            if (!hasNext) break;
-
-            MeshNode? node;
-            try { node = ReadMeshNode(reader, options); }
-            catch (Exception ex)
+            catch (Exception ex) when (PostgreSqlStorageAdapter.IsTransientConnectionFault(ex)
+                                       && attempts < MaxTransientQueryRetries)
             {
-                // Per-row defence: a malformed reader value (corrupt vector,
-                // unparseable timestamp, etc.) must not take down the entire
-                // UNION. Log + skip.
-                _logger?.LogWarning(ex,
-                    "[CrossSchema] Skipping unreadable row in {Table}: {Error}",
-                    tableName, ex.Message);
+                retryAfter = PostgreSqlStorageAdapter.TransientReadBackoff(attempts);
+                LogTransientRetry(ex, tableName, attempts++, retryAfter);
+            }
+
+            if (reader is null)
+            {
+                await Task.Delay(retryAfter, ct).ConfigureAwait(false);
                 continue;
             }
-            yield return node;
+
+            // Streaming leg. `restart` is set only by a transient fault that arrived before any row
+            // was yielded — the one case a re-execution cannot duplicate anything.
+            var restart = false;
+            await using (reader)
+            {
+                while (true)
+                {
+                    bool hasNext;
+                    try { hasNext = await reader.ReadAsync(ct).ConfigureAwait(false); }
+                    catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P01")
+                    {
+                        _logger?.LogDebug(
+                            "[CrossSchema] Skipping satellite query mid-stream — {Table} missing in some schema: {Error}",
+                            tableName, ex.Message);
+                        yield break;
+                    }
+                    catch (Exception ex) when (!yieldedAny
+                                               && PostgreSqlStorageAdapter.IsTransientConnectionFault(ex)
+                                               && attempts < MaxTransientQueryRetries)
+                    {
+                        retryAfter = PostgreSqlStorageAdapter.TransientReadBackoff(attempts);
+                        LogTransientRetry(ex, tableName, attempts++, retryAfter);
+                        restart = true;
+                        break;
+                    }
+                    if (!hasNext) break;
+
+                    MeshNode? node;
+                    try { node = ReadMeshNode(reader, options); }
+                    catch (Exception ex)
+                    {
+                        // Per-row defence: a malformed reader value (corrupt vector,
+                        // unparseable timestamp, etc.) must not take down the entire
+                        // UNION. Log + skip.
+                        _logger?.LogWarning(ex,
+                            "[CrossSchema] Skipping unreadable row in {Table}: {Error}",
+                            tableName, ex.Message);
+                        continue;
+                    }
+                    yieldedAny = true;
+                    yield return node;
+                }
+            }
+
+            if (!restart) yield break;
+            await Task.Delay(retryAfter, ct).ConfigureAwait(false);
         }
     }
 
-    private static string EscapeSql(string input) =>
-        input.Replace("'", "''");
+    private void LogTransientRetry(Exception ex, string what, int attempt, TimeSpan delay) =>
+        _logger?.LogWarning(ex,
+            "[CrossSchema] transient DB fault on {What} fan-out, attempt {Attempt}/{Max}, retrying in {Delay}ms",
+            what, attempt + 1, MaxTransientQueryRetries, delay.TotalMilliseconds);
+
+    /// <summary>
+    /// Opens the command's reader, retrying ONLY on
+    /// <see cref="PostgreSqlStorageAdapter.IsTransientConnectionFault"/> (dropped connection,
+    /// read timeout, <c>40P01</c>/<c>40001</c>) up to <see cref="MaxTransientQueryRetries"/> times
+    /// with the same jittered backoff the storage adapter's reads use. Every other error —
+    /// <c>42P01</c> included — propagates untouched to the caller's own handling, so this can
+    /// never turn a real fault into an empty result. Safe by construction: no row has been read
+    /// yet, so a re-execution cannot duplicate anything.
+    /// </summary>
+    private async Task<Npgsql.NpgsqlDataReader> ExecuteReaderWithTransientRetryAsync(
+        Npgsql.NpgsqlCommand cmd, string what, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            TimeSpan retryAfter;
+            try { return await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false); }
+            catch (Exception ex) when (PostgreSqlStorageAdapter.IsTransientConnectionFault(ex)
+                                       && attempt < MaxTransientQueryRetries)
+            {
+                retryAfter = PostgreSqlStorageAdapter.TransientReadBackoff(attempt);
+                LogTransientRetry(ex, what, attempt, retryAfter);
+            }
+            await Task.Delay(retryAfter, ct).ConfigureAwait(false);
+        }
+    }
 }

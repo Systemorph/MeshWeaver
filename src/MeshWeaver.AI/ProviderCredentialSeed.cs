@@ -65,9 +65,11 @@ public sealed record ProviderCredentialSeedResult(
 /// (MeshWeaver#1982).
 ///
 /// <para>🚨 <b>Why a converging seed and not the create-if-absent one.</b> The catalog's static-repo
-/// import marks each <c>Provider/{name}</c> <see cref="SyncBehavior.ExcludeThisAndChildren"/>, so
+/// import marks each <c>Provider/{name}</c> <see cref="SyncBehavior.ExcludeThisOnly"/>, so
 /// the importer CREATES it once and never revisits it — the claim that protects an admin's key edit
-/// from the next boot's re-seed. A key added to the deployment AFTER that node exists therefore
+/// from the next boot's re-seed. (It claims THIS node only: claiming the subtree also froze the
+/// LanguageModel children, so a model configured after the node existed could never appear —
+/// MeshWeaver#2211.) A key added to the deployment AFTER that node exists therefore
 /// reached every factory and never reached the node: measured on <c>memex.systemorph.com</c>, where
 /// <c>Provider/Anthropic</c> was created keyless on 2026-08-14, <c>Anthropic__ApiKey</c> was
 /// configured after it, and the node stayed keyless until a human pasted the key in on 2026-08-21.

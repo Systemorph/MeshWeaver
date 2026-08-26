@@ -1,5 +1,0 @@
-# No trailing slash — see clients/react/.gitignore.
-node_modules
-dist/
-*.tsbuildinfo
-.vite/
