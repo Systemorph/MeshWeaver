@@ -116,7 +116,7 @@
     },
     {
       "file": "Skill/access.md",
-      "core": "59a03986de2d1db19ded4344e2977f0f9ff21bb280abcac4c71d126b6f8a15ba",
+      "core": "306f33572831057e0840a1fbeb10388297ff456a6b0f9ee3ae43a99dcc7d720f",
       "pack": null,
       "state": "PackAbsent"
     },
@@ -158,7 +158,7 @@
     },
     {
       "file": "Skill/layout-area.md",
-      "core": "36f028e569e6c5f4676349403fd337441bbc77cbc44b5deaa4ca18b0be5f8b33",
+      "core": "8429e63e167028c4d11ac8d441a9a32a4e1466c9bab8e7dcb0e9838f92d916b2",
       "pack": null,
       "state": "PackAbsent"
     },
@@ -170,7 +170,7 @@
     },
     {
       "file": "Skill/markdown.md",
-      "core": "13f81f157d0a470420d7a0276fde03ac7af7f75c3539701c7ab8e47926dbc61b",
+      "core": "3d67acbdd76441a2c1ed00ba16436b0065dc42ff6576574a0837f07daf88e4a5",
       "pack": null,
       "state": "PackAbsent"
     },
@@ -206,13 +206,13 @@
     },
     {
       "file": "Skill/provider-keys.md",
-      "core": "612cc0475a99ec42b2ab96ba7bed355621c7f33ff63da935a5e2267099942193",
+      "core": "edb9f209f7d584536485b0411f8e521c5ffcaf76696d3f88b47be2940ece9681",
       "pack": null,
       "state": "PackAbsent"
     },
     {
       "file": "Skill/pull-request.md",
-      "core": "35cf06fbdd45511d3bbbd5768be5eff8ef11c72eda5847886b6e9a9bca868c31",
+      "core": "27eb0a672388e20e5be33f5c2f9a18a1fd7f6fc5ef4b7b6456ec6412905fb550",
       "pack": null,
       "state": "PackAbsent"
     },

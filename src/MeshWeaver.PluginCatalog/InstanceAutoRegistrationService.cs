@@ -382,7 +382,11 @@ public sealed class InstanceAutoRegistrationService(
                         HomeUrl: options.HomeUrl?.Trim() ?? ""))
                     .SelectMany(result =>
                     {
-                        var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
+                        // 🚨 Required, and no `?? result.InstanceKey` fallback: the issued key is
+                        // this installation's credential at the registry. Storing it in the clear
+                        // is the same defect as a plaintext provider key, so a protector that
+                        // cannot encrypt it means we do not store it at all.
+                        var protector = hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>();
                         var node = new MeshNode(
                             credentialPath.Split('/').Last(), PluginRegistryCredentials.Namespace)
                         {
@@ -393,7 +397,9 @@ public sealed class InstanceAutoRegistrationService(
                             {
                                 RegistryUrl = registry.Url.TrimEnd('/'),
                                 InstanceId = result.InstanceId,
-                                ProtectedKey = protector?.Protect(result.InstanceKey) ?? result.InstanceKey,
+                                // `!`: Protect returns null only for a null input, and the registry
+                                // never issues a null key — it either refuses or returns ciphertext.
+                                ProtectedKey = protector.Protect(result.InstanceKey)!,
                                 RegisteredAt = DateTimeOffset.UtcNow,
                             },
                         };

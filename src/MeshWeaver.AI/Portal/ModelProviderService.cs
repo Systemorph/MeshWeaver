@@ -481,14 +481,24 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
         return null;
     }
 
-    // Encryption-at-rest for the literal ApiKey. Resolved lazily from the hub's
-    // service provider (same place the ChatClientCredentialResolver reads it);
-    // passthrough when not registered or no master key is configured.
-    private string? Protect(string? plaintext)
-    {
-        var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
-        return protector is null ? plaintext : protector.Protect(plaintext);
-    }
+    // Encryption-at-rest for the literal ApiKey. Resolved from the hub's service provider (same
+    // place the ChatClientCredentialResolver reads it).
+    //
+    // 🚨 GetRequiredService, and no fallback. The old body was
+    // `protector is null ? plaintext : protector.Protect(plaintext)`, and both halves of that were
+    // wrong: IProviderKeyProtector is registered unconditionally by AddGraph, so the null branch
+    // was DEAD, and Protect itself degraded to a plaintext passthrough with no master key — so
+    // this method silently persisted raw keys into node content. That is how a live OpenRouter key
+    // ended up in cleartext in production (found 2026-08-24, readable by anyone with read on that
+    // namespace).
+    //
+    // The refusal now lives in Protect itself, once, for every caller — not duplicated here. This
+    // is the INTERACTIVE write path and has no structured outcome to return, so the throw IS the
+    // answer: the operator sees why, and no key is stored. (Null/empty is not a key — a keyless
+    // provider such as Copilot or the local Claude Code CLI carries none — and Protect returns it
+    // unchanged without needing a master key.)
+    private string? Protect(string? plaintext) =>
+        hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>().Protect(plaintext);
 
     private string? Unprotect(string? stored)
     {

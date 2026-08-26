@@ -19,8 +19,25 @@ public static class SkillMarkdown
     private static readonly MarkdownPipeline Pipeline =
         new MarkdownPipelineBuilder().UseYamlFrontMatter().Build();
 
+    /// <summary>
+    /// 🚨 CASE-INSENSITIVE, no naming convention (#1984). A camelCase CONVENTION binds
+    /// <c>nodeType:</c> and nothing else — it SWAPS which spelling binds rather than accepting both.
+    /// That matters here because this reader is not only fed hand-authored files: a Skill node whose
+    /// content never became a <see cref="SkillDefinition"/> is written back out by
+    /// <c>MarkdownFileParser.Serialize</c>, whose serializer carries no convention and therefore
+    /// emits <c>NodeType: Skill</c> in PascalCase. A camelCase-only reader would refuse to recognise
+    /// the file it had just written, and the skill would degrade to a plain Markdown page a second
+    /// time — the exact silent downgrade #1984 is about.
+    ///
+    /// <para>Case-insensitive matching is strictly WIDER than the convention it replaces: every key
+    /// the camelCase convention bound still binds (a case-insensitive compare ignores the internal
+    /// capitalisation of <c>launchesSubThread</c> just as it ignores the leading letter), and
+    /// PascalCase now binds too. <c>YamlOut</c> deliberately keeps the camelCase convention, so the
+    /// files this class WRITES are unchanged and <c>SkillMarkdownRoundTripTest</c> still pins them
+    /// byte-for-byte.</para>
+    /// </summary>
     private static readonly IDeserializer YamlIn = new DeserializerBuilder()
-        .WithNamingConvention(CamelCaseNamingConvention.Instance)
+        .WithCaseInsensitivePropertyMatching()
         .IgnoreUnmatchedProperties()
         .Build();
 
@@ -34,6 +51,42 @@ public static class SkillMarkdown
 
     /// <summary>Parses a skill <c>.md</c> (frontmatter + body) into a <c>Skill</c> MeshNode, or null.</summary>
     public static MeshNode? Parse(string content, string id) => TryParse(content, id, out _);
+
+    /// <summary>
+    /// Whether this <c>.md</c> text DECLARES itself a skill — i.e. its front matter says
+    /// <c>nodeType: Skill</c> (in any casing). The mirror of <c>AgentFileParser.IsAgentMarkdown</c>,
+    /// and the gate <see cref="Persistence.SkillFileParser"/> applies before claiming a file.
+    ///
+    /// <para>🚨 The gate is separate from <see cref="TryParse"/> on purpose. <c>TryParse</c> is
+    /// called by <see cref="BuiltInSkillProvider"/> for files it ALREADY knows are skills (they live
+    /// in <c>content/ai/Skill</c>), so it builds a Skill node from any front matter it can read. A
+    /// parser sitting in the shared <c>.md</c> chain has the opposite obligation: it must decline
+    /// every file that is not a skill, or it would turn every markdown page with front matter into a
+    /// Skill node.</para>
+    /// </summary>
+    /// <param name="content">The file's text (YAML front matter + markdown body).</param>
+    public static bool IsSkillMarkdown(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return false;
+
+        var document = Markdig.Markdown.Parse(content, Pipeline);
+        var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
+        if (yamlBlock is null)
+            return false;
+
+        try
+        {
+            var fm = YamlIn.Deserialize<SkillFrontMatter>(yamlBlock.Lines.ToString());
+            return string.Equals(fm?.NodeType, SkillNodeType.NodeType, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (YamlDotNet.Core.YamlException)
+        {
+            // Malformed front matter is not a claim — let the chain fall through to the catch-all
+            // Markdown parser rather than throwing on a file we never established was ours.
+            return false;
+        }
+    }
 
     /// <summary>
     /// Parses a skill <c>.md</c> into a <c>Skill</c> MeshNode, and on failure says WHY.
