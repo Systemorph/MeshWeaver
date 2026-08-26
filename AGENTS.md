@@ -229,20 +229,25 @@ so never relax it. Three consequences that trip people up, all SILENT:
    Test" --ref main` RUNS and genuinely tests the merge commit, so main shows a **green
    Build-and-Test** — but its `event` is `workflow_dispatch`, not `push`, so CD still skips. The
    most convincing possible "it shipped" signal, and no image.
-3. 🚨 **Back-to-back merges CANCEL each other's main run, so a merge burst publishes NOTHING.**
-   `dotnet-test.yml`'s concurrency group is `build-test-${{ … || github.ref }}` — every push to main
-   groups as `refs/heads/main`, so each merge cancels the in-flight run for the previous one (#2316,
-   which buys ~28% of runner demand and is worth keeping). CD **does** still fire on those runs —
-   `main-cd.yml` subscribes with `types: [completed]`, and a cancelled run is "completed" — but its
-   delivery gate keys on the required check **`Consolidate test results` reaching `success` for that
-   SHA**, which a cancelled run never produces. So CD wakes, decides "nothing will be built", and
-   every intermediate publish that "would have happened" simply does not. Observed
-   2026-08-26: #2316 merged at 12:55:25Z and main's next **five** runs were cancelled back-to-back,
-   leaving 45 minutes with no completed run and no publish.
+3. 🚨 **Runs on `main` are never cancelled — and that is load-bearing, not a tuning choice.**
+   `dotnet-test.yml` sets `cancel-in-progress` to `github.event_name != 'workflow_dispatch' && github.ref
+   != 'refs/heads/main'`. Superseding stays on for PR branches (that is where #2316's ~28% of runner
+   demand is saved, and a later push there tests a strict successor of what was cancelled). It is OFF
+   for main because cancelling there loses two different things at once:
 
-   Publishing only the **tip** of a burst is correct — intermediate commits never needed their own
-   image set, and it is the batching `CD_BATCH_WINDOW_MINUTES` already wants. So do NOT wait between
-   ordinary merges; batching them is right, and the tip's image contains them all.
+   - **Nothing builds the combination that LANDED.** `strict: false` means each PR was tested against
+     the main it branched from, so the merged tree is first compiled by main's own run. This is not
+     hypothetical: five merges inside fifteen seconds put `CS0246: MeshOperations` on main on
+     2026-08-26 — two independently-green PRs, a semantic conflict neither could see (#2412).
+   - **Nothing publishes.** CD's delivery gate keys on `Consolidate test results` reaching `success`
+     **for that SHA**. CD *does* still fire on a cancelled run (`main-cd.yml` subscribes with
+     `types: [completed]`, and cancelled counts as completed) — it just finds no success to act on.
+
+   Before the fix, main's five consecutive runs from 20:28–20:38 on 2026-08-26 were all `cancelled`,
+   each by the next merge. **So do NOT re-introduce cancellation on main to save runner minutes** —
+   the cost is one run per merge and it buys both the compile of what shipped and the ability to ship
+   it. Batching *publication* is still right and `CD_BATCH_WINDOW_MINUTES` still does it; what is not
+   right is batching by destroying the evidence.
 
    🚨 **The wait is owed to a merge that must ship ON ITS OWN** (a CD fix, a hotfix someone is
    verifying): merge it, then wait for **that merge commit's** Build-and-Test to COMPLETE — and
