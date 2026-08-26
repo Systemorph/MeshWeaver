@@ -133,8 +133,11 @@
     <!-- The AI engine. CLOSURE, never thin: the LAST ships-the-bits ProjectReference to it is
          gone (Memex.LocalMesh's, the sidecar that serves the RN shells — Memex.Portal.Shared
          dropped its own earlier, per AiMeshModuleAttribute's remarks), so nothing carries its
-         private package closure — Microsoft.Extensions.AI, Microsoft.Agents.AI, YamlDotNet,
-         Humanizer — into any app output any more. A thin-lane row would land MeshWeaver.AI.dll
+         private closure into any app output any more. Measured on the sidecar's layout, that is
+         Microsoft.Extensions.AI(.Abstractions/.Evaluation), Microsoft.Agents.AI(.Abstractions),
+         Microsoft.ML.Tokenizers, Microsoft.Extensions.VectorData.Abstractions, HtmlAgilityPack,
+         and MeshWeaver.GitSync with Octokit beneath it — while YamlDotNet and Humanizer prune
+         away, the app closure already carrying those. A thin-lane row would land MeshWeaver.AI.dll
          beside a host that cannot resolve its own model-client types at first chat send; the
          closure publish brings the true private deps and prunes whatever the app and the shared
          framework already provide.
