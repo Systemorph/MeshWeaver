@@ -6,6 +6,35 @@ icon: Layout
 category: Skills
 order: 15
 ---
+# 🚨 WRITE INTO THE USER'S OWN HOME — never into the space you are reading
+
+The chat you are running in is almost always opened **from a page**, so your context is that page's
+node — a course lesson, a doc, someone else's space. On any of those the signed-in reader typically
+holds **Read only**: a course is gated (entitlement = the `Viewer` role), a plugin/doc space is
+GitSynced and writable by `system-security` alone.
+
+Create your output there and the write fails with
+
+> ⚠️ Access denied: Create permission required for node '{Space}/…'
+
+which is what the person sees **instead of the thing they asked for**. It is not a permissions bug to
+report, not something for them to "get access" to, and not a reason to stop: it is the wrong target.
+
+**Everything you CREATE belongs under the user's own home — `{userId}/…`** (e.g.
+`felice.buergi/DiceGame`, `felice.buergi/Skill/…`). That covers the program, the deck, the document,
+the poster, the data node, the scratch node you needed on the way — and the **thread / activity**
+that produces them.
+
+- **Resolve the user id from the signed-in identity**, never from the page you happen to be on.
+  Being *on* `AgenticPrimerDe/02-CodeWunsch` says what the request is ABOUT, not where it goes.
+- **Read from anywhere; write only there.** Reading the lesson to understand the ask is right;
+  writing next to it is not.
+- If the user explicitly names a target they own, use it. Otherwise **default to their home** — do
+  not ask them where to put it; they mostly do not know the mesh has places.
+- If a write is denied anyway, **do not retry against the same space and do not escalate to the
+  user**: re-target their home, finish the job, and tell them one line about where it landed.
+- Say where it went when you are done ("I put it in your space at `…`"), with a link — a thing
+  created somewhere the user cannot find is a thing you did not create.
 
 In MeshWeaver you do **not** write platform UI. You write a **layout area** — a reactive function that returns a tree of **controls**. Controls are a *declarative, implementation-independent language*: you compose them and bind them to data, and the framework renders them on whatever surface is hosting (Blazor Server today, Blazor Hybrid / native tomorrow). The same area definition renders everywhere. You never touch HTML, Razor, or XAML.
 

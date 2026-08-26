@@ -6,12 +6,19 @@ icon: LockClosed
 category: Skills
 order: 11
 ---
-
 You are handing out **access rights to mesh nodes**. Permissions in MeshWeaver are **data**:
 an `AccessAssignment` MeshNode inside a `_Access` satellite namespace. There is no separate
 ACL store — you grant access by creating a node with the right **placement** and **content**,
 and the reactive `PermissionEvaluator` picks it up within ~1 second. Get the placement wrong
 and the grant is **silently ignored** — the node exists, permissions don't change.
+
+> 🚨 **A GLOBAL ADMIN HAS NO ACCESS TO DATA — and neither does any other role name.**
+> `Admin/_Access` gates PLATFORM actions (invites, config, provision, enroll — `hub.IsGlobalAdmin()`).
+> It grants **zero** read, write or list on any partition's content, and there is no implicit
+> superuser read anywhere in MeshWeaver. A global admin must not be able to read a course they
+> have not bought; that is the Store funnel, not an oversight. **Access is a GRANT you can point
+> at, or it does not exist** — so never answer "can X see Y?" from a role, a job title, or the
+> fact that someone owns the thing. Read the assignments (§Audit) and name them.
 
 # The model — one node per subject per scope
 
@@ -31,6 +38,40 @@ content:     { accessObject, displayName, roles: [ { role, denied? } ] }
   a deny for that role at that scope (closest scope wins).
 - **Satellites never get their own grants.** `_Thread`, `_Comment`, `_Activity`, … inherit from
   their `mainNode` automatically. Grant on the main node, never on a satellite path.
+
+# Audit — "does X have access to Y?"
+
+**Answer this by reading grants, never by reasoning about roles.** There are exactly TWO
+sources of access, and if neither names X, the answer is no:
+
+1. an **`AccessAssignment`** at Y's scope or any ancestor scope — `{partition}/_Access/…`,
+   a node-scoped `{partition}/{Node}/_Access/…` (covers that node and below), or a **group**
+   grant whose `GroupMembership` includes X (group grants DO resolve cross-partition);
+2. a **`_Policy`** at Y's scope or above carrying **`publicRead: true`**, which ORs Read in for
+   everyone at that scope and below.
+
+```bash
+mcp search "path:{partition} scope:subtree nodeType:AccessAssignment"   # every grant, incl. node-scoped
+mcp get "@{partition}/_Policy"                                          # publicRead: true? absent = no
+mcp get "@{partition}/{Node}/_Access/*"                                 # grants on the node itself
+```
+
+🚨 **`PartitionAccessPolicy.read` is a CAP, never a grant.** `false` denies at that scope and
+below; `null`/absent inherits "allowed" and grants **nothing on its own**. Only `publicRead:
+true` grants. So **a partition with no `_Policy` and no `_Access` entry for X is invisible to
+X** — global admin or not, owner or not.
+
+Three things that look like access and are not:
+
+| Looks like access | Actually |
+|---|---|
+| X is a **global admin** (`Admin/_Access`) | platform gates only — no data read anywhere |
+| the node's content says **`owner: X`** | a domain field; the evaluator never reads it |
+| X is granted on a **different** partition, or is in a group granted there | scoped to that partition — a `Posts` grant gives nothing on `Profiles` |
+
+Then state who is and is not on the list, **per identity** — a person can hold two userIds
+(`rsalzmann` *and* `robert.salzmann`), and a grant on one is nothing to the other. Grant both,
+or confirm which one they log in with.
 
 # Recipe 1 — grant a user a role on a node / space
 
@@ -122,6 +163,9 @@ A `User` node is created on first login/onboarding. If the person you want to gr
 | Node created but never enforced | namespace doesn't end in `/_Access` — landed outside the security pipeline |
 | Grant on a thread/comment has no effect | satellites inherit from `mainNode` — grant on the main node instead |
 | "Global admin" can't see admin tabs | grant written to root `_Access` instead of `Admin/_Access` |
+| "They're a global admin, so they can see it" | **false** — `Admin/_Access` is platform gates, never data. Read the scope's grants |
+| "It's their own node, so they can see it" | content `owner`/author fields are domain data; the evaluator never reads them |
+| Grant made, user still denied | granted to their OTHER userId — check every identity they log in with |
 | User can't be picked in the GUI | no `User` node yet (never logged in) — invite first or grant by principal via MCP |
 
 # Related
