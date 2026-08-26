@@ -24,7 +24,7 @@ jobs:
     # release, unmatchable by the exact-match credentials a user-assigned MI supports (the
     # v3.0.0-rc1 run failed AADSTS700213 exactly this way). Running the job in an environment
     # makes the subject the STABLE `repo:Systemorph/MeshWeaver:environment:release`, covered by
-    # the `gh-env-release` federated credential — same pattern as the memex/atioz/memex-cloud
+    # the `gh-env-release` federated credential — same pattern as the memex/memex-cloud
     # deploy environments.
     environment: release
     steps:

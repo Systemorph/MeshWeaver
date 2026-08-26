@@ -220,8 +220,7 @@ Note the prefix-shadowing order in `MaxConcurrencyFor`: `pg-read:` is tested **b
 **`Routing` is an ISOLATION boundary, not a throttle.** `RoutingGrain` is `[StatelessWorker(1)]` and
 non-reentrant, so a silo has exactly ONE routing turn — and Orleans' request timeout applies to
 callers *waiting on* a grain, never to the turn itself. Anything the turn does inline is therefore
-unbounded by construction and blocks every other message the silo needs to route. Prod (atioz,
-2026-08-07) had one `RouteMessage` turn executing for `06:00:22` with `NonReentrancyQueueSize=541`;
+unbounded by construction and blocks every other message the silo needs to route. Prod (2026-08-07) had one `RouteMessage` turn executing for `06:00:22` with `NonReentrancyQueueSize=541`;
 Orleans' own diagnostics showed the work item still `Running` with `Total processed` frozen — i.e.
 `RouteMessage` had never returned, it was blocked in its own synchronous body. The cure is structural
 (you cannot time out a synchronously blocked thread): `RouteMessage` captures its activation-bound

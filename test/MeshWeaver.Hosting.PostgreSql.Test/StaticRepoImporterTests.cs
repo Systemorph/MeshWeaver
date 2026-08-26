@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
-using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;

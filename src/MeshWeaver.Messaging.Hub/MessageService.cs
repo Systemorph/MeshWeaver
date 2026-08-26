@@ -810,10 +810,29 @@ public class MessageService : IMessageService
             // path, and ANY terminal treatment killed the sync stream's resubscribe latch —
             // each wedged every read of the mid-recycle NodeType.
             fate?.Add($"DROPPED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
-            NackThroughParent(delivery,
+
+            // 🚨 Both halves matter, and this site got both wrong until #2350.
+            //
+            // NackThroughParent DECLINES (returns false) when there is no parent, or the parent is
+            // itself past DisposeHostedHubs. Ignoring the result meant: answered → the reporting
+            // path NACKed a SECOND time, because only FailedAndNacked sets SenderWasNacked;
+            // declined → the sender got nothing from here at all. In both cases the delivery
+            // carried NO classification, so ReportFailure fell back to ErrorType.Unavailable while
+            // the message still read "Hub is shutting down" — a transient race wearing an
+            // authoritative label.
+            //
+            // That defeats every consumer written against the documented contract, which is the
+            // whole reason Failed(string, ErrorType) exists: SynchronizationStream's resubscribe
+            // latch, MeshNodeStreamCache's shutdown-drop handling and PackageInstaller's retry all
+            // ride out ShuttingDown and treat anything else as terminal. Same idiom as
+            // AnswerUnreleasableDelivery above: honour the return value, and classify either way.
+            var reason =
                 $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process "
-                + $"{typeName}; the address may reactivate (recycle / restart). Rejecting now.");
-            return delivery.Failed("Hub is shutting down");
+                + $"{typeName}; the address may reactivate (recycle / restart). Rejecting now.";
+
+            return NackThroughParent(delivery, reason)
+                ? delivery.FailedAndNacked("Hub is shutting down")
+                : delivery.Failed("Hub is shutting down", ErrorType.ShuttingDown);
         }
 
         // STORM CIRCUIT-BREAKER. Detect an unbounded retry/resubscribe/repost loop —
@@ -1833,7 +1852,13 @@ public class MessageService : IMessageService
             }
 
             postFate?.Add($"POST_REFUSED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
-            return ((IMessageDelivery)delivery).Failed("Hub is shutting down");
+
+            // Classified, for the same reason as the intake gate (#2350): a refused POST during
+            // shutdown is transient — the address may reactivate — and an unclassified failure
+            // reaches the sender as ErrorType.Unavailable, which its recovery machinery reads as
+            // terminal. This site does NOT answer the sender itself, so Failed (not
+            // FailedAndNacked) stays correct; only the classification was missing.
+            return ((IMessageDelivery)delivery).Failed("Hub is shutting down", ErrorType.ShuttingDown);
         }
 
         // TODO V10: Which cancellation token to pass here? (12.01.2025, Roland Bürgi)
