@@ -189,6 +189,17 @@ public sealed class ModuleLandingService : IDisposable
     private readonly ILogger<ModuleLandingService>? logger;
     private readonly Subject<Unit> activationChanged = new();
 
+    // 🚨 Every EMISSION goes through the synchronized façade, never `activationChanged` directly.
+    // An Rx Subject is not safe for concurrent OnNext/OnCompleted: its observer list can be observed
+    // mid-mutation, which tears delivery. The two callers here genuinely can overlap — a landing
+    // announces on whichever thread the pool result lands on, while Dispose completes on the
+    // teardown thread — so this is a real race, not a theoretical one. Subject.Synchronize is Rx's
+    // own answer and stays inside the reactive model (no lock of ours, nothing hand-woven); it is
+    // the same wrapper MeshNodeStreamCache, ThreadInboxChannel and this project's own
+    // ModuleDiscoveryService already use. Subscribe still goes to the subject itself — the
+    // synchronization is only needed on the write side. (Copilot review, #2437.)
+    private readonly ISubject<Unit> announce;
+
     /// <summary>
     /// Fires once each time THIS process changes the persisted activation record — a landing, a
     /// shelving, or a removal. The announcement half of restart-as-activation (#1979).
@@ -224,6 +235,7 @@ public sealed class ModuleLandingService : IDisposable
     {
         this.logger = logger;
         this.baseDirectory = baseDirectory ?? AppContext.BaseDirectory;
+        announce = Subject.Synchronize(activationChanged);
     }
 
     /// <summary>The deployment root the <c>modules/</c> tree lives under — exposed so the serving
@@ -568,12 +580,12 @@ public sealed class ModuleLandingService : IDisposable
     /// stopped following the signal.
     /// </summary>
     /// <param name="notify">The emission to make — <c>OnNext</c> after a write, <c>OnCompleted</c>
-    /// at dispose.</param>
-    private void Announce(Action<Subject<Unit>> notify)
+    /// at dispose. Always applied to the SYNCHRONIZED façade; see the field's remarks.</param>
+    private void Announce(Action<ISubject<Unit>> notify)
     {
         try
         {
-            notify(activationChanged);
+            notify(announce);
         }
         catch (Exception exception)
         {
