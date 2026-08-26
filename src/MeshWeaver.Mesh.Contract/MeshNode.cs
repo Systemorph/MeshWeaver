@@ -99,7 +99,9 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// A SATELLITE of the node at <paramref name="mainNode"/>: created with <see cref="MainNode"/>
     /// already pointing at its primary, which is what the doc on <see cref="MainNode"/> promises and
     /// what every listing relies on to keep satellites out of a node's contents (the catalog's
-    /// <c>is:main</c> is literally <c>MainNode != Path</c>). 🚨 Minting a satellite with
+    /// <c>is:main</c> KEEPS exactly the rows where <c>MainNode == Path</c> — SQL
+    /// <c>n.main_node = n.path</c> — so a satellite is excluded precisely because its MainNode
+    /// DIFFERS from its path). 🚨 Minting a satellite with
     /// <c>new MeshNode(id, ns)</c> leaves MainNode defaulting to ITSELF, which makes it a main node
     /// by definition — that is how <c>Access Policy</c> came to be listed as content on every
     /// package cover (#2383). Use this for <c>_Policy</c> and every other underscore-prefixed

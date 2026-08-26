@@ -160,6 +160,94 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     /// <summary>
+    /// A bulk write the STORE REFUSED must never be reported as written — it must be re-decided
+    /// as what it turned out to be, an EXISTING node, so the package's content actually lands
+    /// (MeshWeaver#2361).
+    ///
+    /// <para><b>The defect.</b> The bulk path is chosen for nodes the install's ONE bulk read
+    /// reported absent, and it writes them straight to storage at the version the repo file
+    /// carries — 0. If the path exists by the time the batch lands (any writer that minted a
+    /// version in the window between that read and the write), version 0 is a BACKWARD write:
+    /// the store's version-conditional upsert refuses it and — per
+    /// <c>IStorageAdapter.Write</c>'s contract — emits the DURABLE node instead of the one it
+    /// was handed. The count still matches, so the installer reported success for a write that
+    /// never happened, the partition kept the foreign content, and the only thing that ever
+    /// noticed was the plugin gate's idempotence pin on the NEXT install — where the node now
+    /// exists, takes the request path and finally lands: <c>re-install of the unchanged snapshot
+    /// wrote 2 node(s): Skill/presentation, Skill/slide</c>, intermittently, on a required check.
+    /// </para>
+    ///
+    /// <para>Both assertions below are the invariant, from the two sides that matter: the
+    /// package's content is what is durable after ONE install, and a re-install of the unchanged
+    /// snapshot writes nothing. Before the fix both fail — the first because the foreign row
+    /// survived, the second because the re-install is what repairs it.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ABulkWriteTheStoreRefused_IsReapplied_NotReportedAsWritten()
+    {
+        Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch =
+            (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-refused", Repo));
+        var source = new NodeRepoPackageSource(fetch, "https://github.com/acme/bulk");
+        var manifest = new PackageManifest
+        {
+            Id = "BulkPack",
+            Name = "Bulk Pack",
+            Kind = PackageKind.NodeRepo,
+            TargetPartition = "BulkPack",
+            SourceFolder = "BulkPack",
+            Version = "commit-refused",
+        };
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+
+        // Another writer got there first — at a version the install's version-0 bulk write
+        // cannot beat. This is the ONLY thing the test arranges; everything else is the
+        // installer's own behaviour.
+        _recorder.RaceWriteBeforeBatch = new MeshNode("Lesson2", "BulkPack")
+        {
+            Name = "Foreign Lesson",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+            Version = 7,
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Foreign" },
+        };
+
+        var result = await PackageInstaller.Install(Mesh, manifest, files, "commit-refused")
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+        _recorder.WriteManyBatches.SelectMany(b => b).Should().Contain("BulkPack/Lesson2",
+            "this test is only meaningful while that node travels the bulk path");
+        result.Total.Should().Be(7);
+
+        // 1. The package's content is DURABLE after one install — the whole point of installing.
+        var stored = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => ((IStorageAdapter)_recorder)
+                .Read("BulkPack/Lesson2", Mesh.JsonSerializerOptions))
+            .Where(n => n is not null && !string.Equals(n.Name, "Foreign Lesson", StringComparison.Ordinal))
+            .Select(n => n!)
+            .FirstAsync()
+            // Generous, and never a sleep: the re-apply happens INSIDE the Install this test has
+            // already awaited, so all that is being waited out is the owner's 200 ms debounced
+            // persist. On the unfixed installer nothing ever lands, and the Catch turns the
+            // timeout into the assertion below rather than an opaque TimeoutException.
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Catch((Exception _) => ((IStorageAdapter)_recorder)
+                .Read("BulkPack/Lesson2", Mesh.JsonSerializerOptions).Select(n => n!))
+            .ToTask();
+        stored.Name.Should().NotBe("Foreign Lesson",
+            "an install that reports a node as written must have written it — a refused bulk write "
+            + "left the foreign row in place and said nothing");
+        stored.ContentAs<MeshWeaver.Markdown.MarkdownContent>(Mesh.JsonSerializerOptions)!
+            .Content.Should().Contain("Lesson 2");
+
+        // 2. …and the re-install of the unchanged snapshot writes NOTHING. This is the exact
+        // signal the plugin gate reports, and it can only hold if install #1 really landed.
+        var second = await PackageInstaller.Install(Mesh, manifest, files, "commit-refused")
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+        second.WrittenPaths.Should().BeEmpty(
+            "the re-install must find the package's own content durable — a node the first "
+            + "install only CLAIMED to write is written here instead, which is what the gate sees");
+    }
+
+    /// <summary>
     /// A bulk-written node must be ANNOUNCED on the mesh-change feed, exactly like one written
     /// through the per-node request path. The feed is what invalidates the caches that decide
     /// whether a node is REACHABLE — <c>PathResolutionService</c>'s resolution cache,
@@ -299,6 +387,18 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
         /// <summary>When set, <see cref="ReadMany"/> errors — simulating a transient bulk-read failure.</summary>
         public bool FailReadMany { get; set; }
 
+        /// <summary>
+        /// Arms the interleaving #2361 is about: the FIRST <see cref="WriteMany"/> batch that
+        /// carries this node's path lands it in the store — at its own (higher) version — just
+        /// BEFORE the batch is written, so the installer's version-0 bulk write meets a newer
+        /// durable row. That is the production window in one deterministic step: the install's
+        /// single bulk read ran hundreds of milliseconds earlier (before the root write, the
+        /// visibility barrier and the access phase), and any writer that mints a version in
+        /// between turns the batch's "this node is NEW" classification into a backward write.
+        /// Fires ONCE — a re-install must meet the normal path.
+        /// </summary>
+        public MeshNode? RaceWriteBeforeBatch { get; set; }
+
         public IObservable<DataChangeNotification> Changes => ((IStorageAdapter)_inner).Changes;
 
         public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
@@ -316,7 +416,12 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
             IReadOnlyCollection<MeshNode> nodes, JsonSerializerOptions options)
         {
             _writeManyBatches.Enqueue(nodes.Select(n => n.Path).ToImmutableList());
-            return ((IStorageAdapter)_inner).WriteMany(nodes, options);
+            var race = RaceWriteBeforeBatch;
+            if (race is null || nodes.All(n => n.Path != race.Path))
+                return ((IStorageAdapter)_inner).WriteMany(nodes, options);
+            RaceWriteBeforeBatch = null;                       // once — the re-install is not raced
+            return ((IStorageAdapter)_inner).Write(race, options)
+                .SelectMany(_ => ((IStorageAdapter)_inner).WriteMany(nodes, options));
         }
 
         public IObservable<string> Delete(string path) => ((IStorageAdapter)_inner).Delete(path);

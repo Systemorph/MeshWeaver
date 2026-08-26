@@ -110,7 +110,7 @@ Build and push the portal (no Dockerfile — the SDK's `PublishContainer` pushes
 
 ```bash
 az acr login --name <registry>
-dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
+dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
   -c Release --no-self-contained -t:PublishContainer -p:PublishProfile= \
   -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"' \
   -p:ContainerRegistry=<registry>.azurecr.io -p:ContainerRepository=memex-portal-ai \
