@@ -2,7 +2,9 @@ namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// The coordinates a co-hosted CLI needs to call the portal's MCP endpoint AS THE USER:
-/// the fully-composed <c>{baseUrl}/mcp</c> URL and the Bearer token to present.
+/// the fully-composed <c>{baseUrl}/api/mcp</c> URL (the primary MCP endpoint path; <c>/mcp</c>
+/// remains the permanent compatibility alias for existing client configs) and the Bearer token
+/// to present.
 /// </summary>
 public sealed record McpConnectionInfo(string McpUrl, string BearerToken);
 
