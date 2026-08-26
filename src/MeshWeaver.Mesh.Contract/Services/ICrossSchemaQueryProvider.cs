@@ -84,6 +84,13 @@ public interface ICrossSchemaQueryProvider
     /// <c>source:accessed</c> queries: each schema's branch INNER JOINs its
     /// activity / user-activity satellite so the merged feed orders by
     /// activity recency across partitions.
+    ///
+    /// <para><paramref name="excludedNodeTypes"/> carries the TYPE-level context exclusion
+    /// (<c>MeshConfiguration.GetExcludedNodeTypes</c>) into the UNION's shared <c>WHERE</c>, the
+    /// same way the single-schema <c>GenerateSelectQuery</c> receives it. It is not optional
+    /// polish: without it a query carrying <c>is:content</c> / <c>context:search</c> was filtered
+    /// on the pinned route and unfiltered on this one, so the SAME query answered differently
+    /// depending on whether its path resolved to one partition (#2419).</para>
     /// </summary>
     IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
         ParsedQuery query,
@@ -92,5 +99,6 @@ public interface ICrossSchemaQueryProvider
         string tableName,
         string? userId,
         string? activityUserId,
+        IReadOnlyCollection<string>? excludedNodeTypes,
         CancellationToken ct = default);
 }
