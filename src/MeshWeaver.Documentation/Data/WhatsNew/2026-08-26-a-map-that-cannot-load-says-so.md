@@ -1,7 +1,7 @@
 ---
 Name: A map that cannot load says so
 Category: Fix
-Description: An OpenStreetMap map that fails to draw now explains itself on the page instead of leaving an empty box, and navigating away mid-draw is no longer recorded as a failure.
+Description: An OpenStreetMap map that fails to draw now explains itself on the page instead of leaving an empty box, and leaving a page mid-draw is no longer recorded as a failure.
 Icon: Globe
 Order: -20260826
 ---
@@ -13,10 +13,10 @@ whether the map was still loading, had nothing to show, or had failed outright �
 record of what had actually happened was a server log the viewer cannot read. On a page with
 several maps, all of them looked the same: blank.
 
-A map that cannot be drawn now replaces that empty rectangle with a short message saying the view
-failed to render, suggesting a reload, and offering the technical reason under **Details** — the
-exact address that could not be fetched, so the problem can be reported and fixed instead of
-guessed at.
+A map that cannot be drawn now replaces that empty rectangle with the same short notice the portal
+already shows for any view that fails to render: what happened, a suggestion to reload, and the
+technical reason — including the exact address that could not be fetched, so the problem can be
+reported and fixed instead of guessed at.
 
 The other half of the change is about the logs. Leaving a page while its maps are still being drawn
 cancels that work, which is entirely routine — but it was being recorded with the same severity as
