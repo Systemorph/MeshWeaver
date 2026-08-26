@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
-using MeshWeaver.AI;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -17,7 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
-namespace MeshWeaver.Security.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// Tests Thread and ThreadMessage access rights:
