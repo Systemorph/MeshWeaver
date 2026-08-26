@@ -2265,7 +2265,7 @@ public static class PackageInstaller
                     () => accessService?.ImpersonateAsSystem()
                           ?? System.Reactive.Disposables.Disposable.Empty,
                     _ => persistence.WriteManyAndPublishCreated(stamped, options, changeFeed))
-                .Select(written =>
+                .SelectMany(written =>
                 {
                     if (written.Count != batch.Count)
                     {
@@ -2276,8 +2276,75 @@ public static class PackageInstaller
                             $"Bulk install of '{manifest.Id}' persisted {written.Count}/{batch.Count} "
                             + $"node(s) — storage did not accept: {string.Join(", ", missing)}");
                     }
-                    return (IList<(string, bool)>)batch.Select(n => (n.Path, true)).ToList();
+                    return ReapplyRefused(stamped, written)
+                        .Select(refusedOutcome => (IList<(string, bool)>)batch
+                            .Select(n => (n.Path,
+                                refusedOutcome.TryGetValue(n.Path, out var wrote) ? wrote : true))
+                            .ToList());
                 });
+        }
+
+        // 🚨 ACCEPTED IS NOT APPLIED — a bulk emission is not proof the node was written (#2361).
+        //
+        // The bulk path is chosen for nodes the install's ONE bulk read (ReadCurrent, taken before
+        // the root write, the visibility barrier and the access phase) reported ABSENT, and it
+        // writes them STRAIGHT to the storage adapter at the version the repo file carries — 0,
+        // because a node file has no version. That classification is a snapshot from hundreds of
+        // milliseconds earlier: if the path exists by the time the batch lands, version 0 is a
+        // BACKWARD write, and the write-integrity chain does exactly what it must — the store's
+        // version-conditional upsert refuses it, MonotonicWriteGuard merges latest-wins, and the
+        // package's authored values are DROPPED. Both halves report the refusal the same way:
+        // by emitting the DURABLE node instead of the one handed in (IStorageAdapter.Write's
+        // contract, and the guard's "a version ABOVE the one we handed it" rule).
+        //
+        // The count therefore still matches, and reporting `Wrote = true` off the count alone is
+        // the installer asserting a write that never happened: the partition keeps the foreign
+        // content, the install logs success, and the ONLY thing that notices is the plugin gate's
+        // idempotence pin on the NEXT install — where the node now exists, takes the request path,
+        // mints a forward version and finally lands ("re-install of the unchanged snapshot wrote
+        // 2 node(s): Skill/presentation, Skill/slide", intermittently, MeshWeaver#2361).
+        //
+        // So a refused node is re-decided here as exactly what it turned out to be — an EXISTING
+        // node — through DecideAndWrite, the same function the request path uses, against the
+        // durable row the store just handed back. That keeps all three rules the bulk
+        // classification skipped on the (false) grounds that the node was new: the CLAIM fence (a
+        // node the user took off the repo is still not overwritten), the unchanged-skip (a durable
+        // row that already equals the authored node is not rewritten just because its version is
+        // higher), and — for everything else — the validating request path, whose owning hub mints
+        // a FORWARD version so the write actually lands. Never a retry of the bulk write itself:
+        // repeating a version-0 write against a newer row loses again, by construction.
+        //
+        // The outcome per refused path is returned rather than assumed, so `Written`/`WrittenPaths`
+        // report what happened instead of what was attempted.
+        IObservable<IReadOnlyDictionary<string, bool>> ReapplyRefused(
+            IReadOnlyList<MeshNode> requested, IReadOnlyList<MeshNode> written)
+        {
+            var durable = written
+                .Where(n => !string.IsNullOrEmpty(n.Path))
+                .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+            var refused = requested
+                .Where(n => durable.TryGetValue(n.Path, out var durableNode)
+                            && durableNode.Version > n.Version)
+                .ToArray();
+            if (refused.Length == 0)
+                return Observable.Return(
+                    (IReadOnlyDictionary<string, bool>)ImmutableDictionary<string, bool>.Empty);
+
+            logger?.LogWarning(
+                "[PackageInstaller] {Package}: storage REFUSED the bulk write of {Count} node(s) — a "
+                + "durable row newer than the version the package file carries already existed, so the "
+                + "authored content was dropped. Re-deciding them as existing nodes through the "
+                + "validating request path: {Paths}",
+                manifest.Id, refused.Length, string.Join(", ", refused.Select(n => n.Path)));
+
+            return refused
+                .Select(n => DecideAndWrite(hub, durable[n.Path], n, options)
+                    .Catch<bool, Exception>(_ => Upsert(hub, n).Select(_ => true))
+                    .Select(wrote => (n.Path, wrote)))
+                .ToObservable().Concat().ToList()
+                .Select(outcomes => (IReadOnlyDictionary<string, bool>)outcomes
+                    .ToImmutableDictionary(o => o.Path, o => o.wrote, StringComparer.Ordinal));
         }
 
         // The same per-node type-existence rule the create path applies (MeshExtensions, step 3:
