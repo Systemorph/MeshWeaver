@@ -51,7 +51,7 @@ image — crashlooped on a module's hosted service while serving eleven-hour-old
 
 **A bake is git sync, then C# compile.** Nothing else.
 
-The rule is settled ([Ci Content Bake](/Doc/Architecture/CiContentBake), #2064):
+The rule is settled ([CI Content Bake](/Doc/Architecture/CiContentBake), #2064):
 
 > Producing an assembly is a **build** step; the mesh's job is to **consume** a bake, not to be the
 > thing that makes one.
@@ -251,6 +251,6 @@ gap between image and modules widened until the portal could not start a pod.
 CI keeps what only CI can do — build the image, run the tests, gate the merge — and the bake moves to
 a machine that can hold a warm checkout and 48 cores.
 
-See also: [Ci Content Bake](/Doc/Architecture/CiContentBake) ·
+See also: [CI Content Bake](/Doc/Architecture/CiContentBake) ·
 [Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract) ·
 [Deployment AKS](/Doc/Architecture/DeploymentAKS)
