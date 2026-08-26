@@ -92,4 +92,33 @@ public class InstallAuthoredContentTest
         PackageInstaller.AsAuthored(parsed, File("not json at all"), null).Content
             .Should().BeSameAs(content);
     }
+
+    /// <summary>
+    /// 🚨 Issue #2266 — a BOM'd file is exactly what <see cref="PackageInstaller.AsAuthored"/>'s
+    /// re-read must tolerate, because <see cref="FileFormatParserRegistry.TryParse"/> (which
+    /// produced <c>parsed</c> in the first place) ALREADY strips it. Re-parsing the raw,
+    /// un-stripped bytes under <see cref="System.Text.Json.JsonDocumentOptions"/>' strict defaults
+    /// threw for every BOM'd node-repo file — <c>samples/Graph/Data/PensionFund</c> ships its
+    /// Currency/Position/Year instances BOM'd — and fell through to installing the MATERIALISED
+    /// (possibly wrong-package) value instead of the authored one, which is also what made the
+    /// idempotence check flap for PensionFund's Currency nodes (#2271): the wrongly-installed
+    /// materialised value is what the unchanged-skip then compared the next install against.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void RuntimeCompiledContent_WithALeadingBom_IsStillReplacedByTheAuthoredElement()
+    {
+        var parsed = new MeshNode("CHF", "Ifrs17/Currency") { Content = EmitCollectibleContent() };
+        // Backslash-u-FEFF, spelled as a source ESCAPE on purpose (mirrors
+        // FileFormatParserRegistry.WithoutBom): the literal character is invisible in every
+        // editor, so a copy-paste could silently drop it and stop exercising the BOM at all.
+        var bomAuthoredJson = "\uFEFF" + AuthoredJson;
+
+        var authored = PackageInstaller.AsAuthored(parsed, File(bomAuthoredJson), null);
+
+        authored.Content.Should().BeOfType<JsonElement>(
+            "the BOM must not defeat the re-read — a runtime-compiled content type can only have "
+            + "been resolved by a name that is not unique across packages, and the install must "
+            + "write what the file says");
+        ((JsonElement)authored.Content!).GetProperty("code").GetString().Should().Be("CHF");
+    }
 }

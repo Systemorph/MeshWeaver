@@ -20,7 +20,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Real Orleans regression for issue #1028 — "one non-reentrant RouteMessage can wedge a whole
 /// silo's routing".
 ///
-/// <para><b>Prod evidence (atioz, 2026-08-07).</b> <c>RoutingGrain</c> is
+/// <para><b>Prod evidence (2026-08-07).</b> <c>RoutingGrain</c> is
 /// <c>[StatelessWorker(1)]</c> and NON-reentrant, so a silo has exactly ONE routing turn — and
 /// Orleans' request timeout does not apply INSIDE a turn. One <c>RouteMessage</c> sat executing for
 /// <c>06:00:22</c> with <c>NonReentrancyQueueSize=541</c>; Orleans' work-item diagnostics showed the
