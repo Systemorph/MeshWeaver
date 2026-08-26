@@ -746,7 +746,7 @@ public static class PackageInstaller
     /// (<c>InstalledPackageRepairService</c>) read it, skipped it, and re-skipped it on every boot
     /// since: the wrong shape could never heal itself, and the instance came up with its whole
     /// plugin baseline invisible — Store included, so there was not even a catalog to fix it from.
-    /// Found live on <c>atioz</c> 2026-08-10, whose 8 pre-installed partitions carried 136 legacy
+    /// Found live in production 2026-08-10, on an instance whose 8 pre-installed partitions carried 136 legacy
     /// denies while <c>memex</c>/<c>systemorph</c> — installed after #902 — were correct.</para>
     ///
     /// <para><b>🚨 The DENIES are the fingerprint, not the policy.</b> A gated policy on its own is
