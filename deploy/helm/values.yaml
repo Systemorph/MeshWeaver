@@ -309,9 +309,8 @@ migration:
 # change — the gate holds /health red for the whole bake. Suggested paired setting:
 #   periodSeconds: 10, failureThreshold: 180   →  1800 s = 30 min
 #
-# ⏱️ DERIVED from the MEASURED per-type bake cost (2026-08-10, production Loki, three portals):
-#   ~2.4 s per NodeType, sequential — memex-cloud 237-241 types / 567 s, memex 72-81 / 179 s,
-#   atioz 22-36 / 68 s.
+# ⏱️ DERIVED from the MEASURED per-type bake cost (2026-08-10, production Loki):
+#   ~2.4 s per NodeType, sequential — memex-cloud 237-241 types / 567 s, memex 72-81 / 179 s.
 #
 #   largest production mesh   ~240 types x 2.4 s  ~= 570 s   (~10 min)
 #   + plain cold boot         schema provisioning + static import (the ungated 5 min budget)
