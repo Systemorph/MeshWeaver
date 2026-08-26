@@ -56,7 +56,6 @@ public class ModuleDeclarationIntegrityTest
     public void EveryDeclaredModule_IsEitherShippedByThisRepo_OrDeclaredRequired()
     {
         var root = FindRepoRoot();
-        var lane = ModuleLaneAssemblies(root);
         var problems = new List<string>();
 
         foreach (var (settingsPath, projectPath) in Hosts)
@@ -71,6 +70,7 @@ public class ModuleDeclarationIntegrityTest
                 continue;
 
             var closure = ProjectReferenceClosure(project);
+            var lane = ModuleLaneAssemblies(root, project);
 
             foreach (var entry in assemblies.Concat(required).Distinct(StringComparer.OrdinalIgnoreCase))
             {
@@ -141,19 +141,59 @@ public class ModuleDeclarationIntegrityTest
             .Select(m => m.Groups[1].Value);
 
     /// <summary>
-    /// Assembly names laid into <c>modules/&lt;Name&gt;/</c> by the publish targets — the lane that
-    /// ships a module whose ProjectReference has been flipped off.
+    /// Assembly names laid into <c>modules/&lt;Name&gt;/</c> for THIS host — the lane that ships a
+    /// module whose ProjectReference has been flipped off.
+    ///
+    /// <para>🚨 Per host, not global. The inventory in MeshModulesPublish.targets is shared, but a
+    /// host may narrow the CLOSURE half of it with <c>MeshModulesClosureSubset</c> (the targets
+    /// remove every <c>@(MeshModuleClosure)</c> the subset does not name). Reading the inventory
+    /// globally would credit a host with modules its own publish drops — a guard passing on
+    /// evidence that belongs to a different host. The THIN lane (<c>@(MeshModule)</c>) is not
+    /// narrowed by the subset, so only the closure half is filtered.</para>
+    ///
+    /// <para>No host sets a subset today, so this is closing the hole before it opens rather than
+    /// fixing a live miss.</para>
     /// </summary>
-    private static HashSet<string> ModuleLaneAssemblies(string root)
+    private static HashSet<string> ModuleLaneAssemblies(string root, string hostProjectPath)
     {
         var targets = Path.Combine(root, "memex", "MeshModulesPublish.targets");
         if (!File.Exists(targets))
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        return System.Text.RegularExpressions.Regex
-            .Matches(File.ReadAllText(targets), """<MeshModule(?:Closure)?\s+Include="([^"]+)["]""")
-            .Select(m => Path.GetFileNameWithoutExtension(m.Groups[1].Value))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var text = File.ReadAllText(targets);
+
+        var thin = Names(text, """<MeshModule\s+Include="([^"]+)["]""");
+        var closure = Names(text, """<MeshModuleClosure\s+Include="([^"]+)["]""");
+
+        var subset = ClosureSubset(hostProjectPath);
+        if (subset.Count > 0)
+            closure.IntersectWith(subset);
+
+        thin.UnionWith(closure);
+        return thin;
+
+        static HashSet<string> Names(string text, string pattern) =>
+            System.Text.RegularExpressions.Regex
+                .Matches(text, pattern)
+                .Select(m => Path.GetFileNameWithoutExtension(m.Groups[1].Value))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The host's <c>MeshModulesClosureSubset</c>, split on <c>;</c>. Empty when unset, which the
+    /// targets treat as "the full inventory".
+    /// </summary>
+    private static HashSet<string> ClosureSubset(string hostProjectPath)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            File.ReadAllText(hostProjectPath),
+            "<MeshModulesClosureSubset>([^<]*)</MeshModulesClosureSubset>");
+
+        return match.Success
+            ? match.Groups[1].Value
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
 
     private static string? FindProject(string root, string assemblyName)
