@@ -486,7 +486,8 @@ public class PostgreSqlSqlGenerator
         string? activityUserId = null,
         IReadOnlyList<string>? contentSchemas = null,
         string? activityUserSchema = null,
-        IReadOnlyList<string>? accessControlledSchemas = null)
+        IReadOnlyList<string>? accessControlledSchemas = null,
+        IReadOnlyCollection<string>? excludedNodeTypes = null)
     {
         // 🚨 Which of these schemas can carry the per-schema access clause at all — i.e. which
         // actually have a `user_effective_permissions` table. A schema without it makes the clause
@@ -505,7 +506,12 @@ public class PostgreSqlSqlGenerator
             ? null
             : new HashSet<string>(accessControlledSchemas, StringComparer.OrdinalIgnoreCase);
 
-        var (whereClause, parameters) = GenerateWhereClause(query);
+        // 🚨 excludedNodeTypes belongs in the SHARED where-core, exactly as the single-schema
+        // GenerateSelectQuery passes it. Omitting it here is what made `is:content` /
+        // `context:search` a NO-OP on every unpinned query: the fan-out is the runtime path for
+        // an unscoped browse, so a governance type declaring ExcludeFromContext was filtered on
+        // one route and listed on the other (#2419).
+        var (whereClause, parameters) = GenerateWhereClause(query, excludedNodeTypes: excludedNodeTypes);
         var whereCore = whereClause.StartsWith("WHERE ", StringComparison.Ordinal)
             ? whereClause[6..]
             : whereClause;

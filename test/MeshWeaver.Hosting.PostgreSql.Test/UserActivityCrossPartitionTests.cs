@@ -267,7 +267,7 @@ public class UserActivityCrossPartitionTests
         var parsed = new QueryParser().Parse("source:accessed is:main sort:LastModified-desc");
         var results = await provider.QueryAcrossSchemasAsync(
                 parsed, _options, new List<string> { "orga", "orgb" }, "mesh_nodes",
-                userId: null, activityUserId: "reader1", ct)
+                userId: null, activityUserId: "reader1", excludedNodeTypes: null, ct)
             .Collect(ct).Should().Within(30.Seconds()).Emit();
 
         // Both cross-partition accesses surface (the accessed JOIN resolves against the CALLER's

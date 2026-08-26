@@ -582,9 +582,12 @@ public class SnowflakeSqlGenerator
         string tableName = "mesh_nodes",
         string? activityUserId = null,
         IReadOnlyList<string>? contentSchemas = null,
-        string? activityUserSchema = null)
+        string? activityUserSchema = null,
+        IReadOnlyCollection<string>? excludedNodeTypes = null)
     {
-        var (whereClause, parameters) = GenerateWhereClause(query);
+        // The TYPE-level context exclusion belongs in the SHARED where-core, exactly as the
+        // single-schema GenerateSelectQuery passes it — see the PG twin's note on #2419.
+        var (whereClause, parameters) = GenerateWhereClause(query, excludedNodeTypes: excludedNodeTypes);
         var whereCore = whereClause.StartsWith("WHERE ", StringComparison.Ordinal)
             ? whereClause[6..]
             : whereClause;

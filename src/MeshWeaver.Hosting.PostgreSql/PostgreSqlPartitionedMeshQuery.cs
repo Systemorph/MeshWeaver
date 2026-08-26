@@ -39,7 +39,7 @@ namespace MeshWeaver.Hosting.PostgreSql;
 ///     would be wasted load, not wrong.</item>
 ///   <item><b>Missing namespace / wildcard first segment</b> → fan out
 ///     across every searchable partition via
-///     <see cref="ICrossSchemaQueryProvider.QueryAcrossSchemasAsync(ParsedQuery,JsonSerializerOptions,IReadOnlyList{string},string,string?,string?,CancellationToken)"/>.
+///     <see cref="ICrossSchemaQueryProvider.QueryAcrossSchemasAsync(ParsedQuery,JsonSerializerOptions,IReadOnlyList{string},string,string?,string?,IReadOnlyCollection{string},CancellationToken)"/>.
 ///     Satellite-aware: a <c>nodeType:</c> filter routes the UNION to the
 ///     matching satellite table (Thread → <c>threads</c>, Activity →
 ///     <c>activities</c>, …); <c>source:activity</c> / <c>source:accessed</c>
@@ -138,7 +138,17 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         var adapter = _partitionProvider.GetSchemaAdapter(path);
         if (adapter is null) return null;
         return _scopedDelegates.GetOrAdd(adapter, a =>
-            new PostgreSqlMeshQuery(a, _accessService, meshConfiguration: null,
+            // 🚨 The REAL configuration, not null. This delegate serves every query that pins to a
+            // partition — which is every `namespace:X` browse, including the contents catalog on a
+            // package's public cover — and MeshConfiguration is the ONLY source of the TYPE-level
+            // context exclusion (`GetExcludedNodeTypes`). Handing it null did not disable a nicety:
+            // it made `is:content` / `context:search` a silent NO-OP, so every governance type that
+            // declares ExcludeFromContext — PartitionAccessPolicy, NodeType, GitHubSyncConfig,
+            // TokenUsage, the install ledger — listed as page content on the one page whose job is
+            // to sell (#2419). The instance-level opt-out (node.ExcludeFromContext) kept working,
+            // which is exactly why the gap read as "the declaration is ignored" rather than as a
+            // missing dependency.
+            new PostgreSqlMeshQuery(a, _accessService, meshConfiguration: _meshConfiguration,
                 excludedNamespaces: null, embeddingProvider: _partitionProvider.EmbeddingProvider,
                 ioPoolRegistry: _ioPoolRegistry,
                 // 🚨 The MERGED feed, not `a.Changes`. This delegate is the adapter for ONE schema,
@@ -927,11 +937,24 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
             "[FanOut] schemas={Count} table={Table} source={Source} userId={User} query={Q}",
             schemas.Count, tableName, parsed.Source, userId, request.Query);
 
+        // Context exclusion, both halves — the same pair PostgreSqlMeshQuery applies on the pinned
+        // route. TYPE-level (`MeshConfiguration.GetExcludedNodeTypes`) is pushed into the UNION's
+        // WHERE so the database never materialises the rows; instance-level
+        // (`node.ExcludeFromContext`) is a per-row check because it lives on the node, not the
+        // type. Neither ran here before #2419, so the SAME query answered differently depending on
+        // whether its path happened to pin to one partition.
+        var context = request.Context ?? parsed.Context;
+        var excludedNodeTypes = context != null
+            ? _meshConfiguration?.GetExcludedNodeTypes(context)
+            : null;
+
         await foreach (var node in _crossSchema.QueryAcrossSchemasAsync(
                             queryForSql, options, schemas, tableName,
                             userId == WellKnownUsers.System ? null : userId,
-                            activityUserId, ct).ConfigureAwait(false))
+                            activityUserId, excludedNodeTypes, ct).ConfigureAwait(false))
         {
+            if (node.IsExcludedFromContext(context))
+                continue;
             yield return node;
         }
     }

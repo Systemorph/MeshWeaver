@@ -442,7 +442,8 @@ public class SnowflakeCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         string tableName,
         string? userId = null,
         CancellationToken ct = default)
-        => QueryAcrossSchemasAsync(query, options, schemas, tableName, userId, activityUserId: null, ct);
+        => QueryAcrossSchemasAsync(query, options, schemas, tableName, userId,
+            activityUserId: null, excludedNodeTypes: null, ct);
 
     /// <summary>
     /// UNION-ALL fan-out across <paramref name="schemas"/> with optional
@@ -466,6 +467,7 @@ public class SnowflakeCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         string tableName,
         string? userId,
         string? activityUserId,
+        IReadOnlyCollection<string>? excludedNodeTypes,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         if (schemas.Count == 0)
@@ -489,7 +491,8 @@ public class SnowflakeCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             ? activityUserId!.ToLowerInvariant()  // SnowflakeIdentifiers.Quote escapes when qualifying
             : null;
         var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(
-            query, schemas, aclSchemas, userId, tableName, activityUserId, contentSchemas, activityUserSchema);
+            query, schemas, aclSchemas, userId, tableName, activityUserId, contentSchemas, activityUserSchema,
+            excludedNodeTypes);
 
         _logger?.LogInformation(
             "[CrossSchema] Satellite query: table={Table}, schemas={Count}, contentSchemas={ContentCount}, userId={User}, source={Source}",
