@@ -2,7 +2,6 @@ using MeshWeaver.Mesh;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
-using MeshWeaver.AI;
 using MeshWeaver.Hosting.AspNetCore.Portal; // PortalApplication
 using MeshWeaver.Hosting.AspNetCore;    // SessionHubResolver, McpConfiguration
 using MeshWeaver.Mesh.Security;         // WellKnownUsers
