@@ -31,6 +31,10 @@
              in-mesh compile then resolves a DIFFERENT copy of the styles assembly than the one
              the portal rendered with, and icons/styles silently diverge per pod. -->
         <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
+    <!-- The non-visual portal infrastructure (middleware, caches, accessors) lifted out of
+         this project so the PLATFORM does not depend on the UI assembly. The views still
+         consume it, so the reference points this way now — UI -> hosting, never back. -->
+    <ProjectReference Include="..\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
         <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
         <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
         <ProjectReference Include="..\MeshWeaver.Kernel\MeshWeaver.Kernel.csproj" />

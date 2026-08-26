@@ -1,4 +1,4 @@
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using Microsoft.AspNetCore.Routing;
 using Xunit;
 

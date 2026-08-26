@@ -4,7 +4,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;

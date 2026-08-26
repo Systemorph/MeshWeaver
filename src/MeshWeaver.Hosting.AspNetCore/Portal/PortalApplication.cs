@@ -8,7 +8,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Blazor.Infrastructure;
+namespace MeshWeaver.Hosting.AspNetCore.Portal;
 
 /// <summary>
 /// Manages the portal hub for a Blazor session — <b>one portal hub per interactive

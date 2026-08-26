@@ -2,7 +2,7 @@
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Blazor;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;

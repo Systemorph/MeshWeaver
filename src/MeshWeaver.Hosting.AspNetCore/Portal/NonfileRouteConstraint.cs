@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Routing.Patterns;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Blazor.Infrastructure;
+namespace MeshWeaver.Hosting.AspNetCore.Portal;
 
 /// <summary>
 /// Route constraint that excludes paths for static file prefixes used by Blazor and RCLs,
