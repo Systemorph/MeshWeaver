@@ -53,7 +53,7 @@ sources of access, and if neither names X, the answer is no:
 ```bash
 mcp search "path:{partition} scope:subtree nodeType:AccessAssignment"   # every grant, incl. node-scoped
 mcp get "@{partition}/_Policy"                                          # publicRead: true? absent = no
-mcp get "@{partition}/{Node}/_Access/*"                                 # grants on the node itself
+mcp search "path:{partition}/{Node}/_Access scope:children nodeType:AccessAssignment"  # grants on the node itself
 ```
 
 🚨 **`PartitionAccessPolicy.read` is a CAP, never a grant.** `false` denies at that scope and
