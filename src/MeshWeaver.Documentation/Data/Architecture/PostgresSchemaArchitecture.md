@@ -197,7 +197,7 @@ The `public` schema plays a single, well-defined role: it holds the cross-partit
 | Table | Purpose |
 |---|---|
 | `partition_access` | Binary "user X has any access to partition P" gate. PK `(user_id, partition)`. Populated by per-schema `rebuild_user_effective_permissions`. |
-| `searchable_schemas` | Schemas that cross-schema search (`search_across_schemas`) iterates over. Repopulated on every migration run. |
+| `searchable_schemas` | Schemas the cross-schema UNION fans out over. Repopulated on every migration run. |
 | `node_type_permissions` | 🪦 **Legacy, always empty, read by nothing** (issue #953). Kept for one release only so a rolling deploy's older replicas don't fault on the table name; a follow-up migration drops it. See "Why there is no node-type public read" below. |
 | `user_effective_permissions` and `_shadow` | Denormalised cache of every `(user, path-prefix, permission)` tuple. The shadow is rebuilt then atomically swapped (`PostgreSqlSchemaInitializer.cs:542`). |
 | `change_logs` | Partition-level change feed. |
@@ -256,7 +256,9 @@ No row here means the user cannot read **anything** in the partition, regardless
 **Gate 2 — node gate**
 A matching row in `{schema}.user_effective_permissions` with the longest-prefix match against the node's path, folded per subject and OR'd across subjects. There is **no bypass** of this gate.
 
-Cross-schema search (`public.search_across_schemas`) iterates `searchable_schemas`, applies both gates per schema, and returns only rows where both pass. See `PostgreSqlSchemaInitializer.cs:34`.
+Cross-schema search iterates `searchable_schemas`, applies both gates per schema, and returns only rows where both pass. The runtime builds that UNION in C# — `PostgreSqlSqlGenerator.GenerateCrossSchemaSelectQuery`, one branch per schema carrying the per-schema `user_effective_permissions` clause.
+
+> 🚨 **`public.search_across_schemas` is no longer called by the portal.** The plpgsql function still exists (an older replica mid-rollout still calls it, so it is not dropped), and it enforces the same two gates — see `PostgreSqlSchemaInitializer.cs:74`. But it backed a *second* fan-out shape whose only distinctive behaviour was clipping an unlimited query at 50 rows, and no runtime caller ever reached it: `PostgreSqlPartitionedMeshQuery.EnumerateFanOutAsync` has only ever taken the table-name overload. That overload was deleted in #2048 — two independent access-control implementations for one logical query, one of them unexercised, is where a security fix lands on the wrong copy.
 
 ### Why there is no node-type public read
 
@@ -324,6 +326,8 @@ The table above is the **early history only**. Migrations now live as one file p
 > 🚨 **`access_changed` falls back to a full rebuild when `accessObject` is null.** Always populate `accessObject` in `AccessAssignment` content. A missing value triggers `rebuild_user_effective_permissions` over the entire partition instead of the fast per-user variant, locking the shadow table.
 
 > 🚨 **The `namespace` column keeps the partition prefix — do NOT strip it.** Inside `{partition}.mesh_nodes`, `namespace` stores the full namespace including the partition prefix (e.g. `rbuergi/ApiToken`, not bare `ApiToken`). The generated `path` column is `namespace || '/' || id` — the partition is not auto-prepended. Stripping the prefix to "make namespaces relative" silently breaks dashboard listings (`namespace:rbuergi/ApiToken nodeType:ApiToken`), `ApiTokenIndex.tokenPath` lookups, `MainNode` references, and anything else that builds full-path queries. Exception: the user-identity row and a small set of root-level Markdown nodes legitimately live at `namespace='', id=X` (full path = just `X`) — those are special, not the rule.
+
+> 🚨 **Address a row by `path` — NEVER by splitting a path into `(namespace, id)`.** An **id may contain `/`**: every `LanguageModel` node's id is the provider's wire id (`z-ai/glm-5.3`, `anthropic/claude-opus-5`). Splitting `Provider/OpenRouter/z-ai/glm-5.2` at the last slash looks for `namespace='Provider/OpenRouter/z-ai', id='glm-5.2'` while the stored row is `namespace='Provider/OpenRouter', id='z-ai/glm-5.2'` — no row matches, so the read answers null and the DELETE removes nothing, surfacing as `NodeDeletionRejectionReason.NodeNotFound` for a node `get` resolves in the same breath (issue #2212 — no model node could be deleted through the API or MCP at all). The `path` column is `GENERATED ALWAYS AS (CASE WHEN namespace = '' THEN id ELSE namespace || '/' || id END) STORED` on `mesh_nodes` **and every satellite table**, and it is indexed — so matching on it is both the only correct decomposition-free addressing and the cheapest. `Read` / `ReadMany` / `Exists` / `Delete` and the version-history reads all do; keep it that way in every adapter (Snowflake maintains the same column as a real column on write).
 
 > 🚨 **Direct SQL UPDATE on a running portal leaves stale workspace caches.** `BEGIN; UPDATE {partition}.mesh_nodes …; COMMIT;` against a running `Memex.Portal.Distributed` does NOT propagate to in-memory workspace streams reliably — symptoms: MCP `get` returns "not found" while search hits the new path, API token 401s after the 5-minute `ValidationCache` expires, recompile-on-edit doesn't fire. Migrations should run via `Memex.Database.Migration` (Repair vN block) before the portal starts. If you must SQL-edit a live portal, restart `Memex.Portal.Distributed` afterwards (Aspire respawns it automatically). For namespace/path rewrites, prefer `MoveNodeRequest` over raw SQL — it goes through the hub and updates the workspace stream correctly.
 

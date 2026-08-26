@@ -147,14 +147,13 @@ first. The bake moves the same work ahead of the rollout, where nobody is waitin
 
 ### The real cost: ~2.4 s per NodeType *(measured 2026-08-10)*
 
-Read from production Loki across **all three portals running the same image** — the per-type figure
+Read from production Loki across **the portals running the same image** — the per-type figure
 agrees to within 3% across a 10x spread in mesh size, which is what makes it trustworthy:
 
 | Portal | Types | Full warm-up (median) | Per type |
 |---|---|---|---|
 | **memex-cloud** | 237-241 | **567 s** (~9.5 min) | **~2.4 s** |
 | **memex** | 72-81 | **179 s** (~3 min) | **~2.3 s** |
-| **atioz** | 22-36 | **68 s** (~1 min) | **~2.3 s** |
 
 Other measurements, for context:
 

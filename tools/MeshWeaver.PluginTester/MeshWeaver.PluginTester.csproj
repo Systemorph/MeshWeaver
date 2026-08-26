@@ -15,6 +15,14 @@
     <MeshWeaverSurfaceManifest>true</MeshWeaverSurfaceManifest>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- GateDiscoveryEqualsBakeDiscoveryTest pins PluginGateRunner.DiscoverNodeTypes equal to the
+         compiler-driven bake's discovery (#2063). The two halves disagreeing IS the defect, and
+         the only way to assert it is to call both — so the gate's discovery seam is visible to
+         the test rather than re-implemented in it. -->
+    <InternalsVisibleTo Include="MeshWeaver.PluginTester.Test" />
+  </ItemGroup>
+
   <!-- The dotnet-tool distribution of the compiler (#1707 S1b): the SAME binary CI's bake/gate
        runs, installable via `dotnet tool install -g MeshWeaver.Compiler.Cli` so satellite repos
        need no platform-repo artifact download. OPT-IN via -p:PackCompilerTool=true (the

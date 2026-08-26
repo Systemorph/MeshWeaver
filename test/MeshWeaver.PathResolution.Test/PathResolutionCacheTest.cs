@@ -6,6 +6,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.PathResolution.Test;
@@ -178,5 +179,60 @@ public class PathResolutionCacheTest(ITestOutputHelper output) : MonolithMeshTes
             r => string.Equals(r?.Node?.Name, "After", StringComparison.Ordinal));
         fresh.Should().NotBeNull(
             "the update's change-feed event must evict the cached resolution so a fresh query sees the new Name");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The announcement KIND decides whether a cached MISS is ever evicted</b> — the mechanism
+    /// behind the #817/#824/#2087 announce-loss class, made executable.
+    ///
+    /// <para>A path probed while its node is absent resolves to <c>prefix = ancestor</c> with a
+    /// non-empty <c>Remainder</c>. That is a perfectly cacheable POSITIVE value, so it is cached —
+    /// and from then on only the change feed can dislodge it. <c>Created</c>/<c>Deleted</c> REMOVE
+    /// matching entries; <c>Updated</c> deliberately only STALE-MARKS them and keeps serving the
+    /// route shape, because removing on Updated was the #1172 routing/compile feedback loop (every
+    /// activity-log write invalidated the entry the next routed message needed).</para>
+    ///
+    /// <para>So a genuine CREATE announced as an UPDATE leaves the miss in place for the life of the
+    /// process: the row is in storage, routing keeps answering <i>"No node found at '…'"</i>, no hub
+    /// is ever woken. This test states both halves as facts so no future change can invert them
+    /// silently — and so the reason <c>NodeTypeBatchBake</c>'s insert must publish <c>Created</c>
+    /// (its <c>WriteIfVersion(node, 0)</c> is "write only if absent") is not just prose.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ACachedMiss_IsEvictedByCreated_ButNotByUpdated()
+    {
+        var space = await SeedSpace();
+        var absent = $"{space}/never-created";
+        var feed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+
+        // Cache the MISS: the ancestor resolves, the last segment does not.
+        var miss = await PollResolution(absent,
+            r => r is not null && string.Equals(r.Prefix, space, StringComparison.Ordinal));
+        miss!.Remainder.Should().Be("never-created", "this is the cached-miss shape the class doc names");
+
+        // An UPDATED event for that path must NOT change the route shape — it stale-marks only.
+        // Asserted as the STABLE state after the event has been given every chance to land: an
+        // Updated that arrived and did the right thing is indistinguishable from one still in
+        // flight, so the point is that the shape never changes, not that it changes slowly.
+        var placeholder = MeshNode.FromPath(absent) with { Name = "Phantom", NodeType = "Markdown" };
+        feed.Publish(MeshChangeEvent.Updated(placeholder));
+        var afterUpdated = await Observable.Interval(TimeSpan.FromMilliseconds(100))
+            .StartWith(0L).Take(5)
+            .SelectMany(_ => PathResolver.ResolvePath(absent))
+            .ToArray().ToTask();
+        afterUpdated.Should().OnlyContain(
+            r => r != null && r.Prefix == space && r.Remainder == "never-created",
+            "Updated only STALE-MARKS the entry and keeps serving the route shape (#1172) — which "
+            + "is exactly why announcing a CREATE as an Updated strands the path forever");
+
+        // A CREATED event for the same path REMOVES the entry, so the next resolution re-queries.
+        // The node genuinely exists by then, so the re-query resolves it fully.
+        await SeedChild(absent);
+        feed.Publish(MeshChangeEvent.Created(placeholder));
+        var afterCreated = await PollResolution(absent,
+            r => r is not null && string.Equals(r.Prefix, absent, StringComparison.Ordinal));
+        afterCreated!.Remainder.Should().BeNull(
+            "Created REMOVES the cached miss, so the path resolves in full without a restart — "
+            + "this is the half the announce-loss class keeps losing");
     }
 }

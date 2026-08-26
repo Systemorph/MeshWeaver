@@ -89,10 +89,27 @@ container builds) and fed to `MeshBuilder.InstallAssemblies` as one list:
 1. **The `Modules:Assemblies` appsettings baseline** — the DLLs the image ships with; the list is
    the operator's on/off switch for first-party packs, exactly as before. A baseline entry that
    fails to load fails loudly at startup, never silently.
-2. **The persisted activation list** — `modules/activation.json`, a sidecar file beside the module
-   folders, written by the runtime landing service (`ModuleLandingService`) when a compiled module
-   is installed from the Store. Each entry records the module name, its source, the install
-   record's mesh path, and the framework MVID the landed assemblies were built against.
+2. **The persisted activation record** — one file per module under `modules/activation.d/`, written
+   by the runtime landing service (`ModuleLandingService`) when a compiled module is installed from
+   the Store. Each entry records the module name, its source, the install record's mesh path, its
+   generation directory, its declared platform floor, and the framework MVID the landed assemblies
+   were built against. The legacy aggregate `modules/activation.json` is still READ (deployments
+   already carry one) and a per-module file wins over it by name; nothing writes it any more.
+
+   > 🚨 **Why one file per module and not one index.** Every portal replica mounts the same RWX
+   > `/data`, and a republish after a release pushes 30+ modules concurrently. A single mutable
+   > index that each landing read, appended to and renamed over has two failure modes no retry
+   > fixes: concurrent landings of *different* modules **lose each other's entries** (last writer
+   > wins the whole list), and the rename **contends for the file's SMB lease** with every other
+   > reader and writer of that one path — `Access to the path '/data/modules/activation.json' is
+   > denied` on the write side (HTTP 409), and a `FileNotFoundException` on the read side from
+   > opening into the replace window, which the reader then reported as a corrupt sidecar and
+   > **booted the pod with no store modules at all**. Sharding by module removes the shared cell:
+   > two writers of different modules share no path, so neither outcome is possible. The
+   > restart-required flag is a marker FILE (`activation.d/.pending-restart`) for the same reason —
+   > setting it is a create and clearing it is a delete, never a read-modify-write. And a record
+   > that cannot be read now costs exactly that one module, reported by name, instead of collapsing
+   > the whole answer to the empty list.
 
 The union dedupes by module name (a store install of an already-baseline module contributes
 nothing). **Activation is restart-based**: landing a module writes its assemblies into
@@ -123,6 +140,83 @@ The landing service itself gates twice more, at placement: the same floor check 
 never reach disk), and a refusal of any module whose entry DLL name collides with an app-closure
 assembly — `ResolveModulePath` probes `modules/<name>/` first, so such a module would silently
 shadow the platform's own binary at the next boot.
+
+### 🚨 "Keeps loading across ordinary platform updates" is a promise the PLATFORM owes (#2370)
+
+The semver floor above is not a weaker gate than MVID equality — it is a **different contract**, and
+the platform side of it is: *a public type a module can bind must keep its full name and keep being
+reachable from the assembly it was bound in*. A module's IL holds neither a `using` nor a source
+reference; it holds
+
+```
+TypeRef  MeshWeaver.AI.MeshOperations     scope: AssemblyRef MeshWeaver.AI
+```
+
+so **moving a public type to another assembly, or renaming its namespace, breaks every module
+compiled earlier** — at the next roll, with no warning anywhere:
+
+```
+System.TypeLoadException: Could not load type 'MeshWeaver.AI.MeshOperations'
+    from assembly 'MeshWeaver.AI, Version=3.0.0.0, Culture=neutral, PublicKeyToken=null'
+```
+
+That is #2370. `MeshOperations` moved to `MeshWeaver.Mesh.Operations` and the store-installed
+`MeshWeaver.Mcp` could no longer construct `McpMeshPlugin`; because the MCP SDK builds its tool
+target per invocation, EVERY tool call — `get`, `search`, `create`, `render_area`, the LSP and chunk
+tools — failed identically. A full outage of the deployment's `/mcp` surface, for every external
+client, from a change that was source-compatible and reviewed as a refactor.
+
+**The move is fine; losing the name is not.** Leave a forwarder in the old assembly and keep the
+type's ORIGINAL full name in its new home — a forwarder cannot rename:
+
+```csharp
+// src/MeshWeaver.AI/TypeForwards.cs
+[assembly: TypeForwardedTo(typeof(MeshWeaver.AI.MeshOperations))]
+```
+
+The CLR then resolves the module's TypeRef through the old assembly to ONE type identity — not a
+shim, which would mint a second identity and reintroduce the `as`/`is` trap-door.
+
+🚨 **No repo-local build can see this break, and two green gates specifically cannot.**
+`landed-modules-gate` compiles the plugins repo's module SOURCE against the PR, which is a different
+question from whether the module ALREADY PUBLISHED still binds — and on #2370 it passed, because the
+module's source carried `using` directives for both namespaces. The semver floor cannot see a type at
+all. `scripts/check-type-forwards.py` (wired into the *Public surface (binary compatibility)* job
+beside #2298's `check-record-signatures.py`) is what refuses the next one; its allow file is a
+statement that no shipped module can hold the TypeRef, not a way to make it quiet.
+
+### 🚨 An ACTIVATED entry with no bytes — the boot-GC race (#2303)
+
+The "Missing DLL" skip above is the SYMPTOM; #2303 traced one concrete way an entry ends up
+pointing at nothing: a race between `ModuleLandingService.CollectGarbage` (run at every pod's boot,
+before its own module set is computed) and a landing happening on a DIFFERENT replica at the same
+moment.
+
+A landing is two writes on the shared `/data` volume, deliberately ordered bytes-then-entry: it
+`Directory.Move`s the new generation into place, THEN writes the sidecar entry that names it
+(`LandCore`). Those two writes are adjacent in one synchronous call on the landing replica, but
+nothing serializes them against a GC pass on ANOTHER replica — the per-module sidecar file and the
+landing service's IO pool both bound a single process, not a cross-process sequence. If a GC pass
+reads the sidecar in the gap between the other replica's two writes, the new generation directory
+is on disk but no entry references it YET — indistinguishable from a genuinely orphaned directory —
+and GC deletes it a moment before the landing's `WriteEntry` lands, pointing a real, enabled
+activation entry at bytes that no longer exist. Nothing throws anywhere: the landing that raced GC
+reports success (both of ITS writes succeeded), and the entry only reveals itself as unresolvable
+the next time something reads it — `ModuleActivationStatus.Unresolvable`'s loud startup report and
+`Degraded` health check (#2093), or a boot that silently skips the module via the "Missing DLL" rule
+above. That is the exact shape #2303 reported for `MeshWeaver.Blazor.EntityViews`: an ACTIVATED
+entry whose landed assembly was gone, with no exception or stack frame naming why — likeliest to
+fire during a rolling restart landing (or auto-updating) a module while sibling pods are cycling
+through boot at the same time.
+
+The fix cannot be a lock — replica coordination here is deliberately structural, not a gate. Instead
+`CollectGarbage` carries a grace period (`ModuleLandingService.DefaultGarbageMinAge`, 5 minutes):
+an unreferenced generation (or `.staging-`/`.pending-` leftover) younger than the window is left for
+a LATER pass rather than reclaimed immediately. A directory that survives the window and is STILL
+unreferenced is a genuine orphan and is collected exactly as before — the grace period defers
+reclamation, it does not disable it. The two writes of a real landing are back-to-back with no I/O
+between them, so the actual exposure the window has to cover is low-single-digit seconds even over
+a slow network volume; five minutes is generous headroom on top of that.
 
 Why a sidecar file and not a mesh node: the list is consumed before any storage provider, hub, or
 connection string exists, and it must move with the DLLs it describes — the landing service writes
@@ -236,6 +330,47 @@ targeting packs, so its folder carries the engine assembly (measured private dep
 none; the engine's package closure still rides the app via other references). Because a flipped
 DLL exists nowhere else, the closure lane also lays it into a plain build's output
 (`bin/…/modules/`), keeping `dotnet run` on a host working without a publish step.
+
+### 🚨 Which COPY loaded — the boot report (#2223)
+
+Two `modules/` trees are legitimate at once: the image publishes baseline packs beside the app, and
+a store install LANDS its bytes as a fresh generation under the deployment's writable, pod-shared
+root (`modules/<Name>@<id>/`). So "the pack" is not a place — and until this report existed nothing
+said which of them a running portal had actually loaded.
+
+Measured on memex-cloud 2026-08-25: the portal ran an image built from the fix's own merge commit,
+the store held **two** newer copies of `MeshWeaver.Blazor.Views` that both contained the fix, and
+`/proc/1/maps` showed the process had mapped the **image** copy — which did not. Every lane was
+green. The mechanism is not a bug in any single step:
+
+1. a **baseline** `Modules:Assemblies` entry resolves through `MeshBuilder.ResolveModulePath`, whose
+   probes are landed root → image → app closure;
+2. the landed probe looks in the fixed `modules/<Name>/`, which generation landing never writes, so
+   it misses and the image copy wins;
+3. the sidecar entry that *would* have named the generation is deduped away by name, silently,
+   because the baseline already claimed it (`ComputeEffectiveModuleEntries`).
+
+`ModuleLoadReport` (`src/MeshWeaver.PluginCatalog/ModuleLoadReport.cs`) makes that visible. At boot,
+immediately before `InstallAssemblies`, it emits one `[ModuleLoad]` line per pack — name, source
+(`appsettings` / `store`), the **exact path being loaded**, its MVID and its last-write time — and a
+`STALE PACK` warning when the store holds a copy of the same module that is both **newer** and
+carries a **different MVID**. Two copies with the same MVID are the same bytes in two places and
+warn nothing, or the line would be noise.
+
+It reports the array it is HANDED, so the line and the load cannot disagree; the acceptance is
+literally that the path in `/proc/1/maps` equals the path the line named:
+
+```bash
+kubectl exec -n <ns> <pod> -c memex-portal -- sh -c \
+  'cat /proc/1/maps | grep -o "[^ ]*Blazor.Views.dll" | sort -u'
+kubectl logs -n <ns> <pod> -c memex-portal | grep '\[ModuleLoad\]'
+```
+
+🚨 **It warns; it never refuses to start.** Which copy *ought* to win is an open policy question, and
+a pod that dies on the answer cannot be given the module that fixes it — the same deadlock as a
+registry that cannot start delivering the module breaking it. The remedy the warning names is a
+deployment decision: delist the pack from `Modules:Assemblies` so the landed generation stops being
+shadowed.
 
 ### Native assets — `runtimes/<rid>/native/` (#1728)
 

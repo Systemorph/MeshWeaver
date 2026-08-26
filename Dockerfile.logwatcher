@@ -6,7 +6,7 @@
 #     --file Dockerfile.logwatcher .
 #
 # NOT the sanctioned build path — that stays `dotnet publish -t:PublishContainer`
-# (deploy/aks/DEPLOY-RUNBOOK.md § 6b), which is what CI and the runbook use. This is tracked only
+# (deploy/aks/README.md → "Red-log ticketing"), which is what CI and the deployment sample use. This is tracked only
 # so the escape hatch exists when the local link to ACR cannot carry image layers: on 2026-08-08 the
 # SDK push wedged on repeated "Broken pipe" retries, and the deploy completed only by building
 # ACR-side from a source-only context. Build the context deliberately — a bare `.` from the repo

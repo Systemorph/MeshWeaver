@@ -46,9 +46,22 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para><b>Reactive surface, pooled IO.</b> Both operations return cold
 /// <see cref="IObservable{T}"/>s whose file IO runs on this service's own cap-1
-/// <see cref="IoPool"/> — the one sanctioned bounded-IO primitive — so concurrent landings (and
-/// their sidecar read-modify-writes) serialize without a hand-rolled gate, and nothing blocks a
-/// hub scheduler. Mesh-scoped singleton: the pool dies with the mesh.</para>
+/// <see cref="IoPool"/> — the one sanctioned bounded-IO primitive — so concurrent landings
+/// serialize without a hand-rolled gate, and nothing blocks a hub scheduler. Mesh-scoped
+/// singleton: the pool dies with the mesh.</para>
+///
+/// <para><b>Cross-REPLICA safety is structural, not a gate (#2090).</b> The pool bounds one
+/// process; <c>/data</c> is shared by every portal replica. So the activation record is one file
+/// PER MODULE (<see cref="ModuleActivationSidecar"/>) and a landing writes only its own — two
+/// replicas landing different modules share no path, cannot lose each other's entry, and never
+/// contend for one file's SMB lease.</para>
+///
+/// <para><b>…except boot-time GC against a CONCURRENT landing (#2303).</b> A landing's two writes
+/// (move the bytes, then <see cref="ModuleActivationSidecar.WriteEntry"/>) are not atomic across
+/// replicas, so another replica's <see cref="CollectGarbage"/> can observe the new generation
+/// directory before the entry that claims it exists and delete it as "unreferenced" — leaving a
+/// real activation entry pointing at nothing a moment later. See
+/// <see cref="DefaultGarbageMinAge"/> for the race and the grace-period fix.</para>
 /// </summary>
 public sealed class ModuleLandingService : IDisposable
 {
@@ -63,15 +76,58 @@ public sealed class ModuleLandingService : IDisposable
             string.IsNullOrWhiteSpace(entry?.Directory) ? moduleName : entry!.Directory!);
 
     /// <summary>
+    /// How long an UNREFERENCED directory under <c>modules/</c> must sit before
+    /// <see cref="CollectGarbage"/> treats it as truly orphaned rather than the first half of a
+    /// landing this replica has not seen the SECOND half of yet — the race behind #2303.
+    ///
+    /// <para>🚨 <b>The race.</b> A landing is two writes on the shared <c>/data</c> volume,
+    /// deliberately ordered bytes-then-entry (<see cref="LandCore"/>): <c>Directory.Move</c> lands
+    /// the generation directory, THEN <see cref="ModuleActivationSidecar.WriteEntry"/> records the
+    /// pointer. Those two writes are adjacent in one synchronous call on the LANDING replica, but
+    /// nothing serializes them against a GC pass running on ANOTHER replica at the same moment —
+    /// this pool and the per-module sidecar file both bound a single process
+    /// (<c>Cross-REPLICA safety is structural</c>, above), not a cross-process sequence. If a GC
+    /// pass reads the sidecar in the gap between the other replica's two writes, the new
+    /// generation is on disk but no entry references it YET — indistinguishable from a genuinely
+    /// orphaned directory — and GC deletes it a moment before the landing's
+    /// <c>WriteEntry</c> lands, pointing a real, enabled activation entry at bytes that no longer
+    /// exist. Nothing throws anywhere: the landing reports success (its own two writes both
+    /// succeeded), and the entry only reveals itself as unresolvable the next time something reads
+    /// it — <see cref="ModuleActivationStatus.Unresolvable"/>'s loud report, or a boot that skips
+    /// the module outright. That is the exact shape #2303 reported for
+    /// <c>MeshWeaver.Blazor.EntityViews</c>: an ACTIVATED entry whose landed assembly was gone,
+    /// with no exception or stack frame naming why.</para>
+    ///
+    /// <para>The fix cannot be a lock — this design is deliberately lock-free across replicas. A
+    /// grace period is the correct primitive instead: refusing to reclaim anything younger than the
+    /// window costs a genuinely orphaned directory nothing (the very next GC pass that still finds
+    /// it unreferenced, now past the window, collects it) and closes the race, because the two
+    /// writes of a real landing are back-to-back with no I/O between them — the actual exposure is
+    /// low-single-digit seconds even over a slow network volume, and this window is generous on
+    /// top of that.</para>
+    /// </summary>
+    public static readonly TimeSpan DefaultGarbageMinAge = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Boot-time garbage collection over <c>modules/</c>: deletes generation directories
     /// (<c>&lt;name&gt;@&lt;id&gt;</c>) no activation entry references, leftover
     /// <c>.staging-*</c>, and the retired <c>.pending-*</c> folders of the abandoned deferred-swap
-    /// scheme. Skip-on-locked: a directory some still-running pod holds open simply survives to
-    /// the next boot. Never touches legacy <c>&lt;name&gt;/</c> folders — entries without a
-    /// generation still resolve there.
+    /// scheme — but only once they are older than <paramref name="minAge"/>
+    /// (<see cref="DefaultGarbageMinAge"/>): see that constant for why an UNREFERENCED directory is
+    /// not proof of an orphan (#2303). Skip-on-locked: a directory some still-running pod holds
+    /// open simply survives to the next boot. Never touches legacy <c>&lt;name&gt;/</c> folders —
+    /// entries without a generation still resolve there.
     /// </summary>
+    /// <param name="baseDirectory">The deployment root whose <c>modules/</c> folder is swept.</param>
+    /// <param name="logger">Diagnostics — every removal and every age-deferred skip is logged.</param>
+    /// <param name="minAge">The grace period below which an unreferenced directory is left alone.
+    /// Defaults to <see cref="DefaultGarbageMinAge"/>; a test seam otherwise.</param>
+    /// <param name="nowUtc">The reference "now" the age check compares against. Defaults to
+    /// <see cref="DateTime.UtcNow"/>; a test seam so the race and its fix are provable without a
+    /// real sleep.</param>
     /// <returns>How many directories were removed.</returns>
-    public static int CollectGarbage(string baseDirectory, ILogger? logger = null)
+    public static int CollectGarbage(
+        string baseDirectory, ILogger? logger = null, TimeSpan? minAge = null, DateTime? nowUtc = null)
     {
         var modulesRoot = Path.Combine(baseDirectory, "modules");
         if (!Directory.Exists(modulesRoot))
@@ -82,6 +138,7 @@ public sealed class ModuleLandingService : IDisposable
             .Where(e => !string.IsNullOrWhiteSpace(e.Directory))
             .Select(e => e.Directory!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var cutoff = (nowUtc ?? DateTime.UtcNow) - (minAge ?? DefaultGarbageMinAge);
         var removed = 0;
         foreach (var dir in Directory.EnumerateDirectories(modulesRoot))
         {
@@ -92,6 +149,19 @@ public sealed class ModuleLandingService : IDisposable
                 || (leaf.Contains('@') && !referenced.Contains(leaf));
             if (!collectable)
                 continue;
+            // 🚨 #2303: an unreferenced directory younger than the grace window may simply be a
+            // landing this replica has not seen the ACTIVATION ENTRY for yet — see
+            // DefaultGarbageMinAge. Left for a later pass, which re-reads the sidecar and either
+            // finds the entry now present (survives, correctly) or is still unreferenced and past
+            // the window (a genuine orphan, collected then).
+            if (Directory.GetLastWriteTimeUtc(dir) > cutoff)
+            {
+                logger?.LogDebug(
+                    "Modules GC: {Dir} is unreferenced but younger than the {MinAge} grace period "
+                    + "— left in case a concurrent landing's activation entry has not landed yet.",
+                    leaf, minAge ?? DefaultGarbageMinAge);
+                continue;
+            }
             try
             {
                 Directory.Delete(dir, recursive: true);
@@ -107,9 +177,11 @@ public sealed class ModuleLandingService : IDisposable
         return removed;
     }
 
-    // Cap 1 deliberately: LandModule/RemoveModule each read-modify-write the shared
-    // activation.json sidecar, and the cap IS the serialization — no lock, no semaphore
-    // outside the sealed IoPool primitive. Landing is rare and short; 1 costs nothing.
+    // Cap 1 deliberately: landing writes files and the cap IS the in-process serialization — no
+    // lock, no semaphore outside the sealed IoPool primitive. Landing is rare and short; 1 costs
+    // nothing. 🚨 It is NOT what makes the activation record safe: this pool bounds ONE process,
+    // and /data is shared by every replica. Cross-process safety comes from the record's SHAPE —
+    // one file per module (ModuleActivationSidecar), so concurrent writers never share a path.
     private readonly IoPool pool = new(1);
     private readonly string baseDirectory;
     private readonly ILogger<ModuleLandingService>? logger;
@@ -356,8 +428,6 @@ public sealed class ModuleLandingService : IDisposable
             throw;
         }
 
-        var list = ModuleActivationSidecar.Read(baseDirectory,
-            msg => logger?.LogError("{Message}", msg));
         var entry = new ModuleActivationEntry
         {
             Name = name,
@@ -369,17 +439,21 @@ public sealed class ModuleLandingService : IDisposable
             Enabled = true,
             Directory = generation,
         };
-        ModuleActivationSidecar.Write(baseDirectory, list with
-        {
-            Entries = list.Entries
-                .RemoveAll(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase))
-                .Add(entry),
-            // A HELD landing does not raise the restart signal: a restart cannot activate it (the
-            // boot gate skips the entry until the platform satisfies its floor), so "restart
-            // required" would be a prompt no restart can clear. The platform update that DOES
-            // satisfy the floor is itself a restart, which activates the entry with no flag.
-            PendingRestart = held is null || list.PendingRestart,
-        });
+        // 🚨 THIS MODULE'S OWN FILE, and nothing else (#2090). The landing used to read the whole
+        // shared activation index, append to it and rename the result over the live file — a
+        // read-modify-write of state every replica shares on the RWX /data volume. Two concurrent
+        // landings of DIFFERENT modules therefore raced: the later write silently dropped the
+        // earlier module's entry, and the rename itself contended for the SMB lease on the one hot
+        // file ('Access to the path …/activation.json is denied' → HTTP 409). Writing only
+        // activation.d/<Name>.json removes the shared cell instead of guarding it — different
+        // modules no longer share a path at all.
+        ModuleActivationSidecar.WriteEntry(baseDirectory, entry);
+        // A HELD landing does not raise the restart signal: a restart cannot activate it (the boot
+        // gate skips the entry until the platform satisfies its floor), so "restart required"
+        // would be a prompt no restart can clear. The platform update that DOES satisfy the floor
+        // is itself a restart, which activates the entry with no flag.
+        if (held is null)
+            ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
 
         if (held is null)
             logger?.LogInformation(
@@ -413,13 +487,12 @@ public sealed class ModuleLandingService : IDisposable
                 + "publish-laid-out module folders are managed by the deployment, not uninstall.");
 
         // The generation pointer is CLEARED on uninstall — a disabled entry must not keep its
-        // directory 'referenced', or boot GC could never reclaim it.
-        ModuleActivationSidecar.Write(baseDirectory, list with
-        {
-            Entries = list.Entries.Replace(existing,
-                existing with { Enabled = false, Directory = null }),
-            PendingRestart = true,
-        });
+        // directory 'referenced', or boot GC could never reclaim it. Written to THIS module's own
+        // file, never through the shared index (#2090): an uninstall racing another module's
+        // landing used to drop whichever entry lost.
+        ModuleActivationSidecar.WriteEntry(baseDirectory,
+            existing with { Enabled = false, Directory = null });
+        ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
 
         // Best-effort immediate delete: on a shared volume the files of a LOADED module refuse
         // deletion (SMB keeps them open) — that is fine, the cleared pointer above makes the

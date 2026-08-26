@@ -1,12 +1,11 @@
+using MeshWeaver.Mesh.Security;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
-using MeshWeaver.AI;                        // IProviderKeyProtector
-using MeshWeaver.Blazor.Infrastructure;     // PortalApplication
+using MeshWeaver.Hosting.AspNetCore.Portal;     // PortalApplication
 using MeshWeaver.Data;                       // IWorkspace.GetMeshNodeStream
 using MeshWeaver.Graph.Configuration;        // EaCredentialNodeType
 using MeshWeaver.Mesh;                        // EaCredential, MeshNode
-using MeshWeaver.Mesh.Security;               // ImpersonateAsSystem
 using MeshWeaver.Mesh.Services;               // IMeshService
 using MeshWeaver.Messaging;                   // AccessService
 using Microsoft.Extensions.Configuration;

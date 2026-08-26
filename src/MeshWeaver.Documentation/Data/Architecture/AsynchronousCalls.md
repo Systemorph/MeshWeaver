@@ -212,6 +212,44 @@ No `SearchHub`, no `Channel`, no `await foreach`, no per-item insertion: one sub
 
 ---
 
+## 🚨 `IEnumerable.ToObservable()` on a read path — the emission that is queued and never runs
+
+**On a storage read or a query walk, never call the parameterless `IEnumerable<T>.ToObservable()`. Use `ToInlineObservable()`** (`MeshWeaver.Mesh.Services.InlineObservableExtensions`).
+
+Rx defaults `ToObservable()` to `SchedulerDefaults.Iteration`, which is `CurrentThreadScheduler` — and that scheduler does **not** mean "run it here, now". It means "run it on *this thread's* Rx trampoline". `CurrentThreadScheduler` keeps a `[ThreadStatic] bool` for "a trampoline is already running on this thread"; while it is set, `Schedule` **only enqueues and returns**, leaving the item for whoever owns that outer trampoline to drain.
+
+**Why an ordinary caller is inside a foreign trampoline — and why it is not a test-only concern.** Rx runs *every* operator subscription through that trampoline (`Producer.SubscribeRaw`), so the flag is set far more often than it looks. Worse, it escapes the pipeline: a `Task` completed from inside an Rx pipeline — exactly what `FirstAsync().ToTask()`, an `AsyncSubject`, or a `TaskCompletionSource` resolved on an `OnNext` does — resumes its awaiter **inline on that thread, still inside the trampoline**. Everything that continuation goes on to do inherits the flag. The captured 558-frame stack from a reproduction reads, bottom-up:
+
+```
+MessageService.DrainOne()                       // the hub's own pump, on a ThreadPool thread
+ → Producer.SubscribeRaw
+   → CurrentThreadScheduler.Schedule            // trampoline OPENED here; the flag is now set
+     → … ~500 Rx frames …
+       → ToTaskObserver.OnCompleted → TaskCompletionSource.TrySetResult   // a .ToTask() resolves
+         → AwaitTaskContinuation.RunOrScheduleAction(allowInlining: true) // awaiter resumes INLINE
+           → … the awaiting code, and everything it goes on to call …
+```
+
+The trampoline's owner is the **hub message pump**, not anything test-specific.
+
+**The failure it produces has no signature.** If such a frame subscribes a query and then blocks waiting for its first result, the walk it enqueued can only run once the frame returns, and the frame only returns once the walk runs:
+
+```csharp
+// ❌ WRONG — the walk is queued on whatever trampoline happens to own this thread.
+var nodePaths = level.NodePaths.ToObservable();
+
+// ✅ RIGHT — ImmediateScheduler; no ambient per-thread state, iterates during Subscribe.
+var nodePaths = level.NodePaths.ToInlineObservable();
+```
+
+**No exception, no completion, no row — forever.** In the portal that is a live children listing (chat token chip, notification bell, folder view) that opens and silently stays empty, while a point read of the same content returns immediately. Issue #2377: the pedestrian scope walk had this shape, and it made `LiveQueryHandoffDropTest` fail ~23% of cold whole-assembly runs on a 4-CPU Linux runner (its 30 s warm-up wait was the block) while every warm or single-test run passed. Under xUnit the reach was wider still — the inlined continuation in that stack was a mesh-teardown `await`, so the runner carried on *on that stack* and started subsequent tests inside the trampoline.
+
+`ImmediateScheduler` carries no such state: it invokes directly, and its recursive form is trampolined through a per-call `AsyncLock`, so a long sequence iterates without growing the stack. `LiveQueryForeignTrampolineTest` pins the contract deterministically — it subscribes from inside a real trampoline and blocks there, which is exactly the shape that used to strand.
+
+> This is *not* a licence to sprinkle `ImmediateScheduler` around. It applies where the code already promises to be synchronous on the subscribing thread: `IStorageAdapter` reads and the pedestrian query walk. Anything that genuinely does I/O still goes through `IIoPool` (above).
+
+---
+
 ## 🚨 Cold observables: Subscribe is mandatory
 
 Every method that performs a write or side effect returns a cold `IObservable<T>` — **the side effect runs on `Subscribe`, not on call.** Forgetting to subscribe means the work silently never happens.

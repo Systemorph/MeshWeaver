@@ -6,7 +6,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using MeshWeaver.AI;
+using MeshWeaver.AI;   // MeshOperations — its namespace is a frozen binary contract (#2370)
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -28,7 +28,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// The automatic MeshChangeFeed → TryTriggerRecompile path has been removed.
 /// All compilation is now triggered explicitly via CreateReleaseRequest.
 /// </summary>
-public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestBase(output), IDisposable
+public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private readonly string _cacheDir = Path.Combine(
         Path.GetTempPath(), $"MeshWeaverCodeEditTest-{Guid.NewGuid():N}");
@@ -46,9 +46,20 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 }));
     }
 
-    public new void Dispose()
+    /// <summary>
+    /// 🚨 Overrides <see cref="MonolithMeshTestBase.DisposeAsync"/> — it does NOT implement
+    /// <see cref="IDisposable"/> and block on it. This used to read
+    /// <c>base.DisposeAsync().AsTask().GetAwaiter().GetResult()</c>, which parks the disposing thread
+    /// in a native wait on MESH TEARDOWN — the one operation in this suite with a documented history
+    /// of not completing. xUnit's <c>methodTimeout</c> cannot abort a thread in that state, and
+    /// teardown runs outside it anyway, so a stall there is not a failed test: it is the whole shard
+    /// hanging to its wall-clock cap and reporting <c>exit=124 TIMEOUT</c> with no test named
+    /// (#2013). Awaiting suspends instead of parking, so the same stall surfaces as a bounded,
+    /// attributable teardown.
+    /// </summary>
+    public override async ValueTask DisposeAsync()
     {
-        base.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        await base.DisposeAsync();
         if (Directory.Exists(_cacheDir))
             try { Directory.Delete(_cacheDir, recursive: true); } catch { }
     }

@@ -9,7 +9,7 @@
   <ItemGroup>
     <!-- The in-process (monolith) mesh + SQLite persistence — the same local-first stack the MAUI client
          runs in-process, here as a headless host so a JS client (React Native / web) can reach it over gRPC. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Operations\MeshWeaver.Mesh.Operations.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Sqlite\MeshWeaver.Hosting.Sqlite.csproj" />
     <!-- The gRPC bridge (bidi Open + gRPC-web Connect/Deliver split) the foreign-language clients use. -->
@@ -22,6 +22,13 @@
          portal's endpoint does — so the sidecar compiles and runs whether or not voice is
          installed. The Whisper client itself arrives as a MODULE (below). -->
     <ProjectReference Include="..\..\src\MeshWeaver.Speech.Contract\MeshWeaver.Speech.Contract.csproj" />
+    <!-- The AI engine (Thread/Agent/Skill node types + the chat runtime), the portal's thin lane:
+         the DLL rides the app closure so ResolveModulePath's BaseDirectory fallback finds it, and
+         Modules:Assemblies in appsettings.json is what activates it (a MeshNodeProviderAttribute
+         is read ONLY by InstallConfiguredModules — the reference alone contributes nothing).
+         Without it the sidecar refuses every chat send with "NodeType 'Thread' is not
+         registered" — the RN shells' composer is a dead surface on the local mesh. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
   </ItemGroup>
 
   <!-- ═════════ The RN web client is BAKED at publish — never hand-copied ═════════
@@ -44,9 +51,21 @@
   <Target Name="BakeRnWebClient" AfterTargets="Publish"
           Condition="'$(Configuration)' == 'Release' AND '$(BakeRnWebClient)' != 'false'">
     <PropertyGroup>
-      <RnClientDir>$(MSBuildThisFileDirectory)../../clients/react-native/</RnClientDir>
+      <!-- The RN app lives in MeshWeaver.Plugins now (app/react-native — #2169 Phase A). The bake
+           probes: explicit -p:RnClientDir / MEMEX_RN_APP_DIR > the app's old in-repo home (kept
+           first so a transition-era checkout still wins) > the sibling MeshWeaver.Plugins
+           checkout. No workflow in THIS repo publishes the sidecar Release, so CI carries no
+           cross-repo dependency; when none of the probes hit, the Error below still fails the
+           publish RED — a GUI-less sidecar must never ship silently. -->
+      <RnClientDir Condition="'$(RnClientDir)' == ''">$(MEMEX_RN_APP_DIR)</RnClientDir>
+      <RnClientDir Condition="'$(RnClientDir)' == '' AND Exists('$(MSBuildThisFileDirectory)../../clients/react-native/package.json')">$(MSBuildThisFileDirectory)../../clients/react-native/</RnClientDir>
+      <RnClientDir Condition="'$(RnClientDir)' == '' AND Exists('$(MSBuildThisFileDirectory)../../../MeshWeaver.Plugins/app/react-native/package.json')">$(MSBuildThisFileDirectory)../../../MeshWeaver.Plugins/app/react-native/</RnClientDir>
       <RnDeployment Condition="'$(RnDeployment)' == ''">$(MEMEX_DEPLOYMENT)</RnDeployment>
     </PropertyGroup>
+    <!-- Speak BEFORE any Exec can fail confusingly: no probe hit means there is no app checkout
+         to bake — name the probes and the opt-out instead of dying inside npm. -->
+    <Error Condition="'$(RnClientDir)' == ''"
+           Text="BakeRnWebClient: no RN app checkout found. The app lives in MeshWeaver.Plugins (app/react-native — MeshWeaver#2169 Phase A); probes: -p:RnClientDir / MEMEX_RN_APP_DIR, the old clients/react-native/ tree, the sibling MeshWeaver.Plugins checkout. Clone Systemorph/MeshWeaver.Plugins beside this repo, or pass -p:BakeRnWebClient=false to publish a GUI-less sidecar deliberately." />
     <ItemGroup>
       <RnDeploymentEnv Include="MEMEX_DEPLOYMENT=$(RnDeployment)" Condition="'$(RnDeployment)' != ''" />
     </ItemGroup>
