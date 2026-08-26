@@ -56,28 +56,13 @@ public class LiveQueryForeignTrampolineTest
     [InlineData("path:probe/_Usage scope:descendants")]
     [InlineData("path:probe/_Usage/one scope:exact")]
     public void Initial_arrives_when_subscribed_inside_a_foreign_trampoline(string query)
-    {
-        // 🚨 A DEDICATED thread, not the test thread — and this is load-bearing, not tidiness.
-        // CurrentThreadScheduler.Schedule only OPENS a trampoline when none is running on the
-        // thread; on a thread that already carries one it enqueues and returns without running the
-        // action at all. The xUnit test thread can genuinely be in that state (that is the very
-        // leak this test is about), so probing from it would silently skip the whole body. A fresh
-        // thread is guaranteed to have no trampoline, which makes the setup deterministic.
-        Exception? failure = null;
-        var probe = new Thread(() =>
-        {
-            try { RunProbe(query); }
-            catch (Exception ex) { failure = ex; }
-        })
-        { IsBackground = true };
-        probe.Start();
-
-        Assert.True(probe.Join(TimeSpan.FromSeconds(30)),
+        // 🚨 A DEDICATED thread, not the test thread — see FreshThread for why that is load-bearing
+        // here: the xUnit test thread can already carry a trampoline (that is the very leak this
+        // test is about), and opening one from there would silently skip the whole body.
+        => FreshThread.Run(
+            () => RunProbe(query),
             $"the probe thread never finished for [{query}] — the scope walk was queued on the "
             + "caller's trampoline instead of running inline, so it can never run (#2377)");
-        if (failure is not null)
-            throw failure;
-    }
 
     private static void RunProbe(string query)
     {
