@@ -367,14 +367,16 @@ internal static class NodeTypeEnrichmentHelpers
         // dedupes the underlying SubscribeRequest so concurrent activations
         // share ONE upstream subscription; each subscriber's Take(1) gets
         // the current ISynchronizationStream.Current value (or the next
-        // emission past it). We deliberately bypass IMeshNodeStreamCache's
-        // Replay(1).RefCount() — under bursty activation the RefCount drops
-        // to 0 between Take(1) consumers and reopens a fresh subscription,
-        // racing the Replay buffer with the stale snapshot returned to the
-        // next caller. The workspace's per-(addr, ref) ISynchronizationStream
-        // stays connected as long as ANY subscriber holds it, and its
-        // Current is updated by every DataChangedEvent, so a fresh read
-        // always sees the latest known state.
+        // emission past it).
+        //
+        // 🚨 This read does NOT bypass IMeshNodeStreamCache — a comment here claimed it did,
+        // for long enough that people reasoned about freshness from the claim.
+        // GetMeshNodeStream(path) resolves the cache and reads through its per-path
+        // ReplaySubject(1), so a mirror whose upstream has gone SILENT replays its last value to
+        // every future subscriber and nothing evicts it (fault-eviction needs a fault; idle
+        // eviction needs zero subscribers). That is #2409, and it is why the overlay decision at
+        // the end of this method confirms against storage before committing an instance to the
+        // compile-progress page — see ConfirmInFlightAgainstStorage.
         //
         // 🚨 Freshness contract — the activation reads from the mesh hub's
         // workspace cache, which is updated asynchronously by DataChangedEvent
@@ -559,9 +561,106 @@ internal static class NodeTypeEnrichmentHelpers
             // predicate rejects Pending/Compiling): activate the progress overlay now
             // and let its self-heal recycle the instance when the compile lands.
             .SelectMany(typeNode => IsCompileInFlight(typeNode, meshHub.JsonSerializerOptions)
-                ? WithCompilationInProgressOverlay(node, nodeType, typeNode, meshHub, logger)
+                ? ConfirmInFlightAgainstStorage(meshHub, nodeType, typeNode, node.Path, logger)
+                    .SelectMany(confirmed => IsCompileInFlight(confirmed, meshHub.JsonSerializerOptions)
+                        ? WithCompilationInProgressOverlay(node, nodeType, confirmed, meshHub, logger)
+                        : ApplyStreamResult(
+                            confirmed, node, nodeType, meshConfiguration, compilationService, meshHub, logger))
                 : ApplyStreamResult(
                     typeNode, node, nodeType, meshConfiguration, compilationService, meshHub, logger));
+    }
+
+    /// <summary>
+    /// How long the pre-overlay confirmation read may take before the activation gives up on it and
+    /// binds what the stream said. Deliberately small: this read is EXTRA evidence on a branch that
+    /// already has a graceful sink (the overlay), so it must never become a second way for an
+    /// activation to hang. Failing to confirm costs the pre-#2409 behaviour, never a dead hub.
+    /// </summary>
+    private static readonly TimeSpan OverlayConfirmationTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Re-reads the NodeType from STORAGE before an instance is committed to the
+    /// compilation-in-progress overlay, and returns whichever node is authoritative.
+    ///
+    /// <para>🚨 This closes the asymmetry that made #2409 permanent. The overlay's self-heal watcher
+    /// already re-evaluates against storage (<see cref="AuthoritativeTypeRead"/>) — but only the BIND
+    /// path decides what an activating instance actually serves, and the bind path read the mesh
+    /// hub's mirror. `IMeshNodeStreamCache` hands every consumer one process-wide
+    /// <c>ReplaySubject(1)</c> per path; when the owner's sync stream goes SILENT (not faulted) that
+    /// subject replays its last value forever, and nothing evicts it: fault-eviction needs a fault,
+    /// and idle-eviction needs zero subscribers — which the overlay's own watchers guarantee can
+    /// never happen. A <c>Compiling</c> snapshot latched that way makes this branch DETERMINISTIC,
+    /// not occasional: every activation reaches the overlay after the grace, the self-heal correctly
+    /// reads storage, sees a usable build and recycles, and the re-enrichment binds the same latched
+    /// snapshot again. Heal → recycle → re-poison, which <c>OverlayHealBudget</c> then spaces out to
+    /// ten minutes. Ten of twelve public package covers served the Roslyn compile-progress screen to
+    /// anonymous visitors for over an hour after the type had compiled, and recycling could not
+    /// clear it.</para>
+    ///
+    /// <para>So the two halves now consult the SAME authority at the moment it decides something. It
+    /// is one read on one branch — not a poller, not a watchdog: when the stream and storage agree
+    /// the overlay is applied exactly as before, and when they disagree the instance binds the build
+    /// that actually exists instead of painting a screen about a compile that finished.</para>
+    ///
+    /// <para>Returns <paramref name="fromStream"/> unchanged when this host registers no query core
+    /// (a unit-test hub), when storage has no node at that path, or when the read does not answer
+    /// inside <see cref="OverlayConfirmationTimeout"/> — the last of which is logged, because
+    /// "we could not check" and "we checked and it is compiling" must not look alike.</para>
+    /// </summary>
+    private static IObservable<MeshNode> ConfirmInFlightAgainstStorage(
+        IMessageHub meshHub, string nodeType, MeshNode fromStream, string instancePath, ILogger? logger)
+    {
+        var reRead = AuthoritativeTypeRead(meshHub, nodeType);
+        if (reRead is null)
+            return Observable.Return(fromStream);
+
+        return reRead()
+            .Take(1)
+            .Timeout(OverlayConfirmationTimeout)
+            .Select(authoritative =>
+            {
+                var chosen = PreferAuthoritative(fromStream, authoritative);
+                if (!ReferenceEquals(chosen, fromStream)
+                    && !IsCompileInFlight(chosen, meshHub.JsonSerializerOptions))
+                    logger?.LogInformation(
+                        "EnrichWithNodeType: the mesh-hub mirror reported '{NodeType}' still compiling, but "
+                        + "storage reports a settled build (version {Version}) — binding the settled state for "
+                        + "'{InstancePath}' instead of the compile-progress overlay",
+                        nodeType, chosen.Version, instancePath);
+                return chosen;
+            })
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "EnrichWithNodeType: could not confirm '{NodeType}' against storage before overlaying "
+                    + "'{InstancePath}' — falling back to the stream's in-flight state",
+                    nodeType, instancePath);
+                return Observable.Return(fromStream);
+            });
+    }
+
+    /// <summary>
+    /// The decision <see cref="ConfirmInFlightAgainstStorage"/> makes, split out so the contract is
+    /// unit-testable without a mesh (<c>OverlayAuthorityPreferenceTest</c>) — the same shape
+    /// <see cref="IsCompileSettled"/> uses.
+    ///
+    /// <para>Returns the node the activation should bind: the AUTHORITATIVE (storage) read when there
+    /// is one, otherwise the stream's own snapshot. Absence of an authoritative answer is not
+    /// evidence — a path storage has no row for keeps the stream's value.</para>
+    ///
+    /// <para>🚨 <c>HubConfiguration</c> is <c>[JsonIgnore, NotMapped]</c> and every storage boundary
+    /// strips it, so its absence on a storage row is the READ's blind spot, never information about
+    /// the type. It is carried across from the stream snapshot — without that, preferring the
+    /// storage node would silently strip a static-provider type of the delegate that IS its whole
+    /// configuration, and the instance would bind the bare default chain and lose every area.</para>
+    /// </summary>
+    internal static MeshNode PreferAuthoritative(MeshNode fromStream, MeshNode? authoritative)
+    {
+        if (authoritative is null)
+            return fromStream;
+        return authoritative.HubConfiguration is null && fromStream.HubConfiguration is not null
+            ? authoritative with { HubConfiguration = fromStream.HubConfiguration }
+            : authoritative;
     }
 
     /// <summary>
@@ -1250,10 +1349,17 @@ internal static class NodeTypeEnrichmentHelpers
         // `using` would lapse before the emission-thread subscribe runs (see the sibling heal).
         return Observable.Using(
                 () => AccessContextScope.AsSystem(enrichAccessService),
+                // 🚨 ContentAs, never `curr.Content is NodeTypeDefinition`. This lambda runs against
+                // the CROSS-HUB mirror value, which UpdateRemote passes through un-materialized: on a
+                // JsonElement snapshot the CLR type test fails, the lambda returns `curr` unchanged,
+                // and the whole self-heal recompile is a SILENT no-op (the framework even logs
+                // `[UpdateRemote] NO-OP … contentType=JsonElement` for exactly this shape). The
+                // sibling stale-Ok heal in BuildSlowPath already reads it correctly; these two were
+                // missed, so the one mechanism meant to un-stick a stranded type could not fire.
                 _ => typeStream.Update(curr =>
                 {
-                    if (curr.Content is NodeTypeDefinition cdef
-                        && cdef.CompilationStatus == CompilationStatus.Ok)
+                    if (curr.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions, logger)
+                            is { CompilationStatus: CompilationStatus.Ok } cdef)
                         return curr with
                         {
                             Content = cdef with { CompilationStatus = CompilationStatus.Pending }
@@ -1282,8 +1388,11 @@ internal static class NodeTypeEnrichmentHelpers
                 //    no-op, no compile is coming, and gating would only burn the whole
                 //    no-progress budget before reaching the same conclusion. Gate OFF, so the
                 //    terminal state we already have settles immediately, exactly as before.
-                var gate = flipped?.Content is NodeTypeDefinition flippedDef
-                           && flippedDef.CompilationStatus == CompilationStatus.Pending
+                // ContentAs, for the same reason as the flip lambda above: read by CLR type test
+                // this gate silently answered "no compile is coming" for every un-materialized
+                // snapshot, which is the normal shape on the mirror.
+                var gate = flipped?.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions, logger)
+                        is { CompilationStatus: CompilationStatus.Pending }
                     ? staleVersion
                     : null;
                 return WaitForCompileSettled(typeStream, typeStream
