@@ -675,7 +675,16 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             subThreadWatch = workspace.GetMeshNodeStream(subThreadPath).Subscribe(
                                 node =>
                                 {
-                                    if (node?.Content is not MeshThread t) return;
+                                    // 🚨 #2304 — ContentAs, NOT `node?.Content is not MeshThread t`.
+                                    // The cast is the trap-door: it misses silently for a degraded
+                                    // JsonElement (an unresolvable $type DEGRADES rather than
+                                    // throwing), the as-written JsonObject DOM, or a same-short-named
+                                    // MeshThread from another collectible build — and a missed
+                                    // terminal state here means this subscription NEVER disposes:
+                                    // one leaked sync/ hub per delegation for the life of the
+                                    // process (the 2026-06-25 prod wedge, ~1778 leaked hubs).
+                                    var t = node.ContentAs<MeshThread>(Hub.JsonSerializerOptions, Logger);
+                                    if (t is null) return;
                                     if (t.Status is ThreadExecutionStatus.Executing
                                                  or ThreadExecutionStatus.StartingExecution)
                                     {
