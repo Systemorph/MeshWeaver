@@ -659,7 +659,12 @@ public sealed class InstanceAutoRegistrationService(
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var node = new MeshNode("_DefaultInstallLedger", PackageInstaller.InstalledPartition)
+        // Satellite(): MainNode = the Plugins partition root, not the ledger's own path (#2383).
+        // Bookkeeping that points at itself IS a main node by the catalog's definition: `is:main`
+        // KEEPS exactly the rows where MainNode == Path (SQL `n.main_node = n.path`), which is also
+        // what search_across_schemas hard-filters every union branch on. So the self-default listed
+        // the ledger as partition CONTENT and put it in mesh-wide search.
+        var node = MeshNode.Satellite("_DefaultInstallLedger", PackageInstaller.InstalledPartition) with
         {
             Name = "Default install ledger",
             // 🚨 NOT PackageNodeType. The ledger lives in the Plugins partition but is bookkeeping,
