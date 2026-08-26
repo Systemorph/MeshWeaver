@@ -246,7 +246,6 @@ registered.**
 | namespace | maxSurge | maxUnavailable | surge-first? |
 |---|---|---|---|
 | memex-cloud | 1 | **0** | yes |
-| atioz | 1 | **0** | yes |
 | **memex** | 1 | **1** | **NO** |
 
 With `maxUnavailable: 1` at `replicas: 1`, Kubernetes may delete the only serving pod before the
