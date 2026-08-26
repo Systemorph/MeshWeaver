@@ -22,7 +22,7 @@ public record MeshHostApplicationBuilder : MeshBuilder
         this.Host = Host;
         Host.ConfigureContainer(new MessageHubServiceProviderFactory(BuildHub));
         this.RegisterMeshQueryCoreOnMeshHub();
-        // Drain the mesh root hub (action blocks + IoPool + AsyncDisposeQueue) during host shutdown,
+        // Drain the mesh root hub (action blocks + IoPool) during host shutdown,
         // BEFORE the host disposes the scope — otherwise a late continuation hits the disposed Autofac
         // scope and throws an unobserved ObjectDisposedException.
         //
@@ -55,7 +55,7 @@ public record MeshHostBuilder : MeshBuilder
         Host.UseServiceProviderFactory(new MessageHubServiceProviderFactory(BuildHub));
         this.RegisterMeshQueryCoreOnMeshHub();
         // Same ordered drain as MeshHostApplicationBuilder above: quiesce the mesh root hub
-        // (action blocks + IoPool + AsyncDisposeQueue) during host StopAsync, BEFORE the host
+        // (action blocks + IoPool) during host StopAsync, BEFORE the host
         // disposes the root scope — which IS the hub's Autofac container. Without it, a late
         // continuation resolves from (or begins a nested hub scope on) the already-disposed
         // container and throws ObjectDisposedException("LifetimeScope … has already been

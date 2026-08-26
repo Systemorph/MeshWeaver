@@ -12,7 +12,7 @@ namespace MeshWeaver.Hosting;
 /// (which IS the hub's Autofac container, via <c>MessageHubServiceProviderFactory</c>).
 ///
 /// <para>Disposing a hub is reactive and returns immediately; the action blocks, offloaded
-/// <c>IIoPool</c> work, and the <c>AsyncDisposeQueue</c> drain asynchronously afterwards (see
+/// <c>IIoPool</c> work drain afterwards (see
 /// <see cref="MeshTeardownExtensions"/>). If the host tears the scope down while any of that is
 /// still in flight, a late continuation resolves a service from the already-disposed scope and
 /// throws an unobserved <see cref="ObjectDisposedException"/> ("LifetimeScope … has already been
@@ -81,7 +81,7 @@ public sealed class MeshTeardownHostedService(
             mesh.Address);
         try
         {
-            // TeardownAsync captures the mesh-scoped IoPoolRegistry + AsyncDisposeQueue while the
+            // TeardownAsync captures the mesh-scoped IoPoolRegistry while the
             // scope is still alive, disposes the hub, awaits all drain phases, and fires the
             // MeshTeardownSignal with the terminal report — the "all is done" notification.
             var report = await mesh.TeardownAsync(TeardownTimeout);

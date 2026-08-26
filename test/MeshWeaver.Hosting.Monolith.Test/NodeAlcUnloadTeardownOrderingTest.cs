@@ -279,7 +279,6 @@ public class NodeAlcUnloadTeardownOrderingTest(ITestOutputHelper output) : Monol
     {
         var orderLog = Mesh.ServiceProvider.GetRequiredService<TeardownOrderLog>();
         var ioPools = Mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>();
-        var asyncDisposeQueue = Mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
         var teardownSignal = Mesh.ServiceProvider.GetRequiredService<MeshTeardownSignal>();
 
         await CompileProbeNodeTypeAsync(ProbeNodeTypeId);
@@ -333,10 +332,7 @@ public class NodeAlcUnloadTeardownOrderingTest(ITestOutputHelper output) : Monol
         var leakedIoLeaves = ioPools.DrainAll();
         orderLog.Mark(DrainAllReturnedMark);
 
-        var asyncDisposeClean = asyncDisposeQueue is null
-                                || await asyncDisposeQueue.DrainAsync(TeardownBudget);
-
-        teardownSignal.SignalCompleted(new TeardownReport(leakedIoLeaves, asyncDisposeClean));
+        teardownSignal.SignalCompleted(new TeardownReport(leakedIoLeaves));
 
         var marks = orderLog.Marks;
         Output.WriteLine($"[diag] teardown marks: {string.Join(" | ", marks)}");

@@ -19,7 +19,7 @@ namespace MeshWeaver.Hosting.Test;
 /// ordered mesh drain on shutdown: <c>host.StopAsync()</c> stopped the hosted services and
 /// then <c>host.Dispose()</c> disposed the root <c>IServiceProvider</c> — which IS the mesh
 /// root hub's Autofac container (<see cref="MessageHubServiceProviderFactory"/>) — while the
-/// hub's action blocks, offloaded <c>IIoPool</c> work and the <c>AsyncDisposeQueue</c> were
+/// hub's action blocks and offloaded <c>IIoPool</c> work were
 /// still draining. A late continuation then resolves a service (or begins a nested hub
 /// scope) from the disposed container → <see cref="ObjectDisposedException"/>
 /// ("Instances cannot be resolved and nested lifetimes cannot be created from this
@@ -60,7 +60,7 @@ public class MeshHostBuilderTeardownOrderingTest
             "host shutdown must dispose the mesh root hub BEFORE the Autofac scope goes away — "
             + "otherwise late continuations resolve from a disposed LifetimeScope (the CI catastrophic)");
         mesh.RunLevel.Should().Be(MessageHubRunLevel.Dead,
-            "the drain must be COMPLETE (action blocks + IoPool + AsyncDisposeQueue) when StopAsync returns, "
+            "the drain must be COMPLETE (action blocks + IoPool) when StopAsync returns, "
             + "not merely started — the container disposal follows immediately");
     }
 }

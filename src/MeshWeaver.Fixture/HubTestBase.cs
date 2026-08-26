@@ -166,7 +166,6 @@ public class HubTestBase : TestBase
             // Capture the mesh-scoped teardown services BEFORE disposal begins — resolving DI
             // once the scope is tearing down races its own disposal.
             var ioPools = Mesh.ServiceProvider.GetService<IoPoolRegistry>();
-            var asyncDisposeQueue = Mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
             var teardownSignal = Mesh.ServiceProvider.GetService<MeshTeardownSignal>();
 
             if (!Mesh.IsDisposing)
@@ -185,11 +184,11 @@ public class HubTestBase : TestBase
             Logger.LogInformation("[{DisposalId}] Mesh is disposing, waiting for completion", disposalId);
             // The SAME terminal drain every scenario uses (MeshTeardownExtensions): action blocks
             // + round-trips (DisposalCompleted), then cancel+join the offloaded IIoPool leaves,
-            // then quiesce the AsyncDisposeQueue — and fire the MeshTeardownSignal with the
+            // — and fire the MeshTeardownSignal with the
             // report. Waiting on DisposalCompleted ALONE let pooled work outlive the test (the
             // straggler class this base previously shared with the pre-fix MonolithMeshTestBase).
             var report = await Mesh.WaitForDisposalAndIoDrainAsync(
-                ioPools, asyncDisposeQueue, TimeSpan.FromSeconds(timeoutSeconds), teardownSignal);
+                ioPools, TimeSpan.FromSeconds(timeoutSeconds), teardownSignal);
             Logger.LogInformation("[{DisposalId}] Mesh disposal completed — {Report}", disposalId, report);
             if (!report.Clean)
                 throw new InvalidOperationException(

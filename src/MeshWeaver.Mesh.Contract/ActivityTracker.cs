@@ -11,7 +11,7 @@ namespace MeshWeaver.Mesh;
 /// starting new work, let what is running finish, and only then tear down.
 ///
 /// <para><b>Why the existing drains do not cover this.</b> Mesh teardown already has three phases
-/// (<c>DisposalCompleted</c> → <c>IoPoolRegistry.DrainAll()</c> → <c>AsyncDisposeQueue</c>), but an
+/// (<c>DisposalCompleted</c> → <c>IoPoolRegistry.DrainAll()</c>), but an
 /// activity falls through all of them:</para>
 /// <list type="bullet">
 ///   <item><description>the trigger returns as soon as the activity exists (by design — it must not

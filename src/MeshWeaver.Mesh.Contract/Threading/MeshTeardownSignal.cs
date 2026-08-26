@@ -15,26 +15,23 @@ namespace MeshWeaver.Mesh.Threading;
 /// </summary>
 /// <param name="LeakedIoLeaves">Pooled I/O leaves that ignored cancellation and were still
 /// running when their drain budget expired (see <c>IoPool.Drain</c>). 0 = the join is real.</param>
-/// <param name="AsyncDisposeClean">Whether every cleanup on the <see cref="AsyncDisposeQueue"/>
-/// ran (or unwound after cancellation) within its quiesce budget.</param>
-public sealed record TeardownReport(int LeakedIoLeaves, bool AsyncDisposeClean)
+public sealed record TeardownReport(int LeakedIoLeaves)
 {
     /// <summary>True iff nothing survived teardown — the scope may be disposed and node ALCs
     /// unloaded with no thread still executing their code.</summary>
-    public bool Clean => LeakedIoLeaves == 0 && AsyncDisposeClean;
+    public bool Clean => LeakedIoLeaves == 0;
 
     /// <summary>One-line summary for logs and failure messages.</summary>
     public override string ToString() => Clean
-        ? "teardown clean — all pooled I/O joined, async dispose queue drained"
-        : $"teardown DIRTY — {LeakedIoLeaves} pooled I/O leaf(s) still running, "
-          + $"async dispose queue {(AsyncDisposeClean ? "drained" : "still running")}";
+        ? "teardown clean — all pooled I/O cancelled and joined"
+        : $"teardown DIRTY — {LeakedIoLeaves} pooled I/O leaf(s) still running";
 }
 
 /// <summary>
 /// The mesh's terminal "all is done" signal — the very END of teardown, strictly after
 /// <see cref="Messaging.IMessageHub.DisposalCompleted"/> (which only covers the action blocks and
 /// message round-trips): it also accounts for the offloaded <c>IIoPool</c> ThreadPool work and the
-/// <see cref="AsyncDisposeQueue"/>. Completed exactly once by the teardown orchestrator
+/// pooled I/O. Completed exactly once by the teardown orchestrator
 /// (<c>MeshTeardownExtensions</c>); everything that must not run before teardown truly ends —
 /// disposing the service scope, unloading node ALCs, starting the next test's mesh — subscribes
 /// here rather than re-deriving "done" from partial signals.

@@ -321,7 +321,7 @@ public class XUnitFileLoggerProvider : ILoggerProvider
         // from on each call.
         //
         // Teardown logs AFTER the container is disposed. Anything that logs from a Dispose path
-        // (CompilationCacheService.Dispose, drained through AsyncDisposeQueue by
+        // (CompilationCacheService.Dispose, drained through the IoPool join by
         // MonolithMeshTestBase.DisposeAsync) would otherwise reach GetMinLogLevel → GetService →
         // Autofac's disposed LifetimeScope → ObjectDisposedException. Measured on Acme.Test:
         // 23 first-chance ObjectDisposedExceptions per run, every one of them that exact chain.

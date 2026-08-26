@@ -69,7 +69,6 @@ public class ActivityOutlivesDisposeTest(ITestOutputHelper output) : GitHubSyncT
 
         // The REAL teardown path. A bare Mesh.Dispose() runs only the synchronous half; the
         // documented contract is TeardownAsync — await DisposalCompleted, DrainAll() the pools,
-        // then quiesce the AsyncDisposeQueue.
         var started = DateTimeOffset.UtcNow;
         await Mesh.TeardownAsync(TimeSpan.FromSeconds(60));
         var elapsed = DateTimeOffset.UtcNow - started;
