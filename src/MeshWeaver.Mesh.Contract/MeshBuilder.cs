@@ -130,9 +130,11 @@ public record MeshBuilder
         // pod aborted ~2 s into boot with no application logging (the pipeline is not up yet) —
         // memex-cloud could not start a pod for ~90 minutes.
         //
-        // Everything an attribute can THROW from is materialised here, before any builder state is
-        // mutated, so a module that fails leaves no half-applied configuration behind. The lambdas
-        // are the hazard: `a.Nodes` is what constructs the objects whose ctor may have moved.
+        // Everything an attribute's Nodes/AddressTypes/HubConfigurations getters can THROW from is
+        // materialised here, before any builder state is mutated, so a module that fails leaves no
+        // half-applied configuration behind. This captures the GlobalServiceConfigurations
+        // delegates a node carries as DATA — it does not invoke them. Invoking them is a separate,
+        // equally hazardous step, isolated per module just below.
         var pending = new List<PendingModuleInstall>();
         var incompatible = new List<IncompatibleModule>();
         foreach (var location in assemblyLocations)
@@ -155,10 +157,46 @@ public record MeshBuilder
             }
         }
 
+        // 🚨 A node's GlobalServiceConfigurations delegate is invoked IMMEDIATELY by
+        // ConfigureServices — it runs against the live IServiceCollection, not queued for later
+        // (see ConfigureServices / InstallServices below) — so it is exactly as hazardous as the
+        // attribute materialisation above, and it is where BOTH real #2234 incidents actually
+        // threw: the original report's stack named a GlobalServiceConfigurations callback
+        // (`AzureFoundryProvidersAttribute.<get_Nodes>b__1_0(IServiceCollection)`) being CALLED,
+        // and the systemorph recurrence named this exact frame
+        // (`MeshBuilder.InstallServices(IEnumerable`1 nodes)`) directly. Materialising `a.Nodes`
+        // above only captures the delegate; invoking it is what can throw. Folded per module, same
+        // shape as the BuilderConfigurations fold below, so one module's registration failure
+        // costs only that module — never the modules that load after it in this call.
+        var installed = new List<PendingModuleInstall>();
+        var installedNodes = new List<MeshNode>();
+        foreach (var module in pending)
+        {
+            try
+            {
+                // 🚨 Materialise this module's nodes into a LOCAL buffer BEFORE touching
+                // installedNodes/MeshNodes. A module can carry several nodes; if an EARLIER one's
+                // config succeeds and a LATER one's throws, `.ToList()` still throws here (nothing
+                // is appended), so the module stays "contributes nothing" at the node-list level
+                // even though the earlier node's ConfigureServices call already mutated the live
+                // IServiceCollection for real and cannot be undone — the same asymmetry the
+                // BuilderConfigurations fold below already accepts (applied side effects stay
+                // applied; only chain/list MEMBERSHIP is what stays consistent).
+                var moduleNodes = InstallServices(module.Nodes).ToList();
+                installedNodes.AddRange(moduleNodes);
+                installed.Add(module);
+            }
+            catch (Exception exception)
+            {
+                incompatible.Add(ReportIncompatible(module.Assembly.Location, exception));
+            }
+        }
+        MeshNodes.AddRange(installedNodes);
+
         // Only the modules that actually installed are recorded as installed. A skewed one is
         // deliberately NOT in this list: it contributes no nodes, and letting it into the in-mesh
         // compile reference set would hand every dynamic NodeType the same broken signatures.
-        var assemblies = pending.Select(p => p.Assembly).ToArray();
+        var assemblies = installed.Select(p => p.Assembly).ToArray();
         // Record every installed module for the runtime surfaces that must SEE modules the way
         // they see the platform: the in-mesh compile reference set (a module leaving the publish
         // closure leaves TRUSTED_PLATFORM_ASSEMBLIES, so compilation composes TPA + these) and
@@ -171,10 +209,9 @@ public record MeshBuilder
                 services.AddSingleton(new InstalledModuleAssembly(assembly));
             return services;
         });
-        MeshNodes.AddRange(pending.SelectMany(p => InstallServices(p.Nodes)));
 
         // Register address types from attributes
-        var addressTypes = pending.SelectMany(p => p.AddressTypes).ToArray();
+        var addressTypes = installed.SelectMany(p => p.AddressTypes).ToArray();
         if (addressTypes.Length > 0)
         {
             ConfigureHub(config =>
@@ -187,9 +224,9 @@ public record MeshBuilder
         // Attribute-carried hub configuration — the surfaces a boot-loaded pack needs beyond
         // root DI: the mesh hub's own configuration and the every-per-node-hub chain
         // (Courses/Observability-shaped packs register types + default areas there).
-        foreach (var hubConfiguration in pending.SelectMany(p => p.HubConfigurations))
+        foreach (var hubConfiguration in installed.SelectMany(p => p.HubConfigurations))
             ConfigureHub(hubConfiguration);
-        foreach (var nodeHubConfiguration in pending.SelectMany(p => p.DefaultNodeHubConfigurations))
+        foreach (var nodeHubConfiguration in installed.SelectMany(p => p.DefaultNodeHubConfigurations))
             ConfigureDefaultNodeHub(nodeHubConfiguration);
 
         // Attribute-carried BUILDER configuration — the full-surface hook. Applied last so a
@@ -202,7 +239,7 @@ public record MeshBuilder
         // module. The fold keeps the builder from the last SUCCESSFUL configuration, so a module
         // that throws midway cannot strand the chain.
         var result = this;
-        foreach (var module in pending)
+        foreach (var module in installed)
         {
             try
             {

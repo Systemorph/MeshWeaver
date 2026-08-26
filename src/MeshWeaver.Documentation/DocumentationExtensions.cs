@@ -134,6 +134,11 @@ public static class DocumentationExtensions
         builder.AddMeshNodes(
             new MeshNode("_Policy", DocumentationNodeProvider.RootNamespace)
             {
+                // 🚨 A satellite must point at its MAIN node, not at itself (#2383): the plain
+                // constructor defaults MainNode to the node's own path, which makes _Policy a main
+                // node by the catalog's definition (is:main == MainNode != Path) and lists "Access
+                // Policy" as content on every cover. New satellites: MeshNode.Satellite(id, main).
+                MainNode = DocumentationNodeProvider.RootNamespace,
                 NodeType = "PartitionAccessPolicy",
                 Name = "Documentation Access Policy",
                 Content = new PartitionAccessPolicy
