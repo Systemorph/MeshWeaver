@@ -173,7 +173,27 @@ what the change set IS, or when the work turns out to need a scope call the user
 one line, then stop. A change set spanning repos (education, MeshWeaver.Plugins) is finished when
 every part is merged in dependency order: platform first, then what depends on it.
 
-`gh` CLI has **read + push** only — cannot merge, resolve threads, or request reviewers.
+🚨 **PR capability is PER-CREDENTIAL, not per-repo — measure it, never remember it.** This
+line used to read *"`gh` CLI has read + push only — cannot merge, resolve threads, or request
+reviewers"*, which contradicted the very code block below it and was wrong in a way that cost real
+throughput: believing it makes a session stop at the finish line and hand the merge back, exactly
+the pause the PR-flow rule above says not to take once CI is green.
+
+What makes it unrememberable is that **two sessions on the same day get different answers for the
+same repo** (2026-08-26): one measured `admin:false, maintain:false` on `MeshWeaver` with scopes
+`gist, read:org, repo, workflow`, while another measured `admin:true, maintain:true` with
+`admin:org, delete:packages, gist, repo, workflow, write:packages` — and merged #2328 and #2429
+there. So the constraint is the credential the session happens to hold, not the repository, and any
+static table of either shape will be false for somebody. Check:
+
+```bash
+gh api repos/Systemorph/<repo> --jq '.permissions'   # push is normally enough to merge
+gh auth status                                        # scopes, if the above surprises you
+```
+
+Merging and resolving threads both work wherever the credential allows them (verified on
+`MeshWeaver`, `Memex` and `MeshWeaver.Education` on 2026-08-26). **Never reach for `--admin`** — a
+refusal is information about the gate, not an obstacle to route around.
 
 ```bash
 # Find unresolved review threads
