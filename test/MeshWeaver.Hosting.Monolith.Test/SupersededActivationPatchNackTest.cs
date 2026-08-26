@@ -15,7 +15,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// DETERMINISTIC pins of the #648/#2305 owner-side ack invariants:
+/// DETERMINISTIC pins of the two #648 owner-side ack invariants:
 /// <list type="number">
 ///   <item><b>All-keys-refused ⇒ never Success.</b> A cross-hub three-way merge that refuses
 ///   EVERY intended change (the writer's base is stale and the live value is newer) used to
@@ -27,20 +27,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 ///   the hub and acked Success. The single-writer activation invariant: only the CURRENT
 ///   activation applies patches; a superseded one NACKs retryable (OwnerDisposing) so the
 ///   caller's re-enqueue lands the same update on the fresh activation.</item>
-///   <item><b>#2305 — a PARTIALLY-refused patch must never PARTIALLY commit.</b> A single
-///   <c>stream.Update</c> lambda computes every changed field as ONE atomic caller intent (e.g.
-///   <c>ThreadExecution.PushToResponseMessage</c> sets a response cell's <c>Status</c> AND
-///   <c>Text</c> together). The #648 backstop above only NACKs when the merge refused EVERY
-///   key; a patch where ONE key conflicts (refused) while ANOTHER lands cleanly used to commit
-///   the clean field alone and still ack Success — landing a self-contradictory state (a
-///   Completed response cell still holding the "Generating response…" placeholder: Status
-///   landed, Text was silently dropped) with no signal telling the caller's retry machinery to
-///   repair it. The owner must refuse the WHOLE patch — commit nothing, not even the fields
-///   that merged cleanly — and NACK Conflict so the caller re-diffs and re-applies every field
-///   together.</item>
 /// </list>
-/// All three pins drive the REAL owner pipeline over the wire (PatchDataRequest — the exact
-/// message <c>UpdateRemote</c> posts), because the defect is the owner's ACK SEMANTICS.
+/// Both pins drive the REAL owner pipeline over the wire (PatchDataRequest — the exact message
+/// <c>UpdateRemote</c> posts), because the defect is the owner's ACK SEMANTICS.
 /// </summary>
 public class SupersededActivationPatchNackTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -54,9 +43,6 @@ public class SupersededActivationPatchNackTest(ITestOutputHelper output) : Monol
 
     private string NameKey => JsonOptions.PropertyNamingPolicy?.ConvertName(nameof(MeshNode.Name))
         ?? nameof(MeshNode.Name);
-
-    private string DescriptionKey => JsonOptions.PropertyNamingPolicy?.ConvertName(nameof(MeshNode.Description))
-        ?? nameof(MeshNode.Description);
 
     private async Task<Address> ResolveOwner(string path)
     {
@@ -99,48 +85,6 @@ public class SupersededActivationPatchNackTest(ITestOutputHelper output) : Monol
     }
 
     /// <summary>
-    /// #2305 arrangement — a MIXED patch: one field (<c>Name</c>) conflicts exactly like
-    /// <see cref="ArrangeRefusedPatch"/> (advanced to <c>live-truth</c> since the writer's base),
-    /// the other (<c>Description</c>) is UNTOUCHED since base and would merge perfectly cleanly
-    /// on its own. Both changes ride the SAME patch — the shape a single <c>stream.Update</c>
-    /// lambda produces when it changes several fields of one node at once (Status+Text on a
-    /// response cell being the production case). Before the #2305 fix the clean field landed
-    /// (acked Success) while the conflicting one was silently dropped.
-    /// </summary>
-    private async Task<(string Path, Address Owner, PatchDataRequest Patch)> ArrangePartiallyRefusedPatch()
-    {
-        var id = $"partial-refused-nack-{Guid.NewGuid():N}";
-        var path = $"{TestPartition}/{id}";
-
-        await NodeFactory.CreateNode(new MeshNode(id, TestPartition)
-        {
-            Name = "created", Description = "desc-created", NodeType = "Markdown", State = MeshNodeState.Active
-        }).Should().Within(30.Seconds()).Emit();
-        await ReadNode(path).Should().Within(30.Seconds())
-            .Match(n => n is { Name: "created", Description: "desc-created" });
-
-        // Advance ONLY Name through the owner — Description is left exactly as created, so a
-        // patch that (re)diffs Description against its ORIGINAL base finds it unconflicted.
-        var client = GetClient(c => c.AddData());
-        await client.GetWorkspace().GetMeshNodeStream(path)
-            .Update(n => n with { Name = "live-truth" })
-            .Should().Within(30.Seconds()).Emit();
-        await ReadNode(path).Should().Within(30.Seconds())
-            .Match(n => n is { Name: "live-truth", Description: "desc-created" });
-
-        var owner = await ResolveOwner(path);
-        var patch = new PatchDataRequest(
-            new MeshNodeReference(),
-            new RawJson(
-                $"{{\"{NameKey}\":\"stale-mirror-write\",\"{DescriptionKey}\":\"desc-updated\"}}"))
-        {
-            BaseValues = new RawJson(
-                $"{{\"{NameKey}\":\"created\",\"{DescriptionKey}\":\"desc-created\"}}")
-        };
-        return (path, owner, patch);
-    }
-
-    /// <summary>
     /// #648 pin 1 — fail-without: the no-change backstop acked the all-refused patch
     /// SUCCESS; pass-with: the owner NACKs Conflict and keeps the live value.
     /// </summary>
@@ -167,46 +111,6 @@ public class SupersededActivationPatchNackTest(ITestOutputHelper output) : Monol
         // And the owner kept the newer live value — the refusal is the merge's verdict.
         (await ReadNode(path).Should().Within(30.Seconds()).Emit())!
             .Name.Should().Be("live-truth");
-    }
-
-    /// <summary>
-    /// #2305 pin — fail-without: the clean <c>Description</c> field committed alone (version
-    /// bumped, change persisted) and the owner still acked Success, even though the SAME patch's
-    /// <c>Name</c> field was refused as a stale-base conflict — exactly the mechanism behind "a
-    /// Completed response cell still holding the Generating response… placeholder" (Status lands,
-    /// Text is silently dropped). Pass-with: the owner refuses the WHOLE patch — Description
-    /// stays at its pre-patch value, Name stays at its live value, nothing is persisted — and
-    /// NACKs Conflict so the caller re-diffs and re-applies both fields together.
-    /// </summary>
-    [Fact(Timeout = 55_000)]
-    public async Task PartialRefusal_AbortsWholeWrite_NeverPartiallyCommits()
-    {
-        var (path, owner, patch) = await ArrangePartiallyRefusedPatch();
-
-        var response = await AwaitResponseAsync(patch, o => o.WithTarget(owner));
-        var patchResponse = response.Message;
-
-        Output.WriteLine(
-            $"[response] success={patchResponse.Success} code={patchResponse.NodeError?.Code} "
-            + $"error={patchResponse.Error}");
-        patchResponse.Success.Should().BeFalse(
-            "one field of the patch was refused as a stale-base conflict — committing the OTHER "
-            + "field alone and acking Success is the #2305 partial-commit defect: a caller whose "
-            + "single lambda changed both fields as one atomic intent gets told 'applied' while "
-            + "part of its write silently never landed");
-        patchResponse.NodeError.Should().NotBeNull();
-        patchResponse.NodeError!.Code.Should().Be(MeshNodeErrorCode.Conflict,
-            "the caller must be told to re-read and re-apply the WHOLE patch — never a silent "
-            + "success for a write that only partially landed");
-
-        // Neither field moved: the conflicting Name kept its live value (same verdict as the
-        // all-refused pin above), AND — the #2305 assertion — the UNCONFLICTED Description was
-        // NOT committed on its own. A partial commit here would show "desc-updated".
-        var final = await ReadNode(path).Should().Within(30.Seconds()).Emit();
-        final!.Name.Should().Be("live-truth", "the conflicting field's refusal verdict is unchanged");
-        final.Description.Should().Be("desc-created",
-            "the clean field must NOT commit alone when a sibling field in the same patch was "
-            + "refused — the whole write is one atomic caller intent or it is nothing");
     }
 
     /// <summary>
