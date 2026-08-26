@@ -29,6 +29,18 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// <para>The fix makes the fourth layer agree with the three that already classify this phrase as
 /// transient, so whichever answer wins, the caller reads the same verdict.</para>
+///
+/// <para>🚨 <b>The MECHANISM above was right and the SITE was wrong — corrected in #2346.</b>
+/// <c>RoutingGrain.RouteMessage</c> returns <c>Forwarded</c> unconditionally and delivers to the
+/// owning grain on a BACKGROUND route, so the <c>DispatchObservable</c> branch this classifier feeds
+/// never sees a <c>Failed</c> result for a grain-routed address: on that path the fix could not run
+/// at all, and <c>HubWorksAfterDisposal</c> kept failing with the same text and the same duration on
+/// branches that carried it. The site that actually reports a grain-routed failure is
+/// <c>RoutingGrain.DeliverToGrainWithRetry</c>, which hard-coded the terminal verdict and ignored
+/// the answer-once flag — see <c>RoutingGrainFailureClassificationTest</c>. This classifier is still
+/// load-bearing as the FALLBACK for a failing site that recorded no verdict, and both routers now
+/// read <c>GetFailureErrorType</c> first and fall back to it, so the two cannot drift apart
+/// again.</para>
 /// </summary>
 public class RoutedFailureClassificationTest
 {

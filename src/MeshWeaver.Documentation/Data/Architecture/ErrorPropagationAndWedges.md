@@ -74,6 +74,32 @@ re-derived downstream from message text) and whether it already answered the sen
 routing loop reports as `ErrorType.RoutingLoop`. A site that posts its own NACK (the routing
 services' `NotFound`, on a hot path) marks the delivery answered so the sender never gets two.
 
+#### Recording a verdict is not the same as delivering one (#2346)
+
+Both halves above are carried in the delivery's `Properties`, and both leaked between the site that
+wrote them and the site that acts on them. Worth knowing, because the failure is **silent in both
+directions** and the symptom appears somewhere else entirely — as a rotating cast of Orleans
+teardown flakes, which is how it was eventually found:
+
+- **The verdict did not survive a hub boundary** — the only trip it exists for. `Properties` is
+  `IReadOnlyDictionary<string, object>`, serialized by writing each value by its RUNTIME type, so an
+  `ErrorType` goes out as the enum NAME and comes back as a `string`. `GetFailureErrorType`'s
+  `value is ErrorType` test then failed and every consumer read its FALLBACK — the carefully-recorded
+  `ShuttingDown` reached the router as "no verdict was reached". It now recovers the enum, its name,
+  an integral value or a `JsonElement`; an unrecognised value still falls back, which is honest
+  rather than invented.
+- **The Orleans routing layer read neither.** `RoutingGrain.DeliverToGrainWithRetry` — the ONLY site
+  that reports a grain-routed delivery's failure, because `RouteMessage` returns `Forwarded`
+  unconditionally and delivers on a background route — hard-coded the terminal `ErrorType.Failed`
+  and ignored `SenderWasNacked`. So a disposal race was reported as permanent, *and* the sender got
+  a second, contradictory answer racing the hub's own.
+
+The rule the two together produce, and the one to apply at any new reporting site: **honour the
+answered flag first, then read the CARRIED verdict, and fall back to the shared text rule
+(`ClassifyRoutedFailure` — the same phrase list `AreaErrorClassifier.IsTransientHubFailure` and
+`MeshNodeStreamCache.IsTransientOwnerFailure` use) rather than to a terminal default.** A verdict
+that cannot be read is not evidence of a permanent failure.
+
 ### Long-running operations (activity → activity log)
 
 An import / compile / mirror runs as an activity. A fault must not strand the activity "Running" forever — it writes `Status = Error` with the message onto the activity node, which the activity log and any progress reader render. Persistence at the bottom of the stack never re-gates and never fail-closes a write that was already approved; it forwards. See [Activity Control Plane](/Doc/Architecture/ActivityControlPlane) and [Activity Operations](/Doc/Architecture/ActivityOperations).

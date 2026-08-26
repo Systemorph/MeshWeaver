@@ -430,10 +430,26 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                     // all already treat "is shutting down" as retry-worthy, and NackThroughParent's
                     // own comment calls the wording CONTRACT. This makes the fourth layer agree with
                     // the other three rather than contradict them.
-                    var failureErrorType = ClassifyRoutedFailure(failureMessage);
+                    //
+                    // 🚨 The CARRIED verdict comes first, the text rule is only the FALLBACK — the
+                    // two must not diverge from the silo-side twin in RoutingGrain, because "a fix
+                    // landed on one site and missed the other" is precisely how #2346 outlived both
+                    // of its earlier fixes. A site that recorded a verdict (MessageService's intake
+                    // gate, MessageHubGrain's activation/disposal arms) knows more than any matcher
+                    // can recover from prose: "Hub disposed before delivery for …" is ShuttingDown
+                    // and contains no phrase a text rule could catch.
+                    var failureErrorType = result.GetFailureErrorType(ClassifyRoutedFailure(failureMessage));
                     logger.LogWarning("Orleans: delivery FAILED for {MessageType} to {Address}: {FailureMessage} (as {ErrorType})",
                         msgType, address, failureMessage, failureErrorType);
-                    SendDeliveryFailure(delivery, failureMessage, failureErrorType);
+
+                    // 🚨 ANSWER ONCE — the same contract MessageService.ReportRoutingFailure and
+                    // the silo-side RoutingGrain apply. FailedAndNacked DECLARES that the failing
+                    // site posted its own DeliveryFailure; answering again gives ONE request TWO
+                    // answers, and Observe resolves on whichever lands first.
+                    if (result.SenderWasNacked)
+                        OrleansRouteTrace.Write($"OrleansRoutingService.Deliver DISPATCH_FAILED_ALREADY_NACKED addr={address} id={delivery.Id}");
+                    else
+                        SendDeliveryFailure(delivery, failureMessage, failureErrorType);
                 }
                 else
                 {
