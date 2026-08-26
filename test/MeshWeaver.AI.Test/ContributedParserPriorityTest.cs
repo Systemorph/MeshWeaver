@@ -5,7 +5,7 @@ using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using Xunit;
 
-namespace MeshWeaver.Content.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// The agent file format left core hosting: <see cref="AgentFileParser"/> ships with

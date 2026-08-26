@@ -93,7 +93,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Icon = "Building",
             Content = orgTypeDef
         };
-        persistence.SaveNode(orgTypeNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SaveNodeSynchronously(orgTypeNode, SetupJsonOptions);
 
         // Create ACME Corporation (top-level organization)
         var acmeCorpNode = MeshNode.FromPath("ACME") with
@@ -101,7 +101,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Name = "ACME Corporation",
             NodeType = "Space"
         };
-        persistence.SaveNode(acmeCorpNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SaveNodeSynchronously(acmeCorpNode, SetupJsonOptions);
 
         // Create ACME Software organization (sub-organization under ACME)
         var acmeNode = MeshNode.FromPath("ACME") with
@@ -109,7 +109,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Name = "ACME Software",
             NodeType = "Space"
         };
-        persistence.SaveNode(acmeNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SaveNodeSynchronously(acmeNode, SetupJsonOptions);
 
         // Create ACME/Project type (can be created inside ACME)
         var projectTypeDef = new NodeTypeDefinition
@@ -123,7 +123,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Icon = "Briefcase",
             Content = projectTypeDef
         };
-        persistence.SaveNode(projectTypeNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SaveNodeSynchronously(projectTypeNode, SetupJsonOptions);
 
         // Create ACME/Project/Todo type (can be created inside ACME/Project instances)
         var todoTypeDef = new NodeTypeDefinition
@@ -137,7 +137,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Icon = "Checkmark",
             Content = todoTypeDef
         };
-        persistence.SaveNode(todoTypeNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SaveNodeSynchronously(todoTypeNode, SetupJsonOptions);
 
         // Create ACME/ProductLaunch (instance of ACME/Project)
         var productLaunchNode = MeshNode.FromPath("ACME/ProductLaunch") with
@@ -145,7 +145,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Name = "Product Launch",
             NodeType = "ACME/Project"
         };
-        persistence.SaveNode(productLaunchNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SaveNodeSynchronously(productLaunchNode, SetupJsonOptions);
 
         // Create global Markdown type
         var markdownTypeDef = new NodeTypeDefinition
@@ -160,7 +160,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Order = 1000,
             Content = markdownTypeDef
         };
-        persistence.SaveNode(markdownTypeNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SaveNodeSynchronously(markdownTypeNode, SetupJsonOptions);
 
         // Create global NodeType type
         var nodeTypeTypeDef = new NodeTypeDefinition
@@ -175,7 +175,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Order = 1001,
             Content = nodeTypeTypeDef
         };
-        persistence.SaveNode(nodeTypeTypeNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SaveNodeSynchronously(nodeTypeTypeNode, SetupJsonOptions);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
