@@ -26,7 +26,7 @@ This document explains the model, the six propagation phases, the sanctioned exc
 |---|---|---|
 | **User** | User-facing hubs — the per-circuit portal hub, HTTP-request hubs, per-node hubs handling a user's request | The user's `AccessContext` is live on the AsyncLocal (`AccessService.Context` / `CircuitContext`) when the hub posts. This is the **default** posting identity. |
 | **System** | Framework infrastructure — **routing** (the courier) and **persistence** (the store) | The hub is declared `WithPostingIdentity(PostingIdentity.System)`; its own otherwise-unattributed posts are stamped `system-security` automatically (bypasses RLS — the courier/store is not user-gated). |
-| **Owner** | Threads & activities | `AccessContextScope.FromNode(node)` → `node.CreatedBy` — the post runs under the thread/activity owner's credential. |
+| **Owner** | Threads & activities | `AccessContextScope.FromNode(node)` → `node.CreatedBy` — the post runs under the thread/activity owner's credential. 🚨 In a REACTIVE pipeline resolve the identity and use `access.RunAs(owner, () => work)`, never `Observable.Using(() => AccessContextScope.FromNode(…), …)`: `FromNode`/`AsSystem` are `SwitchAccessContext`/`ImpersonateAsSystem` under another name, and `Using` latches the identity on the subscribing thread (#1790). |
 
 ### Posting identity is a per-hub CONFIGURATION decision, declared at hub startup
 

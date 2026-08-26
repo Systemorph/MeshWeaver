@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace MeshWeaver.Documentation.Test;
@@ -36,6 +37,20 @@ namespace MeshWeaver.Documentation.Test;
 /// than live incidents. What is left at each of them is the subscribing-thread latch, and that only
 /// the call site can close.</para>
 ///
+/// <para><b>What the guard can SEE is itself a moving part.</b> A site is matched by two things
+/// and only two: <see cref="MarkerPattern"/> (the <c>Observable.Using</c> call, whitespace-tolerant)
+/// and <see cref="ScopeFactories"/> (substrings its resource factory must contain). Both have been
+/// wrong in ways that made the ratchet report a clean tree it had never looked at (#2441). The
+/// factory list missed <c>AccessContextScope.AsSystem/FromNode</c> — an alias for
+/// <c>ImpersonateAsSystem</c> / <c>SwitchAccessContext</c> — and a LITERAL marker missed
+/// <c>Observable</c>-newline-<c>.Using</c>. Together they hid <b>19 sites across 10 files</b>: 18
+/// that the widened factory list alone surfaces, plus one that needed the marker fixed too. The
+/// literal marker also mis-reported <c>PackageInstaller</c>'s honest 10 as 9 — i.e. it invited
+/// someone to lower a budget against a site that is still there. <b>A new way to open an identity
+/// scope, or a new spelling of the call, must be taught to this guard in the same change that
+/// introduces it</b> — otherwise the inventory below silently describes a smaller tree than the one
+/// that exists.</para>
+///
 /// <para><b>The ratchet may only SHRINK.</b> A new file, a raised count, or a raised TOTAL is a
 /// failure. A line that has become stale (its site was fixed) is reported, not failed: two PRs
 /// closing sites concurrently would otherwise red <c>main</c> on whichever merged second, and a
@@ -49,18 +64,43 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     /// the shape; this stops the list as a WHOLE from growing — including by the trick of adding a
     /// new file's line. Lower it whenever you delete or lower an entry.
     /// </summary>
-    private const int TotalBudget = 98;
+    private const int TotalBudget = 83;
 
     /// <summary>Production roots. <c>test/</c> and <c>samples/</c> are deliberately out of scope —
     /// the leak there costs test isolation, not a user's permissions, and listing 21 more entries
     /// would bury the ones that matter.</summary>
     private static readonly string[] ScannedRoots = ["src", "memex", "tools"];
 
-    private const string Marker = "Observable.Using";
+    /// <summary>
+    /// 🚨 The call being matched, as a PATTERN and not a literal. <c>Observable.Using</c> and the
+    /// same call wrapped after <c>Observable</c> are one call, and a literal substring sees only the
+    /// first: before #2441 the wrapped form hid a site in <c>DynamicTypePreWarmer</c>, one in
+    /// <c>MeshNodeCompilationService</c>, one in <c>AiSourcesInstallHook</c>, one in
+    /// <c>JsonSynchronizationStream</c>, and made <c>PackageInstaller</c>'s honest 10 read as 9 —
+    /// i.e. it reported a live site as a STALE allowance, which is a ratchet inviting someone to
+    /// lower a budget against evidence that was never there.
+    /// </summary>
+    private static readonly Regex MarkerPattern =
+        new(@"Observable\s*\.\s*Using", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    /// <summary>The identity-scope factories. All three return an <see cref="IDisposable"/> whose
-    /// Dispose writes an <c>AsyncLocal</c>, which is what makes them thread-affine.</summary>
-    private static readonly string[] ScopeFactories = ["Impersonate", "SwitchAccessContext"];
+    /// <summary>The cheap pre-filter for <see cref="MarkerPattern"/> — must stay WEAKER than the
+    /// pattern (a literal "Observable.Using" here would re-introduce exactly the blindness the
+    /// pattern removes).</summary>
+    private const string MarkerPreFilter = "Using";
+
+    /// <summary>
+    /// 🚨 THE LOAD-BEARING LIST. A site is only seen if its resource factory contains one of these
+    /// substrings, so an identity-scope helper whose name contains NONE of them is invisible to this
+    /// guard — the whole shape passes as zero. That is not hypothetical: <c>AccessContextScope</c>
+    /// (whose <c>AsSystem</c> is literally <c>accessService.ImpersonateAsSystem()</c> and whose
+    /// <c>FromNode</c> is <c>SwitchAccessContext</c>) hid 19 sites across 10 files until #2441, two
+    /// of them in a file the guard reported as clean and one of those on a self-heal path whose own
+    /// doc comment cites #1790. <b>Adding a new way to open an identity scope means adding it
+    /// here</b>, in the same change — every entry returns an <see cref="IDisposable"/> whose Dispose
+    /// writes an <c>AsyncLocal</c>, and that is the whole criterion.
+    /// </summary>
+    private static readonly string[] ScopeFactories =
+        ["Impersonate", "SwitchAccessContext", "AccessContextScope"];
 
     private const string AllowFileName = "ImpersonationScopeSites.allow";
 
@@ -132,7 +172,9 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
             + "make the ratchet above pass on no evidence.");
 
         // The doc comments in ImpersonationScopeExtensions and AccessService QUOTE the shape. A
-        // scanner that counted them would ratchet against prose, so prove the masking works.
+        // scanner that counted them would ratchet against prose, so prove the masking works. The
+        // quoted form is the whitespace-free one, which MarkerPattern also matches — so this is a
+        // live check of the masker, not an accident of the marker's spelling.
         var seam = Path.Combine(root, "src", "MeshWeaver.Messaging.Hub", "ImpersonationScopeExtensions.cs");
         Assert.True(File.Exists(seam), "the seam file must exist for this check to mean anything");
         Assert.True(File.ReadAllText(seam).Contains("Observable.Using(access.ImpersonateAsSystem"),
@@ -141,6 +183,54 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
                 .Replace(Path.DirectorySeparatorChar, '/')),
             "the scanner counted a DOC COMMENT as a call site — comment masking is broken, and every "
             + "count in the allow file is therefore unreliable.");
+    }
+
+    /// <summary>
+    /// 🚨 NON-VACUITY OF THE MATCHER, spelling by spelling. Sibling to
+    /// <see cref="TheScannerFindsTheShapeItIsRatcheting"/>, which only proves the scanner sees
+    /// SOMETHING. This proves it sees each thing it claims to — and, just as importantly, that it
+    /// still ignores a bare <c>Observable.Using</c> that opens no identity scope, so the ratchet
+    /// cannot be "fixed" by making it match everything.
+    ///
+    /// <para>Both halves have been wrong in production (#2441): <c>AccessContextScope</c> was
+    /// missing from <see cref="ScopeFactories"/>, and the marker was a literal that could not see
+    /// the call wrapped after <c>Observable</c>. Neither failure was visible from the tree, because
+    /// a matcher that sees nothing and a tree that contains nothing produce the same green.</para>
+    /// </summary>
+    [Fact]
+    public void TheMatcherSeesEverySpellingItClaimsTo()
+    {
+        // Every factory name in the load-bearing list, in the shape it appears at a real site.
+        Assert.Equal(1, CountSitesIn(
+            "return Observable.Using(() => access.ImpersonateAsSystem(), _ => work);"));
+        Assert.Equal(1, CountSitesIn(
+            "return Observable.Using(() => access.ImpersonateAsHub(hub), _ => work);"));
+        Assert.Equal(1, CountSitesIn(
+            "return Observable.Using(() => access.SwitchAccessContext(ctx), _ => work);"));
+        Assert.Equal(1, CountSitesIn(
+            "return Observable.Using(() => AccessContextScope.AsSystem(access), _ => work);"));
+        Assert.Equal(1, CountSitesIn(
+            "return Observable.Using(() => AccessContextScope.FromNode(n, access), _ => work);"));
+
+        // The call SPELLED across lines — the form a literal marker cannot see.
+        Assert.Equal(1, CountSitesIn(
+            "return Observable\n    .Using(\n        () => AccessContextScope.AsSystem(access),\n        _ => work);"));
+        Assert.Equal(1, CountSitesIn(
+            "return Observable\n    .Using(() => access.ImpersonateAsSystem(), _ => work);"));
+
+        // …and what it must NOT see, so widening never becomes matching everything.
+        Assert.Equal(0, CountSitesIn(
+            "return Observable.Using(() => new CancellationTokenSource(), cts => work);"));
+        Assert.Equal(0, CountSitesIn(
+            "// Observable.Using(() => access.ImpersonateAsSystem(), _ => work) is the defect."));
+        Assert.Equal(0, CountSitesIn(
+            "var doc = \"Observable.Using(() => access.ImpersonateAsSystem(), _ => work)\";"));
+
+        // The resource factory is the FIRST argument, never a later one: a scope named in the work
+        // factory is a different (and legitimate) thing — e.g. a RunAsSystem call inside it.
+        Assert.Equal(0, CountSitesIn(
+            "return Observable.Using(() => new CancellationTokenSource(), "
+            + "_ => access.RunAsSystem(() => work));"));
     }
 
     private static Dictionary<string, int> Scan(string root) =>
@@ -160,15 +250,26 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
         try { text = File.ReadAllText(path); }
         catch (IOException) { return 0; } // a file a concurrent build is writing is not evidence
 
-        if (!text.Contains(Marker, StringComparison.Ordinal)) return 0;
+        return CountSitesIn(text);
+    }
+
+    /// <summary>
+    /// The matcher itself, over TEXT rather than a path — so
+    /// <see cref="TheMatcherSeesEverySpellingItClaimsTo"/> can pin what it can see without needing
+    /// a live example of every spelling to survive in the tree. Once a spelling is converted to
+    /// zero occurrences, the tree stops being evidence that the matcher still recognises it, and a
+    /// narrowed <see cref="ScopeFactories"/> or a re-literalised <see cref="MarkerPattern"/> would
+    /// pass unnoticed — which is the failure this whole guard exists to prevent, one level up.
+    /// </summary>
+    internal static int CountSitesIn(string text)
+    {
+        if (!text.Contains(MarkerPreFilter, StringComparison.Ordinal)) return 0;
 
         var code = SourceScan.MaskCommentsAndStrings(text);
         var count = 0;
-        var at = 0;
-        while ((at = code.IndexOf(Marker, at, StringComparison.Ordinal)) >= 0)
+        foreach (Match marker in MarkerPattern.Matches(code))
         {
-            var open = code.IndexOf('(', at + Marker.Length);
-            at += Marker.Length;
+            var open = code.IndexOf('(', marker.Index + marker.Length);
             if (open < 0) continue;
             var firstArg = SourceScan.FirstArgument(code, open);
             if (ScopeFactories.Any(f => firstArg.Contains(f, StringComparison.Ordinal)))
