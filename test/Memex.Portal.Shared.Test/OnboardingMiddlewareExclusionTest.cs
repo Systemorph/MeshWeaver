@@ -21,6 +21,7 @@ public class OnboardingMiddlewareExclusionTest
     [InlineData("/static/img.png")]
     [InlineData("/favicon.ico")]
     [InlineData("/mcp")]
+    [InlineData("/api/mcp")]
     [InlineData("/signin-microsoft")]
     public async Task ExcludedPrefixes_SkipOnboardingCheck(string path)
     {
