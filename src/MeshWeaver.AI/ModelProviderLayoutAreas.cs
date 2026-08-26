@@ -153,7 +153,11 @@ public static class ModelProviderLayoutAreas
                 hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>().Protect(newKey)))
             .SelectMany(stored => ctx.Host.Workspace.GetMeshNodeStream(providerPath)
                 .Update(current =>
-                    current.Content is ModelProviderConfiguration cfg
+                    // ContentAs, not `is`: an `is ModelProviderConfiguration` returns the node
+                    // UNCHANGED whenever the content arrived as a degraded JsonElement — a save
+                    // that silently does nothing, on the one control whose entire job is to store
+                    // the key. ContentAs recovers that shape.
+                    current.ContentAs<ModelProviderConfiguration>(hub.JsonSerializerOptions) is { } cfg
                         ? current with { Content = cfg with { ApiKey = stored } }
                         : current))
             .Subscribe(
