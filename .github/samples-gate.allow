@@ -4,7 +4,6 @@ FutuRe/AsiaRe/LineOfBusiness compile
 FutuRe/AsiaRe/TransactionMapping compile
 FutuRe/EuropeRe/LineOfBusiness compile
 FutuRe/EuropeRe/TransactionMapping compile
-Northwind/AnalyticsCatalog compile
 Northwind/Product compile
 
 # ── PensionFund: revealed by #2063, NOT caused by it ────────────────────────────────────────────
