@@ -1,8 +1,8 @@
 // 🚨 MeshOperations lives in ASSEMBLY MeshWeaver.Mesh.Operations but keeps NAMESPACE
 // MeshWeaver.AI, and that mismatch is deliberate (#2370): the type is reached by already-published
-// modules through [assembly: TypeForwardedTo], and a forwarder cannot rename — so the namespace is
-// frozen at whatever it was when those modules were built. Do not "tidy" this using to match the
-// assembly name; that is what broke main at 17:26.
+// modules through [assembly: TypeForwardedTo] (src/MeshWeaver.AI/TypeForwards.cs), and a forwarder
+// cannot rename — so the namespace is frozen at whatever it was when those modules were built. Do
+// not "tidy" the using below to match the assembly name; that is what broke main at 17:26.
 using MeshWeaver.Mesh;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
