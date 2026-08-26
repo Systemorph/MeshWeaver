@@ -70,6 +70,13 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     // RegisterForDisposal(IDisposable) is synchronous; the async unsubscribe is bridged
     // onto this pool so nothing async ever runs on the disposing hub/grain scheduler.
     private readonly IIoPool ioPool;
+
+    /// <summary>
+    /// The mesh's async-teardown queue, or null in a bare-mesh container that has none.
+    /// Stream unsubscribe is genuinely async, so it cannot run inside a synchronous Dispose —
+    /// it is ENQUEUED here, which is what makes the mesh's drain wait for it.
+    /// </summary>
+    private readonly AsyncDisposeQueue? asyncDisposeQueue;
     private volatile bool disposed;
 
     /// <summary>
@@ -130,6 +137,9 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         this.logger = logger;
         ioPool = serviceProvider.GetService<IoPoolRegistry>()?.Get(StreamPoolName)
                  ?? IoPool.Unbounded;
+        // Optional exactly like the lifetime above: a bare mesh in a unit test has no queue, and
+        // then the teardown below degrades to the old detached behaviour rather than throwing.
+        asyncDisposeQueue = serviceProvider.GetService<AsyncDisposeQueue>();
         // Optional by design: a non-host DI container (a bare mesh in a unit test) has no
         // application lifetime, and then there is no shutdown window to detect — the token
         // stays uncancelled and every routing decision below behaves exactly as before.
@@ -540,22 +550,79 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // pod it left, or the new owner's Attach lands on the old one and has to bounce off it.
             podHub.Dispose();
             cts.Cancel();
-            ioPool.Invoke(async _ =>
+            // 🚨 ENQUEUED, not fire-and-forget. This used to be `ioPool.Invoke(...).Subscribe(_ => {})`
+            // — the handle dropped on the floor — so Dispose() reported "torn down" while the Orleans
+            // unsubscribe was still running on a pooled thread. That is a use-after-unload waiting to
+            // happen: DisposalCompleted covers a hub's action blocks and message round-trips but NOT
+            // mesh-shared pooled I/O leaves (see MessageHubGrain.OnDeactivateAsync's per-ALC note), so
+            // UnloadContextIfSafe could unload this hub's collectible context while this leaf was still
+            // executing types from it. A leaf touching unloaded code is a native SIGSEGV (exit 139),
+            // not an exception anything can catch.
+            //
+            // AsyncDisposeQueue exists for exactly this shape: a resource whose cleanup is genuinely
+            // async enqueues it from its SYNCHRONOUS Dispose, and the mesh drains the queue AFTER
+            // reactive disposal has completed and BEFORE the DI scope is torn down. Enqueuing is what
+            // makes the drain WAIT for this work instead of racing it — the await stays inside the
+            // queued lambda, off this turn, which is why no hub scheduler is parked.
+            EnqueueStreamTeardown(address, subscriptionTask, cts);
+        });
+    }
+
+    /// <summary>
+    /// Tears down one address's Orleans stream subscription, on the mesh's async-teardown queue.
+    ///
+    /// <para>The whole point is that the caller's synchronous <c>Dispose()</c> does NOT wait for
+    /// this, but mesh teardown DOES: <see cref="AsyncDisposeQueue"/> is drained after reactive
+    /// disposal and before the DI scope dies, so the unsubscribe can no longer outlive the context
+    /// whose types it is running.</para>
+    ///
+    /// <para>The <see cref="CancellationTokenSource"/> is disposed HERE, after the awaited work has
+    /// finished, rather than immediately after <c>Cancel()</c>: the attach task holds this token, and
+    /// disposing the source while it is still observed throws <c>ObjectDisposedException</c> from a
+    /// place nothing is watching.</para>
+    ///
+    /// <para>Falls back to the previous detached behaviour when no queue is registered — a bare mesh
+    /// in a unit test has no async teardown to join, and degrading there is correct.</para>
+    /// </summary>
+    private void EnqueueStreamTeardown(
+        Address address,
+        Task<StreamSubscriptionHandle<IMessageDelivery>?> subscriptionTask,
+        CancellationTokenSource cts)
+    {
+        async Task Teardown(CancellationToken _)
+        {
+            try
+            {
+                StreamSubscriptionHandle<IMessageDelivery>? subscription = null;
+                // The attach task may have been cancelled or given up (never subscribed) — then there
+                // is nothing to unsubscribe; a faulted/cancelled await here is expected, not an error.
+                try { subscription = await subscriptionTask.ConfigureAwait(false); }
+                catch (OperationCanceledException) { /* cancelled before it subscribed */ }
+                catch (Exception ex)
                 {
-                    StreamSubscriptionHandle<IMessageDelivery>? subscription = null;
-                    // The attach task may have been cancelled or given up (never subscribed) — then there is
-                    // nothing to unsubscribe; a faulted/cancelled await here is expected, not an error.
-                    try { subscription = await subscriptionTask.ConfigureAwait(false); }
-                    catch (OperationCanceledException) { /* cancelled before it subscribed — nothing to tear down */ }
-                    catch (Exception ex) { logger.LogDebug(ex, "Stream subscription task faulted before teardown for {Address}", address); }
-                    if (subscription is not null)
-                        await subscription.UnsubscribeAsync().ConfigureAwait(false);
-                })
+                    logger.LogDebug(ex, "Stream subscription task faulted before teardown for {Address}", address);
+                }
+
+                if (subscription is not null)
+                    await subscription.UnsubscribeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address);
+            }
+            finally
+            {
+                cts.Dispose();
+            }
+        }
+
+        if (asyncDisposeQueue is not null)
+            asyncDisposeQueue.Enqueue(Teardown);
+        else
+            ioPool.Invoke(Teardown)
                 .Subscribe(
                     _ => { },
                     ex => logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address));
-            cts.Dispose();
-        });
     }
 
     /// <summary>
