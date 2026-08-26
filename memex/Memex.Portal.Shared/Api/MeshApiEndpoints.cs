@@ -1,3 +1,9 @@
+// 🚨 MeshOperations lives in ASSEMBLY MeshWeaver.Mesh.Operations but keeps NAMESPACE
+// MeshWeaver.AI, and that mismatch is deliberate (#2370): the type is reached by already-published
+// modules through [assembly: TypeForwardedTo], and a forwarder cannot rename — so the namespace is
+// frozen at whatever it was when those modules were built. Do not "tidy" this using to match the
+// assembly name; that is what broke main at 17:26.
+using MeshWeaver.AI;
 using MeshWeaver.Mesh;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -6,6 +12,11 @@ using MeshWeaver.Hosting.AspNetCore.Portal; // PortalApplication
 using MeshWeaver.Hosting.AspNetCore;    // SessionHubResolver, McpConfiguration
 using MeshWeaver.Mesh.Security;         // WellKnownUsers
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.AI;                    // MeshOperations — the TYPE ships in
+                                        // MeshWeaver.Mesh.Operations, but its namespace is a
+                                        // FROZEN binary contract (#2370), so this import is
+                                        // load-bearing and is NOT an AI-assembly dependency.
+                                        // Removed as a 'phantom' in #2349 and restored here.
 using MeshWeaver.Messaging;             // AccessService
 using Memex.Portal.Shared.Authentication;
 using Microsoft.AspNetCore.Builder;
