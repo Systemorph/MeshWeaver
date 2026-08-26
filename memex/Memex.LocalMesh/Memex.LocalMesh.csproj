@@ -27,7 +27,26 @@
          Modules:Assemblies in appsettings.json is what activates it (a MeshNodeProviderAttribute
          is read ONLY by InstallConfiguredModules — the reference alone contributes nothing).
          Without it the sidecar refuses every chat send with "NodeType 'Thread' is not
-         registered" — the RN shells' composer is a dead surface on the local mesh. -->
+         registered" — the RN shells' composer is a dead surface on the local mesh.
+
+         🚨 Do NOT "promote" this to the modules/ CLOSURE lane. It looks like the obvious cleanup
+         — the reference double-ships bits that Modules:Assemblies then activates, so the switch
+         controls nothing here — and it is WRONG, for a reason that is invisible from this repo:
+         @(MeshModuleClosure) in memex/MeshModulesPublish.targets is SHARED, and the portal host
+         in MeshWeaver.Plugins imports it through $(MeshWeaverRoot) while narrowing NOTHING (an
+         image host must lay out the complete inventory). So a row added there for this sidecar
+         also puts modules/MeshWeaver.AI/ into the PORTAL IMAGE — and a closure module and a
+         registry module of the same name are mutually exclusive: the landing service answers 409
+         on every instance. That is precisely the gate the AI Store entry (Plugins#687) is waiting
+         on, and the portal is currently clean (zero MeshWeaver.AI mentions in its csproj or its
+         Modules:Assemblies). Host-scoping the row is not the escape hatch either: the closure
+         RESTORE must keep a host-INDEPENDENT property set or it forks the build configuration and
+         reopens the #2127 project.assets.json race — whose victim was src/MeshWeaver.AI itself.
+
+         The endgame is not this lane at all: once Plugins#687 lands, the engine ships from the
+         REGISTRY and this host lists it under Modules:Required, exactly as MeshWeaver.Speech does
+         since it left for MeshWeaver.Plugins. Until then the double-ship is the harmless option —
+         it costs bits in a sidecar binary, and it is the PORTAL image that must stay clean. -->
     <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
   </ItemGroup>
 
