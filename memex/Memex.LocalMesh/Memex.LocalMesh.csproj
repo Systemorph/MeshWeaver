@@ -29,7 +29,8 @@
          the engine back in this app's own closure — the double-ship that makes the switch control
          nothing, exactly as the Speech note below describes — and it would trip
          MeshModulesGuardPublishAppRoot, which refuses a closure module found in the app root.
-         MeshWeaver.AI.csproj is also the ONE reference standing between this repo and #2276. -->
+         Deliberately NOT naming the engine's project file here: a bare mention would match every
+         "who still references the engine?" sweep and read as a live reference (#2276). -->
   </ItemGroup>
 
   <!-- ═════════ The RN web client is BAKED at publish — never hand-copied ═════════
