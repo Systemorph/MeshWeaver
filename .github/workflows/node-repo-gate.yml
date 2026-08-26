@@ -299,6 +299,32 @@ jobs:
           docker run --rm --init -v "$REPO_MOUNT:/repo" "${DUMP_ARGS[@]}" \
             --entrypoint /app/mw-plugin-test "$IMAGE" /repo \
             "${ALLOW_ARGS[@]}"
+      # 🚨 The dump is written by the CONTAINER, which runs as root, so the file lands owned by
+      # root with a restrictive mode — a core dump can contain anything that was in memory, so the
+      # runtime writes it 0600 on purpose. `chmod 0777` on the mount DIRECTORY (above) lets the
+      # container create the file; it does nothing for the file's own permissions. So
+      # upload-artifact, which runs as the unprivileged `runner` user, failed with
+      #
+      #     Error: EACCES: permission denied, open '.../coredumps/mw-plugin-test-7.dmp'
+      #
+      # and the job then died in zip creation. Every crash produced exactly the evidence needed to
+      # diagnose it and then threw it away — which is why MeshWeaver.Reinsurance#98 stayed
+      # "different NodeTypes park on different runs" for weeks instead of being read as the SIGSEGV
+      # (exit 139) it actually is.
+      #
+      # `if: always()` because the only runs with a dump are the ones where the gate FAILED.
+      - name: Make core dumps readable by the uploader
+        if: always() && inputs.capture-coredumps
+        shell: bash
+        run: |
+          dir="${RUNNER_TEMP:-/tmp}/coredumps"
+          [ -d "$dir" ] || exit 0
+          # Not `|| true`: if a dump exists and cannot be made readable, say so here rather than
+          # letting the upload fail three steps later with a message about zip creation.
+          sudo chown -R "$(id -u):$(id -g)" "$dir"
+          sudo chmod -R u+rw "$dir"
+          ls -l "$dir" || true
+
       - name: Upload core dumps (if the gate crashed)
         if: always() && inputs.capture-coredumps
         uses: actions/upload-artifact@v7
