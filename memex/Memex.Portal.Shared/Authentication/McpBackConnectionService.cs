@@ -1,3 +1,4 @@
+using MeshWeaver.AI.Connect;   // IMcpBackConnection/McpConnectionInfo keep their ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh.Services;
