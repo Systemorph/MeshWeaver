@@ -39,31 +39,21 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
 {
     private IMessageHub Mesh => Fixture.ClientMesh;
 
-    // 🚨 async, awaited from the (already-async) [Fact]s below — never
-    // `.GetAwaiter().GetResult()`. StartAsync's continuations can, in principle, be posted back
-    // onto the calling thread; blocking that thread waiting for them is the exact self-deadlock
-    // shape #2013 tracks. Awaiting suspends the test instead of parking its thread.
-    //
-    // `out` can't appear on an async method, so the meshService-returning overload returns a
-    // tuple instead, and the parameterless overload just discards it.
-    private async Task<EventSubscriptionRunner> StartRunnerAsync()
-    {
-        var (runner, _) = await StartRunnerWithMeshServiceAsync();
-        return runner;
-    }
+    private EventSubscriptionRunner StartRunner() =>
+        StartRunner(out _);
 
-    private async Task<(EventSubscriptionRunner Runner, IMeshService MeshService)> StartRunnerWithMeshServiceAsync()
+    private EventSubscriptionRunner StartRunner(out IMeshService meshService)
     {
         var sp = Mesh.ServiceProvider;
-        var meshService = sp.GetRequiredService<IMeshService>();
+        meshService = sp.GetRequiredService<IMeshService>();
         var runner = new EventSubscriptionRunner(
             Mesh,
             sp.GetRequiredService<IMeshChangeFeed>(),
             meshService,
             sp.GetRequiredService<AccessService>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
-        await runner.StartAsync(default);
-        return (runner, meshService);
+        runner.StartAsync(default).GetAwaiter().GetResult();
+        return runner;
     }
 
     /// <summary>
@@ -81,8 +71,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
         var subject = $"timersubject{Guid.NewGuid():N}"[..20];
         var slot = DateTimeOffset.UtcNow.AddSeconds(12);
 
-        var (runner, meshService) = await StartRunnerWithMeshServiceAsync();
-        using var _ = runner;
+        using var runner = StartRunner(out var meshService);
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         using (access.ImpersonateAsSystem())
@@ -163,7 +152,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
         using (access.ImpersonateAsSystem())
             await EventSubscriptionOps.CreateSubscription(meshService, subscription).FirstAsync().ToTask();
 
-        using var runner = await StartRunnerAsync();
+        using var runner = StartRunner();
 
         var fired = await Mesh.GetWorkspace()
             .GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
