@@ -6,7 +6,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using Xunit;
 
-namespace MeshWeaver.Content.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// #1984, the SECOND half. The first half made a <c>nodeType: Skill</c> markdown file TYPE correctly
