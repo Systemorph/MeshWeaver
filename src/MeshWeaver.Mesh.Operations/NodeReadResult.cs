@@ -1,7 +1,7 @@
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// The outcome of ONE bounded node read — the seam that keeps "we could not find out" apart from
@@ -32,7 +32,7 @@ namespace MeshWeaver.AI;
 /// completed read with a definitive answer ("nothing readable here for you"), so it is not an
 /// availability failure and must not become one.</para>
 /// </summary>
-public sealed record NodeReadOutcome
+public sealed record NodeReadResult
 {
     /// <summary>The node, when the read found one. <c>null</c> on Absent AND on Unavailable —
     /// where it carries no meaning at all.</summary>
@@ -46,13 +46,13 @@ public sealed record NodeReadOutcome
     public bool IsUnavailable => UnavailableReason is not null;
 
     /// <summary>The read completed and found the node.</summary>
-    public static NodeReadOutcome Found(MeshNode node) => new() { Node = node };
+    public static NodeReadResult Found(MeshNode node) => new() { Node = node };
 
     /// <summary>The read completed; there is nothing readable at this path. Definitive.</summary>
-    public static NodeReadOutcome Absent { get; } = new();
+    public static NodeReadResult Absent { get; } = new();
 
     /// <summary>The read reached no verdict — report unavailable, never absent.</summary>
-    public static NodeReadOutcome Unavailable(string reason) => new() { UnavailableReason = reason };
+    public static NodeReadResult Unavailable(string reason) => new() { UnavailableReason = reason };
 
     /// <summary>
     /// Classifies a read FAULT into Absent vs. Unavailable — decided here, on the TYPED failure,
@@ -71,7 +71,7 @@ public sealed record NodeReadOutcome
     /// "unavailable" costs a retry, while a false "not found" invites deleting a node that
     /// exists.</para>
     /// </summary>
-    public static NodeReadOutcome FromReadFailure(string path, Exception error)
+    public static NodeReadResult FromReadFailure(string path, Exception error)
     {
         for (var e = error; e is not null; e = e.InnerException)
         {

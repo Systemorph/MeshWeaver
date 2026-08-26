@@ -29,7 +29,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Shared mesh operations for AI agents and MCP tools.
@@ -149,18 +149,21 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Resolves a path relative to the current chat context.
+    /// Resolves a path relative to a caller's context path.
     /// Absolute paths (starting with @/ or /) are returned as-is.
-    /// Relative paths (e.g., @content:file.docx, @MyChild) are prepended with the chat's context path.
+    /// Relative paths (e.g., @content:file.docx, @MyChild) are prepended with <paramref name="contextPath"/>.
     /// Call this before <see cref="ResolvePath"/> whenever a tool accepts a user-supplied path
     /// — otherwise relative paths or bare names get shipped to the mesh unchanged and fail to route.
+    ///
+    /// <para>Takes the context as a STRING rather than the chat that carries it: the resolution is
+    /// pure path arithmetic and the only thing it ever read off a chat was
+    /// <c>chat.Context?.Context</c>. Keeping the parameter primitive is what lets this whole class
+    /// live in the platform while agent chat lives in a module — see issue #2276.</para>
     /// </summary>
-    public static string ResolveContextPath(IAgentChat chat, string path)
+    public static string ResolveContextPath(string? contextPath, string path)
     {
         if (string.IsNullOrEmpty(path))
             return path;
-
-        var contextPath = chat.Context?.Context;
 
         // Strip surrounding quotes (autocomplete wraps spaced paths in quotes)
         if (path.Length >= 2 && path[0] == '"' && path[^1] == '"')
@@ -852,7 +855,7 @@ public class MeshOperations
     /// owning per-node hub's <c>MeshNodeReference</c> reducer — the authoritative
     /// source of truth, no catalog lag. <c>GetDataRequest</c> activates the cold
     /// per-node hub on receipt; the response carries the live MeshNode.
-    /// Returns a <see cref="NodeReadOutcome"/> that keeps the three cases apart (issue #974):
+    /// Returns a <see cref="NodeReadResult"/> that keeps the three cases apart (issue #974):
     /// the node, a DEFINITIVE absence, or an UNAVAILABLE read that reached no verdict.
     /// See <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
     ///
@@ -862,7 +865,7 @@ public class MeshOperations
     /// prevent; the budget below is the ONLY place that knows the read gave up, so it is the place
     /// that classifies.</para>
     /// </summary>
-    private IObservable<NodeReadOutcome> FetchNode(string resolvedPath, int timeoutSeconds = 10)
+    private IObservable<NodeReadResult> FetchNode(string resolvedPath, int timeoutSeconds = 10)
     {
         // 🚨 SECURITY: capture the caller's identity HERE, synchronously, while we are still on the
         // caller's execution context — and re-establish it around the subscribe below.
@@ -903,7 +906,7 @@ public class MeshOperations
         var callerIdentity = accessService?.Context ?? accessService?.CircuitContext
             ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
 
-        return Observable.Create<NodeReadOutcome>(observer =>
+        return Observable.Create<NodeReadResult>(observer =>
         {
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             var emitted = 0;
@@ -918,7 +921,7 @@ public class MeshOperations
             // Matches the GetMeshNode shape in MeshNodeStreamExtensions.cs.
             IDisposable? innerSubscription = null;
 
-            void EmitOnce(NodeReadOutcome outcome)
+            void EmitOnce(NodeReadResult outcome)
             {
                 if (Interlocked.Exchange(ref emitted, 1) != 0) return;
                 observer.OnNext(outcome);
@@ -930,7 +933,7 @@ public class MeshOperations
             // gets an authoritative routing NotFound (classified in FromReadFailure), it does not
             // sit silent. Reporting the silence as "Not found" is what made callers delete and
             // recreate nodes that existed. Widening this budget would only make the lie rarer.
-            cts.Token.Register(() => EmitOnce(NodeReadOutcome.Unavailable(
+            cts.Token.Register(() => EmitOnce(NodeReadResult.Unavailable(
                 $"read of '{resolvedPath}' reached no verdict within {timeoutSeconds}s")));
 
             try
@@ -959,7 +962,7 @@ public class MeshOperations
                         && string.Equals(n.Path, resolvedPath, StringComparison.OrdinalIgnoreCase))
                     .Take(1)
                     .Subscribe(
-                        node => EmitOnce(NodeReadOutcome.Found(node!)),
+                        node => EmitOnce(NodeReadResult.Found(node!)),
                         ex =>
                         {
                             // Classify at the READ, where the failure's type is still intact
@@ -968,7 +971,7 @@ public class MeshOperations
                             // deliberately so, because saying "denied" would disclose that a
                             // gated node exists at this exact path. Anything else is an
                             // availability failure and is named as one.
-                            var outcome = NodeReadOutcome.FromReadFailure(resolvedPath, ex);
+                            var outcome = NodeReadResult.FromReadFailure(resolvedPath, ex);
                             if (ex is UnauthorizedAccessException)
                                 logger.LogInformation(
                                     "FetchNode DENIED for {Path} — caller lacks Read (gated content)",
@@ -985,7 +988,7 @@ public class MeshOperations
                         // The stream completed without ever passing the exact-path filter: the
                         // read DID reach an answer and there is nothing readable here. Absent,
                         // not unavailable — and reaching it here beats sitting out the budget.
-                        () => EmitOnce(NodeReadOutcome.Absent));
+                        () => EmitOnce(NodeReadResult.Absent));
             }
             catch (Exception ex)
             {
@@ -994,7 +997,7 @@ public class MeshOperations
                 // the availability condition this method exists to name. A synchronous throw here
                 // is NOT evidence the node is missing.
                 logger.LogWarning(ex, "FetchNode read setup failed for {Path}", resolvedPath);
-                EmitOnce(NodeReadOutcome.Unavailable(
+                EmitOnce(NodeReadResult.Unavailable(
                     $"read setup for '{resolvedPath}' faulted: {ex.GetType().Name}: {ex.Message}"));
             }
 
@@ -2090,7 +2093,13 @@ public class MeshOperations
     /// on 0 matches and <see cref="AmbiguousAnchorException"/> on an ambiguous match without
     /// <paramref name="replaceAll"/>.
     /// </summary>
-    internal static string AnchoredReplace(
+    /// <param name="text">The live content to edit.</param>
+    /// <param name="oldText">The anchor — the exact text to replace.</param>
+    /// <param name="newText">The replacement text.</param>
+    /// <param name="replaceAll">When true, every occurrence is replaced instead of refusing an ambiguous match.</param>
+    /// <param name="replacements">Receives the number of occurrences actually replaced.</param>
+    /// <returns>The edited content.</returns>
+    public static string AnchoredReplace(
         string text, string oldText, string newText, bool replaceAll, out int replacements)
     {
         var count = CountOccurrences(text, oldText);
@@ -4357,7 +4366,7 @@ public class MeshOperations
 /// caller's read and the write turn (or never existed). Carries the live content's length so the
 /// tool error can tell the agent what it was checked against.
 /// </summary>
-internal sealed class AnchorNotFoundException : InvalidOperationException
+public sealed class AnchorNotFoundException : InvalidOperationException
 {
     /// <summary>Creates the exception, recording the live content's length.</summary>
     public AnchorNotFoundException(int contentLength)
@@ -4373,7 +4382,7 @@ internal sealed class AnchorNotFoundException : InvalidOperationException
 /// text to replace occurs more than once in the LIVE content and <c>replaceAll</c> was not set —
 /// replacing an arbitrary occurrence would corrupt the document.
 /// </summary>
-internal sealed class AmbiguousAnchorException : InvalidOperationException
+public sealed class AmbiguousAnchorException : InvalidOperationException
 {
     /// <summary>Creates the exception, recording how many occurrences were found.</summary>
     public AmbiguousAnchorException(int occurrenceCount)

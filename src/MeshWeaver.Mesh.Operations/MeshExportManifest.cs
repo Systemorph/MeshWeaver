@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using MeshWeaver.Mesh;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// The <c>manifest.json</c> at the root of a mesh export ZIP produced by

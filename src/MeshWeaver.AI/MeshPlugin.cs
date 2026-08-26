@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh;
 using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -313,7 +314,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return null;
     }
 
-    private string ResolveContextPath(string path) => MeshOperations.ResolveContextPath(chat, path);
+    private string ResolveContextPath(string path) => AgentChatPaths.ResolveContextPath(chat, path);
 
     /// <summary>
     /// RunTests only exists where the source repo does: it shells out to `dotnet test`
