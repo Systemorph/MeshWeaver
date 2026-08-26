@@ -164,7 +164,7 @@ public record MeshBuilder
         // threw: the original report's stack named a GlobalServiceConfigurations callback
         // (`AzureFoundryProvidersAttribute.<get_Nodes>b__1_0(IServiceCollection)`) being CALLED,
         // and the systemorph recurrence named this exact frame
-        // (`MeshBuilder.InstallServices(IEnumerable'1 nodes)`) directly. Materialising `a.Nodes`
+        // (`MeshBuilder.InstallServices(IEnumerable`1 nodes)`) directly. Materialising `a.Nodes`
         // above only captures the delegate; invoking it is what can throw. Folded per module, same
         // shape as the BuilderConfigurations fold below, so one module's registration failure
         // costs only that module — never the modules that load after it in this call.
@@ -174,7 +174,16 @@ public record MeshBuilder
         {
             try
             {
-                installedNodes.AddRange(InstallServices(module.Nodes));
+                // 🚨 Materialise this module's nodes into a LOCAL buffer BEFORE touching
+                // installedNodes/MeshNodes. A module can carry several nodes; if an EARLIER one's
+                // config succeeds and a LATER one's throws, `.ToList()` still throws here (nothing
+                // is appended), so the module stays "contributes nothing" at the node-list level
+                // even though the earlier node's ConfigureServices call already mutated the live
+                // IServiceCollection for real and cannot be undone — the same asymmetry the
+                // BuilderConfigurations fold below already accepts (applied side effects stay
+                // applied; only chain/list MEMBERSHIP is what stays consistent).
+                var moduleNodes = InstallServices(module.Nodes).ToList();
+                installedNodes.AddRange(moduleNodes);
                 installed.Add(module);
             }
             catch (Exception exception)

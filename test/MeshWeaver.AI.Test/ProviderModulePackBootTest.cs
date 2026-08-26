@@ -9,6 +9,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using MeshWeaver.AI.Test;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.CodeAnalysis;
@@ -198,6 +199,49 @@ public class ProviderModulePackBootTest
             broken.MissingMember);
     }
 
+    /// <summary>
+    /// The Copilot review on this PR flagged a real gap in the first version of this fix:
+    /// <c>InstallServices</c> is a generator that YIELDS each node right after ITS OWN
+    /// <c>GlobalServiceConfigurations</c> delegate succeeds, so a module with more than one node
+    /// could have an EARLIER node's contribution land in <c>MeshNodes</c> even though a LATER node
+    /// in the SAME module then throws and the whole module is recorded as
+    /// <see cref="IncompatibleModule"/> — a module documented as "contributing nothing" that, in
+    /// fact, contributed one node. This fixture has two nodes under one attribute: the first's
+    /// registration succeeds, the second's throws.
+    /// </summary>
+    [Fact]
+    public void InstallAssemblies_WithAModuleWhoseSecondNodeThrows_ContributesNoNodesAtAll()
+    {
+        var brokenModulePath = CompileTwoNodeModuleWhereTheSecondNodeThrows(
+            out var firstNodePath, out var secondNodePath);
+
+        var services = (IServiceCollection)new ServiceCollection();
+        var builder = new MeshBuilder(configure => configure.Invoke(services),
+            AddressExtensions.CreateMeshAddress());
+
+        var exception = Record.Exception(() => builder.InstallAssemblies(brokenModulePath));
+
+        Assert.Null(exception);
+
+        var nodePaths = services.BuildServiceProvider()
+            .EnumerateStaticNodes()
+            .Select(n => n.Path)
+            .ToList();
+
+        // NEITHER node from the broken module reaches MeshNodes — not even the one whose own
+        // ConfigureServices delegate ran successfully before its sibling threw. The module
+        // "contributes nothing", exactly as IncompatibleModule.Report() claims.
+        Assert.DoesNotContain(firstNodePath, nodePaths);
+        Assert.DoesNotContain(secondNodePath, nodePaths);
+
+        var recorded = services
+            .Where(d => d.ServiceType == typeof(IncompatibleModule))
+            .Select(d => d.ImplementationInstance)
+            .OfType<IncompatibleModule>()
+            .ToList();
+        Assert.Single(recorded);
+    }
+
     [Fact]
     public void TheFactoryClaimsItsOwnModels_AndNobodyElses()
     {
@@ -285,6 +329,76 @@ public class ProviderModulePackBootTest
         if (!result.Success)
             throw new InvalidOperationException(
                 "the broken-service-registration fixture assembly must compile: "
+                + string.Join("; ", result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        return path;
+    }
+
+    /// <summary>
+    /// As <see cref="CompileBrokenServiceRegistrationModule"/>, but with TWO nodes under one
+    /// attribute: the first's <c>GlobalServiceConfigurations</c> delegate succeeds (it registers a
+    /// harmless marker service), the second's throws. Pins that a module's node-list contribution
+    /// is all-or-nothing, not "whichever nodes got yielded before the throw".
+    /// </summary>
+    private static string CompileTwoNodeModuleWhereTheSecondNodeThrows(
+        out string firstNodePath, out string secondNodePath)
+    {
+        var assemblyName = $"MeshWeaver.AI.BrokenProbeMulti.{Guid.NewGuid():N}";
+        firstNodePath = "MeshWeaver.AI.BrokenProbeMulti.First";
+        secondNodePath = "MeshWeaver.AI.BrokenProbeMulti.Second";
+        var tree = CSharpSyntaxTree.ParseText(
+            """
+            using System;
+            using System.Collections.Generic;
+            using MeshWeaver.Mesh;
+            using Microsoft.Extensions.DependencyInjection;
+
+            [assembly: MeshWeaver.AI.BrokenProbeMulti.TwoNodeSecondThrowsAttribute]
+
+            namespace MeshWeaver.AI.BrokenProbeMulti;
+
+            [AttributeUsage(AttributeTargets.Assembly)]
+            public sealed class TwoNodeSecondThrowsAttribute : MeshNodeProviderAttribute
+            {
+                public override IEnumerable<MeshNode> Nodes =>
+                [
+                    new MeshNode("MeshWeaver.AI.BrokenProbeMulti.First")
+                    {
+                        Name = "First node — its registration succeeds",
+                        NodeType = "ModuleDefinition",
+                    }
+                    .WithGlobalServiceRegistry(services =>
+                        services.AddSingleton(new FirstNodeMarker())),
+                    new MeshNode("MeshWeaver.AI.BrokenProbeMulti.Second")
+                    {
+                        Name = "Second node — its registration throws",
+                        NodeType = "ModuleDefinition",
+                    }
+                    .WithGlobalServiceRegistry(services =>
+                        throw new MissingMethodException(
+                            "Method not found: 'Void MeshWeaver.AI.BrokenProbeMulti.LanguageModelCatalogSource"
+                            + "..ctor(System.String)'.")),
+                ];
+            }
+
+            public sealed class FirstNodeMarker;
+            """);
+
+        var references = ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string) ?? string.Empty)
+            .Split(Path.PathSeparator)
+            .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
+            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
+            .ToList();
+
+        var compilation = CSharpCompilation.Create(
+            assemblyName, [tree], references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var path = Path.Combine(Path.GetTempPath(), $"{assemblyName}.dll");
+        using var stream = File.Create(path);
+        var result = compilation.Emit(stream);
+        if (!result.Success)
+            throw new InvalidOperationException(
+                "the two-node fixture assembly must compile: "
                 + string.Join("; ", result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
         return path;
     }
