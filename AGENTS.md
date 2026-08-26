@@ -500,10 +500,10 @@ old `C:\dev\MeshWeaver` here predated the worktree rule above). Avoid chained co
 dotnet build                                              # Build solution (ONE project arg max — several is an MSB1008 no-op)
 dotnet build test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj   # Build one project — required before --no-build
 dotnet test test/MeshWeaver.Data.Test --no-build          # Run one test project (built above; unbuilt = silent exit 0)
-dotnet run --project memex/Memex.Portal.Monolith          # Monolith standalone (https://localhost:7122, http://localhost:5022)
-dotnet run --project memex/aspire/Memex.AppHost           # Aspire (requires Docker) — portal at https://localhost:7202, http://localhost:5202
-aspire run --project memex/aspire/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`) — same URLs as above
-aspire start --no-build --project memex/aspire/Memex.AppHost  # Background + NO rebuild — fast bring-up; `aspire ps` / `aspire stop` to manage. --no-build reuses the last build (won't pick up source edits)
+dotnet run --project ../MeshWeaver.Plugins/src/Memex.Portal.Monolith          # Monolith standalone (https://localhost:7122, http://localhost:5022)
+dotnet run --project ../MeshWeaver.Plugins/src/Memex.AppHost           # Aspire (requires Docker) — portal at https://localhost:7202, http://localhost:5202
+aspire run --project ../MeshWeaver.Plugins/src/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`) — same URLs as above
+aspire start --no-build --project ../MeshWeaver.Plugins/src/Memex.AppHost  # Background + NO rebuild — fast bring-up; `aspire ps` / `aspire stop` to manage. --no-build reuses the last build (won't pick up source edits)
 ```
 
 ### Restarting just the Portal (no full Aspire restart)
@@ -512,7 +512,7 @@ When you change code in `Memex.Portal.Distributed` or any project it references,
 
 1. **Hot reload (cheapest)** — start with `dotnet watch` instead of `dotnet run` / `aspire run`:
    ```bash
-   dotnet watch --project memex/aspire/Memex.AppHost
+   dotnet watch --project ../MeshWeaver.Plugins/src/Memex.AppHost
    ```
    File save → Aspire restarts the affected resource only. Preserves the dashboard, the Postgres container, and the SignalR endpoints. Most code changes apply within seconds.
 2. **Aspire dashboard UI** — open `https://localhost:17200/` → Resources tab → click the ⋯ next to `memex-portal-distributed` → **Restart**. Runs `dotnet build` + restart in-place.
@@ -807,8 +807,8 @@ Full treatment: [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Arch
 | Environment | Base URL |
 |---|---|
 | Prod | `https://memex.meshweaver.cloud` |
-| Dev — Aspire (`memex/aspire/Memex.AppHost`) | `https://localhost:7202` (HTTP fallback `http://localhost:5202`) |
-| Dev — Monolith standalone (`memex/Memex.Portal.Monolith`) | `https://localhost:7122` (HTTP fallback `http://localhost:5022`) |
+| Dev — Aspire (`../MeshWeaver.Plugins/src/Memex.AppHost`) | `https://localhost:7202` (HTTP fallback `http://localhost:5202`) |
+| Dev — Monolith standalone (`../MeshWeaver.Plugins/src/Memex.Portal.Monolith`) | `https://localhost:7122` (HTTP fallback `http://localhost:5022`) |
 
 ## `@/` is Local-Only
 
@@ -856,7 +856,7 @@ Actor-model message hub (`MeshWeaver.Messaging.Hub`) with address-based partitio
 |---|---|
 | `src/` | Core framework (50+ projects) |
 | `samples/Graph/Data/` | Sample data nodes (ACME, Northwind, Cornerstone, etc.) |
-| `memex/Memex.Portal.Monolith/` | Dev portal with full Graph + Documentation support |
+| `../MeshWeaver.Plugins/src/Memex.Portal.Monolith/` | Dev portal with full Graph + Documentation support |
 | `memex/aspire/` | Microservices with .NET Aspire orchestration |
 
 **Request-Response:** `hub.Observe<TResponse>(request, o => o.WithTarget(address)).Subscribe(resp => …, ex => …)`  

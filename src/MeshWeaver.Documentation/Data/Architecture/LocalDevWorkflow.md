@@ -13,6 +13,16 @@ Tags:
 
 ## Quick reference
 
+> 🚨 **The portal hosts live in `MeshWeaver.Plugins` since 2026-08-26** (MeshWeaver#2293 — the GUI
+> extraction). `Memex.Portal.Monolith`, `Memex.AppHost` and `Memex.Portal.Distributed` are under
+> `src/` **in that repository**, and so are the login pages (`Memex.Portal.Gui`). A core checkout on
+> its own has no portal to run: following an older copy of this page from core alone gives a
+> process with no login UI and no control views (#2367). Every command below assumes the standard
+> sibling layout — `MeshWeaver/` and `MeshWeaver.Plugins/` side by side — which is what plugins'
+> `src/Directory.Build.props` defaults `MeshWeaverRoot` to (`../MeshWeaver`); set
+> `-p:MeshWeaverRoot=<path>` if yours differs.
+
+
 When you change code in `Memex.Portal.Distributed` (or any project it references — `MeshWeaver.AI`, `MeshWeaver.Graph`, `MeshWeaver.Hosting.Orleans`, …), you have **three** ways to apply the change without touching the whole Aspire stack:
 
 <svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
@@ -56,7 +66,7 @@ When you change code in `Memex.Portal.Distributed` (or any project it references
 
 | Approach | Typical cost | When to use |
 |---|---|---|
-| `dotnet watch --project memex/aspire/Memex.AppHost` | Seconds | Default. File save triggers a per-resource restart automatically. |
+| `dotnet watch --project ../MeshWeaver.Plugins/src/Memex.AppHost` | Seconds | Default. File save triggers a per-resource restart automatically. |
 | Dashboard UI: Resources → ⋯ → **Restart** | ~10 s | Watch isn't running, or it missed a change. |
 | Kill the portal process (`pkill -f Memex.Portal.Distributed`) | ~5 s | Last resort — dashboard hangs or AppHost is wedged. |
 
@@ -71,18 +81,18 @@ Three modes — pick by whether you want to hold a terminal and whether you need
 ```bash
 # A. Interactive (foreground) — builds, holds the terminal, prints live status.
 #    Registers with `aspire mcp` so MCP tools can drive it. Ctrl+C to stop.
-aspire run --project memex/aspire/Memex.AppHost
+aspire run --project ../MeshWeaver.Plugins/src/Memex.AppHost
 
 # B. Background daemon — detaches and returns immediately; survives across shells.
 #    `--no-build` reuses the existing binaries (fast — no rebuild). Drop --no-build
 #    to build first. Also registers with `aspire mcp`.
-aspire start --no-build --project memex/aspire/Memex.AppHost
+aspire start --no-build --project ../MeshWeaver.Plugins/src/Memex.AppHost
 aspire ps                 # list running AppHosts (Path · PID · dashboard URL)
 aspire stop               # stop the background AppHost
 aspire logs [<resource>]  # tail logs without the dashboard
 
 # C. Visual Studio's "F5" path.
-dotnet run --project memex/aspire/Memex.AppHost
+dotnet run --project ../MeshWeaver.Plugins/src/Memex.AppHost
 ```
 
 > 🚨 **`aspire start --no-build` reuses the LAST build.** It's the fast way to bring the
@@ -97,7 +107,7 @@ dotnet run --project memex/aspire/Memex.AppHost
 Dashboard:  https://localhost:17200/login?t=<TOKEN>
 ```
 
-Open that URL in your browser. The token is per-process — restart Aspire and you get a new one. To skip token authentication in development, add the following to `memex/aspire/Memex.AppHost/Properties/launchSettings.json`:
+Open that URL in your browser. The token is per-process — restart Aspire and you get a new one. To skip token authentication in development, add the following to `../MeshWeaver.Plugins/src/Memex.AppHost/Properties/launchSettings.json`:
 
 ```json
 "environmentVariables": {
@@ -137,7 +147,7 @@ dotnet build-server shutdown
 dotnet build memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj --no-restore
 
 # 4. Start fast, reusing the build from step 3 (no second compile):
-aspire start --no-build --project memex/aspire/Memex.AppHost
+aspire start --no-build --project ../MeshWeaver.Plugins/src/Memex.AppHost
 ```
 
 On Windows (PowerShell), step 1's force-kill is instead:
@@ -155,7 +165,7 @@ Get-Process Memex.AppHost,Memex.Portal.Distributed,aspire -ErrorAction SilentlyC
 ## Option 1 — Hot reload with `dotnet watch`
 
 ```bash
-dotnet watch --project memex/aspire/Memex.AppHost
+dotnet watch --project ../MeshWeaver.Plugins/src/Memex.AppHost
 ```
 
 Save a file and Aspire detects the change, rebuilds the affected project, and restarts only that resource. The Postgres container, blob-storage container, and dashboard all stay up. Most edits apply within seconds.
@@ -215,8 +225,8 @@ If `mcp__aspire__list_apphosts` returns `[]` even though Aspire is running, the 
 Fix — stop the current AppHost and restart with either CLI form:
 
 ```bash
-aspire run --project memex/aspire/Memex.AppHost     # foreground
-aspire start --project memex/aspire/Memex.AppHost   # background daemon
+aspire run --project ../MeshWeaver.Plugins/src/Memex.AppHost     # foreground
+aspire start --project ../MeshWeaver.Plugins/src/Memex.AppHost   # background daemon
 ```
 
 After this, MCP tools (`list_resources`, `list_traces`, `list_structured_logs`, `execute_resource_command`) all work against the running AppHost.
