@@ -161,6 +161,59 @@ public class GateAllowlistTest
     // ── the stale rule ───────────────────────────────────────────────────────────────────────
 
     [Fact]
+    public void Evaluate_IntermittentEntryWhoseCheckPasses_IsNotStale()
+    {
+        // The ratchet's rule — a listed check that starts passing must be removed — assumes the
+        // check is DETERMINISTIC, so one green run proves the debt is paid. For a flapping check
+        // that inference is wrong. PensionFund idempotence was dropped as stale and restored one
+        // commit later for exactly this reason, after which the file carried the intent in a
+        // comment the parser strips, and the ratchet kept failing runs for obeying the file.
+        var healthy = new PackageResult("Claims");
+        var verdict = GateVerdict.Evaluate(
+            Report(healthy), GateAllowlist.Parse(["Claims idempotence intermittent"]));
+
+        Assert.Empty(verdict.Stale);
+        Assert.Empty(verdict.NewFailures);
+        Assert.True(verdict.Success);
+    }
+
+    [Fact]
+    public void Evaluate_IntermittentEntry_StillSuppressesItsOwnFailure()
+    {
+        // Marking an entry intermittent gives up stale-detection for that line and NOTHING else:
+        // it still tolerates the failure it names, exactly as before.
+        var verdict = GateVerdict.Evaluate(
+            Report(IdempotenceBroken("Claims")),
+            GateAllowlist.Parse(["Claims idempotence intermittent"]));
+
+        Assert.Empty(verdict.NewFailures);
+        Assert.Single(verdict.KnownDebt);
+        Assert.True(verdict.Success);
+    }
+
+    [Fact]
+    public void ToString_RendersTheEntryExactlyAsTheAllowFileHasIt()
+    {
+        // The gate prints entries in its diagnostics, and an operator reading that output is looking
+        // for the LINE TO EDIT. A rendering that drops the marker does not match the file and cannot
+        // be pasted back into it.
+        var plain = GateAllowlist.Parse(["Claims idempotence"]).Entries.Single();
+        var flappy = GateAllowlist.Parse(["Claims idempotence intermittent"]).Entries.Single();
+
+        Assert.Equal("Claims idempotence", plain.ToString());
+        Assert.Equal("Claims idempotence intermittent", flappy.ToString());
+    }
+
+    [Fact]
+    public void Parse_RejectsAnUnknownThirdToken()
+    {
+        // A typo in the marker must not silently degrade to a plain entry — that would restore the
+        // stale-failure the marker exists to prevent, with nothing pointing at the cause.
+        Assert.Throws<FormatException>(
+            () => GateAllowlist.Parse(["Claims idempotence intermitent"]));
+    }
+
+    [Fact]
     public void Evaluate_EntryWhoseCheckPasses_IsStale_AndFailsTheRun()
     {
         var healthy = new PackageResult("Claims");
