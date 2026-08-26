@@ -56,12 +56,46 @@ public class PlatformBakeLaneGuard
             + "compile … --output /bake). The framework identity is a property of the shipped "
             + "binaries, so only the image the pods run can produce a bake those pods will adopt.");
 
-        Assert.True(job.Contains("--platform linux/amd64", StringComparison.Ordinal),
-            $"'{JobName}' in {Workflow} must pin the bake platform explicitly. Architecture is part "
-            + "of the identity — the amd64 and arm64 variants of one multi-arch image resolve "
-            + "different identities — and every AKS node is amd64, so inheriting whatever "
-            + "architecture the runner happens to be would silently key the bake to an identity no "
-            + "pod resolves.");
+        // 🚨 THE PLATFORM PIN IS STRUCTURAL, NOT A LITERAL — and the invariant is "explicit", not
+        // "amd64". Architecture is part of the identity (the amd64 and arm64 variants of ONE
+        // multi-arch image resolve different identities), so a container that inherits whatever
+        // architecture the runner happens to be would silently key its bake to an identity no
+        // consumer resolves. The lane is now one leg per architecture, each pinning `--platform` to
+        // its OWN matrix value, so asserting the old `--platform linux/amd64` literal would assert
+        // the opposite of the invariant: it would demand that the arm64 leg pull amd64 bytes.
+        //
+        // Both halves are checked, because either alone is satisfiable while the invariant is gone:
+        //   (a) the matrix must declare the platforms as LITERALS — `${{ matrix.docker_platform }}`
+        //       with no matrix behind it, or one fed from an expression, is an inherited pin
+        //       wearing an explicit pin's clothes;
+        //   (b) EVERY container command that materialises image bytes (run / pull / create) must
+        //       carry that pin — one unpinned `docker run` is enough to bake against the runner's
+        //       own architecture, which is exactly the silent form of this defect.
+        var declaredPlatforms = Regex.Matches(job, @"docker_platform:\s*(\S+)")
+            .Select(m => m.Groups[1].Value.Trim())
+            .Distinct()
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToArray();
+        Assert.True(declaredPlatforms.SequenceEqual(new[] { "linux/amd64", "linux/arm64" }),
+            $"'{JobName}' in {Workflow} must declare its bake platforms as literals in the matrix "
+            + "(docker_platform: linux/amd64 and linux/arm64), one leg per architecture. Found: ["
+            + string.Join(", ", declaredPlatforms) + "]. A bake is an ABI claim about BYTES, so each "
+            + "leg must be taken ON the architecture it describes; publishing one architecture's "
+            + "bytes under the other's identity is the adopt-what-you-did-not-resolve defect "
+            + "CiContentBake.md forbids.");
+
+        var unpinned = job.Split('\n')
+            .Where(l => Regex.IsMatch(l, @"docker\s+(run|pull|create)\b"))
+            .Where(l => !l.Contains("--platform ${{ matrix.docker_platform }}", StringComparison.Ordinal))
+            .Select(l => l.Trim())
+            .ToArray();
+        Assert.True(unpinned.Length == 0,
+            $"'{JobName}' in {Workflow} runs a container without pinning it to this leg's "
+            + "architecture (--platform ${{ matrix.docker_platform }}). Every docker run/pull/create "
+            + "in this job materialises image bytes whose identity the bake then claims, so an "
+            + "unpinned one inherits the runner's architecture and keys the bake to an identity no "
+            + "pod resolves — silently, because the publish still succeeds. Offending line(s):\n  "
+            + string.Join("\n  ", unpinned));
 
         Assert.True(job.Contains("publish-bake-bundles.sh", StringComparison.Ordinal),
             $"'{JobName}' in {Workflow} must publish through .github/scripts/publish-bake-bundles.sh "
