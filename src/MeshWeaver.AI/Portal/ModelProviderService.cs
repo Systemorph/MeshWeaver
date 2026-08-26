@@ -12,11 +12,11 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Models;
+namespace MeshWeaver.AI.Portal;
 
 /// <summary>
 /// Service for creating, rotating, and deleting AI model provider credentials.
-/// Modelled on <see cref="Memex.Portal.Shared.Authentication.ApiTokenService"/>
+/// Modelled on <c>Authentication.ApiTokenService</c>
 /// — credentials are stored as <c>nodeType:ModelProvider</c> MeshNodes in the
 /// owner's dotfile namespace (<c>{userId}/_Memex/{providerName}</c>, the same
 /// hidden namespace that hosts <c>{user}/_Memex/ThreadComposer</c>; see
@@ -337,7 +337,7 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
     /// <summary>
     /// Live list of ModelProviders owned by <paramref name="ownerPath"/>.
     /// Same shape as
-    /// <see cref="Memex.Portal.Shared.Authentication.ApiTokenService.GetTokensForUser"/>
+    /// <c>ApiTokenService.GetTokensForUser</c>
     /// — synced via <c>workspace.GetQuery</c>.
     /// </summary>
     public IObservable<IReadOnlyList<ProviderInfo>> GetProvidersForOwner(string ownerPath, string? targetNamespace = null)

@@ -3,15 +3,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Memex.Portal.Shared;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Xunit;
 
-namespace Memex.Portal.Shared.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// 🚨 The seed must be STARTED, not merely written. <see cref="ProviderCredentialSeed"/> is what
@@ -27,12 +27,27 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class ProviderCredentialSeedWiringTest
 {
-    /// <summary>Runs <c>AddStaticRepoSync</c> against a throwaway builder and returns what it registered.</summary>
-    private static IServiceCollection Wire(IReadOnlySet<string> serveFromPartition)
+    /// <summary>
+    /// Installs the AI MODULE the way <c>Modules:Assemblies</c> does — through its assembly
+    /// attribute, against a deployment configuration — and returns what it registered.
+    ///
+    /// <para>The wiring moved here with the seed itself (#2276): the portal used to register it on
+    /// AI's behalf, which is exactly the reference that stopped the engine shipping from the Store.
+    /// The assertion is unchanged, and it must be: WHO registers it changed, whether it is
+    /// registered must not.</para>
+    /// </summary>
+    private static IServiceCollection Wire(params string[] servedPartitions)
     {
         var services = new ServiceCollection();
         var builder = new MeshBuilder(configure => configure(services), new Address("mesh", "test"));
-        builder.AddStaticRepoSync(serveFromPartition);
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(servedPartitions
+                .Select((p, i) => new KeyValuePair<string, string?>(
+                    $"Features:StaticRepoSync:Partitions:{i}", p)))
+            .Build();
+        builder.WithConfiguration(configuration);
+        foreach (var configure in new AiMeshModuleAttribute().BuilderConfigurations)
+            configure(builder);
         return services;
     }
 
@@ -43,8 +58,7 @@ public class ProviderCredentialSeedWiringTest
     [Fact]
     public void DbSyncedProviderPartition_StartsTheCredentialSeed()
     {
-        var services = Wire(new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { ModelProviderNodeType.RootNamespace });
+        var services = Wire(ModelProviderNodeType.RootNamespace);
 
         Assert.True(RegistersSeed(services),
             "the DB-synced Provider partition is the one shape where a provider node can outlive the "
@@ -55,17 +69,17 @@ public class ProviderCredentialSeedWiringTest
     [Fact]
     public void SyncDisabled_RegistersNothing()
     {
-        var services = Wire(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        var services = Wire();
 
         Assert.False(RegistersSeed(services),
-            "with no partition served from the DB there is no import, no node to converge, and "
-            + "AddStaticRepoSync returns early.");
+            "with no partition served from the DB there is no import, no node to converge, and the "
+            + "module registers no seed.");
     }
 
     [Fact]
     public void OtherPartitionsOnly_DoesNotStartTheCredentialSeed()
     {
-        var services = Wire(new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Doc" });
+        var services = Wire("Doc");
 
         Assert.False(RegistersSeed(services),
             "the seed belongs to the Provider partition; a Doc-only sync has no provider catalog.");

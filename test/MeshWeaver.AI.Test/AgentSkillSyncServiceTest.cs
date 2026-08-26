@@ -1,8 +1,8 @@
 using MeshWeaver.AI;
-using Memex.Portal.Shared.Skills;
+using MeshWeaver.AI.Portal;
 using Xunit;
 
-namespace Memex.Portal.Shared.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// Unit tests for the skill workspace instructions

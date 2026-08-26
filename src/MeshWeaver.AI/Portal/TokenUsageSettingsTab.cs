@@ -11,10 +11,11 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 
-namespace Memex.Portal.Shared.Settings;
+namespace MeshWeaver.AI.Portal;
 
 /// <summary>
 /// Admin settings tab: aggregated token usage + estimated cost, read from the per-model
@@ -24,7 +25,7 @@ namespace Memex.Portal.Shared.Settings;
 /// (<see cref="ModelPriceCatalog"/>) — and never stored, so a price edit re-prices history.
 ///
 /// <para>Platform admins only — the menu entry is a seeded <c>UiContribution</c> node with
-/// <c>Gates.AdminOnly</c> (<see cref="PlatformSettingsTabAreas"/>), and the
+/// <c>Gates.AdminOnly</c> (<c>PlatformSettingsTabAreas</c>), and the
 /// <c>SettingsTokenUsage</c> layout area re-asserts the admin gate for direct URLs; the query is
 /// RLS-scoped to what the viewer can read. Rendered with framework controls
 /// (<see cref="DataGridControl"/> + a button toolbar) — no hand-built HTML.</para>
@@ -41,6 +42,33 @@ public static class TokenUsageSettingsTab
         [(7, "Last 7 days"), (30, "Last 30 days"), (90, "Last 90 days"), (0, "All time")];
 
     private static FilterState Default => new("Model", 30);
+
+    /// <summary>
+    /// Registers the Token Usage tab through the platform's declarative settings seam — the same
+    /// one <c>ApiTokensSettingsTab</c> uses.
+    ///
+    /// <para>It moved off the portal with the rest of the engine (#2276): a settings page that
+    /// composes an AI tab by NAME forces the composition root to reference the engine, which is
+    /// exactly the reference a Store-delivered module cannot coexist with. Declared here, the tab
+    /// appears when the module is installed and is simply absent when it is not — which is what
+    /// "delistable" has to mean for a UI surface.</para>
+    ///
+    /// <para>Gated on <see cref="Permission.All"/>: token spend is instance-wide administration,
+    /// not a per-user view.</para>
+    /// </summary>
+    /// <param name="config">The hub configuration to register on.</param>
+    /// <returns>The same configuration, for chaining.</returns>
+    public static MessageHubConfiguration AddTokenUsageSettingsTab(this MessageHubConfiguration config)
+        => config.AddSettingsMenuItems(
+            new SettingsMenuItemDefinition(
+                Id: TabId,
+                Label: "Token Usage",
+                ContentBuilder: (host, stack, _) => BuildContent(host, stack),
+                Group: "Administration",
+                Icon: FluentIcons.Database(),
+                Order: 320,
+                RequiredPermission: Permission.All)
+            { LabelKey = "settings.tokenUsage", GroupKey = "settings.groupAdministration" });
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {

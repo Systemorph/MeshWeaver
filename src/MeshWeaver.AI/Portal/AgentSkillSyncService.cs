@@ -1,8 +1,8 @@
+using MeshWeaver.Mesh.Services;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.AI;
-using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
@@ -11,7 +11,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Memex.Portal.Shared.Skills;
+namespace MeshWeaver.AI.Portal;
 
 /// <summary>
 /// Configuration for <see cref="AgentSkillSyncService"/>.
@@ -94,7 +94,7 @@ public sealed class AgentSkillSyncService(
             return;
         }
 
-        var hub = serviceProvider.GetService<PortalApplication>()?.Hub;
+        var hub = serviceProvider.GetService<IPortalHubAccessor>()?.Hub;
         if (hub is null)
         {
             logger?.LogInformation(
