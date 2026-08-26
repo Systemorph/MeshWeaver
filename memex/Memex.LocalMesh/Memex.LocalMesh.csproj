@@ -22,36 +22,32 @@
          portal's endpoint does — so the sidecar compiles and runs whether or not voice is
          installed. The Whisper client itself arrives as a MODULE (below). -->
     <ProjectReference Include="..\..\src\MeshWeaver.Speech.Contract\MeshWeaver.Speech.Contract.csproj" />
+    <!-- The AI engine (Thread/Agent/Skill node types + the chat runtime), the portal's thin lane:
+         the DLL rides the app closure so ResolveModulePath's BaseDirectory fallback finds it, and
+         Modules:Assemblies in appsettings.json is what activates it (a MeshNodeProviderAttribute
+         is read ONLY by InstallConfiguredModules — the reference alone contributes nothing).
+         Without it the sidecar refuses every chat send with "NodeType 'Thread' is not
+         registered" — the RN shells' composer is a dead surface on the local mesh.
 
-    <!-- 🚨 Not used by any code here — this reference exists to make the CENTRAL pin BITE.
-         ModelContextProtocol.Core pulls Microsoft.Extensions.AI.Abstractions transitively at
-         10.4.1, and CentralPackageTransitivePinningEnabled is NOT set repo-wide (see the note in
-         Directory.Packages.props), so a bare PackageVersion cannot reach a pure-transitive
-         dependency. While the engine was a ProjectReference its own direct 10.8.3 reference
-         unified this app's graph; dropping that reference silently floated the app root down to
-         10.4.1 while modules/MeshWeaver.AI/ still binds 10.8.3.
+         🚨 Do NOT "promote" this to the modules/ CLOSURE lane. It looks like the obvious cleanup
+         — the reference double-ships bits that Modules:Assemblies then activates, so the switch
+         controls nothing here — and it is WRONG, for a reason that is invisible from this repo:
+         @(MeshModuleClosure) in memex/MeshModulesPublish.targets is SHARED, and the portal host
+         in MeshWeaver.Plugins imports it through $(MeshWeaverRoot) while narrowing NOTHING (an
+         image host must lay out the complete inventory). So a row added there for this sidecar
+         also puts modules/MeshWeaver.AI/ into the PORTAL IMAGE — and a closure module and a
+         registry module of the same name are mutually exclusive: the landing service answers 409
+         on every instance. That is precisely the gate the AI Store entry (Plugins#687) is waiting
+         on, and the portal is currently clean (zero MeshWeaver.AI mentions in its csproj or its
+         Modules:Assemblies). Host-scoping the row is not the escape hatch either: the closure
+         RESTORE must keep a host-INDEPENDENT property set or it forks the build configuration and
+         reopens the #2127 project.assets.json race — whose victim was src/MeshWeaver.AI itself.
 
-         That split is NOT cosmetic: InstallAssemblies uses Assembly.LoadFrom, which loads into the
-         DEFAULT AssemblyLoadContext — first assembly of a simple name wins, and the app root is
-         probed before a module's load-from path. MCP would load 10.4.1 first, the engine would
-         bind against it, and a 10.8-only member surfaces as the MissingMethodException that #2234's
-         per-module isolation catches: the module drops out, reported incompatible, and every chat
-         send is refused with "NodeType 'Thread' is not registered" again — on a green build.
-
-         The narrow remedy named in Directory.Packages.props ("adding the direct reference where the
-         package flows"), not repo-wide transitive pinning, which has a resolution-wide blast radius
-         and belongs in its own PR. With the versions unified the prune drops the module's copy as a
-         same-identity duplicate, so ONE copy ships. -->
-    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
-    <!-- 🚨 The AI engine is NOT referenced here — deliberately, and this comment is the reason.
-         It arrives the same way every other module does: MeshWeaver.AI is on the CLOSURE lane
-         (memex/MeshModulesPublish.targets), so its bits land in modules/MeshWeaver.AI/ and
-         Modules:Assemblies in appsettings.json is what activates it. A ProjectReference would put
-         the engine back in this app's own closure — the double-ship that makes the switch control
-         nothing, exactly as the Speech note below describes — and it would trip
-         MeshModulesGuardPublishAppRoot, which refuses a closure module found in the app root.
-         Deliberately NOT naming the engine's project file here: a bare mention would match every
-         "who still references the engine?" sweep and read as a live reference (#2276). -->
+         The endgame is not this lane at all: once Plugins#687 lands, the engine ships from the
+         REGISTRY and this host lists it under Modules:Required, exactly as MeshWeaver.Speech does
+         since it left for MeshWeaver.Plugins. Until then the double-ship is the harmless option —
+         it costs bits in a sidecar binary, and it is the PORTAL image that must stay clean. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
   </ItemGroup>
 
   <!-- ═════════ The RN web client is BAKED at publish — never hand-copied ═════════
@@ -111,30 +107,14 @@
     <Message Importance="high" Text="BakeRnWebClient: baked @(RnWebFiles->Count()) files into $(PublishDir)wwwroot/" />
   </Target>
 
-  <!-- ═════════ Modules ship as MODULES here, not as references ═════════
-       The principle this host was already documented as following, now actually wired: a module's
-       bits arrive under modules/<Name>/ and Modules:Assemblies decides whether it RUNS. A
-       ProjectReference instead puts the module in this app's own closure — the double-ship that
-       kept it from being a module in the sense that matters: the bits shipped either way and the
-       switch controlled nothing.
+  <!-- ═════════ Voice ships as a module, not as a reference ═════════
+       MeshWeaver.Speech lands in modules/MeshWeaver.Speech/ and is activated by
+       Modules:Assemblies in appsettings.json — the same lane and the same DLL identity the portals
+       use. A ProjectReference would put the Whisper client back in this app's own closure, which
+       is exactly the double-ship that kept it from being a module in the sense that matters: the
+       bits shipped either way and the switch controlled nothing.
 
-       🚨 The import is the half that was missing. It lived in Memex.Portal.Distributed and
-       Memex.Portal.Monolith, and left with them when the portal GUI moved to MeshWeaver.Plugins
-       (83356b3d5) — this host never had it. So the lane's Build hook never ran here and modules/
-       was never created, which is why the AI engine was wired the only way that then worked: a
-       ProjectReference riding the app closure (8dd8eeecf). With the import in place that
-       workaround is gone and the engine arrives the same way it does on the portals.
-
-       MeshModulesClosureSubset names what THIS host lays out. Without it the sidecar would also
-       carry the Cosmos and Snowflake drivers, which ship in the portal IMAGE on purpose (a
-       Store-installed module needs storage to already work) and are dead weight in a local
-       sidecar that never selects either backend. See the 🚨 in MeshModulesPublish.targets: the
-       prohibition is on a GLOBAL subset (-p: narrows every project in the build, including an
-       image's own layout), not on a project-scoped one — this is a PropertyGroup, so it cannot
-       leak past this project. -->
-  <PropertyGroup>
-    <MeshModulesClosureSubset>MeshWeaver.AI</MeshModulesClosureSubset>
-  </PropertyGroup>
-  <Import Project="..\MeshModulesPublish.targets" />
+       MeshModulesClosureSubset narrows the shared lane to the one module this host wants, so no
+       publish+prune is hand-rolled here. -->
 
 </Project>

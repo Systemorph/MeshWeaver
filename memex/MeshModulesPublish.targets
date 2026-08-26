@@ -130,24 +130,6 @@
          still drops everything the app closure already provides (BlazorMonaco, FluentUI, the base
          pack). Dev note: the MONOLITH keeps Debug ships-the-bits references to these two (see its
          csproj) — a dev tree without them renders every control as escaped HTML. -->
-    <!-- The AI engine. CLOSURE, never thin: the LAST ships-the-bits ProjectReference to it is
-         gone (Memex.LocalMesh's, the sidecar that serves the RN shells — Memex.Portal.Shared
-         dropped its own earlier, per AiMeshModuleAttribute's remarks), so nothing carries its
-         private closure into any app output any more. Measured on the sidecar's layout, that is
-         Microsoft.Extensions.AI(.Abstractions/.Evaluation), Microsoft.Agents.AI(.Abstractions),
-         Microsoft.ML.Tokenizers, Microsoft.Extensions.VectorData.Abstractions, HtmlAgilityPack,
-         and MeshWeaver.GitSync with Octokit beneath it — while YamlDotNet and Humanizer prune
-         away, the app closure already carrying those. A thin-lane row would land MeshWeaver.AI.dll
-         beside a host that cannot resolve its own model-client types at first chat send; the
-         closure publish brings the true private deps and prunes whatever the app and the shared
-         framework already provide.
-
-         Being on this lane is a PRECONDITION for #2276, not a detour: a closure DLL and a registry
-         module of the same name are mutually exclusive (the landing service answers 409 on every
-         instance), so the compiled reference had to go before the engine can ship from the Store
-         at all — the same sequence Portal.Shared already went through. When AI leaves this repo,
-         this row is what gets deleted, and the deployment's Modules:Required entry replaces it. -->
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI/MeshWeaver.AI.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Snowflake/MeshWeaver.Hosting.Snowflake.csproj" />
@@ -158,23 +140,15 @@
     no extension). The inventory above stays the ONE place a module's path is written; a consumer
     picks from it by name, never restates it.
 
-    Two consumers set it, both in a .csproj:
-      - test/Memex.Portal.Shared.Test lays the two storage backends into its OWN bin so
-        StorageModuleLayoutTest can load the very layout the image ships (#1752 — the backends have
-        no ProjectReference anywhere, so nothing else proves their folder is loadable);
-      - memex/Memex.LocalMesh takes MeshWeaver.AI and nothing else. It is a SIDECAR, not an image:
-        Cosmos and Snowflake ride the portal image on purpose (a Store-installed module needs
-        storage to already work) and are dead weight on a device that selects neither.
-    Reusing THIS worker is the whole point in both cases: a hand-copied publish+prune would be a
-    second detector, free to agree with itself while the shipped layout is broken.
+    Today exactly one consumer sets it: test/Memex.Portal.Shared.Test, which lays the two storage
+    backends into its OWN bin so StorageModuleLayoutTest can load the very layout the image ships
+    (#1752 — the backends have no ProjectReference anywhere, so nothing else proves their folder is
+    loadable). Reusing THIS worker is the whole point: a hand-copied publish+prune in the test would
+    be a second detector, free to agree with itself while the shipped layout is broken.
 
-    🚨 Never set it GLOBALLY — a -p: flag applies to every project in the build, so one stray flag
-    would narrow an image's own layout too, silently. A PropertyGroup in a host's .csproj cannot
-    leak past that project and is the sanctioned way to name a subset; the earlier blanket "a HOST
-    must never set it" read as forbidding that too, and the distinction that actually matters is
-    global-vs-project-scoped. An IMAGE host still narrows NOTHING: its layout must be complete.
-    A subset naming nothing fails the lane RED (below) rather than laying out nothing and
-    reporting success.
+    🚨 A HOST must never set it: -p: makes a property global to every project in the build, so one
+    stray flag would narrow the image's own layout too. A subset naming nothing fails the lane RED
+    (below) rather than laying out nothing and reporting success.
   -->
   <PropertyGroup>
     <_MeshModulesSubsetNames>;$(MeshModulesClosureSubset);</_MeshModulesSubsetNames>
