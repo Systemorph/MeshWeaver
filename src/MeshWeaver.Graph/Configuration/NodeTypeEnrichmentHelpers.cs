@@ -505,12 +505,16 @@ internal static class NodeTypeEnrichmentHelpers
                 // already handled them; only get here for dynamic types.
                 && t.HubConfiguration is null)
             .Take(1)
-            // Hold the System scope across the cold Update's Subscribe (Observable.Using
-            // keeps the impersonation alive until the inner observable completes; a bare
-            // `using` would lapse before the subscribe runs on the stream-emission thread).
-            .SelectMany(_ => Observable.Using(
-                () => AccessContextScope.AsSystem(enrichAccessService),
-                _2 => typeStream.Update(curr =>
+            // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790)
+            // — and `AccessContextScope.AsSystem(x)` IS `x.ImpersonateAsSystem()`, so the helper
+            // does not make the shape a different animal. Rx forwards OnNext BEFORE Using disposes
+            // its resource, so the subscriber below runs with `system-security` still ambient, and
+            // the scope is then disposed on whichever thread the inner observable terminates —
+            // latching a long-lived stream-emission thread. RunAsSystem seals both ends inside the
+            // one Subscribe and delivers notifications under the subscriber's own identity; the
+            // cold Update inside keeps its emission-time behaviour exactly.
+            .SelectMany(_ => enrichAccessService.RunAsSystem(
+                () => typeStream.Update(curr =>
                     curr.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions, logger) is { } d
                     && d.CompilationStatus == CompilationStatus.Ok
                     && (string.IsNullOrEmpty(d.LatestAssemblyCollection)
@@ -1341,10 +1345,13 @@ internal static class NodeTypeEnrichmentHelpers
         // HasUsableBuild wait below never settles → the per-instance hub's HubReady never fires →
         // Orleans deactivates it on the 30s callback timeout. That is the FrameworkStaleAssembly
         // CI flake (it "passes locally" only because the inbound context survived more often there).
-        // Observable.Using holds the impersonation across the cold Update's Subscribe — a bare
-        // `using` would lapse before the emission-thread subscribe runs (see the sibling heal).
-        return Observable.Using(
-                () => AccessContextScope.AsSystem(enrichAccessService),
+        // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790):
+        // that shape leaves System ambient for the subscriber (Rx forwards OnNext before Using
+        // disposes) and restores on whichever thread the inner observable terminates. This method
+        // RETURNS its observable, so the leak would be inherited by everything the caller composes
+        // on the emission — the widest possible version of the bug. RunAsSystem seals both ends
+        // inside the one Subscribe; the cold Update inside is unchanged.
+        return enrichAccessService.RunAsSystem(
                 // 🚨 ContentAs, never `curr.Content is NodeTypeDefinition`. This lambda runs against
                 // the CROSS-HUB mirror value, which UpdateRemote passes through un-materialized: on a
                 // JsonElement snapshot the CLR type test fails, the lambda returns `curr` unchanged,
@@ -1352,7 +1359,7 @@ internal static class NodeTypeEnrichmentHelpers
                 // `[UpdateRemote] NO-OP … contentType=JsonElement` for exactly this shape). The
                 // sibling stale-Ok heal in BuildSlowPath already reads it correctly; these two were
                 // missed, so the one mechanism meant to un-stick a stranded type could not fire.
-                _ => typeStream.Update(curr =>
+                () => typeStream.Update(curr =>
                 {
                     if (curr.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions, logger)
                             is { CompilationStatus: CompilationStatus.Ok } cdef)
