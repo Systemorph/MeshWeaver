@@ -42,8 +42,16 @@ namespace MeshWeaver.Documentation.Test;
 /// (<c>Observable.Return</c>, <c>Scheduler.Immediate</c>, an NSubstitute stub, a fake store) or is
 /// bounded by an upstream <c>.Timeout(...)</c>, whose timer runs on the default scheduler and
 /// therefore always unblocks the parked thread — a named failure, not a wedge. The
-/// <c>GetAwaiter().GetResult()</c> setup helpers are NOT individually cleared; the allow file names
-/// them and says why they are the lines to lower first.</para>
+/// <c>GetAwaiter().GetResult()</c> setup helpers were left NOT individually cleared, flagged as the
+/// first place to look if an <c>exit=124</c> with no named test recurred — and on 2026-08-26 it did,
+/// in the very assembly hosting them (<c>MeshWeaver.Hosting.Monolith.Test</c>, run 32939560960).
+/// Both categories are fixed as of that recurrence: the <c>StartAsync(default)</c> helpers are now
+/// <c>async Task&lt;T&gt;</c> and awaited from their (already-async) callers, and the
+/// <c>persistence.SaveNode(...)</c> setup helpers — called from a synchronous
+/// <c>ConfigureMesh(MeshBuilder)</c> override with no <c>await</c>-able call site — go through
+/// <c>IStorageAdapterTestExtensions.SaveNodeSynchronously</c>, a direct <c>Subscribe()</c> with no
+/// <c>Task</c>/<c>GetAwaiter</c>/<c>GetResult</c> bridge in between, so there is no native wait to
+/// park on even in principle.</para>
 ///
 /// <para><b>The ratchet may only SHRINK.</b> A new file, a raised count, or a raised TOTAL is a
 /// failure. A line that has become stale (its site was fixed) is reported, not failed: two PRs
@@ -58,7 +66,7 @@ public class BlockingBridgeInTestRatchetGuard(ITestOutputHelper output)
     /// the shape; this stops the list as a WHOLE from growing — including by the trick of adding a
     /// new file's line. Lower it whenever you delete or lower an entry.
     /// </summary>
-    private const int TotalBudget = 60;
+    private const int TotalBudget = 43;
 
     /// <summary>
     /// <c>test/</c> only. <c>src/</c> is governed by the harder rule AGENTS.md already states for
