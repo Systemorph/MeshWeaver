@@ -11,6 +11,12 @@ Self-Update Strategy](/Doc/Architecture/ReleaseStrategy) describes what that set
 consume it. This page is about the *guarantee* — what `main-cd.yml` promises about the set, and the
 two properties that make a partial or missing release impossible rather than merely loud.
 
+> **Scope.** This contract is about ONE repo's set never being half-published. Coordination BETWEEN
+> repos — who released what, and when a dependent repo may start building — is the
+> [release event bus](../ReleaseEventBus), which is deliberately a different mechanism: repos
+> announce releases as persistent facts and QUERY each other's state, rather than compiling or
+> ordering each other's pipelines.
+
 ## The set, and why "partial" is the failure that hurts
 
 | Repository | Architectures | What consumes it |
