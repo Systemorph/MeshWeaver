@@ -130,12 +130,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
 
         while (true)
         {
-            var lazy = sharedReduceCache.GetOrAdd(reference,
-                _ => new Lazy<ISynchronizationStream>(
-                    () => Reduce(reference, x => x)
-                          ?? throw new InvalidOperationException(
-                              $"Cannot reduce stream {StreamId} to {reference}"),
-                    LazyThreadSafetyMode.ExecutionAndPublication));
+            var mine = new Lazy<ISynchronizationStream>(
+                () => Reduce(reference, x => x)
+                      ?? throw new InvalidOperationException(
+                          $"Cannot reduce stream {StreamId} to {reference}"),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            var lazy = sharedReduceCache.GetOrAdd(reference, mine);
 
             ISynchronizationStream reduced;
             try
@@ -158,6 +158,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 return (ISynchronizationStream<TReduced>)reduced;
 
             Remove(reference, lazy);
+
+            // 🚨 A FRESH reduce that is ALREADY unusable means the SOURCE is dead — disposed, or
+            // (since #2387) terminally faulted, which the reduce chain propagates into every child
+            // it can ever build. Re-reducing is not a repair and repeating it is an unbounded
+            // spin, one SynchronizationStream and `sync/{id}` sub-hub per turn. Hand this one
+            // back: it is exactly what the plain uncached reduce produces, and its store already
+            // carries the terminal so a reader gets an END rather than a stale replay followed by
+            // eternal silence. The same guard Workspace.GetStream carries for its own cache.
+            if (ReferenceEquals(lazy, mine))
+                return (ISynchronizationStream<TReduced>)reduced;
+
+            // We lost the add race to another caller's entry and it was dead: drop it and let the
+            // next turn install ours. Every turn removes one entry, so this cannot spin.
         }
 
         void Remove(WorkspaceReference key, Lazy<ISynchronizationStream> entry) =>
@@ -261,6 +274,38 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
 
     /// <inheritdoc />
     bool IStreamLivenessSource.IsDisposed => isDisposed;
+
+    /// <inheritdoc />
+    bool IStreamLivenessSource.IsFaulted => faulted;
+
+    /// <summary>
+    /// Set the instant <see cref="Store"/> takes a terminal error, and never cleared.
+    ///
+    /// <para>🚨 A FAULT IS FOREVER on this type. <see cref="Store"/> is a
+    /// <see cref="ReplaySubject{T}"/>: once it holds an <c>OnError</c>, the Rx grammar says it can
+    /// never notify anything else again, and every LATER subscriber replays that same error
+    /// immediately. Nothing in the stream re-opens it — <c>Resubscribe</c> re-posts a
+    /// <c>SubscribeRequest</c>, but the answer lands in a store that is already terminal.</para>
+    ///
+    /// <para>That makes a faulted stream exactly as dead as a disposed one, which is why
+    /// <see cref="StreamLiveness.IsUsable"/> reads this flag: without it, a cache that keyed a
+    /// mirror by (owner, reference, identity) kept serving the corpse for the whole process
+    /// lifetime, so ONE unanswered SubscribeRequest turned into a permanent failure of that path
+    /// (Systemorph/MeshWeaver#2387).</para>
+    /// </summary>
+    private volatile bool faulted;
+
+    /// <summary>
+    /// The ONE way this stream's store takes a terminal error — it records
+    /// <see cref="faulted"/> and then errors the store. Every <c>Store.OnError</c> in this type
+    /// goes through here so the flag can never drift from the store's actual state.
+    /// </summary>
+    /// <param name="error">The terminal error to publish to subscribers.</param>
+    private void FaultStore(Exception error)
+    {
+        faulted = true;
+        Store.OnError(error);
+    }
 
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
     // Mesh.Contract in the project graph and cannot reference it. Same literal
@@ -859,7 +904,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             }
             try
             {
-                Store.OnError(error);
+                FaultStore(error);
             }
             catch (Exception ex)
             {
@@ -998,7 +1043,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             {
                 // Safe on a disposed stream: the store is completion-terminated on disposal,
                 // never disposed, and a terminated subject ignores OnError (Rx grammar).
-                Store.OnError(ex);
+                FaultStore(ex);
             }
             catch
             {
@@ -1735,7 +1780,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         {
             tasks.TryRemove(task.Id, out var _);
             if (t is { IsFaulted: true, Exception: not null })
-                Store.OnError(t.Exception);
+                FaultStore(t.Exception);
         });
     }
 
