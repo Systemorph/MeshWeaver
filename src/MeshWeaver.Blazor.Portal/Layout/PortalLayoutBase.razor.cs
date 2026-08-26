@@ -1341,30 +1341,38 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         // discard. Disposing a JS module after the circuit is gone throws JSDisconnectedException
         // ROUTINELY (the same exception this file already tolerates at two other interop sites), so
         // an unobserved task here is a steady trickle of UnobservedTaskException with nothing
-        // pointing back at this line. Blocking is not the alternative: this runs on the circuit's
-        // synchronous Dispose.
+        // pointing back at this line.
+        //
+        // 🚨 No async/await: this runs on the circuit's synchronous Dispose, and `async void` here
+        // would put a continuation on the circuit scheduler — the deadlock class AGENTS.md forbids
+        // in Blazor-view code. A fault-only continuation observes the task without awaiting it.
         if (jsModule is not null)
-            ObserveModuleDisposal(jsModule, Logger);
-    }
-
-    /// <summary>
-    /// Awaits a JS module's disposal off the caller's stack, swallowing the disconnect the circuit
-    /// teardown makes expected and logging anything else. Static and parameterised so it holds no
-    /// reference to the component it outlives.
-    /// </summary>
-    private static async void ObserveModuleDisposal(IJSObjectReference module, ILogger logger)
-    {
-        try
         {
-            await module.DisposeAsync();
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
-        {
-            // The circuit went away first — the module went with it. Nothing to dispose, nothing wrong.
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Disposing the portal layout's JS module faulted");
+            var disposal = jsModule.DisposeAsync();
+            if (!disposal.IsCompletedSuccessfully)
+            {
+                var logger = Logger;
+                disposal.AsTask().ContinueWith(
+                    t =>
+                    {
+                        try
+                        {
+                            var fault = t.Exception?.GetBaseException();
+                            // The circuit went away first — the module went with it. Nothing to
+                            // dispose, nothing wrong.
+                            if (fault is null or OperationCanceledException or JSDisconnectedException)
+                                return;
+                            logger.LogWarning(fault, "Disposing the portal layout's JS module faulted");
+                        }
+                        catch
+                        {
+                            // a logger that faults during teardown must not replace the fault it reports
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
         }
     }
 

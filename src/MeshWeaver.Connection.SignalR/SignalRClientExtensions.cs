@@ -116,6 +116,13 @@ public static class SignalRClientExtensions
                 hub.DeliverMessage(delivery);
         });
 
+        // Resolved HERE, while the hub is alive. Resolving inside the continuation below would ask a
+        // service provider that is already disposing — and an ObjectDisposedException thrown there
+        // would itself be unobserved AND would mask the disposal fault it was sent to report.
+        var disposalLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(SignalRClientExtensions));
+        var disposalAddress = hub.Address;
+
         hub.RegisterForDisposal(Disposable.Create(() =>
         {
             connection.Reconnecting -= Connect;
@@ -125,14 +132,27 @@ public static class SignalRClientExtensions
             // faulting DisposeAsync then surfaces as an UnobservedTaskException with no connection
             // to this line, or as nothing at all. So the task is kept and its fault is logged.
             var disposal = connection.DisposeAsync();
-            if (!disposal.IsCompletedSuccessfully)
-                disposal.AsTask().ContinueWith(
-                    t => hub.ServiceProvider.GetService<ILoggerFactory>()
-                        ?.CreateLogger(typeof(SignalRClientExtensions))
-                        .LogWarning(t.Exception, "SignalR connection disposal faulted for {Address}", hub.Address),
-                    CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
+            if (disposal.IsCompletedSuccessfully)
+                return;
+
+            disposal.AsTask().ContinueWith(
+                t =>
+                {
+                    // Non-throwing by construction: a logger that faults during teardown must not
+                    // replace the fault it was reporting with one of its own.
+                    try
+                    {
+                        disposalLogger?.LogWarning(
+                            t.Exception, "SignalR connection disposal faulted for {Address}", disposalAddress);
+                    }
+                    catch
+                    {
+                        // nothing left to report it to
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }));
 
         await connection.StartAsync();
