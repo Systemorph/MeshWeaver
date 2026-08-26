@@ -2,7 +2,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;

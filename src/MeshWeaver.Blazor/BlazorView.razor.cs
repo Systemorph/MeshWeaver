@@ -4,7 +4,7 @@ using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;

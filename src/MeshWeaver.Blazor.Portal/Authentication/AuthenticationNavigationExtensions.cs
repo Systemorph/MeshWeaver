@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
+using MeshWeaver.Hosting.AspNetCore.Portal.Authentication;
+
 namespace MeshWeaver.Blazor.Portal.Authentication;
 
 /// <summary>

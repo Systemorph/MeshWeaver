@@ -2,7 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Blazor.Test;

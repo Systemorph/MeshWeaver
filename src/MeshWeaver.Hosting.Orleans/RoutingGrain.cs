@@ -160,7 +160,7 @@ internal class RoutingGrain(
     /// <para><c>RoutingGrain</c> is <c>[StatelessWorker(1)]</c> and NON-reentrant: this silo has
     /// exactly ONE routing turn, and Orleans' request timeout does not apply INSIDE a turn. So any
     /// work performed here is work that every other message the silo needs to route waits on, with
-    /// no bound of any kind. Prod (atioz, 2026-08-07) had one <c>RouteMessage</c> turn executing
+    /// no bound of any kind. Prod (2026-08-07) had one <c>RouteMessage</c> turn executing
     /// for <c>06:00:22</c> behind <c>NonReentrancyQueueSize=541</c>; Orleans' diagnostics showed
     /// the work item itself still <c>Running</c> (<c>Total processed</c> frozen), i.e.
     /// <c>RouteMessage</c> had never even RETURNED — it was blocked in its own synchronous body,
@@ -343,6 +343,38 @@ internal class RoutingGrain(
     /// now checks for a subscriber before it publishes and NACKs when there is none. Full plan,
     /// including the one log line that says when the overlap window has closed:
     /// <c>Doc/Architecture/PodHubDeliveryRollPlan</c>.</para>
+    ///
+    /// <para>🚨 <b>Issue #2299: a TRANSIENT rejection used to be treated exactly like a terminal
+    /// one.</b> Prod evidence names two distinct transports-level rejections for the same underlying
+    /// condition — "the pod hub you were routed to did not answer" — that Orleans itself marks
+    /// retryable: a <c>ConnectionFailedException</c> wrapped in <c>OrleansMessageRejectionException</c>
+    /// ("…will retry after Nms", i.e. Orleans' own transport considered it transient), and a
+    /// <c>Forwarding failed: … "DeactivateOnIdle was called." … Rejecting now</c> — the SAME shape
+    /// <see cref="BuildGrainRoute"/> already retries via <see cref="DeliverToGrainWithRetry"/> for a
+    /// per-node hub. This leg had no analogous retry at all: the FIRST attempt's failure — unless it
+    /// was specifically <see cref="PodHubNotHereException"/> — went straight to
+    /// <c>TerminalCallFailure</c>. Now the delivery call itself goes through
+    /// <see cref="DeliverToGrainObservable"/>, the SAME transient-retry-with-fresh-resolve primitive
+    /// <see cref="BuildGrainRoute"/> uses: each retry re-invokes <c>GetGrain&lt;IPodHubGrain&gt;</c>,
+    /// so a blip that heals (the connection reconnects, or the mid-<c>DeactivateOnIdle</c> activation
+    /// finishes tearing down) is served on a later attempt instead of dead-ending the message.</para>
+    ///
+    /// <para><b>Retrying here does not fight the "no deactivating silo activates a grain" invariant
+    /// (PR #2270) — it relies on it.</b> <see cref="RoutingGrain"/>'s grain calls are deliberately
+    /// left UNGATED because they are the DRAIN: a message already accepted for routing must still
+    /// land, and it is Orleans' OWN placement — <c>Catalog.GetOrCreateActivation</c>,
+    /// <c>PlacementService.GetCompatibleSilos</c> — that refuses to place a NEW activation on a silo
+    /// that has left the ACTIVE set, retry or no retry. So a retry here can only ever land a fresh
+    /// activation on a silo Orleans itself still considers healthy; it never coerces one onto a silo
+    /// that is stopping.</para>
+    ///
+    /// <para><b><see cref="PodHubNotHereException"/> is still never retried at this layer</b> — it is
+    /// not in <see cref="IsTransientFailure"/>'s classification, so
+    /// <see cref="DeliverToGrainObservable"/>'s <c>RetryWhen</c> rethrows it on the FIRST attempt,
+    /// exactly as before. Retrying it here would fight <see cref="IPodHubGrain.Deliver"/>'s own
+    /// documented contract: with <c>[PreferLocalPlacement]</c> a retry would just place the next
+    /// attempt on the CALLER again, and the loop would never converge — that bounded bounce-and-give-up
+    /// already lives in <c>OrleansRoutingService.AttachPodHub</c>'s claim retry, one layer up.</para>
     /// </summary>
     private IObservable<Unit> BuildPodHubRoute(
         IMessageDelivery delivery,
@@ -354,8 +386,9 @@ internal class RoutingGrain(
         void PostFailureToSender(string failureMessage, ErrorType errorType) =>
             PostFailure(delivery, address, streamProvider, grainFactory, failureMessage, errorType);
 
-        return Observable
-            .Defer(() => grainFactory.GetGrain<IPodHubGrain>(addressPath).Deliver(delivery).ToObservable())
+        return DeliverToGrainObservable(
+                () => grainFactory.GetGrain<IPodHubGrain>(addressPath).Deliver(delivery),
+                addressPath, delivery.Id, logger)
             .Select(_ =>
             {
                 RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_OK addr={addressPath} id={delivery.Id}");
@@ -363,9 +396,10 @@ internal class RoutingGrain(
             })
             .Catch<Unit, Exception>(ex => IsPodHubNotHere(ex)
                 ? FallBackToStream()
-                // A REAL failure of the call — the owning silo threw, went away mid-call, or the
-                // placement could not be made. This is the whole gain over a publish: it is
-                // OBSERVABLE, so it becomes a terminal answer for the sender instead of silence.
+                // A REAL failure of the call, transient retries exhausted (or a non-transient
+                // fault) — the owning silo threw, went away mid-call, or the placement could not
+                // be made. This is the whole gain over a publish: it is OBSERVABLE, so it becomes
+                // a terminal answer for the sender instead of silence.
                 : TerminalCallFailure(ex))
             // Composition-time faults must ALSO reach the sender — see BuildGrainRoute's trailing
             // Catch for the full rationale (the classic one: GetStream NRE'ing out of
@@ -993,9 +1027,16 @@ internal class RoutingGrain(
     /// <summary>
     /// The cold, awaitable retry observable underlying <see cref="DeliverToGrainWithRetry"/> — a single
     /// grain delivery that re-invokes <paramref name="grainCall"/> on each TRANSIENT rejection (so Orleans
-    /// activates a fresh instance), throws the last exception once retries are exhausted / on a non-transient
-    /// fault, and otherwise emits the grain's result. Split out so tests can <c>await … .ToTask()</c> it
-    /// deterministically.
+    /// re-resolves placement, activating a fresh instance where one is needed), throws the last exception
+    /// once retries are exhausted / on a non-transient fault, and otherwise emits the grain's result. Split
+    /// out so tests can <c>await … .ToTask()</c> it deterministically.
+    ///
+    /// <para>Grain-type agnostic by construction (<paramref name="grainCall"/> is a bare
+    /// <c>Func&lt;Task&lt;IMessageDelivery&gt;&gt;</c>), so <see cref="BuildGrainRoute"/> uses it for
+    /// <c>IMessageHubGrain.DeliverMessage</c> and <see cref="BuildPodHubRoute"/> uses it for
+    /// <c>IPodHubGrain.Deliver</c> (issue #2299) — one retry-with-fresh-resolve primitive for both
+    /// forward legs, so a transient rejection is handled identically regardless of which transport the
+    /// destination hub happens to use.</para>
     /// </summary>
     internal static IObservable<IMessageDelivery> DeliverToGrainObservable(
         Func<Task<IMessageDelivery>> grainCall,

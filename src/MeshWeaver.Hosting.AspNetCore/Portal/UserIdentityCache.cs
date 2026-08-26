@@ -9,7 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Blazor.Infrastructure;
+namespace MeshWeaver.Hosting.AspNetCore.Portal;
 
 /// <summary>
 /// The outcome of ONE email → mesh-user lookup, keeping "this user has no node" apart from

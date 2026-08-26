@@ -1,6 +1,6 @@
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Blazor.Infrastructure;
+namespace MeshWeaver.Hosting.AspNetCore.Portal;
 
 /// <summary>
 /// Circuit-scoped holder for the Blazor interactive circuit's stable id AND the

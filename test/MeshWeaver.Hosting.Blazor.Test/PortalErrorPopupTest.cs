@@ -1,6 +1,6 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;

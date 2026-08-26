@@ -3,7 +3,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Blazor.Infrastructure;
+namespace MeshWeaver.Hosting.AspNetCore.Portal;
 
 /// <summary>
 /// The ONE projection of an authoritative mesh <c>User</c> node onto a seeded
