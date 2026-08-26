@@ -40,15 +40,13 @@
 #
 # 🚨 2026-08-26 (#2013): the residue flagged above as "the first place to look if an exit=124
 # recurs" is exactly what recurred — `MeshWeaver.Hosting.Monolith.Test` (part 2/2) wedged
-# `exit=124 TIMEOUT` on `main`@b55f680a9 (run 32939560960, ~07:19Z), no failing test named. Both
-# categories are now fixed, not merely re-flagged:
+# `exit=124 TIMEOUT` on `main`@b55f680a9 (run 32939560960, ~07:19Z), no failing test named. The
+# `MeshWeaver.Hosting.Monolith.Test`/`MeshWeaver.Persistence.Test` half of the residue is fixed:
 #
-#   * The `StartAsync(default).GetAwaiter().GetResult()` helpers (ScheduledPostWatcherTest,
-#     OrleansScheduledPostTest, OrleansEventSubscriptionTimerTest) are called exclusively from
-#     already-`async Task` [Fact] methods — the sanctioned fix applies directly. Each helper is now
-#     `async Task<T>`, `await`s `StartAsync` instead of blocking on it, and callers `await` the
-#     helper. (`OrleansEventSubscriptionTimerTest`'s out-parameter overload became a tuple return —
-#     `async` cannot carry an `out` parameter.)
+#   * `ScheduledPostWatcherTest`'s `StartAsync(default).GetAwaiter().GetResult()` helper is called
+#     exclusively from already-`async Task` [Fact] methods — the sanctioned fix applies directly:
+#     now `async Task<ScheduledPostWatcher>`, `await`s `StartAsync` instead of blocking on it, and
+#     callers `await` the helper.
 #   * The `persistence.SaveNode(...).FirstAsync().ToTask().GetAwaiter().GetResult()` setup helpers
 #     (CreatableTypesIntegrationTest, MeshNodeVisibilityTests, DataContextIntegrationTest,
 #     MeshNodeVersionSyncTest) all seed via `InMemoryStorageAdapter` from a synchronous
@@ -60,6 +58,15 @@
 #     landed by the time `Subscribe` returns — turning "safe only while the implementation happens
 #     to complete synchronously" from an unstated assumption into an enforced, loudly-failing
 #     invariant instead of a silent hang risk.
+#
+# 🚨 `test/MeshWeaver.Hosting.Orleans.Test/{OrleansScheduledPostTest,OrleansEventSubscriptionTimerTest}`
+# carry the IDENTICAL `StartAsync(default).GetAwaiter().GetResult()` shape and are candidates for the
+# same fix — but this project is scope-excluded from the 2026-08-26 pass by explicit coordination
+# with a concurrent session consolidating AI tests out of `MeshWeaver.Hosting.Orleans.Test` (also
+# `MeshWeaver.Query.Test`, `MeshWeaver.Hosting.PostgreSql.Test`): an edit here landing while files are
+# mid-MOVE is silently dropped by the move, with no trace. Their two lines below stay at their
+# original counts until that move lands and this project is unparked. NOT "not yet triaged" — the
+# triage is done (they are the residue's other half); the fix is just deliberately deferred.
 #
 # 🚨 THIS LIST MAY ONLY SHRINK. Fixing a site means LOWERING or DELETING its line. A new file or a
 # raised count fails BlockingBridgeInTestRatchetGuard — adding a line is not a fix.
@@ -84,6 +91,8 @@ test/MeshWeaver.Graph.Test/NodeTypeAdoptionRegistryTest.cs	3
 test/MeshWeaver.Graph.Test/NodeTypeBakeStatusTest.cs	2
 test/MeshWeaver.Graph.Test/OverlayReEvaluationReadTest.cs	3
 test/MeshWeaver.Hosting.Orleans.Test/OrleansClusterDisposal.cs	1
+test/MeshWeaver.Hosting.Orleans.Test/OrleansEventSubscriptionTimerTest.cs	1
+test/MeshWeaver.Hosting.Orleans.Test/OrleansScheduledPostTest.cs	2
 test/MeshWeaver.Hosting.PostgreSql.Test/PostgreSqlTransientRetryTest.cs	4
 test/MeshWeaver.Hosting.Test/AlcLeaseRegistryTest.cs	3
 test/MeshWeaver.Messaging.Hub.Test/SystemScopeDoesNotEscapeTest.cs	3
