@@ -22,6 +22,13 @@
          portal's endpoint does — so the sidecar compiles and runs whether or not voice is
          installed. The Whisper client itself arrives as a MODULE (below). -->
     <ProjectReference Include="..\..\src\MeshWeaver.Speech.Contract\MeshWeaver.Speech.Contract.csproj" />
+    <!-- The AI engine (Thread/Agent/Skill node types + the chat runtime), the portal's thin lane:
+         the DLL rides the app closure so ResolveModulePath's BaseDirectory fallback finds it, and
+         Modules:Assemblies in appsettings.json is what activates it (a MeshNodeProviderAttribute
+         is read ONLY by InstallConfiguredModules — the reference alone contributes nothing).
+         Without it the sidecar refuses every chat send with "NodeType 'Thread' is not
+         registered" — the RN shells' composer is a dead surface on the local mesh. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
   </ItemGroup>
 
   <!-- ═════════ The RN web client is BAKED at publish — never hand-copied ═════════

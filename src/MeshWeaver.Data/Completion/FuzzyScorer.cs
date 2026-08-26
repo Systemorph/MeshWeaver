@@ -1,6 +1,6 @@
 #nullable enable
 
-namespace MeshWeaver.AI.Completion;
+namespace MeshWeaver.Data.Completion;
 
 /// <summary>
 /// Provides fzf-style fuzzy matching and scoring for autocomplete items.

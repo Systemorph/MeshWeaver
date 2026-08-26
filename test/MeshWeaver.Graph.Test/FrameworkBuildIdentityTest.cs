@@ -432,9 +432,24 @@ public class FrameworkBuildIdentityTest
             "repository tree not reachable from the test bin — closure pin runs in-repo only");
 
         var hosts = SurfaceManifestHosts(root!);
-        hosts.Should().HaveCountGreaterThan(1,
-            "the invariant is about hosts AGREEING — a run that found one project (or none) has "
-            + "verified nothing, so a broken discovery must not read as a pass");
+        // 🚨 The agreement invariant became CROSS-REPO when the GUI left. The portal hosts
+        // (Memex.Portal.Monolith, Memex.Portal.Distributed) moved to MeshWeaver.Plugins, so the two
+        // hosts that disagreed in #1814 — mw-plugin-test and memex-portal-ai — no longer live in one
+        // tree and NO single-repo test can compare them. This is one half of the old check: every
+        // surface-manifest host THIS repo still ships must carry the complete canonical surface. The
+        // other half is the plugins gate running the identical closure check against its portal host.
+        // Both halves are required; neither alone reproduces what the original assertion did.
+        //
+        // Pinned BY NAME rather than by count. Relaxing >1 to >0 would let a broken discovery that
+        // happened to match some unrelated csproj read as a pass — exactly the failure mode the
+        // original count bar existed to refuse.
+        hosts.Should().NotBeEmpty(
+            "a discovery that found no surface-manifest host has verified nothing, so it must not "
+            + "read as a pass");
+        hosts.Select(Path.GetFileNameWithoutExtension)
+            .Should().Contain("MeshWeaver.PluginTester",
+                "the tester is this repo's remaining surface-manifest host after the GUI left — if "
+                + "discovery stops finding it, the closure check below is running on the wrong set");
 
         var missingByHost = hosts.ToDictionary(
             host => Path.GetRelativePath(root!, host),

@@ -408,7 +408,7 @@ public sealed class PersistenceService : IStorageAdapter
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
         ListChildPaths(string? parentPath)
         => _allOrdered
-            .ToObservable()
+            .ToInlineObservable()
             .SelectMany(p => p.Adapter.ListChildPaths(parentPath)
                 .Catch<(IEnumerable<string>, IEnumerable<string>), Exception>(_ =>
                     Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []))))
@@ -463,7 +463,7 @@ public sealed class PersistenceService : IStorageAdapter
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
         => _allOrdered
-            .ToObservable()
+            .ToInlineObservable()
             .SelectMany(p => p.Adapter.GetPartitionObjects(nodePath, subPath, options)
                 .Catch<object, Exception>(_ => Observable.Empty<object>()));
 
