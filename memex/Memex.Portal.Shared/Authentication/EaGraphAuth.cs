@@ -2,7 +2,7 @@ using MeshWeaver.Mesh.Security;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
-using MeshWeaver.Hosting.AspNetCore.Portal;  // PortalApplication (lifted out of Blazor)
+using MeshWeaver.Hosting.AspNetCore.Portal;     // PortalApplication
 using MeshWeaver.Data;                       // IWorkspace.GetMeshNodeStream
 using MeshWeaver.Graph.Configuration;        // EaCredentialNodeType
 using MeshWeaver.Mesh;                        // EaCredential, MeshNode
