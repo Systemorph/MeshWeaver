@@ -23,7 +23,13 @@ public static class BoundedBody
         var chunk = new byte[16 * 1024];
         while (true)
         {
-            var read = await body.ReadAsync(chunk, ct);
+            // 🚨 Ask for no more than the remaining budget PLUS ONE byte. A full-chunk request let the
+            // socket read overshoot the cap by up to a chunk before this returned null — the buffer
+            // never exceeded the cap, but the stated contract ("at most max+1 bytes READ") was not what
+            // the code did. Caught in review. The +1 is what detects "over the cap" without holding it.
+            var remaining = maxBytes + 1 - buffer.Length;
+            var want = (int)Math.Min(chunk.Length, remaining);
+            var read = await body.ReadAsync(chunk.AsMemory(0, want), ct);
             if (read == 0) break;
             if (buffer.Length + read > maxBytes) return null;
             buffer.Write(chunk, 0, read);
