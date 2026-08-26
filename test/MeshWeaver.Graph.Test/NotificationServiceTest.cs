@@ -65,6 +65,11 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 30000)]
     public async Task CreateNotification_PopulatesContent_WithUnreadDefaultAndProvidedFields()
     {
+        // CreatedAt is stamped (DateTimeOffset.UtcNow) inside NotificationService.CreateNotification
+        // itself, before the write round-trips through the real hub — bracket the actual call
+        // window instead of a large fixed tolerance, which would hide a regression that stamped
+        // the wrong instant (e.g. write-completion time instead of call time).
+        var before = DateTimeOffset.UtcNow;
         var node = await CreateNotification(
             mainNodePath: $"{TestPartition}/Docs/spec",
             title: "Approval needed",
@@ -73,6 +78,7 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
             targetNodePath: $"{TestPartition}/Docs/spec/Approval/abc",
             createdBy: "carol",
             icon: "bell.svg");
+        var after = DateTimeOffset.UtcNow;
 
         var content = (Notification)node.Content!;
         content.Title.Should().Be("Approval needed");
@@ -82,7 +88,8 @@ public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTes
         content.CreatedBy.Should().Be("carol");
         content.Icon.Should().Be("bell.svg");
         content.IsRead.Should().BeFalse("new notifications start unread");
-        content.CreatedAt.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30));
+        content.CreatedAt.Should().BeOnOrAfter(before).And.BeOnOrBefore(after,
+            "CreatedAt is stamped at call time, before the write round-trips");
     }
 
     [Fact(Timeout = 30000)]
