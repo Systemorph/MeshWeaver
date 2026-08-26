@@ -7,7 +7,7 @@ Icon: Cloud
 
 # Deploying to Azure Container Apps
 
-This is **one of two deploy routes**. Use it for the **.NET Aspire `test` / `prod` modes**, which provision and run on **Azure Container Apps** (Sweden Central) — the AppHost (`memex/aspire/Memex.AppHost`) is the single source of truth for every resource (PostgreSQL, Blob Storage, Orleans clustering, Application Insights). For the shared AKS-cluster portal (`memex` namespace), see [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS). These are **different routes to different targets** — choose by where you're deploying.
+This is **one of two deploy routes**. Use it for the **.NET Aspire `test` / `prod` modes**, which provision and run on **Azure Container Apps** (Sweden Central) — the AppHost (`../MeshWeaver.Plugins/src/Memex.AppHost`) is the single source of truth for every resource (PostgreSQL, Blob Storage, Orleans clustering, Application Insights). For the shared AKS-cluster portal (`memex` namespace), see [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS). These are **different routes to different targets** — choose by where you're deploying.
 
 ## Deployment Modes
 
@@ -91,7 +91,7 @@ Running `aspire deploy` on its own **silently passes when the db-migration conta
 
 The wrapper script closes that gap in three steps:
 
-1. Runs `aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode <prod|test>` (the command Aspire docs sanction).
+1. Runs `aspire deploy --project ../MeshWeaver.Plugins/src/Memex.AppHost/Memex.AppHost.csproj -- --mode <prod|test>` (the command Aspire docs sanction).
 2. Discovers the deployed Postgres FQDN — `az postgres flexible-server list -g <rg> --query "[0].fullyQualifiedDomainName"` — because the server name carries a random suffix that changes whenever the resource group is reprovisioned.
 3. **Polls the database, not the container**: loops `dotnet script tools/check-db-version.csx -- <mode> <pg-fqdn>` every 15 s against a 10-minute deadline. First success exits 0; on deadline it fails the deploy and dumps `az containerapp logs show -n db-migration --tail 100`.
 
