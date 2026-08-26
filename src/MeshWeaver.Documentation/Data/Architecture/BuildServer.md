@@ -7,12 +7,38 @@ Icon: Wrench
 
 # The Build Server
 
-CI's job is to **build the plain image and finish**. Everything else is built *from* that image, on a
-worker that is not a CI runner.
+**memex is the coordinator.** It holds the dependency map, and every repository subscribes to it.
+Nothing polls, nothing is scheduled, and no repository needs to know what depends on it.
+
+## The protocol
 
 ```
-CI            build image → push → promote            fast, few runners
-build worker  git sync → C# compile → bundles → disk  CPU-heavy, off the shared pool
+1.  CORE      builds, runs its BASIC tests, produces the docker image
+              →  notifies memex: a new image exists
+
+2.  PLUGINS   subscribed to memex, are notified, and build against that image
+              →  notify memex: these packages, at these versions
+
+3.  MEMEX     knows the dependency map, and notifies repositories to rebuild —
+              either FULLY, or only the dedicated packages that are affected
+```
+
+Each step ends by telling memex what now exists. Each next step begins because memex said so. That
+is the whole cascade, and everything below is a consequence of it.
+
+🚨 **Core runs its OWN tests and nothing else.** It does not compile plugins, does not test them and
+does not bake them. A core build that also builds the plugin repositories couples the two: it makes
+core's green depend on plugin content, spends core's runners on plugin work, and — as happened on
+2026-08-26 — lets one repository's CI starve the other's out of a shared runner pool. Core's output
+is an **image plus a notification**; step 2 is where plugins are built, in the repository that owns
+them.
+
+CI's job is therefore to **build the plain image and finish**. Everything else is built *from* that
+image, on a worker that is not a CI runner.
+
+```
+CI            build image → push → notify memex        fast, few runners
+build worker  git sync → C# compile → bundles → disk   CPU-heavy, off the shared pool
 environments  seed bundles matching their own identity
 ```
 
@@ -137,9 +163,14 @@ The cascade then runs in dependency order:
 platform → plugins → reinsurance → education → …
 ```
 
-### Everyone subscribes to the mesh
+**memex decides the scope of each notification**, because it is the only participant that can: a
+repository knows what it depends ON, but not what depends on IT. That is why step 3 is memex telling
+a repository to rebuild — fully or in part — rather than a repository working it out for itself.
 
-The cascade is **not** a fan of webhooks. Every participant subscribes to MeshWeaver and reads
+### Everyone subscribes to the mesh, and memex owns the map
+
+Steps 2 and 3 of the protocol are subscriptions, not deliveries. The cascade is **not** a fan of
+webhooks. Every participant subscribes to MeshWeaver and reads
 **persisted streams**: a release is durable mesh state, and a dependent *queries that state* rather
 than catching an event. [The Release Event Bus](/Doc/Architecture/ReleaseEventBus) is the mechanism —
 *the bus is the mesh; the webhook is only a wake-up*.
