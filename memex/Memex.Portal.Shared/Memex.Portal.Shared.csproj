@@ -140,6 +140,25 @@
   <ItemGroup>
     <!-- ExtractToken is pinned by tests (Bearer/Basic parsing on an unauthenticated path). -->
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+    <!-- 🚨 A test assembly in ANOTHER REPOSITORY (MeshWeaver.Plugins), which is unusual and
+         deliberate. `MemexConfiguration.AiMenuItems` is internal and seeds the AI menu's
+         imperative "New thread" entry; the type it must be asserted against —
+         `MeshWeaver.Blazor.Portal.Layout.PortalLayoutBase` — left this repo with the portal
+         split, so `Memex.Portal.Shared.Test.AiMenuNewThreadTest` can no longer compile here
+         once #2293 deletes core's copy of PortalLayoutBase.
+
+         Neither repo holds both halves any more. Plugins can, because it already checks this
+         repo out for the surface-manifest gate, so the re-homed suite lives there and needs to
+         see this member.
+
+         What it pins is not cosmetic: the AI menu contract is split across the two repos and
+         the SEAM IS THE ORDER VALUE. `MeshWeaver.AI.Test.AiMenuContributionsTest` (here) pins
+         every contributed seed at Order > 0; the re-homed suite pins the imperative entry at
+         Order == 0. Disjoint ranges are what make the aggregator's (Order, Label, Area) dedupe
+         lossless. Drop the far half and nothing stops "New thread" taking an Order that
+         collides with a seed — and this side would stay green throughout, because it only ever
+         asserts about its own entries. -->
+    <InternalsVisibleTo Include="MeshWeaver.Blazor.Portal.Test" />
   </ItemGroup>
 
 </Project>
