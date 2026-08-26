@@ -26,7 +26,7 @@ dotnet build
 ## Start the Portal
 
 ```bash
-cd memex/Memex.Portal.Monolith
+cd ../MeshWeaver.Plugins/src/Memex.Portal.Monolith
 dotnet run
 ```
 
