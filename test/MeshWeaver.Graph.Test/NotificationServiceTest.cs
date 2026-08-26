@@ -1,54 +1,60 @@
 using System;
-using System.Reactive.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using NSubstitute;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Unit tests for <see cref="NotificationService.CreateNotification"/>. Use
-/// NSubstitute to capture the MeshNode handed to <c>IMeshService.CreateNode</c>
-/// so we verify the satellite shape (path, MainNode, content) without
-/// spinning up Postgres or Orleans. The PG-table-routing concern is covered
-/// separately by SatelliteNodeTests; this is the "did NotificationService
-/// construct the right thing" check.
+/// Tests for <see cref="NotificationService.CreateNotification"/>: verifies the satellite shape
+/// (path, MainNode, content) it constructs. The PG-table-routing concern is covered separately by
+/// SatelliteNodeTests; this is the "did NotificationService construct the right thing" check.
+///
+/// <para>🚨 Drives <see cref="NotificationService.CreateNotification"/> against a REAL
+/// <see cref="IMeshService"/> (<see cref="MonolithMeshTestBase"/>) — never a mocked one
+/// (Systemorph/MeshWeaver#1810: AGENTS.md forbids mocking <c>IMeshService</c>). Reads back the
+/// node <c>CreateNode</c> itself returns (the materialized, round-tripped shape) rather than
+/// capturing what was merely passed in — a stronger check than the substitute-based version could
+/// make, since it also proves the write actually lands. <c>CreateNotification</c> writes to an
+/// arbitrary <c>mainNodePath</c> it does not own, so the calls run under System — the same
+/// impersonation its real caller (<see cref="NotificationService.Dispatch"/>) already applies.</para>
 /// </summary>
-public class NotificationServiceTest
+public class NotificationServiceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private static (IMeshService Mock, Func<MeshNode?> Captured) MakeCapturingMesh()
+    private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+    private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+    private async Task<MeshNode> CreateNotification(
+        string mainNodePath, string title, string message, NotificationType type,
+        string? targetNodePath = null, string? createdBy = null, string? icon = null)
     {
-        var mesh = Substitute.For<IMeshService>();
-        MeshNode? captured = null;
-        mesh.CreateNode(Arg.Do<MeshNode>(n => captured = n))
-            .Returns(call => Observable.Return((MeshNode)call[0]));
-        return (mesh, () => captured);
+        using (Access.ImpersonateAsSystem())
+            return await NotificationService.CreateNotification(
+                    MeshService, mainNodePath, title, message, type, targetNodePath, createdBy, icon)
+                .Should().Emit();
     }
 
-    [Fact]
-    public void CreateNotification_BuildsSatelliteShape_WithMainNodeAndPath()
+    [Fact(Timeout = 30000)]
+    public async Task CreateNotification_BuildsSatelliteShape_WithMainNodeAndPath()
     {
-        var (mesh, captured) = MakeCapturingMesh();
-        const string main = "ACME/_Thread/chat-abc";
+        const string main = $"{TestPartition}/_Thread/chat-abc";
 
-        NotificationService.CreateNotification(
-            mesh,
+        var node = await CreateNotification(
             mainNodePath: main,
             title: "Chat ready",
             message: "Your conversation is complete.",
             type: NotificationType.General,
             targetNodePath: main,
             createdBy: "agent",
-            icon: "/static/NodeTypeIcons/chat.svg")
-            .Subscribe();
-
-        var node = captured();
-        node.Should().NotBeNull("CreateNode must be invoked once");
+            icon: "/static/NodeTypeIcons/chat.svg");
 
         // Satellite shape — Path is rooted at the main entity under _Notification.
-        node!.MainNode.Should().Be(main);
+        node.MainNode.Should().Be(main);
         node.Namespace.Should().Be($"{main}/{NotificationService.SatelliteSegment}");
         node.Path.Should().StartWith($"{main}/{NotificationService.SatelliteSegment}/");
         node.NodeType.Should().Be(NotificationNodeType.NodeType);
@@ -56,63 +62,50 @@ public class NotificationServiceTest
         node.Name.Should().Be("Chat ready");
     }
 
-    [Fact]
-    public void CreateNotification_PopulatesContent_WithUnreadDefaultAndProvidedFields()
+    [Fact(Timeout = 30000)]
+    public async Task CreateNotification_PopulatesContent_WithUnreadDefaultAndProvidedFields()
     {
-        var (mesh, captured) = MakeCapturingMesh();
-
-        NotificationService.CreateNotification(
-            mesh,
-            mainNodePath: "ACME/Docs/spec",
+        var node = await CreateNotification(
+            mainNodePath: $"{TestPartition}/Docs/spec",
             title: "Approval needed",
             message: "Carol asked for sign-off.",
             type: NotificationType.ApprovalRequired,
-            targetNodePath: "ACME/Docs/spec/Approval/abc",
+            targetNodePath: $"{TestPartition}/Docs/spec/Approval/abc",
             createdBy: "carol",
-            icon: "bell.svg")
-            .Subscribe();
+            icon: "bell.svg");
 
-        var content = (Notification)captured()!.Content!;
+        var content = (Notification)node.Content!;
         content.Title.Should().Be("Approval needed");
         content.Message.Should().Be("Carol asked for sign-off.");
         content.NotificationType.Should().Be(NotificationType.ApprovalRequired);
-        content.TargetNodePath.Should().Be("ACME/Docs/spec/Approval/abc");
+        content.TargetNodePath.Should().Be($"{TestPartition}/Docs/spec/Approval/abc");
         content.CreatedBy.Should().Be("carol");
         content.Icon.Should().Be("bell.svg");
         content.IsRead.Should().BeFalse("new notifications start unread");
-        content.CreatedAt.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(5));
+        content.CreatedAt.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30));
     }
 
-    [Fact]
-    public void CreateNotification_DefaultsTargetToMainNodePath_WhenOmitted()
+    [Fact(Timeout = 30000)]
+    public async Task CreateNotification_DefaultsTargetToMainNodePath_WhenOmitted()
     {
-        var (mesh, captured) = MakeCapturingMesh();
-        const string main = "ACME/_Thread/chat-xyz";
+        const string main = $"{TestPartition}/_Thread/chat-xyz";
 
-        NotificationService.CreateNotification(
-            mesh,
+        var node = await CreateNotification(
             mainNodePath: main,
             title: "Ready",
             message: "",
-            type: NotificationType.General)
-            .Subscribe();
+            type: NotificationType.General);
 
-        ((Notification)captured()!.Content!).TargetNodePath.Should().Be(main,
+        ((Notification)node.Content!).TargetNodePath.Should().Be(main,
             "the bell click should land on the main entity when no other target is set");
     }
 
-    [Fact]
-    public void CreateNotification_EachCallProducesUniqueId()
+    [Fact(Timeout = 30000)]
+    public async Task CreateNotification_EachCallProducesUniqueId()
     {
-        var (mesh, captured) = MakeCapturingMesh();
-        const string main = "ACME";
+        var first = await CreateNotification(TestPartition, "a", "", NotificationType.General);
+        var second = await CreateNotification(TestPartition, "b", "", NotificationType.General);
 
-        NotificationService.CreateNotification(mesh, main, "a", "", NotificationType.General).Subscribe();
-        var first = captured()!.Id;
-
-        NotificationService.CreateNotification(mesh, main, "b", "", NotificationType.General).Subscribe();
-        var second = captured()!.Id;
-
-        first.Should().NotBe(second);
+        first.Id.Should().NotBe(second.Id);
     }
 }
