@@ -56,7 +56,18 @@ public static class IStorageAdapterTestExtensions
         this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options)
     {
         var completed = false;
-        adapter.Write(node, options).Subscribe(_ => completed = true);
+        Exception? failure = null;
+        // Explicit onError (never the throwing default-stub) so a fault surfaces as OUR named
+        // exception with the seeded path, not a raw rethrow on whatever thread raised it. Disposing
+        // right after Subscribe returns — success, failure, or neither — stops a subscription that
+        // turned out to be genuinely async instead of leaving it running in the background after
+        // this method has already thrown "did not complete synchronously".
+        var subscription = adapter.Write(node, options)
+            .Subscribe(_ => completed = true, ex => failure = ex);
+        subscription.Dispose();
+
+        if (failure is not null)
+            throw new InvalidOperationException($"Synchronous seed of '{node.Path}' failed.", failure);
         if (!completed)
             throw new InvalidOperationException(
                 $"Synchronous seed of '{node.Path}' did not complete synchronously on Subscribe. "
