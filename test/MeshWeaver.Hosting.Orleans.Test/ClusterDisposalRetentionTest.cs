@@ -40,22 +40,18 @@ public class ClusterDisposalRetentionTest
     [Fact]
     public void ASettledTeardown_RetainsNothingItCapturedSoItsClusterCanBeCollected()
     {
-        // Other test classes are tearing their clusters down concurrently, so the registry is not
-        // empty — the invariant is that it RETURNS to its prior depth, not that it is ever zero.
-        var before = OrleansClusterDisposal.PendingCount;
-
         var gate = new Subject<Unit>();
-        var captured = Enqueue(gate);
+        var (id, captured) = Enqueue(gate);
 
         // Settle the teardown, exactly as the real ordered stop→dispose chain settles when the last
         // leg completes on the I/O pool.
         gate.OnNext(Unit.Default);
         gate.OnCompleted();
 
-        // Deterministic half of the guard: the entry is gone. (The old bag never removed one, so the
-        // registry — and everything each entry reached — grew for the whole run.)
-        OrleansClusterDisposal.PendingCount.Should().BeLessThanOrEqualTo(
-            before,
+        // Deterministic half of the guard: THIS entry is gone. Asserted per-id, never as a total
+        // count — other test classes tear their clusters down concurrently, so a count is not a
+        // property this test could own.
+        OrleansClusterDisposal.IsPending(id).Should().BeFalse(
             "a settled teardown must leave the registry, or it accumulates for the life of the process");
 
         Collect();
@@ -68,21 +64,21 @@ public class ClusterDisposalRetentionTest
     }
 
     /// <summary>
-    /// Registers a drain that captures a fresh object, and hands back only a weak reference to it.
-    /// <see cref="MethodImplOptions.NoInlining"/> so the closure's display class is unreachable from
-    /// the caller's frame once this returns — otherwise a live stack slot, not the registry, would
-    /// decide the outcome.
+    /// Registers a drain that captures a fresh object, and hands back its registry id plus only a
+    /// WEAK reference to what it captured. <see cref="MethodImplOptions.NoInlining"/> so the
+    /// closure's display class is unreachable from the caller's frame once this returns — otherwise
+    /// a live stack slot, not the registry, would decide the outcome.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static WeakReference Enqueue(IObservable<Unit> gate)
+    private static (long Id, WeakReference Captured) Enqueue(IObservable<Unit> gate)
     {
         var captured = new object();
-        OrleansClusterDisposal.Enqueue(gate.Select(_ =>
+        var id = OrleansClusterDisposal.Enqueue(gate.Select(_ =>
         {
             GC.KeepAlive(captured);
             return Unit.Default;
         }));
-        return new WeakReference(captured);
+        return (id, new WeakReference(captured));
     }
 
     /// <summary>Two forced, blocking, compacting full collections — enough for a plain object with

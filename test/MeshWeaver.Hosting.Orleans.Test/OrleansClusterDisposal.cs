@@ -140,7 +140,8 @@ internal static class OrleansClusterDisposal
     /// already gone from the dictionary, and one that settles between the snapshot and the
     /// subscribe still hands <see cref="WaitAll"/> a completion rather than hanging it.</para>
     /// </summary>
-    internal static void Enqueue(IObservable<Unit> drain)
+    /// <returns>The registry id of this teardown — for <see cref="IsPending"/>; callers ignore it.</returns>
+    internal static long Enqueue(IObservable<Unit> drain)
     {
         var id = Interlocked.Increment(ref drainId);
         var settled = new AsyncSubject<Unit>();
@@ -154,13 +155,15 @@ internal static class OrleansClusterDisposal
             _ => { },
             _ => Settle(id, settled),
             () => Settle(id, settled));
+        return id;
     }
 
     /// <summary>
-    /// Teardowns still in flight. The registry must return to its prior depth as drains settle —
-    /// a monotonically growing count is the retention bug of #2346 coming back.
+    /// Whether ONE teardown is still in flight. Deliberately per-id rather than a total count:
+    /// other test classes are tearing their clusters down concurrently, so a count is not a
+    /// property any single test can assert on.
     /// </summary>
-    internal static int PendingCount => Pending.Count;
+    internal static bool IsPending(long id) => Pending.ContainsKey(id);
 
     /// <summary>Releases one drain's registry entry and publishes its completion.</summary>
     private static void Settle(long id, AsyncSubject<Unit> settled)
