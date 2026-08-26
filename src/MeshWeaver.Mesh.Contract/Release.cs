@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
@@ -31,14 +32,17 @@ public record Release
 
     /// <summary>The repository that published it, as <c>owner/name</c>.</summary>
     [Description("The repository that published this package.")]
+    [Translation("de", "Das Repository, das dieses Paket veröffentlicht hat.")]
     public string Repository { get; init; } = null!;
 
     /// <summary>The package identifier, e.g. <c>MeshWeaver.Blazor.EntityViews</c>.</summary>
     [Description("The published package identifier.")]
+    [Translation("de", "Die Kennung des veröffentlichten Pakets.")]
     public string PackageId { get; init; } = null!;
 
     /// <summary>The published version.</summary>
     [Description("The published version.")]
+    [Translation("de", "Die veröffentlichte Version.")]
     public string Version { get; init; } = null!;
 
     /// <summary>
@@ -50,14 +54,17 @@ public record Release
     /// consumer can check it without re-deriving it.</para>
     /// </summary>
     [Description("The framework identity these bytes were built against.")]
+    [Translation("de", "Die Framework-Identität, gegen die diese Bytes gebaut wurden.")]
     public string? Platform { get; init; }
 
     /// <summary>The commit the package was built from.</summary>
     [Description("The commit this package was built from.")]
+    [Translation("de", "Der Commit, aus dem dieses Paket gebaut wurde.")]
     public string? Commit { get; init; }
 
     /// <summary>When the publication was OBSERVED — never when a job started.</summary>
     [Description("When the publication was observed.")]
+    [Translation("de", "Wann die Veröffentlichung beobachtet wurde.")]
     public DateTime Released { get; init; }
 
     /// <summary>
@@ -67,5 +74,17 @@ public record Release
     /// unreliable without the truth becoming unreliable too.
     /// </summary>
     public static string IdFor(string repository, string packageId, string version) =>
-        $"{repository}/{packageId}/{version}";
+        // 🚨 Repository and package id are NORMALIZED; version is not.
+        //
+        // GitHub repositories are case-insensitive — RepoIdentity.Matches compares Owner and Repo
+        // with OrdinalIgnoreCase — and so are NuGet package ids. Composing the key from raw strings
+        // would let "Systemorph/MeshWeaver" and "systemorph/meshweaver" mint TWO facts for ONE
+        // publication, which is precisely the duplication this derived id exists to prevent: the
+        // whole reason ingest can tolerate an unreliable wake-up is that observing the same
+        // publication twice lands on the same node.
+        //
+        // The VERSION is deliberately left alone. SemVer states that pre-release identifiers are
+        // case-sensitive, so "1.0.0-RC1" and "1.0.0-rc1" are different versions and folding them
+        // would merge two genuinely distinct releases — the opposite failure, and the worse one.
+        $"{repository.ToLowerInvariant()}/{packageId.ToLowerInvariant()}/{version}";
 }
