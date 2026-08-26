@@ -664,6 +664,21 @@ jobs:
         with:
           # Build the EXACT commit the tests passed on — not whatever main is now.
           ref: ${{ needs.gate.outputs.sha }}
+      # 🚨 The portal HOST lives in MeshWeaver.Plugins (#2293 removed it from here). This checkout is
+      # what makes the image buildable at all; without it the publish below has no project.
+      #
+      # ref defaults to `main` and is overridable by a repo variable, mirroring the plugins lane's
+      # own MW_PLATFORM_REF. The variable does not decouple "which plugins commit shipped with which
+      # core commit" — it makes that coupling STEERABLE, so pinning to a known-good plugins commit
+      # during an incident is a variable change rather than editing this file under pressure.
+      - name: Check out MeshWeaver.Plugins (holds the portal host)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          path: plugins-repo
+          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+          fetch-depth: 1
       # The SDK container build + the publish output overflow the runner's ~14 GB; reclaim the
       # ~25 GB of preinstalled tooling a .NET build never touches (same as the test workflow).
       - name: Setup .NET
@@ -680,8 +695,23 @@ jobs:
         id: vars
         run: |
           set -euo pipefail
-          VERSION=$(dotnet msbuild memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
+          # 🚨 Read from a project that STAYS in this repo. This used to read
+          # Memex.Portal.Distributed, which moved to MeshWeaver.Plugins — and CD then failed here for
+          # every commit on main, publishing nothing, until someone noticed nothing had shipped.
+          # Version comes from the root Directory.Build.props, so ANY core project yields the same
+          # value; Mesh.Contract is picked because it is cheap and is not going anywhere.
+          #
+          # -getProperty: asks MSBuild for the COMPUTED value, deliberately not a grep of the props
+          # file: a regex keeps returning a plausible, well-formed, WRONG number after the definition
+          # moves — and that number gets published.
+          VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+          # Refuse rather than invent: an empty version becomes `:` or `latest` somewhere downstream,
+          # which is the failure where a tag exists and points at the wrong thing.
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not resolve Version from the platform checkout. Refusing to invent one."
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
       # OIDC federated login — no client secret stored. Requires a federated credential on the
@@ -728,10 +758,11 @@ jobs:
       # ships NOTHING on its own. `promote` applies version/sha/main once every leg has succeeded.
       - name: Build + push portal-ai (staging tag)
         run: >
-          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
+          -p:MeshWeaverRoot=${{ github.workspace }}
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-portal-ai
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
