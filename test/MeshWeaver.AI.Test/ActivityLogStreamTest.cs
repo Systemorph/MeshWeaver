@@ -143,10 +143,15 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
 
         // ONE subscription feeds both the "am I attached?" await and the collection below —
         // Replay means waiting for attachment cannot cost us the emissions that follow it.
-        var workspace = GetClient().GetWorkspace();
+        // 🚨 ContentAs, never `as ActivityLog`: content reaching a CLIENT hub can legitimately
+        // arrive as untyped JSON, and a silent null would read here as "0 messages" — i.e. as a
+        // passing attach guard followed by an opaque timeout.
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
         var live = workspace
             .GetMeshNodeStream(exec.ActivityLog!)
-            .Select(change => (change?.Content as ActivityLog)?.Messages.Count ?? 0)
+            .Select(change => change.ContentAs<ActivityLog>(client.JsonSerializerOptions)
+                ?.Messages.Count ?? 0)
             .Replay();
         using var connection = live.Connect();
 

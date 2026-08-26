@@ -159,12 +159,18 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         var activityPath = execMessage.ActivityLog!;
 
         var sw = Stopwatch.StartNew();
-        var workspace = GetClient().GetWorkspace();
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
         // ONE subscription feeds both the "am I attached?" await and the collection below —
         // Replay means waiting for attachment cannot cost us the emissions that follow it.
+        // 🚨 ContentAs, never `as ActivityLog`: content reaching a CLIENT hub can legitimately
+        // arrive as untyped JSON, and a silent null would read here as "0 messages" — i.e. as a
+        // passing attach guard followed by an opaque timeout, the worst possible failure shape
+        // for this test.
         var live = workspace
             .GetMeshNodeStream(activityPath)
-            .Select(node => (Log: node?.Content as ActivityLog, ElapsedMs: sw.ElapsedMilliseconds))
+            .Select(node => (Log: node.ContentAs<ActivityLog>(client.JsonSerializerOptions),
+                             ElapsedMs: sw.ElapsedMilliseconds))
             .Replay();
         using var connection = live.Connect();
 
