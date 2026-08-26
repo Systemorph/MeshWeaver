@@ -85,7 +85,6 @@ WEIGHTS=$(cat <<'EOF'
 15 MeshWeaver.Import.Test
 12 MeshWeaver.PathResolution.Test
 12 MeshWeaver.ContentCollections.Indexing.Graph.Test
-12 MeshWeaver.MemexTemplate.Test
 9 MeshWeaver.Northwind.Test
 8 MeshWeaver.PluginTester.Test
 8 MeshWeaver.PythonDemo.Test
