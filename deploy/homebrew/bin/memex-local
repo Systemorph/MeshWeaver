@@ -239,6 +239,12 @@ base_build_local() {
   docker push "$PORTAL_BASE_REF" >/dev/null
 }
 
+# $1 (optional): --rebuild-base, forwarded to base_build_local.
+#
+# 🚨 It was forwarded from here (`base_build_local "${1:-}"`) and ADVERTISED by that function's own
+# "Pass --rebuild-base to force" line — but no caller ever passed it, because neither `up` nor
+# `update` accepted the flag. A documented escape hatch that nothing can reach. Both accept it now
+# (MeshWeaver#2367); shellcheck's SC2120 is what pointed at it.
 image_build_local() {                                  # §3 Option B
   local repo
   repo="$(resolve_repo)" || die "local build (Option B) needs the repo — set MEMEX_REPO to your MeshWeaver checkout, or use 'up --from-acr'"
@@ -1443,7 +1449,7 @@ cmd_e2e() {
       [ "${1:-}" = "--skip-build" ] && skip_build="yes"
       preflight
       e2e_require_stack
-      [ "$skip_build" = "yes" ] || { image_build_local; portal_next_build_local; }  # §3 Option B — current working tree
+      [ "$skip_build" = "yes" ] || { image_build_local ""; portal_next_build_local; }  # §3 Option B — current working tree
       e2e_ensure_db
       e2e_migrate
       e2e_deploy
@@ -1514,7 +1520,7 @@ cmd_e2e() {
 # Subcommands
 # ===========================================================================
 cmd_up() {
-  local image_source="build" acr_tag="$ACR_DEFAULT_TAG" with_obs="no"
+  local image_source="build" acr_tag="$ACR_DEFAULT_TAG" with_obs="no" rebuild_base=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --from-acr) image_source="acr" ;;
@@ -1522,6 +1528,7 @@ cmd_up() {
       --skip-image) image_source="skip" ;;
       --tag) shift; acr_tag="${1:?--tag needs a value}" ;;
       --with-observability) with_obs="yes" ;;
+      --rebuild-base) rebuild_base="--rebuild-base" ;;
       *) die "up: unknown flag '$1'" ;;
     esac
     shift
@@ -1532,7 +1539,7 @@ cmd_up() {
   start_colima                                   # §2
 
   case "$image_source" in                        # §3
-    build) image_build_local; portal_next_build_local ;;   # portal + migration, then the /next React GUI
+    build) image_build_local "$rebuild_base"; portal_next_build_local ;;   # portal + migration, then the /next React GUI
     acr)   image_pull_acr "$acr_tag" ;;
     skip)  info "Skipping image step (--skip-image); relying on IfNotPresent/cache" ;;
   esac
@@ -1646,11 +1653,16 @@ cmd_logs() {
 }
 
 cmd_update() {
-  local image_source="build" acr_tag="$ACR_DEFAULT_TAG"
+  local image_source="build" acr_tag="$ACR_DEFAULT_TAG" rebuild_base=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --from-acr|--acr) image_source="acr" ;;
       --build) image_source="build" ;;
+      # Force a rebuild of the portal-ai BASE (the Node + Claude Code + Copilot layer). It is cached
+      # by image presence, so a changed deploy/base-images/portal-ai/Dockerfile is otherwise never
+      # picked up. base_build_local has always advertised this flag; until MeshWeaver#2367 no caller
+      # accepted it, so nothing could reach it.
+      --rebuild-base) rebuild_base="--rebuild-base" ;;
       # Re-apply CONFIG only, reusing the images already in Colima's store. `up` has had this
       # since the start; `update` did not, so re-rendering the chart after a values/flag change
       # forced a full ~10-minute rebuild of images that were already current — or tempted you
@@ -1667,7 +1679,7 @@ cmd_update() {
 
   step "Rolling memex to a newer image ($image_source)"
   case "$image_source" in
-    build) image_build_local; portal_next_build_local ;;   # §3 Option B — portal + migration, then the /next React GUI
+    build) image_build_local "$rebuild_base"; portal_next_build_local ;;   # §3 Option B — portal + migration, then the /next React GUI
     acr)   image_pull_acr "$acr_tag" ;;          # §3 Option A — retags onto the chart's image names
     skip)  info "reusing the images already in Colima's store — config re-apply only" ;;
   esac
@@ -1794,7 +1806,7 @@ USAGE:
   memex-local <command> [flags]
 
 COMMANDS:
-  up [--build|--from-acr|--skip-image] [--tag T] [--with-observability]
+  up [--build|--from-acr|--skip-image] [--tag T] [--with-observability] [--rebuild-base]
                   Bring the whole stack up (idempotent). Default image source:
                   --build (Option B, native arm64 into Colima's Docker store —
                   the no-cloud-creds path). --from-acr pulls multi-arch from ACR.
@@ -1818,8 +1830,11 @@ COMMANDS:
   status          colima / pods / ingress / port-forward / health.
   logs [--migration|--postgres] [--tail N] [--no-follow]
                   Tail logs (portal by default). Log level: $LOG_LEVEL.
-  update [--build|--from-acr|--skip-image] [--tag T]
+  update [--build|--from-acr|--skip-image] [--tag T] [--rebuild-base]
                   Roll portal+migration to a newer image, then refresh forward.
+                  --rebuild-base forces a rebuild of the portal-ai base layer
+                  (Node + the Claude Code / Copilot CLIs), which is otherwise
+                  cached by image presence; \`up\` takes it too.
   verify [--wait S] [--repair]
                   Is this portal USABLE? Asserts it serves, that /login is routed,
                   and that the DefaultViews/GraphViews packs are present — without
