@@ -7,7 +7,6 @@ using MeshWeaver.AI;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Completion;
 using MeshWeaver.Data;
-using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;

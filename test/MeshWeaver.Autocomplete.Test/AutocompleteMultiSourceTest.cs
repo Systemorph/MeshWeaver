@@ -241,7 +241,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     [InlineData("three")]
     public void FuzzyScorer_AnyWordInFilename_RanksDocumentFirst(string query)
     {
-        var scorer = new AI.Completion.FuzzyScorer();
+        var scorer = new Data.Completion.FuzzyScorer();
 
         var items = new[]
         {
