@@ -1337,7 +1337,43 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             subscription.Dispose();
         _contributedMenuSubscriptions.Clear();
         dotNetRef?.Dispose();
-        jsModule?.DisposeAsync();
+        // Fire-and-forget, but OBSERVED — and the ValueTask was previously dropped without even a
+        // discard. Disposing a JS module after the circuit is gone throws JSDisconnectedException
+        // ROUTINELY (the same exception this file already tolerates at two other interop sites), so
+        // an unobserved task here is a steady trickle of UnobservedTaskException with nothing
+        // pointing back at this line.
+        //
+        // 🚨 No async/await: this runs on the circuit's synchronous Dispose, and `async void` here
+        // would put a continuation on the circuit scheduler — the deadlock class AGENTS.md forbids
+        // in Blazor-view code. A fault-only continuation observes the task without awaiting it.
+        if (jsModule is not null)
+        {
+            var disposal = jsModule.DisposeAsync();
+            if (!disposal.IsCompletedSuccessfully)
+            {
+                var logger = Logger;
+                disposal.AsTask().ContinueWith(
+                    t =>
+                    {
+                        try
+                        {
+                            var fault = t.Exception?.GetBaseException();
+                            // The circuit went away first — the module went with it. Nothing to
+                            // dispose, nothing wrong.
+                            if (fault is null or OperationCanceledException or JSDisconnectedException)
+                                return;
+                            logger.LogWarning(fault, "Disposing the portal layout's JS module faulted");
+                        }
+                        catch
+                        {
+                            // a logger that faults during teardown must not replace the fault it reports
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+        }
     }
 
     /// <summary>
