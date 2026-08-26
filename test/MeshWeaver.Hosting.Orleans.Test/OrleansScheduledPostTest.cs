@@ -49,8 +49,8 @@ public class OrleansScheduledPostTest(ITestOutputHelper output) : OrleansSharedT
 
         await SeedPostAsync(postPath, status: "Scheduled", scheduledAt: slot.ToString("o"));
 
-        using var watcher = StartWatcher();
-        using var runner = StartRunner();
+        using var watcher = await StartWatcherAsync();
+        using var runner = await StartRunnerAsync();
 
         // ── armed, with the post's OWN slot ─────────────────────────────────────────────────
         var armed = await AwaitTimer(postPath, s => s is not null);
@@ -106,7 +106,7 @@ public class OrleansScheduledPostTest(ITestOutputHelper output) : OrleansSharedT
         // A schedulable post alongside it, so a green result cannot mean "the watcher never ran".
         await SeedPostAsync(control, status: "Scheduled", scheduledAt: slot);
 
-        using var watcher = StartWatcher();
+        using var watcher = await StartWatcherAsync();
 
         await AwaitTimer(control, s => s is not null);      // the watcher has demonstrably passed
         Assert.Null(await ReadTimer(published));
@@ -150,7 +150,7 @@ public class OrleansScheduledPostTest(ITestOutputHelper output) : OrleansSharedT
         // A post a PERSON scheduled, so a green result cannot mean "the watcher never ran".
         await SeedPostAsync(control, status: "Scheduled", scheduledAt: slot);
 
-        using var watcher = StartWatcher();
+        using var watcher = await StartWatcherAsync();
 
         await AwaitTimer(control, s => s is not null);      // the watcher has demonstrably passed
         Assert.Null(await ReadTimer(systemWritten));
@@ -172,7 +172,11 @@ public class OrleansScheduledPostTest(ITestOutputHelper output) : OrleansSharedT
 
     // ── harness ─────────────────────────────────────────────────────────────────────────────
 
-    private ScheduledPostWatcher StartWatcher()
+    // 🚨 async, awaited from the (already-async) [Fact]s below — never
+    // `.GetAwaiter().GetResult()`. StartAsync's continuations can, in principle, be posted back
+    // onto the calling thread; blocking that thread waiting for them is the exact self-deadlock
+    // shape #2013 tracks. Awaiting suspends the test instead of parking its thread.
+    private async Task<ScheduledPostWatcher> StartWatcherAsync()
     {
         var sp = Mesh.ServiceProvider;
         var watcher = new ScheduledPostWatcher(
@@ -180,11 +184,11 @@ public class OrleansScheduledPostTest(ITestOutputHelper output) : OrleansSharedT
             sp.GetRequiredService<IMeshService>(),
             sp.GetRequiredService<AccessService>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<ScheduledPostWatcher>>());
-        watcher.StartAsync(default).GetAwaiter().GetResult();
+        await watcher.StartAsync(default);
         return watcher;
     }
 
-    private EventSubscriptionRunner StartRunner()
+    private async Task<EventSubscriptionRunner> StartRunnerAsync()
     {
         var sp = Mesh.ServiceProvider;
         var runner = new EventSubscriptionRunner(
@@ -193,7 +197,7 @@ public class OrleansScheduledPostTest(ITestOutputHelper output) : OrleansSharedT
             sp.GetRequiredService<IMeshService>(),
             sp.GetRequiredService<AccessService>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
-        runner.StartAsync(default).GetAwaiter().GetResult();
+        await runner.StartAsync(default);
         return runner;
     }
 
