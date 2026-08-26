@@ -57,6 +57,7 @@ memex-local status             # colima / pods / ingress / port-forward / health
 memex-local logs               # tail the portal logs (verbose; see "Full logging")
 memex-local logs --migration   # tail the migration job
 memex-local update             # roll portal+migration to a newer image, refresh forward
+memex-local verify             # is the portal USABLE? serves + /login routed + view packs present
 memex-local autoroll up        # AUTO-redeploy portal+migration whenever a fresh image is built
 memex-local autoroll status    # show the watcher + last-rolled portal/migration digests
 memex-local autoroll down      # stop auto-rolling
@@ -151,7 +152,7 @@ rolled in place; the **migration** is re-run as a Job (it has no Deployment).
 | §10 Local LLM | `OLLAMA_HOST=0.0.0.0:11434 ollama serve`; `ollama pull qwen3.6`; `ollama cp … qwen3.6-code` | `setup_ollama()` + overlay `ollama.external` + `OpenAICompatible__*` |
 | §11 Observability | `helm upgrade --install loki grafana/loki-stack …` | `cmd_observability()` |
 | §12 Instance identity | `Portal__InstanceName/Color` | overlay `config.memex_portal` |
-| §14 Verify | `curl --cacert …/rootCA.pem https://memex.localhost:8443/` | `verify_endpoint()` |
+| §14 Verify | assert the portal is USABLE — it serves, `/login` is routed, and the DefaultViews/GraphViews packs are present | `verify_usable()` (`up` / `update` / `verify`; behaviour-tested in `test/run-tests.sh`) |
 | §14 Troubleshoot (stale forward) | restart the port-forward after a rollout | `cmd_port_forward()`; `update` auto-refreshes it |
 | §16 Plugin registry | mount the plugin checkouts + configure them as sources/grants | `plugin_repo_paths()` + the `pluginCatalog.*` `--set`s in `helm_deploy()` |
 | §16 New instance | mint an `mwr_` key → own DB → deploy a self-registering portal → verify | `cmd_instance()` (`inst_mint_key`, `inst_registered_id`, `inst_installed_packages`) |
