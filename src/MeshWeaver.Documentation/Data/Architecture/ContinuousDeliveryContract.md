@@ -191,6 +191,64 @@ what sets that tail.
 the rolls, so each published set restarts every install that selects it. That is the reason the tick
 is hourly and not faster, and it is tracked as #1778 rather than papered over with a slower CD.
 
+## Property 1a — how the set already spans repos, and what the GUI move actually breaks
+
+🚨 **Correction, 2026-08-26.** An earlier draft of this section claimed the shipped artefacts have
+"two publishers on two independent triggers" and proposed unifying them. **That was wrong**, and the
+evidence is in this pipeline's own comments — read them before proposing anything here.
+
+**What is actually true:**
+
+- **`MeshWeaver.Plugins/publish-packages.yml` publishes NOTHING.** It packs and reports, `dry-run` by
+  design: *"nothing consumes a package feed"*, and a push to `nuget.pkg.github.com` would 403 on the
+  org's Packages billing limit and redden main on every merge. So there is no second publisher, and
+  **no package-release event to hang a webhook on** — the question is well-posed and the premise
+  does not hold here.
+- **Consumers fetch BUNDLES from the registry portal** (`/api/plugins/bundles`) — *"assembled from
+  the very bytes that portal runs"*. Distribution is bundles, not a feed.
+- **Coordination already exists, and it is not a shared pipeline.** Each node repo's
+  `node-repo-publish-bake` lane bakes and publishes its own content **under the SAME framework
+  identity, from the SAME image**. That identity is what makes the sets composable.
+- **`main-cd.yml` checks out no other repository — deliberately.** Its own words: *"there is not one
+  `repository:` input in this file, so it could not compile them even by accident — and must never be
+  given the chance."* Content a deployment receives ALREADY BUILT must be **adopted, not rebuilt**;
+  recompiling it is the expensive half of a bake and re-does work another lane already did.
+
+So "build everything, publish everything from one pipeline" is not a gap to close — it is a reversal
+of a constraint this file states and defends. That may still be the right call, but it is a
+**maintainer decision to change a deliberate design**, not a repair, and it should be argued against
+the reason above rather than around it.
+
+### What the GUI move DOES break
+
+The real exposure is narrower and is not about publication at all:
+
+1. **Nothing compiles the moved portal hosts.** `MeshWeaver.Plugins/ci.yml` builds named
+   `MeshWeaver.*` module rows; `Memex.Portal.Gui` / `Monolith` / `Distributed` are not rows. Today a
+   break is still caught by **core's image build** — which the deletion removes. Coverage reaches
+   zero at that moment, silently, because nothing reports a check that is not there.
+2. **The template needs a run with both trees.** `tools/generate-memex-template.cs` COPIES six
+   project directories and rewrites their `ProjectReference`s to `PackageReference`s. Three of the
+   six leave with the GUI and three stay, so **neither repo has all six** — moving the generator does
+   not help.
+
+**The maintainer's ordering for the template** — `build all−template → package all−template →
+build+test template → pack template` — follows from the rewrite: the generated solution resolves
+against PACKAGES, so it cannot be built before they exist. The template is **downstream of
+publication**, not another leg.
+
+### If the pipelines are ever unified, the mechanism already exists
+
+Every image leg pushes only a non-selectable `staging-<sha>-<run_id>`; `promote` applies the real
+tags after all legs succeed. Extending atomicity means adding legs to that same `needs:` — never a
+second gate that has to be kept in step with the first.
+
+And the event rule composes only one way: plugins CI must NOT subscribe to a platform-released event
+(verified — zero `repository_dispatch` in its three workflows). Whoever publishes, emits, on an
+OBSERVED publication — the same reason `delivery-verdict` must not pass on an empty verdict (#2311),
+and `FrameworkReleaseBroadcaster` fires on a real release rather than from a CI step that runs
+regardless.
+
 ## Changing the pipeline
 
 Adding a sixth image touches **three** places, and missing any one of them recreates the exact hole
