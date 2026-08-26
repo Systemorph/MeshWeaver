@@ -791,7 +791,7 @@ Populated automatically by `rebuild_user_effective_permissions()` in each partit
 
 ## Partition access in search
 
-Cross-schema search (`search_across_schemas`) enforces partition access at the SQL level. The access control clause requires:
+Cross-schema search enforces partition access at the SQL level — in the UNION branch `PostgreSqlSqlGenerator.GenerateCrossSchemaSelectQuery` emits per schema. The access control clause requires:
 
 1. **Partition access** — user must have a `partition_access` entry for the schema (always required)
 2. **Node-level permission** — user must have Read permission on the node's `main_node` path

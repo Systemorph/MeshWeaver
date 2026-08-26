@@ -71,22 +71,26 @@ internal static class NodeTypeBatchBake
     /// <see cref="MeshQueryRequest.Limit"/> and <see cref="ParsedQuery.Limit"/> null. "No limit"
     /// is NOT read the same way by every backend: the in-memory
     /// <c>StorageAdapterMeshQueryProvider</c> (<c>LoadCap</c>) and the per-schema
-    /// <c>PostgreSqlMeshQuery</c> treat it as UNBOUNDED, but the cross-schema fan-out that serves
-    /// an UNPINNED query on Postgres substitutes a hard default of 50
-    /// (<c>PostgreSqlCrossSchemaQueryProvider.QueryAcrossSchemasAsync</c>). <c>nodeType:Code</c>
+    /// <c>PostgreSqlMeshQuery</c> treat it as UNBOUNDED, but the cross-schema fan-out that served
+    /// an UNPINNED query on Postgres substituted a hard default of 50. <c>nodeType:Code</c>
     /// carries no <c>namespace:</c>/<c>path:</c>, so it is exactly that unpinned shape — and on
     /// memex-cloud 2026-08-11 the batch resolved 50 Code nodes out of thousands and compiled 169
     /// of 237 types against NOTHING. A test mesh has fewer than 50 Code nodes, so the cap never
     /// bound and every test stayed green.</para>
     ///
+    /// <para>🚨 That substitution is gone — it lived on a paging fan-out shape no runtime caller
+    /// could reach, deleted in #2048 — so an unpinned query stating no limit is unbounded on
+    /// Postgres too now. The explicit ceiling below stays anyway, for the reason in the next
+    /// paragraph, which never depended on it.</para>
+    ///
     /// <para><b>Why a number and not "unbounded".</b> Unbounded is not honoured uniformly (above),
-    /// and it cannot be reached by paging either: <c>public.search_across_schemas</c> takes a LIMIT
-    /// but no OFFSET, and its <c>ORDER BY n.last_modified DESC</c> is not a total order, so a
-    /// Skip/Limit loop over it would silently drop and duplicate rows across pages — worse than one
-    /// big page. So discovery states its ceiling EXPLICITLY (every backend honours an explicit
-    /// <c>limit:</c>) and then ASSERTS it was not reached. A mesh that genuinely exceeds this many
-    /// Code nodes gets a loud discovery failure and the activation-driven sweep — slower, correct,
-    /// and impossible to mistake for a content verdict.</para>
+    /// and it cannot be recovered by paging either: the cross-schema fan-out's
+    /// <c>ORDER BY n.last_modified DESC</c> is not a total order, so a Skip/Limit loop over it
+    /// would silently drop and duplicate rows across pages — worse than one big page. So discovery
+    /// states its ceiling EXPLICITLY (every backend honours an explicit <c>limit:</c>) and then
+    /// ASSERTS it was not reached. A mesh that genuinely exceeds this many Code nodes gets a loud
+    /// discovery failure and the activation-driven sweep — slower, correct, and impossible to
+    /// mistake for a content verdict.</para>
     /// </summary>
     internal const int SourceDiscoveryLimit = 25_000;
 
@@ -673,7 +677,11 @@ internal static class NodeTypeBatchBake
             // the compare-and-set below reads as "insert only if absent". Carried explicitly rather
             // than derived from stampedNode.Version - 1, which would silently rot if the mint
             // changed.
-            .Select(stored => (Expected: stored?.Version ?? 0, Fresh: stored ?? typeNode))
+            // 🚨 `IsInsert` is carried from `stored is null`, NOT inferred from `Expected == 0`
+            // (#2087). The two coincide today only because versions start at 1; deriving the
+            // announcement KIND from a version number is exactly the kind of silent rot the
+            // Expected note below warns about, and getting it wrong strands a path permanently.
+            .Select(stored => (Expected: stored?.Version ?? 0, IsInsert: stored is null, Fresh: stored ?? typeNode))
             .Select(read =>
             {
                 var fresh = read.Fresh;
@@ -683,7 +691,7 @@ internal static class NodeTypeBatchBake
                     logger?.LogWarning(
                         "BatchBake: {TypePath} content could not be read as NodeTypeDefinition — "
                         + "stamp skipped", typeNode.Path);
-                    return (Expected: read.Expected, Stamped: (MeshNode?)null);
+                    return (Expected: read.Expected, read.IsInsert, Stamped: (MeshNode?)null);
                 }
                 var stamped = (ok
                         // currentNodeVersion = typeNode.Version — the version the compiler's
@@ -700,7 +708,7 @@ internal static class NodeTypeBatchBake
                     // there). Written here so a per-type duration is derivable FROM THE MESH on both
                     // drivers, not just from a log line — issue #1439.
                     with { LastCompileStartedAt = startedAt };
-                return (Expected: read.Expected, Stamped: (MeshNode?)(fresh with
+                return (Expected: read.Expected, read.IsInsert, Stamped: (MeshNode?)(fresh with
                 {
                     Content = stamped,
                     Version = MeshNode.NextVersion(fresh.Version)
@@ -743,10 +751,27 @@ internal static class NodeTypeBatchBake
                                 typeNode.Path, stampedNode.Version, stamp.Expected);
                             return;
                         }
-                        // Post-commit announce, exactly as WriteAndPublishUpdated did — the
-                        // mesh-change feed is what invalidates the resolution / stream caches.
+                        // Post-commit announce — the mesh-change feed is what invalidates the
+                        // resolution / stream caches.
+                        //
+                        // 🚨 Created vs Updated is NOT cosmetic here (#2087). `WriteIfVersion` with
+                        // an expected version of 0 is an INSERT — "write only if absent" — so on a
+                        // fresh or freshly-imported partition this line lands the NodeType's very
+                        // first durable row, and it announced that CREATE as an UPDATE.
+                        // `PathResolutionService` only STALE-MARKS on Updated and keeps serving the
+                        // cached route shape (deliberately — removing on Updated was the #1172
+                        // routing/compile feedback loop); only Created/Deleted REMOVE the entry. So
+                        // a path probed while the type was still absent — which is precisely what
+                        // an installer's overlay watchers do — kept its cached miss for the life of
+                        // the process: the row is in Postgres, no hub is ever woken, the type never
+                        // comes live, and every instance typed on it wears the missing-type overlay.
+                        // That is the #817/#824 announce-loss shape reaching the mesh through a
+                        // primitive (#1424's compare-and-set) that was added without an announcement
+                        // partner.
                         if (applied is true)
-                            changeFeed?.Publish(MeshChangeEvent.Updated(stampedNode));
+                            changeFeed?.Publish(stamp.IsInsert
+                                ? MeshChangeEvent.Created(stampedNode)
+                                : MeshChangeEvent.Updated(stampedNode));
                     })
                     .Select(_ => Unit.Default))
             .Catch<Unit, Exception>(ex =>

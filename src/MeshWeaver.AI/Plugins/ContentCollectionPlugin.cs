@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh;
 using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -64,7 +65,7 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         CancellationToken cancellationToken = default)
     {
         var scopePath = !string.IsNullOrWhiteSpace(scope)
-            ? MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, scope))
+            ? MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, scope))
             : chat.Context?.Context;
 
         // 🚨 Was `.FirstAsync().ToTask()` with NO token (#1956): a stalled embedder parked the round
@@ -125,7 +126,7 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         [Description("Collection name (default: 'content')")] string collectionName = ContentCollectionsExtensions.DefaultCollectionName,
         CancellationToken cancellationToken = default)
     {
-        var resolvedPath = MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, nodePath));
+        var resolvedPath = MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodePath));
         var address = new Address(resolvedPath);
 
         // hub.Observe(...) bridged by ToolTask — never `await` a hub response from a plugin method:

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
-using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
@@ -388,6 +387,100 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
             "a claimed (ExcludeThisAndChildren) partition root decouples the whole subtree — the source "
             + "change must NOT overwrite the admin's edit");
         (page.Content as MarkdownContent)!.Content.Should().NotContain("SOURCE CHANGED");
+    }
+
+    /// <summary>
+    /// 🚨 AN IMPORT A CLAIM STOPPED FROM CREATING A DECLARED NODE MUST NOT RECORD SUCCESS.
+    ///
+    /// <para>A claim ("this node is the admin's now") protects a node from being OVERWRITTEN. It has
+    /// nothing to protect on a path the mesh has no node at — so a claim that blocks a CREATE is a
+    /// claim wider than the thing it protects, and the node the source declares can never appear.
+    /// That is issue #2211: <c>Provider/{name}</c> was seeded
+    /// <see cref="SyncBehavior.ExcludeThisAndChildren"/>, so the deployment's 12 configured
+    /// <c>LanguageModel</c> children were declined on every boot while the import logged
+    /// "Imported: 0 node(s) imported" and stamped its marker <b>Succeeded</b>. Succeeded at that
+    /// fingerprint IS the durable short-circuit, so every later boot skipped before it could look at
+    /// anything — the divergence was permanent AND invisible. A pod restart did not fix it; recycling
+    /// the partition hub did not fix it.</para>
+    ///
+    /// <para>Both directions are asserted, because a check that cannot fail is not a check: the
+    /// blocked create is NAMED and NOT recorded as Succeeded (so the next boot re-attempts instead of
+    /// inheriting a green verdict), and once the claim is narrowed the very same source imports
+    /// cleanly and the node appears.</para>
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task Import_BlockedFromCreatingByAClaim_IsNamed_AndNotRecordedAsSucceeded()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be("Imported");
+
+        // Claim Page1's whole subtree — exactly the create-if-absent shape the provider catalog used.
+        await Mesh.GetMeshNodeStream($"{_partition}/Page1")
+            .Update(n => n with { SyncBehavior = SyncBehavior.ExcludeThisAndChildren })
+            .Should().Within(30.Seconds()).Emit();
+        await Mesh.GetMeshNodeStream($"{_partition}/Page1")
+            .Where(n => n is { SyncBehavior: SyncBehavior.ExcludeThisAndChildren })
+            .Should().Within(30.Seconds()).Emit();
+
+        // The deployment now declares a NEW child under the claimed node — the "a model added after
+        // the provider node existed" case. It does not exist in the mesh, and the claim refuses it.
+        var blockedPath = $"{_partition}/Page1/Sub";
+        List<MeshNode> SourceWithChild() =>
+        [
+            new MeshNode("Page1", _partition)
+            {
+                NodeType = "Markdown", Name = "Page 1", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "# Page 1\n\nA page." }
+            },
+            new MeshNode("Sub", $"{_partition}/Page1")
+            {
+                NodeType = "Markdown", Name = "Sub", State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "# Sub\n\nDeclared, never created." }
+            }
+        ];
+        _source.Nodes = SourceWithChild();
+
+        var blocked = (await Import()).Single(r => r.Partition == _partition);
+        blocked.Outcome.Should().Be("ImportedWithBlockedCreates",
+            "an import that could not create a node the source declares has not succeeded — "
+            + "recording it as Succeeded is what froze the divergence permanently (#2211)");
+        blocked.BlockedCreatePaths.Should().Contain(blockedPath,
+            "the blocked path must be NAMED — 'Imported 0 node(s)' gave an operator nothing to act on");
+        blocked.Count.Should().Be(0, "nothing landed");
+
+        // The node really is absent — the outcome is not merely pessimistic reporting. Read through
+        // the QUERY (the importer's own read for a maybe-absent node): point-access on a path that
+        // was never created errors NotFound rather than emitting null, and there is no concurrent
+        // write for the eventually-consistent read to lag behind — the create never happened.
+        (await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{blockedPath}"))
+                .Take(1).Should().Within(30.Seconds()).Emit())
+            .Items.Should().BeEmpty("the declared child was never created");
+
+        // 🚨 THE POINT OF THE STATUS: the marker is not Succeeded, so the NEXT boot re-attempts
+        // instead of short-circuiting. Before the fix this second run answered "Skipped".
+        (await Import()).Single(r => r.Partition == _partition).Outcome.Should().Be(
+            "ImportedWithBlockedCreates",
+            "a Warning marker must not short-circuit the next boot — that short-circuit is what made "
+            + "the drift durable");
+
+        // The other direction: narrow the claim to the node itself and the SAME source imports
+        // cleanly. Without this, the new status could be an unconditional pessimism.
+        await Mesh.GetMeshNodeStream($"{_partition}/Page1")
+            .Update(n => n with { SyncBehavior = SyncBehavior.ExcludeThisOnly })
+            .Should().Within(30.Seconds()).Emit();
+        await Mesh.GetMeshNodeStream($"{_partition}/Page1")
+            .Where(n => n is { SyncBehavior: SyncBehavior.ExcludeThisOnly })
+            .Should().Within(30.Seconds()).Emit();
+
+        var healed = (await Import()).Single(r => r.Partition == _partition);
+        healed.Outcome.Should().Be("Imported",
+            "ExcludeThisOnly protects the claimed node and leaves its children synced — which is why "
+            + "the provider catalog now seeds that width instead of claiming the subtree");
+        healed.BlockedCreatePaths.Should().BeEmpty();
+        (await Read(blockedPath)).Should().NotBeNull(
+            "the declared child must materialize once the claim stops refusing its creation");
+        _ = ct;
     }
 
     /// <summary>

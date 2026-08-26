@@ -24,8 +24,25 @@ namespace MeshWeaver.AI;
 /// </summary>
 public static class ProviderFailureClassifier
 {
-    /// <summary>The banner Azure.Core and System.ClientModel both put in the exception message.</summary>
+    /// <summary>The banner Azure.Core puts in the exception message: <c>"Status: 429 (Too Many Requests)"</c>.</summary>
     private const string StatusMarker = "Status: ";
+
+    /// <summary>
+    /// The OTHER banner — the one <c>System.ClientModel</c> renders for a
+    /// <c>ClientResultException</c>: <c>"HTTP 402 (Payment Required: )"</c>, i.e.
+    /// <c>HTTP {status} ({reasonPhrase}: {errorCode})</c>.
+    ///
+    /// <para>🚨 #2233: this classifier shipped knowing only <see cref="StatusMarker"/>, so EVERY
+    /// OpenAI/OpenRouter refusal fell through unclassified and pasted its raw transport dump into
+    /// the thread — the exact defect #476 set out to kill, still live on the code path the portal
+    /// actually uses. The production evidence is literal: <c>"HTTP 402 (: )"</c> for an exhausted
+    /// OpenRouter credit balance and <c>"HTTP 404 (: 404)"</c> for a missing model. Neither string
+    /// contains "Status: ".</para>
+    ///
+    /// <para>Note there is no space before the digits in <c>"HTTP/1.1"</c>, so a header dump listing
+    /// the protocol version cannot be mistaken for a status here.</para>
+    /// </summary>
+    private const string HttpMarker = "HTTP ";
 
     /// <summary>
     /// The HTTP status a provider refused the round with, or <c>null</c> when the failure carries no
@@ -73,21 +90,45 @@ public static class ProviderFailureClassifier
         => TryGetProviderStatus(ex) is >= 500 and < 600;
 
     /// <summary>
-    /// Reads <c>"Status: 429 (Too Many Requests)"</c> — the conventional Azure.Core /
-    /// System.ClientModel banner — and returns the numeric status, or <c>null</c>.
+    /// True when the provider refused the round for lack of CREDIT rather than for rate (HTTP 402) —
+    /// OpenRouter's <c>"This request requires more credits, or fewer max_tokens"</c>. #2233: distinct
+    /// from <see cref="IsRateLimited"/> because waiting does not help; somebody must top the account
+    /// up (or the round must ask for fewer tokens).
+    /// </summary>
+    public static bool IsQuotaExhausted(Exception? ex) => TryGetProviderStatus(ex) == 402;
+
+    /// <summary>
+    /// True when the provider has no such model or endpoint (HTTP 404) — a stale or mistyped model id
+    /// in the deployment's configuration. #2233: an actionable CONFIGURATION fault, not a transient
+    /// one, so it must never read as "submit again later".
+    /// </summary>
+    public static bool IsModelNotFound(Exception? ex) => TryGetProviderStatus(ex) == 404;
+
+    /// <summary>
+    /// Reads the numeric status out of EITHER conventional banner — Azure.Core's
+    /// <c>"Status: 429 (Too Many Requests)"</c> or System.ClientModel's <c>"HTTP 402 (: )"</c> — and
+    /// returns it, or <c>null</c>. Azure's form is tried first purely because it is the more
+    /// specific marker; a message carrying both resolves the same either way.
     ///
     /// <para>Anchored on the digits IMMEDIATELY after the marker and bounded to three of them, so a
-    /// body that merely mentions a status ("Status: ok") or a prose sentence containing the word
-    /// yields nothing rather than a bogus code.</para>
+    /// body that merely mentions a status ("Status: ok"), a prose sentence containing the word, or a
+    /// header dump's <c>"HTTP/1.1"</c> protocol version yields nothing rather than a bogus code.</para>
     /// </summary>
     private static int? TryParseStatusBanner(string? message)
+        => TryParseAfterMarker(message, StatusMarker) ?? TryParseAfterMarker(message, HttpMarker);
+
+    /// <summary>
+    /// Reads the numeric status immediately following <paramref name="marker"/>, applying the
+    /// anchoring rules described on <see cref="TryParseStatusBanner"/>.
+    /// </summary>
+    private static int? TryParseAfterMarker(string? message, string marker)
     {
         if (string.IsNullOrEmpty(message))
             return null;
-        var at = message.IndexOf(StatusMarker, StringComparison.Ordinal);
+        var at = message.IndexOf(marker, StringComparison.Ordinal);
         if (at < 0)
             return null;
-        var start = at + StatusMarker.Length;
+        var start = at + marker.Length;
         var end = start;
         while (end < message.Length && end - start < 3 && char.IsAsciiDigit(message[end]))
             end++;

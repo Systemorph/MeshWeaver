@@ -20,6 +20,25 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
     /// <summary>The empty list — every failure is a new failure.</summary>
     public static readonly GateAllowlist Empty = new([]);
 
+    /// <summary>
+    /// Optional third token marking an entry whose check FLAPS. Such an entry is exempt from
+    /// stale-detection: passing once does not prove the debt is paid, so the ratchet must not
+    /// demand its removal. It still suppresses only the scope/check it names.
+    ///
+    /// <para>🚨 This is a REAL WEAKENING and its failure mode is social, not technical: the next
+    /// person with a deterministic red they cannot fix will find this token and reach for it. It is
+    /// legitimate for a check that genuinely flaps and for nothing else — marking a deterministic
+    /// failure intermittent silences the ratchet permanently, which is the band-aid the ratchet
+    /// exists to prevent. Prove the flap first (two runs of one commit disagreeing, or an entry
+    /// dropped as stale and restored in this file's history).</para>
+    ///
+    /// <para>The sibling rule is the same idea from the other direction: an entry listed but ABSENT
+    /// from a narrowed run is <c>Unverifiable</c> — warned, never failed. That one refuses to infer
+    /// from a check that did not run; this one refuses to infer from a check that ran once and
+    /// happened to pass. Both are <i>one observation is not proof</i>.</para>
+    /// </summary>
+    public const string IntermittentMarker = "intermittent";
+
     /// <summary>The valid check names, package-level and type-level.</summary>
     public static readonly IReadOnlySet<string> Checks =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -38,11 +57,15 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
             if (line.Length == 0)
                 continue;
             var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length != 2 || !Checks.Contains(parts[1]))
+            var intermittent = parts.Length == 3
+                && string.Equals(parts[2], IntermittentMarker, StringComparison.OrdinalIgnoreCase);
+            if ((parts.Length != 2 && !intermittent) || !Checks.Contains(parts[1]))
                 throw new FormatException(
-                    $"allow file line {number}: expected '<scope> <check>' with check one of " +
+                    $"allow file line {number}: expected '<scope> <check>' (optionally followed by " +
+                    $"'{IntermittentMarker}') with check one of " +
                     $"[{string.Join(", ", Checks)}], got '{line}'");
-            entries.Add(new AllowEntry(parts[0], parts[1].ToLowerInvariant()));
+            entries.Add(new AllowEntry(parts[0], parts[1].ToLowerInvariant())
+                { Intermittent = intermittent });
         }
         return new GateAllowlist(entries);
     }
@@ -101,6 +124,15 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
 /// <summary>One known-debt entry: a scope (package id or NodeType path) and a check name.</summary>
 public sealed record AllowEntry(string Scope, string Check)
 {
+    /// <summary>
+    /// Whether this entry's check FLAPS — see <see cref="GateAllowlist.IntermittentMarker"/>.
+    /// Deliberately an init-only PROPERTY rather than a primary-constructor parameter: adding a
+    /// defaulted parameter to a public record's primary ctor is a binary-breaking change, which the
+    /// <c>scripts/check-record-signatures.py</c> gate refuses. It caught exactly that on the first
+    /// attempt here.
+    /// </summary>
+    public bool Intermittent { get; init; }
+
     /// <summary>Case-insensitive match, exact scope — no globs: an entry must name exactly the
     /// debt it tolerates, or the ratchet stops ratcheting.</summary>
     public bool Matches(string scope, string check) =>
@@ -108,7 +140,16 @@ public sealed record AllowEntry(string Scope, string Check)
         && string.Equals(Check, check, StringComparison.OrdinalIgnoreCase);
 
     /// <inheritdoc />
-    public override string ToString() => $"{Scope} {Check}";
+    /// <summary>
+    /// The entry as it appears in the allow file — INCLUDING the intermittent marker. The gate
+    /// prints entries in its diagnostics ("unverifiable allow entry …: {entry}"), and an operator
+    /// reading that output is looking for the line to edit; a rendering that drops the marker does
+    /// not match the file and cannot be copy-pasted back into it.
+    /// </summary>
+    public override string ToString() =>
+        Intermittent
+            ? $"{Scope} {Check} {GateAllowlist.IntermittentMarker}"
+            : $"{Scope} {Check}";
 }
 
 /// <summary>One observed failure: where, which check, and the detail text.</summary>
@@ -141,7 +182,22 @@ public sealed record GateVerdict(
         {
             if (failures.Any(f => entry.Matches(f.Scope, f.Check)))
                 continue;
-            (Passed(report, entry) ? stale : unverifiable).Add(entry);
+            // 🚨 An INTERMITTENT entry that passed this run is NOT stale. The ratchet's rule — a
+            // listed check that starts passing fails the run until its line goes — assumes a check
+            // is deterministic, so one green run proves the debt is paid. For a flapping check that
+            // inference is wrong, and acting on it churns: PensionFund idempotence was dropped as
+            // stale (768f9ba0b) and RESTORED one commit later (f32047e0e, "the check is
+            // intermittent"), after which the allow file carried the intent in a COMMENT the parser
+            // strips — so the ratchet kept failing runs for obeying the file. Marking the entry
+            // instead puts that intent where the code can read it.
+            //
+            // This never hides a NEW failure: an intermittent entry still only suppresses the
+            // scope/check it names, and a failure it does not name is still a new failure. What it
+            // gives up is stale-detection for that one line, which is the whole point.
+            var passed = Passed(report, entry);
+            if (entry.Intermittent && passed)
+                continue;
+            (passed ? stale : unverifiable).Add(entry);
         }
         return new GateVerdict(newFailures, knownDebt, stale, unverifiable);
     }

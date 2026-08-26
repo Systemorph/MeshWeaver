@@ -6,6 +6,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.AI;   // MeshOperations — its namespace is a frozen binary contract (#2370)
 using MeshWeaver.Reactive;
 using Memex.Portal.Shared;
 using MeshWeaver.ContentCollections;
@@ -241,7 +242,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     [InlineData("three")]
     public void FuzzyScorer_AnyWordInFilename_RanksDocumentFirst(string query)
     {
-        var scorer = new AI.Completion.FuzzyScorer();
+        var scorer = new Data.Completion.FuzzyScorer();
 
         var items = new[]
         {
@@ -753,7 +754,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     {
         // MeshOperations.Get with "ACME/ProductLaunch/content/report.md"
         // should recognize content/ as UCR prefix, not treat it as a node path
-        var ops = new AI.MeshOperations(Mesh);
+        var ops = new MeshOperations(Mesh);
         var result = await ops.Get("@ACME/ProductLaunch/content/report.md").Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Get('@ACME/ProductLaunch/content/report.md'): {result[..Math.Min(200, result.Length)]}");
 
@@ -767,7 +768,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     public async Task RelativePath_ContentColon_ResolvedAsUnifiedPath()
     {
         // Legacy colon format should also work
-        var ops = new AI.MeshOperations(Mesh);
+        var ops = new MeshOperations(Mesh);
         var result = await ops.Get("@ACME/ProductLaunch/content:report.md").Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Get('@ACME/ProductLaunch/content:report.md'): {result[..Math.Min(200, result.Length)]}");
 
@@ -778,7 +779,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     [Fact]
     public void RelativePath_QuotedSpacedPath_StripsQuotes()
     {
-        var result = AI.MeshOperations.ResolvePath("\"@content/My Report.md\"");
+        var result = MeshOperations.ResolvePath("\"@content/My Report.md\"");
         result.Should().Be("content/My Report.md");
     }
 
@@ -789,7 +790,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     [InlineData("simple.md", "simple.md")]
     public void ResolvePath_HandlesVariousFormats(string input, string expected)
     {
-        var result = AI.MeshOperations.ResolvePath(input);
+        var result = MeshOperations.ResolvePath(input);
         result.Should().Be(expected);
     }
 

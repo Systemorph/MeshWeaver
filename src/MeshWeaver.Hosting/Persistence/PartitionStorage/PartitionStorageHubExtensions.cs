@@ -77,7 +77,7 @@ public static class PartitionStorageHubExtensions
         var adapter = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
 
         request.Message.Paths
-            .ToObservable()
+            .ToInlineObservable()
             .SelectMany(path => adapter.Delete(path))
             .ToList()
             .Subscribe(

@@ -60,7 +60,12 @@ public static class PartitionNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Partition",
-        NodeType = NodeType,
+        // A declaration declares itself a NodeType, never the type it declares — see the note on
+        // UserNodeType.CreateMeshNode for what self-typing cost in production. The partition
+        // enumerations happen to pin a namespace (`namespace:Admin/Partition nodeType:Partition`,
+        // which this root-level node never matched), so this one was latent rather than live —
+        // but any pathless `nodeType:Partition` read would have hit the same collision.
+        NodeType = MeshNode.NodeTypePath,
         Icon = "/static/NodeTypeIcons/database.svg",
         ExcludeFromContext = new HashSet<string> { "create", "search", "content" },
         Content = new NodeTypeDefinition { DefaultNamespace = Namespace },

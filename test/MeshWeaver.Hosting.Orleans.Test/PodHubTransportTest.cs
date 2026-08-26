@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -75,7 +76,10 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     [Fact(Timeout = 180_000)]
     public async Task SiloHostedHub_ReceivesDelivery_EvenWithItsStreamSubscriptionGone()
     {
-        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(150)).Token;
+        // Disposed: this overload arms an internal timer, and an undisposed source keeps it
+        // alive past the test (Copilot review, #2268).
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        var ct = deadline.Token;
         var cluster = fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the delivery has to CROSS silos, or "
             + "the sender's own local route short-circuits and the router is never involved");
@@ -145,7 +149,10 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     [Fact(Timeout = 180_000)]
     public async Task AddressThatMovesSilos_ConvergesOnItsNewOwner()
     {
-        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(150)).Token;
+        // Disposed: this overload arms an internal timer, and an undisposed source keeps it
+        // alive past the test (Copilot review, #2268).
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        var ct = deadline.Token;
         var cluster = fixture.Cluster;
         var address = new Address("client", $"moving-{Guid.NewGuid():N}");
 
@@ -216,6 +223,99 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
             + $"still be recognisable AFTER crossing the grain boundary. Got: {thrown.Which}");
     }
 
+    /// <summary>
+    /// 🚨 THE REPLY LEG — issue #1742's actual headline, and the last place a delivery could vanish
+    /// without a trace. A hub on silo A asks for something that cannot be routed; the router on
+    /// silo B gives up and must tell it so. That NACK used to be a publish onto the SENDER's stream,
+    /// which is the same fire-and-forget channel whose failure it is reporting — so when the
+    /// sender's subscriber registry entry was gone (every rolling deploy manufactured that state)
+    /// the NACK was discarded exactly like the message it was about, and the requester spent its
+    /// full 60 s budget on an answer the router believed it had sent. The router's own trace tag
+    /// admitted it: <c>FAILURE_DELIVER_OK_UNCONFIRMED</c>.
+    ///
+    /// <para>This asserts the cure: the NACK now takes the SAME directed pod-hub call the forward
+    /// leg takes, so it lands on the sender's synchronously-written local route with the stream out
+    /// of the picture entirely. Two silos are not decoration here — a co-hosted sender short-circuits
+    /// on the local route (#1486) and never exercises this path at all.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task CrossSiloNack_ReachesASenderWhoseStreamSubscriptionIsGone()
+    {
+        // Disposed: this overload arms an internal timer, and an undisposed source keeps it
+        // alive past the test (Copilot review, #2268).
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        var ct = deadline.Token;
+        var cluster = fixture.Cluster;
+        cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the NACK has to CROSS silos — a "
+            + "co-hosted sender is answered on the local route and never reaches the leg under test");
+
+        // The SENDER: a pod-process hub on silo A.
+        var sender = new Address("client", $"nack-sender-{Guid.NewGuid():N}");
+        var inbox = new ConcurrentQueue<IMessageDelivery>();
+        using var registration = Routing(cluster, 0).RegisterStream(sender, (d, _) =>
+        {
+            inbox.Enqueue(d);
+            return Observable.Return(d);
+        });
+
+        // Prove the pod-hub claim is LIVE before erasing anything — by a cross-silo delivery
+        // ARRIVING, never by asking the grain (whose `false` cannot tell "someone else owns it"
+        // from "nobody does"). Without this the test could pass by never having had a claim.
+        await WaitUntil(async () =>
+        {
+            SiloMeshHub(cluster, 1).Post(new PingRequest(), o => o.WithTarget(sender));
+            await Task.Yield();
+            return inbox.Any(d => Describes(d, nameof(PingRequest)));
+        }, "the sender's pod-hub activation must be claimed and reachable across silos first", ct);
+
+        // ERASE the sender's stream subscription. Its consumer handle stays valid and reports
+        // nothing; the registry now answers "nobody is subscribed" — the state a departed
+        // rendezvous-grain host left behind in production, and what made every publish a silent
+        // discard.
+        var (manager, streamId) = Registry(cluster, sender);
+        foreach (var subscription in await Subscriptions(manager, streamId, ct))
+            await manager.RemoveSubscription(StreamProviders.Memory, streamId, subscription.SubscriptionId)
+                .WaitAsync(Budget, ct);
+        await WaitUntil(
+            async () => !(await Subscriptions(manager, streamId, ct)).Any(),
+            "the registry must report the SENDER's stream as subscriber-less — that is the state in "
+            + "which a NACK used to disappear", ct);
+
+        // CONTROL: prove the stream really cannot carry anything to this sender any more, so a green
+        // below is the directed transport and not a stale pulling agent still delivering. A unique
+        // token rather than "the inbox is empty" — the claim probe above posts on a loop, so a late
+        // ping could still be in flight and emptiness would be a flake, not a fact. The fixed delay
+        // is the sanctioned kind: this is a negative assertion, so there is no positive signal to
+        // filter for.
+        var strayToken = $"stray-{Guid.NewGuid():N}";
+        await StreamOf(cluster, sender).OnNextAsync(Delivery(sender, strayToken)).WaitAsync(Budget, ct);
+        await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        inbox.Any(d => d.Message as string == strayToken).Should().BeFalse(
+            "a publish onto the subscriber-less stream must NOT reach the sender — if it does, the "
+            + "registry removal did not take effect and this test would pass without exercising the "
+            + "directed NACK at all");
+
+        // THE FAILING REQUEST. Routed on silo B (a [StatelessWorker] activates on its caller's silo,
+        // so going through B's grain factory is what puts the router — and therefore PostFailure —
+        // on a silo that does NOT host the sender). Its target is a stream-routed address nothing
+        // has ever claimed, so the route runs out of transports and must answer.
+        var ghost = new Address("client", $"ghost-{Guid.NewGuid():N}");
+        var doomed = new MessageDelivery<PingRequest>(
+            new PingRequest(),
+            new PostOptions(sender).WithTarget(ghost),
+            System.Text.Json.JsonSerializerOptions.Default);
+
+        await Grains(cluster, 1).GetGrain<IRoutingGrain>("default").RouteMessage(doomed)
+            .WaitAsync(Budget, ct);
+
+        await WaitUntil(
+            () => Task.FromResult(inbox.Any(d => Describes(d, nameof(DeliveryFailure)))),
+            "a request the router gave up on must come back to its cross-silo sender as a "
+            + "DeliveryFailure. Silence here is issue #1742 exactly: the NACK was published onto the "
+            + "sender's own subscriber-less stream, succeeded, and was discarded — so the caller "
+            + "waits out its whole budget for an answer the router believes it sent", ct);
+    }
+
     // ---- helpers -------------------------------------------------------------------------
 
     private static (IStreamSubscriptionManager Manager, global::Orleans.Runtime.StreamId StreamId) Registry(
@@ -237,6 +337,17 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
     private static IAsyncStream<IMessageDelivery> StreamOf(TestCluster cluster, Address address)
         => SiloServices(cluster, 0).GetRequiredKeyedService<IStreamProvider>(StreamProviders.Memory)
             .GetStream<IMessageDelivery>(address.ToString());
+
+    /// <summary>
+    /// Does this delivery carry <paramref name="typeName"/>? A delivery POSTED through a hub is
+    /// packaged (<c>RawJson</c>) by the time it is routed, while one the router constructs itself —
+    /// a <c>DeliveryFailure</c> — is not. Asserting either shape alone would pin the packaging
+    /// rather than the transport.
+    /// </summary>
+    private static bool Describes(IMessageDelivery delivery, string typeName) =>
+        delivery.Message is RawJson raw
+            ? raw.Content.Contains(typeName, StringComparison.Ordinal)
+            : delivery.Message?.GetType().Name == typeName;
 
     private static IMessageDelivery Delivery(Address target, string payload)
         => new MessageDelivery<string>(payload, new PostOptions(target).WithTarget(target),

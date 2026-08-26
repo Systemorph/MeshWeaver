@@ -150,6 +150,52 @@ public sealed class LogWatchWorker(
                     LogPipelineGap.TruncatedReport(ns, start, end, resumeAt, options.QueryLimit));
             }
 
+            // 🚨 A burst still OPEN at the window's edge must not be judged from its header alone
+            // (#2222). Its message and stack are on the other side of `end`, where the grouper has no
+            // header to re-attach them to and drops them — so the header would file as an incident
+            // that names a component and no defect, and the body would be lost outright. Hold the
+            // cursor at the header instead and read the burst whole on the next poll.
+            //
+            // Terminating by construction: the rewind lands the cursor ON that header, so if the same
+            // burst is STILL bodyless next time (a call site that really logged nothing), `> start`
+            // is false, no rewind happens and it is reported as bodyless below.
+            var openAtEdge = aggregation.HeaderOnly.Where(b => b.AtWindowEdge).ToImmutableList();
+            var rewindTo = openAtEdge.IsEmpty
+                ? (DateTimeOffset?)null
+                : openAtEdge.Min(b => b.Timestamp);
+            // Deferred, not lost: the cursor ends at or before these headers, so the next poll reads
+            // each burst whole. `> start` is the fixed point that makes this terminate — a burst that
+            // is STILL bodyless when the cursor already sits on its header genuinely has no body, and
+            // falls through to the report below instead of pinning the cursor forever.
+            var deferring = rewindTo is { } candidate && candidate > start;
+            if (deferring && rewindTo!.Value < resumeAt)
+            {
+                logger?.LogDebug(
+                    "{Namespace}: {Count} red burst(s) were still open at the window edge — resuming at "
+                    + "{Cursor:u} instead of {End:u} so their body is read with them.",
+                    ns, openAtEdge.Count, rewindTo.Value.UtcDateTime, resumeAt.UtcDateTime);
+                resumeAt = rewindTo.Value;
+            }
+
+            // Whatever is left had no body to read: report it ONCE per namespace, naming the
+            // categories, instead of opening a degenerate per-category incident for each.
+            var bodyless = deferring
+                ? aggregation.HeaderOnly.Where(b => !b.AtWindowEdge).ToImmutableList()
+                : aggregation.HeaderOnly;
+            if (!bodyless.IsEmpty)
+            {
+                var categories = bodyless
+                    .Select(b => b.Category)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToImmutableList();
+                logger?.LogWarning(
+                    "{Namespace}: {Count} red log line(s) carried NO body (categories: {Categories}) — "
+                    + "not fingerprinted, reported as a pipeline finding instead.",
+                    ns, bodyless.Count, string.Join(", ", categories));
+                reports = reports.Add(
+                    LogPipelineGap.HeaderOnlyReport(ns, bodyless.Count, categories, start, end));
+            }
+
             if (reports.Count > 0)
                 logger?.LogInformation(
                     "{Namespace}: {Fingerprints} distinct fingerprint(s) from {Bursts} red burst(s) "

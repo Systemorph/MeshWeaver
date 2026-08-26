@@ -119,17 +119,45 @@ That is the designed fallback, not a bug, and there are exactly three causes:
 
 `order: -10` sorts it ahead of even a deliberately-pinned `-1`, which is what makes it the **default selection for a new thread**. `isRouter: true` keeps it out of every *automatic* rung — the tier lookup and the deployment default — because a rung that could return Auto would resolve Auto to Auto, or hand the round to something that dispatches rather than answers.
 
-### Its dispatch rule
+### How Auto dispatches — two stages: a floor, then a refinement
 
-**Auto runs the tier the selected agent declares.** That is the whole rule.
+Auto resolves in two stages, and the whole design turns on this: the first **always** produces a runnable answer with no network call, and the second only ever *improves* it.
 
-- The agent declares a tier → Auto dispatches to that tier, through the same chain as everything else (label → deprecated config → default).
-- The agent declares none, or no agent is selected and the default agent declares none → the deployment default.
-- Nothing usable at all → the round fails audibly. Auto never resolves to nothing, and never to Auto.
+**1. The floor — no model call.** `AgentChatClient.ApplyStaleModelFallback` runs synchronously, before any factory sees the selection, and dispatches on the tier the selected agent declares — through the same chain as everything else (label → deprecated config → default):
 
-No classification call, no second model deciding what the first should be. That is deliberate: **a router nobody can predict is worse than a fixed default.** The tiers are already assigned to agents, so dispatching on the agent's tier is the reading of "Auto" that is consistent with the rest of the system — and it costs nothing, because there is no extra round-trip to make the decision.
+- The agent declares a tier → that tier's model.
+- No tier, or no agent selected and the default agent declares none → the deployment default.
+- Nothing usable at all → the round fails audibly. The floor never resolves to nothing, and never to Auto.
 
-The dispatch happens before any factory sees the selection, and the resolved model is stamped onto the round, so a thread on Auto reports the model that really answered.
+So a round can always start, on a predictable model, without a round-trip.
+
+**2. The refinement — one cheap classification call.** Then `ApplyAutoRouterSelectionAsync` (#1951 — *"Auto should trigger an agent to determine the most appropriate model for the thread"*) makes **one** bounded call over the round's actual content and asks it to pick the best candidate. It is deliberately cheap: `AutoModelRouter` caps the task text at 2000 chars and the call at `MaxOutputTokens: 120`, `Temperature: 0`, under a hard timeout. If it names a better model, the round switches to it.
+
+**Predictability is preserved by construction.** Any failure of the refinement — a timeout, an unparseable answer, an id outside the candidate list, an engine with no bare chat client — silently **keeps the floor**. The worst case is exactly the floor you would have gotten anyway, and the choice is logged with the model's own stated reason. This is what makes it safe to let a second model decide: it can only pick *within* the usable candidates, and it can never leave you worse than the fixed default.
+
+Whichever stage decides, the **resolved model is stamped onto the round** (`SubstitutedFromModel` → the response cell), so a thread on Auto reports — and bills — the model that really answered.
+
+> 🕰️ This supersedes the earlier "Auto is a fixed default, no classification call" rule. The floor *is* that fixed default; the refinement (#1951) was added on top so Auto can route a coding-shaped ask to the `coding` tier even when the agent declared no tier — without ever risking a round on an unpredictable pick.
+
+## Auto and the tiers route to open-weight models only
+
+A deliberate policy on the Systemorph deployments (2026-08): **Auto — and therefore every tier it routes to — selects only open-weight models** (GLM, Kimi, Qwen, DeepSeek). Proprietary models (Claude, GPT, Gemini, Grok) stay installed and fully usable, but they are **untiered**: a person can pick one by hand in the composer and an explicit pick always wins, yet Auto never routes to one on its own.
+
+Why draw the line there: open weights are cheap and fast, and — the point that makes this more than a cost lever — **they can run on-device.** The same `chat` tier that OpenRouter serves in the cloud is served by a local Ollama on a laptop (a `Provider/OpenAICompatible` node at `localhost`), so the highest-traffic tier runs free, private, and offline. A proprietary model cannot do that, which is exactly why it belongs behind a manual choice rather than an automatic one.
+
+**How it's expressed:** put open-weight tier labels on the open-weight nodes, and leave the proprietary nodes untiered. Every automatic rung already skips a router and any model whose credentials don't resolve; keep the tier labels only on open-weight nodes and Auto lands on open weights. *(The airtight guarantee — filtering the refinement's candidate list to open weights and running the classifier itself on a small open-weight model — is a router change being finalised separately; the untiered-proprietary + open-weight-labels arrangement already holds for every ordinary round.)*
+
+**The current map** — both cloud instances, via OpenRouter; `utility` and `reasoning` are left unlabelled so they fall through to the default (`glm-5.3`):
+
+| Tier | Model | Note |
+|---|---|---|
+| `utility` | `z-ai/glm-5.3` *(via default)* | cheap background jobs |
+| `chat` | `qwen/qwen3.6-35b-a3b` | the everyday round — most traffic — a fast MoE (~3B active) |
+| `reasoning` | `z-ai/glm-5.3` *(via default)* | multi-step analysis, planning |
+| `coding` | `moonshotai/kimi-k3` | the strongest rung |
+| *manual only* | Claude · GPT · Gemini · Grok | installed, **untiered** — a human picks them |
+
+On a laptop the same four tiers point at a local qwen instead of OpenRouter — same labels, a different provider node per mesh.
 
 ## Migrating off the `ModelTier:*` config
 
@@ -145,3 +173,9 @@ The old keys — `ModelTier__Heavy`, `ModelTier__Standard`, `ModelTier__Light`, 
 They sit **below** the node labels: a labelled model always wins, and the config only ever answers a tier no node carries — and even then, only when it names a model whose credentials resolve. Because the mapping goes through the aliases rather than a hard-coded switch, it keeps working for a deployment that renamed a tier, and an operator can point a *new* tier at an old key just by adding the alias.
 
 **To retire them:** put a `tier` on your model nodes, confirm the resolution warnings stop naming `LegacyConfig`, and delete the keys.
+
+## Related
+
+- [Setting Up Model Providers](/Doc/AI/ModelProviderSetup) — where models come from (config-seeded nodes), where the key lives, and the open-weight model choice per tier
+- [AI Model Provider Settings](/Doc/AI/ModelProviderSettings) — the Settings → Models UI (Providers · Models · Model Tiers)
+- [AI Provider Configuration](/Doc/AI/ProviderConfiguration) — credential/endpoint wiring and model-to-factory routing

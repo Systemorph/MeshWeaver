@@ -9,6 +9,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -250,7 +251,7 @@ public static class PluginGateRunner
     }
 
     /// <summary>One NodeType of one package, as parsed from its file (pre-install).</summary>
-    private sealed record NodeTypeUnderTest(
+    internal sealed record NodeTypeUnderTest(
         string Path, string Package, string? Configuration, bool HasSources)
     {
         /// <summary>The type compiles when it carries a configuration lambda or source files.</summary>
@@ -261,9 +262,45 @@ public static class PluginGateRunner
             Configuration?.Contains("WithView(\"Tests\"", StringComparison.Ordinal) == true;
     }
 
-    // The package's NodeType nodes (content.$type == NodeTypeDefinition), from the raw files —
-    // the same canonical path mapping the installer applies (NodeFileMapper).
-    private static IReadOnlyList<NodeTypeUnderTest> DiscoverNodeTypes(
+    /// <summary>
+    /// Document-parse tolerances for a node file — the same copy <c>JsonFileParser.Parse</c> and
+    /// <c>TreeNodeLoader.ContentJsonDocument</c> both make, off the hub's own options.
+    ///
+    /// <para>🚨 <b>The defaults are a drift, not a neutral choice.</b> <see cref="JsonDocumentOptions"/>
+    /// defaults REJECT comments and trailing commas. A node file carrying either parses under the
+    /// installer and under the bake — both opt in — and would have thrown here, landing in the
+    /// <c>catch (JsonException)</c> and vanishing from the gate's view: the identical
+    /// discovered-by-one-half defect as the BOM, one parser tolerance later (Copilot review on
+    /// #2063). Every tolerance this parse does NOT share with the installer is a future #2063.</para>
+    /// </summary>
+    private static readonly JsonDocumentOptions NodeJsonDocument = new()
+    {
+        CommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
+
+    // The package's NodeType nodes (content.$type == NodeTypeDefinition), from the raw files.
+    //
+    // 🚨 EVERY file-shaped decision here is DELEGATED, never re-implemented — this half of CI has
+    // to see exactly the tree the other half bakes and the runtime installs, and the two ways it
+    // silently failed to (#2063) were both a local copy of a rule that lives elsewhere:
+    //
+    //  1. **The BOM.** This parsed `file.Content` raw. Package content arrives as BYTES and is
+    //     decoded with `Encoding.UTF8.GetString`, which PRESERVES U+FEFF (unlike File.ReadAllText),
+    //     so a BOM'd `.json` threw here and the `catch (JsonException)` dropped it — labelled
+    //     "malformed json is surfaced by the install itself", which stopped being true when #1767
+    //     taught the installer to strip the BOM. The install then wrote the node, this discovery
+    //     did not see it, and the type compiled UNGATED. `samples/Graph/Data/PensionFund` ships 5
+    //     BOM'd NodeTypes and the gate printed `(72 node(s), 0 type(s))` — a green run over nothing.
+    //  2. **The node path.** `NodeFileMapper.FromRelativePath` is only half the installer's rule;
+    //     `PackageInstaller.NodePathForFile` is the whole of it, and it also EXCLUDES README.md,
+    //     `manifest.lock` and `content/**` assets. A NodeType-shaped `.json` under `content/**`
+    //     was therefore discovered here but never installed — so the gate would wait out its full
+    //     compile timeout for a node that does not exist, and report a TimeoutException.
+    //
+    // Both rules now come from the installer itself, and `GateDiscoveryEqualsBakeDiscoveryTest`
+    // pins this set equal to the compiler-driven bake's — the drift, not either symptom, is the bug.
+    internal static IReadOnlyList<NodeTypeUnderTest> DiscoverNodeTypes(
         PackageManifest package, IReadOnlyList<PackageFile> files)
     {
         var sourceFolders = files
@@ -276,10 +313,16 @@ public static class PluginGateRunner
         {
             if (!file.RelativePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
                 continue;
+            // The installer's own rule — null means "this file is not a node at all".
+            if (PackageInstaller.NodePathForFile(file.RelativePath) is not { Length: > 0 } path)
+                continue;
             string? configuration;
             try
             {
-                using var doc = JsonDocument.Parse(file.Content);
+                // The SAME read TreeNodeLoader and JsonFileParser make — BOM-stripped AND
+                // comment/trailing-comma tolerant.
+                using var doc = JsonDocument.Parse(
+                    FileFormatParserRegistry.WithoutBom(file.Content), NodeJsonDocument);
                 if (doc.RootElement.ValueKind != JsonValueKind.Object
                     || !doc.RootElement.TryGetProperty("content", out var content)
                     || content.ValueKind != JsonValueKind.Object
@@ -295,8 +338,6 @@ public static class PluginGateRunner
             {
                 continue; // malformed json is surfaced by the install itself
             }
-            var (id, ns) = NodeFileMapper.FromRelativePath(file.RelativePath);
-            var path = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
             types.Add(new NodeTypeUnderTest(path, package.Id, configuration,
                 HasSources: sourceFolders.Contains(path)));
         }

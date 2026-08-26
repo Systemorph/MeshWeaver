@@ -46,4 +46,22 @@ public record AiSettings
     /// seeding the defaults first so adding a package never silently drops the standard sources.
     /// </summary>
     public ImmutableArray<string> SkillQueries { get; init; } = ImmutableArray<string>.Empty;
+
+    /// <summary>
+    /// The user's NAMED skill sources — the editable form of <see cref="SkillQueries"/>: each row
+    /// carries a name and a description beside its query template, so the AI Settings app can say
+    /// what every source finds and why. When non-empty these WIN over <see cref="SkillQueries"/>
+    /// (which stays for older nodes and for callers that only carry a template);
+    /// <see cref="AiSourceCatalog.EffectiveEntries"/> is the one rule. Empty ⇒ the legacy list, else
+    /// <see cref="AiSourceCatalog.SkillDefaults"/>.
+    /// </summary>
+    public ImmutableArray<AiSourceEntry> SkillSources { get; init; } = ImmutableArray<AiSourceEntry>.Empty;
+
+    /// <summary>The user's NAMED agent sources — same rule as <see cref="SkillSources"/>.</summary>
+    public ImmutableArray<AiSourceEntry> AgentSources { get; init; } = ImmutableArray<AiSourceEntry>.Empty;
+
+    /// <summary>The user's NAMED model sources — same rule as <see cref="SkillSources"/>. Selecting
+    /// a visible model in AI Settings adds an anchored entry here (its own path); the platform path
+    /// "MeshWeaver OpenRouter" is a default entry, removable like any other.</summary>
+    public ImmutableArray<AiSourceEntry> ModelSources { get; init; } = ImmutableArray<AiSourceEntry>.Empty;
 }

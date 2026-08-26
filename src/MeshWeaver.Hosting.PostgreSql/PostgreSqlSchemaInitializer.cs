@@ -97,10 +97,20 @@ public static class PostgreSqlSchemaInitializer
                         union_sql := union_sql || ' UNION ALL ';
                     END IF;
 
+                    -- 🚨 THE UNION BRANCH MUST PROJECT EVERY COLUMN A CALLER CAN SORT ON.
+                    -- p_order_by is applied to the OUTER select over `combined`, so a column the
+                    -- branches do not project simply does not exist there — `sort:path` errored
+                    -- 42703 `column "path" does not exist` on every mesh-wide query, which is half
+                    -- of the standard keyset-paging pair and therefore made cross-partition paging
+                    -- impossible (issue #2186). `path` and `description` were the only two columns
+                    -- PostgreSqlSqlGenerator.PropertyMap can name that were missing here; both are
+                    -- now projected, and the OUTER select below re-lists the record's 13 columns
+                    -- explicitly so the function's RETURNS SETOF RECORD shape is UNCHANGED (an old
+                    -- caller's `AS t(...)` keeps working across a rolling deploy).
                     union_sql := union_sql || format(
                         'SELECT n.id, n.namespace, n.name, n.node_type, n.category, n.icon, '
                         || 'n.display_order, n.last_modified, n.version, n.state, n.content, '
-                        || 'n.desired_id, n.main_node '
+                        || 'n.desired_id, n.main_node, n.path, n.description '
                         || 'FROM %I.mesh_nodes n WHERE n.main_node = n.path',
                         schema_rec.schema_name);
 
@@ -159,7 +169,14 @@ public static class PostgreSqlSchemaInitializer
                     RETURN;
                 END IF;
 
-                full_sql := 'SELECT * FROM (' || union_sql || ') combined';
+                -- The record shape is the 13 columns the caller declares in its `AS t(...)` — NOT
+                -- `SELECT *`, which would leak the extra sort-only columns (path, description) into
+                -- the result and break every existing caller. ORDER BY may still reference them:
+                -- Postgres resolves an ORDER BY expression against the FROM item's columns, not the
+                -- select list.
+                full_sql := 'SELECT id, namespace, name, node_type, category, icon, '
+                    || 'display_order, last_modified, version, state, content, '
+                    || 'desired_id, main_node FROM (' || union_sql || ') combined';
                 IF p_order_by IS NOT NULL AND p_order_by != '' THEN
                     -- Strip table alias prefix (n.) since outer SELECT uses bare column names
                     full_sql := full_sql || ' ORDER BY ' || REPLACE(p_order_by, 'n.', '');

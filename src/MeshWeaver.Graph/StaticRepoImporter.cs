@@ -39,6 +39,32 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     /// must LEAVE the assembly — so recompile derivation takes the union of both lists.
     /// </summary>
     public ImmutableList<string> PrunedPaths { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// How many source nodes this import could NOT land — the per-file failures the
+    /// <c>ImportedWithErrors</c> outcome and the activity's ⚠ lines report.
+    ///
+    /// <para>🚨 This exists so the caller's last-sync guard can ask "did anything fail" instead of
+    /// string-matching one outcome literal. It string-matched <c>"Failed"</c> only, and
+    /// <c>ImportedWithErrors</c> is a DIFFERENT string — so a partial failure advanced
+    /// <c>LastSyncCommitSha</c> past the commit whose nodes never landed, and
+    /// <c>GitHubWebhookProcessor.SkipReason</c> then answered "already at this commit" for every
+    /// later green build. The failure became permanent until the repo produced a new commit
+    /// (#2229 item C); the invariant the guard's own comment states — "a FAILED import must ALSO
+    /// not advance the baseline" — was never implemented for this outcome.</para>
+    /// </summary>
+    public int Failed { get; init; }
+
+    /// <summary>
+    /// The node paths this import could NOT create because a claim (a <see cref="SyncBehavior"/> other
+    /// than <see cref="SyncBehavior.Include"/>, on the node or an ancestor) refuses them while the mesh
+    /// has no node there at all. Non-empty means the source declares content that can never appear, and
+    /// the <see cref="Outcome"/> is <c>ImportedWithBlockedCreates</c> — the import is recorded as a
+    /// Warning rather than a Succeeded marker, so the next boot re-attempts instead of inheriting a
+    /// green verdict for work that never happened (issue #2211). Empty for a partition the operator
+    /// decoupled wholesale ("sync: none" on its root), where declining everything IS the instruction.
+    /// </summary>
+    public ImmutableList<string> BlockedCreatePaths { get; init; } = ImmutableList<string>.Empty;
 }
 
 /// <summary>
@@ -110,6 +136,13 @@ public static class StaticRepoImporter
     private const int BatchSize = 5;
 
     /// <summary>
+    /// How many blocked-create paths the import NAMES in its summary + log line before summarising the
+    /// rest as a count. Named, not counted: "0 imported" gave an operator nothing to act on (#2211).
+    /// Bounded so a pathological source cannot write an unbounded line into the activity node.
+    /// </summary>
+    private const int BlockedPathsNamed = 10;
+
+    /// <summary>
     /// Address-type prefix of the dedicated import hub (<c>import/{meshHubId}</c>). Declared
     /// stream-routed via <c>MeshBuilder.AddStreamRoutedAddressType(ImportAddressType)</c> in
     /// <c>AddGraph</c> so the silo's RoutingGrain dispatches to it over the cluster memory stream
@@ -139,6 +172,15 @@ public static class StaticRepoImporter
         var sources = hub.ServiceProvider.GetServices<IStaticRepoSource>().ToArray();
         if (sources.Length == 0)
             return Observable.Empty<StaticRepoImportResult>();
+
+        // When the caller names no assertion set, ask the SOURCES: each declares whether its catalog
+        // must be verified against the search index (#354). The portal used to pass the AI partition
+        // names here, which made the composition root know them — and a module cannot be delisted
+        // from a list the host hard-codes (#2276). Same set, declared by its owner.
+        indexedCatalogAssertions ??= sources
+            .Where(source => source.AssertIndexedAfterImport)
+            .Select(source => source.Partition)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         // Deploy-time per-partition mode override (Features:StaticRepoSync:Modes) — case-insensitive.
         // When a partition isn't listed the source's own default SyncMode is used (FullReplace for most,
@@ -757,6 +799,11 @@ public static class StaticRepoImporter
                                 result.Outcome switch
                                 {
                                     "ImportedWithErrors" => ActivityStatus.Warning,
+                                    // 🚨 The LOCK's status is the durable short-circuit the next boot
+                                    // reads. An import a claim stopped from creating declared nodes has
+                                    // NOT succeeded, so it must not stamp Succeeded here either —
+                                    // otherwise the very next boot skips before it can look (#2211).
+                                    "ImportedWithBlockedCreates" => ActivityStatus.Warning,
                                     "Failed" => ActivityStatus.Failed,
                                     _ => ActivityStatus.Succeeded,
                                 },
@@ -943,10 +990,24 @@ public static class StaticRepoImporter
                         existing.TryGetValue(path, out var target);
                         if (IsClaimed(path, target))
                         {
+                            // 🚨 A CLAIMED SKIP OF A NODE THAT DOES NOT EXIST IS NOT A SKIP — it is a
+                            // node the source declares that can NEVER appear, and it is counted and
+                            // NAMED (see the terminal-status decision below). A claim means "this is
+                            // the admin's now, don't overwrite it"; there is nothing to protect on a
+                            // path the mesh has no node at, so a claim that blocks its CREATION is a
+                            // claim that is wider than the thing it protects. That is issue #2211:
+                            // Provider/{name} was claimed ExcludeThisAndChildren, so the 12 configured
+                            // LanguageModel children were declined on every boot, the import wrote
+                            // "Imported: 0 node(s)" and stamped the marker Succeeded — and Succeeded at
+                            // that fingerprint is the durable short-circuit, so every later boot
+                            // skipped before it could look at anything. Permanent AND invisible.
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: skip claimed {Path}", source.Partition, path);
-                            return Observable.Return(
-                                (Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null, Log: (LogMessage?)null));
+                            return Observable.Return((
+                                Imported: 0, Failed: 0, Preserved: 0, Claimed: 1,
+                                Written: (string?)null,
+                                Blocked: target is null ? (string?)path : null,
+                                Log: (LogMessage?)null));
                         }
 
                         // 🅶 Git-diff scope: when the caller supplied the changed-path set (a webhook /
@@ -974,13 +1035,13 @@ public static class StaticRepoImporter
                                     "[StaticRepoImport] {Partition}: outside git-diff scope, {Path} is server-newer — counted preserved.",
                                     source.Partition, path);
                                 return Observable.Return(
-                                    (Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null, Log: (LogMessage?)null));
+                                    (Imported: 0, Failed: 0, Preserved: 1, Claimed: 0, Written: (string?)null, Blocked: (string?)null, Log: (LogMessage?)null));
                             }
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: outside git-diff scope, skipping {Path}",
                                 source.Partition, path);
                             return Observable.Return(
-                                (Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null, Log: (LogMessage?)null));
+                                (Imported: 0, Failed: 0, Preserved: 0, Claimed: 0, Written: (string?)null, Blocked: (string?)null, Log: (LogMessage?)null));
                         }
 
                         // Incremental skip: unchanged since the last import (same source token) AND the
@@ -1003,12 +1064,12 @@ public static class StaticRepoImporter
                                     "[StaticRepoImport] {Partition}: unchanged in repo, {Path} is server-newer — counted preserved.",
                                     source.Partition, path);
                                 return Observable.Return(
-                                    (Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null, Log: (LogMessage?)null));
+                                    (Imported: 0, Failed: 0, Preserved: 1, Claimed: 0, Written: (string?)null, Blocked: (string?)null, Log: (LogMessage?)null));
                             }
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: unchanged, skipping {Path}", source.Partition, path);
                             return Observable.Return(
-                                (Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null, Log: (LogMessage?)null));
+                                (Imported: 0, Failed: 0, Preserved: 0, Claimed: 0, Written: (string?)null, Blocked: (string?)null, Log: (LogMessage?)null));
                         }
 
                         // Two-way conflict resolution: a node changed on the SERVER since the last sync
@@ -1025,7 +1086,7 @@ public static class StaticRepoImporter
                             // here. A per-item stream.Update re-serialises the whole activity node, so
                             // one write per kept/failed file is O(n²) — see the phase-level AppendLogs
                             // below and NodeTypeCompilationActivity.AppendLogs.
-                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null,
+                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 1, Claimed: 0, Written: (string?)null, Blocked: (string?)null,
                                 Log: (LogMessage?)new LogMessage(
                                     $"↩ Kept local change to {path} (newer on the server — commit to sync it back).",
                                     Microsoft.Extensions.Logging.LogLevel.Information)));
@@ -1060,14 +1121,14 @@ public static class StaticRepoImporter
                         // Failed and continue. The Failed tally drives the terminal Warning status
                         // below — the activity never reports a green Succeeded while hiding failures.
                         return Upsert(hub, materialized)
-                            .Select(_ => (Imported: 1, Failed: 0, Preserved: 0, Written: (string?)path,
+                            .Select(_ => (Imported: 1, Failed: 0, Preserved: 0, Claimed: 0, Written: (string?)path, Blocked: (string?)null,
                                 Log: (LogMessage?)null))
-                            .Catch<(int Imported, int Failed, int Preserved, string? Written, LogMessage? Log), Exception>(ex =>
+                            .Catch<(int Imported, int Failed, int Preserved, int Claimed, string? Written, string? Blocked, LogMessage? Log), Exception>(ex =>
                             {
                                 logger?.LogWarning(ex,
                                     "[StaticRepoImport] {Partition}: upsert of {Path} failed (continuing).",
                                     source.Partition, path);
-                                return Observable.Return((Imported: 0, Failed: 1, Preserved: 0, Written: (string?)null,
+                                return Observable.Return((Imported: 0, Failed: 1, Preserved: 0, Claimed: 0, Written: (string?)null, Blocked: (string?)null,
                                     Log: (LogMessage?)new LogMessage(
                                         $"⚠ Failed to import {path}: {ex.Message}",
                                         Microsoft.Extensions.Logging.LogLevel.Warning)));
@@ -1088,6 +1149,13 @@ public static class StaticRepoImporter
                         Imported: results.Sum(x => x.Imported),
                         Failed: results.Sum(x => x.Failed),
                         Preserved: results.Sum(x => x.Preserved),
+                        Claimed: results.Sum(x => x.Claimed),
+                        // The paths a claim blocks from EVER being created — the durable, actionable
+                        // half of the claimed tally (#2211).
+                        Blocked: results
+                            .Where(x => x.Blocked is not null)
+                            .Select(x => x.Blocked!)
+                            .ToImmutableList(),
                         Written: results
                             .Where(x => x.Written is not null)
                             .Select(x => x.Written!)
@@ -1213,36 +1281,92 @@ public static class StaticRepoImporter
                             // atomic Update — a reader observing the terminal status always sees the
                             // full diagnostic log (no torn "Succeeded but the ⚠ lines didn't land yet").
                             var failed = count.Failed;
-                            var status = failed > 0 ? ActivityStatus.Warning : ActivityStatus.Succeeded;
+                            // 🚨 A CLAIM THAT BLOCKS A CREATE IS DRIFT THE IMPORT CANNOT CLOSE, AND IT
+                            // MUST NOT BE RECORDED AS SUCCESS. A claimed node that EXISTS is the normal,
+                            // deliberate steady state (the admin owns it) and stays Succeeded. A claimed
+                            // path the mesh has NO node at is different in kind: the source declares it,
+                            // the claim refuses its creation, and no boot can ever change that — issue
+                            // #2211, where 12 configured models sat behind a subtree claim while the
+                            // import wrote "Imported: 0 node(s)" and stamped Succeeded. Succeeded at this
+                            // fingerprint IS the durable short-circuit, so recording it there froze the
+                            // divergence permanently and invisibly.
+                            //
+                            // The one carve-out is a partition the operator DECOUPLED wholesale
+                            // ("sync: none" on the partition root — PartitionSyncAdminLayoutArea): every
+                            // skip there is exactly what was asked for, so it is stated, not escalated.
+                            var partitionDecoupled = snapshot.claimedRoots.Any(r =>
+                                string.Equals(r, source.Partition, StringComparison.OrdinalIgnoreCase));
+                            var blockedCreates = partitionDecoupled
+                                ? ImmutableList<string>.Empty
+                                : count.Blocked;
+                            var status = failed > 0 || blockedCreates.Count > 0
+                                ? ActivityStatus.Warning
+                                : ActivityStatus.Succeeded;
                             // Two-way preserved local changes: kept-not-overwritten (upsert conflicts) PLUS
                             // kept-not-pruned (server additions). Both leave the mesh ahead of the repo.
                             var preserved = count.Preserved + keptFromPrune.Length;
                             var preservedNote = preserved > 0 ? $", kept {preserved} local change(s)" : "";
+                            // The claimed-skip count is stated whenever it is non-zero — "nothing seeded"
+                            // must be greppable rather than silent, whatever the terminal status.
+                            var claimedNote = count.Claimed > 0
+                                ? $", skipped {count.Claimed} claimed node(s)"
+                                : "";
+                            // NAMED, not counted — "0 imported" alone gave an operator nothing to act
+                            // on. Bounded so a pathological source cannot write an unbounded log line.
+                            var blockedNote = blockedCreates.Count > 0
+                                ? $" 🚫 {blockedCreates.Count} node(s) the source declares CANNOT BE CREATED — "
+                                  + "a claim (SyncBehavior other than Include, on the node or an ancestor) "
+                                  + "refuses them, and no boot can change that: "
+                                  + string.Join(", ", blockedCreates.Take(BlockedPathsNamed))
+                                  + (blockedCreates.Count > BlockedPathsNamed
+                                      ? $", … (+{blockedCreates.Count - BlockedPathsNamed} more)"
+                                      : "")
+                                  + ". Un-claim them to let the source seed them, or drop them from the source."
+                                : "";
                             // The summary NAMES the pruned nodes (issue #604) — the count alone left
                             // a destructive import unauditable ("pruned 7" — which seven? unknown).
                             var prunedNote = prunedPaths.Count > 0
                                 ? $"pruned {prunedPaths.Count} ({string.Join(", ", prunedPaths)})"
                                 : "pruned 0";
                             var summary = failed > 0
-                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}, {prunedNote}, synced {contentCount} content file(s)."
-                                : $"Imported {count.Imported} node(s){preservedNote}, {prunedNote}, synced {contentCount} content file(s).";
+                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}"
+                                : $"Imported {count.Imported} node(s){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}";
                             NodeTypeCompilationActivity.Complete(hub, activityPath, status,
                                 new[]
                                 {
                                     new LogMessage(summary,
-                                        failed > 0
+                                        status is ActivityStatus.Warning
                                             ? Microsoft.Extensions.Logging.LogLevel.Warning
                                             : Microsoft.Extensions.Logging.LogLevel.Information)
                                 },
                                 logger!);
+                            if (blockedCreates.Count > 0)
+                                logger?.LogWarning(
+                                    "[StaticRepoImport] {Partition}: {Blocked} node(s) the source declares can never be "
+                                    + "created — a claim (SyncBehavior != Include on the node or an ancestor) refuses "
+                                    + "them: {Paths}. Recorded as Warning at {Fingerprint} so the next boot re-attempts "
+                                    + "instead of short-circuiting on a green marker.",
+                                    source.Partition, blockedCreates.Count,
+                                    string.Join(", ", blockedCreates.Take(BlockedPathsNamed)), fingerprint);
+                            else if (count.Claimed > 0)
+                                logger?.LogInformation(
+                                    "[StaticRepoImport] {Partition}: {Claimed} node(s) skipped as claimed (all present).",
+                                    source.Partition, count.Claimed);
                             logger?.LogInformation(
-                                "[StaticRepoImport] {Partition}: imported {Count}, failed {Failed}, pruned {Pruned}, content {Content} at {Fingerprint}.",
-                                source.Partition, count.Imported, failed, prunedPaths.Count, contentCount, fingerprint);
+                                "[StaticRepoImport] {Partition}: imported {Count}, failed {Failed}, claimed {Claimed}, pruned {Pruned}, content {Content} at {Fingerprint}.",
+                                source.Partition, count.Imported, failed, count.Claimed, prunedPaths.Count, contentCount, fingerprint);
                             return new StaticRepoImportResult(source.Partition, fingerprint,
-                                failed > 0 ? "ImportedWithErrors" : "Imported", count.Imported, preserved)
+                                failed > 0 ? "ImportedWithErrors"
+                                    : blockedCreates.Count > 0 ? "ImportedWithBlockedCreates" : "Imported",
+                                count.Imported, preserved)
                             {
                                 WrittenPaths = count.Written,
                                 PrunedPaths = prunedPaths,
+                                // 🚨 Carried to the CALLER, not just to the activity's ⚠ lines: the
+                                // last-sync guard has to know a node did not land, or it advances
+                                // the baseline past it and the miss is permanent (#2229 item C).
+                                Failed = failed,
+                                BlockedCreatePaths = blockedCreates,
                             };
                         });
                         }));

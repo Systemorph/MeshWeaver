@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
 using System.Security.Cryptography;
-using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;

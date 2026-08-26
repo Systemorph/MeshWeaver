@@ -1,5 +1,6 @@
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
+using MeshWeaver.Mesh;
 using System.Linq;
 using System.Text.Json.Nodes;
 using Xunit;

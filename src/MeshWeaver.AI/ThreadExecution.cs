@@ -127,12 +127,73 @@ internal static class ThreadExecution
                 MeshWeaver.AI.Delegation.DelegationHandlers.HandleHeartbeatTick)
             .WithHandler<MeshWeaver.AI.Delegation.CancelDelegationSubThread>(
                 MeshWeaver.AI.Delegation.DelegationHandlers.HandleCancelDelegationSubThread)
-            .WithInitialization(SetThreadHubIdentity)
-            .WithInitialization(InitializeThreadLifecycle)
-            .WithInitialization(InstallCancellationWatcher)
-            .WithInitialization(InstallExecutionHub)
-            .WithInitialization(InstallSubmissionWatcher)
-            .WithInitialization(InstallHeartbeatTicker);
+            // 🚨 The OBSERVABLE overload throughout, deliberately (#1868). Every one of these six
+            // reaches hub construction on the SYNCHRONOUS overload, which runs inside
+            // MessageHubConfiguration.Build, before StartMessageProcessing:
+            // InstallExecutionHub calls GetHostedHub(…/_Exec, HostedHubCreation.Always) outright,
+            // and SetThreadHubIdentity / InitializeThreadLifecycle / InstallCancellationWatcher each
+            // resolve workspace.GetMeshNodeStream(), whose SynchronizationStream ctor ALWAYS calls
+            // GetHostedHub(sync/{clientId}, Always). So every thread hub in the product built four
+            // child hubs — and four more Autofac containers — from inside its own Build, and a
+            // disposal racing the thread hub's creation raced a TREE of constructions rather than
+            // one frame: the shape behind the whole shutdown-race family (#645/#715/#967/#1573).
+            // Threads are the hottest per-node hub in the product, so this was the biggest remaining
+            // source of that nesting.
+            //
+            // ALL SIX move together, keeping the registration ORDER intact — BuildupActions are
+            // Concat-ed on the InitializeHubRequest turn, so the owner identity is still stamped
+            // first, _Exec still exists before the submission watcher can claim a round (the
+            // eager-creation requirement documented on InstallExecutionHub), and the heartbeat
+            // ticker still comes last. The init turn runs after Build has returned and still BEFORE
+            // the Initialize gate opens, so no message can overtake them and nothing observable to
+            // a message changes. It also runs after the workspace's own data sources have been
+            // started (DataExtensions.StartDataSourcesAndOpenGate, moved by #2045), which is
+            // strictly better than subscribing a stream on a workspace that has not started its
+            // sources yet. Same shape #774 applied to MeshDataSource.SubscribeToOwnDeletion.
+            .WithInitialization(SetThreadHubIdentityInit)
+            .WithInitialization(InitializeThreadLifecycleInit)
+            .WithInitialization(InstallCancellationWatcherInit)
+            .WithInitialization(InstallExecutionHubInit)
+            .WithInitialization(InstallSubmissionWatcherInit)
+            .WithInitialization(InstallHeartbeatTickerInit);
+
+    /// <summary>Init-turn wrapper for <see cref="SetThreadHubIdentity"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the owner observation is established.</returns>
+    private static IObservable<System.Reactive.Unit> SetThreadHubIdentityInit(IMessageHub hub) =>
+        Observable.Defer(() => { SetThreadHubIdentity(hub); return Observable.Return(System.Reactive.Unit.Default); });
+
+    /// <summary>Init-turn wrapper for <see cref="InitializeThreadLifecycle"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the lifecycle observation is established.</returns>
+    private static IObservable<System.Reactive.Unit> InitializeThreadLifecycleInit(IMessageHub hub) =>
+        Observable.Defer(() => { InitializeThreadLifecycle(hub); return Observable.Return(System.Reactive.Unit.Default); });
+
+    /// <summary>Init-turn wrapper for <see cref="InstallCancellationWatcher"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the cancellation watcher is installed.</returns>
+    private static IObservable<System.Reactive.Unit> InstallCancellationWatcherInit(IMessageHub hub) =>
+        Observable.Defer(() => { InstallCancellationWatcher(hub); return Observable.Return(System.Reactive.Unit.Default); });
+
+    /// <summary>Init-turn wrapper for <see cref="InstallExecutionHub"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the <c>_Exec</c> hub exists.</returns>
+    private static IObservable<System.Reactive.Unit> InstallExecutionHubInit(IMessageHub hub) =>
+        // Defer so the work happens at SUBSCRIBE time (the init turn), not when the observable is
+        // constructed — HandleInitialize builds the whole Concat chain up front.
+        Observable.Defer(() => { InstallExecutionHub(hub); return Observable.Return(System.Reactive.Unit.Default); });
+
+    /// <summary>Init-turn wrapper for <see cref="InstallSubmissionWatcher"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the watcher is installed.</returns>
+    private static IObservable<System.Reactive.Unit> InstallSubmissionWatcherInit(IMessageHub hub) =>
+        Observable.Defer(() => { InstallSubmissionWatcher(hub); return Observable.Return(System.Reactive.Unit.Default); });
+
+    /// <summary>Init-turn wrapper for <see cref="InstallHeartbeatTicker"/> — see the registration (#1868).</summary>
+    /// <param name="hub">The thread hub being initialized.</param>
+    /// <returns>An observable that completes once the ticker is installed.</returns>
+    private static IObservable<System.Reactive.Unit> InstallHeartbeatTickerInit(IMessageHub hub) =>
+        Observable.Defer(() => { InstallHeartbeatTicker(hub); return Observable.Return(System.Reactive.Unit.Default); });
 
     /// <summary>
     /// Eagerly creates the <c>_Exec</c> hosted hub at thread hub init time and
@@ -1620,27 +1681,98 @@ internal static class ThreadExecution
                 // doesn't track history at all. So if every round only sent the
                 // new user message, the agent would never see prior turns —
                 // ChatHistoryTest catches exactly this regression.
+                //
+                // 🚨 #2226 — NO OUTER `.Timeout(...)` HERE, deliberately. The loader carries its own
+                // STAGED budget: 10 s for the thread node, then `cellTimeout` (5 s) per cell fanned
+                // out in parallel. An outer 5 s bound was therefore strictly SMALLER than the budget
+                // it wrapped, so on exactly the threads the issue reports — long conversations whose
+                // cells are cold — it pre-empted a load that was still legitimately in progress and
+                // replaced the loader's own descriptive failure with `.Timeout()`'s message-less
+                // "The operation has timed out." That bare TimeoutException, with no inner exception
+                // and no application stack frame, IS the log signature #2226 was opened on. A second
+                // bound over an operation that already bounds itself cannot make anything safer; it
+                // can only report a failure that had not happened yet. (This is not "widening a
+                // timeout to make it pass" — the inner budgets are unchanged; the contradictory
+                // outer one is deleted.)
                 return LoadFullConversationHistoryFromMesh(parentHub, threadPath,
                         excludeUserMessageId: request.UserMessageId,
                         excludeResponseMessageId: responseMsgId,
                         logger)
                     .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(5))
-                    .Catch<IReadOnlyList<ChatMessage>, Exception>(ex =>
-                    {
-                        // 🚨 LOUD log — history-load failure means the agent sees
-                        // truncated context (or nothing) for this round. Continue with
-                        // empty so the round doesn't wedge, but surface the failure so
-                        // CI surfaces the actual cause (per-cell timeout / stream error)
-                        // instead of producing a wrong-content assertion downstream.
-                        logger.LogError(ex,
-                            "[ThreadExec] HISTORY_LOAD_FAILED threadPath={ThreadPath} — proceeding with EMPTY history; agent will see only the new user message",
-                            threadPath);
-                        return Observable.Return<IReadOnlyList<ChatMessage>>(Array.Empty<ChatMessage>());
-                    })
-                    .SelectMany(history =>
+                    .Select(h => (History: h, LoadError: (Exception?)null))
+                    // 🚨 #2226 — CARRY the fault; never substitute an empty history for a failed one.
+                    // This used to `.Catch(→ Array.Empty)` and continue: the agent then answered a
+                    // long-running thread as if it were brand new, and the round settled COMPLETED,
+                    // so nothing downstream — not the user, not the parent of a delegation, not any
+                    // automation reading the node — could tell a context-less answer from a correct
+                    // one. A silent wrong answer is strictly worse than a failed round, so the fault
+                    // rides through to the terminal Error write below.
+                    .Catch<(IReadOnlyList<ChatMessage> History, Exception? LoadError), Exception>(ex =>
+                        Observable.Return<(IReadOnlyList<ChatMessage> History, Exception? LoadError)>(
+                            (Array.Empty<ChatMessage>(), ex)))
+                    .SelectMany(loaded =>
                 {
-                    var chatHistory = history.ToImmutableList();
+                    // 🛑 #2226 — HISTORY COULD NOT BE LOADED. "No history" and "could not load the
+                    // history" are different facts and must not share a code path. Fail the round
+                    // with a message that says so, exactly like the NO_USABLE_MODEL branch below:
+                    // response cell → Status=Error, thread → Idle, parent + notification signalled
+                    // so a delegating parent never waits on a round that will not run.
+                    if (loaded.LoadError is not null)
+                    {
+                        // 🌍 The user reads localized prose off the round's own AccessContext —
+                        // explicit locale, never ambient CultureInfo (a round hops schedulers). The
+                        // exception itself stays on the LogError, which is where an operator looks.
+                        var historyError = LocalizationCatalog.Get(
+                            "chat.historyLoadFailed", userAccessContext?.Locale);
+                        logger.LogError(loaded.LoadError,
+                            "[ThreadExec] HISTORY_LOAD_FAILED threadPath={ThreadPath} responseId={ResponseId} "
+                            + "— FAILING the round; refusing to answer without the thread's prior turns",
+                            threadPath, responseMsgId);
+                        // 🚨 The per-round CLI harness client (Claude Code / Copilot) is created
+                        // ABOVE the history load and is normally disposed in the round's `finally` —
+                        // which this early return skips. Dispose it HERE, or every failed history
+                        // load leaks one harness client (and, for the process-backed harnesses, the
+                        // process behind it). The cached AgentChatClient is deliberately NOT disposed:
+                        // it is reused across rounds. (Same reasoning as the finally block below;
+                        // the NO_USABLE_MODEL early return is exempt because its guard already
+                        // establishes harnessClient == null.)
+                        if (harnessClient is IDisposable historyHd) historyHd.Dispose();
+                        else if (harnessClient is IAsyncDisposable historyHad) _ = historyHad.DisposeAsync();
+                        var historyDone = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
+                        PushToResponseMessage(
+                            $"*Error: {historyError}*",
+                            ImmutableList<ToolCallEntry>.Empty, ImmutableList<NodeChangeEntry>.Empty,
+                            request.AgentName, effectiveModel ?? request.ModelName,
+                            completedAt: DateTime.UtcNow,
+                            status: ThreadMessageStatus.Error,
+                            summary: historyError,
+                            harness: request.Harness,
+                            requestedModelName: substitutedFrom).Subscribe(
+                            _ => { },
+                            ex => execLogger?.LogWarning(ex,
+                                "PushToResponseMessage(HistoryLoadFailed) failed for {ThreadPath}", threadPath));
+                        UpdateThreadExecution(t => t.ResetExecution() with { Summary = historyError }).Subscribe(
+                            _ => { },
+                            ex =>
+                            {
+                                execLogger?.LogWarning(ex,
+                                    "UpdateThreadExecution(HistoryLoadFailed): stream.Update failed for {ThreadPath}",
+                                    threadPath);
+                                historyDone.OnError(ex);
+                            },
+                            () =>
+                            {
+                                historyDone.OnNext(System.Reactive.Unit.Default);
+                                historyDone.OnCompleted();
+                            });
+                        NotifyParentCompletion(parentHub, threadPath, historyError, false,
+                            ImmutableList<NodeChangeEntry>.Empty);
+                        EmitCompletionNotification(parentHub, threadPath, historyError, request.AgentName,
+                            succeeded: false);
+                        return historyDone;
+                    }
+
+                    var chatHistory = loaded.History.ToImmutableList();
 
                     var toolCallLog = ImmutableList<ToolCallEntry>.Empty;
                 var nodeChangeLog = ImmutableList<NodeChangeEntry>.Empty;
@@ -2643,6 +2775,23 @@ internal static class ThreadExecution
                         // already aggregated any UsageContent seen prior to the
                         // OperationCanceledException — so the cell + thread reflect what
                         // the round actually cost.
+                        // 🪙 #595: an OpenAI-compatible provider emits usage ONLY in its terminal
+                        // chunk — a cancel this early means the streaming loop above never saw a
+                        // UsageContent block at all, so inputTokens/outputTokens are still null and
+                        // RecordUsage below would silently no-op while the provider had already
+                        // billed the prompt it processed. When the provider reported NOTHING (not a
+                        // partial figure — genuinely nothing), fall back to a deterministic,
+                        // provider-independent character estimate: the prompt actually sent is known
+                        // before the request was issued (allMessages — the exact list handed to
+                        // GetStreamingResponseAsync at :2335), and the text actually streamed before
+                        // the cancel is exactly cancelText. Never invented when the provider DID
+                        // report something for either counter — only fills the total silence.
+                        var cancelUsageEstimated = inputTokens is null && outputTokens is null;
+                        if (cancelUsageEstimated)
+                        {
+                            inputTokens = TokenUsageNodeType.EstimateTokens(allMessages.Sum(m => m.Text?.Length ?? 0));
+                            outputTokens = TokenUsageNodeType.EstimateTokens(cancelText.Length);
+                        }
                         totalTokens = NormalizeTotal(totalTokens, inputTokens, outputTokens);
                         // 🪙 #476: the model that ACTUALLY ran, exactly as the Completed branch and
                         // RecordUsage record it — a cancelled round's cell must not claim the
@@ -2676,7 +2825,7 @@ internal static class ThreadExecution
                         TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                             AgentPickerProjection.PartitionOf(threadPath),
                             actualModel ?? effectiveModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
-                            cacheReadTokens, cacheWriteTokens)
+                            cacheReadTokens, cacheWriteTokens, isEstimate: cancelUsageEstimated)
                         .Subscribe(
                             _ => { },
                             ex => execLogger?.LogWarning(ex,
@@ -2765,6 +2914,19 @@ internal static class ThreadExecution
                         var providerStatus = ProviderFailureClassifier.TryGetProviderStatus(ex);
                         var providerMessage = providerStatus switch
                         {
+                            // 🪙 #2233 — the two refusals the OpenAI/OpenRouter transport actually
+                            // returns on this portal. Both used to fall through to `ex.Message`,
+                            // which is the SDK's raw "HTTP 402 (: )" banner plus the provider's
+                            // English body: unreadable, untranslated, and (for 402) advice the
+                            // end-user cannot act on. They are separated from 429 because the
+                            // remedies differ — 402 needs credit, 404 needs a config change, and
+                            // neither is fixed by "submit again later".
+                            402 => LocalizationCatalog.Get(
+                                "chat.modelQuotaExhausted", userAccessContext?.Locale,
+                                servingModel ?? "(default)"),
+                            404 => LocalizationCatalog.Get(
+                                "chat.modelNotFound", userAccessContext?.Locale,
+                                servingModel ?? "(default)"),
                             429 => LocalizationCatalog.Get(
                                 "chat.modelRateLimited", userAccessContext?.Locale,
                                 servingModel ?? "(default)"),
@@ -2805,6 +2967,18 @@ internal static class ThreadExecution
                         // forbidden per feedback_no_totask_in_src.md / AsynchronousCalls.md.)
                         // Record tokens consumed before the fault (same rationale as the
                         // Cancelled branch) so an errored round still reports its cost.
+                        // 🪙 #595: same fallback as the Cancelled branch above — when the provider
+                        // reported NOTHING before the fault (an OpenAI-compatible provider's usage
+                        // arrives only in a terminal chunk the failure pre-empted), estimate from
+                        // the prompt actually sent (allMessages) and the text actually streamed
+                        // before the error (errorTextBase — NOT errorText, which has the
+                        // diagnostic "*Error: …*" prose appended and is never model output).
+                        var errorUsageEstimated = inputTokens is null && outputTokens is null;
+                        if (errorUsageEstimated)
+                        {
+                            inputTokens = TokenUsageNodeType.EstimateTokens(allMessages.Sum(m => m.Text?.Length ?? 0));
+                            outputTokens = TokenUsageNodeType.EstimateTokens(errorTextBase.Length);
+                        }
                         totalTokens = NormalizeTotal(totalTokens, inputTokens, outputTokens);
                         // 🪙 #476 — THE issue's repro: a round asked for model X, ran on the fallback
                         // Y, and died on Y's 429. The error cell stamped `request.ModelName` (X), so
@@ -2835,7 +3009,7 @@ internal static class ThreadExecution
                         TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                             AgentPickerProjection.PartitionOf(threadPath),
                             servingModel, inputTokens, outputTokens, execLogger,
-                            cacheReadTokens, cacheWriteTokens)
+                            cacheReadTokens, cacheWriteTokens, isEstimate: errorUsageEstimated)
                         .Subscribe(
                             _ => { },
                             recEx => execLogger?.LogWarning(recEx,
@@ -3583,26 +3757,38 @@ internal static class ThreadExecution
                 var cellLookups = cellIds
                     .Select(id =>
                         hub.GetMeshNodeStream($"{threadPath}/{id}")
-                            .Where(n => n.Content is ThreadMessage m && !string.IsNullOrEmpty(m.Text))
+                            // 🚨 #2290 — ContentAs, NOT `n.Content is ThreadMessage`. The cast is the
+                            // trap-door: it matches only when the value ALREADY is that CLR type, and
+                            // misses silently for a degraded JsonElement (an unresolvable `$type` is
+                            // DEGRADED, not thrown), for the as-written JsonObject DOM, and for a
+                            // same-short-named record from another collectible build. A miss here is
+                            // not "one lost message": the predicate never matches → Take(1) never
+                            // fires → the per-cell Timeout trips → the cell is dropped as
+                            // HISTORY_CELL_DROP → and once EVERY cell degrades (a cold start: pod
+                            // restart, grains not activated, cells not yet re-typed) the zero-loaded
+                            // guard below throws and HARD-ERRORS the user's round. ContentAs
+                            // deserializes the degraded forms and LOGS when it genuinely cannot —
+                            // exactly what the thread node two reads above already does.
+                            .Select(n => n.ContentAs<ThreadMessage>(hub.JsonSerializerOptions, logger))
+                            .Where(m => m is not null && !string.IsNullOrEmpty(m.Text))
                             .Take(1)
                             .Timeout(perCellTimeout)
-                            .Select(n => (MeshNode?)n)
-                            .Catch<MeshNode?, Exception>(ex =>
+                            .Catch<ThreadMessage?, Exception>(ex =>
                             {
                                 logger.LogWarning(ex,
                                     "[ThreadExec] HISTORY_CELL_DROP threadPath={ThreadPath} cellId={CellId} — cell unreadable within budget; will be omitted",
                                     threadPath, id);
-                                return Observable.Return<MeshNode?>(null);
+                                return Observable.Return<ThreadMessage?>(null);
                             }))
                     .ToList();
 
                 return Observable.CombineLatest(cellLookups)
                     .Take(1)
-                    .Select(nodes =>
+                    .Select(cells =>
                     {
-                        var messages = nodes
-                            .Where(n => n is not null)
-                            .Select(n => (ThreadMessage)n!.Content!)
+                        var messages = cells
+                            // OfType drops the per-cell null sentinels AND re-types in one step.
+                            .OfType<ThreadMessage>()
                             .OrderBy(m => m.Timestamp)
                             .Select(m =>
                             {

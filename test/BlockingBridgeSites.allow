@@ -1,0 +1,100 @@
+# BlockingBridgeSites.allow — the blocking-bridge ratchet (#2013).
+#
+# Each line is a test file that still bridges an observable (or a task) to a BLOCKING call:
+#
+#     source.ToEnumerable()          source.Wait()          x.GetAwaiter().GetResult()
+#
+# All three park the calling thread on a semaphore until the source produces. When the source
+# schedules onto that SAME thread — a hub action block, a grain turn, xUnit's single-threaded
+# MaxConcurrencySyncContext — it self-deadlocks. Which thread it lands on depends on the scheduler
+# an operator picks, so it is intermittent: in #1991 one local run passed with the offending test
+# present and two later runs wedged for 31 and 15 minutes at ~0% CPU.
+#
+# 🚨 xUnit's methodTimeout CANNOT abort a thread parked in a native wait, so this costs the WHOLE
+# SHARD and lies about why: `exit=124 TIMEOUT`, no failing test named, and a marker that guesses
+# "likely fixture/init hang". Treat any exit=124 with no named test as this, first.
+#
+# TO FIX A SITE:  await the stream — `await source.Should().Emit()` / `.Match(...)`, or
+#                 `.FirstAsync().ToTask(ct)`. Awaiting SUSPENDS the test instead of parking its
+#                 thread, so it cannot self-deadlock. Where the assertion must stay synchronous,
+#                 subscribe and collect on ImmediateScheduler (PresentationScreenTest documents it).
+#                 For a test class that needs cleanup after the mesh: override
+#                 `public override async ValueTask DisposeAsync()` — never implement IDisposable and
+#                 block on base.DisposeAsync().
+#
+# WHAT THE 2026-08-25 RE-TRIAGE FOUND. #2013 counted 37 `.Wait()` sites and asked for per-site
+# judgement rather than a blanket rewrite. Re-measured across all three markers:
+#
+#   * `.ToEnumerable()` is at ZERO — the #1991 instance stayed fixed.
+#   * THREE sites were the real thing and are GONE in the change that added this file:
+#     CodeEditRecompileTest, CompileSourceSnapshotWedgeTest and SourceDiscoveryUnavailableTest each
+#     implemented IDisposable and blocked on `base.DisposeAsync()` — parking the disposing thread on
+#     MESH TEARDOWN, the one operation in this suite with a documented history of not completing
+#     (#613, the teardown-straggler cluster), and doing it OUTSIDE methodTimeout. They now override
+#     `DisposeAsync` and await it.
+#   * Every remaining `.Wait()` was inspected and is over a source that has ALREADY COMPLETED before
+#     the wait begins (Observable.Return, Scheduler.Immediate, an NSubstitute stub, an in-memory
+#     fake store, a configuration reader) or is bounded by an upstream `.Timeout(...)`, whose timer
+#     runs on the default scheduler and therefore always unblocks the parked thread — a named
+#     TimeoutException, not a wedge.
+#
+# 🚨 2026-08-26 (#2013): the residue flagged above as "the first place to look if an exit=124
+# recurs" is exactly what recurred — `MeshWeaver.Hosting.Monolith.Test` (part 2/2) wedged
+# `exit=124 TIMEOUT` on `main`@b55f680a9 (run 32939560960, ~07:19Z), no failing test named. The
+# `MeshWeaver.Hosting.Monolith.Test`/`MeshWeaver.Persistence.Test` half of the residue is fixed:
+#
+#   * `ScheduledPostWatcherTest`'s `StartAsync(default).GetAwaiter().GetResult()` helper is called
+#     exclusively from already-`async Task` [Fact] methods — the sanctioned fix applies directly:
+#     now `async Task<ScheduledPostWatcher>`, `await`s `StartAsync` instead of blocking on it, and
+#     callers `await` the helper.
+#   * The `persistence.SaveNode(...).FirstAsync().ToTask().GetAwaiter().GetResult()` setup helpers
+#     (CreatableTypesIntegrationTest, MeshNodeVisibilityTests, DataContextIntegrationTest,
+#     MeshNodeVersionSyncTest) all seed via `InMemoryStorageAdapter` from a synchronous
+#     `ConfigureMesh(MeshBuilder)` override, called during test construction before any async
+#     lifecycle hook exists — there is no `await`-able call site to bridge from. They now go through
+#     `IStorageAdapterTestExtensions.SaveNodeSynchronously` (`MeshWeaver.Fixture`): a direct
+#     `Subscribe()`, no `Task`/`GetAwaiter`/`GetResult` in between, so there is no native wait to
+#     park on even in principle. It asserts, by throwing a named exception, that the write already
+#     landed by the time `Subscribe` returns — turning "safe only while the implementation happens
+#     to complete synchronously" from an unstated assumption into an enforced, loudly-failing
+#     invariant instead of a silent hang risk.
+#
+# 🚨 `test/MeshWeaver.Hosting.Orleans.Test/{OrleansScheduledPostTest,OrleansEventSubscriptionTimerTest}`
+# carry the IDENTICAL `StartAsync(default).GetAwaiter().GetResult()` shape and are candidates for the
+# same fix — but this project is scope-excluded from the 2026-08-26 pass by explicit coordination
+# with a concurrent session consolidating AI tests out of `MeshWeaver.Hosting.Orleans.Test` (also
+# `MeshWeaver.Query.Test`, `MeshWeaver.Hosting.PostgreSql.Test`): an edit here landing while files are
+# mid-MOVE is silently dropped by the move, with no trace. Their two lines below stay at their
+# original counts until that move lands and this project is unparked. NOT "not yet triaged" — the
+# triage is done (they are the residue's other half); the fix is just deliberately deferred.
+#
+# 🚨 THIS LIST MAY ONLY SHRINK. Fixing a site means LOWERING or DELETING its line. A new file or a
+# raised count fails BlockingBridgeInTestRatchetGuard — adding a line is not a fix.
+#
+# Scope: test/ only. src/ is governed by the harder rule AGENTS.md already states for product code.
+#
+# format: relative/path.cs<TAB>count
+#
+# One deliberate exception to "the list may only shrink, never gain a file": ONE line for
+# BlockingBridgeSelfDeadlockMechanismTest.cs — its `.GetAwaiter().GetResult()` is not a setup
+# helper that might accidentally deadlock the suite, it IS the deadlock, constructed on a private
+# single-threaded SynchronizationContext and proven via a BOUNDED wait from a genuinely separate
+# thread. It exists to pin the mechanism this whole ratchet is about; see the file's own remarks.
+test/MeshWeaver.Content.Test/ThreadMessageToolTest.cs	1
+test/MeshWeaver.ContentCollections.Indexing.Graph.Test/ContentChunkAutocompleteProviderTest.cs	2
+test/MeshWeaver.ContentCollections.Indexing.Test/ChunkNavigationStoreTest.cs	2
+test/MeshWeaver.ContentCollections.Indexing.Test/ContentChunkSearchTest.cs	6
+test/MeshWeaver.ContentCollections.Indexing.Test/ContentSearchHitContractTest.cs	2
+test/MeshWeaver.ContentCollections.Test/ObservableCollectionSurfaceTest.cs	2
+test/MeshWeaver.Documentation.Test/BlockingBridgeSelfDeadlockMechanismTest.cs	1
+test/MeshWeaver.Graph.Test/NodeTypeAdoptionRegistryTest.cs	3
+test/MeshWeaver.Graph.Test/NodeTypeBakeStatusTest.cs	2
+test/MeshWeaver.Graph.Test/OverlayReEvaluationReadTest.cs	3
+test/MeshWeaver.Hosting.Orleans.Test/OrleansClusterDisposal.cs	1
+test/MeshWeaver.Hosting.Orleans.Test/OrleansEventSubscriptionTimerTest.cs	1
+test/MeshWeaver.Hosting.Orleans.Test/OrleansScheduledPostTest.cs	2
+test/MeshWeaver.Hosting.PostgreSql.Test/PostgreSqlTransientRetryTest.cs	4
+test/MeshWeaver.Hosting.Test/AlcLeaseRegistryTest.cs	3
+test/MeshWeaver.Messaging.Hub.Test/SystemScopeDoesNotEscapeTest.cs	3
+test/MeshWeaver.PluginCatalog.Test/FeatureFlagReaderTest.cs	7
+test/MeshWeaver.PluginCatalog.Test/PackageParameterResolutionTest.cs	1

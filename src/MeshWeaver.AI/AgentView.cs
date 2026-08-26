@@ -63,11 +63,20 @@ public static class AgentView
             .WithView(
                 (h, c) =>
                 {
-                    var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
+                    var services = host.Hub.ServiceProvider;
+                    var meshQuery = services.GetService<IMeshService>();
                     if (meshQuery == null)
                         return Observable.Return(RenderError("Query service not available."));
 
-                    return meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Agent"))
+                    // The agents the VIEWER resolves — their AI Settings agent sources for this
+                    // context, through the one seam — never an unanchored nodeType:Agent sweep
+                    // (which UNIONs every partition schema, MeshWeaver #2186).
+                    var user = AgentPickerProjection.ResolveUserHome(services.GetService<AccessService>());
+                    return AiSettingsNodeType
+                        .ObserveAgentQueries(host.Hub.GetWorkspace(), host.Hub, services, user,
+                            host.Hub.Address.ToString())
+                        .Select(queries => meshQuery.Query<MeshNode>(new MeshQueryRequest { Queries = queries }))
+                        .Switch()
                         .Select(change => BuildCatalogContent(change.Items.ToList()))
                         .Catch<UiControl, Exception>(_ => Observable.Return(BuildCatalogContent([])));
                 },

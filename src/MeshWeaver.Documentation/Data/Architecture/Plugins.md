@@ -145,3 +145,9 @@ The same primitive — a node repo in a git source, imported into a running mesh
 node repos (Doc, Agent, Skill, samples) and module content move off the image and onto git delivery:
 their **content** exports to the plugins repo (GitSync), and their **self-contained types** become
 dynamic node types. Everything from git, versioned by the node, no NuGet.
+
+## Related
+
+- @../RepositoryTopology — which repository owns what: the plugins repo (`MeshWeaver.Plugins`) is the private code catalog, distinct from the public framework repo and the config-only `Memex` repo.
+- @../PluginRegistry — how the private plugins repo is re-served to every installation without handing out its GitHub credential.
+- @../StaticRepoImport — the import pipeline that turns a node repo into live mesh nodes.

@@ -1,7 +1,7 @@
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -68,6 +68,15 @@ public sealed class OutboundEmailSender(
             logger?.LogInformation("Email disabled — OutboundEmailSender idle");
             return Task.CompletedTask;
         }
+
+        // 🚨 Enabled, but is there anything that can actually DELIVER? Asked HERE, in StartAsync,
+        // for two reasons. It is inside the startup window, so StartupErrorNotifier folds the
+        // refusal into the Admin bell that reports a degraded boot — whereas ApplicationStarted
+        // callbacks run after that buffer has already drained. And refusing before the watch is
+        // even armed is what keeps queued mail at New: a watcher that starts and then declines
+        // per-item has already claimed (New → Sending) the first one. See EmailDeliveryGuard.
+        if (EmailDeliveryGuard.RefuseToStart(rootServices, options, logger, nameof(OutboundEmailSender)))
+            return Task.CompletedTask;
 
         // Defer ALL mesh access until the host is fully started. The Orleans client and the mesh
         // hub come up as hosted services too; touching the hub here (or constructing

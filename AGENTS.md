@@ -221,7 +221,7 @@ a live daily throttle, until #1778.
 `main-cd.yml` builds and pushes the deployment images. Its `workflow_run` path is still gated on
 `event == 'push' && head_branch == 'main'` — that gate is what stops a **fork's** pull_request run
 (whose `head_branch` can also be "main") from publishing untrusted code with this repo's secrets,
-so never relax it. Two consequences that trip people up, both SILENT:
+so never relax it. Three consequences that trip people up, all SILENT:
 
 1. **No Build-and-Test run on main at all.** CD reacts to that workflow completing; if it never ran
    on the merge commit (a CI incident, a stalled queue), CD sits `SKIPPED` with nothing to react to.
@@ -229,8 +229,42 @@ so never relax it. Two consequences that trip people up, both SILENT:
    Test" --ref main` RUNS and genuinely tests the merge commit, so main shows a **green
    Build-and-Test** — but its `event` is `workflow_dispatch`, not `push`, so CD still skips. The
    most convincing possible "it shipped" signal, and no image.
+3. 🚨 **Back-to-back merges CANCEL each other's main run, so a merge burst publishes NOTHING.**
+   `dotnet-test.yml`'s concurrency group is `build-test-${{ … || github.ref }}` — every push to main
+   groups as `refs/heads/main`, so each merge cancels the in-flight run for the previous one (#2316,
+   which buys ~28% of runner demand and is worth keeping). CD **does** still fire on those runs —
+   `main-cd.yml` subscribes with `types: [completed]`, and a cancelled run is "completed" — but its
+   delivery gate keys on the required check **`Consolidate test results` reaching `success` for that
+   SHA**, which a cancelled run never produces. So CD wakes, decides "nothing will be built", and
+   every intermediate publish that "would have happened" simply does not. Observed
+   2026-08-26: #2316 merged at 12:55:25Z and main's next **five** runs were cancelled back-to-back,
+   leaving 45 minutes with no completed run and no publish.
 
-**Neither is terminal any more.** CD carries a **reconciler**: an hourly `schedule` (plus its own
+   Publishing only the **tip** of a burst is correct — intermediate commits never needed their own
+   image set, and it is the batching `CD_BATCH_WINDOW_MINUTES` already wants. So do NOT wait between
+   ordinary merges; batching them is right, and the tip's image contains them all.
+
+   🚨 **The wait is owed to a merge that must ship ON ITS OWN** (a CD fix, a hotfix someone is
+   verifying): merge it, then wait for **that merge commit's** Build-and-Test to COMPLETE — and
+   check the completed run's **head SHA is your merge commit**, because "a run completed" and "the
+   run for my commit completed" diverge during exactly the burst you are working around.
+
+   🚨 **A merge cancels whatever is in flight — including a run ANOTHER SESSION is waiting on.**
+   Several sessions merge into this repo at once, so "wait for the run" only works if *everyone*
+   waits; two sessions each merging politely still cancel each other. Before merging, check whether
+   main has a run in flight that someone is gating a deploy on, and if so **hold and say so**. On
+   2026-08-26 a routine merge killed the run another session was watching to end a CD freeze — no
+   damage beyond a lost cycle, but the fix is coordination, not care.
+
+   🚨 **A hold reaches your hands, NOT your subagents' — push it to them explicitly.** An agent
+   briefed to "root-cause and open a PR" follows this file's own merge-on-green default, which is
+   correct on any other day. The same 2026-08-26 hold was then broken **twice more, by two
+   subagents**, each merging a perfectly good fix at exactly the wrong moment. When you take a hold:
+   message every running agent, tell them to push and PARK, and disarm any auto-merge already
+   armed. The general form — **a constraint is only as complete as the set of hands it reaches** —
+   applies to anything you delegate, not just merges.
+
+**None of these is terminal any more.** CD carries a **reconciler**: an hourly `schedule` (plus its own
 `workflow_dispatch`) resolves main's tip through the API, asks ACR whether that commit has the
 complete four-image set, and publishes only when it does not — bounded at 3 attempts per commit,
 with every attempt and the final give-up written to the `ci-failure` issue. So:
@@ -465,24 +499,25 @@ The `memex` portal runs on the shared **AKS cluster** `<aks-cluster>` (RG `<aks-
 ```bash
 az acr login -n meshweaver
 # Portal (custom base) AND migration (the migration is what creates schema + the matview):
-dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
+dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-portal-ai -p:ContainerImageTag=<tag> \
   -p:ContainerBaseImage=meshweaver.azurecr.io/memex-portal-ai-base:latest
 dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj -c Release \
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
-# Roll out (NS = memex):
+# Roll out (NS = memex). 🚨 The MIGRATION is a Job, not a Deployment — see below.
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "\
   kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
-  kubectl -n <NS> set image deployment/memex-migration-deployment memex-migration=meshweaver.azurecr.io/memex-migration:<tag>; \
-  kubectl -n <NS> rollout restart deployment/memex-migration-deployment deployment/memex-portal-deployment; \
+  kubectl -n <NS> rollout restart deployment/memex-portal-deployment; \
   kubectl -n <NS> rollout status deployment/memex-portal-deployment --timeout=300s"
 ```
 
-- **`deploy/aks/envs/<env>/deploy.sh` is first-time ENV SETUP only** (helm install + PVCs + KV SecretProviderClass + ingress + connection-string patch). Do NOT use it for a code update — it re-runs the whole chart and can reset live config.
+- **An env's `deploy.sh` is first-time ENV SETUP only** (helm install + PVCs + KV SecretProviderClass + ingress + connection-string patch). Do NOT use it for a code update — it re-runs the whole chart and can reset live config. 🚨 **Env folders live in the PRIVATE `Systemorph/Memex` repo**, not `deploy/aks/envs/<env>/` — they moved out 2026-08-08/09 (`a69959165`) because their directory names are tenant identities; `deploy/aks/envs/example/` here is the reference template only.
 - **Don't run `tools/deploy.sh` or `aspire deploy` against the AKS cluster** — those are the *Container Apps* route (a different target), not a code-update path for AKS.
-- `memex-migration` runs the migration then exits 0 and the Deployment restarts it (benign `CrashLoopBackOff`). Before declaring success, confirm its log shows `Database migration completed. Version: N` AND the portal serves (HTTP 200).
+- 🚨 **The migration is a run-once `Job`, NOT a Deployment** (`deploy/helm/templates/memex-migration/job.yaml`: `kind: Job`, `restartPolicy: Never`, name embeds `.Release.Revision`, `ttlSecondsAfterFinished`). It runs on **`helm upgrade`**, not on an image-tag roll — so `kubectl set image` / `rollout restart` against a `memex-migration-deployment` is a command with no object: the chart does not define one, and any that exists in a live namespace is a cluster-only orphan of a chart revision that predates the Job (#1788). Do not resurrect it. A `MigrationWorkloadModelGuard` (test/MeshWeaver.Documentation.Test) fails the build if a command like that returns to this file, a doc or a deploy script.
+- **A crash-looping migration pod is a FAILURE, not noise.** It used to be modelled as a Deployment, which restarted it forever after each clean exit — three prod namespaces sat at 50/53/38 restarts, each rebuilding `public.top_level_index` across every partition schema. Documenting that as "benign" is what made a real migration failure unreadable. With the Job form the pod runs once and stops, so `CrashLoopBackOff` on it now means exactly what it says. Before declaring a deploy successful, confirm the Job's log shows `Database migration completed. Version: N` AND the portal serves (HTTP 200) — `kubectl -n <NS> get jobs -l app.kubernetes.io/component=memex-migration` and `kubectl -n <NS> logs job/memex-migration-<revision>`.
+- **The schema still has a hard gate.** `DbVersionGate` (a hosted service in `Memex.Portal.Distributed`) reads `admin.mesh_nodes.db_version` at startup and `StopApplication()`s with a `LogCritical` when it is below `DbVersion.Latest`. So a portal rolled ahead of its schema refuses to serve rather than serving a half-migrated database — loud, and the reason the ordering between the two workloads cannot silently invert.
 
 Routes + full reference: [Deployment.md](src/MeshWeaver.Documentation/Data/Architecture/Deployment.md) (index) · [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md) · [DeploymentContainerApps.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentContainerApps.md)
 
@@ -499,10 +534,10 @@ old `C:\dev\MeshWeaver` here predated the worktree rule above). Avoid chained co
 dotnet build                                              # Build solution (ONE project arg max — several is an MSB1008 no-op)
 dotnet build test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj   # Build one project — required before --no-build
 dotnet test test/MeshWeaver.Data.Test --no-build          # Run one test project (built above; unbuilt = silent exit 0)
-dotnet run --project memex/Memex.Portal.Monolith          # Monolith standalone (https://localhost:7122, http://localhost:5022)
-dotnet run --project memex/aspire/Memex.AppHost           # Aspire (requires Docker) — portal at https://localhost:7202, http://localhost:5202
-aspire run --project memex/aspire/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`) — same URLs as above
-aspire start --no-build --project memex/aspire/Memex.AppHost  # Background + NO rebuild — fast bring-up; `aspire ps` / `aspire stop` to manage. --no-build reuses the last build (won't pick up source edits)
+dotnet run --project ../MeshWeaver.Plugins/src/Memex.Portal.Monolith          # Monolith standalone (https://localhost:7122, http://localhost:5022)
+dotnet run --project ../MeshWeaver.Plugins/src/Memex.AppHost           # Aspire (requires Docker) — portal at https://localhost:7202, http://localhost:5202
+aspire run --project ../MeshWeaver.Plugins/src/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`) — same URLs as above
+aspire start --no-build --project ../MeshWeaver.Plugins/src/Memex.AppHost  # Background + NO rebuild — fast bring-up; `aspire ps` / `aspire stop` to manage. --no-build reuses the last build (won't pick up source edits)
 ```
 
 ### Restarting just the Portal (no full Aspire restart)
@@ -511,7 +546,7 @@ When you change code in `Memex.Portal.Distributed` or any project it references,
 
 1. **Hot reload (cheapest)** — start with `dotnet watch` instead of `dotnet run` / `aspire run`:
    ```bash
-   dotnet watch --project memex/aspire/Memex.AppHost
+   dotnet watch --project ../MeshWeaver.Plugins/src/Memex.AppHost
    ```
    File save → Aspire restarts the affected resource only. Preserves the dashboard, the Postgres container, and the SignalR endpoints. Most code changes apply within seconds.
 2. **Aspire dashboard UI** — open `https://localhost:17200/` → Resources tab → click the ⋯ next to `memex-portal-distributed` → **Restart**. Runs `dotnet build` + restart in-place.
@@ -743,10 +778,57 @@ workspace.GetMeshNodeStream(path)
     .Take(1).Timeout(TimeSpan.FromSeconds(10));
 ```
 
-**Valid query uses:** listing children (`path/*`), searching by predicate, existence checks, autocomplete.  
-**Wrong:** reading content by exact path, reading state before a write, polling for job completion.
+**Valid query uses:** listing children (`path/*`), searching by predicate, autocomplete — anywhere a
+stale negative is harmless.  
+🚨 **Existence of a SPECIFIC path is NOT one of them** — use `GetMeshNodeStream(path)` / a direct read.
+A query's negative can be minutes old, so a caller that reads it as "absent" redoes work that already
+happened. This line used to sanction existence checks, and that was wrong in a way that shipped: on
+2026-08-25 a `search` reported two just-minted tiles missing while a direct `get` returned both
+(#2229), and a create whose reply was lost plus a query that then answered "absent" gave one caller
+two independent reasons to conclude nothing had happened — two mesh-wide sweeps were armed 40 seconds
+apart on that basis. Existence-by-query is safe only where the write it guards is path-deterministic
+and idempotent (the redundant write lands on the same path); where the target id is minted per
+attempt, a stale negative produces DUPLICATE DATA, not merely duplicated work.  
+**Wrong:** reading content by exact path, reading state before a write, polling for job completion,
+deciding create-or-skip for a known path.
 
-`GetMeshNodeStream(path)` + `Where(...).Take(1)` is also the right primitive for **waiting for work to finish**.
+`GetMeshNodeStream(path)` + `Where(...).Take(1)` is also the right primitive for **waiting for work to finish** — for a node that **exists**.
+
+🚨 **A node that may NOT EXIST YET is the one case where neither half is enough on its own, and each
+half alone is a defect that has shipped.** Do not pick a horn:
+
+- **A point read of an ABSENT node is forbidden by the framework**, not merely slow: the owner
+  answers an authoritative routing NotFound which **terminates the stream with an error** (it cannot
+  wait for the node to appear), and that NotFound opens `MeshNodeStreamCache`'s **storm-breaker**
+  window on the path — and the breaker **fast-fails WRITES too**, so the read suppresses the write it
+  is waiting for. The breaker says so itself: *"A point node-access to a node that does not exist is
+  a defect — read optional nodes via GetQuery (empty-on-absent), not GetMeshNodeStream(exactPath)."*
+- **Reading that node's CONTENT out of a query is forbidden above** — unbounded lag.
+
+**The composition, and it is the canonical pattern — listing for EXISTENCE, stream for CONTENT:**
+
+```csharp
+hub.GetQuery(id, $"path:{parent} scope:children nodeType:X select:path")   // EXISTENCE — empty-on-absent
+    .Where(nodes => nodes.Any(n => string.Equals(n.Path, target, StringComparison.OrdinalIgnoreCase)))
+    .Take(1)
+    .SelectMany(_ => workspace.GetMeshNodeStream(target))                  // CONTENT — authoritative, live
+    .Select(node => node.ContentAs<X>(hub.JsonSerializerOptions));
+```
+
+The index **trails** the store, so "the index has seen it" implies "the store has it" — the point read
+opened on that signal can never be early, and never NotFounds. The same lag that disqualifies a query
+for CONTENT is what makes it a safe gate. Creating the node anyway? Skip the check entirely and use
+`CreateOrUpdateNodeRequest`.
+
+🚨 **This is about ONE known path whose value you are GATING on — not about node counts.** The
+worked counter-example is `src/MeshWeaver.Blazor.Portal/Chat/ThreadTokenChip.razor.cs:106`: it reads
+`content` out of the very same `{thread}/_Usage scope:children` query, **and it is correct** — it
+sums a SET to paint a total, and a briefly-stale total is cosmetic. Converting it to N point reads
+would mean N per-node hub activations per render, and on a legitimately EMPTY set (a thread with no
+rounds yet) every one is an absent-node read tripping the breaker **on the render path**. So: stale
+answer merely looks wrong on screen → query, `content` and all. Stale answer DECIDES whether
+something proceeds, passes, or is written → the owner's stream. Full pattern:
+[CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) → "An OPTIONAL node".
 
 **Free-floating words → vector search.** When a query contains bare text tokens (`laptop nodeType:Story`) AND PG is the backend AND an `IEmbeddingProvider` is registered, `PostgreSqlMeshQuery.QueryAsync` automatically routes through the HNSW cosine index instead of ILIKE substring scan. Structured-only queries (`nodeType:Story namespace:ACME`) stay on the regular SQL path. Full reference: [VectorSearch.md](src/MeshWeaver.Documentation/Data/Architecture/VectorSearch.md).
 
@@ -759,8 +841,8 @@ Full treatment: [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Arch
 | Environment | Base URL |
 |---|---|
 | Prod | `https://memex.meshweaver.cloud` |
-| Dev — Aspire (`memex/aspire/Memex.AppHost`) | `https://localhost:7202` (HTTP fallback `http://localhost:5202`) |
-| Dev — Monolith standalone (`memex/Memex.Portal.Monolith`) | `https://localhost:7122` (HTTP fallback `http://localhost:5022`) |
+| Dev — Aspire (`../MeshWeaver.Plugins/src/Memex.AppHost`) | `https://localhost:7202` (HTTP fallback `http://localhost:5202`) |
+| Dev — Monolith standalone (`../MeshWeaver.Plugins/src/Memex.Portal.Monolith`) | `https://localhost:7122` (HTTP fallback `http://localhost:5022`) |
 
 ## `@/` is Local-Only
 
@@ -808,7 +890,7 @@ Actor-model message hub (`MeshWeaver.Messaging.Hub`) with address-based partitio
 |---|---|
 | `src/` | Core framework (50+ projects) |
 | `samples/Graph/Data/` | Sample data nodes (ACME, Northwind, Cornerstone, etc.) |
-| `memex/Memex.Portal.Monolith/` | Dev portal with full Graph + Documentation support |
+| `../MeshWeaver.Plugins/src/Memex.Portal.Monolith/` | Dev portal with full Graph + Documentation support |
 | `memex/aspire/` | Microservices with .NET Aspire orchestration |
 
 **Request-Response:** `hub.Observe<TResponse>(request, o => o.WithTarget(address)).Subscribe(resp => …, ex => …)`  

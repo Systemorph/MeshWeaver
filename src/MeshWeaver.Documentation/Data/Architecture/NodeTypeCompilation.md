@@ -647,6 +647,80 @@ wired by `AddAssemblyCacheRetention` (`src/MeshWeaver.Hosting/AssemblyCacheReten
 `BlobAssemblyStore` is unaffected: it keys `v{version}` with no framework tag, so a new image
 overwrites rather than accrues.
 
+#### 🚨 The cache grows on a SECOND axis, and generation retention is blind to it
+
+Generations are one axis. The other is **per-type version accumulation *inside* one generation** —
+one dll/pdb pair per recompile, forever, every file carrying the same tag. Measured on memex-cloud
+2026-08-22, when the 16 GiB `/data` PVC hit 100% and every NodeType recompile failed with
+`No space left on device` (surfacing four steps away as `compilationStatus: Error`, while the
+migration pod crash-looped 66 times):
+
+| | |
+|---|---|
+| files in `Store_Plugin`'s directory alone | **4,184** (`v100` … `v8800+`, since June) |
+| framework generations they span | **one** |
+
+Keeping three *generations* of that shape still keeps ~12.5k files, so no setting of
+`KeepGenerations` could ever have been the answer. The collector for this axis is therefore in the
+**writer**: after `FileSystemAssemblyStore.PutWithLocation` publishes a new version it prunes that
+type's directory to the newest `KeepVersionsPerType` versions (default **3**, override
+`AssemblyCache:Retention:KeepVersionsPerType`). The pass that made the directory grow is the one
+that trims it, so nothing has to walk the tree to discover the growth.
+
+**Why this one may delete on defaults while the generation sweep may not.** Different worst cases:
+
+| | generation sweep | per-type eviction |
+|---|---|---|
+| removes | a whole framework generation | older versions **within the writer's own generation** |
+| whose bytes belong to | possibly **another image**, on another live pod | this image |
+| worst case of a wrong answer | `BadImageFormatException` → failed grain activations → portal wedge | a cache **miss** → `TryGetAssemblyPath` returns null → activation recompiles |
+| therefore needs | a live **claim** before deleting; armed by an operator | nothing beyond staying inside its own tag |
+
+Eviction never crosses the tag boundary, only removes names
+`AssemblyCacheFileName.Parse` attributes to this store (so `.tmp-*` leftovers, bake leases, claim
+files and pre-tag legacy DLLs are untouchable), never removes the file it just wrote, and treats a
+delete that throws as "leave it alone" — a file that will not unlink is one something is holding.
+Both collectors share that one parser deliberately: two collectors disagreeing about which names this
+store wrote is how one of them would remove a file the other treats as foreign.
+
+### 🚨 In-MEMORY generations accumulate the same way — a superseded build stays ROOTED while any instance serves it
+
+The store section above is about disk; the same generation arithmetic plays out inside every
+process that hosts instance hubs, and there the unit is an **AssemblyLoadContext**. Every publish
+of a usable build mints a new collectible ALC; *collectible* only means "may unload once nothing
+roots it" — and a serving instance hub roots the build it bound. The stale-build banner ("a newer
+build of this type is available — Recycle") deliberately leaves every instance on its old build
+until a human clicks, so in a sync-heavy window each publication wave stacks one more full
+assembly generation — types × Roslyn artifacts — onto the silo hosting the type hubs. The
+eviction fix on the compile path (#605) cannot free any of it: eviction drops the store's
+reference, not the instance's.
+
+Measured, 2026-08-25 (issue #2194): two memex-cloud silos flat at 2.7–4.5 GB for five hours, then
+a hard inflection the moment the first scheduled bake tick after a framework-pin bump published a
+full-catalog rebake, followed by five content merges — six publication waves in four hours. The
+two type-hosting silos climbed ~2.5 GB/h to 17–20 GB and four cores of GC; every other replica
+stayed ≤3.6 GB. Nothing intervened: no OOMKill (the pod limit was never reached), no probe
+failure (after startup, readiness and liveness both watch `/alive`, a process-up check a
+thrashing pod still answers), no alert — the pods served hung requests as Ready for 3½ hours
+until a human read `kubectl top`. The same stranded instances also produced the visible half:
+old and new assemblies serving side by side (`$type` registration mismatches), pages wedged until
+the type and instance hubs were recycled by hand.
+
+The missing piece is **convergence**, and it is policy, not plumbing:
+`Modules:AutoRecycleOnStaleBuild` (#2192, default **off**) turns the banner's offer into an
+automatic self-recycle — when a NodeType publishes a usable build whose assembly differs from the
+one an instance bound, the instance posts its own `DisposeRequest`, re-activates on the new
+build, and the superseded ALC unroots and collects. Anywhere the catalog updates itself — every
+self-updating portal — leaving the key off means choosing the accumulation above; #2194 tracks
+the prod enablement. The structural end state is stronger still: DLL-only module adoption
+("never ship uncompiled state") removes in-portal recompilation altogether, so a publication
+wave costs an assembly load instead of a Roslyn generation.
+
+**Triage fingerprint** — intermittent hangs while most requests succeed, on a portal that
+recently synced or baked: suspect a degraded-but-Ready replica, not a global wedge. One or two
+pods far above their siblings in BOTH memory and CPU in `kubectl top pods` is this incident;
+`kubectl delete pod` them (grace-drain — the Deployment replaces them) and read #2194.
+
 ---
 
 ## 🚨 That recompile can FAIL — and nothing upstream can warn you

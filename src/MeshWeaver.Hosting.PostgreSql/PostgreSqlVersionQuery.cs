@@ -36,31 +36,29 @@ public class PostgreSqlVersionQuery : IVersionQuery
             : $"\"{schema}\".\"mesh_node_history\"";
     }
 
-    private static (string Namespace, string Id) SplitPath(string path)
-    {
-        var lastSlash = path.LastIndexOf('/');
-        var ns = lastSlash > 0 ? path[..lastSlash] : "";
-        var id = lastSlash > 0 ? path[(lastSlash + 1)..] : path;
-        return (ns, id);
-    }
+    /// <summary>
+    /// Trims the addressing form of a path. History rows are matched on the STORED
+    /// <c>path</c> column (a generated, indexed column on <c>mesh_node_history</c>) —
+    /// NEVER on a positional (namespace, id) split, which loses every id containing a
+    /// '/' (every LanguageModel id is <c>{vendor}/{model}</c>; see issue #2212).
+    /// </summary>
+    private static string NormalizePath(string path) => path.Trim('/');
 
     /// <inheritdoc />
     public IObservable<MeshNodeVersion> GetVersions(string path)
         // The pg I/O pool runs the DB fetch on the ThreadPool behind its concurrency gate
         // with ConfigureAwait(false) — no custom TaskScheduler (Orleans) is ever captured.
         => _ioPool.Invoke(ct => FetchVersionsAsync(path, ct))
-            .SelectMany(versions => versions.ToObservable());
+            .SelectMany(versions => versions.ToInlineObservable());
 
     private async Task<List<MeshNodeVersion>> FetchVersionsAsync(string path, CancellationToken ct)
     {
         var results = new List<MeshNodeVersion>();
-        var (ns, id) = SplitPath(path);
         await using var cmd = _dataSource.CreateCommand(
             "SELECT version, last_modified, changed_by, name, node_type " +
-            $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 " +
+            $"FROM {_historyTable} WHERE path = $1 " +
             "ORDER BY version DESC");
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(id);
+        cmd.Parameters.AddWithValue(NormalizePath(path));
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
@@ -79,13 +77,11 @@ public class PostgreSqlVersionQuery : IVersionQuery
     public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
         => _ioPool.Invoke(async ct =>
         {
-            var (ns, id) = SplitPath(path);
             await using var cmd = _dataSource.CreateCommand(
                 "SELECT id, namespace, name, node_type, category, icon, display_order, " +
                 "last_modified, version, state, content, desired_id, main_node " +
-                $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 AND version = $3");
-            cmd.Parameters.AddWithValue(ns);
-            cmd.Parameters.AddWithValue(id);
+                $"FROM {_historyTable} WHERE path = $1 AND version = $2");
+            cmd.Parameters.AddWithValue(NormalizePath(path));
             cmd.Parameters.AddWithValue(version);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -99,14 +95,12 @@ public class PostgreSqlVersionQuery : IVersionQuery
     public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options)
         => _ioPool.Invoke(async ct =>
         {
-            var (ns, id) = SplitPath(path);
             await using var cmd = _dataSource.CreateCommand(
                 "SELECT id, namespace, name, node_type, category, icon, display_order, " +
                 "last_modified, version, state, content, desired_id, main_node " +
-                $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 AND version < $3 " +
+                $"FROM {_historyTable} WHERE path = $1 AND version < $2 " +
                 "ORDER BY version DESC LIMIT 1");
-            cmd.Parameters.AddWithValue(ns);
-            cmd.Parameters.AddWithValue(id);
+            cmd.Parameters.AddWithValue(NormalizePath(path));
             cmd.Parameters.AddWithValue(beforeVersion);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
