@@ -1,3 +1,4 @@
+using MeshWeaver.AI.Portal;
 using MeshWeaver.Blazor.Portal.Layout;
 using MeshWeaver.Graph;
 using Xunit;
