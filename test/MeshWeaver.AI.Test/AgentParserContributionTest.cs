@@ -1,5 +1,4 @@
 using System.Linq;
-using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
@@ -17,12 +16,17 @@ namespace MeshWeaver.AI.Test;
 /// <para>🚨 This test exists because the failure mode is SILENT. <see cref="MarkdownFileParser"/>
 /// accepts every <c>.md</c> file, so if the agent parser is missing — not registered, registered
 /// after the built-ins, or dropped by a construction site that forgot to pass the contributed set —
-/// an <c>.md</c> carrying <c>nodeType: Agent</c> is parsed into a plain Markdown node. No
-/// exception, no log line, nothing red: the agent simply ceases to exist, and the first symptom is
-/// a user being told "Selected agent 'X' was not found" in production. Ordering is therefore part
-/// of the contract, and pinned here rather than left to registration accident.</para>
+/// an <c>.md</c> carrying <c>nodeType: Agent</c> is parsed into a plain Markdown node. No exception,
+/// no log line, nothing red: the agent simply ceases to exist, and the first symptom is a user being
+/// told "Selected agent 'X' was not found" in production.</para>
+///
+/// <para>It lives beside the parser rather than in core's content suite (#2276): the REGISTRY's
+/// ordering contract is pinned generically by
+/// <c>MeshWeaver.Content.Test.ContributedParserPriorityTest</c> against a test-local contributor,
+/// while this asserts the thing only the AI module can — that the real agent parser is the one
+/// contributed, and that an agent file survives it as agent configuration.</para>
 /// </summary>
-public class ContributedParserPriorityTest
+public class AgentParserContributionTest
 {
     private const string AgentMarkdown = """
         ---
@@ -53,16 +57,15 @@ public class ContributedParserPriorityTest
     }
 
     [Fact]
-    public void WithoutTheContributedParser_TheSameFileDegradesSilently()
+    public void WithoutTheContributedParser_TheAgentDegradesSilently()
     {
-        // The regression this guard is aimed at, stated as an executable fact — and it is WORSE
-        // than "the file fails to parse". The built-in set produces a node (no throw, no null),
-        // and MarkdownFileParser even copies `nodeType: Agent` off the front matter, so the node
-        // still CLAIMS to be an agent. What it loses is its content: no AgentConfiguration, so no
-        // instructions, no delegations, no plugins. An agent-shaped node that cannot act.
+        // Worse than "the file fails to parse": the built-in set produces a node (no throw, no
+        // null), and MarkdownFileParser even copies `nodeType: Agent` off the front matter, so the
+        // node still CLAIMS to be an agent. What it loses is its content — no AgentConfiguration, so
+        // no instructions, no delegations, no plugins. An agent-shaped node that cannot act.
         //
-        // That is why the discriminator asserted here is the CONTENT TYPE and not the nodeType:
-        // a guard keyed on nodeType would have passed while the platform shipped hollow agents.
+        // That is why the discriminator asserted here is the CONTENT TYPE and not the nodeType: a
+        // guard keyed on nodeType would have passed while the platform shipped hollow agents.
         var registry = new FileFormatParserRegistry();
 
         var node = Parse(registry);
@@ -73,14 +76,10 @@ public class ContributedParserPriorityTest
     }
 
     [Fact]
-    public void BuiltInParsersStillHandleTheirOwnFormats()
+    public void TheAgentParserIsTheOneContributedFirst()
     {
-        // Removing the hard-coded agent parser must not disturb the rest of the chain.
         var registry = new FileFormatParserRegistry(contributedParsers: [new AgentFileParser()]);
 
-        registry.SupportedExtensions.Should().Contain(".md").And.Contain(".cs");
-        registry.GetParsers(".md").Should().HaveCountGreaterThan(1,
-            "both the contributed agent parser and the Markdown fallback serve .md");
         registry.GetParsers(".md").First().Should().BeOfType<AgentFileParser>(
             "priority order is the contract: contributed parsers first");
     }

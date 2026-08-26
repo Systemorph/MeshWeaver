@@ -428,8 +428,33 @@ public static class MarkdownViewLogic
         // address ("No node found at …/_Activity/markdown-…"). The node's own stream is served BY that hub,
         // so its first emission proves the hub is live and routable. The create/routing error is SURFACED,
         // never swallowed (a swallowed kernel-unavailable was the old bug; see RoutingServiceBase NotFound).
+        //
+        // 🚨 Gated on an EXACT-PATH query first, never a bare exact-path subscribe straight off CreateNode,
+        // and never a children LISTING of the namespace. "Persisted" and "routable" are different facts
+        // (Systemorph/MeshWeaver#2229 item A: "the create SUCCEEDS and the REPLY is lost" / an authoritative
+        // read route that can answer NotFound for a path whose write already landed, for minutes under
+        // load). An exact-path GetMeshNodeStream hitting that NotFound TERMINATES the stream with an error
+        // rather than waiting — which is exactly the interactive kernel silently never activating that this
+        // method exists to avoid.
+        //
+        // `path:{x}` with no `scope:` qualifier is QueryScope.Exact, whose contract for an absent path is
+        // "answered ZERO ROWS with no error" — empty-on-absent, no routing NotFound, no storm-breaker
+        // window, same as a listing. UNLIKE a `scope:children …` listing of `activityNamespace`, it cannot
+        // page past the one row it can return — `_Activity` is explicitly un-pruned (StaticRepoImport.md),
+        // so it grows without bound, and a listing anchored at the CONTAINER can miss this activity once
+        // the owner has enough of them (the same silent never-activates this fix exists to remove,
+        // reintroduced by a rarer route). See PackageInstaller.WaitForGating and CqrsAndContentAccess.md →
+        // "An OPTIONAL node".
+        //
+        // No `select:` projection: MeshNode.Path is COMPUTED (Namespace + "/" + Id), so a projection
+        // omitting either input yields an empty path — the query below relies on Count, not a path
+        // comparison, but the same trap applies to any `select:` added here later.
         meshService.CreateNode(activityNode)
-            .SelectMany(_ => senderHub.GetMeshNodeStream(activityPath)
+            .SelectMany(_ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{activityPath} nodeType:Activity"))
+                .Where(change => change.Items.Count > 0)
+                .Take(1)
+                .SelectMany(_ => senderHub.GetMeshNodeStream(activityPath))
                 .Where(node => node is not null)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(15)))
