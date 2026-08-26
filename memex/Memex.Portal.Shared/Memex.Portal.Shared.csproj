@@ -135,6 +135,11 @@
   <ItemGroup>
     <!-- ExtractToken is pinned by tests (Bearer/Basic parsing on an unauthenticated path). -->
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+    <!-- The portal composition (ConfigureMemexServices / ConfigureMemexPortal /
+         StartMemexApplication) moved to Memex.Portal.Gui with its hosts, and constructs
+         ApiTokenService / McpBackConnectionService / OAuthCodeStore, which are internal here.
+         MeshWeaver.Plugins#701. -->
+    <InternalsVisibleTo Include="Memex.Portal.Gui" />
   </ItemGroup>
 
 </Project>
