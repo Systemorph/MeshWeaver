@@ -1,3 +1,4 @@
+using MeshWeaver.AI;   // IProviderKeyProtector & co keep their ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;

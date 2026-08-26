@@ -35,3 +35,25 @@ using System.Runtime.CompilerServices;
 [assembly: TypeForwardedTo(typeof(MeshWeaver.AI.MeshExportManifest))]
 [assembly: TypeForwardedTo(typeof(MeshWeaver.AI.MeshExportFileEntry))]
 [assembly: TypeForwardedTo(typeof(MeshWeaver.AI.NodeReadOutcome))]
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// The SAME class again, found by replaying the gate across v3.0.0-rc7 → main (#2398).
+// #2276 moved the platform's credential-protection and MCP-back-connection contracts out of this
+// assembly into MeshWeaver.Mesh.Contract, renaming their namespaces on the way. Three of them have
+// a PROVEN module consumer on Systemorph/MeshWeaver.Plugins@main:
+//
+//   IMcpBackConnection     MeshWeaver.AI.ClaudeCode/{ClaudeCodeChatClient,ClaudeCodeHarness}.cs
+//                          MeshWeaver.AI.Copilot/{CopilotChatClient,CopilotHarness}.cs
+//   McpConnectionInfo      MeshWeaver.AI.ClaudeCode/ClaudeCodeChatClient.cs
+//   IProviderKeyProtector  MeshWeaver.Blazor.Portal/Chat/ThreadChatView.razor.cs
+//
+// Their SOURCE was updated in the same wave, so `landed-modules-gate` is green and a REBUILT
+// bundle is correct. What that says nothing about is a deployment still running a bundle
+// published BEFORE the wave: it holds the old TypeRef and dies exactly like #2370 the moment its
+// platform rolls. These forwarders are what makes that ordering irrelevant.
+[assembly: TypeForwardedTo(typeof(MeshWeaver.AI.IMasterKeyProvider))]
+[assembly: TypeForwardedTo(typeof(MeshWeaver.AI.ConfigMasterKeyProvider))]
+[assembly: TypeForwardedTo(typeof(MeshWeaver.AI.IProviderKeyProtector))]
+[assembly: TypeForwardedTo(typeof(MeshWeaver.AI.ProviderKeyProtector))]
+[assembly: TypeForwardedTo(typeof(MeshWeaver.AI.Connect.IMcpBackConnection))]
+[assembly: TypeForwardedTo(typeof(MeshWeaver.AI.Connect.McpConnectionInfo))]

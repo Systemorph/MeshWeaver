@@ -1,4 +1,12 @@
-namespace MeshWeaver.Mesh.Services;
+// 🚨 The NAMESPACE is part of the binary contract, and it does NOT follow the assembly.
+// This type used to live in MeshWeaver.AI; a module compiled before it moved holds a TypeRef to
+// `MeshWeaver.AI.Connect.IMcpBackConnection` scoped to the `MeshWeaver.AI` AssemblyRef. The
+// [assembly: TypeForwardedTo] in src/MeshWeaver.AI/TypeForwards.cs redirects that TypeRef here —
+// but ONLY while the full type NAME is unchanged, because a forwarder CANNOT rename. So
+// `namespace MeshWeaver.AI.Connect;` inside MeshWeaver.Mesh.Contract is DELIBERATE AND PERMANENT.
+// Tidying it to `MeshWeaver.Mesh.Services` is the #2370 outage all over again (#2398);
+// MovedTypeBinaryContractTest and scripts/check-type-forwards.py both refuse it.
+namespace MeshWeaver.AI.Connect;
 
 /// <summary>
 /// The coordinates a co-hosted CLI needs to call the portal's MCP endpoint AS THE USER:
