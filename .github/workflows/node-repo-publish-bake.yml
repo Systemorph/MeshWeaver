@@ -80,7 +80,8 @@ name: Node repo publish-bake (reusable)
 #       azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
 #       azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 #       azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-#       stage-repo-token: ${{ secrets.MESHWEAVER_REPO_TOKEN }}
+#       stage-repo-app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+#       stage-repo-app-private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
 #
 # The real topology, and the order it produces without any central scheduler:
 #
@@ -234,8 +235,16 @@ on:
       azure-subscription-id:
         description: Subscription of the storage accounts.
         required: true
-      stage-repo-token:
-        description: Token able to read stage-repo (needed only when stage-modules is set).
+      stage-repo-app-id:
+        description: >
+          App id of a GitHub App installed on stage-repo's org with Contents: Read (needed only
+          when stage-modules is set). Replaces the former stage-repo-token PAT: an installation
+          token is minted per run and scoped to stage-repo alone, so it cannot rot the way a
+          stored PAT does — and, unlike a PAT, it resolves for dependabot-triggered runs once
+          provisioned in the caller's Dependabot secret store as well (#2249).
+        required: false
+      stage-repo-app-private-key:
+        description: Private key (PEM) of that App.
         required: false
 
 jobs:
@@ -257,7 +266,8 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.azure-subscription-id }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
-          STAGE_TOKEN: ${{ secrets.stage-repo-token }}
+          STAGE_APP_ID: ${{ secrets.stage-repo-app-id }}
+          STAGE_APP_KEY: ${{ secrets.stage-repo-app-private-key }}
           BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
           STAGE_MODULES: ${{ inputs.stage-modules }}
           NARROW: ${{ inputs.narrow-by-affected }}
@@ -271,8 +281,17 @@ jobs:
           [ -n "${ACR_USERNAME:-}" ]           || missing+=("acr-username (secret) — registry user able to pull the test image")
           [ -n "${ACR_PASSWORD:-}" ]           || missing+=("acr-password (secret) — registry password for that user")
           [ -n "${BAKE_PUBLISH_TARGETS:-}" ]   || missing+=("bake-publish-targets (input, from the caller's repo VARIABLE) — the portals' Azure Files targets, whitespace-separated <account>/<share>[/<base-path>]")
-          if [ -n "${STAGE_MODULES:-}" ] && [ -z "${STAGE_TOKEN:-}" ]; then
-            missing+=("stage-repo-token (secret) — token able to read the stage repo (stage-modules is set)")
+          if [ -n "${STAGE_MODULES:-}" ]; then
+            [ -n "${STAGE_APP_ID:-}" ]  || missing+=("stage-repo-app-id (secret) — app id of a GitHub App that can read the stage repo (stage-modules is set)")
+            [ -n "${STAGE_APP_KEY:-}" ] || missing+=("stage-repo-app-private-key (secret) — that App's private key, PEM (stage-modules is set)")
+            # 🚨 If this fires on a dependabot PR, the secrets exist but in the WRONG STORE.
+            # GitHub hands a dependabot-triggered run the Dependabot secret store, never the
+            # Actions one, so a value provisioned only for normal runs is simply absent here and
+            # every dependabot PR stays red forever (#2249). Provision the same pair under
+            # Settings -> Secrets and variables -> Dependabot in the CALLING repo.
+            if [ "${GITHUB_ACTOR:-}" = "dependabot[bot]" ] && [ ${#missing[@]} -gt 0 ]; then
+              echo "::warning::Secret source for this run is the DEPENDABOT store, not Actions."
+            fi
           fi
           # 🚨 Declaring dependents is declaring an OBLIGATION: those repos exit on their own
           # upstream gate and are woken only by the event this job fires. A missing token would
@@ -468,12 +487,36 @@ jobs:
         run: mw-platform-gate/.github/scripts/bake-scope.sh
       # Same staging the caller's gate does, for the same reason: cross-repo `requires` must
       # resolve for the package roots to bind.
+      # 🚨 A PAT here was a permanent two-way failure. It rots — the platform's own copy went
+      # HTTP 401 and a daily check never ran once (#1709) — and, because GitHub hands a
+      # dependabot-triggered run the DEPENDABOT secret store rather than the Actions one, a PAT
+      # provisioned for normal runs left every dependabot PR in every satellite permanently RED
+      # (#2249). An installation token is minted here, per run, scoped to stage-repo alone.
+      - name: Resolve the stage repo's owner and name
+        id: stage-repo-parts
+        if: inputs.stage-modules != ''
+        env:
+          STAGE_REPO: ${{ inputs.stage-repo }}
+        run: |
+          set -euo pipefail
+          echo "owner=${STAGE_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${STAGE_REPO##*/}"  >> "$GITHUB_OUTPUT"
+      - name: Mint an installation token for the stage repo
+        id: stage-token
+        if: inputs.stage-modules != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.stage-repo-app-id }}
+          private-key: ${{ secrets.stage-repo-app-private-key }}
+          owner: ${{ steps.stage-repo-parts.outputs.owner }}
+          repositories: ${{ steps.stage-repo-parts.outputs.name }}
+          permission-contents: read
       - name: Stage cross-repo modules
         if: inputs.stage-modules != ''
         uses: actions/checkout@v7
         with:
           repository: ${{ inputs.stage-repo }}
-          token: ${{ secrets.stage-repo-token }}
+          token: ${{ steps.stage-token.outputs.token }}
           path: cross-repo-stage
           sparse-checkout: ${{ inputs.stage-modules }}
       - name: Set up Node for the pre-bake hook
