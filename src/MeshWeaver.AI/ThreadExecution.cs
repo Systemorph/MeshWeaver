@@ -3728,26 +3728,38 @@ internal static class ThreadExecution
                 var cellLookups = cellIds
                     .Select(id =>
                         hub.GetMeshNodeStream($"{threadPath}/{id}")
-                            .Where(n => n.Content is ThreadMessage m && !string.IsNullOrEmpty(m.Text))
+                            // 🚨 #2290 — ContentAs, NOT `n.Content is ThreadMessage`. The cast is the
+                            // trap-door: it matches only when the value ALREADY is that CLR type, and
+                            // misses silently for a degraded JsonElement (an unresolvable `$type` is
+                            // DEGRADED, not thrown), for the as-written JsonObject DOM, and for a
+                            // same-short-named record from another collectible build. A miss here is
+                            // not "one lost message": the predicate never matches → Take(1) never
+                            // fires → the per-cell Timeout trips → the cell is dropped as
+                            // HISTORY_CELL_DROP → and once EVERY cell degrades (a cold start: pod
+                            // restart, grains not activated, cells not yet re-typed) the zero-loaded
+                            // guard below throws and HARD-ERRORS the user's round. ContentAs
+                            // deserializes the degraded forms and LOGS when it genuinely cannot —
+                            // exactly what the thread node two reads above already does.
+                            .Select(n => n.ContentAs<ThreadMessage>(hub.JsonSerializerOptions, logger))
+                            .Where(m => m is not null && !string.IsNullOrEmpty(m.Text))
                             .Take(1)
                             .Timeout(perCellTimeout)
-                            .Select(n => (MeshNode?)n)
-                            .Catch<MeshNode?, Exception>(ex =>
+                            .Catch<ThreadMessage?, Exception>(ex =>
                             {
                                 logger.LogWarning(ex,
                                     "[ThreadExec] HISTORY_CELL_DROP threadPath={ThreadPath} cellId={CellId} — cell unreadable within budget; will be omitted",
                                     threadPath, id);
-                                return Observable.Return<MeshNode?>(null);
+                                return Observable.Return<ThreadMessage?>(null);
                             }))
                     .ToList();
 
                 return Observable.CombineLatest(cellLookups)
                     .Take(1)
-                    .Select(nodes =>
+                    .Select(cells =>
                     {
-                        var messages = nodes
-                            .Where(n => n is not null)
-                            .Select(n => (ThreadMessage)n!.Content!)
+                        var messages = cells
+                            // OfType drops the per-cell null sentinels AND re-types in one step.
+                            .OfType<ThreadMessage>()
                             .OrderBy(m => m.Timestamp)
                             .Select(m =>
                             {

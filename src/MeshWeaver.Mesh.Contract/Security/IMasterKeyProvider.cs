@@ -1,4 +1,4 @@
-namespace MeshWeaver.AI;
+namespace MeshWeaver.Mesh.Security;
 
 /// <summary>
 /// Supplies the symmetric master key used by <see cref="IProviderKeyProtector"/>

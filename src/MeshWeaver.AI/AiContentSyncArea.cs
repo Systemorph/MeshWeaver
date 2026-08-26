@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Text;
-using MeshWeaver.AI;
+using MeshWeaver.GitSync;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -11,7 +11,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.GitSync;
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// The action layout area the "Sync to repo" AI-content menu item navigates to — writes the live

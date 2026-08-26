@@ -10,13 +10,22 @@ namespace MeshWeaver.Mesh.Security;
 /// <para>🚨 <b>In the security fold, "no result" and "not allowed" must never be the same value.</b>
 /// Several of these reads are GLOBAL by necessity — a <c>GroupMembership</c> lives under the group
 /// node, which may sit in a different partition than the grant that names the group, so the query
-/// carries no <c>path:</c> and no <c>namespace:</c>. On Postgres that is exactly the shape
-/// <c>PostgreSqlCrossSchemaQueryProvider</c> serves by UNION-ing every partition schema, ordering by
-/// <c>last_modified DESC</c> and clipping at a 50-row default page. A caller cannot tell a page from
-/// the whole set (<see cref="MeshQueryRequest.Complete"/>), and here the difference is a
+/// carries no <c>path:</c> and no <c>namespace:</c>. On Postgres that is the shape
+/// <c>PostgreSqlCrossSchemaQueryProvider</c> serves by UNION-ing every partition schema, ordering
+/// by <c>last_modified DESC</c>. If such a read comes back CLIPPED, a caller cannot tell a page
+/// from the whole set (<see cref="MeshQueryRequest.Complete"/>) — and here the difference is a
 /// PERMISSION: a truncated membership list is indistinguishable from "this viewer is in no groups",
 /// so a group-derived permission simply vanishes and every surface gated on it disappears at once —
 /// with nothing logged and nothing failing (issue #2011).</para>
+///
+/// <para>🚨 The clip this guards against is no longer a DEFAULT the fan-out applies. A second,
+/// paging fan-out shape did substitute 50 rows for an unlimited query, and it is deleted (#2048)
+/// because no runtime caller ever reached it; the one shape the runtime executes states no limit
+/// unless the caller does. What survives — and is why this class is not ceremony — is that a
+/// <c>limit:N</c> arriving IN THE QUERY STRING is honoured, and any future bound would be applied
+/// here. <see cref="Enumeration"/> overwrites such a limit rather than honouring it, so a fold read
+/// cannot be truncated by the string it was written with, whatever the storage layer later
+/// decides.</para>
 ///
 /// <para>It is worse than a lost grant in one direction that matters. A group-scoped <b>deny</b>
 /// (<c>AccessAssignment</c> with <c>Denied = true</c> whose subject is a group) is applied only to

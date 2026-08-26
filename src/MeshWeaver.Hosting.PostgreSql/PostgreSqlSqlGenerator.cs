@@ -607,10 +607,19 @@ public class PostgreSqlSqlGenerator
             // For plain queries, n.last_modified is fine.
             var lastModifiedExpr = isActivity ? "act.last_modified" : (isAccessed ? "ua.last_modified" : "n.last_modified");
 
+            // 🚨 `n.path` is projected because the ORDER BY is applied to the OUTER select over the
+            // union, where only the union's OWN columns are in scope: without it `sort:path` fails
+            // with `42703 column "path" does not exist`, whatever the branch tables carry. That is
+            // issue #2186 — whose fix landed on `public.search_across_schemas`, i.e. on the paging
+            // fan-out shape no runtime caller could reach, so mesh-wide keyset paging stayed broken
+            // on the shape every unpinned query actually takes. (Deleting that shape, #2048, is what
+            // surfaced it.) Every branch below must project the same columns in the same positions —
+            // UNION ALL is positional — so the content branch carries a `path` expression too.
             var selectSql = "SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
                 $"n.category, n.icon, n.display_order, {lastModifiedExpr} AS last_modified, " +
                 "n.version, n.state, n.content, " +
-                $"n.desired_id, n.main_node, {SyncBehaviorColumn(tableName)} FROM {qualifiedTable} n";
+                $"n.desired_id, n.main_node, {SyncBehaviorColumn(tableName)}, n.path " +
+                $"FROM {qualifiedTable} n";
 
             if (isAccessed)
                 selectSql += $" INNER JOIN {userActivityTable} ua ON ua.namespace = @actUserNs" +
@@ -653,7 +662,7 @@ public class PostgreSqlSqlGenerator
         // Content branches — only for a FREE-TEXT omnibox query, and only over schemas that hold a
         // content_chunks table. Each branch lexically matches the chunk text and projects each file's
         // best chunk to its synthetic Document row (slug + _Documents namespace — replicates
-        // DocumentPaths.For/Slug; see SlugSql). The 15 projected columns align positionally with the
+        // DocumentPaths.For/Slug; see SlugSql). The 16 projected columns align positionally with the
         // mesh_nodes branches above so the outer SELECT * / ReadMeshNode shape is uniform; the term is
         // inlined (this generator inlines all params) and single-quotes doubled, mirroring the
         // mesh_nodes text-rank term handling below.
@@ -677,7 +686,10 @@ public class PostgreSqlSqlGenerator
                     "cc.last_modified AS last_modified, 0::bigint AS version, 2::smallint AS state, " +
                     "NULL::jsonb AS content, NULL::text AS desired_id, " +
                     $"cc.collection_path || '/_Documents/' || {SlugSql} AS main_node, " +
-                    "0::smallint AS sync_behavior " +
+                    "0::smallint AS sync_behavior, " +
+                    // Positionally aligned with `n.path` above — a synthetic Document row's path IS
+                    // its main_node, so the same expression answers both.
+                    $"cc.collection_path || '/_Documents/' || {SlugSql} AS path " +
                     $"FROM {contentTable} cc WHERE cc.chunk_text ILIKE '%{term}%' " +
                     // DISTINCT ON requires its keys lead the ORDER BY; keep one (best) row per file.
                     "ORDER BY cc.collection_path, cc.file_path)");

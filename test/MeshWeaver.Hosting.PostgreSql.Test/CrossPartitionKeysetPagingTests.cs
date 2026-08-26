@@ -115,8 +115,12 @@ public class CrossPartitionKeysetPagingTests(PostgreSqlFixture fixture, ITestOut
         PostgreSqlCrossSchemaQueryProvider cross, QueryParser parser, string query, CancellationToken ct)
     {
         var rows = new List<string>();
+        // The table-name overload — the one PostgreSqlPartitionedMeshQuery.EnumerateFanOutAsync
+        // takes for every unpinned query, and since #2048 the only cross-schema shape there is.
         await foreach (var node in cross
-                           .QueryAcrossSchemasAsync(parser.Parse(query), _options, Schemas, ct: ct)
+                           .QueryAcrossSchemasAsync(
+                               parser.Parse(query), _options, Schemas, "mesh_nodes",
+                               userId: null, activityUserId: null, ct)
                            .WithCancellation(ct))
             rows.Add(node.Path);
         return rows;

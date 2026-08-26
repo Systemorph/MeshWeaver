@@ -1,5 +1,6 @@
 #pragma warning disable CS1591
 
+using MeshWeaver.Mesh.Security;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;

@@ -7,12 +7,19 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// <summary>
 /// Pins the cross-schema fan-out's TIMING instrumentation.
 ///
-/// <para>Why this exists: <c>search_across_schemas</c> builds a <c>UNION ALL</c> over every row of
+/// <para>Why this exists: the fan-out builds a <c>UNION ALL</c> over every row of
 /// <c>public.searchable_schemas</c>, so a query with no <c>path:</c>/<c>namespace:</c> anchor scans
 /// EVERY partition — every plugin and every user partition. Its cost therefore grows with the number
 /// of users, and it degrades over months with no code change. Before this, the provider logged the
 /// WHERE clause but never a duration, so a slow query was indistinguishable from a bad filter and
 /// the fan-out width was invisible.</para>
+///
+/// <para>🚨 The instrumentation was CALLED from the paging overload, which no runtime caller could
+/// reach — so for its whole life it produced not one line in production. #2048 deleted that
+/// overload and moved the call onto the table-name form every unpinned query takes. These
+/// assertions are about the log DECISION and are deliberately callable without Postgres; what they
+/// cannot check is which caller invokes it, so if you move this helper again, move it to a live
+/// path and say which one.</para>
 ///
 /// <para>The assertions are about what an operator can ACT on: a slow fan-out must be visible at
 /// default log level (Warning, not Debug), must state how many schemas it spanned, and must name the
@@ -56,7 +63,7 @@ public class CrossSchemaFanOutTimingTests
     {
         var (provider, log) = Subject(schemas: 312);
 
-        provider.LogFanOutTiming("search_across_schemas",
+        provider.LogFanOutTiming("mesh_nodes",
             totalMs: PostgreSqlCrossSchemaQueryProvider.SlowFanOutMs, firstRowMs: 900, rows: 15, limit: 15);
 
         var entry = Assert.Single(log.Entries);
@@ -71,7 +78,7 @@ public class CrossSchemaFanOutTimingTests
         // across 312 schemas" tells the operator it is an unanchored query.
         var (provider, log) = Subject(schemas: 312);
 
-        provider.LogFanOutTiming("search_across_schemas", totalMs: 4200, firstRowMs: 4100, rows: 3, limit: 50);
+        provider.LogFanOutTiming("mesh_nodes", totalMs: 4200, firstRowMs: 4100, rows: 3, limit: 50);
 
         var message = Assert.Single(log.Entries).Message;
         Assert.Contains("312", message);
@@ -85,7 +92,7 @@ public class CrossSchemaFanOutTimingTests
         // A warning that does not say what to do gets muted rather than fixed.
         var (provider, log) = Subject(schemas: 200);
 
-        provider.LogFanOutTiming("search_across_schemas", totalMs: 9000, firstRowMs: 8000, rows: 1, limit: 10);
+        provider.LogFanOutTiming("mesh_nodes", totalMs: 9000, firstRowMs: 8000, rows: 1, limit: 10);
 
         var message = Assert.Single(log.Entries).Message;
         Assert.Contains("path:", message);
@@ -98,7 +105,7 @@ public class CrossSchemaFanOutTimingTests
         // Every page render fans out; warning on the normal case would drown the slow one.
         var (provider, log) = Subject(schemas: 12);
 
-        provider.LogFanOutTiming("search_across_schemas", totalMs: 40, firstRowMs: 30, rows: 8, limit: 50);
+        provider.LogFanOutTiming("mesh_nodes", totalMs: 40, firstRowMs: 30, rows: 8, limit: 50);
 
         var entry = Assert.Single(log.Entries);
         Assert.Equal(LogLevel.Debug, entry.Level);
@@ -123,7 +130,7 @@ public class CrossSchemaFanOutTimingTests
         // Total alone cannot distinguish "the scan was slow" from "the caller consumed slowly".
         var (provider, log) = Subject(schemas: 40);
 
-        provider.LogFanOutTiming("search_across_schemas", totalMs: 5000, firstRowMs: 120, rows: 200, limit: 200);
+        provider.LogFanOutTiming("mesh_nodes", totalMs: 5000, firstRowMs: 120, rows: 200, limit: 200);
 
         var message = Assert.Single(log.Entries).Message;
         Assert.Contains("120", message);
