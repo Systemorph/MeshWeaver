@@ -210,7 +210,7 @@ jobs:
   # Cost when it misses: one ~15 s job (checkout + one ls-remote) in front of a
   # ~22 min suite. Cost when it hits: the whole suite, skipped.
   record-signatures:
-    name: "Public record signatures (binary compatibility)"
+    name: "Public surface (binary compatibility)"
     timeout-minutes: 8
     runs-on: ubuntu-latest
     # 🚨 Runs on PRs only, and deliberately does NOT depend on precheck: this is a DIFF gate, so
@@ -222,7 +222,7 @@ jobs:
       with:
         # The gate compares HEAD against the merge base, so the base commit must be present.
         fetch-depth: 0
-    - name: "Prove the gate is not vacuous"
+    - name: "Prove the record gate is not vacuous"
       run: python3 scripts/check-record-signatures.py --self-test
     - name: "Refuse a binary-breaking primary-constructor change"
       run: |
@@ -230,6 +230,19 @@ jobs:
         base="origin/${{ github.base_ref }}"
         git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
         python3 scripts/check-record-signatures.py --base "$base"
+    # The OTHER half of the same class (#2370): a public TYPE moving assemblies, which no repo-local
+    # build can see. `landed-modules-gate` compiles the plugins repo's module SOURCE against this PR
+    # and therefore goes GREEN on exactly this break — the module that is already published binds a
+    # TypeRef, not a `using`.
+    - name: "Prove the type-move gate is not vacuous"
+      run: python3 scripts/check-type-forwards.py --self-test
+    - name: "Refuse a public type moving assemblies without a forwarder"
+      run: |
+        set -euo pipefail
+        base="origin/${{ github.base_ref }}"
+        # Already fetched above for the record gate; harmless and explicit if the steps are reordered.
+        git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        python3 scripts/check-type-forwards.py --base "$base"
 
   precheck:
     name: "Check for an already-green tree"
