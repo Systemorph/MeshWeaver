@@ -5,6 +5,9 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Hosting;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
+// So the routed-failure classification can be pinned without standing up a silo — the decision is
+// pure, and the flake it fixes was never reproducible through a cluster.
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans.Test")]
 namespace MeshWeaver.Connection.Orleans;
 
 
