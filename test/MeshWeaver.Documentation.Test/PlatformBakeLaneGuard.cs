@@ -146,11 +146,17 @@ public class PlatformBakeLaneGuard
     }
 
     /// <summary>
-    /// 🚨 CD bakes ONLY the content the image itself embeds. Everything a deployment receives
-    /// already built — node-repo content (Plugins, Education, Reinsurance, SocialMedia), Store
-    /// packages, and the samples trees — is ADOPTED from a bundle its own lane published under the
-    /// same framework identity. Re-compiling it here would redo that work, burn CD wall-clock, and
-    /// re-derive assemblies that were meant to be authoritative.
+    /// 🚨 The platform's main build BUILDS EVERYTHING and publishes it atomically: core, every
+    /// plugin, the portal host, and the bake — one run, one framework identity. Maintainer decision
+    /// 2026-08-26 ("we want to run full plugin build in main memex build"; "plugins should not have
+    /// a lane in this sense"). That supersedes the earlier model in which plugins were ADOPTED from
+    /// a bundle their own lane published, and it removes the #1814 bake-identity class by
+    /// construction: nothing can be built against a framework other than the one shipping.
+    ///
+    /// <para>What this guard still refuses: the samples trees (no deployment embeds them), and any
+    /// checkout that is not <c>Systemorph/MeshWeaver.Plugins</c>. The plugins checkout is the ONE
+    /// deliberate cross-repo input — a second one would be a new decision, not an extension of
+    /// this one.</para>
     /// </summary>
     [Fact]
     public void PlatformBake_CompilesOnlyWhatTheImageEmbeds()
@@ -171,14 +177,17 @@ public class PlatformBakeLaneGuard
             + "still compile-GATE on every PR in dotnet-test.yml's doc-gate — that proves the "
             + "content, which is the part worth paying for.");
 
-        // The strongest form of "CD cannot compile someone else's module": it never checks out
-        // someone else's repository. One `repository:` input would make it possible.
+        // The main build checks out exactly ONE other repository — the plugins it builds and ships.
+        // Asserted POSITIVELY (present, and the only one) rather than as an absence: the portal
+        // host lives there now, so a main-cd without this checkout cannot build the deployment
+        // image at all (measured 2026-08-26: every push run failed at the version step and nothing
+        // published until this was restored). And a third `repository:` would be a new decision.
         var text = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow)));
-        Assert.False(text.Contains("repository:", StringComparison.Ordinal),
-            $"{Workflow} must check out no repository but this one. Node-repo and Store content "
-            + "arrives already compiled and is adopted; a checkout of another repo here would let "
-            + "CD re-derive assemblies whose authoritative build belongs to that repo's own "
-            + "publish-bake lane.");
+        var repos = Regex.Matches(text, @"repository:\s*(\S+)")
+            .Select(m => m.Groups[1].Value.Trim())
+            .Distinct()
+            .ToList();
+        Assert.Equal(new[] { "Systemorph/MeshWeaver.Plugins" }, repos);
     }
 
     /// <summary>The block's lines that can actually DO something: YAML and shell comment lines

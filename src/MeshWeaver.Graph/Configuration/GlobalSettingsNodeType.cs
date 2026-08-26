@@ -94,8 +94,9 @@ public static class GlobalSettingsNodeType
     /// the admin tabs contain. Modelled on <c>LicenseNodeType</c>'s policy, which is world-readable
     /// for the same reason — you must be able to read the page before you can act on it.</para>
     /// </summary>
+    // Satellite(): MainNode = the partition root, not the node's own path — see #2383.
     private static MeshNode CreatePolicy() =>
-        new("_Policy", SettingsPath)
+        MeshNode.Satellite("_Policy", SettingsPath) with
         {
             NodeType = PartitionAccessPolicyNodeType.NodeType,
             Name = "Access Policy",

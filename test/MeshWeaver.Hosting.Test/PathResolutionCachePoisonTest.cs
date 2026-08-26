@@ -6,10 +6,11 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using NSubstitute;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -29,8 +30,17 @@ namespace MeshWeaver.Hosting.Test;
 /// that has no timeout (e.g. AI Export's subtree snapshot), timing out the whole
 /// operation. This pins the fix deterministically: a hung first query must NOT
 /// poison the path.</para>
+///
+/// <para>🚨 Drives <see cref="PathResolutionService"/> against a REAL, hosted
+/// <see cref="IMessageHub"/> (<see cref="HubTestBase"/>) — never a mocked one
+/// (Systemorph/MeshWeaver#1810: AGENTS.md forbids mocking <c>IMessageHub</c>).
+/// <see cref="SequencedQueryCore"/> and <see cref="ExistingWritablePartitionProvider"/> stay
+/// hand-rolled: <see cref="PathResolutionService"/>'s constructor takes both as narrow,
+/// already-testable seams (<c>IMeshQueryCore</c>, <c>IEnumerable&lt;IPartitionStorageProvider&gt;</c>)
+/// deliberately decoupled from the hub, and NSubstitute cannot proxy the internal
+/// <c>IMeshQueryCore</c> interface anyway.</para>
 /// </summary>
-public class PathResolutionCachePoisonTest
+public class PathResolutionCachePoisonTest(ITestOutputHelper output) : HubTestBase(output)
 {
     /// <summary>
     /// Minimal <see cref="IMeshQueryCore"/> whose Nth <c>Query</c> subscription is
@@ -64,20 +74,18 @@ public class PathResolutionCachePoisonTest
         public IObservable<bool?> PartitionExists(string @namespace) => Observable.Return<bool?>(true);
     }
 
-    private static (PathResolutionService Svc, SequencedQueryCore Query) BuildService(
+    private (PathResolutionService Svc, SequencedQueryCore Query) BuildService(
         Func<int, IObservable<QueryResultChange<MeshNode>>> behaviour,
         IMeshChangeFeed? changeFeed = null,
         IEnumerable<IPartitionStorageProvider>? partitionProviders = null)
     {
-        var hub = Substitute.For<IMessageHub>();
-        var sp = Substitute.For<IServiceProvider>();
-        hub.ServiceProvider.Returns(sp);
-        hub.JsonSerializerOptions.Returns(new JsonSerializerOptions());
         // A registered change feed is what ENABLES caching (without it the service
-        // resolves uncached). Real InProcessMeshChangeFeed — pass one in to drive
-        // invalidation from the test; the default is never published to.
-        sp.GetService(typeof(IMeshChangeFeed)).Returns(changeFeed ?? new InProcessMeshChangeFeed());
-        // No AccessService → ImpersonateAsSystem() is a no-op (Disposable.Empty).
+        // resolves uncached). Real InProcessMeshChangeFeed by default — pass one in to
+        // drive invalidation from the test.
+        var feed = changeFeed ?? new InProcessMeshChangeFeed();
+        var hub = Mesh.GetHostedHub(
+            new Address($"pathres-{Guid.NewGuid():N}"),
+            c => c.WithServices(s => s.AddSingleton(feed)));
 
         var query = new SequencedQueryCore(behaviour);
         var svc = new PathResolutionService(hub, query,

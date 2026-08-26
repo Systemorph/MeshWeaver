@@ -405,7 +405,7 @@ az acr build --registry <acrName> --image memex-portal-ai-base:latest \
 # them into an OCI Image Index (manifest list). ContainerRuntimeIdentifiers MUST be a subset of
 # RuntimeIdentifiers (set them equal). The arm64 leg layers on the multi-arch base above.
 az acr login --name <acrName>
-dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
+dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
   -c Release --no-self-contained -t:PublishContainer -p:PublishProfile= \
   -p:RuntimeIdentifiers="linux-x64;linux-arm64" -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64" \
   -p:ContainerRegistry=<acrName>.azurecr.io -p:ContainerRepository=memex-portal-ai \

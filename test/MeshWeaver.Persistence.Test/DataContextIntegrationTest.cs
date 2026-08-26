@@ -67,8 +67,10 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
 
     private static readonly JsonSerializerOptions SetupJsonOptions = new();
 
+    // 🚨 Not a `.FirstAsync().ToTask().GetAwaiter().GetResult()` bridge (#2013) — see
+    // SaveNodeSynchronously's doc for why that shape is a latent wedge risk and this isn't.
     private static void SaveNode(InMemoryStorageAdapter persistence, MeshNode node)
-        => persistence.SaveNode(node, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        => persistence.SaveNodeSynchronously(node, SetupJsonOptions);
 
     /// <summary>
     /// Seeds two compilable NodeTypes the legal way (see
@@ -148,14 +150,14 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         SetupTestConfiguration(persistence);
 
         // Pre-seed the hierarchy with Content
-        persistence.SaveNode(MeshNode.FromPath("graph") with
+        persistence.SaveNodeSynchronously(MeshNode.FromPath("graph") with
         {
             Name = "Graph",
             NodeType = "type/graph"
-        }, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        }, SetupJsonOptions);
 
         // Pre-seed story nodes WITH Content containing TestStory data
-        persistence.SaveNode(MeshNode.FromPath("graph/story1") with
+        persistence.SaveNodeSynchronously(MeshNode.FromPath("graph/story1") with
         {
             Name = "Story 1",
             NodeType = "type/story",
@@ -166,9 +168,9 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Description = "This is the first story",
                 Points = 5
             }
-        }, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        }, SetupJsonOptions);
 
-        persistence.SaveNode(MeshNode.FromPath("graph/story2") with
+        persistence.SaveNodeSynchronously(MeshNode.FromPath("graph/story2") with
         {
             Name = "Story 2",
             NodeType = "type/story",
@@ -179,7 +181,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Description = "This is the second story",
                 Points = 8
             }
-        }, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        }, SetupJsonOptions);
 
         // Stable cache directory (separate from the per-class testDataDirectory)
         // so the compiled type/graph DLL survives across test runs. The source
