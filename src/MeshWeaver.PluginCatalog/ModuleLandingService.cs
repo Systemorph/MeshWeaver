@@ -559,19 +559,21 @@ public sealed class ModuleLandingService : IDisposable
             throw new ArgumentException($"Invalid {what}: '{value}'.");
     }
 
-    /// <inheritdoc />
     /// <summary>
-    /// Announces that the persisted activation record changed. A subscriber's fault is logged and
-    /// contained rather than propagated: a surface that failed to re-render must never turn a
-    /// landing that genuinely succeeded into a reported failure, and the write it is announcing has
-    /// already happened by the time this runs. The fault is NOT swallowed silently — it is the only
-    /// evidence a surface stopped following the signal.
+    /// Announces that the persisted activation record changed, containing a subscriber's fault
+    /// rather than propagating it: a surface that failed to re-render must never turn a landing that
+    /// genuinely succeeded into a reported failure — the write being announced has already happened
+    /// by the time this runs — and on the teardown path it must never turn a clean dispose into a
+    /// throwing one. The fault is NOT swallowed silently: this line is the only evidence a surface
+    /// stopped following the signal.
     /// </summary>
-    private void AnnounceActivationChanged()
+    /// <param name="notify">The emission to make — <c>OnNext</c> after a write, <c>OnCompleted</c>
+    /// at dispose.</param>
+    private void Announce(Action<Subject<Unit>> notify)
     {
         try
         {
-            activationChanged.OnNext(Unit.Default);
+            notify(activationChanged);
         }
         catch (Exception exception)
         {
@@ -580,10 +582,12 @@ public sealed class ModuleLandingService : IDisposable
         }
     }
 
-    /// <summary>Disposes the IO pool and completes the activation-change signal.</summary>
+    private void AnnounceActivationChanged() => Announce(subject => subject.OnNext(Unit.Default));
+
+    /// <inheritdoc />
     public void Dispose()
     {
-        activationChanged.OnCompleted();
+        Announce(subject => subject.OnCompleted());
         activationChanged.Dispose();
         pool.Dispose();
     }
