@@ -222,6 +222,7 @@ public static class DataExtensions
                 typeof(SubscribeAck),
                 typeof(UnsubscribeRequest),
                 typeof(StreamErrorEvent),
+                typeof(StreamEndedEvent),
                 typeof(GetDomainTypesRequest),
                 typeof(DomainTypesResponse),
                 typeof(TypeDescription),
@@ -1491,14 +1492,26 @@ public static class DataExtensions
 
         // Resolve the target id SYNCHRONOUSLY from the reduced stream's Current (Id is immutable)
         // — never a nested Take(1).Subscribe that re-enters the owner.
+        // 🚨 Off the CONTRACT, not off a rebuilt document — the same O(1) rule as the ack gate
+        // (#2339), and this one runs on the handler's TURN: every patch in a burst paid a full
+        // node serialisation here before the merge could even be queued, so the waste was
+        // charged straight to the action block that the whole burst is serialised on.
         string? preReadId = null;
         var currentSnapshot = stream.Current is { } cur ? cur.Value : default;
         if (currentSnapshot is not null)
         {
-            var snapObj = System.Text.Json.JsonSerializer
-                .SerializeToNode(currentSnapshot, currentSnapshot.GetType(), jsonOpts)
-                as System.Text.Json.Nodes.JsonObject;
-            preReadId = (snapObj?[idKey] ?? snapObj?["Id"] ?? snapObj?["id"])?.GetValue<string>();
+            if (TryReadIdentityFromContract(
+                    currentSnapshot, idKey, versionKey, jsonOpts, out var snapshotId, out _))
+            {
+                preReadId = snapshotId;
+            }
+            else
+            {
+                var snapObj = System.Text.Json.JsonSerializer
+                    .SerializeToNode(currentSnapshot, currentSnapshot.GetType(), jsonOpts)
+                    as System.Text.Json.Nodes.JsonObject;
+                preReadId = (snapObj?[idKey] ?? snapObj?["Id"] ?? snapObj?["id"])?.GetValue<string>();
+            }
         }
 
         // ATOMIC read-merge-write on the primary action-block turn — a PURE, bounded transform.
@@ -1666,6 +1679,22 @@ public static class DataExtensions
     /// churn — acking on either flushed stale state and reported success for a write that
     /// never landed (TwoSiloRecycleConvergenceTest, runs 30068597014 / 30079395006).
     /// Internal for the deterministic pin in <c>MeshWeaver.Data.Test</c>.
+    ///
+    /// <para>🚨 O(1) IN THE NODE, and that is load-bearing — issue #2339. This predicate is
+    /// evaluated once per STILL-PENDING patch on EVERY emission of the owner's reduced stream,
+    /// so a burst of K concurrent cross-hub writes to one node evaluates it K(K+1)/2 times
+    /// (41 616 at K=288). Materialising the whole node just to read two scalars made each of
+    /// those a full document serialisation — measured on a thread node at 0.9 ms per call at
+    /// 144 entries and 1.9 ms at 288 — and the cost is SELF-AMPLIFYING: the longer emissions
+    /// lag the merges, the more patches are still pending, and the more full serialisations
+    /// every subsequent emission has to pay before it can be delivered. That feedback loop is
+    /// why the owner applied all 288 writes of <c>CrossHubPatchAtomicityTest</c>'s burst in
+    /// 1.5 s while every subscriber sat through a ~2.7 s wall with no frames at all — the lag
+    /// that put the test past its settle bound on a loaded runner. Read the two values straight
+    /// off the serialization CONTRACT (<see cref="System.Text.Json.Serialization.Metadata.JsonTypeInfo"/>
+    /// — the same names and getters the serializer itself would use) and never build the
+    /// document. The full-serialisation path below survives only for a value whose contract
+    /// cannot be resolved from these options.</para>
     /// </summary>
     internal static bool ChangeContainsStampedWrite(
         object? value,
@@ -1677,6 +1706,12 @@ public static class DataExtensions
     {
         if (stampedVersion < 0 || string.IsNullOrEmpty(stampedId) || value is null)
             return false;
+
+        // Contract-driven read: no document, no allocation proportional to the node.
+        if (TryReadIdentityFromContract(value, idKey, versionKey, jsonOpts, out var fastId, out var fastVersion))
+            return string.Equals(fastId, stampedId, StringComparison.Ordinal)
+                && fastVersion >= stampedVersion;
+
         var obj = System.Text.Json.JsonSerializer
             .SerializeToNode(value, value.GetType(), jsonOpts) as System.Text.Json.Nodes.JsonObject;
         if (obj is null)
@@ -1691,6 +1726,75 @@ public static class DataExtensions
             && verValue.TryGetValue<long>(out var parsed))
             ver = parsed;
         return ver >= stampedVersion;
+    }
+
+    /// <summary>
+    /// Reads the write-identity pair (entity id, Version) off <paramref name="value"/>'s
+    /// serialization contract instead of off a materialised document — see the O(1) note on
+    /// <see cref="ChangeContainsStampedWrite"/>. Property lookup goes through
+    /// <see cref="System.Text.Json.Serialization.Metadata.JsonPropertyInfo.Name"/>, which is the
+    /// EFFECTIVE JSON name (naming policy and <c>[JsonPropertyName]</c> already applied), so the
+    /// keys matched here are exactly the keys the serializer would have written — the same
+    /// ranked <c>idKey ?? "Id" ?? "id"</c> ladder the document path uses, and
+    /// <paramref name="versionKey"/> alone for the version, defaulting to 0 when absent (a
+    /// Version of 0 is omitted from the document by <c>WhenWritingDefault</c>, which is exactly
+    /// why the document path defaults the same way).
+    /// <para>Returns <c>false</c> — deferring to the document path — only when the contract is
+    /// genuinely unavailable: options with no <c>TypeInfoResolver</c> (a bare
+    /// <c>JsonSerializerOptions</c> that has not serialized anything yet), a resolver that does
+    /// not describe this type, or a type that is not serialized as a JSON object (a custom
+    /// converter). Those cannot be answered from properties at all, so they must fall through
+    /// rather than be guessed at.</para>
+    /// </summary>
+    private static bool TryReadIdentityFromContract(
+        object value,
+        string idKey,
+        string versionKey,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        out string? id,
+        out long version)
+    {
+        id = null;
+        version = 0;
+        if (jsonOpts.TypeInfoResolver is null
+            || !jsonOpts.TryGetTypeInfo(value.GetType(), out var typeInfo)
+            || typeInfo is null
+            || typeInfo.Kind != System.Text.Json.Serialization.Metadata.JsonTypeInfoKind.Object)
+            return false;
+
+        // The document path resolves the id as `obj[idKey] ?? obj["Id"] ?? obj["id"]`, so the
+        // three spellings are RANKED, not interchangeable — collect them separately and apply
+        // the same precedence rather than taking whichever the contract happens to list first.
+        System.Text.Json.Serialization.Metadata.JsonPropertyInfo? idExact = null;
+        System.Text.Json.Serialization.Metadata.JsonPropertyInfo? idPascal = null;
+        System.Text.Json.Serialization.Metadata.JsonPropertyInfo? idCamel = null;
+        System.Text.Json.Serialization.Metadata.JsonPropertyInfo? versionProperty = null;
+        foreach (var property in typeInfo.Properties)
+        {
+            if (property.Get is null)
+                continue;
+            if (string.Equals(property.Name, idKey, StringComparison.Ordinal))
+                idExact ??= property;
+            else if (string.Equals(property.Name, "Id", StringComparison.Ordinal))
+                idPascal ??= property;
+            else if (string.Equals(property.Name, "id", StringComparison.Ordinal))
+                idCamel ??= property;
+            if (string.Equals(property.Name, versionKey, StringComparison.Ordinal))
+                versionProperty ??= property;
+        }
+
+        if ((idExact ?? idPascal ?? idCamel) is { Get: { } getId })
+            id = getId(value) as string;
+        if (versionProperty is { Get: { } getVersion })
+            version = getVersion(value) switch
+            {
+                long l => l,
+                int i => i,
+                short s => s,
+                byte b => b,
+                _ => 0L
+            };
+        return true;
     }
 
     private static Type? WalkBaseForGeneric(Type type, Type genericDef)
@@ -3043,12 +3147,49 @@ public static class DataExtensions
     private const int AutocompleteAggregateTopN = 200;
 
     /// <summary>
+    /// How long the merged snapshot must stay unchanged before it counts as settled. Short enough
+    /// to feel instant in a composer, long enough for a second provider's first real snapshot to
+    /// land after the seeded empty one.
+    /// </summary>
+    private static readonly TimeSpan AutocompleteSettleWindow = TimeSpan.FromMilliseconds(150);
+
+    /// <summary>
+    /// The answer deadline. A provider that keeps emitting (a live catalog under load) never goes
+    /// quiet, so at this point the best snapshot so far is the answer.
+    /// </summary>
+    private static readonly TimeSpan AutocompleteAnswerDeadline = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// The floor: if the combined stream never produced ANYTHING — a provider that emits neither a
+    /// snapshot nor an error, against the contract in <see cref="AutocompleteSnapshots.Empty"/> —
+    /// an empty response still goes out. Deliberately later than
+    /// <see cref="AutocompleteAnswerDeadline"/> so a real snapshot always wins the race.
+    /// </summary>
+    private static readonly TimeSpan AutocompleteSilenceFloor = TimeSpan.FromMilliseconds(2500);
+
+    /// <summary>
     /// Handles the one-shot <see cref="AutocompleteRequest"/> by aggregating the SNAPSHOT streams of
     /// every registered <see cref="IAutocompleteProvider"/>. CombineLatest + merge (see
-    /// <see cref="AutocompleteSnapshots.Combine"/>); the SETTLED snapshot is taken (LastAsync) and a
-    /// single <see cref="AutocompleteResponse"/> posted. Progressive consumers use the
-    /// <see cref="AutocompleteReference"/> workspace stream instead. Each provider's <c>OnError</c> is
-    /// swallowed to an empty snapshot so one bad provider doesn't stall the CombineLatest.
+    /// <see cref="AutocompleteSnapshots.Combine"/>), then ONE <see cref="AutocompleteResponse"/> is
+    /// posted. Progressive consumers use the <see cref="AutocompleteReference"/> workspace stream
+    /// instead. Each provider's <c>OnError</c> is swallowed to an empty snapshot so one bad provider
+    /// doesn't stall the CombineLatest.
+    ///
+    /// <para>🚨 <b>"Settled" is a QUIET PERIOD, never completion.</b> This used to take
+    /// <c>LastAsync()</c>, which emits only when the combined stream COMPLETES — and a provider
+    /// backed by mesh data never completes: it is a live subscription, which is the whole point of
+    /// the snapshot model (<c>SkillAutocompleteProvider</c> composes ObserveSkillQueries →
+    /// ObserveSnapshot → Switch; every one of those is endless by design). So on any hub with such a
+    /// provider registered the handler ran, returned <c>Processed</c> in ~27 ms, and posted NOTHING
+    /// — the caller waited out its timeout with no error anywhere. Verified from the message trace:
+    /// <c>HUB_HANDLE_END … Result: Processed</c> followed by silence, and no response post from that
+    /// hub (issue #2276).</para>
+    ///
+    /// <para>The three ways this now always answers, first one wins: the snapshot goes quiet for
+    /// <see cref="AutocompleteSettleWindow"/>; the deadline arrives and we answer with the best
+    /// snapshot so far; or no provider ever produced anything, in which case an empty response goes
+    /// out rather than nothing at all. A one-shot request must produce exactly one answer — never
+    /// a hang, which is indistinguishable from "still thinking".</para>
     /// </summary>
     private static IMessageDelivery HandleAutocompleteRequest(
         IMessageHub hub,
@@ -3058,12 +3199,20 @@ public static class DataExtensions
         var query = request.Message.Query;
         var contextPath = request.Message.Context;
 
-        AutocompleteSnapshots.Combine(
+        // ONE upstream subscription shared by the three racers below — RefCount, so the providers'
+        // queries are not issued twice.
+        var combined = AutocompleteSnapshots.Combine(
                 providers.Select(p => p.GetItems(query, contextPath)
                     .Catch<IReadOnlyCollection<AutocompleteItem>, Exception>(
                         _ => Observable.Return(AutocompleteSnapshots.Empty))),
                 AutocompleteAggregateTopN)
-            .LastAsync()
+            .Publish()
+            .RefCount();
+
+        Observable.Amb(
+                combined.Throttle(AutocompleteSettleWindow).Take(1),
+                combined.Sample(AutocompleteAnswerDeadline).Take(1),
+                Observable.Timer(AutocompleteSilenceFloor).Select(_ => AutocompleteSnapshots.Empty))
             .Subscribe(
                 snapshot =>
                 {

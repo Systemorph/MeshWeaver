@@ -674,9 +674,16 @@ public class SnowflakeSqlGenerator
                 ? "act.\"last_modified\""
                 : (isAccessed ? "ua.\"last_modified\"" : "n.\"last_modified\"");
 
+            // 🚨 `n."path"` is projected because the ORDER BY is applied to the OUTER select over
+            // the union, where only the union's OWN columns are in scope — without it `sort:path`
+            // fails on a column that does not exist there, whatever the branch tables carry. The PG
+            // twin carries the identical line and the same reason (issue #2186, whose fix reached
+            // only the paging fan-out shape that #2048 deleted). UNION ALL is positional, so the
+            // content arm's DocumentProjection carries a matching `path` expression.
             var selectSql = $"SELECT {NodeColumnsPrefix}, {lastModifiedExpr} AS \"last_modified\", " +
                 "n.\"version\", n.\"state\", n.\"content\", " +
-                $"n.\"desired_id\", n.\"main_node\", {SyncBehaviorColumn(tableName)} FROM {qualifiedTable} n";
+                $"n.\"desired_id\", n.\"main_node\", {SyncBehaviorColumn(tableName)}, n.\"path\" " +
+                $"FROM {qualifiedTable} n";
 
             if (isAccessed)
                 selectSql += $" INNER JOIN {userActivityTable} ua ON ua.\"namespace\" = {Marker("actUserNs")}" +
@@ -897,13 +904,17 @@ public class SnowflakeSqlGenerator
         "cc.\"last_modified\" AS \"last_modified\", 0::bigint AS \"version\", 2::smallint AS \"state\", " +
         "NULL::variant AS \"content\", NULL::string AS \"desired_id\", " +
         $"cc.\"collection_path\" || '/_Documents/' || {SlugSql} AS \"main_node\", " +
-        "0::smallint AS \"sync_behavior\"";
+        "0::smallint AS \"sync_behavior\", " +
+        // Positionally aligned with n."path" on the mesh_nodes branches — a synthetic Document
+        // row's path IS its main_node, so the same expression answers both.
+        $"cc.\"collection_path\" || '/_Documents/' || {SlugSql} AS \"path\"";
 
     /// <summary>Column names of <see cref="DocumentProjection"/>, in projection order.</summary>
     private static readonly ImmutableArray<string> DocumentColumns =
     [
         "id", "namespace", "name", "node_type", "description", "category", "icon", "display_order",
-        "last_modified", "version", "state", "content", "desired_id", "main_node", "sync_behavior"
+        "last_modified", "version", "state", "content", "desired_id", "main_node", "sync_behavior",
+        "path"
     ];
 
     /// <summary>

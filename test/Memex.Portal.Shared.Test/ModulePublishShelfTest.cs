@@ -143,7 +143,7 @@ public class ModulePublishShelfTest : IDisposable
 
         // …and the SERVE side lists exactly this held landing for consumers — the same Collect
         // the index and the download route resolve through, against the state the route wrote.
-        var (files, decline) = ModuleBundleSource.Collect(root, "MeshWeaver.Speech", list);
+        var (files, _, decline) = ModuleBundleSource.Collect(root, "MeshWeaver.Speech", list);
         Assert.Null(decline);
         Assert.Single(files);
     }

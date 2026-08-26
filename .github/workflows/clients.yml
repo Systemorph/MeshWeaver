@@ -29,7 +29,6 @@ name: Clients
 #   src/MeshWeaver.Messaging.Contract/Localization/     → the same test scrapes Locales.Supported
 #     Locales.cs
 #   src/MeshWeaver.Blazor/BlazorViewRegistry.cs         → clients/react/src/render/parity.test.ts
-#                                                         + clients/react-native/src/parity.test.ts
 #                                                         (control/skin vocabulary is DERIVED from it)
 #   src/MeshWeaver.Hosting.Grpc/Protos/**               → the canonical mesh.proto the python,
 #                                                         grpc-web and typescript clients generate from
@@ -39,6 +38,8 @@ name: Clients
 #   src/MeshWeaver.Data.Contract/Messages.cs              must turn the client red, because the hub
 #   src/MeshWeaver.Data.Contract/PatchDataRequest.cs      DROPS an unmatched member silently)
 #   memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs   → clients/grpc-web/src/restContract.test.ts
+#   memex/Memex.Portal.Monolith/**                        → clients/portal-next/e2e (the next-only
+#                                                            e2e boots this host as its backend)
 #   memex/Memex.LocalMesh/LocalMeshApiEndpoints.cs        (BOTH backends must serve every /api/mesh
 #                                                         verb the client SDK posts to — an unmapped
 #                                                         one answers the SPA fallback with a 200)
@@ -63,7 +64,7 @@ on:
       - ".github/workflows/clients.yml"
       - "src/MeshWeaver.Messaging.Hub/Localization/**"
       - "src/MeshWeaver.Messaging.Contract/Localization/Locales.cs"
-      - "src/MeshWeaver.Blazor/BlazorViewRegistry.cs"
+      - "src/MeshWeaver.Blazor.Views/ViewsExtensions.cs"
       - "src/MeshWeaver.Hosting.Grpc/Protos/**"
       - "src/MeshWeaver.Mesh.Contract/CreateNodeRequest.cs"
       - "src/MeshWeaver.Mesh.Contract/MeshNode.cs"
@@ -72,6 +73,7 @@ on:
       - "src/MeshWeaver.Data.Contract/PatchDataRequest.cs"
       - "memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs"
       - "memex/Memex.LocalMesh/LocalMeshApiEndpoints.cs"
+      - "memex/Memex.Portal.Monolith/**"
   push:
     branches: [main]
     paths:
@@ -79,7 +81,7 @@ on:
       - ".github/workflows/clients.yml"
       - "src/MeshWeaver.Messaging.Hub/Localization/**"
       - "src/MeshWeaver.Messaging.Contract/Localization/Locales.cs"
-      - "src/MeshWeaver.Blazor/BlazorViewRegistry.cs"
+      - "src/MeshWeaver.Blazor.Views/ViewsExtensions.cs"
       - "src/MeshWeaver.Hosting.Grpc/Protos/**"
       - "src/MeshWeaver.Mesh.Contract/CreateNodeRequest.cs"
       - "src/MeshWeaver.Mesh.Contract/MeshNode.cs"
@@ -88,30 +90,9 @@ on:
       - "src/MeshWeaver.Data.Contract/PatchDataRequest.cs"
       - "memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs"
       - "memex/Memex.LocalMesh/LocalMeshApiEndpoints.cs"
+      - "memex/Memex.Portal.Monolith/**"
 
 jobs:
-  react:
-    name: "@meshweaver/react (typecheck + test + build)"
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: clients/react
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          # 22, not 20: jsdom 30 declares engines ^22.22.2 || ^24.15.0 || >=26.0.0 (jsdom 29 still
-          # allowed 20). On Node 20 its undici dependency hits
-          # `webidl.util.markAsUncloneable is not a function` — markAsUncloneable landed in Node 22 —
-          # and EVERY jsdom worker fails to start, so vitest collects ZERO tests and exits 1.
-          # "no tests" is not a pass, which is why this must be the node version and not a fallback.
-          # (Node 20 also went end-of-life 2026-04-30; portal-next has been on 22 all along.)
-          node-version: 22
-      - run: npm ci --no-audit --no-fund
-      - run: npm run typecheck
-      - run: npm test # vitest: renderer core, control gallery, ThreadChat (live thread-node stream), Blazor-parity ratchet
-      - run: npm run build # the publishable lib (tsconfig.lib.json) must stay green, not just the test graph
-
   python-sdk:
     name: "meshweaver (Python test)"
     runs-on: ubuntu-latest
@@ -127,193 +108,3 @@ jobs:
       - run: bash scripts/gen_proto.sh # generate stubs from the canonical mesh.proto
       - run: pytest -q
 
-  node-sdk:
-    name: "@meshweaver/client (typecheck + test)"
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: clients/typescript
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          # 22, not 20: the worker's runtime type-stripper (amaro — see package.json's _amaro_note)
-          # declares engines node>=22, and Node 20 went end-of-life 2026-04-30.
-          node-version: 22
-      - run: npm ci --no-audit --no-fund
-      - run: npm run typecheck
-      # 🚨 The tests MUST run here (issue #1496). This package defined `test` and shipped
-      # test/worker.test.mjs, but the job ran `typecheck` ONLY — so the SDK carried a decode that
-      # returned an empty node for every subscription, and nothing in CI could have noticed. A test
-      # nobody runs is documentation, and the defect it would have caught silently dropped thread
-      # message ids in production.
-      - run: npm test # node --test: the js/ts Code-node execution core (type stripping → vm → REPL value) + the change-event decode
-
-  grpc-web:
-    name: "@meshweaver/client-web (typecheck + test)"
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: clients/grpc-web
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 20
-      - run: npm ci --no-audit --no-fund
-      - run: npm run typecheck # runs buf generate (from the canonical mesh.proto) then tsc
-      - run: npm test # vitest: envelope round-trip, in-memory Connect/Deliver correlation & demux, thread ops (startThread/submitMessage wire shapes)
-
-  react-native:
-    name: "RN connector (typecheck + test)"
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: clients/react-native
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 20
-      # The aliased renderer source (../react/src) needs its own deps (react) resolvable.
-      - name: Install renderer deps
-        working-directory: clients/react
-        run: npm ci --no-audit --no-fund
-      # The live path source-aliases @meshweaver/client-web (../grpc-web/src) — install its deps and
-      # generate src/gen so RN's tsc can follow the alias.
-      - name: Install + generate grpc-web client
-        working-directory: clients/grpc-web
-        run: npm ci --no-audit --no-fund && npm run gen
-      # Every package the typecheck and the render test need (react-native, react,
-      # react-test-renderer, @types/*, expo-av, vitest, typescript) is ALREADY declared in
-      # package.json, so the old `--no-save <explicit list>` form pinned nothing extra and installed
-      # the same 979-package tree anyway.
-      # 🚨 It also CRASHED npm: `package.json` grew an `overrides` block in 457ad8dd3 (the Dependabot
-      # sweep), and npm 10 — what Node 20 ships, i.e. this runner — dies resolving overrides during a
-      # `--no-save` install with "Cannot read properties of null (reading 'edgesOut')". npm 11 does
-      # not, which is why it reproduced only in CI. `npm ci` does no resolution at all — it replays
-      # the committed lock — so that failure mode is gone for good.
-      - run: npm ci --no-audit --no-fund
-      - run: npx tsc --noEmit
-      # Headless render of the sample area + the speech pipeline (transcription client, push-to-talk→submit).
-      - run: npx vitest run
-
-  portal:
-    name: "Portal example (typecheck + build)"
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: clients/portal
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 20
-      # The aliased renderer source (../react/src) needs its own deps (react, @fluentui) resolvable.
-      - name: Install renderer deps
-        working-directory: clients/react
-        run: npm ci --no-audit --no-fund
-      # The live mode source-aliases @meshweaver/client-web (../grpc-web/src) — install its deps and
-      # generate src/gen so the portal's tsc + vite can follow the alias.
-      - name: Install + generate grpc-web client
-        working-directory: clients/grpc-web
-        run: npm ci --no-audit --no-fund && npm run gen
-      - run: npm ci --no-audit --no-fund
-      - run: npx tsc --noEmit # vite build transpiles without type-checking — check types explicitly
-      - run: npm run build
-
-  portal-next:
-    name: "Portal-next (typecheck + test + build)"
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: clients/portal-next
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          # Matches the Dockerfile's node:22-alpine — build the app on the runtime it ships on.
-          node-version: 22
-      # vitest.config.ts source-aliases the renderer (../react/src); its own deps must resolve.
-      - name: Install renderer deps
-        working-directory: clients/react
-        run: npm ci --no-audit --no-fund
-      # next.config.mjs + vitest.config.ts alias @meshweaver/client-web to ../grpc-web/src, whose
-      # src/gen is GENERATED (gitignored) from the canonical mesh.proto — without it the build fails
-      # with "Can't resolve './gen/mesh_pb'".
-      - name: Install + generate grpc-web client
-        working-directory: clients/grpc-web
-        run: npm ci --no-audit --no-fund && npm run gen
-      # `npm ci` (not install) — it is what the Dockerfile runs; drift between package.json and the
-      # lock fails here rather than in the image build.
-      - run: npm ci --no-audit --no-fund
-      - run: npm run typecheck # next build skips type-checking by design (see next.config.mjs)
-      - run: npm test # vitest: server snapshot, SSR shell, token mint, redirect decision, mesh paths
-      - run: npm run build # the standalone production bundle the Docker image ships
-
-  rn-web-e2e:
-    name: "RN web (Playwright)"
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: clients/react-native
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 20
-      # The source-linked renderer core (../react/src) needs its own deps resolvable during the web export.
-      - name: Install renderer deps
-        working-directory: clients/react
-        run: npm ci --no-audit --no-fund
-      # metro.config.js aliases @meshweaver/client-web to ../grpc-web/src — install its deps and
-      # generate src/gen so the web export can bundle the live client.
-      - name: Install + generate grpc-web client
-        working-directory: clients/grpc-web
-        run: npm ci --no-audit --no-fund && npm run gen
-      - run: npm ci --no-audit --no-fund
-      # Bounded for the same reason as dotnet-test.yml's provisioning step: a stalled CDN does
-      # not fail the download, it HANGS it, and an unbounded hang here burns the whole job's
-      # budget and reports as a timeout that names nothing. A red Clients workflow blocks image
-      # publication, so a stall that reads as "the clients broke" is expensive to misdiagnose.
-      # No retry loop here (unlike dotnet-test) — this step has none today, and a bound alone
-      # already converts a silent hang into a visible, re-runnable infra failure.
-      # The apt wait is for the same reason as dotnet-test's: `--with-deps` shells out to apt-get,
-      # and the runner's own background apt makes it exit 100 "Could not get lock" — contention,
-      # not a broken download. Same shared script, so this copy cannot drift from that one again.
-      # Both bounds are hard: it can wait, it cannot hang.
-      #
-      # 🚨 The install bound is 420s, not 180s, because 180 was BELOW what this step actually
-      # costs. Unlike dotnet-test's, this install is the FULL chromium (the e2e drives a real
-      # browser, not `--only-shell`) plus its apt dependencies, and two independent runs measured
-      # ~185s: main's own run 32180959535 and 32170659820 both died at exactly `exit code 124`
-      # — `timeout` killing a healthy install a few seconds short. A bound that the normal path
-      # exceeds is not a hang detector, it is a flake generator, and it reports as the very
-      # "infra failure" wording that trains people to re-run rather than look.
-      #
-      # 🚨 TWO PHASES, AND ONLY THE FIRST IS FATAL — the same correction #1878 made to
-      # dotnet-test.yml, which landed there and NOT here. That asymmetry is this file's third
-      # drift from its twin (after the `flock` no-op #1858 fixed in one copy, and the wait script
-      # #1855 extracted to end exactly this), and it cost a full morning: on 2026-08-19 the apt
-      # phase stalled on `azure.archive.ubuntu.com` and killed this job while every other Clients
-      # job passed — and because `clients-gate` feeds `Consolidate test results`, the repo's ONE
-      # required check, it blocked every merge behind it.
-      #
-      # Under `install --with-deps` the apt-get runs FIRST and the download second, so an apt
-      # stall means no browser at all. Downloading first banks the artefact; the apt phase then
-      # only adds the font packages, and its failure is a WARNING because `npm run e2e` below
-      # drives a real Chromium and is the direct proof of the capability this step is a proxy for.
-      # Strictly no loss of safety: the gate moves from "did apt run?" to "does the browser
-      # work?", which is the question the e2e asks anyway. If a library really is missing, e2e
-      # fails — carrying this warning as its context.
-      - run: |
-          set -euo pipefail
-          # Phase 1 — the browser binary, straight from the CDN. No apt in this path. MUST succeed.
-          timeout --signal=TERM --kill-after=30 420 npx playwright install chromium
-          # Phase 2 — the system packages. `install` is idempotent, so this re-run does only the
-          # apt half. Non-fatal by design (see above).
-          "$GITHUB_WORKSPACE/.github/scripts/wait-for-apt.sh" 180
-          if ! timeout --signal=TERM --kill-after=30 420 npx playwright install --with-deps chromium; then
-            echo "::warning::the '--with-deps' system packages could not be applied (APT/INFRA). Continuing: the e2e run below drives a real browser and measures the capability directly."
-          fi
-      - run: npm run e2e # expo export --platform web → serve dist/ → drive headless Chromium

@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 
@@ -25,6 +26,11 @@ public sealed class ModelStaticRepoSource(BuiltInLanguageModelProvider provider)
     /// <inheritdoc />
     // The catalog is config-derived → fingerprint on content, so a changed catalog re-imports.
     public bool Versioned => false;
+
+    /// <inheritdoc />
+    /// <remarks>A skill/agent/model that exists but is unfindable is indistinguishable
+    /// from one that was never imported — this catalog asserts it reached the index (#354).</remarks>
+    public bool AssertIndexedAfterImport => true;
 
     /// <inheritdoc />
     // Additive: admins add their OWN providers/models (e.g. a bring-your-own OpenAI-compatible

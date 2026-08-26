@@ -64,23 +64,18 @@ public class SnowflakeVersionQuery : IVersionQuery
     }
 
     /// <summary>
-    /// Splits a mesh path into its <c>(namespace, id)</c> pair — the storage key of the history
-    /// table. Identical to the PG original.
+    /// Trims the addressing form of a path. History rows are matched on the REAL <c>path</c>
+    /// column — NEVER a positional (namespace, id) split, which loses every id containing a '/'
+    /// (issue #2212). Identical to the PG original.
     /// </summary>
-    private static (string Namespace, string Id) SplitPath(string path)
-    {
-        var lastSlash = path.LastIndexOf('/');
-        var ns = lastSlash > 0 ? path[..lastSlash] : "";
-        var id = lastSlash > 0 ? path[(lastSlash + 1)..] : path;
-        return (ns, id);
-    }
+    private static string NormalizePath(string path) => path.Trim('/');
 
     /// <inheritdoc />
     public IObservable<MeshNodeVersion> GetVersions(string path)
         // The Snowflake I/O pool runs the DB fetch on the ThreadPool behind its concurrency gate
         // with ConfigureAwait(false) — no custom TaskScheduler (Orleans) is ever captured.
         => _ioPool.Invoke(ct => FetchVersionsAsync(path, ct))
-            .SelectMany(versions => versions.ToObservable());
+            .SelectMany(versions => versions.ToInlineObservable());
 
     /// <summary>
     /// I/O leaf for <see cref="GetVersions"/>: fetches every version summary for a node,
@@ -89,16 +84,14 @@ public class SnowflakeVersionQuery : IVersionQuery
     private async Task<List<MeshNodeVersion>> FetchVersionsAsync(string path, CancellationToken ct)
     {
         var results = new List<MeshNodeVersion>();
-        var (ns, id) = SplitPath(path);
         await using var connection = await _source.OpenAsync(ct).ConfigureAwait(false);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = $"""
             SELECT "version", "last_modified", "changed_by", "name", "node_type"
-            FROM {_historyTable} WHERE "namespace" = :p1 AND "id" = :p2
+            FROM {_historyTable} WHERE "path" = :p1
             ORDER BY "version" DESC
             """;
-        SnowflakeConnectionSource.AddParam(cmd, "p1", ns, DbType.String);
-        SnowflakeConnectionSource.AddParam(cmd, "p2", id, DbType.String);
+        SnowflakeConnectionSource.AddParam(cmd, "p1", NormalizePath(path), DbType.String);
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
@@ -118,17 +111,15 @@ public class SnowflakeVersionQuery : IVersionQuery
     public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
         => _ioPool.Invoke(async ct =>
         {
-            var (ns, id) = SplitPath(path);
             await using var connection = await _source.OpenAsync(ct).ConfigureAwait(false);
             await using var cmd = connection.CreateCommand();
             cmd.CommandText = $"""
                 SELECT "id", "namespace", "name", "node_type", "category", "icon", "display_order",
                        "last_modified", "version", "state", "content", "desired_id", "main_node"
-                FROM {_historyTable} WHERE "namespace" = :p1 AND "id" = :p2 AND "version" = :p3
+                FROM {_historyTable} WHERE "path" = :p1 AND "version" = :p2
                 """;
-            SnowflakeConnectionSource.AddParam(cmd, "p1", ns, DbType.String);
-            SnowflakeConnectionSource.AddParam(cmd, "p2", id, DbType.String);
-            SnowflakeConnectionSource.AddParam(cmd, "p3", version, DbType.Int64);
+            SnowflakeConnectionSource.AddParam(cmd, "p1", NormalizePath(path), DbType.String);
+            SnowflakeConnectionSource.AddParam(cmd, "p2", version, DbType.Int64);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
@@ -141,18 +132,16 @@ public class SnowflakeVersionQuery : IVersionQuery
     public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options)
         => _ioPool.Invoke(async ct =>
         {
-            var (ns, id) = SplitPath(path);
             await using var connection = await _source.OpenAsync(ct).ConfigureAwait(false);
             await using var cmd = connection.CreateCommand();
             cmd.CommandText = $"""
                 SELECT "id", "namespace", "name", "node_type", "category", "icon", "display_order",
                        "last_modified", "version", "state", "content", "desired_id", "main_node"
-                FROM {_historyTable} WHERE "namespace" = :p1 AND "id" = :p2 AND "version" < :p3
+                FROM {_historyTable} WHERE "path" = :p1 AND "version" < :p2
                 ORDER BY "version" DESC LIMIT 1
                 """;
-            SnowflakeConnectionSource.AddParam(cmd, "p1", ns, DbType.String);
-            SnowflakeConnectionSource.AddParam(cmd, "p2", id, DbType.String);
-            SnowflakeConnectionSource.AddParam(cmd, "p3", beforeVersion, DbType.Int64);
+            SnowflakeConnectionSource.AddParam(cmd, "p1", NormalizePath(path), DbType.String);
+            SnowflakeConnectionSource.AddParam(cmd, "p2", beforeVersion, DbType.Int64);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))

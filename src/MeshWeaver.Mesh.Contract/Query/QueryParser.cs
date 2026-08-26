@@ -490,6 +490,25 @@ public partial class QueryParser
 
                 if (field.Equals("path", StringComparison.OrdinalIgnoreCase))
                 {
+                    // 🚨 AN ORDERED COMPARISON ON path IS A FILTER, NOT AN ANCHOR.
+                    // `path:>"m"` is the keyset half of the standard paging pair
+                    // (`sort:path` + `path:>"{cursor}"`). Folding it into the path ANCHOR
+                    // discarded the operator entirely, so the query silently became
+                    // `path:m` — an exact/scoped anchor at a path that does not exist — and
+                    // answered ZERO ROWS with no error, which reads as "the walk is done"
+                    // (issue #2186: a cross-partition walk built on it returned page one and
+                    // reported success). It also re-routed a mesh-wide query onto a single
+                    // partition. Left as a filter token it becomes `n.path > 'm'` against the
+                    // real, indexed `path` column and the walk pages properly.
+                    if (token.Condition.Operator is QueryOperator.GreaterThan
+                        or QueryOperator.GreaterOrEqual
+                        or QueryOperator.LessThan
+                        or QueryOperator.LessOrEqual)
+                    {
+                        filterTokens.Add(token);
+                        continue;
+                    }
+
                     // Multi-value `path:a|b|c` — `In`/`NotIn` carries the
                     // alternation list. Backends use the list to push down
                     // `WHERE path IN (...)`. Single-value form sets only Path.

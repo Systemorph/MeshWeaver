@@ -373,7 +373,7 @@ public static class AgentPickerProjection
                 $"{AgentsQueryId}|u={userPath ?? ""}|s={spacePath ?? ""}|q={Fingerprint(queries)}",
                 queries))
             .Switch()
-            .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions, locale));
+            .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions, locale, userPath, spacePath));
     }
 
     /// <summary>Deterministic short fingerprint of a resolved query set, for cache-keying the
@@ -410,7 +410,7 @@ public static class AgentPickerProjection
     /// (agent / model / harness) the default is the node with the LOWEST <c>Order</c> (the <c>Order = -1</c>
     /// convention: "to make something the default, set its order to -1"). No hardcoded agent name, model
     /// id, or harness; nothing is invented when a registry is empty (the field stays null). Reactive +
-    /// testable like <see cref="ObserveAgents"/> / <see cref="ObserveModels"/>; the chat view subscribes
+    /// testable like <see cref="ObserveAgents"/> / <see cref="ObserveModels(IWorkspace, IMessageHub, string?, string?, IReadOnlyList{string}?, string?)"/>; the chat view subscribes
     /// to this to seed a new composer.
     /// <para>Utility (generator) agents are excluded — the default is never a background generator.</para>
     /// </summary>
@@ -565,13 +565,38 @@ public static class AgentPickerProjection
     /// varying only namespace + scope (the synced-collection all-Initial gating constraint). The
     /// per-partition flat <c>/Model</c> registry is the next increment; credentials live in <c>Provider</c>.
     /// </summary>
+    /// <summary>The node types every model-registry query reads — models, their providers and the tiers.</summary>
+    public const string ModelRegistryTypes =
+        $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}|{ModelTierNodeType.NodeType}";
+
+    /// <summary>
+    /// The SETTINGS-AWARE model pipeline: the user's resolved model sources
+    /// (<see cref="AiSettingsNodeType.ObserveModelQueries"/>) drive the registry snapshot, so the
+    /// picker lists exactly what the user's AI Settings say — and re-resolves when they change.
+    /// Prefer this over <see cref="ObserveModels"/> in every user-facing surface. Deliberately NOT
+    /// an overload of that name: landed plugin sources cref <c>ObserveModels</c> unqualified, and
+    /// overloading it turns their docs into CS0419 under warnings-as-errors.
+    /// </summary>
+    public static IObservable<IReadOnlyList<ModelInfo>> ObserveResolvedModels(
+        IWorkspace workspace, IMessageHub hub, IServiceProvider services, string? user,
+        string? currentPath = null, string? nodeTypePath = null,
+        IReadOnlyList<string>? selectedProviderPaths = null)
+        => AiSettingsNodeType
+            .ObserveModelQueries(workspace, hub, services, user, currentPath, nodeTypePath, selectedProviderPaths)
+            .Select(queries => ObserveSnapshot(workspace, hub,
+                    BuildModelQueryId(ModelsQueryId, currentPath, nodeTypePath, selectedProviderPaths, user)
+                    + "|q=" + string.Join(";", queries),
+                    queries)
+                .Select(snapshot => ProjectModels(snapshot, hub.JsonSerializerOptions)))
+            .Switch();
+
     public static string[] BuildModelQueries(
         string? currentPath = null,
         string? nodeTypePath = null,
         IEnumerable<string>? selectedProviderPaths = null,
         string? userPath = null)
     {
-        var typeFilter = $"{LanguageModelNodeType.NodeType}|{ModelProviderNodeType.NodeType}|{ModelTierNodeType.NodeType}";
+        var typeFilter = ModelRegistryTypes;
         var queries = new List<string>
         {
             $"namespace:{ModelProviderNodeType.RootNamespace} nodeType:{typeFilter} scope:descendants{RegistryProjection}",
@@ -643,10 +668,32 @@ public static class AgentPickerProjection
     /// 🌍 The viewer's language, resolved ONCE on the render turn and passed down — see
     /// <see cref="ToAgentDisplayInfo"/> for why it is an argument and not an ambient read.
     /// </param>
+    /// <param name="userPath">The viewer's home partition — its <c>{user}/Agent</c> layer wins a
+    /// slug collision (see the layer note above). Null for the programmatic generators.</param>
+    /// <param name="spacePath">The context/space path — its layer wins over any other package's.</param>
     public static IReadOnlyList<AgentDisplayInfo> ProjectAgents(
-        IEnumerable<MeshNode> snapshot, JsonSerializerOptions jsonOptions, string? locale = null)
+        IEnumerable<MeshNode> snapshot, JsonSerializerOptions jsonOptions, string? locale = null,
+        string? userPath = null, string? spacePath = null)
     {
-        var byPath = new Dictionary<string, AgentDisplayInfo>(StringComparer.Ordinal);
+        // 🚨 Collapse the registry LAYERS: one agent SLUG is one row.
+        //
+        // The registry is deliberately layered — the same agent exists as a platform default
+        // (`Agent/Tutor`), as a package's shipped copy (`Essentials/Agent/Tutor`) and as the copy
+        // plugin install rebases into the viewer's home (`{user}/Agent/Tutor`). Keying this dict by
+        // node.Path (as it was until 2026-08-25) made every layer its own dropdown row: users saw
+        // ToolsReference twice and most platform agents three times.
+        //
+        // De-duplicating by PATH was not merely untidy, it offered a choice the execution side
+        // cannot honour: an agent is ADDRESSED by its slug (handoffs, /agent, the chat chip,
+        // SetSelectedAgent), and AgentChatClient.CreateAgentsSync keys its dict on exactly that
+        // (`createdAgents.SetItem(agentConfig.Id, agent)`). Three rows sharing one slug already
+        // collapsed to ONE executable agent — whichever won a last-write-wins race.
+        //
+        // So: group by slug, and keep the MOST SPECIFIC layer (LayerRank). Ties inside one layer
+        // resolve by ordinal path, because a synced-query snapshot carries no ordering guarantee
+        // and the surviving row must not depend on arrival order.
+        var bySlug = new Dictionary<string, (AgentDisplayInfo Info, int Rank, string Path)>(
+            StringComparer.OrdinalIgnoreCase);
         foreach (var node in snapshot)
         {
             if (node.Path == null) continue;
@@ -654,8 +701,18 @@ public static class AgentPickerProjection
                 continue;
 
             var info = ToAgentDisplayInfo(node, jsonOptions, locale);
-            if (info != null)
-                byPath[node.Path] = info;
+            if (info == null) continue;
+
+            // A node whose configuration carries no slug is not addressable by one — key it by its
+            // own path so it stays a row of its own instead of collapsing with every other such node.
+            var slug = string.IsNullOrWhiteSpace(info.AgentConfiguration?.Id)
+                ? node.Path
+                : info.AgentConfiguration!.Id;
+            var rank = LayerRank(node, userPath, spacePath);
+            if (!bySlug.TryGetValue(slug, out var winner)
+                || rank < winner.Rank
+                || (rank == winner.Rank && string.CompareOrdinal(node.Path, winner.Path) < 0))
+                bySlug[slug] = (info, rank, node.Path);
         }
 
         // Group by harness (GroupName) so the picker shows major categories —
@@ -663,11 +720,33 @@ public static class AgentPickerProjection
         // contiguous (SimpleDropdown renders a header when the group key changes).
         // Alphabetical group order happens to give Claude Code, GitHub Copilot,
         // MeshWeaver; within a group, Order then Name (Assistant's order:-1 leads MeshWeaver).
-        return byPath.Values
+        return bySlug.Values
+            .Select(winner => winner.Info)
             .OrderBy(a => a.GroupName ?? Harnesses.MeshWeaver, StringComparer.OrdinalIgnoreCase)
             .ThenBy(a => a.Order)
             .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    /// <summary>
+    /// How SPECIFIC an agent node's layer is — the tie-break when one slug is shipped by several
+    /// layers. Lower wins: the viewer's own copy, then the space being chatted in, then any other
+    /// package, and last the bare platform default. Pure.
+    /// </summary>
+    private static int LayerRank(MeshNode node, string? userPath, string? spacePath)
+    {
+        var ns = node.Namespace;
+        if (!string.IsNullOrEmpty(userPath)
+            && string.Equals(ns, $"{userPath}/{AgentSubNamespace}", StringComparison.OrdinalIgnoreCase))
+            return 0;
+        if (PartitionOf(spacePath) is { Length: > 0 } space
+            && string.Equals(ns, $"{space}/{AgentSubNamespace}", StringComparison.OrdinalIgnoreCase))
+            return 1;
+        // The bare platform namespace is the LEAST specific: anything a package or a user ships
+        // under the same slug is a deliberate override of it.
+        if (string.Equals(ns, AgentRootNamespace, StringComparison.OrdinalIgnoreCase))
+            return 3;
+        return 2;
     }
 
     /// <summary>The utility model tier marks a programmatic generator agent (ThreadNamer,
@@ -710,9 +789,22 @@ public static class AgentPickerProjection
                 byPath[node.Path] = info;
         }
 
+        // 🚨 Provider is the PRIMARY key, not Order (#2331). `Order` does double duty: a global
+        // minimum picks the deployment DEFAULT (ObserveDefaultComposer re-sorts by it independently
+        // of this display order) and a per-model pin (ModelOrdering.Defaults) promotes ONE model
+        // within its provider (e.g. z-ai/glm-5.3 at -2 among OpenRouter's uniform Order-6 siblings).
+        // Sorting by Order first let that pin lift the model out of its provider's run entirely —
+        // the group stopped being contiguous, so the picker (which renders a header whenever the
+        // group key changes, same as ProjectAgents' harness grouping) rendered the provider TWICE.
+        // Grouping by Provider first makes every block contiguous BY CONSTRUCTION — same shape as
+        // ProjectAgents' GroupName-first sort — and Order still does its promotion job as the
+        // tie-break INSIDE the group, which is exactly what a pin is for.
         return byPath.Values
-            .OrderBy(m => m.Order)
+            // Auto (the router / composer default) leads every concrete provider, mirroring its
+            // RouterOrder = -10 intent — it is the one entry meant to sort ahead of everything else.
+            .OrderByDescending(m => m.IsRouter)
             .ThenBy(m => m.Provider, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(m => m.Order)
             .ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }

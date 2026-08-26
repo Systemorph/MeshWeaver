@@ -7,6 +7,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Features;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting")]
@@ -30,6 +31,40 @@ public record MeshBuilder
     }
 
     private List<MeshNode> MeshNodes { get; } = new();
+
+    /// <summary>
+    /// The deployment's configuration, when the caller supplied it — the surface an
+    /// assembly-attribute module needs to answer a question whose answer is a CONFIG value.
+    ///
+    /// <para>🚨 A module contributes through <see cref="MeshNodeProviderAttribute"/> at INSTALL
+    /// time, and until now that was a blind spot: <c>MeshWeaver.Social</c> records it as
+    /// "there is no IConfiguration instance at install time", which is why it binds through the
+    /// options pipeline instead. Options work when the answer is needed at RESOLVE time. They do
+    /// not work when it is needed to BUILD something — e.g. whether a type-definition node is
+    /// <c>IsDefinitionOnly</c>, an <c>init</c> property fixed when the node is constructed, and
+    /// getting it wrong makes a partition root permanently unrecoverable (#902).</para>
+    ///
+    /// <para><c>null</c> when nothing supplied one — a bespoke host, a test fixture, or a direct
+    /// <see cref="InstallAssemblies"/>. A module reading this MUST treat null as "not configured"
+    /// and fall back to the same default it would have used with an absent key, never to a guess:
+    /// the value it is deciding is usually one where a wrong answer is silent.</para>
+    /// </summary>
+    public IConfiguration? Configuration { get; private set; }
+
+    /// <summary>
+    /// Supplies the deployment configuration that <see cref="Configuration"/> exposes to
+    /// attribute-carried module contributions. Called for you by
+    /// <c>MeshBuilderModuleActivation.InstallConfiguredModules</c>, which already holds it;
+    /// a bespoke host that installs modules by hand can call it directly.
+    /// </summary>
+    /// <param name="configuration">The configuration to expose. Never null.</param>
+    /// <returns>The builder for method chaining.</returns>
+    public MeshBuilder WithConfiguration(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        Configuration = configuration;
+        return this;
+    }
 
     /// <summary>
     /// Resolves one <c>Modules:Assemblies</c> entry to an assembly path. Rooted paths pass
@@ -87,9 +122,81 @@ public record MeshBuilder
         // consults the module's deps.json, so nothing probes modules/<Name>/runtimes/<rid>/native/.
         // Subscribed here — before anything from a module folder is loaded — and idempotent.
         ModuleNativeAssets.EnsureRegistered();
-        var assemblies = assemblyLocations
-            .Select(Assembly.LoadFrom)
-            .ToArray();
+
+        // 🚨 Per-module isolation (#2234). One module that cannot install against THIS build must
+        // cost that module's contribution and nothing else. It used to cost the process: a landed
+        // AzureFoundry built against a 9-parameter record ctor met an image carrying the
+        // 8-parameter one, the MissingMethodException escaped this method, and every replacement
+        // pod aborted ~2 s into boot with no application logging (the pipeline is not up yet) —
+        // memex-cloud could not start a pod for ~90 minutes.
+        //
+        // Everything an attribute's Nodes/AddressTypes/HubConfigurations getters can THROW from is
+        // materialised here, before any builder state is mutated, so a module that fails leaves no
+        // half-applied configuration behind. This captures the GlobalServiceConfigurations
+        // delegates a node carries as DATA — it does not invoke them. Invoking them is a separate,
+        // equally hazardous step, isolated per module just below.
+        var pending = new List<PendingModuleInstall>();
+        var incompatible = new List<IncompatibleModule>();
+        foreach (var location in assemblyLocations)
+        {
+            try
+            {
+                var assembly = Assembly.LoadFrom(location);
+                var moduleAttributes = assembly.GetCustomAttributes<MeshNodeProviderAttribute>().ToArray();
+                pending.Add(new PendingModuleInstall(
+                    assembly,
+                    moduleAttributes.SelectMany(a => a.Nodes).ToArray(),
+                    moduleAttributes.SelectMany(a => a.AddressTypes).ToArray(),
+                    moduleAttributes.SelectMany(a => a.HubConfigurations).ToArray(),
+                    moduleAttributes.SelectMany(a => a.DefaultNodeHubConfigurations).ToArray(),
+                    moduleAttributes.SelectMany(a => a.BuilderConfigurations).ToArray()));
+            }
+            catch (Exception exception)
+            {
+                incompatible.Add(ReportIncompatible(location, exception));
+            }
+        }
+
+        // 🚨 A node's GlobalServiceConfigurations delegate is invoked IMMEDIATELY by
+        // ConfigureServices — it runs against the live IServiceCollection, not queued for later
+        // (see ConfigureServices / InstallServices below) — so it is exactly as hazardous as the
+        // attribute materialisation above, and it is where BOTH real #2234 incidents actually
+        // threw: the original report's stack named a GlobalServiceConfigurations callback
+        // (`AzureFoundryProvidersAttribute.<get_Nodes>b__1_0(IServiceCollection)`) being CALLED,
+        // and the systemorph recurrence named this exact frame
+        // (`MeshBuilder.InstallServices(IEnumerable`1 nodes)`) directly. Materialising `a.Nodes`
+        // above only captures the delegate; invoking it is what can throw. Folded per module, same
+        // shape as the BuilderConfigurations fold below, so one module's registration failure
+        // costs only that module — never the modules that load after it in this call.
+        var installed = new List<PendingModuleInstall>();
+        var installedNodes = new List<MeshNode>();
+        foreach (var module in pending)
+        {
+            try
+            {
+                // 🚨 Materialise this module's nodes into a LOCAL buffer BEFORE touching
+                // installedNodes/MeshNodes. A module can carry several nodes; if an EARLIER one's
+                // config succeeds and a LATER one's throws, `.ToList()` still throws here (nothing
+                // is appended), so the module stays "contributes nothing" at the node-list level
+                // even though the earlier node's ConfigureServices call already mutated the live
+                // IServiceCollection for real and cannot be undone — the same asymmetry the
+                // BuilderConfigurations fold below already accepts (applied side effects stay
+                // applied; only chain/list MEMBERSHIP is what stays consistent).
+                var moduleNodes = InstallServices(module.Nodes).ToList();
+                installedNodes.AddRange(moduleNodes);
+                installed.Add(module);
+            }
+            catch (Exception exception)
+            {
+                incompatible.Add(ReportIncompatible(module.Assembly.Location, exception));
+            }
+        }
+        MeshNodes.AddRange(installedNodes);
+
+        // Only the modules that actually installed are recorded as installed. A skewed one is
+        // deliberately NOT in this list: it contributes no nodes, and letting it into the in-mesh
+        // compile reference set would hand every dynamic NodeType the same broken signatures.
+        var assemblies = installed.Select(p => p.Assembly).ToArray();
         // Record every installed module for the runtime surfaces that must SEE modules the way
         // they see the platform: the in-mesh compile reference set (a module leaving the publish
         // closure leaves TRUSTED_PLATFORM_ASSEMBLIES, so compilation composes TPA + these) and
@@ -102,13 +209,9 @@ public record MeshBuilder
                 services.AddSingleton(new InstalledModuleAssembly(assembly));
             return services;
         });
-        var attributes = assemblies
-            .SelectMany(a => a.GetCustomAttributes<MeshNodeProviderAttribute>())
-            .ToArray();
-        MeshNodes.AddRange(attributes.SelectMany(a => InstallServices(a.Nodes)));
 
         // Register address types from attributes
-        var addressTypes = attributes.SelectMany(a => a.AddressTypes).ToArray();
+        var addressTypes = installed.SelectMany(p => p.AddressTypes).ToArray();
         if (addressTypes.Length > 0)
         {
             ConfigureHub(config =>
@@ -121,18 +224,75 @@ public record MeshBuilder
         // Attribute-carried hub configuration — the surfaces a boot-loaded pack needs beyond
         // root DI: the mesh hub's own configuration and the every-per-node-hub chain
         // (Courses/Observability-shaped packs register types + default areas there).
-        foreach (var hubConfiguration in attributes.SelectMany(a => a.HubConfigurations))
+        foreach (var hubConfiguration in installed.SelectMany(p => p.HubConfigurations))
             ConfigureHub(hubConfiguration);
-        foreach (var nodeHubConfiguration in attributes.SelectMany(a => a.DefaultNodeHubConfigurations))
+        foreach (var nodeHubConfiguration in installed.SelectMany(p => p.DefaultNodeHubConfigurations))
             ConfigureDefaultNodeHub(nodeHubConfiguration);
 
         // Attribute-carried BUILDER configuration — the full-surface hook. Applied last so a
         // builder-level hook observes the attribute's own nodes/services, mirroring the order a
         // compiled-in caller would get from `builder.InstallAssemblies(...).AddX()`. MeshBuilder
         // methods mutate this instance and return it, so the fold cannot lose configuration.
-        return attributes
-            .SelectMany(a => a.BuilderConfigurations)
-            .Aggregate(this, (builder, configure) => configure(builder));
+        //
+        // Folded per MODULE rather than over one flat list: these run arbitrary module code, so a
+        // throw here is the same hazard as the materialisation above and must cost only its own
+        // module. The fold keeps the builder from the last SUCCESSFUL configuration, so a module
+        // that throws midway cannot strand the chain.
+        var result = this;
+        foreach (var module in installed)
+        {
+            try
+            {
+                result = module.BuilderConfigurations.Aggregate(result, (builder, configure) => configure(builder));
+            }
+            catch (Exception exception)
+            {
+                incompatible.Add(ReportIncompatible(module.Assembly.Location, exception));
+            }
+        }
+
+        // 🚨 Registered AFTER the fold, not before it. A module can fail in either half — while its
+        // contributions are materialised, or while its BuilderConfigurations run — and registering
+        // early captured only the first. The second would have been written to stderr and then
+        // dropped, so /health and RequiredModuleStatus would report a replica missing that module's
+        // features as healthy: the exact invisible-skip this record exists to prevent, reintroduced
+        // one code path over.
+        if (incompatible.Count > 0)
+        {
+            result.ConfigureServices(services =>
+            {
+                foreach (var module in incompatible)
+                    services.AddSingleton(module);
+                return services;
+            });
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// One module's contributions, materialised before any builder state is touched.
+    /// </summary>
+    private sealed record PendingModuleInstall(
+        Assembly Assembly,
+        IReadOnlyCollection<MeshNode> Nodes,
+        IReadOnlyCollection<KeyValuePair<string, Type>> AddressTypes,
+        IReadOnlyCollection<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations,
+        IReadOnlyCollection<Func<MessageHubConfiguration, MessageHubConfiguration>> DefaultNodeHubConfigurations,
+        IReadOnlyCollection<Func<MeshBuilder, MeshBuilder>> BuilderConfigurations);
+
+    /// <summary>
+    /// Records a module that could not install, and writes it to stderr.
+    ///
+    /// <para>🚨 stderr, not a logger: this runs BEFORE the logging pipeline exists, which is
+    /// exactly why #2234's crash left a container log containing only the createdump DSO listing
+    /// and cost most of a day to diagnose. The one channel that works at this point is the one the
+    /// container captures.</para>
+    /// </summary>
+    private static IncompatibleModule ReportIncompatible(string entry, Exception exception)
+    {
+        var module = IncompatibleModule.From(entry, exception);
+        Console.Error.WriteLine($"[MeshWeaver.Mesh.IncompatibleModule] {module.Report()}");
+        return module;
     }
 
     private IEnumerable<MeshNode> InstallServices(IEnumerable<MeshNode> nodes)

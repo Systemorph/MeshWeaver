@@ -37,6 +37,70 @@ public static class LinkedInConnectEndpoints
     public const string StateCookieName = "lnkd_connect_state";
     private const string CallbackPath = "/connect/linkedin/callback";
 
+    /// <summary>
+    /// The scopes the connect flow ALWAYS requests, and the only ones publishing needs.
+    ///
+    /// <list type="bullet">
+    ///   <item><c>openid</c>/<c>profile</c>/<c>email</c> — OIDC sign-in plus the member's <c>sub</c>
+    ///     (person id), persisted as the credential's <c>SubjectId</c> so publishing knows the
+    ///     author (see <c>LinkedInPostsApi.NormalizeMemberUrn</c>).</item>
+    ///   <item><c>w_member_social</c> — "Create, modify, and delete posts, comments, and reactions
+    ///     on your behalf". This is the publishing scope, and the consent-screen line the member
+    ///     actually approves.</item>
+    /// </list>
+    /// </summary>
+    public const string BaseScopes = "openid profile email w_member_social";
+
+    /// <summary>
+    /// The scope that makes IMPRESSIONS (views) and reshares readable for a member's OWN posts
+    /// (<c>/rest/memberCreatorPostAnalytics</c>). Without it the stats refresh reports likes and
+    /// comments only.
+    ///
+    /// <para>🚨 <b>Requesting it is OPT-IN, and the default is OFF (issue #51).</b> LinkedIn
+    /// rejects the whole authorization — before any sign-in or consent screen — when the app is not
+    /// approved for the Member Post Analytics product: the member sees "Bummer, something went
+    /// wrong" and is bounced back, so NO new member can connect at all and publishing, which never
+    /// needed this scope, is blocked by a request for analytics. Approval is granted per LinkedIn
+    /// app, so whether it may be asked for is a property of the DEPLOYMENT, not of this code — a
+    /// deployment whose app carries the product sets
+    /// <see cref="RequestPostAnalyticsConfigKey"/> to <c>true</c>. Credentials connected while it
+    /// was requested keep working; the ones without it simply report no impressions, and the
+    /// callback says so (<c>analytics=unavailable</c>) instead of leaving the member to wonder.</para>
+    /// </summary>
+    public const string PostAnalyticsScope = "r_member_postAnalytics";
+
+    /// <summary>
+    /// Configuration key opting a deployment INTO requesting <see cref="PostAnalyticsScope"/>:
+    /// <c>Social:LinkedIn:RequestPostAnalytics</c>. Absent or false — the default — requests
+    /// <see cref="BaseScopes"/> only.
+    /// </summary>
+    public const string RequestPostAnalyticsConfigKey = LinkedInOptions.SectionName + ":RequestPostAnalytics";
+
+    /// <summary>
+    /// The space-separated scope string to request. Pure, so the one thing that decides whether a
+    /// member can connect at all is unit-tested rather than read off a URL in a browser.
+    /// </summary>
+    /// <param name="requestPostAnalytics">Whether this deployment's LinkedIn app is approved for
+    /// the Member Post Analytics product.</param>
+    public static string BuildScope(bool requestPostAnalytics) =>
+        requestPostAnalytics ? BaseScopes + " " + PostAnalyticsScope : BaseScopes;
+
+    /// <summary>Whether this deployment opted into requesting the analytics scope.</summary>
+    /// <param name="config">The host configuration.</param>
+    public static bool WantsPostAnalytics(IConfiguration config) =>
+        bool.TryParse(config[RequestPostAnalyticsConfigKey], out var wanted) && wanted;
+
+    /// <summary>
+    /// Whether an authorization LinkedIn granted actually carries <see cref="PostAnalyticsScope"/>.
+    /// LinkedIn returns the granted scopes comma-separated on the token response; a member who
+    /// declined the analytics line (or an app that was never approved for it) still gets a working
+    /// publishing credential, and the difference must be SAID rather than surfacing later as
+    /// permanently-zero impressions.
+    /// </summary>
+    /// <param name="grantedScope">The <c>scope</c> field of LinkedIn's token response.</param>
+    public static bool GrantsPostAnalytics(string? grantedScope) =>
+        grantedScope?.Contains(PostAnalyticsScope, StringComparison.OrdinalIgnoreCase) == true;
+
     /// <summary>Registers the LinkedIn connect endpoints.</summary>
     public static IEndpointRouteBuilder MapLinkedInConnect(this IEndpointRouteBuilder endpoints)
     {
@@ -80,20 +144,7 @@ public static class LinkedInConnectEndpoints
                 + $"&client_id={Uri.EscapeDataString(clientId!)}"
                 + $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"
                 + $"&state={Uri.EscapeDataString(state)}"
-                // openid/profile/email  → OIDC sign-in + the member's `sub` (person id), which we
-                //                         persist as the credential SubjectId so publishing knows
-                //                         the author (see LinkedInPostsApi.NormalizeMemberUrn).
-                // w_member_social       → "Create, modify, and delete posts, comments, and reactions
-                //                         on your behalf" — the publishing scope the app is approved
-                //                         for. Grants the consent-screen "share on your behalf" line;
-                //                         that IS the intent now (POST /linkedin/publish → /rest/posts).
-                + "&scope=" + Uri.EscapeDataString(
-                    // r_member_postAnalytics is what makes IMPRESSIONS (views) and reshares
-                    // readable for the member's OWN posts — without it the nightly stats refresh
-                    // can only ever report likes + comments. A credential connected before this
-                    // was added keeps working for publishing and silently reports 0 impressions
-                    // until the member re-runs /connect/linkedin and approves the new line.
-                    "openid profile email w_member_social r_member_postAnalytics");
+                + "&scope=" + Uri.EscapeDataString(BuildScope(WantsPostAnalytics(config)));
 
             return Results.Redirect(url);
         }).RequireAuthorization();
@@ -116,9 +167,12 @@ public static class LinkedInConnectEndpoints
         {
             var logger = loggers.CreateLogger("LinkedInConnect");
 
-            if (!string.IsNullOrEmpty(error))
-                return Results.Redirect($"/?connect=linkedin-error&reason={Uri.EscapeDataString(error)}");
-
+            // 🚨 The state cookie is read BEFORE the error branch, and that ordering is the fix
+            // (issue #51). LinkedIn's refusals — a scope the app is not approved for, a member who
+            // declines consent — come back through `error`, and answering them at "/" threw away
+            // the one thing that makes the refusal actionable: WHICH profile was being connected.
+            // The member landed on the home page with a query string nothing renders, so a
+            // deterministic, reproducible refusal read as "it just doesn't work".
             if (!http.Request.Cookies.TryGetValue(StateCookieName, out var cookieValue) || string.IsNullOrEmpty(cookieValue))
                 return Results.BadRequest("Missing connect state cookie (CSRF).");
             http.Response.Cookies.Delete(StateCookieName);
@@ -134,6 +188,17 @@ public static class LinkedInConnectEndpoints
             catch
             {
                 return Results.BadRequest("Bad state cookie.");
+            }
+
+            if (!string.IsNullOrEmpty(error))
+            {
+                logger.LogWarning(
+                    "LinkedIn refused the authorization for {Profile}: {Error} (requested scope '{Scope}')",
+                    profilePath, error, BuildScope(WantsPostAnalytics(config)));
+                return Results.Redirect(
+                    $"/{profilePath}/LinkedIn?connect=linkedin-error&stage=authorize"
+                    + $"&reason={Uri.EscapeDataString(error!)}"
+                    + $"&scope={Uri.EscapeDataString(BuildScope(WantsPostAnalytics(config)))}");
             }
 
             if (!string.Equals(cookieState, state, StringComparison.Ordinal))
@@ -202,23 +267,25 @@ public static class LinkedInConnectEndpoints
                 Content = credential,
                 State = MeshNodeState.Active,
             };
-            // Upsert the LinkedInProfile node so the analytics dashboard has somewhere
-            // to render. Loose dictionary content avoids a hard dependency on the
-            // dynamic LinkedInProfile content type from this assembly.
+            // Upsert the LinkedInProfile node so the analytics dashboard has somewhere to render.
+            // Loose JSON content avoids a hard dependency on the dynamic LinkedInProfile content
+            // type from this assembly — and it is JSON, not a Dictionary, because a dictionary's
+            // "$type" entry is DISCARDED on write and replaced by the dictionary's own CLR
+            // collection name (issue #52; see NodeContentJson). This node carried the same defect
+            // as the profile the issue reported: its dashboard had no typed content to read.
             var profileNode = new MeshNode("LinkedIn", profilePath)
             {
                 Name = displayName ?? "LinkedIn",
                 NodeType = "LinkedIn/LinkedInProfile",
                 State = MeshNodeState.Active,
-                Content = new Dictionary<string, object?>
-                {
-                    ["$type"] = "LinkedInProfile",
-                    ["displayName"] = displayName ?? subject,
-                    ["subjectUrn"] = $"urn:li:person:{subject}",
-                    ["pictureUrl"] = pictureUrl,
-                    ["email"] = emailAddress,
-                    ["connectedAt"] = DateTimeOffset.UtcNow,
-                }
+                Content = NodeContentJson.Create("LinkedInProfile",
+                [
+                    new("displayName", displayName ?? subject),
+                    new("subjectUrn", $"urn:li:person:{subject}"),
+                    new("pictureUrl", pictureUrl),
+                    new("email", emailAddress),
+                    new("connectedAt", DateTimeOffset.UtcNow),
+                ])
             };
 
             // SYNC THE IDENTITY ONTO THE PROFILE ITSELF. When the caller pointed at a
@@ -281,7 +348,15 @@ public static class LinkedInConnectEndpoints
                     _ =>
                     {
                         logger.LogInformation("Connected LinkedIn credential for profile {Profile} (subject {Subject})", profilePath, subject);
-                        tcs.TrySetResult(Results.Redirect($"/{profilePath}/LinkedIn?connect=linkedin-ok"));
+                        // DEGRADED BUT HONEST (issue #51): publishing is connected either way, but a
+                        // credential without r_member_postAnalytics can only ever report likes and
+                        // comments. Say it on the landing page rather than letting the member
+                        // discover it as impressions that are permanently 0.
+                        var analytics = WantsPostAnalytics(config) && !GrantsPostAnalytics(scope)
+                            ? "&analytics=unavailable"
+                            : string.Empty;
+                        tcs.TrySetResult(Results.Redirect(
+                            $"/{profilePath}/LinkedIn?connect=linkedin-ok{analytics}"));
                     },
                     ex =>
                     {

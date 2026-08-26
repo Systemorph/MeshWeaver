@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -50,19 +52,51 @@ public static class AiCatalogLayoutAreas
     public static MessageHubConfiguration AddAiCatalogLayoutAreas(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout.AddAiCatalogLayoutAreas());
 
-    private static UiControl AgentsCatalog(LayoutAreaHost host, RenderingContext _)
-        => BuildScopeCatalog(host, "agents", AgentNodeType.NodeType, globalNamespace: "Agent");
+    private static IObservable<UiControl> AgentsCatalog(LayoutAreaHost host, RenderingContext _)
+        => BuildSourceCatalog(host, "agents", AiSourceKinds.Agent, AgentNodeType.NodeType);
 
-    private static UiControl SkillsCatalog(LayoutAreaHost host, RenderingContext _)
-        => BuildScopeCatalog(host, "skills", SkillNodeType.NodeType, globalNamespace: SkillNodeType.RootNamespace);
+    private static IObservable<UiControl> SkillsCatalog(LayoutAreaHost host, RenderingContext _)
+        => BuildSourceCatalog(host, "skills", AiSourceKinds.Skill, SkillNodeType.NodeType);
+
+    /// <summary>
+    /// A catalog whose tabs ARE the viewer's resolved sources — one tab per active
+    /// <see cref="AiSourceEntry"/> of <paramref name="kind"/> (its name as the label, its expanded
+    /// query as the search), so what the catalog lists is exactly what the platform resolves for
+    /// this viewer here, and editing AI Settings changes both. Live: re-renders when the settings
+    /// node changes. Signed out ⇒ the defaults.
+    /// </summary>
+    private static IObservable<UiControl> BuildSourceCatalog(
+        LayoutAreaHost host, string catalog, string kind, string nodeType)
+    {
+        var contextPath = host.Hub.Address.ToString();
+        var viewerHome = ResolveViewerHome(host);
+        var services = host.Hub.ServiceProvider;
+        var settings = string.IsNullOrEmpty(viewerHome)
+            ? Observable.Return<AiSettings?>(null)
+            : AiSettingsNodeType.Observe(host.Hub.GetWorkspace(), host.Hub, services, viewerHome!)
+                .Select(s => (AiSettings?)s);
+        return settings.Select(s =>
+        {
+            var context = AiSourceCatalog.Context(viewerHome, contextPath, null);
+            var tabs = Controls.Tabs.WithSkin(sk => sk.WithWidth("100%"));
+            foreach (var source in AiSourceCatalog.Resolve(kind, s, context).Where(r => r.IsActive))
+                tabs = tabs.WithMeshSearch(source.Entry.Name,
+                    query: AiSourceCatalog.ForSearch(source.Query!, nodeType),
+                    createNodeType: nodeType,
+                    createNamespace: AiSourceCatalog.AnchorNamespace(source.Query),
+                    placeholder: string.IsNullOrWhiteSpace(source.Entry.Description)
+                        ? host.Localize(SearchKey(catalog, "global"))
+                        : source.Entry.Description,
+                    configure: ScopeSearch);
+            return (UiControl)tabs;
+        });
+    }
 
     private static UiControl ProvidersCatalog(LayoutAreaHost host, RenderingContext _)
         => BuildScopeCatalog(host, "providers", ModelProviderNodeType.NodeType, globalNamespace: ModelProviderNodeType.RootNamespace);
 
-    private static UiControl ModelsCatalog(LayoutAreaHost host, RenderingContext _)
-        // Models live UNDER the "Provider" partition (LanguageModelNodeType remark), so the global
-        // scope roots at ModelProviderNodeType.RootNamespace ("Provider"), not "Model".
-        => BuildScopeCatalog(host, "models", LanguageModelNodeType.NodeType, globalNamespace: ModelProviderNodeType.RootNamespace);
+    private static IObservable<UiControl> ModelsCatalog(LayoutAreaHost host, RenderingContext _)
+        => BuildSourceCatalog(host, "models", AiSourceKinds.Model, LanguageModelNodeType.NodeType);
 
     private static UiControl TiersCatalog(LayoutAreaHost host, RenderingContext _)
         // Tiers are a PLATFORM registry, not a per-space one — deliberately the ONE catalog here

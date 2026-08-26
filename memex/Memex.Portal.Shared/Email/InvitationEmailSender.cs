@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
-using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -61,6 +61,13 @@ public sealed class InvitationEmailSender(
             return Task.CompletedTask;
         }
 
+        // 🚨 Same refusal as OutboundEmailSender, and it matters more here: this watcher's claim is
+        // Invitation.EmailSentAt, which is PERMANENT — an invitation stamped "emailed" by a sender
+        // that delivered nothing can never be re-sent by any code path. Not starting leaves it
+        // un-stamped, so delivery resumes by itself once the module lands (#2023).
+        if (EmailDeliveryGuard.RefuseToStart(rootServices, options, logger, nameof(InvitationEmailSender)))
+            return Task.CompletedTask;
+
         // Defer mesh access until the host is fully started (Orleans + mesh hub come up as
         // hosted services too) — same rationale as OutboundEmailSender.
         lifetime.ApplicationStarted.Register(BeginWatching);
@@ -72,7 +79,9 @@ public sealed class InvitationEmailSender(
         try
         {
             scope = rootServices.CreateScope();
-            var hub = scope.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
+            // Portal hub when the Blazor shell registered one; the mesh root hub otherwise.
+            var hub = scope.ServiceProvider.GetService<PortalApplication>()?.Hub
+                      ?? scope.ServiceProvider.GetRequiredService<IMessageHub>();
             var sp = hub.ServiceProvider;
             var query = sp.GetRequiredService<IMeshQueryCore>();
             var meshService = sp.GetRequiredService<IMeshService>();

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -7,6 +8,7 @@ using System.Threading.Tasks;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Delegation;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -210,15 +212,27 @@ public class SubThreadColdStartRepro(ITestOutputHelper output) : SubThreadHeartb
         // ONLY way the sub-thread reaches a completed assistant response carrying that
         // text is if the heartbeat did NOT cancel it during first-token latency —
         // exactly the behaviour the fix restores.
-        var settled = await Observable.Defer(() =>
-                workspace.GetMeshNodeStream(subThreadPath)
-                    .Select(n => n.Content as MeshThread)
-                    .Where(t => t is { IsExecuting: false, Messages.Count: >= 2 })
-                    .Take(1))
-            .Catch<MeshThread?, Exception>(_ =>
-                Observable.Empty<MeshThread?>().Delay(200.Milliseconds()))
-            .Repeat()
-            .Should().Within(20.Seconds()).Emit();
+        // 🚨 Existence FIRST, content SECOND — the composition AGENTS.md prescribes for a node that
+        // may not exist yet (ExecuteDelegationAsync's CreateNode is fire-and-forget). NEVER
+        // `Defer(...).Catch(...).Repeat()`: `Catch` sees only OnError, the point read of the
+        // not-yet-created node COMPLETES without emitting, and `Repeat` then re-subscribes at
+        // ~54 kHz inside the assertion's SYNCHRONOUS subscribe — a busy-wait no timeout in the
+        // harness can reach, which kills the whole test host at CI's 8 m cap (#2341).
+        //
+        // The GetQuery id embeds the per-run sub-thread path: the "never compose an id per call"
+        // rule guards a production hot path, and here the call happens once on a mesh that is
+        // disposed with this [Fact].
+        var subThreadParent = subThreadPath[..subThreadPath.LastIndexOf('/')];
+        var settled = await client
+            .GetQuery($"subthread-exists:{subThreadPath}",
+                $"path:{subThreadParent} scope:children select:path")
+            .Where(nodes => nodes.Any(n =>
+                string.Equals(n.Path, subThreadPath, StringComparison.OrdinalIgnoreCase)))
+            .Take(1)
+            .SelectMany(_ => workspace.GetMeshNodeStream(subThreadPath))
+            .Select(n => n.ContentAs<MeshThread>(client.JsonSerializerOptions))
+            .Should().Within(20.Seconds())
+            .Match(t => t is { IsExecuting: false, Messages.Count: >= 2 });
 
         settled!.IsExecuting.Should().BeFalse();
 
@@ -294,15 +308,11 @@ public class SubThreadStallRepro(ITestOutputHelper output) : SubThreadHeartbeatT
             .Should().Within(15.Seconds()).Match(t => t is { IsExecuting: true });
 
         // The inter-activity timeout (1 s, past the 1 s grace) must fire and cancel it.
-        var settled = await Observable.Defer(() =>
-                workspace.GetMeshNodeStream(subThreadPath)
-                    .Select(n => n.Content as MeshThread)
-                    .Where(t => t is { IsExecuting: false })
-                    .Take(1))
-            .Catch<MeshThread?, Exception>(_ =>
-                Observable.Empty<MeshThread?>().Delay(200.Milliseconds()))
-            .Repeat()
-            .Should().Within(20.Seconds()).Emit();
+        // The wait above already read the node off its owner, so this is a plain authoritative
+        // point read — no existence gate and, above all, no `Catch(...).Repeat()` busy-wait (#2341).
+        var settled = await workspace.GetMeshNodeStream(subThreadPath)
+            .Select(n => n.ContentAs<MeshThread>(client.JsonSerializerOptions))
+            .Should().Within(20.Seconds()).Match(t => t is { IsExecuting: false });
 
         settled!.IsExecuting.Should().BeFalse(
             "a sub-agent that streamed then went silent past the inter-activity timeout " +

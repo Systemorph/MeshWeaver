@@ -241,6 +241,17 @@ public record MeshSearchControl()
     public object? ExcludeBasePath { get; init; }
 
     /// <summary>
+    /// Whether nodes under an underscore-prefixed segment RELATIVE to <see cref="Namespace"/>
+    /// (<c>_Entitlements</c>, <c>_Access</c>, <c>_Policy</c>, …) are shown. Default FALSE — those
+    /// satellites are governance bookkeeping, not content, and a node's Contents catalog listing
+    /// them reads as clutter at best and as leaked internals at worst. The filter is
+    /// namespace-RELATIVE and only active when <see cref="Namespace"/> anchors the control, so an
+    /// unanchored search (the global /search page, the top-bar Thread/Agent searches — whose
+    /// results legitimately LIVE under satellites) is untouched.
+    /// </summary>
+    public object? IncludeHidden { get; init; }
+
+    /// <summary>
     /// Whether results should update live as user types (default true).
     /// When false, search only triggers on Enter.
     /// </summary>
@@ -375,6 +386,9 @@ public record MeshSearchControl()
     /// <summary>Returns a copy with base-path exclusion set to <paramref name="exclude"/>.</summary>
     /// <param name="exclude"><c>true</c> removes the namespace root node from results.</param>
     public MeshSearchControl WithExcludeBasePath(bool exclude) => this with { ExcludeBasePath = exclude };
+
+    /// <summary>Show nodes under underscore-prefixed satellite segments (see <see cref="IncludeHidden"/>).</summary>
+    public MeshSearchControl WithIncludeHidden(bool include) => this with { IncludeHidden = include };
     /// <summary>Returns a copy with live-search set to <paramref name="live"/>.</summary>
     /// <param name="live"><c>false</c> restricts search to trigger only on Enter.</param>
     public MeshSearchControl WithLiveSearch(bool live) => this with { LiveSearch = live };

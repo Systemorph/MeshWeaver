@@ -444,16 +444,52 @@ package `preInstalled` is what puts that guarantee back — it is what makes the
 `{source}/_DefaultInstallLedger`, and that ledger's entries are exactly the packages carrying the
 flag.
 
-Ship only the first half and the readiness gate reports, correctly:
+Ship only the first half and the readiness gate reports it — but **which status it reports is the
+whole design**, because the two situations `Modules:Required` used to conflate have opposite
+remedies:
 
-```
-required_modules Unhealthy: 4 required module(s) absent … This image does not
-ship them and no install landed them.
-```
+| what happened | verdict | `required_modules` | effect |
+|---|---|---|---|
+| The module is loaded, or resolves from this deployment | `Present` | Healthy | — |
+| `Modules:Assemblies` **claims** the pack and the image does not carry it | `Absent` | **Unhealthy** | Readiness fails → the rollout STALLS and the old pods keep serving |
+| Required but the image never claimed it — i.e. store-delivered | `ExpectedLater` | **Degraded**, named | The rollout completes; the missing feature is reported, per module, with its exact sub-state |
+
+🚨 **Degraded here is not leniency, and Unhealthy is not a bigger hammer.** The gate exists to stop a
+build that silently dropped a feature, and stalling only helps when the PREVIOUS pods have what the
+new ones lack — which is true for a pack the image was supposed to ship, and false for a
+store-delivered module. Reporting the second as Unhealthy wedged both prod rollouts on 2026-08-23:
+the module can only arrive from the registry, the registry is itself a portal downstream of the same
+rollout, and the only remedy anyone found was blanking `Modules__Required__0..4` on the live
+deployment. A gate whose one escape hatch is deleting its own declaration is the skip-trapdoor with
+its polarity flipped — it fails on no evidence instead of passing on it.
+
+The evidence that separates them was already on disk: **`Modules:Assemblies` is the image's own
+claim about what it carries.** `RequiredModuleStatus.Classify` asks that question, and an
+`ExpectedLater` module always names which of four states it is in, so an operator never has to
+guess: not installed (install the package), landed and awaiting the restart, landing incomplete
+(re-install — no restart will fix it), or held above the platform floor (the platform update that
+satisfies it is itself the restart that loads it). Both buckets ship in the probe's `data` payload
+(`missing`, `expected`, `detail`) whatever the status, so a fleet sweep can enumerate them without
+parsing prose.
 
 ⚠️ **Provisioning a package is NOT installing its module.** Provisioning creates the node partition;
 landing the DLL is a separate step that the catalog performs for pre-installed packages. Confusing
 the two costs a deploy.
+
+### An activated module that never host-loaded is a SILENT 404
+
+`MapMeshModuleEndpoints` can only scan assemblies that are actually loaded. So a module the
+activation record says is ON, whose bytes never reached the process, contributes no routes — and its
+whole HTTP surface answers 404 for the pod's entire lifetime with no exception and nothing to grep.
+That is how `/mcp` went dark on memex.systemorph while the portal was otherwise healthy and two
+clean rolling restarts changed nothing.
+
+Startup now reports it, and `pending_module_activation` distinguishes the two cases rather than
+promising a restart that cannot help:
+
+- **landed, not loaded** → "a restart activates them" — true, and the rollout performs it;
+- **activated, bytes ABSENT** → "re-install the package" — a restart will NOT load them, and saying
+  otherwise is a prompt no restart can ever clear.
 
 ### Breaking the deadlock by hand
 

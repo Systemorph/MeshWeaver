@@ -694,33 +694,52 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             // EffectivePermissionPostgresTest.RuntimeCreateNode_AccessAssignment_PgBacked_GrantsPermission)
             // never see writes that complete during the first Initial query.
             //
-            // Approach: accumulate early notifications under a lock until the
-            // initial query completes. Inside the initialResults callback:
-            //   1) Set up the LIVE Buffer(100ms) pipeline first (captures live events).
-            //   2) Snapshot+clear the backlog under lock; set initialDone=true.
-            //   3) Dispose the early subscription (live carries everything now).
-            //   4) Emit Initial.
-            //   5) Drain the backlog as one synthetic batch by re-querying and
+            // Approach: ONE subscription for the query's whole lifetime. It accumulates
+            // notifications into a backlog under a lock until the initial query completes, then
+            // routes straight into the live re-query pipeline. Inside the initialResults callback:
+            //   1) Set up the LIVE pipeline.
+            //   2) Snapshot+clear the backlog, publish the live buffer and set initialDone=true —
+            //      all in ONE critical section.
+            //   3) Emit Initial.
+            //   4) Drain the backlog as one synthetic batch by re-querying and
             //      diffing against the just-populated currentItems via ProcessBatch.
-            // Events fired between live-set-up (step 1) and backlog-swap (step 2)
-            // may be double-captured — ProcessBatch is idempotent against
-            // currentItems, so duplicate processing is wasted CPU but correct.
+            //
+            // 🚨 Never attach a SECOND subscription at Initial and dispose this one. That handoff
+            // DROPS a notification permanently: IsolatedChangeFeed snapshots its observer list
+            // BEFORE delivering, so a write published just before the live subscription was
+            // attached is delivered against a snapshot holding ONLY the early observer — which by
+            // then sees initialDone == true and throws it away, while the live observer was never
+            // in that snapshot. Nothing re-triggers the re-query, so the node stays invisible to
+            // that subscription for its whole life even though a point read returns it. Measured
+            // and reproduced in MeshWeaver.AI.Test; it is the long-running `WaitForUsage` red
+            // (#1040, #1812, #2001) and, in the portal, a live children listing that silently
+            // misses a node created in that window. With one subscription the window cannot exist.
             var earlyBacklog = new List<DataChangeNotification>();
             var earlyLock = new object();
             var initialDone = false;
+            // Published under `earlyLock` in the same critical section that sets initialDone.
+            Subject<DataChangeNotification>? liveBuffer = null;
 
-            var earlySubscription = _changeFeed
+            disposables.Add(_changeFeed
                 .Where(n => parsedFilters.Any(f =>
                     PathMatcher.ShouldNotifyForQuery(n.Path, f.BasePath, f.Scope, f.Namespaces)))
                 .Subscribe(n =>
                 {
+                    Subject<DataChangeNotification>? live;
                     lock (earlyLock)
                     {
                         if (!initialDone)
+                        {
                             earlyBacklog.Add(n);
+                            return;
+                        }
+                        live = liveBuffer;
                     }
-                });
-            disposables.Add(earlySubscription);
+                    if (live is null)
+                        return;
+                    try { live.OnNext(n); }
+                    catch (ObjectDisposedException) { }
+                }));
 
             disposables.Add(RunQuery().Subscribe(
                 initialResults =>
@@ -734,20 +753,15 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                     }
 
                     DataChangeNotification[] backlog;
-                    // 1) Set up live subscription first — starts buffering immediately.
+                    // 1) Set up the live pipeline the ONE feeding subscription hands off to.
                     var changeBuffer = new Subject<DataChangeNotification>();
-                    // 🚨 ORDER MATTERS. CompositeDisposable disposes in INSERTION order, so the
-                    // feeding subscription must be registered BEFORE the buffer it writes into.
-                    // The other way round, teardown disposes changeBuffer first while the
-                    // subscription is still live, and a write landing in that window calls OnNext
-                    // on a disposed Subject → ObjectDisposedException thrown back into the
-                    // adapter's fan-out. That is what starved the $security-access query of its
-                    // notification and froze the permission fold (see IsolatedChangeFeed).
-                    disposables.Add(
-                        _changeFeed
-                            .Where(n => parsedFilters.Any(f =>
-                                PathMatcher.ShouldNotifyForQuery(n.Path, f.BasePath, f.Scope, f.Namespaces)))
-                            .Subscribe(changeBuffer));
+                    // 🚨 ORDER MATTERS. CompositeDisposable disposes in INSERTION order, and the
+                    // feeding subscription was registered above, BEFORE this buffer. The other way
+                    // round, teardown disposes changeBuffer first while the subscription is still
+                    // live, and a write landing in that window calls OnNext on a disposed Subject
+                    // → ObjectDisposedException thrown back into the adapter's fan-out. That is
+                    // what starved the $security-access query of its notification and froze the
+                    // permission fold (see IsolatedChangeFeed).
                     disposables.Add(changeBuffer);
                     // 🚨 Strict unit-of-work + zero debounce: every change
                     // triggers its own RunQuery, serialised via Concat so the
@@ -769,17 +783,16 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                                 t => ProcessBatch(t.batch, t.newResults, currentItems, firstParsed, observer),
                                 ex => observer.OnError(ex)));
 
-                    // 2) Snapshot + clear early backlog under lock; gate further early-capture.
+                    // 2) Snapshot + clear the backlog, publish the live buffer and flip the gate —
+                    //    ONE critical section, so the feeding subscription's next notification
+                    //    routes to exactly one of the two and can never fall between them.
                     lock (earlyLock)
                     {
                         backlog = earlyBacklog.ToArray();
                         earlyBacklog.Clear();
+                        liveBuffer = changeBuffer;
                         initialDone = true;
                     }
-
-                    // 3) Early subscription is now redundant — live pipeline carries
-                    //    all subsequent events. Dispose to free the upstream sub.
-                    earlySubscription.Dispose();
 
                     observer.OnNext(new QueryResultChange<T>
                     {

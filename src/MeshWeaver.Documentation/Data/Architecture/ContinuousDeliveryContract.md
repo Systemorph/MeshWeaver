@@ -191,6 +191,71 @@ what sets that tail.
 the rolls, so each published set restarts every install that selects it. That is the reason the tick
 is hourly and not faster, and it is tracked as #1778 rather than papered over with a slower CD.
 
+## Property 1a — how the set already spans repos, and what the GUI move actually breaks
+
+🚨 **Correction, 2026-08-26.** An earlier draft of this section claimed the shipped artefacts have
+"two publishers on two independent triggers" and proposed unifying them. **That was wrong**, and the
+evidence is in this pipeline's own comments — read them before proposing anything here.
+
+**What is actually true:**
+
+- **`MeshWeaver.Plugins/publish-packages.yml` publishes NOTHING.** It packs and reports, `dry-run` by
+  design: *"nothing consumes a package feed"*, and a push to `nuget.pkg.github.com` would 403 on the
+  org's Packages billing limit and redden main on every merge. So there is no second publisher, and
+  **no package-release event to hang a webhook on** — the question is well-posed and the premise
+  does not hold here.
+- **Consumers fetch BUNDLES from the registry portal** (`/api/plugins/bundles`) — *"assembled from
+  the very bytes that portal runs"*. Distribution is bundles, not a feed.
+- **Coordination already exists, and it is not a shared pipeline.** Each node repo's
+  `node-repo-publish-bake` lane bakes and publishes its own content **under the SAME framework
+  identity, from the SAME image**. That identity is what makes the sets composable.
+- **`main-cd.yml` checks out no other repository — deliberately.** Its own words: *"there is not one
+  `repository:` input in this file, so it could not compile them even by accident — and must never be
+  given the chance."* Content a deployment receives ALREADY BUILT must be **adopted, not rebuilt**;
+  recompiling it is the expensive half of a bake and re-does work another lane already did.
+
+So "build everything, publish everything from one pipeline" is not a gap to close — it is a reversal
+of a constraint this file states and defends. That may still be the right call, but it is a
+**maintainer decision to change a deliberate design**, not a repair, and it should be argued against
+the reason above rather than around it.
+
+### What the GUI move DOES break
+
+The real exposure is narrower and is not about publication at all:
+
+1. **Nothing compiles the moved portal hosts.** `MeshWeaver.Plugins/ci.yml` builds named
+   `MeshWeaver.*` module rows; `Memex.Portal.Gui` / `Monolith` / `Distributed` are not rows. Today a
+   break is still caught by **core's image build** — which the deletion removes. Coverage reaches
+   zero at that moment, silently, because nothing reports a check that is not there.
+2. **The template needs a run with both trees — RESOLVED, and by moving the generator.** It COPIES
+   six project directories and rewrites their `ProjectReference`s to `PackageReference`s. Three of
+   the six leave with the GUI and three stay, so neither repo has all six. This paragraph used to
+   conclude that moving the generator "does not help"; that was wrong, and the reason is a detail
+   that did not exist when it was written: **MeshWeaver.Plugins' CI already clones the platform**
+   (for `check-surface-manifest.py --core`), so it is the one place both trees are present. The
+   generator now lives there and takes `--core <MeshWeaver checkout>`, with each of the six projects
+   tagged by the root it resolves against.
+
+   The trap that made this expensive to see: the generator reads **core's** tree, so its failures do
+   NOT clear when files land in plugins — the dependency runs the opposite way from how it looks.
+
+**The maintainer's ordering for the template** — `build all−template → package all−template →
+build+test template → pack template` — follows from the rewrite: the generated solution resolves
+against PACKAGES, so it cannot be built before they exist. The template is **downstream of
+publication**, not another leg.
+
+### If the pipelines are ever unified, the mechanism already exists
+
+Every image leg pushes only a non-selectable `staging-<sha>-<run_id>`; `promote` applies the real
+tags after all legs succeed. Extending atomicity means adding legs to that same `needs:` — never a
+second gate that has to be kept in step with the first.
+
+And the event rule composes only one way: plugins CI must NOT subscribe to a platform-released event
+(verified — zero `repository_dispatch` in its three workflows). Whoever publishes, emits, on an
+OBSERVED publication — the same reason `delivery-verdict` must not pass on an empty verdict (#2311),
+and `FrameworkReleaseBroadcaster` fires on a real release rather than from a CI step that runs
+regardless.
+
 ## Changing the pipeline
 
 Adding a sixth image touches **three** places, and missing any one of them recreates the exact hole
@@ -304,6 +369,50 @@ on:
 > image from it and fail hard without it:
 > `gh api repos/Systemorph/<repo>/dispatches -f event_type=meshweaver-framework-released -f 'client_payload[version]=<released version>'`.
 > Firing without a payload is how a "remedy" turns into a red bake that changes nothing.
+
+### The release EVENT — pushed, but from memex, and now failable
+
+The pull above is the guarantee. Since 2026-08-23 it is also **broadcast**, so the wave is prompt
+instead of arriving up to a schedule interval late — and the broadcast is placed so that neither
+objection to `notify-dependents` comes back:
+
+```
+CD (this repo)                       memex (the control instance)          the node repos
+──────────────                       ────────────────────────────          ──────────────
+promote ✅                            WebhookInbox: Hosting/PlatformBuilds
+   │                                        │  (allowlist + size cap only)
+   └─ notify-platform-update ──POST────────▶│
+      HMAC-SHA256 over the RAW body         ├─ PlatformBuildInboxWatcher verifies the HMAC
+      (secrets.PLATFORM_WEBHOOK_SECRET)     │     against Hosting:PlatformWebhookSecret
+                                            ├─ PlatformPinUpdater → MW_IMAGE_DIGEST bump PRs
+                                            └─ FrameworkReleaseBroadcaster ──dispatch──▶ ✅ rebake
+                                                 (the GitHub App memex already holds for GitSync)
+```
+
+- **No credential in the release path.** The platform holds no write access to any satellite and no
+  PAT; it signs one POST. The fan-out uses the App memex already has.
+- **No list in this repo.** The subscriber set lives in memex's own Hosting fleet registry. The
+  vestigial `BAKE_SUBSCRIBER_REPOS` repo variable was **deleted on 2026-08-25** — a leftover that
+  looks like the live subscriber list is worse than none.
+
+🚨 **The notify job is a GATE, not a reporter (#2235).** It was written reporter-class — "losing one
+notification costs one delayed rebake wave" — with an input-shaped `if [ -z "$SECRET" ] … exit 0`
+and a `::warning::` on every non-2xx. Result: **zero releases broadcast between 2026-08-22 and
+2026-08-25, and a green tick on every promote.** Now `preflight` asserts `PLATFORM_WEBHOOK_URL` +
+`PLATFORM_WEBHOOK_SECRET` RED naming what to provision, every non-2xx is `exit 1` with a message
+naming which of the three causes it is, and both jobs are in `alert-on-failure`'s `needs` so the
+failure is filed rather than merely rendered. It runs after `promote`, so failing it cannot
+unpublish anything — the images ship and the installs still self-update; what changes is that
+"nobody was told" stops looking like success. `PlatformReleaseNotifyGuard`
+(`test/MeshWeaver.Documentation.Test`) pins all of it.
+
+🚨 **A 2xx still does NOT prove the wave ran.** The inbox is deliberately dumb, so 2xx means
+*stored*. The half CD cannot see is the shared HMAC: an unset or mismatched
+`Hosting:PlatformWebhookSecret` on the control instance (Key Vault → `Hosting-PlatformWebhookSecret`;
+see `deploy/aks/envs/example/secretproviderclass.yaml`) makes the watcher drop every delivery as
+unverifiable, and the POST still answers 2xx. The close condition for the mechanism is therefore
+observed on the SATELLITES — a `repository_dispatch` run plus the `MW_IMAGE_DIGEST` bump PR — never
+a green tick in CD.
 
 Provisioning state (2026-08-17): the satellites' **publish** credentials ARE provisioned. The Azure
 managed identity `github-actions-bake` (in the cluster's resource group) holds *Storage File Data

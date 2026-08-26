@@ -304,17 +304,73 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
                 logger?.LogDebug(ex,
                     "PostgreSqlPartitionStorageProvider: transient concurrent-DDL error ({SqlState}: {Message}) on attempt {Attempt}/{Max}; retrying",
                     ex.SqlState, ex.MessageText, attempt, maxAttempts);
-                await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), ct).ConfigureAwait(false);
+                await Task.Delay(DdlRaceBackoff(attempt), ct).ConfigureAwait(false);
             }
         }
     }
 
+    /// <summary>
+    /// Backoff between concurrent-DDL retries: 50 ms × attempt, JITTERED by up to ±40%.
+    ///
+    /// <para>🚨 The jitter is load-bearing, not decoration. The losers of a catalog race are, by
+    /// construction, two sessions that issued the same statement at the same instant; a
+    /// deterministic delay re-synchronises them and they collide again on every attempt until the
+    /// bound is exhausted. Spreading the wake-ups is what makes a bounded retry actually converge.</para>
+    /// </summary>
+    private static TimeSpan DdlRaceBackoff(int attempt) =>
+        TimeSpan.FromMilliseconds(50 * attempt * (0.6 + Random.Shared.NextDouble() * 0.8));
+
     /// <summary>Postgres errors meaning "another session is concurrently running the same idempotent
-    /// DDL" — transient and safe to retry (the retry observes the committed result).</summary>
-    private static bool IsTransientDdlRace(PostgresException ex) =>
+    /// DDL" — transient and safe to retry (the retry observes the committed result).
+    ///
+    /// <para>🚨 <c>IF NOT EXISTS</c> is NOT race-free, and that is the whole of issue #2130.
+    /// Postgres checks for the object and inserts the catalog row in two separate steps under no
+    /// common lock, so two sessions running the same <c>CREATE SCHEMA IF NOT EXISTS</c> can both
+    /// pass the check and the loser's insert then violates a SYSTEM-CATALOG unique index —
+    /// <c>23505 duplicate key value violates unique constraint "pg_namespace_nspname_index"</c>
+    /// (the exact error that silently dropped AppleMaps/ICloud/GoogleMaps/Agent package installs).
+    /// The same race on a table/index/type/trigger surfaces either as 23505 on its own catalog
+    /// index or as the corresponding <c>duplicate_*</c> state. All of them mean "the winner
+    /// committed the object"; re-running this provisioning DDL then finds it present and
+    /// succeeds.</para>
+    ///
+    /// <para>🚨 The 23505 arm is scoped to a SYSTEM CATALOG constraint (<c>pg_*</c>) precisely so it
+    /// can never swallow an application-level unique violation — a duplicate mesh-node primary key
+    /// stays a hard error, as <c>PostgreSqlStorageAdapter.IsTransientConnectionFault</c> also
+    /// insists.</para></summary>
+    internal static bool IsTransientDdlRace(PostgresException ex) =>
         ex.MessageText.Contains("tuple concurrently updated", StringComparison.OrdinalIgnoreCase)
         || ex.SqlState == PostgresErrorCodes.DeadlockDetected
-        || ex.SqlState == PostgresErrorCodes.SerializationFailure;
+        || ex.SqlState == PostgresErrorCodes.SerializationFailure
+        || IsCatalogUniqueViolation(ex)
+        || IsDuplicateObject(ex);
+
+    /// <summary>
+    /// A <c>23505</c> whose violated constraint is a SYSTEM CATALOG index (<c>pg_namespace_nspname_index</c>,
+    /// <c>pg_type_typname_nsp_index</c>, <c>pg_class_relname_nsp_index</c>, <c>pg_extension_name_index</c>, …)
+    /// — i.e. another session committed the same catalog object between our existence check and our
+    /// insert. Never an application constraint: those keep propagating as the real errors they are.
+    /// The constraint name is read from the structured field, with a message fallback because a
+    /// server configured with <c>Include Error Detail=false</c> redacts DETAIL but not the message.
+    /// </summary>
+    private static bool IsCatalogUniqueViolation(PostgresException ex)
+    {
+        if (ex.SqlState != PostgresErrorCodes.UniqueViolation) return false;
+        if (!string.IsNullOrEmpty(ex.ConstraintName))
+            return ex.ConstraintName.StartsWith("pg_", StringComparison.OrdinalIgnoreCase);
+        return ex.MessageText.Contains("\"pg_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The "already exists" states an idempotent <c>CREATE … IF NOT EXISTS</c> can only produce by
+    /// losing a race — every statement this provider issues carries the guard, so a duplicate here
+    /// is never a genuine authoring error.
+    /// </summary>
+    private static bool IsDuplicateObject(PostgresException ex) =>
+        ex.SqlState is PostgresErrorCodes.DuplicateSchema
+            or PostgresErrorCodes.DuplicateTable
+            or PostgresErrorCodes.DuplicateObject
+            or PostgresErrorCodes.DuplicateFunction;
 
     private async Task<PartitionDefinition> EnsureSchemaAsync(
         PartitionDefinition def, CancellationToken ct)
@@ -387,8 +443,13 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
                 VectorDimensions = _options.VectorDimensions,
                 Schema = schema
             };
-            await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
-                ddlDs, schemaOptions, extraTables, ct).ConfigureAwait(false);
+            // Same concurrent-DDL exposure as the proc above (CREATE TABLE IF NOT EXISTS races a
+            // concurrent creator on pg_type_typname_nsp_index / pg_class_relname_nsp_index), so it
+            // gets the same bounded, jittered retry rather than faulting the whole provisioning.
+            await ExecuteDdlWithRetryAsync(attemptCt =>
+                    PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
+                        ddlDs, schemaOptions, extraTables, attemptCt),
+                ct, _logger).ConfigureAwait(false);
         }
 
         // 🚨 Register the brand-new partition in the CENTRAL registry (public.searchable_schemas)

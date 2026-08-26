@@ -58,18 +58,17 @@ public interface ICrossSchemaQueryProvider
         string prefix, string? userId, int limit, CancellationToken ct = default);
 
     /// <summary>
-    /// Queries nodes across multiple schemas in a single SQL UNION ALL query.
-    /// </summary>
-    IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
-        ParsedQuery query,
-        JsonSerializerOptions options,
-        IReadOnlyList<string> schemas,
-        string? userId = null,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Queries a satellite table across multiple schemas in a single SQL UNION ALL query.
-    /// Used for satellite node types (Thread, Activity, etc.) that live in dedicated tables.
+    /// Queries a table across multiple schemas in a single SQL UNION ALL query — the primary
+    /// <c>mesh_nodes</c> projection AND the satellite tables (Thread, Activity, …) alike.
+    ///
+    /// <para>🚨 There is exactly ONE fan-out shape, and it applies NO default limit: an unpinned
+    /// query that states no limit gets every match. A second, PAGING shape used to sit beside this
+    /// one — it substituted a 50-row default and warned that it had truncated — and it was
+    /// unreachable: <c>PostgreSqlPartitionedMeshQuery.EnumerateFanOutAsync</c> and its Snowflake
+    /// twin, the runtime path for every unpinned query, have only ever called THIS overload. It is
+    /// deleted (#2048) rather than wired, because a silent default clip is precisely the defect
+    /// #1216 / #1326 / #1960 were filed against; if a bound is ever wanted it belongs here, stated
+    /// loudly, on the one shape the runtime executes.</para>
     /// </summary>
     IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
         ParsedQuery query,

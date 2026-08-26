@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Embeddings;
@@ -51,11 +53,41 @@ public static class EmbeddingExtensions
     /// Registers the provider selected by <paramref name="options"/> as the singleton
     /// <see cref="IEmbeddingProvider"/>; no-op when <see cref="CreateEmbeddingProvider"/>
     /// yields null. Returns true when a provider was registered.
+    ///
+    /// <para>Either way it records the decision as a singleton
+    /// <see cref="EmbeddingCapability"/> and registers
+    /// <see cref="EmbeddingCapabilityReporter"/>, so the host says once, at startup, whether
+    /// semantic search is on and — when it is not — exactly which configuration key would turn it
+    /// on. The bool this returns is a composition detail only one caller reads; the log line is
+    /// what an operator has.</para>
+    ///
+    /// <para>🚨 It deliberately does NOT fall back to registering
+    /// <see cref="NullEmbeddingProvider"/> when embeddings are off. The PRESENCE of an
+    /// <see cref="IEmbeddingProvider"/> registration is the capability signal every consumer reads
+    /// (<c>sp.GetService&lt;IEmbeddingProvider&gt;()</c> in both storage backends, and the
+    /// content-indexing module's resolve-time <c>enabledWhen</c> gate). A Null default would report
+    /// the capability as PRESENT on a deployment that has none: the query path would survive it
+    /// (a null vector falls through to ILIKE), but the indexing pipeline would activate against an
+    /// embedder that can never embed — re-creating issue #1642 from the other direction.
+    /// <see cref="NullEmbeddingProvider"/> stays what it is: an explicit stand-in a caller opts
+    /// into, not a silent default.</para>
     /// </summary>
+    /// <param name="services">The service collection to register into.</param>
+    /// <param name="options">The bound <c>Embedding</c> configuration section.</param>
+    /// <returns><c>true</c> when a provider was registered.</returns>
     public static bool TryAddEmbeddingProvider(
         this IServiceCollection services, EmbeddingOptions options)
     {
         var provider = options.CreateEmbeddingProvider();
+        // Reported from what actually happened, never re-derived — see EmbeddingCapability.From.
+        var capability = EmbeddingCapability.From(options, provider is not null);
+        // Last one wins, matching the provider registration below — a host wires one backend.
+        services.AddSingleton(capability);
+        // TryAddEnumerable dedupes by (ServiceType, ImplementationType), so a host that wires two
+        // storage backends still reports once.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, EmbeddingCapabilityReporter>());
+
         if (provider is null)
             return false;
         services.AddSingleton(provider);
