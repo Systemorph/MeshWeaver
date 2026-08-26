@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
@@ -19,6 +20,39 @@ public class PostgreSqlChangeListener : IAsyncDisposable
     private readonly ILogger<PostgreSqlChangeListener>? _logger;
     private CancellationTokenSource? _cts;
     private Task? _listenTask;
+
+    // Completed the instant `LISTEN mesh_node_changes` has actually executed — see Listening.
+    // AsyncSubject: it replays its completion to every later subscriber, so a consumer that asks
+    // after registration already happened is answered immediately rather than waiting for an
+    // announcement that has been and gone.
+    private readonly System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit> _listening = new();
+
+    /// <summary>
+    /// Completes once <c>LISTEN mesh_node_changes</c> has been REGISTERED on the dedicated
+    /// connection — i.e. from this point on a <c>NOTIFY</c> is actually delivered here.
+    ///
+    /// <para>🚨 <b>Why this is not the same as "StartAsync returned", and why nothing else can
+    /// stand in for it.</b> <see cref="StartAsync"/> deliberately returns as soon as the loop is
+    /// launched (a hosted service must not block host startup on a database being reachable), and
+    /// the loop then opens a connection FIRST and issues <c>LISTEN</c> second. In that window the
+    /// process is connected but not subscribed — and <b>Postgres never replays a
+    /// <c>NOTIFY</c></b>, so every notification fired in it is lost with no recovery path.</para>
+    ///
+    /// <para>The connection is therefore NOT a proxy for the subscription: a backend appears in
+    /// <c>pg_stat_activity</c> the moment it opens, which is exactly why the readiness probe that
+    /// counted rows there could go green before <c>LISTEN</c> had run and let a writer race it
+    /// (Systemorph/MeshWeaver#2281). Anything that must not miss the first notification waits on
+    /// THIS, which is signalled by the <c>LISTEN</c> statement itself completing.</para>
+    ///
+    /// <para>Completes on the FIRST successful registration only. A later reconnect re-issues
+    /// <c>LISTEN</c> but does not re-signal — this answers "has this listener ever come up", not
+    /// "is the connection healthy right now".</para>
+    /// </summary>
+    /// <remarks><c>AsObservable()</c>, not the subject: the runtime type would otherwise still be
+    /// <c>AsyncSubject&lt;Unit&gt;</c>, so a caller could downcast and SIGNAL readiness itself —
+    /// the one thing a readiness signal must never let anyone but its source do. Same guard as
+    /// <c>OrleansStreamingReadiness</c>.</remarks>
+    public IObservable<System.Reactive.Unit> Listening => _listening.AsObservable();
 
     /// <summary>
     /// Initializes the change listener.
@@ -71,6 +105,12 @@ public class PostgreSqlChangeListener : IAsyncDisposable
 
     /// <summary>
     /// Starts the background listener loop.
+    ///
+    /// <para>🚨 Returns as soon as the loop is LAUNCHED — deliberately, because this runs from an
+    /// <c>IHostedService</c> and a portal must not fail to start because the database is briefly
+    /// unreachable (the loop reconnects on its own). So "StartAsync completed" does NOT mean
+    /// "listening": wait on <see cref="Listening"/> for that, and read its remarks for why the
+    /// difference is a real, silent data-loss window rather than a technicality.</para>
     /// </summary>
     public Task StartAsync(CancellationToken ct = default)
     {
@@ -118,6 +158,11 @@ public class PostgreSqlChangeListener : IAsyncDisposable
                 }
 
                 _logger?.LogInformation("PostgreSQL LISTEN started on mesh_node_changes");
+                // The subscription now exists on the server, so from here a NOTIFY reaches us.
+                // Signalled AFTER ExecuteNonQueryAsync, never after OpenConnectionAsync — the
+                // whole point of Listening is that those two are not the same instant.
+                _listening.OnNext(System.Reactive.Unit.Default);
+                _listening.OnCompleted();
 
                 // WaitAsync will block until a notification arrives or cancellation is requested
                 while (!ct.IsCancellationRequested)

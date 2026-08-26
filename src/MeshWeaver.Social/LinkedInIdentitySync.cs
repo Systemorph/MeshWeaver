@@ -1,6 +1,5 @@
-using System;
 using System.Collections.Generic;
-using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace MeshWeaver.Social;
 
@@ -12,6 +11,14 @@ namespace MeshWeaver.Social;
 /// <para>The rule is READ-MERGE-WRITE, never replace: LinkedIn owns the display name and the
 /// photo, the mesh owns everything else (network, headline, owner, handle, profile URL). A
 /// wholesale content write would silently drop those.</para>
+///
+/// <para>🚨 <b>The result is a <see cref="JsonObject"/>, and that is load-bearing (issue #52).</b>
+/// This used to return a <c>Dictionary&lt;string, object?&gt;</c> carrying an explicit
+/// <c>["$type"] = "SocialProfile"</c> entry — which the platform's polymorphic converter DROPS,
+/// stamping the dictionary's own CLR collection name in its place. Every connect therefore rewrote
+/// a live profile to <c>"$type":"Dictionary`2[String,Object]"</c>, after which the profile read as
+/// empty and its posts could not be approved. <see cref="NodeContentJson"/> carries the full
+/// reasoning; the short version is that only a JSON shape is written verbatim.</para>
 /// </summary>
 public static class LinkedInIdentitySync
 {
@@ -22,76 +29,32 @@ public static class LinkedInIdentitySync
     public const string ImageUrlKey = "imageUrl";
 
     /// <summary>
-    /// The profile content with LinkedIn's <paramref name="displayName"/> and
-    /// <paramref name="pictureUrl"/> applied over whatever is already stored. Reads the existing
-    /// content in WHATEVER shape it arrives — a typed record, a <see cref="JsonElement"/>, or a
-    /// dictionary — because content typing depends on which hub last touched it. A null or blank
-    /// incoming value leaves the stored one alone: an account that exposes no photo must not
-    /// erase a good one. Pure.
+    /// The <c>$type</c> a <c>SocialMedia/Profile</c> node's content carries. Used only as the
+    /// FALLBACK: an existing discriminator always wins, because the stored node knows its own type
+    /// and this module — compiled, and unable to reference a dynamic NodeType's content class —
+    /// does not.
     /// </summary>
-    public static Dictionary<string, object?> Merge(object? existingContent, string? displayName, string? pictureUrl)
-    {
-        var merged = ToDictionary(existingContent);
-        merged["$type"] = "SocialProfile";
-        if (!string.IsNullOrWhiteSpace(displayName))
-            merged[DisplayNameKey] = displayName!.Trim();
-        if (!string.IsNullOrWhiteSpace(pictureUrl))
-            merged[ImageUrlKey] = pictureUrl!.Trim();
-        return merged;
-    }
+    public const string ProfileContentType = "SocialProfile";
 
     /// <summary>
-    /// Content as a camelCase property bag, whatever shape it arrived in. An unreadable or absent
-    /// content yields an empty bag rather than throwing — the caller still gets a valid profile
-    /// carrying the LinkedIn identity. Pure.
+    /// The profile content with LinkedIn's <paramref name="displayName"/> and
+    /// <paramref name="pictureUrl"/> applied over whatever is already stored. Reads the existing
+    /// content in WHATEVER shape it arrives — a typed record, a <c>JsonElement</c>, or a
+    /// dictionary — because content typing depends on which hub last touched it. A null or blank
+    /// incoming value leaves the stored one alone: an account that exposes no photo must not
+    /// erase a good one. The <c>$type</c> discriminator is preserved (or restored, on a profile
+    /// an earlier build already damaged). Pure.
     /// </summary>
-    public static Dictionary<string, object?> ToDictionary(object? content)
+    /// <param name="existingContent">The profile's content as stored, in any shape.</param>
+    /// <param name="displayName">LinkedIn's display name; ignored when blank.</param>
+    /// <param name="pictureUrl">LinkedIn's profile photo URL; ignored when blank.</param>
+    public static JsonObject Merge(object? existingContent, string? displayName, string? pictureUrl)
     {
-        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
-        switch (content)
-        {
-            case null:
-                return result;
-
-            case IDictionary<string, object?> dict:
-                foreach (var kv in dict)
-                    result[kv.Key] = kv.Value;
-                return result;
-
-            case JsonElement { ValueKind: JsonValueKind.Object } element:
-                foreach (var property in element.EnumerateObject())
-                    result[property.Name] = Unwrap(property.Value);
-                return result;
-
-            default:
-                // A typed record (the hub's own content type): round-trip through camelCase JSON —
-                // the casing the mesh stores and every reader expects.
-                try
-                {
-                    var json = JsonSerializer.Serialize(content, content.GetType(), CamelCase);
-                    using var doc = JsonDocument.Parse(json);
-                    if (doc.RootElement.ValueKind == JsonValueKind.Object)
-                        foreach (var property in doc.RootElement.EnumerateObject())
-                            result[property.Name] = Unwrap(property.Value);
-                }
-                catch (Exception)
-                {
-                    // Unserializable content must not break a login callback.
-                }
-                return result;
-        }
+        var updates = new List<KeyValuePair<string, object?>>(2);
+        if (!string.IsNullOrWhiteSpace(displayName))
+            updates.Add(new(DisplayNameKey, displayName!.Trim()));
+        if (!string.IsNullOrWhiteSpace(pictureUrl))
+            updates.Add(new(ImageUrlKey, pictureUrl!.Trim()));
+        return NodeContentJson.Merge(existingContent, ProfileContentType, updates);
     }
-
-    private static readonly JsonSerializerOptions CamelCase =
-        new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-
-    private static object? Unwrap(JsonElement value) => value.ValueKind switch
-    {
-        JsonValueKind.String => value.GetString(),
-        JsonValueKind.Number => value.TryGetInt64(out var l) ? l : value.GetDouble(),
-        JsonValueKind.True => true,
-        JsonValueKind.False => false,
-        JsonValueKind.Null or JsonValueKind.Undefined => null,
-        _ => value.Clone(),
-    };
 }
