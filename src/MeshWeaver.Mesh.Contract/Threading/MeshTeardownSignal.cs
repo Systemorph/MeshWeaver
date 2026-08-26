@@ -15,11 +15,18 @@ namespace MeshWeaver.Mesh.Threading;
 /// </summary>
 /// <param name="LeakedIoLeaves">Pooled I/O leaves that ignored cancellation and were still
 /// running when their drain budget expired (see <c>IoPool.Drain</c>). 0 = the join is real.</param>
-public sealed record TeardownReport(int LeakedIoLeaves)
+/// <param name="AsyncDisposeClean">🚨 Always <c>true</c> since the async dispose queue was
+/// removed (#2442 — nothing had ever enqueued to it). RETAINED for binary compatibility only:
+/// dropping it changes this record's primary-constructor ARITY, and a consumer compiled against
+/// the old signature aborts its host at boot with MissingMethodException, in both directions.
+/// That change therefore needs an atomic move — every bundle rebuilt and republished, then the
+/// image rolled — so it rides a planned republish rather than a cleanup. Delete it then,
+/// together with its term in <see cref="TeardownReport.Clean"/>.</param>
+public sealed record TeardownReport(int LeakedIoLeaves, bool AsyncDisposeClean)
 {
     /// <summary>True iff nothing survived teardown — the scope may be disposed and node ALCs
     /// unloaded with no thread still executing their code.</summary>
-    public bool Clean => LeakedIoLeaves == 0;
+    public bool Clean => LeakedIoLeaves == 0 && AsyncDisposeClean;
 
     /// <summary>One-line summary for logs and failure messages.</summary>
     public override string ToString() => Clean

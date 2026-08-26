@@ -1375,7 +1375,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // The terminal signal — DISPOSE_DONE is only true when this report is CLEAN. Fire it
             // before the scope disposes below so any subscriber ordering on "all is done" (ALC
             // unload hooks, diagnostics) observes the truthful terminal state, dirty or not.
-            var teardownReport = new TeardownReport(leakedIoLeaves);
+            var teardownReport = new TeardownReport(leakedIoLeaves, true /* the async dispose queue is gone (#2442); this arg is binary-compat residue */);
             teardownSignal?.SignalCompleted(teardownReport);
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms — {teardownReport}");
             TestPhaseTrace(testName, "DISPOSE_DONE", sw.ElapsedMilliseconds, teardownReport.ToString());

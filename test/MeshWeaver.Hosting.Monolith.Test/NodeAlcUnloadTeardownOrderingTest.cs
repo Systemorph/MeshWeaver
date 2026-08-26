@@ -332,7 +332,7 @@ public class NodeAlcUnloadTeardownOrderingTest(ITestOutputHelper output) : Monol
         var leakedIoLeaves = ioPools.DrainAll();
         orderLog.Mark(DrainAllReturnedMark);
 
-        teardownSignal.SignalCompleted(new TeardownReport(leakedIoLeaves));
+        teardownSignal.SignalCompleted(new TeardownReport(leakedIoLeaves, true /* the async dispose queue is gone (#2442); this arg is binary-compat residue */));
 
         var marks = orderLog.Marks;
         Output.WriteLine($"[diag] teardown marks: {string.Join(" | ", marks)}");
