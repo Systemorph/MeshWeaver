@@ -1011,6 +1011,24 @@ types. The satellites escape it precisely because they bake INSIDE the image.
   resolve different identities (see the identity rule above). Local arm64 installs compile at boot
   as they always have; nothing may paper over this by publishing the same bundles twice.
 
+  🚨 **That rule is now ENFORCED, not just stated** — and it had to be, because it holds only for
+  *part* of the identity space. `FrameworkBuildIdentity` resolves **surface identity (`s<hash>`) →
+  stamped commit identity (`g<sha>`) → MVID set**. The first is architecture-sensitive (the four
+  reference assemblies above genuinely differ), so the two lanes get different directories and
+  cannot collide. **`g<sha>` is not**: it is the same string for every CI build of a commit,
+  whatever it was built on. Under that identity a second architecture would either be told
+  "already published" by the content×framework sealed-skip and ship *nothing* — leaving its pods
+  adopting the other architecture's bytes — or unseal and *overwrite* the incumbent. Both silent.
+
+  So `publish-bake-bundles.sh` records the producing architecture beside the content marker
+  (`architecture.txt`) and **refuses** a publication whose architecture differs from the one
+  already under that identity, rather than skipping or overwriting. An incumbent with no marker
+  predates the recording and can only be the amd64 lane, so a non-`linux-x64` bake refuses that
+  too. Set `BAKE_ARCHITECTURE` (`linux-x64` | `linux-arm64`) in any lane that is not amd64.
+
+  This is what a per-architecture publish needs *first*: adding an arm64 lane without it does not
+  produce two lanes, it corrupts one.
+
 See also: [Plugin Packaging](/Doc/Architecture/PluginPackaging) (the compilation-unit rules and the
 MVID rationale) · [Build Coordination](/Doc/Architecture/BuildCoordination) (who bakes when several
 replicas boot) · [Modules](/Doc/Architecture/Modules) · [Release Availability
