@@ -2775,6 +2775,23 @@ internal static class ThreadExecution
                         // already aggregated any UsageContent seen prior to the
                         // OperationCanceledException — so the cell + thread reflect what
                         // the round actually cost.
+                        // 🪙 #595: an OpenAI-compatible provider emits usage ONLY in its terminal
+                        // chunk — a cancel this early means the streaming loop above never saw a
+                        // UsageContent block at all, so inputTokens/outputTokens are still null and
+                        // RecordUsage below would silently no-op while the provider had already
+                        // billed the prompt it processed. When the provider reported NOTHING (not a
+                        // partial figure — genuinely nothing), fall back to a deterministic,
+                        // provider-independent character estimate: the prompt actually sent is known
+                        // before the request was issued (allMessages — the exact list handed to
+                        // GetStreamingResponseAsync at :2335), and the text actually streamed before
+                        // the cancel is exactly cancelText. Never invented when the provider DID
+                        // report something for either counter — only fills the total silence.
+                        var cancelUsageEstimated = inputTokens is null && outputTokens is null;
+                        if (cancelUsageEstimated)
+                        {
+                            inputTokens = TokenUsageNodeType.EstimateTokens(allMessages.Sum(m => m.Text?.Length ?? 0));
+                            outputTokens = TokenUsageNodeType.EstimateTokens(cancelText.Length);
+                        }
                         totalTokens = NormalizeTotal(totalTokens, inputTokens, outputTokens);
                         // 🪙 #476: the model that ACTUALLY ran, exactly as the Completed branch and
                         // RecordUsage record it — a cancelled round's cell must not claim the
@@ -2808,7 +2825,7 @@ internal static class ThreadExecution
                         TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                             AgentPickerProjection.PartitionOf(threadPath),
                             actualModel ?? effectiveModel ?? request.ModelName, inputTokens, outputTokens, execLogger,
-                            cacheReadTokens, cacheWriteTokens)
+                            cacheReadTokens, cacheWriteTokens, isEstimate: cancelUsageEstimated)
                         .Subscribe(
                             _ => { },
                             ex => execLogger?.LogWarning(ex,
@@ -2950,6 +2967,18 @@ internal static class ThreadExecution
                         // forbidden per feedback_no_totask_in_src.md / AsynchronousCalls.md.)
                         // Record tokens consumed before the fault (same rationale as the
                         // Cancelled branch) so an errored round still reports its cost.
+                        // 🪙 #595: same fallback as the Cancelled branch above — when the provider
+                        // reported NOTHING before the fault (an OpenAI-compatible provider's usage
+                        // arrives only in a terminal chunk the failure pre-empted), estimate from
+                        // the prompt actually sent (allMessages) and the text actually streamed
+                        // before the error (errorTextBase — NOT errorText, which has the
+                        // diagnostic "*Error: …*" prose appended and is never model output).
+                        var errorUsageEstimated = inputTokens is null && outputTokens is null;
+                        if (errorUsageEstimated)
+                        {
+                            inputTokens = TokenUsageNodeType.EstimateTokens(allMessages.Sum(m => m.Text?.Length ?? 0));
+                            outputTokens = TokenUsageNodeType.EstimateTokens(errorTextBase.Length);
+                        }
                         totalTokens = NormalizeTotal(totalTokens, inputTokens, outputTokens);
                         // 🪙 #476 — THE issue's repro: a round asked for model X, ran on the fallback
                         // Y, and died on Y's 429. The error cell stamped `request.ModelName` (X), so
@@ -2980,7 +3009,7 @@ internal static class ThreadExecution
                         TokenUsageNodeType.RecordUsage(parentHub, threadPath,
                             AgentPickerProjection.PartitionOf(threadPath),
                             servingModel, inputTokens, outputTokens, execLogger,
-                            cacheReadTokens, cacheWriteTokens)
+                            cacheReadTokens, cacheWriteTokens, isEstimate: errorUsageEstimated)
                         .Subscribe(
                             _ => { },
                             recEx => execLogger?.LogWarning(recEx,

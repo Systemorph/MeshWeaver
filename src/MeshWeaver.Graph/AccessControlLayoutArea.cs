@@ -563,7 +563,11 @@ public static class AccessControlLayoutArea
                             {
                                 // First-time create — only IMeshService.CreateNode
                                 // brings the per-node hub into existence.
-                                var policyNode = new MeshNode("_Policy", nodePath ?? "")
+                                // Satellite(): MainNode = the scope this policy caps, not the
+                                // policy's own path (#2383). CreateNode normalises this too, but a
+                                // writer that states its own parentage is what makes the durable row
+                                // right on EVERY backend, including the ones that bypass the handler.
+                                var policyNode = MeshNode.Satellite("_Policy", nodePath ?? "") with
                                 {
                                     NodeType = "PartitionAccessPolicy",
                                     Name = "Access Policy",

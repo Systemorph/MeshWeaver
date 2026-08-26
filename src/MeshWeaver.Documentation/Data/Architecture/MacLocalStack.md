@@ -136,7 +136,7 @@ portal / db-migration ──OTLP/HTTP──▶ otel-collector ─┬─ logs   �
 | `prometheus` | `prom/prometheus` | 9090 | metrics (remote-write receiver) |
 | `grafana` | `grafana/grafana` | 3000 | dashboards (anonymous admin, datasources pre-provisioned) |
 
-These are **CPU-only**, so containers are fine. Configs live in `memex/aspire/Memex.AppHost/observability/`;
+These are **CPU-only**, so containers are fine. Configs live in `../MeshWeaver.Plugins/src/Memex.AppHost/observability/`;
 data persists in volumes across restarts. OTLP uses **HTTP/protobuf** (4318) rather than gRPC to avoid
 http/2-through-proxy fragility. Open **Grafana** from the Aspire dashboard's resource list → Explore → Loki.
 
@@ -155,8 +155,8 @@ ollama serve &                       # only if you enabled --localai
 ollama pull qwen3-coder:30b
 
 # The local cluster, with both extras:
-aspire run --project memex/aspire/Memex.AppHost -- --observability true --localai true
-#   • plain:                 aspire run --project memex/aspire/Memex.AppHost
+aspire run --project ../MeshWeaver.Plugins/src/Memex.AppHost -- --observability true --localai true
+#   • plain:                 aspire run --project ../MeshWeaver.Plugins/src/Memex.AppHost
 #   • observability only:    ... -- --observability true
 #   • local AI only:         ... -- --localai true
 ```
@@ -180,8 +180,8 @@ metrics, and the **portal** for the app. The MAUI client is separate — see [§
 
 | Concern | File |
 |---|---|
-| Local-cluster extras (LGTM + Ollama/Qwen wiring, opt-in flags) | `memex/aspire/Memex.AppHost/MemexLocalStack.cs` |
-| Observability configs (collector, Loki, Tempo, Prometheus, Grafana datasources) | `memex/aspire/Memex.AppHost/observability/` |
+| Local-cluster extras (LGTM + Ollama/Qwen wiring, opt-in flags) | `../MeshWeaver.Plugins/src/Memex.AppHost/MemexLocalStack.cs` |
+| Observability configs (collector, Loki, Tempo, Prometheus, Grafana datasources) | `../MeshWeaver.Plugins/src/Memex.AppHost/observability/` |
 | OpenTelemetry emission (already wired) | `memex/aspire/Memex.Portal.ServiceDefaults/ServiceDefaults.cs` |
 | OpenAI-compatible provider (serves Ollama) | `src/MeshWeaver.AI.OpenAI/OpenAIExtensions.cs` |
 | On-device voice + CoreML apple image | [On-device voice](/Doc/Architecture/OnDeviceVoice) · `memex/Memex.Client/Voice/` |

@@ -1355,6 +1355,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
             using var cts = new CancellationTokenSource(DisposeTimeout);
             await WaitWithProgressAsync(testName, sw, cts.Token);
+            // 🚨 The three post-dispose phases are traced INDIVIDUALLY, because the gap between
+            // DISPOSE_INVOKED and DISPOSE_DONE was the one stretch of teardown that could hang
+            // with nothing at all written to the one file CI keeps: the hub-side wait above ends
+            // in a DISPOSE_TIMEOUT trace, but DrainAll() below is synchronous, unlogged and (until
+            // #2394) unbounded — so a wedge there presented as an 8&#160;min whole-assembly
+            // exit=124 naming no test and no phase. These markers make that phase attributable
+            // from the trace file alone, which is all a killed host leaves behind.
+            TestPhaseTrace(testName, "DISPOSE_IOPOOL_DRAIN_START", sw.ElapsedMilliseconds);
             // DisposalCompleted only drains the action blocks + message round-trips.
             // Offloaded I/O (IIoPool) runs on the ThreadPool independently and is NOT
             // covered — CANCEL + JOIN it here, BEFORE base.DisposeAsync tears down the
@@ -1364,10 +1372,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // completes on its own, so a WAIT-only drain would time out and let the scope
             // dispose under it; DrainAll() cancels the leaf so it stops, then joins.
             var leakedIoLeaves = ioPools?.DrainAll() ?? 0;
+            TestPhaseTrace(testName, "DISPOSE_IOPOOL_DRAIN_DONE", sw.ElapsedMilliseconds,
+                $"leakedIoLeaves={leakedIoLeaves}");
             // After all the sync stuff is disposed (and everyone has enqueued their async
             // cleanup), quiesce the async dispose queue before the scope closes below.
             var asyncDisposeClean = asyncDisposeQueue is null
                 || await asyncDisposeQueue.DrainAsync(DisposeTimeout);
+            TestPhaseTrace(testName, "DISPOSE_ASYNC_QUEUE_DRAINED", sw.ElapsedMilliseconds,
+                $"clean={asyncDisposeClean}");
 
             // The terminal signal — DISPOSE_DONE is only true when this report is CLEAN. Fire it
             // before the scope disposes below so any subscriber ordering on "all is done" (ALC
