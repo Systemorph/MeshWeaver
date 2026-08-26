@@ -53,6 +53,23 @@ public class MessageService : IMessageService
     private readonly IMessageHub hub;
 
     /// <summary>
+    /// The activation-identity token every <see cref="ErrorType.ShuttingDown"/> NACK a caller can
+    /// re-probe against (<c>GetMeshNodeOutcome</c>'s paced loop, #2025) must embed. Stable for
+    /// THIS hub instance's whole lifetime and different across activations — the datum that lets
+    /// the re-probe loop count DISTINCT owner activations instead of raw probes, i.e. tell "one
+    /// hub wedged in teardown" from "a recycle storm" (opposite fixes).
+    ///
+    /// <para>🚨 Factored into ONE place deliberately (Copilot review on #2376 caught two NACK
+    /// sites that had drifted from each other: one embedded no activation identity at all, the
+    /// other paired it with a per-DELIVERY id that varies on every retry even against the SAME
+    /// activation — either shape defeats the counter, in opposite directions). Every ShuttingDown
+    /// NACK this service mints for a delivery the reader can re-probe must call this, not inline
+    /// its own <c>RuntimeHelpers.GetHashCode</c>.</para>
+    /// </summary>
+    private string ActivationTag() =>
+        $"activation #{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(hub):X8}";
+
+    /// <summary>
     /// The hub tree's handler-side trail for awaited requests (issue #981). Every stage recorded
     /// below is guarded by <c>Find(id)</c> returning non-null — i.e. SOMEONE in this tree is
     /// currently awaiting a reply to that delivery — so an ordinary fire-and-forget message costs
@@ -810,10 +827,39 @@ public class MessageService : IMessageService
             // path, and ANY terminal treatment killed the sync stream's resubscribe latch —
             // each wedged every read of the mid-recycle NodeType.
             fate?.Add($"DROPPED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
-            NackThroughParent(delivery,
-                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process "
-                + $"{typeName}; the address may reactivate (recycle / restart). Rejecting now.");
-            return delivery.Failed("Hub is shutting down");
+
+            // 🚨 Both halves matter, and this site got both wrong until #2350.
+            //
+            // NackThroughParent DECLINES (returns false) when there is no parent, or the parent is
+            // itself past DisposeHostedHubs. Ignoring the result meant: answered → the reporting
+            // path NACKed a SECOND time, because only FailedAndNacked sets SenderWasNacked;
+            // declined → the sender got nothing from here at all. In both cases the delivery
+            // carried NO classification, so ReportFailure fell back to ErrorType.Unavailable while
+            // the message still read "Hub is shutting down" — a transient race wearing an
+            // authoritative label.
+            //
+            // That defeats every consumer written against the documented contract, which is the
+            // whole reason Failed(string, ErrorType) exists: SynchronizationStream's resubscribe
+            // latch, MeshNodeStreamCache's shutdown-drop handling and PackageInstaller's retry all
+            // ride out ShuttingDown and treat anything else as terminal. Same idiom as
+            // AnswerUnreleasableDelivery above: honour the return value, and classify either way.
+            //
+            // 🚨 The ACTIVATION identity rides on the NACK too, and it is not decoration. A caller
+            // re-probing a ShuttingDown address (GetMeshNodeOutcome's paced loop) can otherwise
+            // not tell ONE hub wedged in teardown from a RECYCLE STORM — a hundred activations
+            // each dying before it can answer. Those have opposite fixes, and #2025 spent a full
+            // CI cycle on exactly that ambiguity: "still recycling after 110 probes" says nothing
+            // about whether it was 110 probes at one corpse or at 110 of them. The object hash is
+            // stable for an activation's lifetime and differs across activations, which is the
+            // whole question.
+            var reason =
+                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}, {ActivationTag()}) "
+                + $"— cannot process {typeName}; the address may reactivate (recycle / restart). "
+                + "Rejecting now.";
+
+            return NackThroughParent(delivery, reason)
+                ? delivery.FailedAndNacked("Hub is shutting down")
+                : delivery.Failed("Hub is shutting down", ErrorType.ShuttingDown);
         }
 
         // STORM CIRCUIT-BREAKER. Detect an unbounded retry/resubscribe/repost loop —
@@ -1477,8 +1523,13 @@ public class MessageService : IMessageService
             // gate and be dropped — the very reason NackThroughParent exists. It applies the
             // tombstone fork itself (transient ShuttingDown for an address that may reactivate,
             // authoritative NotFound for a deleted one) and skips traffic nobody awaits.
+            //
+            // 🚨 ActivationTag() rides here too (#2025, Copilot review on #2376), separate from the
+            // per-DELIVERY `(id=...)` right after it: the delivery id is unique to THIS message and
+            // varies on every retry even against the SAME activation, so a re-probe loop counting
+            // distinct owners must key off the activation tag, never the whole message text.
             NackThroughParent(delivery,
-                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — "
+                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}, {ActivationTag()}) — "
                 + $"{delivery.Message.GetType().Name} (id={delivery.Id}) was accepted before "
                 + "disposal began and its turn came too late to process. The address may "
                 + "reactivate (recycle / restart); retry to get the authoritative answer.");
@@ -1833,7 +1884,13 @@ public class MessageService : IMessageService
             }
 
             postFate?.Add($"POST_REFUSED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
-            return ((IMessageDelivery)delivery).Failed("Hub is shutting down");
+
+            // Classified, for the same reason as the intake gate (#2350): a refused POST during
+            // shutdown is transient — the address may reactivate — and an unclassified failure
+            // reaches the sender as ErrorType.Unavailable, which its recovery machinery reads as
+            // terminal. This site does NOT answer the sender itself, so Failed (not
+            // FailedAndNacked) stays correct; only the classification was missing.
+            return ((IMessageDelivery)delivery).Failed("Hub is shutting down", ErrorType.ShuttingDown);
         }
 
         // TODO V10: Which cancellation token to pass here? (12.01.2025, Roland Bürgi)

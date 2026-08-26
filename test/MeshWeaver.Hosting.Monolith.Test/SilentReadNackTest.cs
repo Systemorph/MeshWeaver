@@ -155,19 +155,82 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
         // satisfy this" — is what these two lines actually establish: the routing layer's failures
         // carry ErrorType.NotFound or a bare exception message (RoutingServiceBase), never this
         // prefix and never the retry sentence.
-        failure.Message.Should().Contain($"GetDataRequest({new MeshNodeReference()}) at '{path}'",
-            "NackSilentRead formats every one of its three terminals this way, and nothing else "
-            + "does — so this proves the answer came from HandleGetDataRequest rather than from "
-            + "the routing layer, WITHOUT pinning which of the three raced to it first");
-        failure.Message.Should().Contain("Retry against the fresh activation.",
-            "all three handler terminals promise the retry; a routing NACK promises nothing, so "
-            + "this is the second half of the same discrimination");
+        AnsweredByTheOwner(failure.Message ?? string.Empty, path).Should().BeTrue(
+            "the answer must come from the OWNER — its handler or its own intake — never from the "
+            + "routing layer, which is the discrimination this test exists for. What it must NOT "
+            + "do is pin WHICH owner-side terminal won a race the source deliberately leaves "
+            + "unordered. Got: " + failure.Message);
         failure.Message.Should().Contain("shutting down",
             "MeshNodeStreamCache.IsTransientOwnerFailure classifies by this marker; without it a "
             + "long-lived stream consumer tears down instead of riding the recycle out");
         failure.Message.Should().NotContain("No node found",
             "that phrase turns a retryable stall into a PROVABLE absence (MeshNodeStreamCache"
             + ".IsMissingNodeFailure) — the exact confusion this NACK exists to avoid");
+    }
+
+    /// <summary>
+    /// Whether a NACK came from the OWNER rather than from the routing layer — the discrimination
+    /// this test exists for, expressed over the owner's FOUR terminals rather than one of them.
+    ///
+    /// <para>🚨 Pinning a single terminal is how this assertion keeps failing on races the source
+    /// deliberately leaves unordered. #1599 already removed the first version of that mistake
+    /// (requiring the disposal arm's wording — 21 failures in 60 on unmodified main) by accepting
+    /// any of <c>HandleGetDataRequest</c>'s three terminals through their shared
+    /// <c>NackSilentRead</c> prefix. It still missed a FOURTH answer, which the source documents
+    /// at the site: a delivery ACCEPTED while the hub was healthy, queued, and reaching its turn
+    /// after <c>RunLevel</c> passed <c>ShutDown</c> is NACKed by the hub's own intake
+    /// (<c>MessageService</c>, "was accepted before disposal began and its turn came too late").
+    /// The read then never reaches the handler at all — so no handler prefix, and a red test on a
+    /// perfectly correct outcome. Observed 2026-08-21 while running this class beside two others.</para>
+    ///
+    /// <para>Nothing is lost by accepting it: all four are materially IDENTICAL to the caller —
+    /// <c>ErrorType.ShuttingDown</c>, the "shutting down" marker
+    /// <c>MeshNodeStreamCache.IsTransientOwnerFailure</c> classifies on, a retry promise, and
+    /// never "No node found". The routing layer's failures carry <c>ErrorType.NotFound</c> or a
+    /// bare exception message and match NEITHER shape, which is what keeps this a real check.</para>
+    /// </summary>
+    /// <param name="message">The <c>DeliveryFailure</c> message text.</param>
+    /// <param name="path">The owner's mesh path.</param>
+    /// <returns><c>true</c> when the NACK is owner-side.</returns>
+    internal static bool AnsweredByTheOwner(string message, string path) =>
+        // NackSilentRead — any of HandleGetDataRequest's three terminals.
+        (message.Contains($"GetDataRequest({new MeshNodeReference()}) at '{path}'", StringComparison.Ordinal)
+         && message.Contains("Retry against the fresh activation.", StringComparison.Ordinal))
+        // The hub's own intake — a delivery whose turn came after RunLevel passed ShutDown.
+        || (message.Contains($"Hub {path} is shutting down", StringComparison.Ordinal)
+            && message.Contains("retry to get the authoritative answer.", StringComparison.Ordinal));
+
+    /// <summary>
+    /// The widening above must still REFUSE a routing-layer NACK, or it has quietly deleted the
+    /// only thing this test was checking. Pure, so it runs with no mesh and no race.
+    /// </summary>
+    [Fact]
+    public void AnsweredByTheOwner_AcceptsEveryOwnerTerminal_AndRefusesRoutings()
+    {
+        const string path = "TestData/silent-read";
+        var reference = new MeshNodeReference();
+
+        AnsweredByTheOwner(
+            $"GetDataRequest({reference}) at '{path}': the owner is shutting down and the read is "
+            + "still outstanding. Retry against the fresh activation.", path)
+            .Should().BeTrue("the disposal arm of NackSilentRead");
+        AnsweredByTheOwner(
+            $"GetDataRequest({reference}) at '{path}': hosted-hub creation is frozen, so the read "
+            + "cannot be served. Retry against the fresh activation.", path)
+            .Should().BeTrue("the fault arm of NackSilentRead");
+        AnsweredByTheOwner(
+            $"Hub {path} is shutting down (RunLevel=Dead) — GetDataRequest (id=abc) was accepted "
+            + "before disposal began and its turn came too late to process. The address may "
+            + "reactivate (recycle / restart); retry to get the authoritative answer.", path)
+            .Should().BeTrue("the hub's own intake — the fourth terminal, and the one that reddened "
+                             + "this test on an outcome the source documents as correct");
+
+        AnsweredByTheOwner($"No node found at '{path}'", path)
+            .Should().BeFalse("a routing NotFound is a provable ABSENCE, not a recycling owner");
+        AnsweredByTheOwner($"No route to '{path}'", path)
+            .Should().BeFalse("a bare routing failure promises no retry and names no owner");
+        AnsweredByTheOwner($"Hub {path}/child is shutting down; retry to get the authoritative answer.", path)
+            .Should().BeFalse("a DIFFERENT hub's recycle is not this owner answering");
     }
 
     /// <summary>

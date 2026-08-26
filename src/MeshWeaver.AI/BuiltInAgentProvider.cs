@@ -54,6 +54,12 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         // The write caps keep the built-in agents unmodifiable.
         yield return new MeshNode("_Policy", RootNamespace)
         {
+            // 🚨 A satellite must point at its MAIN node, not at itself (#2383): the plain
+            // constructor defaults MainNode to the node's own path, which makes _Policy a main
+            // node by the catalog's definition (is:main KEEPS exactly the rows where MainNode ==
+            // Path) and lists "Access Policy" as content on every cover. New satellites:
+            // MeshNode.Satellite(id, main).
+            MainNode = RootNamespace,
             NodeType = "PartitionAccessPolicy",
             Name = "Access Policy",
             Content = new PartitionAccessPolicy

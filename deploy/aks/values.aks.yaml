@@ -86,6 +86,13 @@ config:
     # provisioned for anything to read the inbox — an allowlisted target with no watcher
     # stores deliveries nobody consumes.
     WebhookInbox__Targets__0: "Hosting/PlatformBuilds"
+    # A deployment that ALSO needs a second inbox target (e.g. memex-cloud additionally listens
+    # on Store/Payments for Stripe) sets __1 too — never a second writer of __0. See #2235: a
+    # hand-set `kubectl set env WebhookInbox__Targets__0=...` on the live Deployment permanently
+    # shadows whatever this ConfigMap renders for that SAME name (explicit `env:` beats `envFrom`),
+    # so the platform-build target silently never took effect even though the ConfigMap was
+    # correct. Leave empty when only one target is needed.
+    WebhookInbox__Targets__1: ""
     # ---- Instance branding (per-env) ----------------------------------------
     # Large Safari bookmark / Start-Page / Add-to-Dock tile (apple-touch-icon, 180×180 PNG).
     # This ships the PROJECT's own mark (Systemorph builds MeshWeaver — the chart's
