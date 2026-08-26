@@ -227,8 +227,22 @@ jobs:
     - name: "Refuse a binary-breaking primary-constructor change"
       run: |
         set -euo pipefail
-        base="origin/${{ github.base_ref }}"
         git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        # 🚨 The MERGE BASE, not the base branch tip — same reasoning as the type-move gate below.
+        # This step disagreed with its own script until #2398: check-record-signatures.py's
+        # docstring says it compares "the merge base against the working tree", while the step
+        # handed it `origin/<base_ref>`.
+        #
+        # The half that was wrong is NOT the file list — that uses the three-dot
+        # `git diff --name-only {base}...HEAD`, which resolves the merge base itself. It is the
+        # BEFORE CONTENT: `git show {base}:{file}` reads the literal ref, so with the tip, a record
+        # whose primary constructor changed on main while this PR is open gets compared against
+        # THAT change rather than against what this PR branched from — and the PR reads as
+        # reverting it. A red on somebody else's commit, on a gate whose whole value is that people
+        # believe it. Passing the merge-base SHA fixes both halves consistently (`sha...HEAD`
+        # degenerates to `sha`, since it is an ancestor of HEAD).
+        base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+        echo "Comparing against merge base $base"
         python3 scripts/check-record-signatures.py --base "$base"
     # The OTHER half of the same class (#2370): a public TYPE moving assemblies, which no repo-local
     # build can see. `landed-modules-gate` compiles the plugins repo's module SOURCE against this PR
