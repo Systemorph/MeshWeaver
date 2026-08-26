@@ -344,7 +344,7 @@ operational rule that follows is absolute:
 > exists to prevent.
 
 Manifest-less CI processes (test hosts) fall back to the commit identity `g<sha>` stamped by
-`Directory.Build.props`; local manifest-less builds fall back to the identity anchor's MVID
+`MeshWeaverSurfaceManifest.targets` at the repo root (imported by the root `Directory.Build.props`, and by the plugins repo's `src/Directory.Build.props` against `$(MeshWeaverRoot)` — the portal hosts live there since #2293, and an inline target would be invisible to them, which is how `3.0.0-rc8.ci.5768` shipped no manifest); local manifest-less builds fall back to the identity anchor's MVID
 (`MeshWeaver.Compiler.dll` — single-file attributable, which is what lets a packer read it without
 loading anything). The commit stamp doubles as provenance everywhere.
 
