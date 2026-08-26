@@ -1,9 +1,11 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -207,5 +209,37 @@ public class MonotonicWriteGuardTests
 
         (await store.Read("TestData/b", JsonOptions).Should().Emit())!.Version.Should().Be(1);
         (await store.Read("TestData/a", JsonOptions).Should().Emit())!.Version.Should().Be(90);
+    }
+
+    /// <summary>
+    /// 🚨 The durable trace must IDENTIFY the row that won, not merely count what was dropped
+    /// (#2403). The losing write is often not a stale own-node snapshot at all but a SECOND,
+    /// legitimate writer that reached the path first — and a cross-partition writer records where
+    /// its row came from in <see cref="MeshNode.MainNode"/>. That is the one field that names it:
+    /// the plugins gate's intermittent <c>Skill/presentation</c> failure was a pre-installed-skill
+    /// MIRROR created from <c>Publish/Skill/presentation</c>, and identifying it took two sessions
+    /// and three full local gate reproductions precisely because neither the warning nor this trace
+    /// carried the provenance. <c>LastModifiedBy</c> does not close the gap — every
+    /// system-impersonated writer stamps the same principal.
+    /// </summary>
+    [Fact]
+    public async Task ConflictTrace_NamesTheDurableRowsProvenance()
+    {
+        var (store, leaf) = BuildStore();
+
+        // The winner: a MIRROR of a node in ANOTHER partition — its MainNode is the source path.
+        await store.Write(
+                Node("mirror", 1) with { MainNode = "Publish/Skill/presentation" }, JsonOptions)
+            .Should().Emit();
+
+        // The loser: an installer's authored node, written at the version its repo file carries (0).
+        await store.Write(Node("authored", 0), JsonOptions).Should().Emit();
+
+        var trace = await leaf.Read($"{Path}/_Activity/write-conflict-1", JsonOptions).Should().Emit();
+        var log = trace!.ContentAs<ActivityLog>(JsonOptions);
+        log.Should().NotBeNull("the guard records a durable trace for every resolved conflict");
+        log!.Messages.Select(m => m.Message).Should().Contain(
+            m => m.Contains("mainNode='Publish/Skill/presentation'", StringComparison.Ordinal),
+            "the trace has to name the writer, and provenance is what names a cross-partition mirror");
     }
 }
