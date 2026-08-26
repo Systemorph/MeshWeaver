@@ -1294,13 +1294,15 @@ jobs:
       # release rather than be filed under an address nobody reads. The release marker is then never
       # written, so the deployment gate (#1754) holds too — fail-safe in both directions.
       #
-      # 🚨 --platform ${{ matrix.docker_platform }} on BOTH pulls, out loud. The identity is per-architecture (the same
-      # four reference assemblies differ between the amd64 and arm64 legs of one multi-arch image), so
-      # a multi-arch image carries two identities and comparing across legs would be meaningless. Every
-      # AKS node is amd64 and the bake above already pins amd64; this pins the portal side to match.
-      # (An arm64 install — memex.localhost — resolves the OTHER identity and compiles locally; that is
-      # the second, independent way to mint an unread address, and publishing a second copy under it to
-      # "cover" it is forbidden: a bake is adoptable only when its producer ran the consumer's binaries.)
+      # 🚨 --platform ${{ matrix.docker_platform }} on BOTH pulls, out loud — THIS leg's architecture,
+      # never the runner's default. The identity is per-architecture (the same four reference
+      # assemblies differ between the amd64 and arm64 legs of one multi-arch image), so a multi-arch
+      # image carries two identities and comparing ACROSS legs would be meaningless: the bake above
+      # pinned this leg's architecture, and this pins the portal side to the same one so the two
+      # values being compared describe the same bytes.
+      # (Publishing one leg's bytes under the other's identity to "cover" it stays forbidden — a bake
+      # is adoptable only when its producer ran the consumer's binaries, which is exactly why the
+      # second architecture gets its own LANE rather than a second label on this one.)
       #
       # The comparison is done by the bake image's own `framework-identity` verb, which resolves the
       # identity of ANOTHER directory from that directory's meshweaver-surface.manifest and assemblies
