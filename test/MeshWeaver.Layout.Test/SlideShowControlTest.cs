@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -37,6 +38,21 @@ public class SlideShowControlTest(ITestOutputHelper output) : HubTestBase(output
 
         var json = JsonSerializer.Serialize<UiControl>(control, options);
         Output.WriteLine(json);
+
+        // The WIRE, not just the round trip: object equality after a deserialize would still hold
+        // if the JSON shape drifted (a renamed or dropped $type, a differently-nested frames array),
+        // because both ends move together. The view reads this JSON, so pin the JSON.
+        json.Should().Contain("\"frames\":[",
+            because: "the frames array is the payload the presenter renders every slide from");
+        Regex.Matches(json, "\"\\$type\":\"SlideFrame\"").Count.Should().Be(2,
+            because: "each frame must carry its discriminator — without it a hub that has not " +
+                     "registered SlideFrame reads untyped JsonElements and the deck renders empty");
+        json.Should().Contain("\"startIndex\":1", because: "the opening slide travels on the wire");
+        json.Should().Contain("\"urlTemplate\":\"/MyDeck/Present?i={0}\"",
+            because: "the address-bar template is what keeps a client-side swap deep-linkable");
+        json.Should().NotContain("\"background\":null",
+            because: "a slide with no background of its own omits the field rather than sending null");
+
         var back = JsonSerializer.Deserialize<UiControl>(json, options)
             .Should().BeOfType<SlideShowControl>().Subject;
 
@@ -78,6 +94,16 @@ public class SlideShowControlTest(ITestOutputHelper output) : HubTestBase(output
         var control = new SlideShowControl { NextHref = "/d/Present?i=1", ExitHref = "/d" };
 
         var json = JsonSerializer.Serialize<UiControl>(control, options);
+        Output.WriteLine(json);
+
+        // The progressive-enhancement contract, asserted as the BYTES an href-only client receives:
+        // an href-mode slide show must serialise exactly as it did before frames mode existed. The
+        // three new fields are absent, not null — React and React Native present from this payload
+        // and must see nothing new in it.
+        json.Should().Be(
+            $$"""{"$type":"SlideShowControl","nextHref":"/d/Present?i=1","exitHref":"/d","moduleName":"{{ModuleSetup.ModuleName}}","apiVersion":"{{ModuleSetup.ApiVersion}}","skins":[]}""",
+            because: "adding frames mode must not change one byte of the href-mode wire shape");
+
         var back = JsonSerializer.Deserialize<UiControl>(json, options)
             .Should().BeOfType<SlideShowControl>().Subject;
 
