@@ -160,7 +160,7 @@ internal class RoutingGrain(
     /// <para><c>RoutingGrain</c> is <c>[StatelessWorker(1)]</c> and NON-reentrant: this silo has
     /// exactly ONE routing turn, and Orleans' request timeout does not apply INSIDE a turn. So any
     /// work performed here is work that every other message the silo needs to route waits on, with
-    /// no bound of any kind. Prod (atioz, 2026-08-07) had one <c>RouteMessage</c> turn executing
+    /// no bound of any kind. Prod (2026-08-07) had one <c>RouteMessage</c> turn executing
     /// for <c>06:00:22</c> behind <c>NonReentrancyQueueSize=541</c>; Orleans' diagnostics showed
     /// the work item itself still <c>Running</c> (<c>Total processed</c> frozen), i.e.
     /// <c>RouteMessage</c> had never even RETURNED — it was blocked in its own synchronous body,

@@ -126,7 +126,7 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
 
     /// <summary>
     /// Injects the #1020 prod fault shape: the availability BOOKKEEPING write to
-    /// <c>Admin/UpdatePolicy</c> times out. On atioz that node's hub was unreachable (its
+    /// <c>Admin/UpdatePolicy</c> times out. On one production portal that node's hub was unreachable (its
     /// <c>SubscribeRequest</c> never answered — the silo's routing was wedged), so every tick died
     /// here 30 s in. Everything else — the registry check, the version pick, the k8s patch — was
     /// healthy, which is why the install looked fine and drifted 37 h.
@@ -169,7 +169,7 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
         await service.StartAsync(CancellationToken.None);
         try
         {
-            // The bookkeeping write fails on EVERY tick — exactly the atioz shape. Pre-fix the patch
+            // The bookkeeping write fails on EVERY tick — exactly the production shape. Pre-fix the patch
             // was chained after it with .SelectMany, so the tick errored into the poller's warning
             // sink and NOTHING was ever applied: this await timed out while the registry check kept
             // succeeding. The roll-forward must happen regardless.

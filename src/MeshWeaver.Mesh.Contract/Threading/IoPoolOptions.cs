@@ -68,7 +68,7 @@ public static class IoPoolNames
     /// <para>🚨 This is the fix for issue #1028. <c>RoutingGrain</c> is <c>[StatelessWorker(1)]</c>
     /// and NON-reentrant, so the silo has exactly ONE routing turn: any work the turn performs
     /// inline is work the whole silo's routing waits on, and Orleans' request timeout does NOT
-    /// apply inside a turn. Prod (atioz, 2026-08-07) had a single <c>RouteMessage</c> turn
+    /// apply inside a turn. Prod (2026-08-07) had a single <c>RouteMessage</c> turn
     /// executing for <c>06:00:22</c> with <c>NonReentrancyQueueSize=541</c> — every other message
     /// the silo needed to route was stuck behind it for 37 h. Routing work therefore never runs on
     /// the turn; it runs here, where one stuck delivery costs one pool slot and nothing else.</para>
