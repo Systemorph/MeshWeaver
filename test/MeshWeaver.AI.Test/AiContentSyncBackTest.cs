@@ -1,13 +1,13 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
-using MeshWeaver.AI;
+using MeshWeaver.GitSync;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.GitSync.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// End-to-end sync-back: the <see cref="AiContentDiskWriter"/> enumerates the live Skill partition
