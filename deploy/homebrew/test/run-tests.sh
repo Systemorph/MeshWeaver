@@ -198,21 +198,25 @@ echo "── macOS bash 3.2 safety (the runner is bash 5 — assert it staticall
 # not exist. It was not theoretical: helm_deploy expanded next_args/plugin_args unguarded, both of
 # which are empty on the paths the script itself calls normal (--from-acr, no plugin checkout), so
 # the deploy died on "unbound variable" for them.
-# The safe form is ${x[@]+"${x[@]}"} — which CONTAINS the unsafe spelling, so the guarded form and
-# whole-line comments are removed before looking for what is left. ("$@" is a special parameter, not
-# an array, and is always safe.)
+# The safe form ${x[@]+"${x[@]}"} CONTAINS the unsafe spelling, so lines carrying the guard marker
+# `[@]+"` are dropped along with whole-line comments, and whatever still matches is unguarded. (A
+# line holding a guarded AND an unguarded expansion would slip through; grep beats a portable-regex
+# argument with sed for a check that has to behave identically on BSD and GNU. "$@" is a special
+# parameter, not an array, and is always safe.)
 unsafe="$(grep -vE '^[[:space:]]*#' "$CLI" \
-  | sed 's/\${[A-Za-z_][A-Za-z0-9_]*\[@\]+"\${[A-Za-z_][A-Za-z0-9_]*\[@\]}"}//g' \
-  | grep -nE '"\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]\}"' || true)"
+  | grep -v '\[@\]+"' \
+  | grep -E '"\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]\}"' || true)"
 if [ -z "$unsafe" ]; then ok 'no unguarded "${array[@]}" (bash 3.2 + set -u would abort)'
-else bad 'no unguarded "${array[@]}"' "use \${x[@]+\"\${x[@]}\"} at: ${unsafe}"; fi
+else bad 'no unguarded "${array[@]}"' "use \${x[@]+\"\${x[@]}\"} on: ${unsafe}"; fi
 
 echo "── up/update actually RUN the verification ───────────────────────"
 
 # The whole point of MeshWeaver#2367 is that these two reported success on an unusable portal.
 # Deleting the call is the easy regression, and it leaves no trace anywhere else.
 for c in cmd_up cmd_update; do
-  body="$(awk -v f="^${c}\\\\(\\\\) \\\\{" '$0 ~ f { on=1 } on { print } on && /^}$/ { exit }' "$CLI")"
+  # No `{` in the pattern: it opens an interval in ERE, and awk implementations disagree about
+  # whether `\{` is an error, a warning or a literal. `^cmd_up\(\)` is unambiguous everywhere.
+  body="$(awk -v f="^${c}\\\\(\\\\)" '$0 ~ f { on=1 } on { print } on && /^}$/ { exit }' "$CLI")"
   case "$body" in
     *"verify_usable --wait"*) ok "${c} runs the usability verification" ;;
     *) bad "${c} runs the usability verification" "no verify_usable call in ${c}()" ;;
