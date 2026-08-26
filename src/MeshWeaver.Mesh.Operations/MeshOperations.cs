@@ -29,7 +29,15 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Mesh;
+// 🚨 The NAMESPACE is part of the binary contract, and it does NOT follow the assembly.
+// A module compiled earlier holds a TypeRef to `MeshWeaver.AI.MeshOperations` scoped to the
+// `MeshWeaver.AI` AssemblyRef. Moving the type to this assembly is survivable — a
+// [TypeForwardedTo] in MeshWeaver.AI redirects that TypeRef here — but ONLY while the full
+// type NAME is unchanged, because a forwarder cannot rename. Renaming the namespace to
+// `MeshWeaver.Mesh` (#2283) is what took the /mcp surface down in #2370: every tool call
+// died with `TypeLoadException: Could not load type 'MeshWeaver.AI.MeshOperations'`.
+// Do not "tidy" this namespace. See MeshWeaver.Mesh.Operations/README.md.
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Shared mesh operations for AI agents and MCP tools.
@@ -855,7 +863,7 @@ public class MeshOperations
     /// owning per-node hub's <c>MeshNodeReference</c> reducer — the authoritative
     /// source of truth, no catalog lag. <c>GetDataRequest</c> activates the cold
     /// per-node hub on receipt; the response carries the live MeshNode.
-    /// Returns a <see cref="NodeReadResult"/> that keeps the three cases apart (issue #974):
+    /// Returns a <see cref="NodeReadOutcome"/> that keeps the three cases apart (issue #974):
     /// the node, a DEFINITIVE absence, or an UNAVAILABLE read that reached no verdict.
     /// See <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
     ///
@@ -865,7 +873,7 @@ public class MeshOperations
     /// prevent; the budget below is the ONLY place that knows the read gave up, so it is the place
     /// that classifies.</para>
     /// </summary>
-    private IObservable<NodeReadResult> FetchNode(string resolvedPath, int timeoutSeconds = 10)
+    private IObservable<NodeReadOutcome> FetchNode(string resolvedPath, int timeoutSeconds = 10)
     {
         // 🚨 SECURITY: capture the caller's identity HERE, synchronously, while we are still on the
         // caller's execution context — and re-establish it around the subscribe below.
@@ -906,7 +914,7 @@ public class MeshOperations
         var callerIdentity = accessService?.Context ?? accessService?.CircuitContext
             ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
 
-        return Observable.Create<NodeReadResult>(observer =>
+        return Observable.Create<NodeReadOutcome>(observer =>
         {
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             var emitted = 0;
@@ -921,7 +929,7 @@ public class MeshOperations
             // Matches the GetMeshNode shape in MeshNodeStreamExtensions.cs.
             IDisposable? innerSubscription = null;
 
-            void EmitOnce(NodeReadResult outcome)
+            void EmitOnce(NodeReadOutcome outcome)
             {
                 if (Interlocked.Exchange(ref emitted, 1) != 0) return;
                 observer.OnNext(outcome);
@@ -933,7 +941,7 @@ public class MeshOperations
             // gets an authoritative routing NotFound (classified in FromReadFailure), it does not
             // sit silent. Reporting the silence as "Not found" is what made callers delete and
             // recreate nodes that existed. Widening this budget would only make the lie rarer.
-            cts.Token.Register(() => EmitOnce(NodeReadResult.Unavailable(
+            cts.Token.Register(() => EmitOnce(NodeReadOutcome.Unavailable(
                 $"read of '{resolvedPath}' reached no verdict within {timeoutSeconds}s")));
 
             try
@@ -962,7 +970,7 @@ public class MeshOperations
                         && string.Equals(n.Path, resolvedPath, StringComparison.OrdinalIgnoreCase))
                     .Take(1)
                     .Subscribe(
-                        node => EmitOnce(NodeReadResult.Found(node!)),
+                        node => EmitOnce(NodeReadOutcome.Found(node!)),
                         ex =>
                         {
                             // Classify at the READ, where the failure's type is still intact
@@ -971,7 +979,7 @@ public class MeshOperations
                             // deliberately so, because saying "denied" would disclose that a
                             // gated node exists at this exact path. Anything else is an
                             // availability failure and is named as one.
-                            var outcome = NodeReadResult.FromReadFailure(resolvedPath, ex);
+                            var outcome = NodeReadOutcome.FromReadFailure(resolvedPath, ex);
                             if (ex is UnauthorizedAccessException)
                                 logger.LogInformation(
                                     "FetchNode DENIED for {Path} — caller lacks Read (gated content)",
@@ -988,7 +996,7 @@ public class MeshOperations
                         // The stream completed without ever passing the exact-path filter: the
                         // read DID reach an answer and there is nothing readable here. Absent,
                         // not unavailable — and reaching it here beats sitting out the budget.
-                        () => EmitOnce(NodeReadResult.Absent));
+                        () => EmitOnce(NodeReadOutcome.Absent));
             }
             catch (Exception ex)
             {
@@ -997,7 +1005,7 @@ public class MeshOperations
                 // the availability condition this method exists to name. A synchronous throw here
                 // is NOT evidence the node is missing.
                 logger.LogWarning(ex, "FetchNode read setup failed for {Path}", resolvedPath);
-                EmitOnce(NodeReadResult.Unavailable(
+                EmitOnce(NodeReadOutcome.Unavailable(
                     $"read setup for '{resolvedPath}' faulted: {ex.GetType().Name}: {ex.Message}"));
             }
 

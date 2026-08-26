@@ -197,7 +197,12 @@ public class PostgreSqlAccessControl
             : "'{}'::jsonb";
 
         var mnTable = Q("mesh_nodes");
-        var mainNode = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
+        // 🚨 The SCOPE the policy caps, NOT the policy's own path (#2383). This writer bypasses the
+        // handler that would normalise it (MeshExtensions.NormalizeSatelliteMainNode), so the value
+        // has to be right here. `main_node = path` is what search_across_schemas selects on, so the
+        // self-referential spelling put every `_Policy` row into mesh-wide search results as though
+        // it were partition content. A root-scope policy (empty namespace) has no owner: "".
+        var mainNode = ns;
         await using var cmd = _dataSource.CreateCommand(
             $"""
             INSERT INTO {mnTable} (namespace, id, name, node_type, content, main_node, state)
