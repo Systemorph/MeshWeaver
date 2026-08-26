@@ -11,6 +11,8 @@ using MeshWeaver.AI.Test;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
@@ -134,6 +136,68 @@ public class ProviderModulePackBootTest
         Assert.DoesNotContain(services, d => d.ServiceType == typeof(IncompatibleModule));
     }
 
+    /// <summary>
+    /// The gap the first isolation pass (#2275) left open. That pass wraps everything an
+    /// attribute's <c>Nodes</c>/<c>AddressTypes</c>/<c>HubConfigurations</c> GETTERS can throw
+    /// from — but a node's <c>GlobalServiceConfigurations</c> delegate is still just DATA at that
+    /// point; <see cref="MeshBuilder"/> invokes it later, against a live <see cref="IServiceCollection"/>,
+    /// via the private <c>InstallServices</c> helper. BOTH real #2234 incidents threw from exactly
+    /// that later step, not from materialising <c>Nodes</c>: the original report's stack named a
+    /// <c>GlobalServiceConfigurations</c> callback (<c>AzureFoundryProvidersAttribute.&lt;get_Nodes&gt;b__1_0(IServiceCollection)</c>)
+    /// being CALLED, and the systemorph recurrence named <c>MeshBuilder.InstallServices</c> itself.
+    /// A fixture whose <c>Nodes</c> getter succeeds but whose registration delegate throws when
+    /// invoked is the one that pins this — <see cref="InstallAssemblies_WithAModuleItCannotLoad_KeepsTheGoodOne_AndDoesNotAbort"/>
+    /// above throws from <c>Assembly.LoadFrom</c> itself, which never reaches this code path.
+    ///
+    /// <para>The broken module has to be a genuinely SEPARATE assembly from the healthy probe pack:
+    /// an assembly-level attribute applies to the WHOLE assembly it lives in, so a permanently-
+    /// throwing one could not share <see cref="ProbeProviderPackAttribute"/>'s DLL without also
+    /// breaking <see cref="InstallAssemblies_WithEveryModuleLoadable_RecordsNoIncompatibility"/>,
+    /// which loads that same DLL expecting zero incompatibilities.</para>
+    /// </summary>
+    [Fact]
+    public void InstallAssemblies_WithAModuleWhoseServiceRegistrationThrowsAtInvocation_KeepsTheGoodOne_AndDoesNotAbort()
+    {
+        var brokenModulePath = CompileBrokenServiceRegistrationModule(out var brokenModuleName);
+
+        // 🚨 Deliberately NOT `configure => configurations.Add(configure)` (the pattern the other
+        // tests in this file use) — that defers every delegate to a later, test-owned Aggregate
+        // call, so nothing actually RUNS while InstallAssemblies is on the stack, and this test
+        // would pass for the wrong reason (or rather: it would fail in the test's own Aggregate
+        // call, outside InstallAssemblies' try/catch, exactly as this test did before this line
+        // was written this way — confirmed by actually running it). Production's real wiring,
+        // MeshHostApplicationBuilder(Host, address) : base(x => x.Invoke(Host.Services), address),
+        // invokes the delegate IMMEDIATELY against the live IServiceCollection, which is exactly
+        // why both #2234 incidents' stack traces show the throw happening synchronously inside
+        // MeshBuilder.InstallAssemblies/InstallServices. Mirroring that wiring here is what makes
+        // this test exercise the code path the incidents actually hit.
+        var services = (IServiceCollection)new ServiceCollection();
+        var builder = new MeshBuilder(configure => configure.Invoke(services),
+            AddressExtensions.CreateMeshAddress());
+
+        var exception = Record.Exception(() => builder.InstallAssemblies(
+            brokenModulePath,
+            typeof(ProbeProviderPackAttribute).Assembly.Location));
+
+        Assert.Null(exception);
+
+        // The healthy pack, in its OWN assembly, is unaffected by its neighbour's failure.
+        AssertFactoryAndCatalogSourceLanded(services);
+
+        // And the failure is RECORDED, with the exact missing signature — the sentence an
+        // operator acts on — rather than swallowed or left to abort the process.
+        var recorded = services
+            .Where(d => d.ServiceType == typeof(IncompatibleModule))
+            .Select(d => d.ImplementationInstance)
+            .OfType<IncompatibleModule>()
+            .ToList();
+        var broken = Assert.Single(recorded);
+        Assert.Equal(brokenModuleName, broken.Name);
+        Assert.Contains("CONTRIBUTING NOTHING", broken.Report());
+        Assert.Equal("Void MeshWeaver.AI.BrokenProbe.LanguageModelCatalogSource..ctor(System.String, System.String, System.Int32)",
+            broken.MissingMember);
+    }
+
     [Fact]
     public void TheFactoryClaimsItsOwnModels_AndNobodyElses()
     {
@@ -160,6 +224,69 @@ public class ProviderModulePackBootTest
             .SingleOrDefault();
         Assert.NotNull(catalog);
         Assert.Contains(catalog!.Sources, s => s.ProviderName == ProbeProviderPackAttribute.ProviderName);
+    }
+
+    /// <summary>
+    /// Compiles and emits a REAL, standalone assembly (never <see cref="ProbeProviderPackAttribute"/>'s)
+    /// carrying one <see cref="MeshNodeProviderAttribute"/> whose sole node's
+    /// <c>GlobalServiceConfigurations</c> delegate throws a <see cref="MissingMethodException"/>
+    /// when INVOKED — reproducing a binary-incompatible record ctor call against a live
+    /// <see cref="IServiceCollection"/>, not a load-time failure. References the process's own
+    /// TRUSTED_PLATFORM_ASSEMBLIES set, which in a test host already includes every assembly this
+    /// fixture needs (MeshWeaver.Mesh.Contract for <see cref="MeshNodeProviderAttribute"/>/
+    /// <see cref="MeshNode"/>, Microsoft.Extensions.DependencyInjection.Abstractions for
+    /// <see cref="IServiceCollection"/>) — the same pattern <c>EmitToDiskWithRetryTest.RealAssemblyBytes</c>
+    /// (MeshWeaver.Graph.Test) uses to emit a real fixture assembly for a test.
+    /// </summary>
+    private static string CompileBrokenServiceRegistrationModule(out string assemblyName)
+    {
+        assemblyName = $"MeshWeaver.AI.BrokenProbe.{Guid.NewGuid():N}";
+        var tree = CSharpSyntaxTree.ParseText(
+            """
+            using System;
+            using System.Collections.Generic;
+            using MeshWeaver.Mesh;
+
+            [assembly: MeshWeaver.AI.BrokenProbe.BrokenServiceRegistrationAttribute]
+
+            namespace MeshWeaver.AI.BrokenProbe;
+
+            [AttributeUsage(AttributeTargets.Assembly)]
+            public sealed class BrokenServiceRegistrationAttribute : MeshNodeProviderAttribute
+            {
+                public override IEnumerable<MeshNode> Nodes =>
+                [
+                    new MeshNode("MeshWeaver.AI.BrokenProbe")
+                    {
+                        Name = "Probe module whose service registration throws",
+                        NodeType = "ModuleDefinition",
+                    }
+                    .WithGlobalServiceRegistry(services =>
+                        throw new MissingMethodException(
+                            "Method not found: 'Void MeshWeaver.AI.BrokenProbe.LanguageModelCatalogSource..ctor"
+                            + "(System.String, System.String, System.Int32)'.")),
+                ];
+            }
+            """);
+
+        var references = ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string) ?? string.Empty)
+            .Split(Path.PathSeparator)
+            .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
+            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
+            .ToList();
+
+        var compilation = CSharpCompilation.Create(
+            assemblyName, [tree], references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var path = Path.Combine(Path.GetTempPath(), $"{assemblyName}.dll");
+        using var stream = File.Create(path);
+        var result = compilation.Emit(stream);
+        if (!result.Success)
+            throw new InvalidOperationException(
+                "the broken-service-registration fixture assembly must compile: "
+                + string.Join("; ", result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        return path;
     }
 }
 
