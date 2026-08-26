@@ -65,3 +65,63 @@ public class RecyclingShapeDiagnosticTest
     public void NoOwnerObserved_SaysNothing(int owners) =>
         MeshNodeStreamExtensions.RecyclingShape(owners).Should().BeEmpty();
 }
+
+/// <summary>
+/// The re-probe loop counts owners by the <c>activation #XXXXXXXX</c> TOKEN a NACK carries, never
+/// by its whole message text (#2376 Copilot review, on top of #2025).
+///
+/// <para>Two of <c>MessageService</c>'s ShuttingDown NACK sites had drifted from each other: the
+/// "accepted before disposal began" terminal paired its activation tag with a per-DELIVERY
+/// <c>(id=...)</c> that is unique to every retry even against the SAME activation — so comparing
+/// whole message strings would count one wedged owner as a false STORM. A third site (routing /
+/// <c>NackSilentRead</c>'s three terminals in <c>MeshWeaver.Data</c>) carries no activation
+/// identity at all yet. <see cref="MeshNodeStreamExtensions.ExtractActivationTag"/> is the fix for
+/// both: pull just the stable token, and return <c>null</c> — excluded from the owner count,
+/// never guessed — when none is present.</para>
+/// </summary>
+public class ExtractActivationTagTest
+{
+    [Fact]
+    public void ExtractsTheHexTokenAfterTheMarker()
+    {
+        MeshNodeStreamExtensions.ExtractActivationTag(
+                "Hub ACME/ProductLaunch is shutting down (RunLevel=Dead, activation #1A2B3C4D) — "
+                + "cannot process GetDataRequest; the address may reactivate (recycle / restart). "
+                + "Rejecting now.")
+            .Should().Be("1A2B3C4D");
+    }
+
+    [Fact]
+    public void SameActivation_DifferentDeliveryIds_ExtractTheSameToken()
+    {
+        // The exact shape that fooled a whole-message comparison: two probes against the SAME
+        // activation, each carrying a DIFFERENT delivery id right next to the (shared) tag.
+        var first = MeshNodeStreamExtensions.ExtractActivationTag(
+            "Hub ACME/ProductLaunch is shutting down (RunLevel=Dead, activation #DEADBEEF) — "
+            + "GetDataRequest (id=aaa111) was accepted before disposal began and its turn came "
+            + "too late to process. The address may reactivate (recycle / restart); retry to get "
+            + "the authoritative answer.");
+        var second = MeshNodeStreamExtensions.ExtractActivationTag(
+            "Hub ACME/ProductLaunch is shutting down (RunLevel=Dead, activation #DEADBEEF) — "
+            + "GetDataRequest (id=bbb222) was accepted before disposal began and its turn came "
+            + "too late to process. The address may reactivate (recycle / restart); retry to get "
+            + "the authoritative answer.");
+
+        first.Should().Be("DEADBEEF");
+        second.Should().Be(first,
+            "the SAME owner activation must extract to the SAME token regardless of which "
+            + "delivery's id happens to sit next to it");
+    }
+
+    [Fact]
+    public void NoMarker_ReturnsNull_ExcludedRatherThanGuessed() =>
+        MeshNodeStreamExtensions.ExtractActivationTag(
+                "No node found at 'ACME/ProductLaunch'")
+            .Should().BeNull("a NACK site that carries no activation identity must not "
+                + "contribute a fabricated owner to the count");
+
+    [Fact]
+    public void MarkerWithNoTrailingHex_ReturnsNull() =>
+        MeshNodeStreamExtensions.ExtractActivationTag("… activation #")
+            .Should().BeNull("a marker with nothing after it is not a token");
+}

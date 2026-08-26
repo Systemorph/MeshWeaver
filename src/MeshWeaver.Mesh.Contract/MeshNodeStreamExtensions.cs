@@ -2286,7 +2286,17 @@ public static class MeshNodeStreamExtensions
                                 if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
                                 {
                                     lastRecyclingNack = ex;
-                                    lock (owners) owners.Add(ex.Message);
+                                    // Extract just the activation TOKEN, never the whole message (#2376
+                                    // Copilot review): a NACK's text can carry per-DELIVERY noise (a
+                                    // request id, a type name) that differs on every retry even against
+                                    // the SAME activation, and comparing whole strings would then count
+                                    // one wedged owner as a false storm. A NACK with no token at all
+                                    // (a site that has not been taught to embed one yet) contributes
+                                    // nothing to the set rather than a guess — RecyclingShape(0) says
+                                    // nothing, which is honest; miscounting would not be.
+                                    var ownerTag = ExtractActivationTag(ex.Message);
+                                    if (ownerTag is not null)
+                                        lock (owners) owners.Add(ownerTag);
                                     var probes = Interlocked.Increment(ref shuttingDownNacks);
                                     if (!cts.IsCancellationRequested && Volatile.Read(ref emitted) == 0)
                                     {
@@ -2387,6 +2397,34 @@ public static class MeshNodeStreamExtensions
              + "STORM. Look at whatever is requesting the recycles (a NodeType republishing, a "
              + "self-heal watcher firing per publication), not at any single hub's disposal.",
     };
+
+    /// <summary>
+    /// Extracts the <c>activation #XXXXXXXX</c> token a ShuttingDown NACK embeds (MessageService's
+    /// <c>ActivationTag()</c>), or <c>null</c> when the NACK carries none.
+    ///
+    /// <para>🚨 Deliberately NOT "compare the whole message" (#2376 Copilot review, #2025). A
+    /// NACK's text can carry per-DELIVERY noise — a request id, a type name — that differs on
+    /// every retry even against the SAME activation, so treating the whole string as the owner key
+    /// over-counts a single wedged owner into a false STORM verdict. Extracting just the stable
+    /// token, and returning <c>null</c> (excluded from the owner count, never guessed) when a NACK
+    /// site has not been taught to embed one, keeps the count accurate in both directions: never
+    /// inflated by per-delivery text, never fabricated from a NACK that carries no identity at
+    /// all.</para>
+    /// </summary>
+    /// <param name="message">A <see cref="DeliveryFailureException"/> message from a ShuttingDown NACK.</param>
+    /// <returns>The hex activation id, or <c>null</c> when the message carries none.</returns>
+    internal static string? ExtractActivationTag(string message)
+    {
+        const string marker = "activation #";
+        var start = message.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+            return null;
+        start += marker.Length;
+        var end = start;
+        while (end < message.Length && Uri.IsHexDigit(message[end]))
+            end++;
+        return end > start ? message[start..end] : null;
+    }
 }
 
 /// <summary>
