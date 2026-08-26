@@ -119,4 +119,69 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         => segment.Length > 1 && segment[0] == '_'
            && Defaults.Any(m => m.Segment.Length > 0 && m.Segment[0] == '_'
                                 && string.Equals(m.Segment, segment, StringComparison.Ordinal));
+
+    /// <summary>
+    /// True if <paramref name="id"/> is a <b>satellite-shaped node id</b>: an underscore followed by
+    /// an upper-case letter (<c>_Policy</c>, <c>_Provider</c>, <c>_GitSync</c>,
+    /// <c>_DefaultInstallLedger</c>, <c>_Entitlements</c>, …). A node with such an id is a SIBLING
+    /// satellite — governance bookkeeping filed next to the node it belongs to — so its
+    /// <see cref="MeshNode.MainNode"/> is its namespace, never itself (#2383).
+    ///
+    /// <para>This is the repo-wide convention, not a new one: <c>StaticRepoImporter</c>,
+    /// <c>InstanceSyncService</c>, <c>GitHubSyncService</c>, <c>PackageInstaller</c>,
+    /// <c>DeleteLayoutArea</c>, <c>MarkdownOverviewLayoutArea</c> and the bulk-create refusal all
+    /// classify a <c>_</c>-prefixed segment exactly this way. <c>CachingStorageAdapter</c>'s
+    /// <c>ExtractMainNodePath</c> uses the same underscore+upper-case test.</para>
+    ///
+    /// <para>🚨 Deliberately DIFFERENT from <see cref="IsSatelliteSegment"/>, and the two must not be
+    /// merged. That one answers <i>"which TABLE does this row live in"</i> and is therefore
+    /// restricted to the enumerated <see cref="Defaults"/> — widening it would move <c>_Policy</c>
+    /// out of <c>mesh_nodes</c> and hide it from the permission evaluator's
+    /// <c>id = '_Policy'</c> lookup, the regression the remark on <see cref="IsSatellitePath"/>
+    /// records. This one answers <i>"does this node belong to the node above it"</i>, which is a
+    /// question about PARENTAGE, not storage. <c>_Policy</c> is a <c>mesh_nodes</c> row AND a
+    /// satellite; both are true at once.</para>
+    ///
+    /// <para>🚨 The test is on the node's OWN ID, never on its whole path — because a PARTITION may
+    /// legitimately be named with a leading underscore. <c>GlobalSettingsNodeType.SettingsPath</c> is
+    /// literally <c>_Setting</c>, so scanning the path would resolve <c>_Setting/_Policy</c>'s owner
+    /// to <c>""</c>, the empty prefix that <c>COALESCE(main_node, namespace)</c> projects as a
+    /// ROOT-scope grant. The owner comes from <see cref="OwnerOfSatellitePath"/> over the NAMESPACE,
+    /// which leaves a non-container namespace like <c>_Setting</c> intact.</para>
+    /// </summary>
+    public static bool IsSatelliteId(string? id)
+        => id is { Length: > 1 } && id[0] == '_' && char.IsUpper(id[1]);
+
+    /// <summary>
+    /// The namespace of the partition CATALOG — <c>Admin/Partition/{partitionName}</c>. Entries there
+    /// are partition DECLARATIONS, so their id is a name being declared rather than a relationship
+    /// being expressed. Mirrors <c>PartitionNodeType.Namespace</c>, which lives in MeshWeaver.Graph
+    /// and so cannot be referenced from here.
+    /// </summary>
+    private const string PartitionCatalogNamespace = "Admin/Partition";
+
+    /// <summary>
+    /// True if <paramref name="node"/> is a SIBLING satellite — governance bookkeeping filed next to
+    /// the node it belongs to, whose <see cref="MeshNode.MainNode"/> is therefore its namespace and
+    /// never itself (#2383). The ONE definition of that classification, shared by the create/upsert
+    /// normalization and by the guard that sweeps the static seeds; a second, subtly different copy
+    /// would give a subtly different inventory.
+    ///
+    /// <para>Three conditions, and each excludes a real node that would otherwise be misread:</para>
+    /// <list type="number">
+    ///   <item>The id is satellite-shaped (<see cref="IsSatelliteId"/>).</item>
+    ///   <item>🚨 It HAS a namespace. A partition root is a main node even when its own name begins
+    ///     with an underscore — <c>GlobalSettingsNodeType.SettingsPath</c> is literally
+    ///     <c>_Setting</c> — and <c>MainNode == Path</c> is correct for it.</item>
+    ///   <item>🚨 It is not an entry in the partition CATALOG. <c>Admin/Partition/_Access</c>
+    ///     DECLARES the global root-scope access partition; its id is that partition's NAME. It is a
+    ///     main node of the catalog that lists it, and re-pointing its MainNode would drop it out of
+    ///     the catalog's own <c>is:main</c> listing — turning a fix into a disappearance.</item>
+    /// </list>
+    /// </summary>
+    public static bool IsSiblingSatellite(MeshNode node)
+        => node is not null
+           && !string.IsNullOrEmpty(node.Namespace)
+           && IsSatelliteId(node.Id)
+           && !string.Equals(node.Namespace, PartitionCatalogNamespace, StringComparison.OrdinalIgnoreCase);
 }

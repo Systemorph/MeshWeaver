@@ -60,5 +60,6 @@
     <ItemGroup>
         <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
         <InternalsVisibleTo Include="MeshWeaver.Threading.Test" />
+        <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
     </ItemGroup>
 </Project>

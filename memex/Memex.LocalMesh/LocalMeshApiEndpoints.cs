@@ -1,3 +1,4 @@
+using MeshWeaver.AI;   // MeshOperations — the namespace is its frozen binary contract (#2370)
 using MeshWeaver.Mesh;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -125,6 +126,25 @@ public static class LocalMeshApiEndpoints
         {
             var onboarded = await DeviceSeed.IsOnboarded(RootHub(services)).FirstAsync().ToTask(ct);
             return Results.Json(new { onboarded });
+        });
+
+        // The caller's mesh identity — the sidecar twin of the portal's POST /api/mesh/whoami
+        // (Memex.Portal.Shared MeshApiEndpoints), same {userId, name, email} shape, so a shell
+        // resolves "whose home partition am I?" identically against either backend. This host
+        // authenticates nobody — every caller IS the device user (GrpcOptions.AnonymousUser) —
+        // so the answer is the device identity once onboarded, nulls before (the shells show
+        // onboarding first). Without this the WEB shell served from wwwroot had no way to learn
+        // its own partition: chat threads had nowhere to anchor while the native shells worked.
+        group.MapPost("/whoami", async (IServiceProvider services, CancellationToken ct) =>
+        {
+            var onboarded = await DeviceSeed.IsOnboarded(RootHub(services)).FirstAsync().ToTask(ct);
+            string? userId = onboarded ? DeviceSeed.DeviceUserId : null;
+            return Results.Json(new
+            {
+                userId,
+                name = onboarded ? DeviceSeed.DeviceUser.Name : null,
+                email = userId is null ? null : $"{userId}@local",
+            });
         });
 
         return endpoints;

@@ -21,7 +21,7 @@ A **code update** is three steps: build the images, point the Deployments at the
 az acr login -n meshweaver
 
 # Portal — needs the prebuilt custom base image. MULTI-ARCH: never pass `-r linux-x64`.
-dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
+dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
   --no-self-contained -t:PublishContainer -p:PublishProfile= \
   -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"' \
   -p:ContainerRegistry=meshweaver.azurecr.io \

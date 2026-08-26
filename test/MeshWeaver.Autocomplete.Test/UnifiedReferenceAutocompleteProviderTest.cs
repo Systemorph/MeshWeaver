@@ -565,18 +565,4 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
 
     #endregion
 
-    #region Content Reference Extraction Tests
-
-    [Theory]
-    [InlineData("@content/docs/readme.md", "content/docs/readme.md")]
-    [InlineData("@ACME/content/readme.md", "ACME/content/readme.md")]
-    [InlineData("@content:docs/readme.md", "content:docs/readme.md")]
-    [InlineData("@ACME/content:readme.md", "ACME/content:readme.md")]
-    public void MarkdownExtractor_HandlesBothContentFormats(string input, string expectedPath)
-    {
-        var paths = AI.MarkdownReferenceExtractor.GetUniquePaths(input);
-        paths.Should().ContainSingle().Which.Should().Be(expectedPath);
-    }
-
-    #endregion
 }

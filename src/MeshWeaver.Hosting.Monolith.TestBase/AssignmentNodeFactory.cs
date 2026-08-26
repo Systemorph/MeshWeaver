@@ -51,9 +51,14 @@ public static class AssignmentNodeFactory
         };
     }
 
-    /// <summary>PartitionAccessPolicy node at <c>{ns}/_Policy</c>.</summary>
+    /// <summary>
+    /// PartitionAccessPolicy node at <c>{ns}/_Policy</c>. <c>Satellite()</c>, so the node a test
+    /// builds carries the same MainNode the framework derives on a real write (#2383) — a factory
+    /// that minted the self-referential default would hand every test the defect shape as its
+    /// baseline.
+    /// </summary>
     public static MeshNode Policy(string ns, PartitionAccessPolicy policy)
-        => new("_Policy", ns)
+        => MeshNode.Satellite("_Policy", ns) with
         {
             NodeType = "PartitionAccessPolicy",
             Name = "Access Policy",

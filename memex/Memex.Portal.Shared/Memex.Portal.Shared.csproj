@@ -9,7 +9,6 @@
 
   <ItemGroup>
     <!-- Core MeshWeaver -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
     <!-- MeshWeaver.Blazor.Analysis is deliberately NOT referenced (#1974): it ships via the
          modules/<Name>/ closure layout in MeshModulesPublish.targets and activates via
          Modules:Assemblies. Its static web assets reach the browser through the module
@@ -52,13 +51,14 @@
          it so a rollout that lost the pack stalls on readiness instead of shipping blank edit
          forms. A reference here would put the DLL back in the app closure, where the module
          landing refuses the same-identity module (409 on every instance). -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
     <!-- MeshWeaver.Blazor.Graph is deliberately NOT referenced (the EntityViews/#1974 shape): its
          GraphViewsViewPackModuleAttribute registers the node views when the DLL is listed under
-         Modules:Assemblies; the bits ship via the modules/<Name>/ lane. Blazor.Portal REMAINS a
-         compiled reference for now — it is SHELL infrastructure (PortalLayoutBase, auth,
-         viewport), tracked for extraction as #2169 Phase B3. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
+         Modules:Assemblies; the bits ship via the modules/<Name>/ lane. The MeshWeaver.Blazor.Portal
+         PROJECT was removed from this repo (#2293): the shell infrastructure it held —
+         PortalLayoutBase, auth, viewport — moved to MeshWeaver.Plugins with the portal hosts,
+         completing the extraction this comment used to track as #2169 Phase B3. The assembly
+         NAME still appears here on purpose: the InternalsVisibleTo below grants the plugins-built
+         MeshWeaver.Blazor.Portal.dll the internals it always had. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.SignalR\MeshWeaver.Hosting.SignalR.csproj" />
@@ -120,8 +120,6 @@
     <PackageReference Include="Azure.Identity" />
     <PackageReference Include="NuGet.Versioning" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
-    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
-    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
     <PackageReference Include="Microsoft.Identity.Web" />
     <PackageReference Include="Microsoft.Identity.Web.UI" />
     <PackageReference Include="SkiaSharp" />
@@ -159,6 +157,12 @@
          collides with a seed — and this side would stay green throughout, because it only ever
          asserts about its own entries. -->
     <InternalsVisibleTo Include="MeshWeaver.Blazor.Portal.Test" />
+
+    <!-- The portal composition (ConfigureMemexServices / ConfigureMemexPortal /
+         StartMemexApplication) moved to Memex.Portal.Gui with its hosts, and constructs
+         ApiTokenService / McpBackConnectionService / OAuthCodeStore, which are internal here.
+         MeshWeaver.Plugins#701. -->
+    <InternalsVisibleTo Include="Memex.Portal.Gui" />
   </ItemGroup>
 
 </Project>

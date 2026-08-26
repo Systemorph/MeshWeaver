@@ -356,12 +356,20 @@ public class SnowflakeAccessControl
         var jsonBuild = $"OBJECT_CONSTRUCT({string.Join(", ", contentParts)})";
 
         var mnTable = Q("mesh_nodes");
-        var mainNode = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
+        // 🚨 TWO different values that used to share one variable. `path` is the node's own address;
+        // `main_node` is the SCOPE it caps (#2383). Spelling main_node as the policy's own path made
+        // every `_Policy` row satisfy `main_node = path`, which is what search_across_schemas selects on
+        // and what the catalog's `is:main` means — so an internal governance node listed as partition
+        // content. This writer bypasses MeshExtensions.NormalizeSatelliteMainNode, so it must be right
+        // here. A root-scope policy (empty namespace) has no owner: "".
+        var path = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
+        var mainNode = ns;
         await using var connection = await _source.OpenAsync(ct).ConfigureAwait(false);
 
         void BindAll(DbCommand cmd)
         {
             SnowflakeConnectionSource.AddParam(cmd, "namespace", ns, DbType.String);
+            SnowflakeConnectionSource.AddParam(cmd, "path", path, DbType.String);
             SnowflakeConnectionSource.AddParam(cmd, "main_node", mainNode, DbType.String);
         }
 
@@ -380,7 +388,7 @@ public class SnowflakeAccessControl
                     "state" = 2
                 WHEN NOT MATCHED THEN INSERT
                     ("namespace", "id", "path", "name", "node_type", "content", "main_node", "state")
-                VALUES (s."namespace", s."id", :main_node, 'Access Policy', 'PartitionAccessPolicy',
+                VALUES (s."namespace", s."id", :path, 'Access Policy', 'PartitionAccessPolicy',
                         s."content", :main_node, 2)
                 """;
             BindAll(merge);
@@ -399,7 +407,7 @@ public class SnowflakeAccessControl
             insert.CommandText =
                 $"INSERT INTO {mnTable} " +
                 "(\"namespace\", \"id\", \"path\", \"name\", \"node_type\", \"content\", \"main_node\", \"state\") " +
-                $"SELECT :namespace, '_Policy', :main_node, 'Access Policy', 'PartitionAccessPolicy', {jsonBuild}, :main_node, 2";
+                $"SELECT :namespace, '_Policy', :path, 'Access Policy', 'PartitionAccessPolicy', {jsonBuild}, :main_node, 2";
             BindAll(insert);
             await insert.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
