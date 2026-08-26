@@ -83,6 +83,9 @@ public class OrleansSlideNavigationPostgresTest(ITestOutputHelper output) : Test
         }
 
         var builder = new TestClusterBuilder();
+        // Test-sized grain directory (#2346). This class builds its own TestCluster rather than
+        // going through OrleansTestCluster.DeployAsync, so it opts in explicitly.
+        builder.AddSiloBuilderConfigurator<TestGrainDirectorySizing>();
         builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<SlideNavPostgresSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
