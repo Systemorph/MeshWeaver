@@ -33,9 +33,6 @@ public static class IoPoolServiceCollectionExtensions
         // DrainAll() cancel+joins them before the scope disposes / NodeType ALCs unload (the endemic
         // teardown SIGSEGV).
         services.TryAddSingleton<IPooledSubscribeScheduler, IoPoolSubscribeScheduler>();
-        // The async half of mesh teardown — resources enqueue async cleanup here from
-        // their sync Dispose(); the mesh's DisposeAsync drains it before the scope dies.
-        services.TryAddSingleton<AsyncDisposeQueue>();
         // The terminal "all is done" signal — completed exactly once by the teardown
         // orchestrator (MeshTeardownExtensions) after EVERY drain phase, carrying the
         // TeardownReport. Subscribe to this (never to DisposalCompleted alone) before

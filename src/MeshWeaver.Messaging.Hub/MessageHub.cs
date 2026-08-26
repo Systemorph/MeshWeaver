@@ -2189,7 +2189,7 @@ public sealed class MessageHub : IMessageHub
                     // terminal state, never a mid-teardown ShutDown snapshot. The force-teardown
                     // path already orders it this way; here Dead was only set in the FINALLY, so a
                     // StopAsync waiter woken by the signal could finish its (fast) IoPool +
-                    // AsyncDisposeQueue drains and read RunLevel == ShutDown — the flaky
+                    // IoPool drain and read RunLevel == ShutDown — the flaky
                     // MeshHostBuilderTeardownOrderingTest failure on loaded CI shards. The finally
                     // keeps its (now redundant on success) assignment for the faulted path.
                     lock (locker)

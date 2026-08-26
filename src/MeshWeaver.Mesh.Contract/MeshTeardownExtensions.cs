@@ -54,7 +54,6 @@ public static class MeshTeardownExtensions
         // Capture mesh-scoped teardown services while the scope is still ALIVE —
         // never resolve DI once disposal has begun (the scope may already be tearing down).
         var ioPools = mesh.ServiceProvider.GetService<IoPoolRegistry>();
-        var asyncDisposeQueue = mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
         var activities = mesh.ServiceProvider.GetService<ActivityTracker>();
         var teardownSignal = mesh.ServiceProvider.GetService<MeshTeardownSignal>();
 
@@ -77,26 +76,21 @@ public static class MeshTeardownExtensions
 
         mesh.Dispose();
 
-        return await mesh.WaitForDisposalAndIoDrainAsync(ioPools, asyncDisposeQueue, timeout, teardownSignal);
+        return await mesh.WaitForDisposalAndIoDrainAsync(ioPools, timeout, teardownSignal);
     }
 
     /// <summary>
     /// The wait half of <see cref="TeardownAsync"/>, exposed for callers that
     /// already drive <see cref="System.IDisposable.Dispose"/> themselves (and keep their
     /// own progress/diagnostic loop around <see cref="IMessageHub.DisposalCompleted"/>).
-    /// Pass the <see cref="IoPoolRegistry"/> + <see cref="AsyncDisposeQueue"/> captured
-    /// BEFORE disposal began.
+    /// Pass the <see cref="IoPoolRegistry"/> captured BEFORE disposal began.
     ///
-    /// <para>Three ordered phases, all BEFORE the service scope is disposed:</para>
+    /// <para>Two ordered phases, both BEFORE the service scope is disposed:</para>
     /// <list type="number">
-    /// <item>await <see cref="IMessageHub.DisposalCompleted"/> — the synchronous/reactive
-    ///   disposal: action blocks + message round-trips. Resources enqueue their async
-    ///   cleanup onto the <see cref="AsyncDisposeQueue"/> during this phase.</item>
+    /// <item>await <see cref="IMessageHub.DisposalCompleted"/> — the reactive disposal:
+    ///   action blocks + message round-trips, and each hub's own container.</item>
     /// <item>cancel + join the offloaded ThreadPool I/O the action block doesn't cover
-    ///   (<see cref="IoPoolRegistry.DrainAll"/>).</item>
-    /// <item>after all the sync stuff is disposed, give the
-    ///   <see cref="AsyncDisposeQueue"/> a bounded quiesce budget to finish
-    ///   (<see cref="AsyncDisposeQueue.DrainAsync"/>), then the caller closes the scope.</item>
+    ///   (<see cref="IoPoolRegistry.DrainAll"/>), then the caller closes the scope.</item>
     /// </list>
     /// </summary>
     /// <returns>
@@ -107,7 +101,7 @@ public static class MeshTeardownExtensions
     /// silently over live work is the use-after-unload SIGSEGV.
     /// </returns>
     public static async Task<TeardownReport> WaitForDisposalAndIoDrainAsync(
-        this IMessageHub mesh, IoPoolRegistry? ioPools, AsyncDisposeQueue? asyncDisposeQueue,
+        this IMessageHub mesh, IoPoolRegistry? ioPools,
         TimeSpan timeout, MeshTeardownSignal? teardownSignal = null)
     {
         // (1) Action blocks + message round-trips.
@@ -125,16 +119,11 @@ public static class MeshTeardownExtensions
         //     so it stops, then joins — no ToTask, no wait-without-cancel.
         var leakedIoLeaves = ioPools?.DrainAll() ?? 0;
 
-        // (3) After all the sync stuff is disposed (and everyone has enqueued their
-        //     async cleanup), quiesce the async dispose queue before the scope closes.
-        var asyncDisposeClean = asyncDisposeQueue is null
-            || await asyncDisposeQueue.DrainAsync(timeout);
-
-        // (4) The terminal signal — the very end of teardown, all phases accounted. Fired AFTER
+        // (3) The terminal signal — the very end of teardown, all phases accounted. Fired AFTER
         //     the drains so a subscriber that proceeds on it (scope disposal, ALC unload, next
         //     test's mesh) never runs concurrently with surviving teardown work — and the report
         //     tells it when that guarantee could NOT be kept.
-        var report = new TeardownReport(leakedIoLeaves, asyncDisposeClean);
+        var report = new TeardownReport(leakedIoLeaves);
         teardownSignal?.SignalCompleted(report);
         return report;
     }

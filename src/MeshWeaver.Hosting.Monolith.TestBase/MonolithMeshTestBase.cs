@@ -1345,10 +1345,8 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // Capture the mesh-scoped teardown services BEFORE disposal — once Dispose()
             // begins, resolving DI races the scope teardown. We drain them after
             // DisposalCompleted (below) so the service scope isn't torn down while
-            // offloaded ThreadPool I/O is still running or async cleanup is still
-            // enqueued. See MeshTeardownExtensions.
+            // offloaded ThreadPool I/O is still running. See MeshTeardownExtensions.
             var ioPools = Mesh.ServiceProvider.GetService<IoPoolRegistry>();
-            var asyncDisposeQueue = Mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
             var teardownSignal = Mesh.ServiceProvider.GetService<MeshTeardownSignal>();
             Mesh.Dispose();
             TestPhaseTrace(testName, "DISPOSE_INVOKED", sw.ElapsedMilliseconds);
@@ -1374,17 +1372,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             var leakedIoLeaves = ioPools?.DrainAll() ?? 0;
             TestPhaseTrace(testName, "DISPOSE_IOPOOL_DRAIN_DONE", sw.ElapsedMilliseconds,
                 $"leakedIoLeaves={leakedIoLeaves}");
-            // After all the sync stuff is disposed (and everyone has enqueued their async
-            // cleanup), quiesce the async dispose queue before the scope closes below.
-            var asyncDisposeClean = asyncDisposeQueue is null
-                || await asyncDisposeQueue.DrainAsync(DisposeTimeout);
-            TestPhaseTrace(testName, "DISPOSE_ASYNC_QUEUE_DRAINED", sw.ElapsedMilliseconds,
-                $"clean={asyncDisposeClean}");
-
             // The terminal signal — DISPOSE_DONE is only true when this report is CLEAN. Fire it
             // before the scope disposes below so any subscriber ordering on "all is done" (ALC
             // unload hooks, diagnostics) observes the truthful terminal state, dirty or not.
-            var teardownReport = new TeardownReport(leakedIoLeaves, asyncDisposeClean);
+            var teardownReport = new TeardownReport(leakedIoLeaves);
             teardownSignal?.SignalCompleted(teardownReport);
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms — {teardownReport}");
             TestPhaseTrace(testName, "DISPOSE_DONE", sw.ElapsedMilliseconds, teardownReport.ToString());
