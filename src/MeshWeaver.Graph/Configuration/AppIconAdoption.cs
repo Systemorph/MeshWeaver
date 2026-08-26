@@ -34,11 +34,45 @@ public static class AppIconAdoption
     /// <summary>The placeholder a record wears when nobody supplied a real icon.</summary>
     internal const string GenericIcon = "/static/NodeTypeIcons/puzzlepiece.svg";
 
+    /// <summary>
+    /// Icons CORE itself shipped on default app records and has since replaced. A record still
+    /// wearing one of these was stamped by an older seed and nobody has chosen it, so converging it
+    /// to the current artwork is a repair rather than an overwrite.
+    ///
+    /// <para>🚨 An explicit historical list, and deliberately not "anything that differs from the
+    /// current seed". Differs-from-current would also overwrite an icon a VIEWER chose, which is
+    /// theirs; and it would fight the Store, which converges the icons of records it owns
+    /// (MeshWeaver.Plugins#624) — two writers on one field with overlapping conditions. Enumerating
+    /// what core shipped keeps this to exactly the records core is responsible for, and it is
+    /// enumerable precisely because it is HISTORY: we know what we shipped. Add a line here when a
+    /// default's artwork changes; a value that never shipped does not belong.</para>
+    /// </summary>
+    internal static readonly IReadOnlySet<string> SupersededDefaultIcons =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "/static/NodeTypeIcons/chat.svg",   // Threads, replaced by inline artwork 2026-08-24
+        };
+
     /// <summary>True when a record has no icon, or still wears the placeholder.</summary>
     internal static bool NeedsIcon(MeshNode? record) =>
         record is not null
         && (string.IsNullOrEmpty(record.Icon)
             || string.Equals(record.Icon, GenericIcon, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// True when a record still wears an icon core shipped and has since replaced, so it should be
+    /// converged to <paramref name="currentSeedIcon"/> — the value today's seed would give it.
+    ///
+    /// <para>Returns false when the record carries anything else, INCLUDING the current icon and
+    /// including something a viewer or the Store chose. That is the whole safety property: this
+    /// repair can only ever move a record off a value core itself is retiring.</para>
+    /// </summary>
+    internal static bool NeedsIconRefresh(MeshNode? record, string? currentSeedIcon) =>
+        record is not null
+        && !string.IsNullOrEmpty(record.Icon)
+        && !string.IsNullOrEmpty(currentSeedIcon)
+        && !string.Equals(record.Icon, currentSeedIcon, StringComparison.Ordinal)
+        && SupersededDefaultIcons.Contains(record.Icon);
 
     /// <summary>
     /// The app this record opens — <see cref="App.Plugin"/> from the record's CONTENT first, and

@@ -1970,7 +1970,14 @@ jobs:
     # clients-gate is a NEEDS on the same principle as plugin-gate/doc-gate/licence-gate: a red
     # Clients workflow can stop ALL image publication (#1568), so it must be able to fail the
     # repo's only required status check.
-    needs: [precheck, preflight, build, test, plugin-gate, landed-modules-gate, doc-gate, licence-gate, clients-gate]
+    # record-signatures is a NEEDS on the same principle, and it is the one that had been
+    # missing: it carries BOTH binary-compatibility gates (public record primary constructors,
+    # and public types moving assembly without a TypeForwardedTo). #2283 moved four public types
+    # out of MeshWeaver.AI and shipped a TypeLoadException to production on EVERY MCP tool call
+    # (#2370) — a module's IL binds a NAME, so no source build can see it. The gate for exactly
+    # that now exists and is proven live, but until this line it could go RED while the PR merged
+    # anyway. A gate whose verdict nothing reads is decorative.
+    needs: [precheck, preflight, build, test, plugin-gate, landed-modules-gate, doc-gate, licence-gate, clients-gate, record-signatures]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -2317,6 +2324,20 @@ jobs:
       run: |
         echo "::error::A dependency licence is incompatible with shipping MeshWeaver under Apache-2.0 / MIT — see the 'Dependency licences' job for the offending package(s) and their licence."
         echo "::error::Fix it by removing the package or replacing it with a permissively-licensed one. Do NOT add it to EXCEPTIONS unless the upstream licence genuinely IS permissive and only the package metadata is missing."
+        exit 1
+
+    # ── …and a BINARY-COMPATIBILITY break decides it too ────────────────────────────────────
+    # 🚨 `needs:` alone is NOT enough under `if: always()` — same lesson as the steps above, and
+    # this is the case that already cost a production incident. A source build answers source
+    # compatibility; an already-published module binds a NAME in its IL. So a public type that
+    # moves assembly, or a public record whose primary constructor changes shape, breaks every
+    # module built before the change while every compile in the repo stays green.
+    - name: Fail if the binary-compatibility gate failed
+      if: needs.record-signatures.result == 'failure'
+      run: |
+        echo "::error::A public surface changed in a way that breaks ALREADY-PUBLISHED modules — see the 'Public surface (binary compatibility)' job for the exact types."
+        echo "::error::A moved public type needs [assembly: TypeForwardedTo] left behind in its ORIGINAL assembly (a forwarder keeps one type identity; a shim mints a second and reintroduces the is/as trap-door). A forwarder cannot rename, so the type keeps its original name."
+        echo "::error::Do NOT satisfy this by rebuilding the consumer: the point is that modules ALREADY shipped bind the old name. If a forwarder is impossible (it would need a reference cycle), the move has to be reverted or the whole set republished atomically — see #2398."
         exit 1
 
     # ── …and a missing CI INPUT decides it too ──────────────────────────────────────────────
