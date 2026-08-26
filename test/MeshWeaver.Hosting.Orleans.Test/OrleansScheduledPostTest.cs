@@ -60,6 +60,11 @@ public class OrleansScheduledPostTest(ITestOutputHelper output) : OrleansSharedT
         Assert.NotNull(armed.FireAt);
         Assert.True(Math.Abs((armed.FireAt!.Value - slot).TotalSeconds) < 3,
             $"armed for {armed.FireAt:o} but the post's slot is {slot:o}");
+        // 🚨 The #50 regression, end to end and on the storage lane that caused it: the timer must
+        // NAME the person who scheduled the post. A null here is the production bug — the path-less
+        // query cannot carry last_modified_by, so the identity has to come from an authoritative
+        // per-node read — and it is invisible until the slot arrives and the publish is refused.
+        Assert.Equal(Scheduler, armed.CreatedBy);
 
         // ── HELD, not fired on arrival ──────────────────────────────────────────────────────
         // The half that can actually be wrong. A timer that fires when it is armed publishes the
@@ -107,6 +112,64 @@ public class OrleansScheduledPostTest(ITestOutputHelper output) : OrleansSharedT
         Assert.Null(await ReadTimer(published));
     }
 
+    /// <summary>
+    /// 🚨 The other half of the identity contract: a post whose last writer was the PLATFORM — a
+    /// GitSync, an import, a migration — gets NO timer, and is told so on the post itself.
+    ///
+    /// <para>Arming one would mean a timed publish running as the system principal, going out
+    /// through whichever profile the post names; refusing is the only safe answer to "whose account
+    /// does this post on?". Refusing at ARMING time rather than at fire time is what turns that
+    /// from a post which sits past its slot in silence into one that says what to do about it.</para>
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task ASystemWrittenPost_IsNotArmed_AndSaysWhyOnThePost()
+    {
+        var systemWritten = $"TestData/orleanssys{Guid.NewGuid():N}";
+        var control = $"TestData/orleansctl{Guid.NewGuid():N}";
+        var slot = DateTimeOffset.UtcNow.AddSeconds(20).ToString("o");
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var cut = systemWritten.LastIndexOf('/');
+        using (access.ImpersonateAsSystem())
+            await meshService.CreateOrUpdateNode(
+                new MeshNode(systemWritten[(cut + 1)..], systemWritten[..cut])
+                {
+                    Name = "Orleans system-written post",
+                    NodeType = "Systemorph/Post",
+                    State = MeshNodeState.Active,
+                    Content = new Dictionary<string, object?>
+                    {
+                        ["text"] = "Written by the platform",
+                        ["authorPath"] = "TestData/profile",
+                        ["status"] = "Scheduled",
+                        ["scheduledAt"] = slot,
+                    },
+                }).FirstAsync().ToTask();
+
+        // A post a PERSON scheduled, so a green result cannot mean "the watcher never ran".
+        await SeedPostAsync(control, status: "Scheduled", scheduledAt: slot);
+
+        using var watcher = StartWatcher();
+
+        await AwaitTimer(control, s => s is not null);      // the watcher has demonstrably passed
+        Assert.Null(await ReadTimer(systemWritten));
+
+        // …and the refusal is ON THE POST, in the words its owner reads — not only in a log line
+        // and not only on a subscription in the Admin partition they cannot see (issue #50).
+        var explained = await Mesh.GetMeshNodeStream(systemWritten)
+            .Select(node => NodeContentJson.ToJsonObject(node?.Content))
+            .Where(content => content.ContainsKey(PostPublishProblem.ErrorCodeKey)
+                && content[PostPublishProblem.ErrorCodeKey] is not null)
+            .FirstAsync()
+            .Timeout(45.Seconds());
+
+        Assert.Equal(
+            PostPublishProblem.SchedulerUnknownCode,
+            explained[PostPublishProblem.ErrorCodeKey]!.GetValue<string>());
+        Assert.NotEmpty(explained[PostPublishProblem.ErrorKey]!.GetValue<string>());
+    }
+
     // ── harness ─────────────────────────────────────────────────────────────────────────────
 
     private ScheduledPostWatcher StartWatcher()
@@ -134,6 +197,22 @@ public class OrleansScheduledPostTest(ITestOutputHelper output) : OrleansSharedT
         return runner;
     }
 
+    /// <summary>The person these posts are scheduled by. See <see cref="SeedPostAsync"/>.</summary>
+    private const string Scheduler = "orleans-test-user";
+
+    /// <summary>
+    /// Seeds a post AS A PERSON.
+    ///
+    /// <para>🚨 <b>The seeding identity is part of the scenario, not harness plumbing.</b> The
+    /// watcher publishes as whoever scheduled the post, and it REFUSES to arm a timer it knows
+    /// would be refused at fire time — a system or hub principal among them, because an un-gated
+    /// timed publish could otherwise go out through a profile that principal may not use (see
+    /// <c>ScheduledSocialPublishHandler.UnusableScheduler</c>). Seeding under
+    /// <c>ImpersonateAsSystem</c> therefore no longer describes "a post someone scheduled": it
+    /// describes a system-written post, which correctly gets NO timer — see
+    /// <see cref="ASystemWrittenPost_IsNotArmed_AndSaysWhyOnThePost"/>. Impersonation is still what
+    /// gets the write past access control; the identity it impersonates just has to be a person.</para>
+    /// </summary>
     private async Task SeedPostAsync(
         string postPath, string status, string scheduledAt, string? publishedUrn = null)
     {
@@ -150,7 +229,7 @@ public class OrleansScheduledPostTest(ITestOutputHelper output) : OrleansSharedT
 
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        using (access.ImpersonateAsSystem())
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = Scheduler, Name = Scheduler }))
             await meshService.CreateOrUpdateNode(new MeshNode(postPath[(cut + 1)..], postPath[..cut])
             {
                 Name = "Orleans scheduled post",

@@ -409,6 +409,15 @@ public static class PackageInstaller
     private static readonly TimeSpan GatingSettleTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// How many cover-grant waits may be in flight at once. Each is a LIVE mesh query held open
+    /// until its grant lands, so an unbounded fan-out over a large install is a self-inflicted
+    /// query storm — the shape that saturates the action block and takes the liveness probe with
+    /// it. Small on purpose: the waits overlap, so the phase still finishes in one
+    /// <see cref="GatingSettleTimeout"/> rather than one per root.
+    /// </summary>
+    private const int GatingWaitConcurrency = 4;
+
+    /// <summary>
     /// The cover grant a gating node type writes at its partition root — the ONE observable proof
     /// that the partition has become readable rather than merely present.
     ///
@@ -461,9 +470,49 @@ public static class PackageInstaller
     /// it LOGS the distinction it can observe instead of pretending to know which it was.</para>
     /// </summary>
     private static IObservable<Unit> WaitForGating(
-        IWorkspace workspace, string root, ILogger? logger) =>
-        workspace.GetMeshNodeStream(CoverGrantPath(root))
-            .Where(node => node is not null)
+        IMessageHub hub, string root, ILogger? logger)
+    {
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return(Unit.Default);
+
+        var grant = CoverGrantPath(root);
+        // 🚨 A children LISTING, never an exact-path stream. The grant is OPTIONAL by this
+        // method's own contract ("a partition whose node type does not gate never writes it"),
+        // and an exact-path GetMeshNodeStream on an absent node does not wait — the owner answers
+        // an authoritative routing NotFound that TERMINATES the stream, and that NotFound opens
+        // MeshNodeStreamCache's storm-breaker window on the path. The breaker fast-fails WRITES
+        // too, so this wait SUPPRESSED THE VERY WRITE IT WAS WAITING FOR: the gating pass's own
+        // CreateOrUpdateNodeRequest for the grant then never completed, and the caller sat out its
+        // full 60 s request budget. Observed as `[SYNC_STREAM] OnError … Owner={root}/_Access/
+        // Public_Access` → `No node found …` → `CreateOrUpdateNodeRequest … target <unset>` →
+        // TimeoutException → the provisioning plan failing in its create-home-root phase
+        // (Systemorph/MeshWeaver#2229 item A, reproduced on MeshWeaver.Education CI).
+        //
+        // A listing is empty-on-absent, so the watcher can be in place long before the node is
+        // written, and it is LIVE — the grant landing emits. Nothing here reads Content, so the
+        // index's lag costs at most one extra beat of waiting; existence is all this asks.
+        // See Doc/Architecture/CqrsAndContentAccess.md → "An OPTIONAL node".
+        // 🚨 Anchored at the EXACT grant, never a page of the _Access container's children.
+        // A `scope:children … limit:N` listing can MISS a grant that exists — a partition with more
+        // than N access entries puts it off the first page — and the wait would then time out for a
+        // partition that is perfectly readable. That is the same user-visible symptom this method
+        // was just fixed for (a false "no cover grant"), reintroduced by a rarer and harder-to-
+        // diagnose route.
+        //
+        // `path:{grant}` with no `scope:` qualifier is QueryScope.Exact, whose contract for a path
+        // that does not exist is documented in QueryParser: "answered ZERO ROWS with no error". So
+        // it is empty-on-absent like any listing — no routing NotFound, no terminated stream, no
+        // storm-breaker window (which is what made the original point read suppress the very write
+        // it was waiting for) — while being incapable of paging past the one row it can return.
+        //
+        // No `select:` projection: MeshNode.Path is COMPUTED (`Namespace + "/" + Id`), so a
+        // projection that omits either input yields an EMPTY path and the match below can never
+        // succeed. At most one small AccessAssignment row is materialised, and nothing reads its
+        // Content — this asks existence and nothing else.
+        return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{grant} nodeType:{AccessAssignmentNodeType.NodeType}"))
+            .Where(change => change.Items.Count > 0)
             .Take(1)
             .Select(_ => Unit.Default)
             .Do(_ => logger?.LogInformation(
@@ -480,6 +529,7 @@ public static class PackageInstaller
                     root, GatingSettleTimeout.TotalSeconds);
                 return Observable.Return(Unit.Default);
             });
+    }
 
     public static IObservable<Unit> RunInstallHooks(IMessageHub hub, string partition, ILogger? logger)
     {
@@ -1403,7 +1453,10 @@ public static class PackageInstaller
                 });
         }
 
-        return roots
+        // PHASE 1 — ACTIVATE, strictly sequentially. Each activation's gating pass WRITES its
+        // partition's access table, and concurrent passes deadlock (40P01) on the shared
+        // effective-permissions rebuild, so this half must stay a Concat.
+        var activated = roots
             .Select(root => Observable
                 .Using(
                     () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
@@ -1413,11 +1466,6 @@ public static class PackageInstaller
                                 .Where(node => node is not null)
                                 .Take(1)
                                 .Timeout(WarmTimeout)
-                                // 🚨 Warming the hub is only half of "installed". The gating pass
-                                // that makes the partition READABLE runs off this activation, so
-                                // returning here reports a clean install over a partition whose
-                                // cover still denies every viewer. Wait for the grant itself.
-                                .SelectMany(_ => WaitForGating(workspace, root, logger))
                                 .Select(_ => true)
                             : Observable.Return(false)))
                 .Where(warmed => warmed)
@@ -1432,9 +1480,64 @@ public static class PackageInstaller
             .ToObservable()
             .Concat()
             .Do(root => logger?.LogInformation("[PackageInstaller] warmed installed root {Root}", root))
-            .DefaultIfEmpty(string.Empty)
-            .LastAsync()
-            .Select(_ => Unit.Default);
+            .ToList();
+
+        // PHASE 2 — wait for the cover grants, CONCURRENTLY.
+        //
+        // 🚨 Warming the hub is only half of "installed". The gating pass that makes the partition
+        // READABLE runs off the activation, so returning at the end of phase 1 reports a clean
+        // install over a partition whose cover still denies every viewer. Wait for the grant itself.
+        //
+        // 🚨 But the wait must NOT ride the sequential chain. It only OBSERVES — a listing, no
+        // write — so it carries none of the serialisation phase 1 needs, and GatingSettleTimeout is
+        // ALSO the "this partition does not gate" answer, which is a normal and common shape. Ridden
+        // sequentially, a boot installing eight non-gating packages would pay the bound eight times
+        // over (~4 minutes of dead air). Merged, the whole install pays it at most once.
+        //
+        // The predecessor of this code appeared to be fast here, but only because it asked an
+        // exact-path GetMeshNodeStream about a node that is usually absent: that NotFounds
+        // immediately, so the wait never actually waited for ANY grant to land — and it poisoned the
+        // path's storm breaker on the way past, which is what then suppressed the gating write
+        // itself (#2229 item A).
+        return activated
+            .SelectMany(warmed =>
+            {
+                // 🚨 Only roots whose NodeType THIS PACKAGE DEFINES. The cover grant is written by
+                // that type's gating configuration, which lives plugin-side — core cannot introspect
+                // it, which is exactly why the grant is addressed as a well-known PATH here. So for a
+                // root typed by something this install did not bring, there is no gating pass of ours
+                // to wait for and the bound would be spent entirely on dead air.
+                //
+                // This can only ever skip a DIAGNOSTIC: WaitForGating is documented "never fatal",
+                // its result is discarded, and its whole product is the log line below it. It cannot
+                // change what is installed or who can read it.
+                var gating = warmed
+                    .Where(root => InPackageTypeOf(root, nodes) is not null)
+                    .ToList();
+                if (gating.Count == 0)
+                    return Observable.Return(Unit.Default);
+                // 🚨 SYSTEM, like phase 1 — the whole install runs as System and the _Access
+                // listing is only readable that way; under the ambient (empty) identity the
+                // listing would come back empty and the wait would spend its full bound on a
+                // grant that is actually there. RunAsSystem, never Observable.Using: the latter
+                // opens the scope on the SUBSCRIBING thread and closes it on the terminating one,
+                // leaving the subscriber latched as system-security (#1790, and the shape
+                // ImpersonationScopeSiteRatchetGuard refuses at any new site).
+                return accessService.RunAsSystem(() => gating
+                    .Select(root => WaitForGating(hub, root, logger))
+                    .ToObservable()
+                    // 🚨 BOUNDED. A bare Merge() subscribes every root at once, and each one is a
+                    // LIVE mesh query held open until the grant lands or the bound elapses — a boot
+                    // installing a large selection would fan that out with no ceiling at all. This
+                    // repo's failure mode for exactly that is documented: storm -> action block
+                    // saturated -> liveness probe times out -> pod pulled from the Service -> 502 ->
+                    // SIGKILL. Merge's own maxConcurrent is the bound (never a SemaphoreSlim, which
+                    // parks a hub thread); it costs nothing in latency here because the waits
+                    // overlap, and the whole phase is still capped by GatingSettleTimeout.
+                    .Merge(GatingWaitConcurrency)
+                    .DefaultIfEmpty(Unit.Default)
+                    .LastAsync());
+            });
     }
 
     /// <summary>

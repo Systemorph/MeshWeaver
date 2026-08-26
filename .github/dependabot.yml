@@ -22,57 +22,6 @@ updates:
         applies-to: version-updates
         update-types: [minor, patch]
 
-  # JS clients — one update config over the web workspaces; grouped the same way.
-  # 🚨 The RN app moved to MeshWeaver.Plugins/app/react-native (#2169): its Expo-coordinated
-  # suppress the same packages everywhere else. It has its own config below.
-  - package-ecosystem: npm
-    directories:
-    schedule:
-      interval: weekly
-      day: monday
-      time: "05:30"
-      timezone: Europe/Zurich
-    open-pull-requests-limit: 10
-    groups:
-      npm-minor-patch:
-        applies-to: version-updates
-        update-types: [minor, patch]
-      # Majors grouped too — the first weekly run opened 20 individual major PRs (TS 7, vite 8,
-      # @types/node 26, react 19, …), each burning a full CI cycle + a Copilot review. One majors
-      # PR per wave keeps the review meaningful and the CI bill bounded.
-      npm-major:
-        applies-to: version-updates
-        update-types: [major]
-
-  # React Native / Expo — its OWN config, because this package upgrades as ONE coordinated Expo SDK
-  # jump, never as a sweep. It is the only npm directory whose peer graph is pinned from outside:
-  # react-native hard-peers a react major, and @expo/cli reads tsconfig through the TypeScript
-  # compiler API. So a group PR that moves any ONE of those without the others cannot even install.
-  #
-  # 🚨 Why a SEPARATE config and not an `ignore:` on the block above: `ignore` applies to the whole
-  # update config, so holding react/typescript majors back for RN would also hold them back for
-  # /clients/react, /clients/portal-next and /clients/portal — which take them fine. Splitting the
-  # directory out is what makes the holdback surgical.
-  #
-  # That PR was opened and rejected twice (most recently #1704, 2026-08-17), each time dying in
-  # `npm ci` before a single check ran. #1584 then did the migration deliberately — Expo SDK 52→57,
-  # react-native 0.76.5→0.86.2, react 18→19, expo-av → expo-audio/expo-video — so the holdbacks
-  # that existed only because of the SDK 52 pin are GONE below, each re-measured on SDK 57 rather
-  # than assumed:
-  #
-  #   - typescript: RETIRED. The blocker was @expo/cli SDK 52 reading tsconfig through the classic
-  #     TS compiler API that TS 7 deleted. SDK 57's CLI does not — `expo export --platform web`
-  #     runs clean on a cold Metro cache under typescript 7.0.2, so this package is on 7 with the
-  #     rest of the client tree.
-  #   - react / react-dom / react-test-renderer / @types/react*: RETIRED AS A VERSION PIN, kept as
-  #     a COUPLING. RN 0.76.5's hard `react ^18.2.0` peer is gone (0.86.2 peers `react ^19.2.3`),
-  #     but react's major here is still whatever react-native peers, so it stays grouped with the
-  #     SDK jump rather than arriving on its own — see the react-native entry.
-  #
-  # What is NOT retired is the reason this config exists at all: react-native, react-native-web and
-  # the expo/@expo majors move as ONE coordinated SDK jump. Lift those with the NEXT SDK migration,
-  # the same way, not by a sweep.
-
   - package-ecosystem: pip
     directory: "/clients/python"
     schedule:

@@ -1601,3 +1601,47 @@ kubectl -n monitoring port-forward svc/loki-grafana 3000:80   # what the tunnel 
 If `kubectl` times out: confirm the VPN is connected, that the private DNS zone
 `privatelink.<region>.azmk8s.io` is linked to the VNet (it is, via `network.bicep`),
 and that your client gets a `172.16.201.x` address.
+
+
+## Silo memory growth on recompile waves (#2194)
+
+> Carried across from `DEPLOY-RUNBOOK.md` when #2144 consolidated the deployment docs.
+> The runbook was deleted in that consolidation; this analysis was written against it and
+> would otherwise have been lost to a modify/delete conflict.
+
+volume silently misaligns an environment and a cluster can run an older volume set while the chart
+in git looks right. Diff live mounts against the chart after every deploy.
+
+### Degraded-but-Ready replica — intermittent hangs, `kubectl top` divergence
+
+Symptom: some requests hang or serve garbled state while most succeed, typically after a burst of
+content syncs or a scheduled bake. Cause class (2026-08-25, MeshWeaver#2194): each NodeType
+publication mints a new AssemblyLoadContext and serving instances stay on the OLD build behind the
+Recycle banner, so every superseded ALC stays rooted — the type-hosting silos climb to tens of GB
+and go GC-bound while still answering `/alive` (both post-startup probes), so Kubernetes never
+pulls them from rotation.
+
+```bash
+az aks command invoke -g <rg> -n <cluster> --command "kubectl top pods -n <ns> --no-headers"
+```
+
+One or two pods far above their siblings in BOTH memory and CPU = this. Remedy: `kubectl delete
+pod` the outliers (grace-drain; the Deployment replaces them). Prevention: enable
+`Modules:AutoRecycleOnStaleBuild` (MeshWeaver#2192) so instances converge onto each newly
+published build and old ALCs collect — mechanism in
+`src/MeshWeaver.Documentation/Data/Architecture/NodeTypeCompilation.md`.
+
+**You no longer have to be watching.** `PortalReplicaWorkingSetDiverged`
+(`deploy/aks/scripts/values.observability.yaml`, group `portal-degraded`) fires when one
+`memex-portal` container's working set is >3× the lightest in the same namespace AND above 8 GB for
+15 minutes — the exact 2026-08-25 shape, where nothing alerted and the two sick pods served hung
+pages for three and a half hours. It is DETECTION only; the fix is still convergence. It needs the
+observability stack installed (`install-observability.sh`), and it can never fire on a
+single-replica namespace by construction (`max == min`).
+
+⚠️ Still open on #2194: a **progress-aware `/alive`**. Both post-startup probes watch `/alive`, a
+trivial process-up check a GC-thrashing pod answers happily. Do NOT "fix" that by pointing readiness
+back at `/health` — that re-creates the 2026-07-21 probe death-spiral. A restart threshold needs
+calibrating against real GC-pause data first, which is what the alert above starts producing.
+
+## Known gaps / follow-ups
