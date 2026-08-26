@@ -9,7 +9,8 @@ namespace MeshWeaver.Graph.Security;
 /// <summary>
 /// Fail-closed guard for Create/Update: refuses a write that DECLARES a NodeType — its
 /// <see cref="MeshNode.Content"/> IS a <see cref="Configuration.NodeTypeDefinition"/> — while also
-/// naming itself an INSTANCE of a type via <see cref="MeshNode.NodeType"/>.
+/// naming ITSELF via <see cref="MeshNode.NodeType"/>, i.e. enrolling the declaration in its own
+/// instance query.
 ///
 /// <para><b>The defect this closes at the WRITER (#2160/#2161/#2162, #2245, #2358).</b> A NodeType
 /// declaration is the MeshNode that DEFINES a type. Three built-in declarations (<c>User</c>,
@@ -28,6 +29,23 @@ namespace MeshWeaver.Graph.Security;
 /// retroactive, instance-by-instance fix cannot close. This validator is the "ONE change that fixes
 /// the class of bug rather than an instance of it" #2358 itself asks for: refuse the collision AT
 /// THE WRITE BOUNDARY, for every declaration present or future, not just the three named so far.</para>
+///
+/// <para>🚨 <b>SELF-typing only — a declaration naming an UNRELATED type stays legal, and that is
+/// deliberate.</b> The guard first refused any <c>NodeType</c> other than <c>NodeType</c>, and that
+/// broke a shape the plugins repo actually ships: a package ROOT that is a <c>Space</c> and whose
+/// content also happens to be a <c>NodeTypeDefinition</c> (the UWDeepfield shape, pinned by
+/// <c>NodeRepoInstanceOrderingTest</c>). Refusing it made the whole package un-installable — a
+/// strictly worse outcome than the degradation it was guarding against, and one CI caught before
+/// merge. The harm this guard exists to stop is a declaration polluting the instance query for the
+/// type IT DECLARES (<c>User</c> declaration answering <c>nodeType:User</c> beside real accounts);
+/// a <c>Space</c> root answering <c>nodeType:Space</c> is simply a Space, correctly returned.</para>
+///
+/// <para>The residual is real but SMALLER and is NOT closed here: a <c>nodeType:Space</c> consumer
+/// that calls <c>ContentAs&lt;Space&gt;()</c> on such a root gets a degraded null, because the
+/// content is a <c>NodeTypeDefinition</c>. Closing that means changing the shipped package first
+/// (a cross-repo change in MeshWeaver.Plugins), not refusing the write here — refusing it at the
+/// boundary while the content still ships is how a guard breaks production rather than protecting
+/// it.</para>
 ///
 /// <para>Bad-data TOLERANCE is unchanged: this guard never rejects a READ. An existing row that
 /// already carries the collision keeps loading (degraded, tolerated by
@@ -59,11 +77,20 @@ public sealed class NodeTypeDeclarationSelfTypingValidator : INodeValidator
         if (!IsNodeTypeDeclarationContent(node.Content))
             return Observable.Return(NodeValidationResult.Valid());
 
+        // SELF-typing only: the NodeType field names THIS declaration. An instance references a
+        // type by the declaration's path (`nodeType:"Pack/Widget"`) or, for a built-in at the root,
+        // by its id (`nodeType:"User"`) — so those two are the ways a declaration can enrol itself
+        // in its own instance query. Naming an UNRELATED type is a different shape and is legal
+        // (see the class doc).
+        if (!string.Equals(node.NodeType, node.Path, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(node.NodeType, node.Id, StringComparison.OrdinalIgnoreCase))
+            return Observable.Return(NodeValidationResult.Valid());
+
         return Observable.Return(NodeValidationResult.Invalid(
-            $"'{node.Path}' carries NodeTypeDefinition content (it DECLARES a NodeType) but its own " +
-            $"NodeType field is '{node.NodeType}' — a declaration must never claim to be an instance " +
-            "of the type it declares, or of anything else: doing so makes it indistinguishable from " +
-            $"a real instance to every 'nodeType:{node.NodeType}' query in the mesh. Set NodeType to " +
+            $"'{node.Path}' carries NodeTypeDefinition content (it DECLARES a NodeType) and its own " +
+            $"NodeType field is '{node.NodeType}' — i.e. the declaration claims to be an INSTANCE OF " +
+            "ITSELF. That makes it indistinguishable from a real instance to every " +
+            $"'nodeType:{node.NodeType}' query in the mesh. Set NodeType to " +
             $"'{MeshNode.NodeTypePath}', or leave it unset.",
             NodeRejectionReason.ValidationFailed));
     }

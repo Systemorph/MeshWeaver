@@ -56,21 +56,64 @@ public class NodeTypeDeclarationSelfTypingValidatorTest(ITestOutputHelper output
         result.ErrorMessage.Should().Contain("Widget");
     }
 
+    /// <summary>
+    /// 🚨 A declaration naming an UNRELATED type must be ACCEPTED. This test asserted the opposite
+    /// until CI proved that wrong: the broad rule refused a shape MeshWeaver.Plugins actually ships
+    /// — a package ROOT that is a <c>Space</c> whose content also happens to be a
+    /// <c>NodeTypeDefinition</c> (the UWDeepfield shape) — which made the whole package
+    /// un-installable. <c>NodeRepoInstanceOrderingTest</c> pins that install and went red.
+    ///
+    /// <para>The harm being guarded is a declaration polluting the instance query for the type IT
+    /// DECLARES: the <c>User</c> declaration answering <c>nodeType:User</c> beside real accounts
+    /// (355k+ production occurrences). A <c>Space</c> root answering <c>nodeType:Space</c> is
+    /// simply a Space, correctly returned — no collision to prevent.</para>
+    ///
+    /// <para>The residual is acknowledged in the validator's own docs and deliberately NOT closed
+    /// here: a <c>ContentAs&lt;Space&gt;()</c> on such a root degrades to null. Fixing that means
+    /// changing the shipped package first, not refusing the write while the content still ships.</para>
+    /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task ADeclaration_ClaimingToBeAnInstanceOfADifferentType_IsAlsoRejected()
+    public async Task ADeclaration_NamingAnUnrelatedType_IsAccepted()
     {
         var result = await Guard
             .Validate(new NodeValidationContext
             {
                 Operation = NodeOperation.Create,
-                // Declares "Widget" but misfiles itself as an instance of an unrelated type.
-                Node = DeclarationNode("SomeOtherType", new NodeTypeDefinition()),
+                // The UWDeepfield shape: a Space root whose content is a NodeTypeDefinition.
+                Node = DeclarationNode("Space", new NodeTypeDefinition()),
+            })
+            .Should().Emit();
+
+        result.IsValid.Should().BeTrue(
+            "a declaration naming an UNRELATED type does not enrol itself in its own instance "
+            + "query, and refusing it makes the shipped UWDeepfield package un-installable, "
+            + $"got: {result.ErrorMessage}");
+    }
+
+    /// <summary>
+    /// The self-typing check must match on the declaration's PATH too, not only its id — an
+    /// instance references an in-package type by path (<c>nodeType:"Pack/Widget"</c>), so a
+    /// declaration at that path naming it is the same self-enrolment as the root-level case.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ADeclaration_SelfTypedByItsFullPath_IsRejected()
+    {
+        var result = await Guard
+            .Validate(new NodeValidationContext
+            {
+                Operation = NodeOperation.Create,
+                Node = new MeshNode("Widget", "Pack")
+                {
+                    Name = "Widget",
+                    NodeType = "Pack/Widget",
+                    Content = new NodeTypeDefinition(),
+                },
             })
             .Should().Emit();
 
         result.IsValid.Should().BeFalse(
-            "the collision is 'a declaration claims to be ANY instance', not specifically its own "
-            + "name — any non-empty, non-NodeTypePath NodeType on NodeTypeDefinition content is illegal");
+            "instances reference this type as 'Pack/Widget', so the declaration naming that path "
+            + "puts itself in its own instance query — the id-only check would miss it");
     }
 
     [Fact(Timeout = 30000)]
