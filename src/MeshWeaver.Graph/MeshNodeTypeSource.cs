@@ -871,6 +871,12 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     /// <summary>
     /// One-shot read of this node's DURABLE row — the authoritative activation seed.
     ///
+    /// <para><b>It is an OBSERVATION, never an edit.</b> The version it reads is recorded on
+    /// <see cref="PostCommitFlushRegistry"/> so the per-node persistence sampler and the
+    /// dispose-time flush cannot write it back — see the comment at the record site for why the
+    /// sampler's reference-identity echo gate cannot cover this emission, and what the write-back
+    /// costs when a rival replica writes in the same window (#2008/#1432).</para>
+    ///
     /// <para><b>This is a raw <see cref="IStorageAdapter.Read"/>, NOT
     /// <c>MeshNodeStreamExtensions.GetMeshNode</c>.</b> It reads the row directly out of the
     /// store; there is no owner round-trip, no routing, and therefore no
@@ -910,9 +916,40 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         return _persistenceCore.Read(_hubPath, _workspace.Hub.JsonSerializerOptions)
             .Take(1)
-            .Do(seed => _logger?.LogDebug(
-                "MeshNodeTypeSource[{HubPath}]: durable activation seed {Outcome} (version={Version})",
-                _hubPath, seed is null ? "found no row" : "read", seed?.Version))
+            .Do(seed =>
+            {
+                _logger?.LogDebug(
+                    "MeshNodeTypeSource[{HubPath}]: durable activation seed {Outcome} (version={Version})",
+                    _hubPath, seed is null ? "found no row" : "read", seed?.Version);
+                // 🚨 The seed IS the durable row, so record its version on the per-path high-water
+                // that HandleSaveMeshNode / FlushPendingOwnSave consult — the same thing
+                // MeshNodeStreamHandle.AdoptPersisted does for the OTHER durable-observation path
+                // (a storage change notification), and sound for the same #1249 reason: two
+                // DISTINCT own-node states can never share a version, because UpdateImpl re-stamps
+                // any own update arriving at or below its previous version with NextVersion. A
+                // later LOCAL edit therefore always carries a strictly higher version and still
+                // writes; only the observation itself is suppressed. RecordObservedDurable, not
+                // Record: a read must never resolve an in-flight flush CLAIM (see its doc).
+                //
+                // Without this, activation re-persisted the row it had just READ. The
+                // reference-identity echo gate in the persistence sampler
+                // (MeshDataSourceExtensions.SubscribeToOwnDeletion: !ReferenceEquals(n,
+                // OwnNodeCache.PersistedSnapshot)) cannot cover it: PersistedSnapshot is ONE slot,
+                // and Initialize builds TWO collections back-to-back (this seed, then the
+                // routing-supplied leg) before the workspace delivers either to the sampler — so
+                // the slot holds the routing instance and the SEED emission fails the reference
+                // test and is dispatched as if it were a local edit. Measured directly: a mirror
+                // process activating over a shared store wrote its own seed back on every
+                // activation. Harmless while the row has not moved (an equal-version rewrite), but
+                // when a rival replica's real write lands first the seed write is a strict
+                // REGRESSION: MonotonicWriteGuard refuses it and AdoptDurableTruth then rebases
+                // this hub at durable + 1 — a revision the store never held (#1432), reached by a
+                // hub that never edited anything. That is the intermittent #2008 failure, and this
+                // is its root: an observation must never enter the write path.
+                if (seed is not null)
+                    _workspace.Hub.ServiceProvider.GetService<PostCommitFlushRegistry>()
+                        ?.RecordObservedDurable(seed.Path, seed.Version);
+            })
             .Catch<MeshNode?, Exception>(ex =>
             {
                 _logger?.LogWarning(ex,
