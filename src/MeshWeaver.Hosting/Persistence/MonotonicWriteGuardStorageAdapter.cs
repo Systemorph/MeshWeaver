@@ -19,12 +19,20 @@ namespace MeshWeaver.Hosting.Persistence;
 /// <see cref="MeshNode.NextVersion"/>, which is <c>current.Version + 1</c>, and an unchanged
 /// node is re-persisted at the version it already carries — so a correctly-produced write is
 /// ALWAYS &gt;= the version already stored. A write that
-/// regresses is therefore never a legitimate newer state — it is a stale snapshot that some
-/// component adopted as live (a cache-seeded reactivation, a lagging change-feed echo, a
-/// debounce buffer that outlived its state) about to overwrite acked, durable data. Before
+/// regresses is therefore never a legitimate NEWER state: it was produced against an older
+/// durable state than the row now holds, and letting it land overwrites acked data. Before
 /// this guard the store took it silently: the observed production shape was
 /// <c>Version=12 / ApiKey=sk-v6</c> → <c>Version=2 / ApiKey=sk-v0</c>, six acknowledged
 /// writes destroyed while the write reported success.</para>
+///
+/// <para>🚨 That says the write is OLD — it does not say WHY, and the two causes want different
+/// investigations (#2403). One is a stale snapshot some component adopted as live (a cache-seeded
+/// reactivation, a lagging change-feed echo, a debounce buffer that outlived its state). The other
+/// is a second, entirely legitimate writer that simply reached the path first, so the loser's write
+/// was measured against a row it had never seen — the shape behind #2403, where a cross-partition
+/// skill MIRROR created a path an installer was about to write. Asserting the stale-snapshot cause
+/// in the warning sent that investigation hunting for a bug in the losing writer, where there was
+/// none. <see cref="MeshNode.MainNode"/> is what separates the two on sight.</para>
 ///
 /// <para><b>Two-stage, so it costs nothing on the happy path.</b> A per-path in-process
 /// high-water mark (fed by every write AND every read this process performs — no extra I/O)
@@ -215,8 +223,9 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
         logger?.LogWarning(
             "[MonotonicWriteGuard] CONFLICT on {Path}: a write at Version={IncomingVersion} lost the race against "
             + "the durable Version={StoredVersion}. MeshNode.Version is the owner's monotonic persistence clock "
-            + "(MeshNode.NextVersion floors every mint at current+1), so the losing write is a STALE snapshot, not a "
-            + "newer state. Resolved by merging into the durable row: merged={MergedMembers}; "
+            + "(MeshNode.NextVersion floors every mint at current+1), so this write was PRODUCED AGAINST AN OLDER "
+            + "durable state than the row now holds — either a stale snapshot some component adopted as live, or a "
+            + "second writer that reached this path first. Resolved by merging into the durable row: merged={MergedMembers}; "
             + "latest-wins (stale values DROPPED)={OverwrittenMembers}. The durable row: nodeType={StoredNodeType} "
             + "name='{StoredName}' category='{StoredCategory}' mainNode='{StoredMainNode}' "
             + "lastModifiedBy='{StoredLastModifiedBy}' lastModified={StoredLastModified:O}. Find the writer — a "
