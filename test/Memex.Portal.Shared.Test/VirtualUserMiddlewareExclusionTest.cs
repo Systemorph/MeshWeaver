@@ -88,6 +88,8 @@ public class VirtualUserMiddlewareExclusionTest
     [Theory]
     [InlineData("/mcp")]
     [InlineData("/mcp/tools")]
+    [InlineData("/api/mcp")]
+    [InlineData("/api/mcp/tools")]
     public async Task McpPath_StillExcluded(string path)
     {
         var nextCalled = false;

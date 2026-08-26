@@ -22,8 +22,11 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
 {
     private const string CookieName = "meshweaver_virtual_user";
 
+    // "/api/mcp" beside "/mcp": the McpEndpointRoutes rewrite normally folds the primary path
+    // onto /mcp before this runs; the explicit entry is defense-in-depth against reordering —
+    // Bearer-authed MCP traffic must never provision guest VUsers.
     private static readonly string[] ExcludedPrefixes =
-        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp", "/bootstrap", "/healthz"];
+        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp", "/api/mcp", "/bootstrap", "/healthz"];
 
     // 🚨 Anonymous, high-frequency infrastructure routes. They are polled by machines that keep no
     // cookie, so the VUser flow can only ever churn: it re-derives an id and stamps a guest context

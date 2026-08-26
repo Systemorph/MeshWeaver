@@ -12,13 +12,15 @@ namespace Memex.Portal.Shared.Authentication;
 /// <see cref="IMcpBackConnection"/>. The co-hosted Claude Code / GitHub Copilot CLIs call
 /// <see cref="EnsureForUser"/> at spawn time (every execution); on a cache miss this mints a
 /// long-lived per-user MeshWeaver <c>ApiToken</c> via <see cref="ApiTokenService"/> — with NO manual
-/// step — and returns the composed <c>{baseUrl}/mcp</c> URL plus the raw <c>mw_…</c> token to present
-/// as <c>Authorization: Bearer</c>. Internal portal↔CLI↔/mcp comms are therefore token-based and
+/// step — and returns the composed <c>{baseUrl}/api/mcp</c> URL (the PRIMARY endpoint path — see
+/// <see cref="McpEndpointRoutes"/>; safe to use here because the back-connection targets THIS
+/// portal, whose image carries the alias) plus the raw <c>mw_…</c> token to present
+/// as <c>Authorization: Bearer</c>. Internal portal↔CLI↔MCP comms are therefore token-based and
 /// scoped to the user's own permissions (the ApiToken carries the user's roles).
 ///
 /// <para>The per-user token is cached on this singleton's instance dictionary (NEVER static — it
 /// dies with the host) for the process lifetime; a fresh replica mints its own (the prior token
-/// stays valid). A revoked token surfaces as a 401 on the next <c>/mcp</c> call, which the
+/// stays valid). A revoked token surfaces as a 401 on the next MCP call, which the
 /// auth-on-exception path turns into a re-mint.</para>
 /// </summary>
 internal sealed class McpBackConnectionService : IMcpBackConnection
@@ -46,7 +48,7 @@ internal sealed class McpBackConnectionService : IMcpBackConnection
         if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(userId))
             return Observable.Return<McpConnectionInfo?>(null);
 
-        var mcpUrl = $"{baseUrl!.TrimEnd('/')}/mcp";
+        var mcpUrl = $"{baseUrl!.TrimEnd('/')}{McpEndpointRoutes.PrimaryEndpoint}";
 
         // Reuse the cached token (long-lived, no expiry) — cheap hot path, no mint.
         if (tokensByUser.TryGetValue(userId, out var cached))

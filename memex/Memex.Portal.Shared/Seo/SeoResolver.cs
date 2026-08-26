@@ -44,9 +44,13 @@ public static class SeoResolver
     /// <summary>Per-request stash key so the head and body components resolve ONCE.</summary>
     public const string HttpContextItem = "Memex.Seo.PageData";
 
-    /// <summary>Route prefixes that are never mesh nodes — skipped without touching the mesh.</summary>
+    /// <summary>Route prefixes that are never mesh nodes — skipped without touching the mesh.
+    /// "mcp" is deliberately NOT here: <c>Mcp</c> is a real partition (the MCP Server store
+    /// plugin) whose cover renders at <c>/Mcp</c>, so it resolves like any node page; MCP
+    /// protocol traffic never reaches the page render path this resolver serves (the endpoint
+    /// route and <c>NonfileRouteConstraint</c> keep it off).</summary>
     private static readonly string[] NonNodePrefixes =
-        ["login", "api", "_blazor", "_framework", "_content", "dev", "mcp", "static", "webhooks"];
+        ["login", "api", "_blazor", "_framework", "_content", "dev", "static", "webhooks"];
 
     /// <summary>Whether the request path can be a node page worth resolving.</summary>
     public static bool IsCandidatePath(string? path)
