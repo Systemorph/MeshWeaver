@@ -21,6 +21,13 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
     public static readonly GateAllowlist Empty = new([]);
 
     /// <summary>The valid check names, package-level and type-level.</summary>
+    /// <summary>
+    /// Optional third token marking an entry whose check FLAPS. Such an entry is exempt from
+    /// stale-detection: passing once does not prove the debt is paid, so the ratchet must not
+    /// demand its removal. It still suppresses only the scope/check it names.
+    /// </summary>
+    public const string IntermittentMarker = "intermittent";
+
     public static readonly IReadOnlySet<string> Checks =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             { "install", "idempotence", "compile", "render", "tests" };
@@ -38,11 +45,14 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
             if (line.Length == 0)
                 continue;
             var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length != 2 || !Checks.Contains(parts[1]))
+            var intermittent = parts.Length == 3
+                && string.Equals(parts[2], IntermittentMarker, StringComparison.OrdinalIgnoreCase);
+            if ((parts.Length != 2 && !intermittent) || !Checks.Contains(parts[1]))
                 throw new FormatException(
-                    $"allow file line {number}: expected '<scope> <check>' with check one of " +
+                    $"allow file line {number}: expected '<scope> <check>' (optionally followed by " +
+                    $"'{IntermittentMarker}') with check one of " +
                     $"[{string.Join(", ", Checks)}], got '{line}'");
-            entries.Add(new AllowEntry(parts[0], parts[1].ToLowerInvariant()));
+            entries.Add(new AllowEntry(parts[0], parts[1].ToLowerInvariant(), intermittent));
         }
         return new GateAllowlist(entries);
     }
@@ -99,7 +109,7 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
 }
 
 /// <summary>One known-debt entry: a scope (package id or NodeType path) and a check name.</summary>
-public sealed record AllowEntry(string Scope, string Check)
+public sealed record AllowEntry(string Scope, string Check, bool Intermittent = false)
 {
     /// <summary>Case-insensitive match, exact scope — no globs: an entry must name exactly the
     /// debt it tolerates, or the ratchet stops ratcheting.</summary>
@@ -140,6 +150,20 @@ public sealed record GateVerdict(
         foreach (var entry in allow.Entries)
         {
             if (failures.Any(f => entry.Matches(f.Scope, f.Check)))
+                continue;
+            // 🚨 An INTERMITTENT entry that passed this run is NOT stale. The ratchet's rule — a
+            // listed check that starts passing fails the run until its line goes — assumes a check
+            // is deterministic, so one green run proves the debt is paid. For a flapping check that
+            // inference is wrong, and acting on it churns: PensionFund idempotence was dropped as
+            // stale (768f9ba0b) and RESTORED one commit later (f32047e0e, "the check is
+            // intermittent"), after which the allow file carried the intent in a COMMENT the parser
+            // strips — so the ratchet kept failing runs for obeying the file. Marking the entry
+            // instead puts that intent where the code can read it.
+            //
+            // This never hides a NEW failure: an intermittent entry still only suppresses the
+            // scope/check it names, and a failure it does not name is still a new failure. What it
+            // gives up is stale-detection for that one line, which is the whole point.
+            if (entry.Intermittent && Passed(report, entry))
                 continue;
             (Passed(report, entry) ? stale : unverifiable).Add(entry);
         }
