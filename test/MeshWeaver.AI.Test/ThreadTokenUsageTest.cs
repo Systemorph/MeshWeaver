@@ -82,6 +82,15 @@ public class ThreadTokenUsageTest : AITestBase
     // deterministically lands after token aggregation, with no sleep.
     private const string UsageMarker = "[usage-accounted]";
 
+    // The lone text chunk a provider-reports-nothing client streams before blocking/throwing.
+    // Deliberately longer than the framework's own initial "Generating response..." placeholder
+    // (22 chars) — PushToResponseMessage's monotonic-growth guard keeps whichever of
+    // current/incoming text is LONGER while Status is Streaming, so anything shorter would never
+    // actually replace the placeholder on the cell (see the comment at the yield site).
+    // No trailing whitespace: StripSummaryBlock (the streaming push's TrimEnd) would strip it
+    // before the text reaches the cell, breaking an exact-suffix Contains check on the gate below.
+    private const string NoReportWorkingText = "Working — no provider usage report on this stream.";
+
     public ThreadTokenUsageTest(ITestOutputHelper output) : base(output) { }
 
     protected override bool ShareMeshAcrossTests => true;
@@ -97,6 +106,8 @@ public class ThreadTokenUsageTest : AITestBase
                 services.AddSingleton<IChatClientFactory>(new UsageCacheChatClientFactory());
                 services.AddSingleton<IChatClientFactory>(new UsageResolvedCancelFactory());
                 services.AddSingleton<IChatClientFactory>(new UsageResolvedErrorFactory());
+                services.AddSingleton<IChatClientFactory>(new UsageNoProviderUsageCancelFactory());
+                services.AddSingleton<IChatClientFactory>(new UsageNoProviderUsageErrorFactory());
                 return services;
             });
 
@@ -408,6 +419,85 @@ public class ThreadTokenUsageTest : AITestBase
         cell.OutputTokens.Should().Be(OutTokens);
     }
 
+    // ─── Provider reports NOTHING before the terminal path (#595 — the estimate floor) ───
+    //
+    // An OpenAI-compatible provider emits usage ONLY in a successful stream's terminal chunk —
+    // a cancel or a fault pre-empting that chunk means the streaming loop above never saw a
+    // UsageContent block at all, so inputTokens/outputTokens are still null when the terminal
+    // path runs. Before this fix RecordUsage's all-zero guard made this a silent no-op: the round
+    // vanished from accounting even though the provider had already billed the prompt it
+    // processed. These pin the ESTIMATE floor: TokenUsageNodeType.EstimateTokens derives a
+    // non-zero input estimate from the prompt actually sent (allMessages) and a non-zero output
+    // estimate from the text actually streamed before the terminal path, and the satellite is
+    // flagged IsEstimated so a reader never conflates it with a provider-reported count.
+
+    [Fact]
+    public async Task CancelledRound_ProviderReportsNothing_RecordsEstimatedTokens()
+    {
+        var threadPath = await SeedThread();
+        var client = GetClient();
+        client.SubmitMessage(threadPath, "cancel me, provider never reports usage", modelName: "usage-cancel-noreport-model", createdBy: TestUser);
+
+        var executing = await WaitForThread(threadPath,
+            t => t.IsExecuting && t.ActiveMessageId != null, SettleBudgetMs);
+        var cellId = executing.ActiveMessageId!;
+
+        // No usage marker exists on this path (the provider never emits UsageContent) — gate on
+        // the text that DOES stream before requesting the cancel, so it deterministically lands
+        // after the streaming loop has something to estimate from.
+        await WaitForCell(threadPath, cellId, m => (m.Text ?? "").Contains(NoReportWorkingText), SettleBudgetMs);
+
+        await client.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Update(curr => curr?.Content is MeshThread t
+                ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
+                : curr!)
+            .FirstAsync().ToTask();
+
+        await WaitForThread(threadPath,
+            t => t.Status == ThreadExecutionStatus.Cancelled, SettleBudgetMs);
+
+        var usage = await WaitForUsage(threadPath, "usage_cancel_noreport_model",
+            u => u.InputTokens > 0, SettleBudgetMs);
+        usage.IsEstimated.Should().BeTrue(
+            "the provider reported no usage at all before the cancel — the recorded counts are a character estimate, never a provider count");
+        usage.InputTokens.Should().BeGreaterThan(0,
+            "the prompt actually sent is known before the request was issued, even when the provider never confirms it");
+        usage.OutputTokens.Should().BeGreaterThan(0,
+            "the text chunk streamed before the cancel — that much output is known too");
+
+        var cell = await WaitForCell(threadPath, cellId,
+            m => m.Status == ThreadMessageStatus.Cancelled, SettleBudgetMs);
+        cell.InputTokens.GetValueOrDefault().Should().BeGreaterThan(0,
+            "the cancelled cell reflects the same estimate recorded on the satellite");
+    }
+
+    [Fact]
+    public async Task ErrorRound_ProviderReportsNothing_RecordsEstimatedTokens()
+    {
+        var threadPath = await SeedThread();
+        var client = GetClient();
+        client.SubmitMessage(threadPath, "throw, provider never reports usage", modelName: "usage-error-noreport-model", createdBy: TestUser);
+
+        var terminal = await WaitForThread(threadPath,
+            t => t.Status == ThreadExecutionStatus.Idle
+                 && t.IngestedMessageIds.Count >= 1
+                 && t.Messages.Count >= 2,
+            20_000);
+
+        var usage = await WaitForUsage(threadPath, "usage_error_noreport_model",
+            u => u.InputTokens > 0, SettleBudgetMs);
+        usage.IsEstimated.Should().BeTrue(
+            "the provider reported no usage at all before the fault — the recorded counts are a character estimate, never a provider count");
+        usage.InputTokens.Should().BeGreaterThan(0);
+        usage.OutputTokens.Should().BeGreaterThan(0,
+            "the text chunk streamed before the throw — that much output is known too");
+
+        var cell = await WaitForCell(threadPath, terminal.Messages[^1],
+            m => m.Status == ThreadMessageStatus.Error, SettleBudgetMs);
+        cell.InputTokens.GetValueOrDefault().Should().BeGreaterThan(0,
+            "the errored cell reflects the same estimate recorded on the satellite");
+    }
+
     // ─── Provider reports only in/out (pins the total-derivation fallback) ───
 
     [Fact]
@@ -596,8 +686,14 @@ public class ThreadTokenUsageTest : AITestBase
     /// <paramref name="modelId"/>, when set, stamps every update's ModelId — modelling a provider
     /// or harness that reports the RESOLVED model it actually ran (ThreadExecution captures it as
     /// actualModel), distinct from the requested alias the factory routes on.
+    /// <paramref name="omitUsageContent"/>, when true, NEVER emits a <see cref="UsageContent"/>
+    /// block at all — models an OpenAI-compatible provider that reports usage ONLY in the
+    /// terminal chunk of a successful stream, which a cancel/fault pre-empts by construction
+    /// (there is no terminal chunk to omit it from — the round never reaches one). Only "Working. "
+    /// streams before <paramref name="mode"/> takes over, so the streaming loop's
+    /// inputTokens/outputTokens stay null all the way to the terminal path (#595's estimate floor).
     /// </summary>
-    private sealed class UsageChatClient(bool reportTotal, PostUsage mode, bool emitCache = false, string? modelId = null) : IChatClient
+    private sealed class UsageChatClient(bool reportTotal, PostUsage mode, bool emitCache = false, string? modelId = null, bool omitUsageContent = false) : IChatClient
     {
         public ChatClientMetadata Metadata => new("UsageProvider");
 
@@ -611,29 +707,41 @@ public class ThreadTokenUsageTest : AITestBase
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             // Text first — the round is genuinely streaming past the Executing flip.
-            yield return new ChatResponseUpdate(ChatRole.Assistant, "Working. ") { ModelId = modelId };
-            // The usage report — this is what ThreadExecution aggregates. When emitCache is set, the
-            // cache breakdown rides in AdditionalCounts under MIXED provider keys (OpenAI's
-            // "InputTokenDetails.CachedTokenCount" for read, Claude's "CacheCreationInputTokens" for
-            // write) so the test proves UsageTokens.SplitCache is provider-agnostic.
-            var details = new UsageDetails
+            // 🚨 omitUsageContent's text must OUTGROW the framework's own initial
+            // "Generating response..." placeholder (22 chars): PushToResponseMessage's
+            // monotonic-growth guard keeps the LONGER of current vs incoming text while
+            // Status is Streaming, so a shorter chunk ("Working. ", 9 chars) would never
+            // actually land on the cell — silently starving any test that waits for it
+            // (caught by CancelledRound_ProviderReportsNothing_RecordsEstimatedTokens
+            // timing out with the placeholder still showing, not a product bug).
+            yield return new ChatResponseUpdate(ChatRole.Assistant,
+                omitUsageContent ? NoReportWorkingText : "Working. ") { ModelId = modelId };
+
+            if (!omitUsageContent)
             {
-                InputTokenCount = InTokens,
-                OutputTokenCount = OutTokens,
-                TotalTokenCount = reportTotal ? TotalTokens : (long?)null
-            };
-            if (emitCache)
-                details.AdditionalCounts = new AdditionalPropertiesDictionary<long>
+                // The usage report — this is what ThreadExecution aggregates. When emitCache is set,
+                // the cache breakdown rides in AdditionalCounts under MIXED provider keys (OpenAI's
+                // "InputTokenDetails.CachedTokenCount" for read, Claude's "CacheCreationInputTokens"
+                // for write) so the test proves UsageTokens.SplitCache is provider-agnostic.
+                var details = new UsageDetails
                 {
-                    ["InputTokenDetails.CachedTokenCount"] = CacheReadTokens,
-                    [UsageTokens.CacheWriteKey] = CacheWriteTokens
+                    InputTokenCount = InTokens,
+                    OutputTokenCount = OutTokens,
+                    TotalTokenCount = reportTotal ? TotalTokens : (long?)null
                 };
-            yield return new ChatResponseUpdate(ChatRole.Assistant, new AIContent[]
-            {
-                new UsageContent(details)
-            }) { ModelId = modelId };
-            // Post-usage marker — once it lands on the cell, the usage above was provably pulled.
-            yield return new ChatResponseUpdate(ChatRole.Assistant, UsageMarker) { ModelId = modelId };
+                if (emitCache)
+                    details.AdditionalCounts = new AdditionalPropertiesDictionary<long>
+                    {
+                        ["InputTokenDetails.CachedTokenCount"] = CacheReadTokens,
+                        [UsageTokens.CacheWriteKey] = CacheWriteTokens
+                    };
+                yield return new ChatResponseUpdate(ChatRole.Assistant, new AIContent[]
+                {
+                    new UsageContent(details)
+                }) { ModelId = modelId };
+                // Post-usage marker — once it lands on the cell, the usage above was provably pulled.
+                yield return new ChatResponseUpdate(ChatRole.Assistant, UsageMarker) { ModelId = modelId };
+            }
 
             switch (mode)
             {
@@ -738,5 +846,24 @@ public class ThreadTokenUsageTest : AITestBase
         public override IReadOnlyList<string> Models => ["usage-error-alias"];
         protected override IChatClient CreateClient() => new UsageChatClient(
             reportTotal: true, PostUsage.Throw, modelId: "usage-error-resolved");
+    }
+
+    // Models an OpenAI-compatible provider: usage arrives ONLY in a successful terminal chunk,
+    // which the cancel pre-empts — the terminal path must fall back to the character estimate.
+    private sealed class UsageNoProviderUsageCancelFactory : UsageFactoryBase
+    {
+        public override string Name => "UsageNoProviderUsageCancelFactory";
+        public override IReadOnlyList<string> Models => ["usage-cancel-noreport-model"];
+        protected override IChatClient CreateClient() => new UsageChatClient(
+            reportTotal: true, PostUsage.BlockUntilCancel, omitUsageContent: true);
+    }
+
+    // Same for the Error terminal path.
+    private sealed class UsageNoProviderUsageErrorFactory : UsageFactoryBase
+    {
+        public override string Name => "UsageNoProviderUsageErrorFactory";
+        public override IReadOnlyList<string> Models => ["usage-error-noreport-model"];
+        protected override IChatClient CreateClient() => new UsageChatClient(
+            reportTotal: true, PostUsage.Throw, omitUsageContent: true);
     }
 }

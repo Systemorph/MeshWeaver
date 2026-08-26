@@ -57,14 +57,29 @@ public record TokenUsage
     /// </summary>
     public long CacheWriteTokens { get; init; }
 
+    /// <summary>
+    /// True once ANY round folded into this satellite contributed an ESTIMATED count (see
+    /// <see cref="TokenUsageNodeType.EstimateTokens(int)"/> / <c>RecordUsage</c>'s <c>isEstimate</c>
+    /// parameter) rather than a provider-reported one. Sticky by design: <see cref="InputTokens"/> /
+    /// <see cref="OutputTokens"/> are a single running total that no longer separates the two
+    /// sources once mixed, so once any contribution was an estimate the whole total must be
+    /// presented as approximate. False for a satellite whose every round reported real
+    /// provider usage.
+    /// </summary>
+    public bool IsEstimated { get; init; }
+
     /// <summary>Returns a copy with the given round's counts added.</summary>
-    public TokenUsage Add(long inputTokens, long outputTokens, long cacheReadTokens = 0, long cacheWriteTokens = 0)
+    /// <param name="isEstimated">True when <paramref name="inputTokens"/>/<paramref name="outputTokens"/>
+    /// are a deterministic character-based ESTIMATE (the provider reported nothing before a
+    /// Cancelled/Error terminal path), not a provider-reported count.</param>
+    public TokenUsage Add(long inputTokens, long outputTokens, long cacheReadTokens = 0, long cacheWriteTokens = 0, bool isEstimated = false)
         => this with
         {
             InputTokens = InputTokens + inputTokens,
             OutputTokens = OutputTokens + outputTokens,
             CacheReadTokens = CacheReadTokens + cacheReadTokens,
             CacheWriteTokens = CacheWriteTokens + cacheWriteTokens,
+            IsEstimated = IsEstimated || isEstimated,
         };
 }
 
@@ -175,6 +190,22 @@ public static class TokenUsageNodeType
         new(NormalizeModelId(modelId).Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
 
     /// <summary>
+    /// Deterministic, provider-independent token estimate from a character count — ~4
+    /// characters/token, the SAME conservative heuristic already used for context-budget
+    /// trimming (<c>AgentChatClient.MaxContextChars</c>: "Rough by design — a conservative char
+    /// count, not a real tokenizer"). Used ONLY as a floor when a round's Cancelled/Error
+    /// terminal path finds the provider reported NOTHING at all (an OpenAI-compatible provider
+    /// emits usage exclusively in its terminal chunk, which a cancel or transport failure can
+    /// pre-empt) — never in place of a real provider-reported count, and never on the Completed
+    /// path. A positive character count always estimates to at least 1 token (a round that sent
+    /// or streamed *something* consumed at least that much); zero/negative estimates to 0.
+    /// </summary>
+    /// <param name="charCount">The character length of the text being estimated (a prompt or a
+    /// streamed completion).</param>
+    /// <returns>The estimated token count.</returns>
+    public static int EstimateTokens(int charCount) => charCount <= 0 ? 0 : Math.Max(1, charCount / 4);
+
+    /// <summary>
     /// Records ONE round's token usage onto the per-model satellite at
     /// <c>{threadPath}/_Usage/{modelKey}</c>, ACCUMULATING input/output across the thread's rounds
     /// (keyed by model). A no-token round is a no-op. Returns an <see cref="IObservable{T}"/> that
@@ -205,10 +236,16 @@ public static class TokenUsageNodeType
     /// visible, and only rounds 2+ pay for a read-modify-write. It costs nothing to do it this way —
     /// the create already had to carry a content instance.</para>
     /// </summary>
+    /// <param name="isEstimate">True when <paramref name="inputTokens"/>/<paramref name="outputTokens"/>
+    /// are a deterministic character-based ESTIMATE (see <see cref="EstimateTokens"/>) rather than a
+    /// provider-reported count — stamped onto the satellite's <see cref="TokenUsage.IsEstimated"/> so
+    /// downstream cost/report readers can flag the total as approximate. Defaults to false: every
+    /// existing caller (the Completed path, and Cancelled/Error whenever the provider DID report
+    /// something) is unaffected.</param>
     public static IObservable<System.Reactive.Unit> RecordUsage(
         IMessageHub hub, string threadPath, string? userId,
         string? modelId, int? inputTokens, int? outputTokens, ILogger? logger = null,
-        int? cacheReadTokens = null, int? cacheWriteTokens = null)
+        int? cacheReadTokens = null, int? cacheWriteTokens = null, bool isEstimate = false)
     {
         long inTok = inputTokens ?? 0;
         long outTok = outputTokens ?? 0;
@@ -276,6 +313,7 @@ public static class TokenUsageNodeType
                 OutputTokens = outTok,
                 CacheReadTokens = cacheReadTok,
                 CacheWriteTokens = cacheWriteTok,
+                IsEstimated = isEstimate,
             },
         };
 
@@ -298,7 +336,7 @@ public static class TokenUsageNodeType
                     {
                         var cur = node.ContentAs<TokenUsage>(hub.JsonSerializerOptions, logger)
                                   ?? new TokenUsage { UserId = userId, ThreadId = threadPath, Model = model };
-                        return node with { Content = cur.Add(inTok, outTok, cacheReadTok, cacheWriteTok) };
+                        return node with { Content = cur.Add(inTok, outTok, cacheReadTok, cacheWriteTok, isEstimate) };
                     })
                     .Select(_ => System.Reactive.Unit.Default))
             // Subscribed as an INDEPENDENT side effect (NOT chained before the terminal status write),
