@@ -403,33 +403,39 @@ public static class JsonSynchronizationStream
         // yet. That would resurrect the orphaned stream in exactly the fast local case this fix
         // exists for, and only sometimes: the classic invisible race.
         var rejectedByRecycle = new System.Reactive.Subjects.ReplaySubject<string>(1);
-        var observeSubscription = Observable
-            .Using(
-                // Apply an explicit identity SCOPE for the post — do NOT rely on the ambient AsyncLocal
-                // still being set. Observable.Using's factory runs at SUBSCRIBE time, and a sync
-                // re-subscribe / keep-alive / Blazor re-render fan-out fires on a background Rx
-                // scheduler where AsyncLocal is WIPED. Previously a real user applied no scope and
-                // trusted AsyncLocal: when it was wiped the SubscribeRequest delivery got a NULL
-                // AccessContext → PostPipeline fail-closed → owner DENIES the subscribe → the consumer
-                // re-opens it → flood of denied SubscribeRequests that wedged the Space hub
-                // (AgenticPension). Re-apply the CAPTURED user (SwitchAccessContext(ambient)) so the
-                // post carries the right identity regardless of thread; non-user → System. Either way
-                // AccessContext is NEVER null, so the subscribe is authorised (RLS still gates the
-                // user's actual Read) instead of fail-closed-denied.
-                () => (isRealUser ? accessService?.SwitchAccessContext(ambient) : accessService?.ImpersonateAsSystem())
-                      ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
-                _ => hub.Observe(
-                        new SubscribeRequest(reduced.StreamId, reference)
-                        {
-                            Identity = identityForSubscribe,
-                            // Declared by the assembly that also OWNS the applier
-                            // (ApplyPatchWithCorrectUnescaping below), so the claim can never be
-                            // wrong: whatever version of this code posts the subscribe is the version
-                            // that folds the frames.
-                            AcceptsStringSplice = true,
-                        },
-                        o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
-                    .Take(1))
+        // Apply an explicit identity SCOPE for the post — do NOT rely on the ambient AsyncLocal
+        // still being set. The scope is entered at SUBSCRIBE time, and a sync re-subscribe /
+        // keep-alive / Blazor re-render fan-out fires on a background Rx scheduler where AsyncLocal
+        // is WIPED. Previously a real user applied no scope and trusted AsyncLocal: when it was
+        // wiped the SubscribeRequest delivery got a NULL AccessContext → PostPipeline fail-closed →
+        // owner DENIES the subscribe → the consumer re-opens it → flood of denied SubscribeRequests
+        // that wedged the Space hub (AgenticPension). Re-apply the CAPTURED user
+        // (RunAs(ambient)) so the post carries the right identity regardless of thread;
+        // non-user → RunAsSystem. Either way AccessContext is NEVER null, so the subscribe is
+        // authorised (RLS still gates the user's actual Read) instead of fail-closed-denied.
+        //
+        // 🚨 RunAs/RunAsSystem, never `Observable.Using(() => access.SwitchAccessContext(…), …)`
+        // (#1444/#1790). `Using` opens the AsyncLocal on the SUBSCRIBING thread and disposes it when
+        // the inner observable TERMINATES — for this cross-hub request/response, the OWNER hub's
+        // response thread — so the subscribing thread (a Blazor circuit, a hub turn, a re-render
+        // fan-out) was left latched as the captured user or as `system-security`. RunAs owns both
+        // ends inside one Subscribe, and keeps exactly the property the paragraph above needs: the
+        // post below is still issued inside the scope.
+        var postSubscribeRequest = () => hub.Observe(
+                new SubscribeRequest(reduced.StreamId, reference)
+                {
+                    Identity = identityForSubscribe,
+                    // Declared by the assembly that also OWNS the applier
+                    // (ApplyPatchWithCorrectUnescaping below), so the claim can never be
+                    // wrong: whatever version of this code posts the subscribe is the version
+                    // that folds the frames.
+                    AcceptsStringSplice = true,
+                },
+                o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
+            .Take(1);
+        var observeSubscription = (isRealUser
+                ? accessService.RunAs(ambient, postSubscribeRequest)
+                : accessService.RunAsSystem(postSubscribeRequest))
             .Subscribe(
                 _ =>
                     // The owner sends the first DataChangedEvent as the response; it is already

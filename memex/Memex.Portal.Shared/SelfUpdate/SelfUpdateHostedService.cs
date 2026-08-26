@@ -517,9 +517,15 @@ public class SelfUpdateHostedService : IHostedService
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
         var jsonOptions = _hub.JsonSerializerOptions;
-        return Observable.Using(
-            () => AccessContextScope.AsSystem(accessService),
-            _ => _hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+        // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790):
+        // `AsSystem(x)` IS `x.ImpersonateAsSystem()`, so the helper hides the shape. The write here
+        // is CROSS-HUB, which is the worst case for `Using` — Rx disposes the scope when the inner
+        // observable terminates, i.e. on the Admin partition hub's response thread, while the
+        // subscriber (the self-update poller's tick) keeps `system-security` latched. RunAsSystem
+        // opens and closes inside one Subscribe; the Update is still ISSUED as System, which is what
+        // the cross-hub patch stamps.
+        return accessService.RunAsSystem(
+            () => _hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
                 .Update(node =>
                 {
                     var cur = UpdatePolicyNodeType.ParseContent(node.Content, jsonOptions);
@@ -609,9 +615,10 @@ public class SelfUpdateHostedService : IHostedService
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
         var jsonOptions = _hub.JsonSerializerOptions;
-        return Observable.Using(
-            () => AccessContextScope.AsSystem(accessService),
-            _ => _hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+        // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see
+        // RecordHold above (#1444/#1790).
+        return accessService.RunAsSystem(
+            () => _hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
                 .Update(node =>
                 {
                     var cur = UpdatePolicyNodeType.ParseContent(node.Content, jsonOptions);

@@ -169,9 +169,14 @@ public static class UpdatePolicyNodeType
             Content = new UpdatePolicyContent { Policy = defaultPolicy },
         };
 
-        return Observable.Using(
-            () => AccessContextScope.AsSystem(accessService),
-            _ => workspace
+        // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790):
+        // `AsSystem(x)` IS `x.ImpersonateAsSystem()`, so the helper hides the shape rather than
+        // changing it. RecordVerification below already states the reason — impersonation is an
+        // AsyncLocal and `Using` disposes it on whichever thread the sequence terminates on, leaving
+        // the caller latched as System — and hand-rolls the seal with Observable.Create; this is the
+        // same seal, taken off the framework shelf.
+        return accessService.RunAsSystem(
+            () => workspace
                 .GetQuery($"{NodeType}|{NodePath}", $"path:{NodePath} nodeType:{NodeType}")
                 .Take(1)
                 .SelectMany(nodes =>
