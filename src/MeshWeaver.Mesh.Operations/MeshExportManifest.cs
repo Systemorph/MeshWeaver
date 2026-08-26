@@ -1,7 +1,8 @@
 using System.Collections.Generic;
 using MeshWeaver.Mesh;
 
-namespace MeshWeaver.Mesh;
+// The namespace is a binary contract, not a filing decision — see MeshOperations.cs.
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// The <c>manifest.json</c> at the root of a mesh export ZIP produced by

@@ -259,7 +259,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     }
 
     /// <summary>
-    /// Score the result set with <see cref="MeshWeaver.AI.Completion.FuzzyScorer"/> when the query has
+    /// Score the result set with <see cref="MeshWeaver.Data.Completion.FuzzyScorer"/> when the query has
     /// a <c>TextSearch</c> term — fzf-style ranking against the item's Name
     /// (with Path as a fallback for items without a Name). The aggregator
     /// (<c>MeshQuery.ClipMergedInitial</c>) sorts by these scores descending
@@ -272,7 +272,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     {
         if (items.Count == 0) return null;
         if (string.IsNullOrEmpty(parsed.TextSearch)) return null;
-        var scorer = new MeshWeaver.AI.Completion.FuzzyScorer();
+        var scorer = new MeshWeaver.Data.Completion.FuzzyScorer();
         // FuzzyScorer.Score returns ScoredItem<T> filtered to MATCHES only —
         // it drops non-matches. For our purpose every item already matched the
         // server-side filter; we just want the relevance score on each. Re-run

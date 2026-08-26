@@ -534,7 +534,8 @@ public sealed class IoPool : IIoPool, IDisposable
     /// The number of leaves that did NOT unwind within the drain budget — gate permits that could not
     /// be re-acquired because an async leaf ignored its cancellation token, PLUS any blocking leaf
     /// (<see cref="InvokeBlocking{T}"/>) still running, which holds no permit and so is counted
-    /// separately. <c>0</c> means the join is REAL:
+    /// separately, PLUS one for a cancellation that is still running its registered teardown
+    /// callbacks (see <see cref="StartCancelOffCallerThread"/>). <c>0</c> means the join is REAL:
     /// no pool thread is still running when this returns. Anything else means teardown is about to
     /// proceed over live work (the use-after-unload SIGSEGV precondition) — the caller must surface
     /// it, never swallow it: a drain that silently gives up is how "disposal completed" becomes a
@@ -551,7 +552,18 @@ public sealed class IoPool : IIoPool, IDisposable
         if (!TryEnterGateRegion()) return 0;
         try
         {
-            _poolCts.Cancel();
+            // 🚨 NOT `_poolCts.Cancel()` on this thread — see StartCancelOffCallerThread. The
+            // callbacks this token carries run the pooled subscriptions' whole DOWNSTREAM teardown,
+            // and this thread is the mesh-teardown thread.
+            //
+            // Joined BEFORE the gate join, under the same budget, because the gate join's whole
+            // meaning depends on the cancel having landed: "once _poolCts is cancelled every waiting
+            // leaf's WaitAsync throws, so no NEW leaf can take a permit" (see the remarks above).
+            // A cancel still running would leave that premise false. In the healthy case this costs
+            // a thread start; a callback that never finishes costs one budget and is then REPORTED
+            // in the residual — which is the whole difference between #2394's silent 8-minute
+            // wall-clock kill and a named, failing teardown.
+            var cancelResidual = StartCancelOffCallerThread().Join(DrainTimeout) ? 0 : 1;
             var acquired = 0;
             for (var i = 0; i < _maxConcurrency; i++)
             {
@@ -573,20 +585,83 @@ public sealed class IoPool : IIoPool, IDisposable
             // Join them on their own idle signal, bounded by the SAME budget — no new timeout, no poll.
             // Re-read the counter when the wait expires: a leaf that finished between the signal reset
             // and our wait would otherwise be reported as surviving.
+            var blockingResidual = 0;
             if (!_blockingIdle.Wait(DrainTimeout))
             {
                 // _blockingInFlight, never _inFlight: an async leaf that ignored its token is ALREADY
                 // reported through gateResidual, so adding it again would double-count it.
-                var stillRunning = Volatile.Read(ref _blockingInFlight);
-                return gateResidual + stillRunning;
+                blockingResidual = Volatile.Read(ref _blockingInFlight);
             }
 
-            return gateResidual;
+            // A teardown callback still running is live application code on the very scope (and the
+            // very collectible node ALCs) the caller is about to release, so it belongs in the
+            // residual exactly like an un-unwound leaf.
+            return cancelResidual + gateResidual + blockingResidual;
         }
         finally
         {
             LeaveGateRegion();
         }
+    }
+
+    /// <summary>
+    /// Cancels <see cref="_poolCts"/> on a DEDICATED thread and returns that thread so the caller
+    /// can join it under its own budget.
+    ///
+    /// <para>🚨 <b><see cref="CancellationTokenSource.Cancel()"/> runs every registered callback
+    /// SYNCHRONOUSLY on the thread that calls it</b>, and the callbacks on this pool's token are
+    /// not bookkeeping. <see cref="SubscribeThroughPool{T}"/> registers one per LIVE pooled
+    /// subscription that performs that subscription's whole downstream teardown
+    /// (<c>inner.Dispose()</c> then <c>observer.OnCompleted()</c>) — layout-render pipelines, query
+    /// change feeds, routing dispatch bookkeeping. Every gated leaf additionally links its
+    /// subscriber token to this one, so cancelling also resumes each leaf's
+    /// <c>await _gate.WaitAsync(ct)</c>, whose <see cref="OperationCanceledException"/> surfaces to
+    /// that leaf's observer — more downstream teardown, inline on the same thread.</para>
+    ///
+    /// <para>The thread calling <see cref="Drain"/>/<see cref="Dispose"/> is the MESH TEARDOWN
+    /// thread (<c>IoPoolRegistry.DrainAll()</c>, from <c>MeshTeardownExtensions</c> and
+    /// <c>MonolithMeshTestBase.DisposeAsync</c>). Running arbitrary application teardown there was
+    /// unbounded by construction: <see cref="DrainTimeout"/> bounds only the gate join that comes
+    /// AFTER the cancel, no watchdog covers this phase (the hub's own watchdog ends at
+    /// <c>DisposalCompleted</c>, which teardown has already observed by then), and nothing on the
+    /// path logs. One teardown leg that blocks therefore parked mesh teardown SILENTLY and forever
+    /// — issue #2394: a whole test assembly killed at its 8&#160;min wall-clock cap with no test
+    /// named and not one line written after <c>DISPOSE_INVOKED</c>.</para>
+    ///
+    /// <para>A DEDICATED thread, never the ThreadPool or this pool's own blocking scheduler: the
+    /// work this cancel exists to unwind may be holding every one of those slots, so scheduling the
+    /// cancel behind it is the starvation deadlock <see cref="Dispose"/> already refuses.</para>
+    /// </summary>
+    private Thread StartCancelOffCallerThread()
+    {
+        // The region is taken HERE, on the caller's thread — not inside the new one — so disposal
+        // cannot complete (and dispose _poolCts) in the window between Start() and the thread
+        // actually getting scheduled.
+        Interlocked.Increment(ref _gateUsers);
+        var canceller = new Thread(() =>
+        {
+            try
+            {
+                _poolCts.Cancel();
+            }
+            catch (Exception)
+            {
+                // Cancel() aggregates whatever the registered teardown callbacks threw. Each of
+                // those callbacks is responsible for its own diagnostics; what must not happen is
+                // this thread dying before the finally hands the region back, because that hand-back
+                // is what completes disposal.
+            }
+            finally
+            {
+                LeaveGateRegion();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "IoPool-cancel",
+        };
+        canceller.Start();
+        return canceller;
     }
 
     /// <summary>
@@ -608,10 +683,15 @@ public sealed class IoPool : IIoPool, IDisposable
         // OrderedRouteDispatcherTest hung for its full 30 s budget — the exact failure recorded
         // when this fix was first deferred. An 18-core dev box hides it completely.
         //
-        // So: cancel here (leaves unwind promptly), and put the WAITING on `Disposed`, which the
+        // So: cancel (leaves unwind promptly), and put the WAITING on `Disposed`, which the
         // caller awaits ASYNCHRONOUSLY. Resource release happens on the last leaf's way out —
         // see TryFinishDisposal — because a leaf still running would otherwise touch a disposed
         // _gate / _poolCts.
+        //
+        // 🚨 …and the cancel is issued OFF this thread (StartCancelOffCallerThread). "Cancel here"
+        // used to mean `_poolCts.Cancel()` inline, which is itself a blocking call: Cancel runs
+        // every registered callback synchronously on the caller, and this token's callbacks tear
+        // down whole downstream pipelines. #2394.
         if (Interlocked.CompareExchange(ref _disposing, 1, 0) != 0) return;
 
         // Set BEFORE the cancel so a leaf issued in the gap short-circuits to Cancelled<T>()
@@ -628,7 +708,12 @@ public sealed class IoPool : IIoPool, IDisposable
         Interlocked.Increment(ref _gateUsers);
         try
         {
-            _poolCts.Cancel();
+            // 🚨 The cancel itself runs OFF this thread — see StartCancelOffCallerThread. Cancel()
+            // executes every pooled subscription's downstream teardown synchronously on whoever
+            // calls it, so `_poolCts.Cancel()` here WAS a blocking call in the one method whose
+            // contract above says it must never block. Nothing joins it: the WAIT lives on
+            // Disposed, and the canceller's own region hand-back is what lets that fire.
+            StartCancelOffCallerThread();
         }
         finally
         {

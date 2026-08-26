@@ -402,4 +402,23 @@ public class MarkdownReferenceExtractorTest
     }
 
     #endregion
+
+    /// <summary>
+    /// Both UCR content forms — <c>content/…</c> and <c>content:…</c>, bare or partition-qualified.
+    ///
+    /// <para>Moved from <c>MeshWeaver.Autocomplete.Test.UnifiedReferenceAutocompleteProviderTest</c>
+    /// (#2276). <see cref="MarkdownReferenceExtractor"/> ships with MeshWeaver.AI and was that
+    /// suite's last real dependency on the engine; the autocomplete pipeline it sits beside is core
+    /// and stays there.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("@content/docs/readme.md", "content/docs/readme.md")]
+    [InlineData("@ACME/content/readme.md", "ACME/content/readme.md")]
+    [InlineData("@content:docs/readme.md", "content:docs/readme.md")]
+    [InlineData("@ACME/content:readme.md", "ACME/content:readme.md")]
+    public void HandlesBothContentFormats(string input, string expectedPath)
+    {
+        var paths = MarkdownReferenceExtractor.GetUniquePaths(input);
+        paths.Should().ContainSingle().Which.Should().Be(expectedPath);
+    }
 }

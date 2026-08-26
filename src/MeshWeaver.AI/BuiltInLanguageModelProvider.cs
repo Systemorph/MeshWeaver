@@ -285,8 +285,9 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
         {
             // 🚨 A satellite must point at its MAIN node, not at itself (#2383): the plain
             // constructor defaults MainNode to the node's own path, which makes _Policy a main
-            // node by the catalog's definition (is:main == MainNode != Path) and lists "Access
-            // Policy" as content on every cover. New satellites: MeshNode.Satellite(id, main).
+            // node by the catalog's definition (is:main KEEPS exactly the rows where MainNode ==
+            // Path) and lists "Access Policy" as content on every cover. New satellites:
+            // MeshNode.Satellite(id, main).
             MainNode = ModelProviderNodeType.RootNamespace,
             NodeType = "PartitionAccessPolicy",
             Name = "Access Policy",
@@ -328,8 +329,9 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
             {
                 // 🚨 A satellite must point at its MAIN node, not at itself (#2383): the plain
                 // constructor defaults MainNode to the node's own path, which makes _Policy a main
-                // node by the catalog's definition (is:main == MainNode != Path) and lists "Access
-                // Policy" as content on every cover. New satellites: MeshNode.Satellite(id, main).
+                // node by the catalog's definition (is:main KEEPS exactly the rows where MainNode ==
+                // Path) and lists "Access Policy" as content on every cover. New satellites:
+                // MeshNode.Satellite(id, main).
                 MainNode = LanguageModelNodeType.RootNamespace,
                 NodeType = "PartitionAccessPolicy",
                 Name = "Access Policy",

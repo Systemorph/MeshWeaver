@@ -62,8 +62,9 @@ public static class LicenseNodeType
 
     // World-readable, non-writable: everyone must be able to read the terms BEFORE accepting them,
     // and nobody but System may author the shipped catalog.
+    // Satellite(): MainNode = the partition root, not the node's own path — see #2383.
     private static MeshNode CreatePolicy() =>
-        new("_Policy", WellKnownLicenses.Partition)
+        MeshNode.Satellite("_Policy", WellKnownLicenses.Partition) with
         {
             NodeType = "PartitionAccessPolicy",
             Name = "Access Policy",
