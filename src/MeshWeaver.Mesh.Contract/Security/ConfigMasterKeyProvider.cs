@@ -14,8 +14,9 @@ namespace MeshWeaver.Mesh.Security;
 ///
 /// <para>Any input length is accepted: the configured value is hashed with
 /// SHA-256 to derive the 32-byte AES key, so a passphrase or a base64 of 32
-/// random bytes both work. When the key is absent/blank, returns <c>null</c> so
-/// <see cref="ProviderKeyProtector"/> falls back to plaintext passthrough.</para>
+/// random bytes both work. When the key is absent/blank, returns <c>null</c> — and
+/// <see cref="ProviderKeyProtector.Protect"/> then REFUSES to write rather than falling back to
+/// plaintext, so an unconfigured deployment stores no new secrets at all.</para>
 ///
 /// <para>⚠ Rotating the configured value makes previously-stored ciphertext
 /// undecryptable (different derived key) — re-save / rotate affected provider
@@ -40,9 +41,15 @@ public sealed class ConfigMasterKeyProvider : IMasterKeyProvider
         var configured = services.GetService<IConfiguration>()?[ConfigKey];
         if (string.IsNullOrWhiteSpace(configured))
         {
-            logger?.LogInformation(
-                "No {ConfigKey} configured — provider-key encryption is DISABLED (keys stored as plaintext). " +
-                "Set a base64 master key via env/secret to enable encryption at rest.", ConfigKey);
+            // 🚨 Error, not Information. This is not "a feature is off" — it is "this deployment
+            // cannot store a credential at all", and every attempt to store one will now be
+            // refused. The line that used to sit here said "keys stored as plaintext" at
+            // Information, which is precisely how the plaintext leak went unnoticed.
+            logger?.LogError(
+                "No {ConfigKey} configured — this deployment CANNOT store credentials: every attempt "
+                + "to encrypt one at rest is refused, rather than silently persisting it in plaintext. "
+                + "Set a base64 master key via env 'Ai__KeyProtection__MasterKey' or a deploy secret.",
+                ConfigKey);
             return;
         }
 

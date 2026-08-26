@@ -100,7 +100,8 @@ public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncToke
     public IObservable<SyncTokenSigningMaterial> Rotate(string rotatedBy)
     {
         var access = hub.ServiceProvider.GetService<AccessService>();
-        var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
+        // Required: this path WRITES the signing key — see Protect below.
+        var protector = hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var now = DateTimeOffset.UtcNow;
 
@@ -143,7 +144,8 @@ public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncToke
     /// </summary>
     private IObservable<SyncTokenSigningKey> Mint()
     {
-        var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
+        // Required: this path WRITES the signing key — see Protect below.
+        var protector = hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var now = DateTimeOffset.UtcNow;
 
@@ -229,11 +231,17 @@ public sealed class SyncTokenSigningKeyService(IMessageHub hub, ILogger<SyncToke
     private static byte[] NewSecret() =>
         RandomNumberGenerator.GetBytes(SyncTokenSigningKeys.KeyByteLength);
 
-    private static string Protect(IProviderKeyProtector? protector, byte[] secret)
-    {
-        var encoded = Convert.ToBase64String(secret);
-        return protector?.Protect(encoded) ?? encoded;
-    }
+    /// <summary>
+    /// 🚨 No fallback. This mints the key that SIGNS every sync token, so storing it in the clear
+    /// would let anyone with read on the node forge tokens. The old body was
+    /// <c>protector?.Protect(encoded) ?? encoded</c> — an unregistered protector, or a deployment
+    /// with no master key, silently persisted the signing key verbatim. Protect now refuses in the
+    /// latter case, and this refuses in the former: minting is an authenticated, on-demand action
+    /// (never a boot path), so a loud failure is the right shape — the operator configures
+    /// <c>Ai:KeyProtection:MasterKey</c> and retries.
+    /// </summary>
+    private static string Protect(IProviderKeyProtector protector, byte[] secret) =>
+        protector.Protect(Convert.ToBase64String(secret))!;
 
     private static byte[]? Unprotect(IProviderKeyProtector? protector, string? stored)
     {

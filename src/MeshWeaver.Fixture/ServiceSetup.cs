@@ -36,6 +36,23 @@ public class ServiceSetup
         // running" hang-hunt workflow).
         var configuration = new ConfigurationBuilder()
             .SetBasePath(Directory.GetCurrentDirectory())
+            // 🚨 A test mesh is a CONFIGURED deployment, not an unconfigured one. Without a master
+            // key, IProviderKeyProtector.Protect refuses — a provider key, a GitHub PAT, the
+            // registry's sync-token signing key and the Entra credential can none of them be
+            // stored. Leaving it out made the DEFAULT test environment the misconfigured one,
+            // which is exactly why the plaintext passthrough survived: the encryption test
+            // configured a key, so the degradation only ever happened where nobody was testing.
+            //
+            // It lives HERE and not in test/appsettings.json because eleven test projects ship
+            // their own appsettings.json that SHADOWS the shared file (see test/Directory.Build.props)
+            // — a value put there would silently miss them. Added first, so a project's own
+            // appsettings.json can still override it; a fixture that must exercise the
+            // UNPROTECTED deployment (ProviderCredentialSeedWithoutMasterKeyTest,
+            // ProviderKeyNoPlaintextTest) registers its own IConfiguration instead.
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Ai:KeyProtection:MasterKey"] = "test-master-key-do-not-use-outside-tests",
+            })
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
             .Build();
         services.AddSingleton<IConfiguration>(configuration);
