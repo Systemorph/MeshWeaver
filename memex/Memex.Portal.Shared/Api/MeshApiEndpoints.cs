@@ -3,6 +3,11 @@
 // modules through [assembly: TypeForwardedTo], and a forwarder cannot rename — so the namespace is
 // frozen at whatever it was when those modules were built. Do not "tidy" this using to match the
 // assembly name; that is what broke main at 17:26.
+//
+// This import is therefore load-bearing and is NOT an AI-assembly dependency. It was removed as a
+// "phantom" in #2349 and restored twice independently (#2408 and #2411) — once with this banner and
+// once inline further down, which is how main ended up with the SAME using twice and CS0105 under
+// warnings-as-errors. One directive, one explanation: keep them together.
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
 using System.Reactive.Linq;
@@ -12,11 +17,6 @@ using MeshWeaver.Hosting.AspNetCore.Portal; // PortalApplication
 using MeshWeaver.Hosting.AspNetCore;    // SessionHubResolver, McpConfiguration
 using MeshWeaver.Mesh.Security;         // WellKnownUsers
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.AI;                    // MeshOperations — the TYPE ships in
-                                        // MeshWeaver.Mesh.Operations, but its namespace is a
-                                        // FROZEN binary contract (#2370), so this import is
-                                        // load-bearing and is NOT an AI-assembly dependency.
-                                        // Removed as a 'phantom' in #2349 and restored here.
 using MeshWeaver.Messaging;             // AccessService
 using Memex.Portal.Shared.Authentication;
 using Microsoft.AspNetCore.Builder;
