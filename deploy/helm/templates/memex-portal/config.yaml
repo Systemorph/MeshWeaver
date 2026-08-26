@@ -317,6 +317,16 @@ data:
   # default; "empty = inert" is only true for strings.
   SelfUpdate__MinRollInterval: "{{ .Values.config.memex_portal.SelfUpdate__MinRollInterval | default "01:00:00" }}"
   WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 }}"
+  # 🚨 #2235: a SECOND slot, because index 0 is not this template's alone to give. memex-cloud
+  # hand-set WebhookInbox__Targets__0=Store/Payments directly on the Deployment (kubectl set env,
+  # unrecorded, pre-dating this chart key) BEFORE the platform-release broadcast existed. Explicit
+  # `env:` entries win over the SAME-named var sourced via `envFrom` (this ConfigMap), so that
+  # stray override silently shadows whatever this template renders for __0 forever — the overlay
+  # correctly set Targets__0=Hosting/PlatformBuilds, helm reported success, the ConfigMap held the
+  # right value, and the live pod still ran with Store/Payments. CD's notify-platform-update then
+  # 404'd on every promoted build with no error anywhere until #2268 made the 404 fail loud. A
+  # deployment needing more than one inbox target sets __0 AND __1 (not two writers of __0).
+  WebhookInbox__Targets__1: "{{ .Values.config.memex_portal.WebhookInbox__Targets__1 }}"
   # The MODULES a deployment refuses to run without (MeshBuilderModuleActivation.RequiredKey).
   # The image ships a baseline list in appsettings; a deployment OVERRIDES an entry by name here,
   # and blanks one it cannot satisfy.
