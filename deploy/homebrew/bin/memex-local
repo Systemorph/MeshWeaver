@@ -78,6 +78,10 @@ readonly PF_SCRIPT="$LOCAL_HOME/port-forward.sh"
 readonly PF_LOG="$LOCAL_HOME/port-forward.log"
 readonly PLIST_LABEL="com.memex.local"
 readonly PLIST_DST="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+# How long to wait for the launchd port-forward to actually BIND before reporting it did not.
+# Seconds. Bounded on purpose: over budget means the agent is not coming up, which is a state to
+# report (see wait_port_forward), never one to keep waiting out.
+readonly PF_BIND_BUDGET="${MEMEX_PF_BIND_BUDGET:-30}"
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -562,8 +566,20 @@ helm_deploy() {
 # ---------------------------------------------------------------------------
 apply_logging() {
   step "Applying verbose logging (Logging__LogLevel__Default=$LOG_LEVEL) as a deployment-config override"
+  # 🚨 Default alone is NOT enough, and the gap is invisible from out here. The portal image's
+  # appsettings.json caps the whole `MeshWeaver` prefix at Warning, and a Default override does
+  # not lift a MORE SPECIFIC prefix — .NET resolves a category against its longest matching key.
+  # §14 settles its view-pack wait on `[DefaultInstall] reconciled`, which is LogInformation under
+  # MeshWeaver.PluginCatalog, so with Default alone that line reached stdout on NO install ever:
+  # the wait could not settle early, burned its full budget (600 s on `update`) on every run, and
+  # then reported "the boot reconcile has not reported completion" — a statement about the logging
+  # config, not about the install. The FAILURE variant of that same line is LogError and was
+  # always visible, which is exactly why only the SUCCESS path was silent and the gap survived.
+  # This is a deployment-config override on the local install; the committed appsettings*.json and
+  # every Log* call in src/ stay untouched (AGENTS.md — never edit log levels in code to debug).
   kubectl set env deployment/memex-portal-deployment -n "$NAMESPACE" \
-    "Logging__LogLevel__Default=$LOG_LEVEL"
+    "Logging__LogLevel__Default=$LOG_LEVEL" \
+    "Logging__LogLevel__MeshWeaver.PluginCatalog=Information"
 }
 
 # ---------------------------------------------------------------------------
@@ -607,6 +623,41 @@ install_launchd() {
   launchctl bootout "gui/$(id -u)" "$PLIST_DST" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
   ok "launchd agent '$PLIST_LABEL' loaded (logs: $PF_LOG)"
+  # 🚨 NOT a gate — verify_usable is, and it runs next in every caller. This wait exists so that
+  # what the gate reports is the POD's state and not a race against the host transport, which is
+  # why a port-forward that never binds must warn and let the run continue to that report rather
+  # than aborting here.
+  wait_port_forward || true
+}
+
+# Block until the launchd port-forward is actually usable, or say that it is not.
+#
+# 🚨 `launchctl bootstrap` returns once launchd has ACCEPTED the job — NOT once the kubectl
+# port-forward inside it has bound :8443. cmd_up, cmd_update and cmd_port_forward all go straight
+# from install_launchd into the verification, so without this the first probes hit a socket that
+# does not exist yet: §14 then reports "no answer" for a portal that is serving perfectly, and
+# sends the developer to read a healthy pod log.
+#
+# The wait ends on ANY http status, 503 included. A status of any kind proves the socket is bound
+# and proxying, and judging WHICH status is check 1's job — so this can never mask a broken portal,
+# it only stops the gate from racing its own transport. Waiting on the port is waiting on the
+# actual precondition; there is no sleep-and-hope here and the budget is a report, not a retry.
+wait_port_forward() {
+  local deadline code
+  deadline=$(( $(date +%s) + PF_BIND_BUDGET ))
+  while :; do
+    code="$(probe_http /)"
+    if [ "$code" != "000" ]; then
+      ok "port-forward is bound (:${HOST_PORT} answered HTTP $code)"
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then break; fi
+    sleep 1
+  done
+  warn "the launchd port-forward did not bind :${HOST_PORT} within ${PF_BIND_BUDGET}s — nothing on
+     this Mac is listening, so every check below reports 'no answer' however healthy the pod is.
+     Remedy: 'memex-local status', then read $PF_LOG."
+  return 1
 }
 
 uninstall_launchd() {
@@ -686,7 +737,7 @@ probe_default_install_done() {
 # The HTTP half. Echoes the STATUS CODE (000 when no request completed), because judging curl's own
 # exit code instead of the code it fetched is the bug this whole function replaces.
 probe_http() {
-  local path="$1" caroot ca=()
+  local path="$1" caroot code ca=()
   if command -v mkcert >/dev/null 2>&1; then
     caroot="$(mkcert -CAROOT 2>/dev/null || true)"
     if [ -n "$caroot" ] && [ -f "$caroot/rootCA.pem" ]; then ca=(--cacert "$caroot/rootCA.pem"); fi
@@ -694,8 +745,21 @@ probe_http() {
   # ${x[@]+"${x[@]}"} — NOT a style tic. macOS ships bash 3.2, where `set -u` treats "${x[@]}" on an
   # EMPTY array as an unbound variable and kills the script. This tool is macOS-only, so every
   # possibly-empty array expansion in this file has to carry the guard (see helm_deploy).
-  curl ${ca[@]+"${ca[@]}"} -sS -o /dev/null -w '%{http_code}' --max-time 15 \
-    "https://${HOSTNAME_LOCAL}:${HOST_PORT}${path}" 2>/dev/null || printf '000'
+  # 🚨 curl WRITES its %{http_code} and THEN exits non-zero when it cannot connect — and the code
+  # it writes in exactly that case is ALREADY '000'. So a trailing `|| printf '000'` does not
+  # supply a missing status, it APPENDS a second one: the function returned '000000', which
+  # matches no arm of the caller's case statement and fell through to the generic "that is not a
+  # serving portal", naming the INGRESS. The one red state with a precise, local remedy — nothing
+  # bound on :8443 — was therefore the one state reported wrongly, and it is the state `up` and
+  # `update` produce most often, because both restart the port-forward and verify immediately.
+  # Capture first, then normalise to exactly three digits; the fallback also covers curl being
+  # absent altogether, which writes nothing at all.
+  code="$(curl ${ca[@]+"${ca[@]}"} -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+    "https://${HOSTNAME_LOCAL}:${HOST_PORT}${path}" 2>/dev/null || true)"
+  case "$code" in
+    [0-9][0-9][0-9]) printf '%s' "$code" ;;
+    *)               printf '000' ;;
+  esac
 }
 
 verify_usable() {
@@ -734,6 +798,13 @@ verify_usable() {
      The login pages compile INTO the image from MeshWeaver.Plugins/src/Memex.Portal.Gui, so a 404
      means the image predates the GUI move (MeshWeaver#2293/#2367).
      Remedy: rebuild it — 'memex-local update --build', with the plugins checkout on main."
+         failed=1 ;;
+    # 🚨 Nothing answered, so this check learned NOTHING about the sign-in route and must not
+    # pretend otherwise. Check 1 has already named the transport and its remedy; repeating a
+    # different remedy here ('memex-local logs') sends the developer to a healthy pod a second
+    # time for one cause. One cause, one diagnosis — the transport is check 1's to own.
+    000) warn "/login could not be reached either — this check cannot judge the sign-in route
+     until something answers on :${HOST_PORT}. See the remedy above; it is the same cause."
          failed=1 ;;
     *)  warn "/login answered HTTP $code — the sign-in route is not usable.
      Remedy: 'memex-local logs'."

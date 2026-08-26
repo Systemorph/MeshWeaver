@@ -190,10 +190,15 @@ The mechanism that makes the write path share a single subscription per node acr
 
 This is exactly what the `MeshNodeReference(path)` reducer registered by `AddSyncedQuery` relies on: when it returns `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(new Address(path), new MeshNodeReference())`, every writer through the synced collection — and any other code in the workspace asking for the same `(addr, ref)` — gets back the same stream instance. One upstream pump per node, no matter how many writers share it.
 
-**Cache eviction** is lazy and happens in two cases:
+**Cache eviction** is lazy and happens in three cases:
 
 - When the cached stream's hub leaves `MessageHubRunLevel.Started` (disposed or failed), the next `GetRemoteStream` call replaces it with a fresh instance.
 - When an explicit `IMeshChangeFeed` event reports a path change (ownership churn — see `Workspace.EvictForPath`), open subscribers stay attached to their existing stream while new callers bind to a fresh one tied to the re-activated owner.
+- **When the cached stream has FAULTED** — its store took a terminal error, typically because the owner did not answer its `SubscribeRequest` inside the request budget. The next `GetRemoteStream` call drops it, closes it, and builds a fresh mirror.
+
+That third case is not cosmetic. A stream's store is a `ReplaySubject`, so an `OnError` on it is permanent under the Rx grammar: the stream can never emit again, and every later subscriber replays that same error the instant it subscribes. `CreateExternalClient`'s terminal arm faults the stream and tears down only its keep-alive, leaving the object *errored but undisposed* — so while liveness was judged on disposal alone, the cache kept serving the corpse for the whole process lifetime. Every later write to that node then failed **instantly** while reporting the 30-second initial-state bound, which is what made the symptom unreadable: a timeout announced after a fraction of a millisecond. On boot it cost each replica one of its default packages, and the installer's own fall-back-to-a-full-install repair re-entered the same dead mirror and could not possibly succeed — [#2387](https://github.com/Systemorph/MeshWeaver/issues/2387).
+
+Dropping a faulted stream is **not** a retry: nothing re-attempts on a timer and nothing loops. The next natural caller opens a fresh mirror, and a stream that is *born* dead (a construction-time fault — a same-process owner NACKing the subscribe inline) is handed back rather than re-created, so create → fault → create can never spin. This is the same contract `PromiseCache` states for pooled I/O: cache a success, evict a fault, and let the next caller re-attempt.
 
 **An evicted stream is closed as soon as its last declared holder lets go.** Eviction removes the
 stream from the cache but cannot dispose it at the eviction site — it does not know whether anyone
@@ -211,7 +216,16 @@ behind for the process lifetime — [#1324](https://github.com/Systemorph/MeshWe
 
 The full integrity story is a plain dictionary, single-threaded access, and shared-by-default semantics — made safe entirely by the actor model.
 
-The `RemoteStreamCacheTest` (`test/MeshWeaver.Query.Test`) pins this contract: two `GetRemoteStream(...)` calls for the same key are reference-equal, and a disposed stream is evicted before the next caller receives it.
+The `RemoteStreamCacheTest` (`test/MeshWeaver.Query.Test`) pins this contract: two calls for the same
+key are reference-equal, and a disposed **or faulted** stream is evicted before the next caller
+receives it. Two details the test makes explicit and this page should not blur:
+
+* **The key is a triple** — `(address, reference, subscribing identity)`, the identity resolved from
+  the same helper that stamps `SubscribeRequest.Identity`, so a stream can only ever be served back
+  to the identity it was subscribed for. It is not keyed on `(owner, reference)` alone.
+* **The test calls `GetRemoteStreamUnchecked<…>`**, deliberately bypassing the MeshNode guard — that
+  guard is not what is under test here, and going through it would make the test assert two things
+  at once.
 
 ---
 

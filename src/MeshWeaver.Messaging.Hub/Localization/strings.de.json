@@ -532,6 +532,7 @@
   "ui.removeSource": "Quelle entfernen",
   "ui.removeInstallRecord": "Installationseintrag entfernen",
   "ui.requiresGlobalAdmin": "Erfordert Global Admin",
+  "ui.restartRequiredToActivate": "Neustart erforderlich, um dieses Paket vollständig zu aktivieren",
   "ui.orphanedInstallRecords": "Verwaiste Installationseinträge",
   "ui.requestAccess": "Zugriff anfragen",
   "ui.resetToDefault": "Auf Standard zurücksetzen",

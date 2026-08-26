@@ -9,7 +9,7 @@ namespace MeshWeaver.Hosting.AspNetCore.Portal;
 
 /// <summary>
 /// Route constraint that excludes paths for static file prefixes used by Blazor and RCLs,
-/// plus infrastructure endpoints (auth, dev, mcp, OAuth callbacks). Applied to the root
+/// plus infrastructure endpoints (auth, dev, OAuth callbacks). Applied to the root
 /// catch-all page endpoint via <see cref="NonfileRouteConstraintExtensions.ExcludeStaticAssetPaths{TBuilder}"/>
 /// so that requests under these prefixes are never swallowed by the Blazor application page
 /// (a miss falls through to a proper 404 instead of an HTML shell).
@@ -27,9 +27,18 @@ public class NonfileRouteConstraint : IRouteConstraint
     private static readonly HashSet<string> ExcludedPrefixes = new(StringComparer.OrdinalIgnoreCase)
     {
         "_framework", "_content", "_blazor", "favicon.ico",
-        "auth", "dev", "mcp",
+        "auth", "dev",
         "signin-microsoft", "signin-google", "signin-linkedin", "signin-apple"
     };
+
+    /// <summary>
+    /// The MCP endpoint's first path segment. NOT in <see cref="ExcludedPrefixes"/> any more:
+    /// <c>Mcp</c> is ALSO a mesh partition (the Store plugin node whose cover a browser
+    /// navigation to <c>/Mcp</c> must render), so the exclusion is by REQUEST SHAPE, not by
+    /// path alone — see <see cref="IsMcpProtocolRequest"/>. Route templates are case-insensitive,
+    /// and so is this check: <c>/mcp</c> and <c>/Mcp</c> are the same path family.
+    /// </summary>
+    private const string McpSegment = "mcp";
 
     /// <summary>
     /// Returns false when the route value for <paramref name="routeKey"/> begins with an excluded prefix;
@@ -59,6 +68,9 @@ public class NonfileRouteConstraint : IRouteConstraint
         if (ExcludedPrefixes.Contains(firstSegment.ToString()))
             return false;
 
+        if (IsMcpProtocolRequest(httpContext, firstSegment))
+            return false;
+
         // 🚨 A path that IS a real file in webroot is never a page route. The prefix list above
         // only covers the KNOWN asset roots (_framework, _content, …); anything else physically
         // present — a hand-dropped wwwroot file, a published SPA bundle, an asset outside the
@@ -71,6 +83,46 @@ public class NonfileRouteConstraint : IRouteConstraint
         // mesh Document nodes legitimately end in .pdf/.docx/.txt, and rejecting dotted paths is
         // exactly the agentic-pensions#10 regression this class was written to fix.
         return !FileExistsInWebRoot(httpContext, path);
+    }
+
+    /// <summary>
+    /// Whether this request is MCP PROTOCOL traffic on the <c>/mcp</c> path family — traffic the
+    /// page route must never swallow. The <c>Mcp</c> segment is special because it is BOTH the MCP
+    /// endpoint (streamable-HTTP JSON-RPC, mapped by the MeshWeaver.Mcp module) AND a mesh
+    /// partition whose Store cover a browser renders at <c>/Mcp</c>:
+    ///
+    /// <list type="bullet">
+    /// <item><description>Non-GET/HEAD (the JSON-RPC POST, session DELETE) → protocol. When the
+    /// module is loaded its own literal route outranks this catch-all anyway; when it is NOT
+    /// loaded (the #2093 failure mode) the request must answer an honest 404 — never a 200 HTML
+    /// shell that an MCP client cannot parse and an operator reads as "the endpoint works".
+    /// </description></item>
+    /// <item><description>GET/HEAD asking for <c>text/event-stream</c> or <c>application/json</c>
+    /// (SSE channel probes, API-shaped reads) → protocol, same reasoning.</description></item>
+    /// <item><description>GET/HEAD wanting <c>text/html</c> (a browser navigation to
+    /// <c>/Mcp</c>) → NOT protocol: the page route serves the partition cover. The MCP module
+    /// maps no GET in stateless mode, so nothing shadows this.</description></item>
+    /// </list>
+    ///
+    /// Null context (URL generation / non-request evaluation) counts as protocol — the
+    /// conservative pre-existing behavior of the blanket "mcp" prefix exclusion.
+    /// </summary>
+    private static bool IsMcpProtocolRequest(HttpContext? httpContext, ReadOnlySpan<char> firstSegment)
+    {
+        if (!firstSegment.Equals(McpSegment, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (httpContext is null)
+            return true;
+
+        var request = httpContext.Request;
+        if (!HttpMethods.IsGet(request.Method) && !HttpMethods.IsHead(request.Method))
+            return true;
+
+        var accept = request.Headers.Accept.ToString();
+        if (accept.Contains("text/html", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return accept.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase)
+               || accept.Contains("application/json", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>True when <paramref name="path"/> resolves to a file that physically exists in the
@@ -102,10 +154,12 @@ public static class NonfileRouteConstraintExtensions
     /// <summary>
     /// Applies <see cref="NonfileRouteConstraint"/> to the root catch-all page endpoint
     /// (ApplicationPage's <c>/{**Path}</c>) so static-asset and infrastructure prefixes
-    /// (<c>_framework</c>, <c>_content</c>, <c>favicon.ico</c>, <c>auth</c>, <c>mcp</c>, ...)
-    /// are not swallowed by the Blazor application page: a request under those prefixes that
-    /// no static file or explicit endpoint handles falls through to 404 instead of rendering
-    /// the HTML shell. Chain on the builder returned by <c>MapRazorComponents</c>.
+    /// (<c>_framework</c>, <c>_content</c>, <c>favicon.ico</c>, <c>auth</c>, ...) — plus
+    /// MCP-protocol-shaped requests on the <c>/mcp</c> path family — are not swallowed by the
+    /// Blazor application page: a request under those prefixes that no static file or explicit
+    /// endpoint handles falls through to 404 instead of rendering the HTML shell. A browser
+    /// navigation to <c>/Mcp</c> is deliberately NOT excluded — it renders the Mcp partition's
+    /// cover. Chain on the builder returned by <c>MapRazorComponents</c>.
     ///
     /// This is an endpoint convention, NOT an inline template constraint, because only the
     /// ASP.NET endpoint layer honors custom constraints — the Blazor Router's inline-constraint

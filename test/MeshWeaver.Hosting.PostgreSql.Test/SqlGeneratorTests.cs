@@ -526,6 +526,43 @@ public class SqlGeneratorTests
     }
 
     [Fact]
+    public void GenerateCrossSchemaSelectQuery_ExcludedNodeTypes_PushesDownContextFilter()
+    {
+        // #2419: `GenerateCrossSchemaSelectQuery` called `GenerateWhereClause(query)` with no
+        // excluded types, so the type-level context exclusion (`is:content` / `context:search`)
+        // was applied on the single-schema route and DROPPED on the UNION — the same query
+        // answering differently depending on whether its path pinned to one partition. On a
+        // public package cover that surfaced as the partition's `_Policy` node listed as the
+        // page's only content.
+        var parser = new QueryParser();
+        var parsed = parser.Parse("namespace:Anthropic scope:subtree is:main is:content");
+        var gen = new PostgreSqlSqlGenerator();
+
+        var (sql, parameters) = gen.GenerateCrossSchemaSelectQuery(
+            parsed, new[] { "anthropic" }, userId: null,
+            excludedNodeTypes: new[] { "PartitionAccessPolicy" });
+
+        sql.Should().Contain("n.node_type NOT IN",
+            "the UNION's shared WHERE must carry the context exclusion, as the single-schema "
+            + "generator does");
+        parameters.Values.Should().Contain("PartitionAccessPolicy");
+    }
+
+    [Fact]
+    public void GenerateCrossSchemaSelectQuery_NoExcludedNodeTypes_EmitsNoContextFilter()
+    {
+        // The negative half: a query with no context must not acquire a node_type predicate —
+        // otherwise the test above would pass on a generator that always emitted one.
+        var parser = new QueryParser();
+        var parsed = parser.Parse("namespace:Anthropic scope:subtree");
+        var gen = new PostgreSqlSqlGenerator();
+
+        var (sql, _) = gen.GenerateCrossSchemaSelectQuery(parsed, new[] { "anthropic" });
+
+        sql.Should().NotContain("n.node_type NOT IN");
+    }
+
+    [Fact]
     public void GenerateCrossSchemaSelectQuery_NamespaceSubtree_PushesDownPathFilter()
     {
         // Repro from prod (memex.meshweaver.cloud/Systemorph/Events):

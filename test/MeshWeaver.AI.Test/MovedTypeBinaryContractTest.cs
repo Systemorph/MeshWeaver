@@ -32,38 +32,65 @@ namespace MeshWeaver.AI.Test;
 /// repo's module SOURCE against the PR and therefore goes green on exactly this change.</para>
 ///
 /// <para><b>What this pins.</b> Each moved type must still resolve <i>through</i>
-/// <c>MeshWeaver.AI</c> under its ORIGINAL full name, and must resolve to the type that now lives
-/// in <c>MeshWeaver.Mesh.Operations</c> — i.e. a real <c>[TypeForwardedTo]</c> yielding ONE type
-/// identity, not a shim duplicating the surface. A forwarder cannot rename, so the full name
-/// (namespace included) is frozen: this test is what fails if someone tidies
-/// <c>namespace MeshWeaver.AI</c> in <c>MeshWeaver.Mesh.Operations</c>.</para>
+/// <c>MeshWeaver.AI</c> under its ORIGINAL full name, and must resolve to the assembly that carries
+/// it today — i.e. a real <c>[TypeForwardedTo]</c> yielding ONE type identity, not a shim
+/// duplicating the surface. A forwarder cannot rename, so the full name (namespace included) is
+/// frozen: this test is what fails if someone tidies <c>namespace MeshWeaver.AI</c> in the assembly
+/// that now hosts it.</para>
+///
+/// <para><b>It happened twice.</b> Replaying <c>scripts/check-type-forwards.py</c> across
+/// <c>v3.0.0-rc7 → main</c> found 17 unguarded moves; #2370 fixed four of them, and #2398 fixed the
+/// six that #2276 made when it moved the credential-protection and MCP-back-connection contracts
+/// into <c>MeshWeaver.Mesh.Contract</c> — three with a proven module consumer on
+/// Systemorph/MeshWeaver.Plugins. That is why the frozen list below is a map from name to hosting
+/// assembly rather than one constant: the two waves landed in different places.</para>
 /// </summary>
 public class MovedTypeBinaryContractTest
 {
     /// <summary>The assembly a module's TypeRef names — the simple name it binds by at runtime.</summary>
     private const string BoundAssembly = "MeshWeaver.AI";
 
-    /// <summary>Where the types actually live since #2283.</summary>
-    private const string HostingAssembly = "MeshWeaver.Mesh.Operations";
-
     /// <summary>
-    /// The frozen names. A module compiled before #2283 holds exactly these strings in its
-    /// metadata; changing one is a break no consumer's compiler will ever warn about.
+    /// The frozen names, each mapped to the assembly that carries it TODAY. A module compiled
+    /// before the type moved holds exactly these strings in its metadata; changing one is a break
+    /// no consumer's compiler will ever warn about.
+    ///
+    /// <para>Two waves, two destinations — which is why this is a map and not one constant:</para>
+    /// <list type="bullet">
+    ///   <item>#2283 moved the <c>MeshOperations</c> family to <c>MeshWeaver.Mesh.Operations</c>
+    ///     (the move that caused #2370).</item>
+    ///   <item>#2276 moved the credential-protection and MCP-back-connection contracts to
+    ///     <c>MeshWeaver.Mesh.Contract</c>. That one shipped WITHOUT forwarders and was found by
+    ///     replaying <c>scripts/check-type-forwards.py</c> across <c>v3.0.0-rc7 → main</c> (#2398);
+    ///     three of them have a proven module consumer in Systemorph/MeshWeaver.Plugins.</item>
+    /// </list>
     /// </summary>
-    private static readonly string[] FrozenNames =
+    private static readonly (string Name, string Assembly)[] Frozen =
     [
-        "MeshWeaver.AI.MeshOperations",
-        "MeshWeaver.AI.MeshExportManifest",
-        "MeshWeaver.AI.MeshExportFileEntry",
-        "MeshWeaver.AI.NodeReadOutcome",
+        ("MeshWeaver.AI.MeshOperations", "MeshWeaver.Mesh.Operations"),
+        ("MeshWeaver.AI.MeshExportManifest", "MeshWeaver.Mesh.Operations"),
+        ("MeshWeaver.AI.MeshExportFileEntry", "MeshWeaver.Mesh.Operations"),
+        ("MeshWeaver.AI.NodeReadOutcome", "MeshWeaver.Mesh.Operations"),
+        ("MeshWeaver.AI.IMasterKeyProvider", "MeshWeaver.Mesh.Contract"),
+        ("MeshWeaver.AI.ConfigMasterKeyProvider", "MeshWeaver.Mesh.Contract"),
+        ("MeshWeaver.AI.IProviderKeyProtector", "MeshWeaver.Mesh.Contract"),
+        ("MeshWeaver.AI.ProviderKeyProtector", "MeshWeaver.Mesh.Contract"),
+        ("MeshWeaver.AI.Connect.IMcpBackConnection", "MeshWeaver.Mesh.Contract"),
+        ("MeshWeaver.AI.Connect.McpConnectionInfo", "MeshWeaver.Mesh.Contract"),
     ];
 
     /// <summary>The same list, as theory rows.</summary>
-    public static TheoryData<string> ForwardedTypeNames() => [.. FrozenNames];
+    public static TheoryData<string, string> ForwardedTypeNames()
+    {
+        var data = new TheoryData<string, string>();
+        foreach (var (name, assembly) in Frozen)
+            data.Add(name, assembly);
+        return data;
+    }
 
     [Theory]
     [MemberData(nameof(ForwardedTypeNames))]
-    public void OldName_StillResolves_ThroughTheAssemblyModulesBind(string fullName)
+    public void OldName_StillResolves_ThroughTheAssemblyModulesBind(string fullName, string hostingAssembly)
     {
         // Assembly-qualified on purpose: this is the resolution a module's TypeRef performs —
         // "find `fullName` in the assembly named `MeshWeaver.AI`" — and it is the exact step that
@@ -78,7 +105,7 @@ public class MovedTypeBinaryContractTest
             + "platform roll — the #2370 outage. Restore the name and its [assembly: TypeForwardedTo] "
             + "in src/MeshWeaver.AI/TypeForwards.cs.");
 
-        Assert.Equal(HostingAssembly, resolved!.Assembly.GetName().Name);
+        Assert.Equal(hostingAssembly, resolved!.Assembly.GetName().Name);
     }
 
     [Fact]
@@ -92,7 +119,7 @@ public class MovedTypeBinaryContractTest
             .Select(t => t.FullName)
             .ToHashSet(StringComparer.Ordinal);
 
-        Assert.All(FrozenNames, name => Assert.Contains(name, forwarded));
+        Assert.All(Frozen, f => Assert.Contains(f.Name, forwarded));
     }
 
     [Fact]
@@ -106,6 +133,19 @@ public class MovedTypeBinaryContractTest
         Assert.Equal("MeshWeaver.AI.MeshExportFileEntry", typeof(MeshExportFileEntry).FullName);
         Assert.Equal("MeshWeaver.AI.NodeReadOutcome", typeof(MeshWeaver.AI.NodeReadOutcome).FullName);
 
-        Assert.Equal(HostingAssembly, typeof(MeshOperations).Assembly.GetName().Name);
+        // #2276 / #2398 — the SAME pin for the wave that landed in MeshWeaver.Mesh.Contract. These
+        // four keep `namespace MeshWeaver.AI` and the pair below keeps `namespace
+        // MeshWeaver.AI.Connect`, both inside an assembly named neither of those things. That
+        // mismatch is the contract, not an oversight.
+        Assert.Equal("MeshWeaver.AI.IMasterKeyProvider", typeof(IMasterKeyProvider).FullName);
+        Assert.Equal("MeshWeaver.AI.ConfigMasterKeyProvider", typeof(ConfigMasterKeyProvider).FullName);
+        Assert.Equal("MeshWeaver.AI.IProviderKeyProtector", typeof(IProviderKeyProtector).FullName);
+        Assert.Equal("MeshWeaver.AI.ProviderKeyProtector", typeof(ProviderKeyProtector).FullName);
+        Assert.Equal("MeshWeaver.AI.Connect.IMcpBackConnection", typeof(Connect.IMcpBackConnection).FullName);
+        Assert.Equal("MeshWeaver.AI.Connect.McpConnectionInfo", typeof(Connect.McpConnectionInfo).FullName);
+
+        Assert.Equal("MeshWeaver.Mesh.Operations", typeof(MeshOperations).Assembly.GetName().Name);
+        Assert.Equal("MeshWeaver.Mesh.Contract", typeof(IProviderKeyProtector).Assembly.GetName().Name);
+        Assert.Equal("MeshWeaver.Mesh.Contract", typeof(Connect.IMcpBackConnection).Assembly.GetName().Name);
     }
 }

@@ -1,5 +1,7 @@
 using System.IO;
 using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 
@@ -185,6 +187,43 @@ public sealed class ModuleLandingService : IDisposable
     private readonly IoPool pool = new(1);
     private readonly string baseDirectory;
     private readonly ILogger<ModuleLandingService>? logger;
+    private readonly Subject<Unit> activationChanged = new();
+
+    // 🚨 Every EMISSION goes through the synchronized façade, never `activationChanged` directly.
+    // An Rx Subject is not safe for concurrent OnNext/OnCompleted: its observer list can be observed
+    // mid-mutation, which tears delivery. The two callers here genuinely can overlap — a landing
+    // announces on whichever thread the pool result lands on, while Dispose completes on the
+    // teardown thread — so this is a real race, not a theoretical one. Subject.Synchronize is Rx's
+    // own answer and stays inside the reactive model (no lock of ours, nothing hand-woven); it is
+    // the same wrapper MeshNodeStreamCache, ThreadInboxChannel and this project's own
+    // ModuleDiscoveryService already use. Subscribe still goes to the subject itself — the
+    // synchronization is only needed on the write side. (Copilot review, #2437.)
+    private readonly ISubject<Unit> announce;
+
+    /// <summary>
+    /// Fires once each time THIS process changes the persisted activation record — a landing, a
+    /// shelving, or a removal. The announcement half of restart-as-activation (#1979).
+    ///
+    /// <para><b>Why it has to exist for the reader to be usable.</b>
+    /// <see cref="PendingModuleActivations"/> answers "is a restart pending for this package?" by
+    /// reading the record on demand, which is correct and always current — but a view has to know
+    /// WHEN to ask again. On the install path the module lands strictly AFTER the install record
+    /// node is written (the content install completes, then the bundle is fetched and landed), so
+    /// the node-driven re-render that flips a card to "installed" happens BEFORE the restart is
+    /// pending. Without this signal the one moment the buyer is looking at the card is exactly the
+    /// moment it cannot say so, and the note appears only on some later, unrelated render.</para>
+    ///
+    /// <para>Announcing a write so its readers can react is the same discipline the mesh applies to
+    /// storage writes (#817/#824) — not a poll and not a watchdog: it fires on the write, or not at
+    /// all. It is deliberately a bare signal rather than the new state, because the state is
+    /// per-process and derived; every subscriber re-derives it from the record and the assemblies it
+    /// has actually loaded, so two surfaces can never disagree.</para>
+    ///
+    /// <para>🚨 Emitted AFTER the pool work item completes, never inside it. This service's pool is
+    /// cap-1, so a subscriber that reacted by asking this service to read would queue behind the
+    /// very work item that notified it.</para>
+    /// </summary>
+    public IObservable<Unit> ActivationChanged => activationChanged;
 
     /// <summary>Creates the service.</summary>
     /// <param name="logger">Diagnostics — every landing, refusal and removal is logged.</param>
@@ -196,6 +235,7 @@ public sealed class ModuleLandingService : IDisposable
     {
         this.logger = logger;
         this.baseDirectory = baseDirectory ?? AppContext.BaseDirectory;
+        announce = Subject.Synchronize(activationChanged);
     }
 
     /// <summary>The deployment root the <c>modules/</c> tree lives under — exposed so the serving
@@ -240,7 +280,8 @@ public sealed class ModuleLandingService : IDisposable
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
                 staticAssets, holdAboveFloor: false);
             return Unit.Default;
-        });
+        })
+        .Do(_ => AnnounceActivationChanged());
 
     /// <summary>
     /// Lands a module onto the REGISTRY SHELF (2026-08-22) — the publish path's entry, identical to
@@ -287,7 +328,8 @@ public sealed class ModuleLandingService : IDisposable
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null)
         => pool.InvokeBlocking(_ =>
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
-                staticAssets, holdAboveFloor: true));
+                staticAssets, holdAboveFloor: true))
+            .Do(_ => AnnounceActivationChanged());
 
     /// <summary>
     /// Validates one module-relative asset path: forward slashes, no rooting, no traversal, and
@@ -328,7 +370,8 @@ public sealed class ModuleLandingService : IDisposable
         {
             RemoveCore(name);
             return Unit.Default;
-        });
+        })
+        .Do(_ => AnnounceActivationChanged());
 
     private ModuleLandingOutcome LandCore(
         string name,
@@ -528,8 +571,38 @@ public sealed class ModuleLandingService : IDisposable
             throw new ArgumentException($"Invalid {what}: '{value}'.");
     }
 
+    /// <summary>
+    /// Announces that the persisted activation record changed, containing a subscriber's fault
+    /// rather than propagating it: a surface that failed to re-render must never turn a landing that
+    /// genuinely succeeded into a reported failure — the write being announced has already happened
+    /// by the time this runs — and on the teardown path it must never turn a clean dispose into a
+    /// throwing one. The fault is NOT swallowed silently: this line is the only evidence a surface
+    /// stopped following the signal.
+    /// </summary>
+    /// <param name="notify">The emission to make — <c>OnNext</c> after a write, <c>OnCompleted</c>
+    /// at dispose. Always applied to the SYNCHRONIZED façade; see the field's remarks.</param>
+    private void Announce(Action<ISubject<Unit>> notify)
+    {
+        try
+        {
+            notify(announce);
+        }
+        catch (Exception exception)
+        {
+            logger?.LogWarning(exception,
+                "A subscriber to ActivationChanged faulted; the module landing itself succeeded.");
+        }
+    }
+
+    private void AnnounceActivationChanged() => Announce(subject => subject.OnNext(Unit.Default));
+
     /// <inheritdoc />
-    public void Dispose() => pool.Dispose();
+    public void Dispose()
+    {
+        Announce(subject => subject.OnCompleted());
+        activationChanged.Dispose();
+        pool.Dispose();
+    }
 }
 
 /// <summary>

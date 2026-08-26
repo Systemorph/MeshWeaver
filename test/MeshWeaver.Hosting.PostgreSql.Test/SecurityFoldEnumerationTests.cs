@@ -147,7 +147,8 @@ public class SecurityFoldEnumerationTests(PostgreSqlFixture fixture, ITestOutput
     private Task<System.Collections.Generic.List<MeshNode>> Collect(
         PostgreSqlCrossSchemaQueryProvider cross, ParsedQuery query, CancellationToken ct)
         => cross.QueryAcrossSchemasAsync(
-                query, _options, Schemas, "mesh_nodes", userId: null, activityUserId: null, ct)
+                query, _options, Schemas, "mesh_nodes", userId: null, activityUserId: null,
+                excludedNodeTypes: null, ct)
             .Collect(ct).Should().Within(60.Seconds()).Emit();
 
     // ── End-to-end guard: the stamped fold still decides correctly, and still denies ────────────

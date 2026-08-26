@@ -58,7 +58,8 @@ public class PerSchemaAccessClauseLeakTests
         ParsedQuery query, string tableName, IReadOnlyList<string> schemas,
         string? userId, CancellationToken ct)
         => new PostgreSqlCrossSchemaQueryProvider(_fixture.DataSource)
-            .QueryAcrossSchemasAsync(query, _options, schemas, tableName, userId, activityUserId: null, ct)
+            .QueryAcrossSchemasAsync(query, _options, schemas, tableName, userId,
+                activityUserId: null, excludedNodeTypes: null, ct)
             .Collect(ct).Should().Within(30.Seconds()).Emit();
 
     /// <summary>

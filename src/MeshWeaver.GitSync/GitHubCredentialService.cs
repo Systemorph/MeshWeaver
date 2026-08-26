@@ -1,3 +1,4 @@
+using MeshWeaver.AI;   // IProviderKeyProtector & co keep their ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using MeshWeaver.Data;

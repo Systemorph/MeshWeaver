@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.AspNetCore.Authentication;
 using ModelContextProtocol.Authentication;
@@ -75,6 +76,11 @@ public static class McpAuthenticationExtensions
     /// </summary>
     public static IServiceCollection AddMcpAuthentication(this IServiceCollection services)
     {
+        // The /api/mcp → /mcp endpoint alias (see McpEndpointRoutes): self-wired at the front of
+        // the pipeline so the PRIMARY path is served by every host that has MCP auth, without the
+        // composition needing an extra call.
+        services.AddTransient<IStartupFilter, McpEndpointRoutes.StartupFilter>();
+
         services.AddAuthentication()
             .AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
                 ApiTokenAuthenticationHandler.SchemeName, _ => { })
@@ -147,9 +153,21 @@ public static class McpAuthenticationExtensions
             {
                 var req = ctx.HttpContext.Request;
                 var origin = $"{req.Scheme}://{req.Host}";
+                // RFC 9728 path-inserted discovery: McpEndpointRoutes rewrites
+                // /.well-known/oauth-protected-resource/{api/mcp|mcp} onto this bare document
+                // and stashes which resource the client asked about — answer with THAT resource
+                // so a strict client's "resource matches the server URL" validation passes for
+                // both the primary (/api/mcp) and the compatibility (/mcp) endpoint. A fetch of
+                // the bare document (the URL the WWW-Authenticate challenge names) keeps
+                // answering /mcp — the value every already-connected client validated against.
+                var resourcePath =
+                    ctx.HttpContext.Items.TryGetValue(McpEndpointRoutes.ResourcePathItem, out var stashed)
+                    && stashed is string s
+                        ? s
+                        : McpEndpointRoutes.CompatibilityEndpoint;
                 ctx.ResourceMetadata = new ProtectedResourceMetadata
                 {
-                    Resource = $"{origin}/mcp",
+                    Resource = $"{origin}{resourcePath}",
                     BearerMethodsSupported = { "header" },
                     ScopesSupported = { "mcp" },
                     AuthorizationServers = { origin },
