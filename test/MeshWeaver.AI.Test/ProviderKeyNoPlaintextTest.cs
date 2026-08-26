@@ -89,9 +89,16 @@ public class ProviderKeyNoPlaintextTest : AITestBase
     public void AKeylessProvider_IsStillAllowed_WithoutAMasterKey()
     {
         // Keyless providers (GitHub Copilot, local Claude Code CLI) legitimately carry no key.
-        // Refusing those would break them, so null/empty must stay a valid write — Protect returns
-        // null/empty unchanged before it ever looks for a master key.
-        var service = Mesh.ServiceProvider.GetRequiredService<ModelProviderService>();
-        Assert.NotNull(service);   // constructing the service must not require a master key
+        // Refusing those would break them on every unconfigured deployment, so null/empty must stay
+        // a valid write: Protect returns them unchanged before it ever looks for a master key. This
+        // is the boundary of the refusal — assert it, or "fail closed" quietly grows into "fail".
+        var protector = Mesh.ServiceProvider.GetRequiredService<IProviderKeyProtector>();
+
+        Assert.Null(protector.Protect(null));
+        Assert.Equal("", protector.Protect(""));
+
+        // …and an ALREADY-protected value is idempotent, so a re-save on an unconfigured deployment
+        // does not blow up on data it is merely carrying through.
+        Assert.Equal("enc:v1:already", protector.Protect("enc:v1:already"));
     }
 }

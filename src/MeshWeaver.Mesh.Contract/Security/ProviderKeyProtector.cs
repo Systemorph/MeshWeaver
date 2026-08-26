@@ -32,12 +32,27 @@ public sealed class ProviderKeyProtector : IProviderKeyProtector
     }
 
     /// <summary>
-    /// Encrypts a provider key into the <c>enc:v1:</c> stored form. Idempotent (an
-    /// already-tagged value is returned unchanged) and a passthrough when no master
-    /// key is configured.
+    /// Encrypts a secret into the <c>enc:v1:</c> stored form. Idempotent — an already-tagged value
+    /// is returned unchanged — and null/empty is returned as-is, because a caller that has no
+    /// secret is not storing one (a keyless provider such as Copilot or the local Claude Code CLI).
+    ///
+    /// <para>🚨 With no master key configured this <b>THROWS</b>. It used to return the plaintext
+    /// unchanged, and that passthrough is the defect: an unconfigured deployment persisted raw
+    /// credentials into node content with nothing failing and nothing logged at the call site —
+    /// found in production on 2026-08-24 with a live OpenRouter key in cleartext in
+    /// <c>Provider/OpenRouter</c>. A missing master key is a CONFIGURATION FAULT, not a degraded
+    /// mode.</para>
+    ///
+    /// <para>A caller that has a structured, non-writing refusal to report — the boot seed's
+    /// <c>ProviderSeedOutcome.RefusedUnprotected</c> — must ask <see cref="IMasterKeyProvider"/>
+    /// BEFORE calling this and skip the write, rather than discovering the state from a throw.
+    /// Anywhere else the throw IS the answer: refusing loudly beats storing a live credential.</para>
     /// </summary>
-    /// <param name="plaintext">The key to protect; null/empty is returned as-is.</param>
-    /// <returns>The encrypted stored form, or the original value when encryption is disabled or skipped.</returns>
+    /// <param name="plaintext">The secret to protect; null/empty is returned as-is.</param>
+    /// <returns>The encrypted stored form, or the input unchanged when it is null/empty or already tagged.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// No master key is configured, so the value could only be stored in plaintext.
+    /// </exception>
     public string? Protect(string? plaintext)
     {
         if (string.IsNullOrEmpty(plaintext)) return plaintext;
@@ -45,7 +60,17 @@ public sealed class ProviderKeyProtector : IProviderKeyProtector
         if (plaintext.StartsWith("enc:", StringComparison.Ordinal)) return plaintext;
 
         var key = masterKeyProvider.GetMasterKey();
-        if (key is null) return plaintext; // encryption disabled → passthrough
+        if (key is null)
+            // 🚨 REFUSE. Naming the setting AND the two ways to avoid storing a literal at all is
+            // part of the fix: a refusal that does not say what to do next is how the passthrough
+            // survived. Never echo the value — a key that has been echoed must be rotated.
+            throw new InvalidOperationException(
+                "Refusing to encrypt a secret for storage: no master key is configured "
+                + $"({ConfigMasterKeyProvider.ConfigKey}), so the value could only be persisted in "
+                + "PLAINTEXT. Set the master key for this deployment (env "
+                + "'Ai__KeyProtection__MasterKey'), or reference the credential from the host's "
+                + "secret store instead of storing a literal (ModelDefinition.ApiKeySecretRef, or "
+                + "the provider's {section}:ApiKey configuration).");
 
         var nonce = RandomNumberGenerator.GetBytes(NonceLen);
         var pt = Encoding.UTF8.GetBytes(plaintext);

@@ -18,6 +18,11 @@ namespace MeshWeaver.Graph.Test;
 ///
 /// <para>The registration now lives in <c>AddGraph()</c> and this is the ratchet: exactly ONE
 /// registration exists in the tree, so resolving it here proves the platform path carries it.</para>
+///
+/// <para>🚨 "Optionally, null ⇒ store the secret verbatim" is no longer the fallback anywhere —
+/// those four call sites now resolve the protector as REQUIRED, and <c>Protect</c> itself refuses
+/// rather than passing plaintext through when no master key is configured. So this test asserts
+/// the value that registration is FOR: the stored form is ciphertext, not the input.</para>
 /// </summary>
 public class ProviderKeyProtectorRegistrationTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
@@ -35,9 +40,14 @@ public class ProviderKeyProtectorRegistrationTest(ITestOutputHelper output)
             "the default reads Ai:KeyProtection:MasterKey from configuration; a deployment swaps in "
             + "a KMS-backed provider by registering its own before AddGraph runs");
 
-        // Round-trips whether or not this host configures a master key: with one, through
-        // AES-256-GCM; without, both directions are passthrough.
-        protector!.Unprotect(protector.Protect("ghp_the_committing_users_token"))
-            .Should().Be("ghp_the_committing_users_token");
+        const string secret = "ghp_the_committing_users_token";
+        var stored = protector!.Protect(secret);
+
+        // 🚨 The STORED form is ciphertext. This used to read "round-trips whether or not this host
+        // configures a master key … without, both directions are passthrough" — and a round-trip
+        // alone passes on a passthrough, which is the behaviour that put a live key in cleartext
+        // into production. Asserting the stored bytes is what a passthrough cannot satisfy.
+        stored.Should().StartWith("enc:v1:").And.NotContain(secret);
+        protector.Unprotect(stored).Should().Be(secret);
     }
 }
