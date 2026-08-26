@@ -42,7 +42,7 @@ The two routes provision and run on different platforms (raw AKS deployments + H
 Full local development with Docker containers (PostgreSQL pgvector + Azurite, Orleans in-process):
 
 ```bash
-aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode local
+aspire run --project ../MeshWeaver.Plugins/src/Memex.AppHost/Memex.AppHost.csproj -- --mode local
 ```
 
 ## Monolith (standalone, no Docker)
@@ -50,9 +50,9 @@ aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode l
 Lighter setup without Orleans or external infrastructure:
 
 ```bash
-dotnet run --project memex/Memex.Portal.Monolith
+dotnet run --project ../MeshWeaver.Plugins/src/Memex.Portal.Monolith
 # or via the AppHost:
-aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode monolith
+aspire run --project ../MeshWeaver.Plugins/src/Memex.AppHost/Memex.AppHost.csproj -- --mode monolith
 ```
 
 ---
@@ -77,7 +77,7 @@ For single-tenant apps, configure the tenant ID explicitly — the default `/com
 
 Secrets are stored in `dotnet user-secrets` for local development and in GitHub secrets for CI/CD. (On AKS, secrets come from the Key Vault `SecretProviderClass` wired by `deploy/aks/envs/<env>/deploy.sh`.)
 
-Parameters for distributed modes (the authoritative list is the `builder.AddParameter(...)` calls in `memex/aspire/Memex.AppHost/Program.cs`):
+Parameters for distributed modes (the authoritative list is the `builder.AddParameter(...)` calls in `../MeshWeaver.Plugins/src/Memex.AppHost/Program.cs`):
 
 | Parameter | Description | If unset |
 |---|---|---|
@@ -103,7 +103,7 @@ Parameters for distributed modes (the authoritative list is the `builder.AddPara
 Set a secret with:
 
 ```bash
-cd memex/aspire/Memex.AppHost
+cd ../MeshWeaver.Plugins/src/Memex.AppHost
 dotnet user-secrets set "Parameters:azure-foundry-key" "<your-key>"
 ```
 

@@ -160,7 +160,7 @@ Each provider package self-registers its config section via `AddLanguageModelCat
 
 ### Aspire deploy auto-seeds; the Helm/AKS chart does not
 
-A stock **Aspire** deploy (`memex/aspire/Memex.AppHost`) sets the catalog env vars, so the system catalog populates out of the box:
+A stock **Aspire** deploy (`../MeshWeaver.Plugins/src/Memex.AppHost`) sets the catalog env vars, so the system catalog populates out of the box:
 
 ```text
 Anthropic__Endpoint, Anthropic__ApiKey, Anthropic__Models__0..2   (= ModelTier heavy/standard/light)

@@ -132,11 +132,21 @@ if (disposeQueue is not null)
 // THEN dispose the scope
 ```
 
-Phases 0, 1 and 3 are **bounded** by a timeout. A wait that times out means a real bug — a
+Every phase is **bounded** by a timeout. A wait that times out means a real bug — a
 wedged action block (surfaced separately by `AnyHubQuiescingTimedOut`), a leaked
 I/O slot (a non-zero `leakedIoLeaves` / `IoPoolRegistry.TotalInFlight`), or a wedged async
 cleanup. The timeout keeps tear-down from hanging; it does **not** paper over the leak
 — log it and fix the leak, never just widen the timeout (see [the no-band-aids rule](/Doc/Architecture/ControlledIoPooling)).
+
+> 🚨 **Phase 2 was the exception, and it was invisible.** `IoPool.Drain()`'s budget covered only
+> the gate join; the `_poolCts.Cancel()` ahead of it ran on the CALLING thread — i.e. this very
+> teardown thread — and `CancellationTokenSource.Cancel()` executes every registered callback
+> synchronously there. Those callbacks tear down whole pooled subscriptions (see
+> [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling)), so one clean-up leg that would
+> not return parked teardown for as long as anyone waited, writing nothing anywhere: issue #2394,
+> a whole test assembly killed at its 8 min wall-clock cap with no test named and not one line
+> after `DISPOSE_INVOKED`. The cancel now runs on its own thread and is joined under the same
+> budget, so a stuck leg is reported in `leakedIoLeaves` instead of hanging.
 
 ### The order is the whole point
 

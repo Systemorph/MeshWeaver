@@ -24,8 +24,10 @@ public record PromptCellResponse(string Code, UiControl Output);
 ///   <c>prompt → (code, output)</c> function; no AI infrastructure involved.</item>
 ///   <item><b>Live</b> — a responder that submits the prompt to a real agent thread
 ///   (<c>hub.StartThread</c>, the <c>TrainingSim</c> agent node) and projects the
-///   reply. The old compiled adapter (<c>TrainingSimResponder</c>) is retired; the
-///   agent runs from its mesh node.</item>
+///   reply. Today that responder is still the compiled adapter
+///   (<c>MeshWeaver.AI.TrainingSimResponder.Live</c>) — retiring it in favour of a
+///   mesh-node-only implementation is tracked in #1610 and is NOT done; do not
+///   delete the compiled class on the strength of this comment.</item>
 /// </list>
 /// </summary>
 public record PromptCellConfig

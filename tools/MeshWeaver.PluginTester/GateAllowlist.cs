@@ -128,7 +128,8 @@ public sealed record AllowEntry(string Scope, string Check)
     /// Whether this entry's check FLAPS — see <see cref="GateAllowlist.IntermittentMarker"/>.
     /// Deliberately an init-only PROPERTY rather than a primary-constructor parameter: adding a
     /// defaulted parameter to a public record's primary ctor is a binary-breaking change, which the
-    /// "Public record signatures" gate refuses. It caught exactly that on the first attempt here.
+    /// <c>scripts/check-record-signatures.py</c> gate refuses. It caught exactly that on the first
+    /// attempt here.
     /// </summary>
     public bool Intermittent { get; init; }
 

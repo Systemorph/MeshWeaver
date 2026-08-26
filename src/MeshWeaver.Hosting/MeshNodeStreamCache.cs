@@ -393,6 +393,25 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
     private static readonly TimeSpan UpdateQueueSlidingExpiration = TimeSpan.FromMinutes(10);
 
+    // 🚨 The state the LAST write on a path left the node in AS ACKNOWLEDGED BY THE OWNER, held only
+    // until the next write on that path consumes it (issues #2305 / #2291). It exists because the
+    // queue above advances on a write's local terminal, NOT on the owner's echo — so the successor's
+    // mirror can still be showing the node as it was BEFORE its predecessor's patch. Diffing against
+    // that ships a base this mirror itself superseded, and the owner three-way-merges it as a conflict
+    // that never happened: the leaf is refused and the writer's newer value is silently dropped while
+    // its non-conflicting siblings land. (An agent round's response cell kept "Generating response..."
+    // in Text while Status went Completed and Summary carried the answer — one write, two verdicts.)
+    //
+    // 🚨 ACKNOWLEDGED, not merely computed — see MeshNodeStreamHandle's onLocalState. A base taken
+    // from a write that never landed is self-perpetuating: it mints no version, so nothing corrects
+    // it, and the next write diffs its own unlanded value into an empty patch and skips silently.
+    //
+    // ONE-SHOT by construction: the dispatch below TryRemoves it, so a stale entry can influence at
+    // most the single next write, and MeshNodeStreamHandle.PatchBaseSource ignores it the moment the
+    // mirror carries a newer Version — which the owner mints on EVERY applied change, from any
+    // writer. Bounded like the queues: the per-path eviction callback drops it, and so does Dispose.
+    private readonly ConcurrentDictionary<string, MeshNode> _pendingSelfWrites = new();
+
     private sealed record UpdateQueueEntry(Subject<UpdateRequest> Subject, IDisposable ConcatSubscription);
 
     private readonly record struct UpdateRequest(
@@ -717,6 +736,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         //    nothing roots the disposed mesh's exceptions/identities.
         _negative.Clear();
         _transientStreaks.Clear();
+
+        // 6. Pending per-path write bases. The queue eviction callbacks above already drop the ones
+        //    whose queue still existed; this covers a path whose queue had expired first.
+        _pendingSelfWrites.Clear();
     }
 
     /// <summary>
@@ -1694,6 +1717,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 logger.LogDebug(
                     "[UpdateQueue] EVICTED path={Path} reason={Reason}",
                     key, reason);
+                // The pending base outlives nothing: a path with no queue has no successor to hand it to.
+                if (key is string evictedPath)
+                    _pendingSelfWrites.TryRemove(evictedPath, out _);
                 if (value is Lazy<UpdateQueueEntry> { IsValueCreated: true } lz)
                 {
                     try { lz.Value.ConcatSubscription.Dispose(); } catch { /* best-effort */ }
@@ -1707,13 +1733,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// Builds the per-path Concat pipeline that processes <see cref="UpdateRequest"/>s
     /// serially. Each request applies its patch through the local <c>Handle</c>
     /// (LOCAL_EMIT) and completes immediately — it does NOT wait for the patch's echo
-    /// from the owner. The owning node hub's single-threaded action block already
-    /// serialises patches, so the next queued Update sees post-patch state via the
-    /// local Handle. The former 3-second echo wait DEADLOCKED when the echo could never
+    /// from the owner. The former 3-second echo wait DEADLOCKED when the echo could never
     /// arrive (a write to a freshly-created node defers on the owner's [Initialize]
     /// gate; or the writing hub's own action block is the one that would deliver the
     /// echo) and otherwise serialised 3s per update. Per-stage timing logs:
     /// ENQUEUE → START → LOCAL_EMIT → COMPLETE; missing LOCAL_EMIT = Handle.Update hung.
+    ///
+    /// <para>🚨 This used to add: "the owning node hub's single-threaded action block already
+    /// serialises patches, so the next queued Update sees post-patch state via the local Handle."
+    /// The first clause is true and the second does not follow from it — and nothing delivered it.
+    /// The owner serialises the APPLY; the successor reads this hub's MIRROR, which advances only on
+    /// the echo this queue deliberately does not wait for. So under load write N+1 diffed against
+    /// state older than write N's, shipped that as its base, and the owner refused the conflicting
+    /// leaves of a write that nothing was concurrent with (#2305 / #2291). The invariant is now
+    /// DELIVERED rather than asserted: the predecessor's locally-computed node is handed to the
+    /// successor via <see cref="_pendingSelfWrites"/>, and <c>MeshNodeStreamHandle.PatchBaseSource</c>
+    /// prefers it only while the mirror carries nothing newer.</para>
     /// </summary>
     private IObservable<MeshNode> BuildUpdateQueueObservable(string path, Subject<UpdateRequest> subject) =>
         subject
@@ -1740,10 +1775,24 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     ? accessService.SwitchAccessContext(req.Caller)
                     : null;
 
+                // 🚨 Consume the predecessor's locally-computed state — see _pendingSelfWrites. Taken
+                // (and REMOVED) here rather than read in place so it can only ever inform the single
+                // next write: if this one produces no local emit, the write after it reads the mirror.
+                _pendingSelfWrites.TryRemove(path, out var pendingSelfWrite);
+
                 // FullNode set ⇒ overwrite (ChangeType.Full wholesale replace); else field-merge.
                 var update = req.FullNode is not null
+                    // An Overwrite asserts the whole node, so it needs no base and leaves none: the
+                    // write after it re-reads the mirror, as it must.
                     ? entry.Handle.Overwrite(req.FullNode)
-                    : entry.Handle.Update(req.Update);
+                    // 🚨 The successor's base is published by the write path itself, not read off the
+                    // emission below: the emission has been re-typed for callers, and re-serialising a
+                    // re-typed node need not reproduce the JSON the diff was built from. The callback
+                    // fires only on the owner's ACK (or a no-op) — a rejected, timed-out or retried
+                    // write publishes nothing, so the entry stays removed and the next write reads the
+                    // mirror, exactly as it did before this change.
+                    : entry.Handle.UpdateQueued(
+                        req.Update, pendingSelfWrite, local => _pendingSelfWrites[path] = local);
 
                 // 🚨 Deliver the write's terminal to the caller's result on a subscription
                 // whose lifetime is INDEPENDENT of the queue slot. entry.Handle.Update is

@@ -146,7 +146,7 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
         // Resolve every node's owning hub IN CALLER ORDER (Concat, not Merge — order is contract).
         return nodes
             .Select(n => _router.AddressFor(n.Path).Take(1).Select(addr => (Node: n, Address: addr)))
-            .ToObservable().Concat().ToList()
+            .ToInlineObservable().Concat().ToList()
             .SelectMany(pairs =>
             {
                 // Consecutive runs of the same address — one WriteBatchRequest per run.
@@ -171,7 +171,7 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
                                 ? Observable.Throw<IReadOnlyList<MeshNode>>(
                                     new InvalidOperationException(d.Message.Error))
                                 : Observable.Return<IReadOnlyList<MeshNode>>(d.Message.WrittenNodes)))
-                    .ToObservable().Concat().ToList()
+                    .ToInlineObservable().Concat().ToList()
                     .Select(lists => (IReadOnlyList<MeshNode>)lists
                         .SelectMany(l => l).ToImmutableList());
             });

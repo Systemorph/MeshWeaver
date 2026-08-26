@@ -1,8 +1,10 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
@@ -767,5 +769,105 @@ public class IoPoolTest
         done.Wait(Timeout5).Should().BeTrue("the leaf should complete");
         bodyOnThreadPool.Should().BeTrue("the leaf must run on the ThreadPool, not the subscriber's thread");
         bodyThread.Should().NotBe(subscriberThread);
+    }
+    /// <summary>
+    /// 🚨 REPRO for #2394 — the SILENT teardown wedge.
+    ///
+    /// <para><see cref="CancellationTokenSource.Cancel()"/> runs every registered callback
+    /// SYNCHRONOUSLY on the thread that calls it, and <see cref="IoPool.SubscribeThroughPool{T}"/>
+    /// registers one per LIVE pooled subscription which performs that subscription's whole
+    /// downstream teardown (<c>inner.Dispose()</c> then <c>observer.OnCompleted()</c>) — layout
+    /// renders, query change feeds, routing dispatch. <see cref="IoPool.Drain"/> used to call
+    /// <c>_poolCts.Cancel()</c> inline, so <c>IoPoolRegistry.DrainAll()</c> — i.e. the MESH
+    /// TEARDOWN thread — executed arbitrary application teardown with nothing over it:
+    /// <c>DrainTimeout</c> bounds only the gate join that comes AFTER the cancel, no watchdog
+    /// covers the phase (the hub's own ends at <c>DisposalCompleted</c>, already observed), and
+    /// nothing on the path logs. One teardown leg that blocked parked mesh teardown FOREVER —
+    /// <c>MeshWeaver.Hosting.Monolith.Test</c> killed at its 8&#160;min wall-clock cap with no test
+    /// named and not one trace line after <c>DISPOSE_INVOKED</c>.</para>
+    ///
+    /// <para>Deterministic: the teardown leg below simply does not return promptly, which is the
+    /// only precondition the wedge ever needed.</para>
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task Drain_runsPooledSubscriptionTeardown_offTheCallersThread()
+    {
+        using var pool = new IoPool(4);
+        var source = new Subject<int>();
+        using var teardownEntered = new ManualResetEventSlim(false);
+        using var releaseTeardown = new ManualResetEventSlim(false);
+        var teardownThread = 0;
+
+        using var subscription = pool.SubscribeThroughPool<int>(source).Subscribe(
+            _ => { },
+            () =>
+            {
+                teardownThread = Environment.CurrentManagedThreadId;
+                teardownEntered.Set();
+                releaseTeardown.Wait(Timeout10);
+            });
+
+        SpinWait.SpinUntil(() => source.HasObservers, Timeout5)
+            .Should().BeTrue("the pooled subscribe must have completed before the drain");
+
+        var drainThread = 0;
+        var drain = Task.Run(
+            () =>
+            {
+                drainThread = Environment.CurrentManagedThreadId;
+                return pool.Drain();
+            },
+            TestContext.Current.CancellationToken);
+
+        teardownEntered.Wait(Timeout5, TestContext.Current.CancellationToken)
+            .Should().BeTrue("Drain cancels the pool, which terminates every pooled subscription");
+
+        teardownThread.Should().NotBe(drainThread,
+            "a pooled subscription's downstream teardown must never run on the thread that called "
+            + "Drain() — that thread is the mesh-teardown thread, and Cancel() executes registered "
+            + "callbacks synchronously on whoever calls it (#2394)");
+
+        releaseTeardown.Set();
+
+        var residual = await drain.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
+        residual.Should().Be(0, "the teardown finished inside the budget — nothing to report");
+    }
+
+    /// <summary>
+    /// The other half of #2394: <see cref="IoPool.Dispose"/> documents "DISPOSE MUST NOT BLOCK" —
+    /// yet <c>_poolCts.Cancel()</c> IS a blocking call whenever a pooled subscription's teardown is
+    /// slow, for the same reason as above. `using var pool = …` in an async method runs Dispose on
+    /// a ThreadPool thread, so a blocking Dispose parks a pool thread while the work it is
+    /// unwinding needs pool threads — the starvation deadlock the method's own comment describes.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public void Dispose_doesNotBlockOnASlowPooledSubscriptionTeardown()
+    {
+        var pool = new IoPool(4);
+        var source = new Subject<int>();
+        using var teardownEntered = new ManualResetEventSlim(false);
+        using var releaseTeardown = new ManualResetEventSlim(false);
+
+        using var subscription = pool.SubscribeThroughPool<int>(source).Subscribe(
+            _ => { },
+            () =>
+            {
+                teardownEntered.Set();
+                releaseTeardown.Wait(Timeout5);
+            });
+
+        SpinWait.SpinUntil(() => source.HasObservers, Timeout5)
+            .Should().BeTrue("the pooled subscribe must have completed before disposal");
+
+        var sw = Stopwatch.StartNew();
+        pool.Dispose();
+        sw.Stop();
+
+        teardownEntered.Wait(Timeout5).Should().BeTrue("disposal must still terminate the subscription");
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
+            "Dispose must return immediately — the WAIT belongs on Disposed, and running the "
+            + "pooled subscriptions' teardown inline made Dispose block for as long as they took");
+
+        releaseTeardown.Set();
     }
 }

@@ -109,6 +109,55 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// </summary>
     private bool IsHostStopping => hostStopping.IsCancellationRequested;
 
+    /// <summary>
+    /// 🚨 <b>THE ONLY DOOR to an Orleans grain from this class</b> — and therefore the one place
+    /// where "this host has begun stopping" turns into "do not ask Orleans for an activation".
+    /// Every <c>GetGrain</c> in this file goes through here; <c>grainFactory</c> is never touched
+    /// directly. Returns <c>null</c> once the host is stopping, and the caller degrades.
+    ///
+    /// <para><b>The invariant.</b> A deactivating silo must not create a NEW grain activation —
+    /// not for a routed message, not for a "goodbye" announcement, not for anything. Orleans
+    /// enforces exactly that itself: <c>Catalog.GetOrCreateActivation</c> creates an activation
+    /// only while <c>_siloStatusOracle.CurrentStatus == SiloStatus.Active</c>, and
+    /// <c>PlacementService.GetCompatibleSilos</c> intersects candidates with the ACTIVE silo set.
+    /// So there is no parallel gate to build here, and this is not one.</para>
+    ///
+    /// <para><b>What this closes is the WINDOW, and it is the mesh's own.</b>
+    /// <see cref="IHostApplicationLifetime.ApplicationStopping"/> fires strictly BEFORE the Orleans
+    /// silo hosted service stops — which is precisely why <see cref="DeliverMessage"/> can use it
+    /// as a readiness signal at all. For the same reason the membership oracle still reports
+    /// <c>Active</c> for some seconds after we know we are going away, and in that window Orleans
+    /// will faithfully create any activation we ask for, ON THE SILO THAT IS LEAVING. Asking is
+    /// ours to stop; refusing is Orleans'.</para>
+    ///
+    /// <para><b>The measured instance</b> was the pod-hub claim/release pair below, and the release
+    /// leg is the "goodbye announcement" in its purest form: <see cref="IPodHubGrain"/> is
+    /// <c>[PreferLocalPlacement]</c>, so <c>Detach()</c> against an activation that has already gone
+    /// does not release anything — it CREATES a fresh activation on the dying silo in order to tell
+    /// it nothing. Both legs used to reach <c>grainFactory</c> three lines away from the gate
+    /// <see cref="DeliverMessage"/> already applies. See also PR #2252, where an announcement that
+    /// escaped through a healthy ancestor re-activated a grain that was mid-deactivation and left
+    /// it stuck in the silo catalog.</para>
+    ///
+    /// <para>🚨 <b>Deliberately NOT applied to the drain.</b> This gate is for calls the mesh makes
+    /// about ITSELF — bookkeeping that can only ever target the local silo. It is not applied to
+    /// <c>RoutingGrain</c>'s delivery calls, because those are the DRAIN: a message already accepted
+    /// for routing must still land, and Orleans' own placement is what correctly sends it to a
+    /// HEALTHY silo instead of this one. Refusing there would drop live work rather than relocate
+    /// it — "no new activations", never "no traffic".</para>
+    ///
+    /// <para>A null <c>grainFactory</c> is deliberately NOT handled here: reaching placement must
+    /// stay observable as its throw, which is what
+    /// <c>OrleansRoutingShutdownClassificationTest.HostRunning_StillReachesGrainPlacement</c> probes.
+    /// Callers that legitimately run without a grain transport check for it themselves.</para>
+    /// </summary>
+    /// <typeparam name="TGrain">The grain interface to resolve.</typeparam>
+    /// <param name="key">The grain's string key.</param>
+    /// <returns>The grain reference, or <c>null</c> once the host has begun stopping.</returns>
+    private TGrain? GrainWhileRunning<TGrain>(string key)
+        where TGrain : class, IGrainWithStringKey
+        => IsHostStopping ? null : grainFactory.GetGrain<TGrain>(key);
+
     // Stream-teardown is bounded by Default (ProcessorCount); the op is a quick Orleans
     // UnsubscribeAsync, never a sustained fan-out.
     private const string StreamPoolName = "RoutingStream";
@@ -316,7 +365,15 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             logger.LogDebug("Orleans: delivering {MessageType} to {Address}, sender={Sender}, target={Target}",
                 msgType, address, delivery.Sender, delivery.Target);
 
-        var grain = grainFactory.GetGrain<IRoutingGrain>("default");
+        // The stopping token can flip between DeliverMessage's gate and here. Refusing at the seam
+        // keeps that late flip on the SAME path as the early one: the throw lands in DeliverMessage's
+        // Catch, which re-reads IsHostStopping and NACKs the sender as the transient
+        // ErrorType.ShuttingDown. Never a terminal Failed — consumers with recovery machinery ride
+        // ShuttingDown out and tear down on a terminal verdict.
+        var grain = GrainWhileRunning<IRoutingGrain>("default");
+        if (grain is null)
+            return Observable.Throw<IMessageDelivery>(
+                new OperationCanceledException($"Host is shutting down, cannot route to {addressPath}"));
 
         // The grain RPC runs on the Orleans scheduler — bridge its Task reactively (Defer keeps
         // it cold so each RetryWhen re-subscribe re-invokes RouteMessage), never Observable.FromAsync.
@@ -592,7 +649,24 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         var attach = new SingleAssignmentDisposable();
         inFlight.Add(attach);
         attach.Disposable = Observable
-            .Defer(() => grainFactory.GetGrain<IPodHubGrain>(addressPath).Attach().ToObservable())
+            .Defer(() =>
+            {
+                // Inside the Defer on purpose: RetryWhen re-subscribes, so a claim that is still
+                // bouncing between pods when shutdown begins stops asking instead of spending its
+                // remaining attempts placing an activation on the silo that is leaving.
+                var grain = GrainWhileRunning<IPodHubGrain>(addressPath);
+                if (grain is null)
+                {
+                    logger.LogDebug(
+                        "Pod-hub claim for {Address} not attempted — the host has begun stopping, and "
+                        + "claiming an address for a process that is going away would only place a new "
+                        + "activation on the silo that is leaving.",
+                        addressPath);
+                    return Observable.Empty<bool>();
+                }
+
+                return grain.Attach().ToObservable();
+            })
             // `false` is "landed on a silo that is not the owner". Turning it into an error is what
             // lets the retry policy below express "bounce off the old activation and try again"
             // without a hand-rolled loop.
@@ -635,7 +709,23 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // gone: releasing a claim that nobody can hear is a no-op, never a throw out of Dispose.
             try
             {
-                grainFactory.GetGrain<IPodHubGrain>(addressPath).Detach().ToObservable()
+                // 🚨 THE INVARIANT, at the site that violated it. A "goodbye" that has to CREATE the
+                // activation it says goodbye to is not a release — IPodHubGrain is
+                // [PreferLocalPlacement], so once the previous activation has gone this call places a
+                // brand-new one on the very silo that is shutting down, purely to tell it nothing.
+                // There is also nothing to release: every activation in this process is going away
+                // with it. Skipping is the whole correct behaviour, not a degradation.
+                var grain = GrainWhileRunning<IPodHubGrain>(addressPath);
+                if (grain is null)
+                {
+                    logger.LogDebug(
+                        "Pod-hub claim for {Address} not released — the host has begun stopping, so the "
+                        + "activation is going away regardless and announcing it would only create one.",
+                        addressPath);
+                    return;
+                }
+
+                grain.Detach().ToObservable()
                     .Subscribe(
                         _ => { },
                         ex => logger.LogDebug(ex, "Failed to release the pod-hub claim for {Address}", addressPath));
