@@ -82,7 +82,7 @@ def rendered_key_names(template_dir: str) -> set[str]:
 
 
 def env_of(overlay_path: str) -> str:
-    """The environment name — the overlay's parent dir (memex / memex-cloud / atioz)."""
+    """The environment name — the overlay's parent dir (e.g. memex, memex-cloud)."""
     return os.path.basename(os.path.dirname(os.path.abspath(overlay_path)))
 
 

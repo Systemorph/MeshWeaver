@@ -664,6 +664,21 @@ jobs:
         with:
           # Build the EXACT commit the tests passed on — not whatever main is now.
           ref: ${{ needs.gate.outputs.sha }}
+      # 🚨 The portal HOST lives in MeshWeaver.Plugins (#2293 removed it from here). This checkout is
+      # what makes the image buildable at all; without it the publish below has no project.
+      #
+      # ref defaults to `main` and is overridable by a repo variable, mirroring the plugins lane's
+      # own MW_PLATFORM_REF. The variable does not decouple "which plugins commit shipped with which
+      # core commit" — it makes that coupling STEERABLE, so pinning to a known-good plugins commit
+      # during an incident is a variable change rather than editing this file under pressure.
+      - name: Check out MeshWeaver.Plugins (holds the portal host)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          path: plugins-repo
+          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+          fetch-depth: 1
       # The SDK container build + the publish output overflow the runner's ~14 GB; reclaim the
       # ~25 GB of preinstalled tooling a .NET build never touches (same as the test workflow).
       - name: Setup .NET
@@ -680,8 +695,23 @@ jobs:
         id: vars
         run: |
           set -euo pipefail
-          VERSION=$(dotnet msbuild memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
+          # 🚨 Read from a project that STAYS in this repo. This used to read
+          # Memex.Portal.Distributed, which moved to MeshWeaver.Plugins — and CD then failed here for
+          # every commit on main, publishing nothing, until someone noticed nothing had shipped.
+          # Version comes from the root Directory.Build.props, so ANY core project yields the same
+          # value; Mesh.Contract is picked because it is cheap and is not going anywhere.
+          #
+          # -getProperty: asks MSBuild for the COMPUTED value, deliberately not a grep of the props
+          # file: a regex keeps returning a plausible, well-formed, WRONG number after the definition
+          # moves — and that number gets published.
+          VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+          # Refuse rather than invent: an empty version becomes `:` or `latest` somewhere downstream,
+          # which is the failure where a tag exists and points at the wrong thing.
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not resolve Version from the platform checkout. Refusing to invent one."
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
       # OIDC federated login — no client secret stored. Requires a federated credential on the
@@ -728,10 +758,11 @@ jobs:
       # ships NOTHING on its own. `promote` applies version/sha/main once every leg has succeeded.
       - name: Build + push portal-ai (staging tag)
         run: >
-          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
+          -p:MeshWeaverRoot=${{ github.workspace }}
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-portal-ai
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
@@ -1007,6 +1038,21 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
+      # 🚨 The plugins are BUILT HERE, in the same run and against the same image as the platform's
+      # own content — maintainer decision 2026-08-26 ("run full plugin build in main memex build";
+      # "plugins should not have a lane in this sense"). One run, one framework identity, one
+      # sealed publish: a plugin bundle can no longer carry bytes from a framework that is not the
+      # one shipping (#1814's class), and its version is the version THIS run computed (#695's
+      # class — see the publish step). Same repo as portal-image's checkout; PlatformBakeLaneGuard
+      # asserts it is the only foreign repository in this file.
+      - name: Check out MeshWeaver.Plugins (every plugin is baked in this run)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          path: plugins-repo
+          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+          fetch-depth: 1
       - name: "Preflight: the publish targets must be provisioned"
         run: |
           set -euo pipefail
@@ -1245,6 +1291,73 @@ jobs:
           {
             echo "### 🔑 Bake address verified"
             echo "- \`$BAKED\` — resolved by BOTH the bake host and the promoted \`memex-portal-ai\` image (linux/amd64)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: "BAKE every plugin against the SAME image (compiler-driven, no mesh)"
+        env:
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
+          [ -f "$PLUGINS/plugin-gate.allow" ] || { echo "::error::plugins-repo/plugin-gate.allow is missing — the known-debt ratchet the plugin bake is configured against. Refusing to bake without it."; exit 1; }
+          PLUGINS_SHA="$(git -C "$PLUGINS" rev-parse HEAD)"
+          BAKE_PLUGINS="$RUNNER_TEMP/bake-plugins"
+          rm -rf "$BAKE_PLUGINS"; mkdir -p "$BAKE_PLUGINS"; chmod 777 "$BAKE_PLUGINS"
+          echo "── baking /plugins (every module) against $IMAGE at plugins $PLUGINS_SHA"
+          docker run --rm --init --pull never --platform linux/amd64 -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" compile /plugins \
+            --output /bake --allow /plugins/plugin-gate.allow --source-sha "$PLUGINS_SHA"
+          # Postconditions, not hopes — same as the platform bake above.
+          if [ ! -s "$BAKE_PLUGINS/framework-mvid.txt" ]; then
+            echo "::error::the plugin bake ran green but wrote no identity — the bake stage regressed."; exit 1
+          fi
+          if ! ls "$BAKE_PLUGINS"/*.zip >/dev/null 2>&1; then
+            echo "::error::the plugin bake ran green but produced no bundles — nothing could be published."; exit 1
+          fi
+          echo "BAKE_PLUGINS_DIR=$BAKE_PLUGINS" >> "$GITHUB_ENV"
+          echo "PLUGINS_SHA=$PLUGINS_SHA" >> "$GITHUB_ENV"
+          echo "plugin bake identity: $(cat "$BAKE_PLUGINS/framework-mvid.txt")"
+          ls "$BAKE_PLUGINS"/*.zip | wc -l | xargs echo "plugin bundles:"
+      - name: "GATE the plugin bake: render + execute Tests areas on the BAKED bytes"
+        env:
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
+          echo "── gating /plugins against $IMAGE, consuming the bake in /bake"
+          docker run --rm --init --pull never --platform linux/amd64 -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS_DIR:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" /plugins \
+            --allow /plugins/plugin-gate.allow --seed /bake
+      # 🚨 The whole point of building plugins HERE: their identity must be the platform's, by
+      # construction. Assert it rather than trust it — a divergence means the two bakes did not run
+      # against the same image, and publishing both would ship bundles no portal can adopt together.
+      - name: "Assert the plugin bake's identity equals the platform bake's"
+        run: |
+          set -euo pipefail
+          PLATFORM="$(tr -d '[:space:]' < "$BAKE_DIR/framework-mvid.txt")"
+          PLUGINS="$(tr -d '[:space:]' < "$BAKE_PLUGINS_DIR/framework-mvid.txt")"
+          if [ "$PLATFORM" != "$PLUGINS" ]; then
+            echo "::error::plugin bake identity ($PLUGINS) differs from the platform bake identity ($PLATFORM) in the SAME run — they did not build against the same image. Refusing to publish either."
+            exit 1
+          fi
+          echo "identities agree: $PLATFORM"
+      # 🚨 RELEASE_VERSION is REQUIRED here and is the version THIS run computed. It is not read
+      # from any manifest.lock: a bundle's version must be minted by the run that produced its
+      # bytes (Plugins#695 — a version that moves on a lock file while the bytes come from
+      # elsewhere is how an already-fixed defect kept shipping, #2356).
+      - name: "Publish the plugin bundles to every portal target (same identity, same version)"
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ -n "$RELEASE_VERSION" ] || { echo "::error::no release version from portal-image — refusing to publish plugin bundles under an unknown version (Plugins#695)."; exit 1; }
+          .github/scripts/publish-bake-bundles.sh "$BAKE_PLUGINS_DIR" "plugins" \
+            "$PLUGINS_SHA" "$RELEASE_VERSION"
+          {
+            echo "### 🧩 Plugin bundles published (built in this run)"
+            echo "- identity: \`$(cat "$BAKE_PLUGINS_DIR/framework-mvid.txt")\` (equal to the platform bake's, asserted)"
+            echo "- version: \`$RELEASE_VERSION\` (this run's, not manifest.lock)"
+            echo "- plugins commit: \`$PLUGINS_SHA\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: "Publish bundles to every portal target"
         env:
@@ -1514,7 +1627,10 @@ jobs:
   #     the hour — so failing there would be noise, and noise is how a real red gets ignored.
   delivery-verdict:
     name: "CD delivered, or had a good reason not to"
-    needs: [gate, promote]
+    # 🚨 Every delivery leg is a NEED, not just [gate, promote]. The verdict cannot assert that a
+    # publish actually happened while it can only see two of the nine jobs that make it happen.
+    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote,
+            publish-bake, notify-platform-update, verify-images]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1526,9 +1642,41 @@ jobs:
           COMPLETE: ${{ needs.gate.outputs.complete }}
           GREEN: ${{ needs.gate.outputs.green }}
           SHORT: ${{ needs.gate.outputs.short_sha }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
+          UPSTREAM_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
-          echo "reason=$REASON publish=$PUBLISH complete=$COMPLETE green=$GREEN sha=$SHORT"
+          echo "gate=$GATE_RESULT reason=$REASON publish=$PUBLISH complete=$COMPLETE green=$GREEN sha=$SHORT"
+
+          # 🚨 THIS JOB MUST NOT PASS ON AN EMPTY VERDICT.
+          #
+          # Both guards below compare REASON against a literal. When `gate` is SKIPPED every
+          # `needs.gate.outputs.*` is the EMPTY STRING, so neither comparison can match, and this
+          # job printed "not publishing was the correct answer" and exited 0 having evaluated
+          # NOTHING. Measured 2026-08-26: run 32914425222 reported `reason= publish= complete=
+          # green= sha=` and a green tick, while every image job read `skipped`. A no-op and a
+          # real delivery were indistinguishable on the wall — which is exactly how a merged fix
+          # sat unshipped while its instance waited for it.
+          #
+          # That is the repo's own CI invariant (#3/#4) turned inward: a gate that CANNOT run must
+          # not look like a gate that passed. So classify the three cases explicitly.
+          if [ -z "$REASON" ]; then
+            # (a) LEGITIMATE no-op: CD fires on every completed Build-and-Test, and `gate` is
+            # deliberately conditioned to push-on-main. A PR run reaching here is expected, and
+            # saying so is not the same as claiming a delivery.
+            if [ "$GATE_RESULT" = "skipped" ] \
+               && [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] \
+               && { [ "$UPSTREAM_EVENT" != "push" ] || [ "$UPSTREAM_BRANCH" != "main" ]; }; then
+              echo "not applicable — upstream was '${UPSTREAM_EVENT}' on '${UPSTREAM_BRANCH}', not a push to main. No delivery was due, and none is claimed."
+              exit 0
+            fi
+            # (b) EVERYTHING ELSE with no verdict is the invisible state this job exists to catch:
+            # the gate errored, was cancelled, or ran and produced no outputs at all. Reporting
+            # success here is the failure mode, not the safe default.
+            echo "::error::the delivery gate produced NO verdict (gate=${GATE_RESULT}, event=${GITHUB_EVENT_NAME}, upstream='${UPSTREAM_EVENT}' on '${UPSTREAM_BRANCH}'), so this run cannot say whether delivery was due. Refusing to report success on an unevaluated gate — a CD run that checked nothing must never be indistinguishable from one that delivered."
+            exit 1
+          fi
 
           if [ "$REASON" = "reconcile" ] && [ "$PUBLISH" != "true" ] \
              && [ "$COMPLETE" = "false" ] && [ "$GREEN" = "true" ]; then
@@ -1552,6 +1700,69 @@ jobs:
           fi
 
           echo "OK — either something was published, or not publishing was the correct answer."
+
+      # 🚨 THE POSITIVE CHECK: a run that DECIDED to publish must have RUN every leg.
+      #
+      # The guards above classify the gate's VERDICT. They say nothing about whether the nine jobs
+      # that carry out a delivery actually executed — and a job that `skipped` renders the same
+      # grey/green tick as one that ran, so a publish missing a leg reports success. That is the
+      # repo's own CI invariant ("a gate that cannot run must not look like a gate that passed")
+      # applied to delivery itself rather than to the decision about delivery.
+      #
+      # Named results, compared to a literal 'success': `skipped`, `cancelled` and `failure` all
+      # fail here. There is deliberately no "if it is empty, assume fine" branch — that assumption
+      # is what made the verdict pass on an empty gate output in the first place.
+      - name: A publishing run must have RUN every leg, not skipped any
+        if: needs.gate.outputs.publish == 'true'
+        env:
+          LEGS: >-
+            preflight=${{ needs.preflight.result }}
+            portal-image=${{ needs.portal-image.result }}
+            migration-image=${{ needs.migration-image.result }}
+            plugin-test-image=${{ needs.plugin-test-image.result }}
+            promote=${{ needs.promote.result }}
+            publish-bake=${{ needs.publish-bake.result }}
+            notify-platform-update=${{ needs.notify-platform-update.result }}
+            verify-images=${{ needs.verify-images.result }}
+        run: |
+          set -euo pipefail
+          bad=""
+          for kv in $LEGS; do
+            name="${kv%%=*}"; res="${kv#*=}"
+            if [ "$res" != "success" ]; then bad="$bad $name=$res"; fi
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::the gate decided to PUBLISH, but these delivery legs did not run to success:$bad. A skipped leg is not a delivery: the promote step tags all-or-nothing, so a missing leg means either no image set was published or one was published without its bake/notify. Read the named job rather than re-running."
+            exit 1
+          fi
+          echo "every delivery leg ran and succeeded: $LEGS"
+
+      # Make the outcome unmissable on the run page. A 3-second success and a 20-minute delivery
+      # are otherwise identical at a glance, which is how a merged fix sat unshipped.
+      - name: Say plainly what this run did
+        if: always()
+        env:
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+          REASON: ${{ needs.gate.outputs.reason }}
+          SHORT: ${{ needs.gate.outputs.short_sha }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          PROMOTE_RESULT: ${{ needs.promote.result }}
+        run: |
+          # 🚨 NO-OP is keyed on the gate having been SKIPPED — never on an empty reason. An empty
+          # reason is ALSO what a gate that errored, was cancelled, or produced no outputs looks
+          # like, and this step runs under `if: always()`, so labelling that "NO-OP" would stamp a
+          # broken run with the one label that says nothing was due. (Caught in review.)
+          if [ "$GATE_RESULT" = "skipped" ]; then
+            echo "### ⚪ NO-OP — the gate did not run: not a push to main, so no delivery was due" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; then
+            echo "### ✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PUBLISH" = "true" ]; then
+            echo "### ❌ DELIVERY FAILED for \`${SHORT}\` — the gate decided to publish but promote=${PROMOTE_RESULT}; see the leg check above" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "$REASON" ]; then
+            echo "### 🕐 NO PUBLISH for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ❌ INCONCLUSIVE — gate=${GATE_RESULT} produced no verdict; this run is red above" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   alert-on-failure:
     name: "Alert: CD failed on main"

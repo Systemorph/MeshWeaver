@@ -322,7 +322,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         {
             var key = PartitionKey(nodePath, subPath);
             return _partitionObjects.TryGetValue(key, out var list)
-                ? list.ToObservable()
+                ? list.ToInlineObservable()
                 : Observable.Empty<object>();
         });
 

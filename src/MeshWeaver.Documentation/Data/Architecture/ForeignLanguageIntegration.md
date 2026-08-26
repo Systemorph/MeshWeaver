@@ -58,7 +58,7 @@ The transport is proven by network-free in-memory round-trip tests (the bidi `Op
 
 ## Part 2 — The client SDKs
 
-Each SDK is the in-language equivalent of `IMessageHub` + `MeshWeaver.AI.MeshOperations`, speaking the bidi
+Each SDK is the in-language equivalent of `IMessageHub` + `MeshWeaver.Mesh.Operations.MeshOperations`, speaking the bidi
 stream. All build on **three primitives**, and every mesh operation is a thin composition of them:
 
 | Primitive | What it does |

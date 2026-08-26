@@ -1,6 +1,4 @@
 using System.Linq;
-using MeshWeaver.AI;
-using MeshWeaver.AI.Persistence;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -8,80 +6,110 @@ using Xunit;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
-/// The agent file format left core hosting: <see cref="AgentFileParser"/> ships with
-/// <c>MeshWeaver.AI</c> and reaches <see cref="FileFormatParserRegistry"/> as a CONTRIBUTED parser
-/// (registered by <c>AddAI</c>, resolved wherever a registry is built from a service provider).
-/// That is what let <c>MeshWeaver.Hosting.csproj</c> drop its <c>ProjectReference</c> to the AI
-/// assembly.
+/// <see cref="FileFormatParserRegistry"/>'s ORDERING contract: a contributed parser is tried before
+/// the built-ins, so a specialised parser wins over <see cref="MarkdownFileParser"/>, which accepts
+/// every <c>.md</c> file.
 ///
-/// <para>🚨 This test exists because the failure mode is SILENT. <see cref="MarkdownFileParser"/>
-/// accepts every <c>.md</c> file, so if the agent parser is missing — not registered, registered
-/// after the built-ins, or dropped by a construction site that forgot to pass the contributed set —
-/// an <c>.md</c> carrying <c>nodeType: Agent</c> is parsed into a plain Markdown node. No
-/// exception, no log line, nothing red: the agent simply ceases to exist, and the first symptom is
-/// a user being told "Selected agent 'X' was not found" in production. Ordering is therefore part
-/// of the contract, and pinned here rather than left to registration accident.</para>
+/// <para>🚨 This exists because the failure mode is SILENT. If a contributed parser is missing — not
+/// registered, registered after the built-ins, or dropped by a construction site that forgot to pass
+/// the contributed set — the catch-all still produces a node. No exception, no log line, nothing
+/// red: the file is parsed into a plain Markdown node and whatever richer content it carried simply
+/// ceases to exist. Ordering is therefore part of the contract, and pinned here rather than left to
+/// registration accident.</para>
+///
+/// <para>🚨 <b>Why this lives in CORE, and why its contributor is a test-local
+/// <see cref="ProbeFileParser"/>.</b> This test was briefly moved to <c>MeshWeaver.AI.Test</c>
+/// while clearing core's content suite of its AI reference (#2276) — reasonably, since its
+/// contributor at the time was the AI module's <c>AgentFileParser</c>. But
+/// <see cref="FileFormatParserRegistry"/> is CORE, and <c>MeshWeaver.AI.Test</c> is leaving the
+/// repository with the module: the registry's ordering contract would have travelled with it,
+/// leaving core with a registry whose priority behaviour nothing here verifies. A contract does
+/// not belong to whichever client happened to exercise it first.</para>
+///
+/// <para>So the contributor is a test-local probe, and that is a strengthening rather than a
+/// concession: this is a test of the REGISTRY, and it should hold for every contributor —
+/// including ones that do not exist yet. Pinning it against one particular module's parser both
+/// coupled core's suite to that module and quietly narrowed the assertion to "this one client
+/// works". The real-parser proof for the agent format lives beside the parser itself, in
+/// <c>MeshWeaver.AI.Test.AgentParserContributionTest</c>.</para>
 /// </summary>
 public class ContributedParserPriorityTest
 {
-    private const string AgentMarkdown = """
+    private const string ProbeMarkdown = """
         ---
-        nodeType: Agent
-        name: ProbeAgent
-        description: A probe agent used to pin parser priority.
+        nodeType: Probe
+        name: ProbeNode
         ---
 
-        You are ProbeAgent. These are the instructions.
+        Body text that a richer parser would keep and the catch-all would flatten.
         """;
 
+    /// <summary>
+    /// A minimal stand-in for any module-contributed parser: it claims <c>.md</c> and produces a
+    /// node the catch-all provably cannot, which is what makes the two outcomes distinguishable.
+    /// </summary>
+    private sealed class ProbeFileParser : IFileFormatParser
+    {
+        public const string ProbeNodeType = "Probe";
+
+        public IReadOnlyList<string> SupportedExtensions => [".md"];
+
+        public MeshNode? Parse(string filePath, string content, string relativePath)
+            => content.Contains("nodeType: Probe")
+                ? new MeshNode(relativePath) { NodeType = ProbeNodeType, Content = new ProbeContent(content) }
+                : null;
+
+        public string Serialize(MeshNode node) => ((ProbeContent)node.Content!).Raw;
+
+        public bool CanSerialize(MeshNode node) => node.NodeType == ProbeNodeType;
+    }
+
+    private sealed record ProbeContent(string Raw);
+
     private static MeshNode? Parse(FileFormatParserRegistry registry) =>
-        registry.TryParse(".md", "/data/Agent/ProbeAgent.md", AgentMarkdown, "Agent/ProbeAgent.md");
+        registry.TryParse(".md", "/data/Probe/ProbeNode.md", ProbeMarkdown, "Probe/ProbeNode.md");
 
     [Fact]
-    public void ContributedAgentParser_WinsOverTheCatchAllMarkdownParser()
+    public void ContributedParser_WinsOverTheCatchAllMarkdownParser()
     {
-        var registry = new FileFormatParserRegistry(
-            contributedParsers: [new AgentFileParser()]);
+        var registry = new FileFormatParserRegistry(contributedParsers: [new ProbeFileParser()]);
 
         var node = Parse(registry);
 
         node.Should().NotBeNull();
-        node!.NodeType.Should().Be("Agent",
+        node!.Content.Should().BeOfType<ProbeContent>(
             "a contributed parser is tried BEFORE MarkdownFileParser, which accepts every .md");
-        node.Content.Should().BeOfType<AgentConfiguration>(
-            "the agent's front matter and body must survive as agent configuration");
     }
 
     [Fact]
     public void WithoutTheContributedParser_TheSameFileDegradesSilently()
     {
-        // The regression this guard is aimed at, stated as an executable fact — and it is WORSE
-        // than "the file fails to parse". The built-in set produces a node (no throw, no null),
-        // and MarkdownFileParser even copies `nodeType: Agent` off the front matter, so the node
-        // still CLAIMS to be an agent. What it loses is its content: no AgentConfiguration, so no
-        // instructions, no delegations, no plugins. An agent-shaped node that cannot act.
+        // The regression this guard is aimed at, stated as an executable fact — and it is WORSE than
+        // "the file fails to parse". The built-in set produces a node (no throw, no null), and
+        // MarkdownFileParser even copies `nodeType:` off the front matter, so the node still CLAIMS
+        // its type. What it loses is its CONTENT.
         //
-        // That is why the discriminator asserted here is the CONTENT TYPE and not the nodeType:
-        // a guard keyed on nodeType would have passed while the platform shipped hollow agents.
+        // That is why the discriminator asserted here is the content type and not the nodeType: a
+        // guard keyed on nodeType would have passed while the platform shipped hollow nodes.
         var registry = new FileFormatParserRegistry();
 
         var node = Parse(registry);
 
         node.Should().NotBeNull("MarkdownFileParser accepts every .md — that is the trap");
-        node!.Content.Should().NotBeOfType<AgentConfiguration>(
-            "without the AI module's parser the agent's configuration is silently lost");
+        node!.Content.Should().NotBeOfType<ProbeContent>(
+            "without the contributed parser the richer content is silently lost");
     }
 
     [Fact]
     public void BuiltInParsersStillHandleTheirOwnFormats()
     {
-        // Removing the hard-coded agent parser must not disturb the rest of the chain.
-        var registry = new FileFormatParserRegistry(contributedParsers: [new AgentFileParser()]);
+        // Contributing a parser must not disturb the rest of the chain.
+        var registry = new FileFormatParserRegistry(contributedParsers: [new ProbeFileParser()]);
 
         registry.SupportedExtensions.Should().Contain(".md").And.Contain(".cs");
         registry.GetParsers(".md").Should().HaveCountGreaterThan(1,
-            "both the contributed agent parser and the Markdown fallback serve .md");
-        registry.GetParsers(".md").First().Should().BeOfType<AgentFileParser>(
+            "both the contributed parser and the Markdown fallback serve .md");
+        registry.GetParsers(".md").First().Should().BeOfType<ProbeFileParser>(
             "priority order is the contract: contributed parsers first");
     }
 }

@@ -77,6 +77,12 @@ public static class MeshBuilderModuleActivation
                 + "registry has not landed yet is reported degraded and named (it is not something "
                 + "a held rollout could deliver).");
 
+        // Hand the configuration to the builder BEFORE anything is installed: an attribute's
+        // BuilderConfigurations runs inside InstallAssemblies, so a module asking "what did this
+        // deployment configure?" must find the answer already there. We hold it either way — not
+        // passing it on was the whole of the gap.
+        builder.WithConfiguration(configuration);
+
         return resolved.Length == 0 ? builder : builder.InstallAssemblies(resolved);
     }
 

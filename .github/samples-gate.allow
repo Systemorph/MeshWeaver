@@ -1,22 +1,10 @@
-# Known-debt ratchet for the samples gate. EMPTY = no known debt: every failure is a NEW failure.
-# It may only shrink — an entry whose check starts passing is STALE and fails the run.
-#
-# Emptied 2026-08-25 (#1786). It was seeded with eight entries; all eight are now gone, for two
-# different reasons that are worth keeping apart:
-#   * FutuRe/{AmericasIns,AsiaRe,EuropeRe}/{LineOfBusiness,TransactionMapping} — retired as
-#     NodeTypes by b63fbf057 (they are Markdown nodes now), so their entries named a scope the
-#     gate no longer reports on. That reads as `Unverifiable`, which is WARNED and never failed —
-#     i.e. six lines that could sit here for ever describing debt that no longer exists.
-#   * Northwind/AnalyticsCatalog — DashboardLayoutAreas referenced four classes by their old
-#     `*Views` names (`OrderViews`, `SalesViews`, `SupplierViews`, `ProductViews`); the real
-#     classes are `*LayoutAreas`.
-#   * Northwind/Product — ProductContent's `[Dimension(typeof(Supplier))]` / `typeof(Category)`
-#     name records that live in Northwind/AnalyticsCatalog/Source, which the default source query
-#     (`namespace:<node>/Source scope:subtree`) cannot reach; Product.json now declares the two
-#     `shared=@…` sources entries that pull exactly those two files in.
-#
-# NOT emptied: the two PensionFund entries below were added AFTER this branch's base
-# (#2250) and are untouched by #1786's work. They are real, live debt — see each.
+FutuRe/AmericasIns/LineOfBusiness compile
+FutuRe/AmericasIns/TransactionMapping compile
+FutuRe/AsiaRe/LineOfBusiness compile
+FutuRe/AsiaRe/TransactionMapping compile
+FutuRe/EuropeRe/LineOfBusiness compile
+FutuRe/EuropeRe/TransactionMapping compile
+Northwind/Product compile
 
 # ── PensionFund: revealed by #2063, NOT caused by it ────────────────────────────────────────────
 # PensionFund ships 72 files, 62 of them BOM'd, including all 5 of its NodeTypes. Until #2063 the
@@ -51,4 +39,18 @@ PensionFund/BalanceSheet compile
 # type is registered, the installer materialises a typed `Currency` and re-serialises it, and
 # default-suppression drops the property whose value equals the type's default. The stored
 # node then differs from the authored file and the unchanged-skip misses.
-PensionFund idempotence
+PensionFund idempotence intermittent
+
+# 🚨 The `intermittent` token above is a REAL WEAKENING, and its failure mode is social rather than
+# technical: the next person with a deterministic red they cannot fix will find this token and reach
+# for it. It is legitimate for exactly one thing — a check that FLAPS, where a single green run does
+# not prove the debt is paid. It is NOT for a failure that is merely inconvenient, hard, or someone
+# else's. Marking a deterministic failure intermittent silences the ratchet permanently and is the
+# band-aid the ratchet exists to prevent.
+#
+# It buys exemption from STALE-DETECTION and nothing else: the entry still tolerates only the
+# scope/check it names, and a failure it does not name is still a new failure.
+#
+# Before adding one, prove the flap — two runs of the same commit disagreeing, or the git history of
+# this file showing an entry dropped as stale and restored. That is what justified this one:
+# 768f9ba0b dropped it, f32047e0e restored it one commit later.

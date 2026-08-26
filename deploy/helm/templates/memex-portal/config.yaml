@@ -316,7 +316,17 @@ data:
   # exactly how the 2026-08-23 memex operator-enablement deploy wedged. A typed key needs a real
   # default; "empty = inert" is only true for strings.
   SelfUpdate__MinRollInterval: "{{ .Values.config.memex_portal.SelfUpdate__MinRollInterval | default "01:00:00" }}"
-  WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 }}"
+  WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 | default "" }}"
+  # 🚨 #2235: a SECOND slot, because index 0 is not this template's alone to give. memex-cloud
+  # hand-set WebhookInbox__Targets__0=Store/Payments directly on the Deployment (kubectl set env,
+  # unrecorded, pre-dating this chart key) BEFORE the platform-release broadcast existed. Explicit
+  # `env:` entries win over the SAME-named var sourced via `envFrom` (this ConfigMap), so that
+  # stray override silently shadows whatever this template renders for __0 forever — the overlay
+  # correctly set Targets__0=Hosting/PlatformBuilds, helm reported success, the ConfigMap held the
+  # right value, and the live pod still ran with Store/Payments. CD's notify-platform-update then
+  # 404'd on every promoted build with no error anywhere until #2268 made the 404 fail loud. A
+  # deployment needing more than one inbox target sets __0 AND __1 (not two writers of __0).
+  WebhookInbox__Targets__1: "{{ .Values.config.memex_portal.WebhookInbox__Targets__1 | default "" }}"
   # The MODULES a deployment refuses to run without (MeshBuilderModuleActivation.RequiredKey).
   # The image ships a baseline list in appsettings; a deployment OVERRIDES an entry by name here,
   # and blanks one it cannot satisfy.
@@ -419,8 +429,8 @@ data:
   # the WHOLE array — so ONE unconstructable plugin strips EVERY custom tool from EVERY agent, and
   # the log names the wrong victim ("Plugin 'ExecutiveAssistant' failed to resolve … ->
   # WebSearchPlugin"). memex.systemorph.com lost every agent tool exactly this way after its first
-  # chart-driven deploy (2026-08-20 → 2026-08-22, ~100 failures/24h); memex-cloud and atioz were
-  # unaffected only because no chart had ever rendered their ConfigMap. This is the same rule the
+  # chart-driven deploy (2026-08-20 → 2026-08-22, ~100 failures/24h); memex-cloud was
+  # unaffected only because no chart had ever rendered its ConfigMap. This is the same rule the
   # OpenAICompatible__DiscoverModels note above states: `default ""` is safe ONLY for keys whose
   # consumer reads them as strings. Guarded rather than `default "None"` so an instance that
   # configures no web search renders no WebSearch keys at all — the shape the two healthy
@@ -444,6 +454,14 @@ data:
   # (client secrets) come from the SecretProviderClass, not here.
   Authentication__Provider: "{{ .Values.config.memex_portal.Authentication__Provider | default "" }}"
   Authentication__EnableDevLogin: "{{ .Values.config.memex_portal.Authentication__EnableDevLogin | default "false" }}"
+  {{- /* DevLogin is a PAIR. EnableDevLogin turns the built-in developer login on; DevAdminUsers is
+         the comma-separated list of ids that get platform admin when they sign in that way
+         (DevAuthController.IsConfiguredDevAdmin -> UserOnboardingService.GrantPlatformAdmin).
+         Templating one without the other yields a portal you can log into and then administer
+         nothing on — and it fails SILENTLY, because a key this configmap does not list never
+         reaches a container while helm reports success. Same defect as Modules__Root (#1924) and
+         Modules__Required__N (#2104). */}}
+  Authentication__DevAdminUsers: "{{ .Values.config.memex_portal.Authentication__DevAdminUsers | default "" }}"
   Authentication__Microsoft__ClientId: "{{ .Values.config.memex_portal.Authentication__Microsoft__ClientId | default "" }}"
   Authentication__Microsoft__TenantId: "{{ .Values.config.memex_portal.Authentication__Microsoft__TenantId | default "" }}"
   Authentication__Google__ClientId: "{{ .Values.config.memex_portal.Authentication__Google__ClientId | default "" }}"
@@ -465,7 +483,7 @@ data:
   # a `helm upgrade` then reverts. Same defect the plugin-catalog keys below carried, with a
   # nastier symptom: a missing App identity does not error, it makes every GitHub read fall back
   # to ANONYMOUS, and anonymous against a PRIVATE repo is a 404 — which renders as an EMPTY
-  # STORE. atioz sat exactly there (private Systemorph/MeshWeaver.Plugins, no App identity):
+  # STORE. One portal sat exactly there (private Systemorph/MeshWeaver.Plugins, no App identity):
   # zero catalog entries, and every Provision click failing at the Import phase, leaving a
   # content-less stub root behind.
   GitHub__App__ClientId: "{{ .Values.config.memex_portal.GitHub__App__ClientId | default "" }}"
