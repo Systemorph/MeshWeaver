@@ -376,7 +376,7 @@ public class DeclaredAccessInstallTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
-    /// THE PRE-#902 GATE HEALS (atioz, 2026-08-10). An instance provisioned before the declared-access
+    /// THE PRE-#902 GATE HEALS (production, 2026-08-10). An instance provisioned before the declared-access
     /// step carries the SCOPED shape applied with an empty declaration — a policy that withholds
     /// public read plus Public/Anonymous Viewer denies on every child, i.e. every child gated and
     /// nothing public. Create-only meant the boot repair pass read the policy, skipped it, and

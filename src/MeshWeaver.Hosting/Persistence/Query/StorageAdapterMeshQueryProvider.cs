@@ -646,7 +646,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             return WalkAdapter(basePath, QueryScope.Descendants)
                 .Where(path => !string.IsNullOrEmpty(path))
                 .ToList()
-                .SelectMany(allPaths => NamespaceFrontier.Frontier(basePath, allPaths).ToObservable())
+                .SelectMany(allPaths => NamespaceFrontier.Frontier(basePath, allPaths).ToInlineObservable())
                 .Where(path => emittedFrontier.Add(path))
                 .SelectMany(path => persistence.Read(path, options)
                     .Take(1)
@@ -764,7 +764,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         }
 
         var matchedScopeNodes = walkPairs
-            .ToObservable()
+            .ToInlineObservable()
             .SelectMany(pair => WalkAdapter(pair.Root, pair.Scope))
             .Where(path => !string.IsNullOrEmpty(path))
             .Where(path => emittedPaths.Add(path))
@@ -836,12 +836,12 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 string.Join(",", level.Item2 ?? Enumerable.Empty<string>())))
             .SelectMany(level =>
             {
-                var nodePaths = (level.Item1 ?? Enumerable.Empty<string>()).ToObservable();
+                var nodePaths = (level.Item1 ?? Enumerable.Empty<string>()).ToInlineObservable();
                 if (!recursive)
                     return nodePaths;
                 var nodesAndDeeper = nodePaths.SelectMany(p =>
                     Observable.Return(p).Concat(WalkLevel(p, recursive: true)));
-                var dirs = (level.Item2 ?? Enumerable.Empty<string>()).ToObservable()
+                var dirs = (level.Item2 ?? Enumerable.Empty<string>()).ToInlineObservable()
                     .SelectMany(d => WalkLevel(d, recursive: true));
                 return nodesAndDeeper.Concat(dirs);
             })
@@ -944,7 +944,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     logger?.LogDebug("Validator {Validator} rejected read on node {Path}: {Error}",
                         v.GetType().Name, node.Path, r.ErrorMessage);
             }))
-            .ToObservable()
+            .ToInlineObservable()
             .Concat()
             .All(r => r.IsValid);
     }
@@ -1272,27 +1272,70 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     });
 
             // Subscribe to persistence.Changes BEFORE running the initial query so
-            // notifications during the I/O window are captured. After Initial,
-            // swap to a live Buffer pipeline that re-queries on each batch.
+            // notifications during the I/O window are captured. After Initial, the SAME
+            // subscription routes straight into the live re-query pipeline.
             // persistence.Changes is the adapter-level Subject (in-process);
             // cross-process change visibility relies on the backend's own change
             // feed (PG LISTEN/NOTIFY, Cosmos change feed) feeding per-process
             // Subjects — same shape as prod.
+            //
+            // 🚨 ONE subscription for this query's whole lifetime — never a second one attached
+            // at Initial. This used to be two: an "early" one that buffered into earlyBacklog
+            // while `!initialDone`, and a "live" one attached inside the initialResults callback,
+            // after which the early one was disposed. That handoff DROPPED a notification, and it
+            // dropped it PERMANENTLY:
+            //
+            //   IsolatedChangeFeed.OnNext snapshots its observer list BEFORE delivering (it must —
+            //   a subscriber may attach or detach mid-publish). A write published just before the
+            //   live subscription was attached is therefore delivered against a snapshot that
+            //   contains ONLY the early observer — and by the time that delivery ran, the callback
+            //   had already set initialDone = true and drained the (empty) backlog. The early
+            //   handler's `if (!initialDone)` then threw the notification away, the live observer
+            //   never saw it because it was not in the snapshot, and nothing re-triggers the
+            //   re-query. The node stayed invisible to that subscription for its whole life, while
+            //   a point read and any FRESH subscription returned it immediately.
+            //
+            //   Measured, not theorised: instrumenting both observers reproduced it in
+            //   MeshWeaver.AI.Test (4-wide, DOTNET_PROCESSOR_COUNT=4) — the notification arrives
+            //   with match=True on the early observer AFTER `Initial items=0 backlog=0`, and no
+            //   live delivery and no re-query for that base path ever follow. That is the
+            //   long-running ThreadTokenUsageTest/ModelSubstitutionTest `WaitForUsage` red
+            //   (#1040, #1812, #2001), and in the portal the same shape makes any live children
+            //   listing — the chat token chip, a notification bell, a folder view — miss a node
+            //   created in that window until something else changes under the same base path.
+            //
+            // With a single subscription the window cannot exist: the routing decision is made
+            // inside the same lock that publishes the buffer, so every notification lands either
+            // in the backlog or in the live buffer, and never between them.
             var earlyBacklog = new List<DataChangeNotification>();
             var earlyLock = new object();
             var initialDone = false;
-            var earlySubscription = persistence.Changes
+            // Published under `earlyLock` in the same critical section that sets initialDone.
+            Subject<DataChangeNotification>? liveBuffer = null;
+            disposables.Add(persistence.Changes
                 .Where(n => scopeFilters.Any(sf =>
                     PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
                 .Subscribe(n =>
                 {
+                    Subject<DataChangeNotification>? live;
                     lock (earlyLock)
                     {
                         if (!initialDone)
+                        {
                             earlyBacklog.Add(n);
+                            return;
+                        }
+                        live = liveBuffer;
                     }
-                });
-            disposables.Add(earlySubscription);
+                    if (live is null)
+                        return;
+                    // Torn down between the read and the push — teardown disposes this
+                    // subscription BEFORE the buffer (insertion order, see below), so this is
+                    // narrow, and swallowing it here keeps a disposal race from reaching the
+                    // adapter's fan-out.
+                    try { live.OnNext(n); }
+                    catch (ObjectDisposedException) { }
+                }));
 
             disposables.Add(
                 RunQuery().Subscribe(
@@ -1309,19 +1352,14 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         DataChangeNotification[] backlog;
                         var changeBuffer = new Subject<DataChangeNotification>();
                         // 🚨 ORDER MATTERS (mirror of PostgreSqlMeshQuery's live pipeline).
-                        // CompositeDisposable disposes in INSERTION order, so the feeding
-                        // subscription must be registered BEFORE the buffer it writes into.
-                        // The other way round, teardown disposes changeBuffer first while the
-                        // subscription is still live, and a write landing in that window calls
-                        // OnNext on a disposed Subject → ObjectDisposedException thrown back
-                        // into the adapter's change-feed fan-out — where a plain-Subject merge
-                        // aborts delivery to every later subscriber, and IsolatedChangeFeed's
+                        // CompositeDisposable disposes in INSERTION order, and the ONE feeding
+                        // subscription was registered above, BEFORE this buffer. The other way
+                        // round, teardown disposes changeBuffer first while the subscription is
+                        // still live, and a write landing in that window calls OnNext on a
+                        // disposed Subject → ObjectDisposedException thrown back into the
+                        // adapter's change-feed fan-out — where a plain-Subject merge aborts
+                        // delivery to every later subscriber, and IsolatedChangeFeed's
                         // disposed-observer branch can misattribute the throw (issue #889).
-                        disposables.Add(
-                            persistence.Changes
-                                .Where(n => scopeFilters.Any(sf =>
-                                    PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
-                                .Subscribe(changeBuffer));
                         disposables.Add(changeBuffer);
                         // 🚨 Strict unit-of-work + zero debounce: every change
                         // triggers its own RunQuery, serialised via Concat so
@@ -1374,13 +1412,16 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                                     newResults => ProcessBatch(newResults, currentItems, parsedQuery, observer),
                                     ex => observer.OnError(ex)));
 
+                        // Publish the live buffer and flip the gate in ONE critical section, so
+                        // the feeding subscription's next notification routes to exactly one of
+                        // the two and can never fall between them.
                         lock (earlyLock)
                         {
                             backlog = earlyBacklog.ToArray();
                             earlyBacklog.Clear();
+                            liveBuffer = changeBuffer;
                             initialDone = true;
                         }
-                        earlySubscription.Dispose();
 
                         observer.OnNext(new QueryResultChange<T>
                         {

@@ -79,8 +79,9 @@ public static class RoleNodeType
     {
         private static readonly MeshNode[] Nodes =
         [
-            // Read-only policy for the Role namespace — built-in roles are unmodifiable
-            new("_Policy", "Role")
+            // Read-only policy for the Role namespace — built-in roles are unmodifiable.
+            // Satellite(): MainNode = "Role", not the node's own path — see #2383.
+            MeshNode.Satellite("_Policy", "Role") with
             {
                 NodeType = "PartitionAccessPolicy",
                 Name = "Access Policy",

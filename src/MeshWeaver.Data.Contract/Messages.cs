@@ -284,6 +284,34 @@ public record UnsubscribeRequest(string StreamId) : StreamMessage(StreamId);
 public record StreamErrorEvent(string StreamId, string Message) : StreamMessage(StreamId);
 
 /// <summary>
+/// 🚨 The OWNER telling a subscriber that the SERVER-SIDE half of <paramref name="StreamId"/> has
+/// ENDED — normally, without an error: the per-subscriber <c>sync/</c> stream was disposed by an
+/// <see cref="UnsubscribeRequest"/>, an idle release, or the owning hub tearing down
+/// (deactivation, recycle, restart).
+///
+/// <para><b>Why this message has to exist</b> (Systemorph/MeshWeaver#2191). The owner had exactly
+/// two things to say to a subscriber — here is a change, and here is an error — and nothing at all
+/// about the case that happens most: this subscription simply ending. The subscriber's own half
+/// stays perfectly healthy — hub <c>Started</c>, stream undisposed, replay subject still handing
+/// out the last snapshot it ever saw — so every later change to the node was dropped at that seam
+/// with no error, no log and no way for the mirror to know. An open live-bound layout area froze on
+/// its pre-write snapshot indefinitely; only a page reload or a Recycle brought it back.</para>
+///
+/// <para>The end of the stream IS the event, exactly as the owner's <c>ShuttingDown</c> NACK is:
+/// the subscriber re-asks ONCE, gated on the owner's teardown actually completing. Nothing polls,
+/// no timer runs — see <c>JsonSynchronizationStream.CreateExternalClient</c>.</para>
+///
+/// <para><see cref="CanBeIgnoredAttribute"/> because the common case is the subscriber's OWN
+/// teardown: the client disposes its stream, which posts <see cref="UnsubscribeRequest"/> to the
+/// owner, and the announcement then arrives for a sync hub that is already gone. Routing must DROP
+/// it silently there rather than NACK — the same contract <c>HeartBeatEvent</c> relies on — so a
+/// normal navigation never costs a delivery failure.</para>
+/// </summary>
+[SystemMessage]
+[CanBeIgnored]
+public record StreamEndedEvent(string StreamId) : StreamMessage(StreamId);
+
+/// <summary>
 /// Request to get data by reference (collection or entity), similar to SubscribeRequest but for one-time data retrieval
 /// </summary>
 /// <param name="Reference">The workspace reference to retrieve data for</param>

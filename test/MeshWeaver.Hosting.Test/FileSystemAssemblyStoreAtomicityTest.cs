@@ -74,8 +74,14 @@ public class FileSystemAssemblyStoreAtomicityTest : IDisposable
         return bytes;
     }
 
+    // 🚨 The keep window is set to cover every version this test writes, deliberately. The subject
+    // here is PUBLICATION ATOMICITY — "a discovered assembly is always complete" — and the final
+    // deterministic assertion round-trips all `Versions` of them. With the shipped budget (3) the
+    // store's eviction-at-write (#2086) would correctly remove the older ones and the round-trip
+    // would fail for a reason that has nothing to do with atomicity. Stating the requirement here
+    // is what stops this test silently depending on retention it never meant to assert.
     private FileSystemAssemblyStore NewStore() =>
-        new(_root, NullLogger<FileSystemAssemblyStore>.Instance);
+        new(_root, NullLogger<FileSystemAssemblyStore>.Instance, keepVersionsPerType: Versions);
 
     /// <summary>The exact glob <see cref="FileSystemAssemblyStore.TryGetAssemblyPath"/> discovers by.</summary>
     private static string DiscoveryGlob(long version) =>

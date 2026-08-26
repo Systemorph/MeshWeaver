@@ -738,7 +738,19 @@ public record LayoutAreaHost : IDisposable
         // RenderingContext. Logging Reference.Area here printed "Rendering failed for
         // area (null)" for exactly those renders, hiding WHICH area failed (issue #1182).
         var area = context.Area;
-        if (AreaErrorClassifier.IsAccessDenied(ex))
+        // 🚨 FIRST — a teardown race is not a render failure, and this is the only arm whose fault
+        // arrives WRAPPED past every text-matching predicate below (the reflective
+        // SynchronizationStream.Reduce hop mints a TargetInvocationException whose own message is
+        // "Exception has been thrown by the target of an invocation"). See the Debug level below.
+        if (AreaErrorClassifier.IsHubDisposalRace(ex))
+            // A hub deactivating is normal grain lifecycle, and its own exception says the address
+            // may reactivate. DEBUG, matching SynchronizationStream.OnError's classification of the
+            // same exception as benign teardown: at Error this filed an incident for a routine
+            // background event (#2255), and Warning would still page an error dashboard.
+            logger.LogDebug(ex,
+                "Area {Area} render raced a hub disposal — transient, the address reactivates and "
+                + "the client's resubscribe renders the real content", area);
+        else if (AreaErrorClassifier.IsAccessDenied(ex))
             // A denial is a user-action outcome (the viewer lacks the right on the node
             // being rendered), not an engineering fault — Warning, so error dashboards
             // don't page / auto-file an incident for "user opened a node they cannot read".
@@ -780,6 +792,26 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     private UiControl CreateRenderErrorControl(Exception ex)
     {
+        // 🚨 A hub that is DEACTIVATING is a transient, self-declared-recoverable condition — the
+        // exception's own message is "The address may reactivate (recycle / restart); retry to get
+        // the authoritative answer". Rendering the generic ⚠ error panel here presented a temporary
+        // condition as a permanent one, and leaked the framework diagnostic (including its
+        // double-quoted reference) to the end user (#2255).
+        //
+        // The frame is NAMED — AreaFrameClassifier.HubRecyclingId, part of IsTransientFrame — so a
+        // consumer can tell "wait, this comes back" from the three states it already distinguishes.
+        // 🚨 There is deliberately NO retry and NO wait HERE: the render is happening ON the hub
+        // that is going away, so this host cannot outlive the condition it is reporting. What
+        // recovers the area is the CLIENT's own subscription terminating and re-subscribing against
+        // the fresh activation (NamedAreaView + AreaStreamRetry, whose recycle policy already keeps
+        // probing until the hub answers) — an event, not a poll, and not a resubscribe storm.
+        if (AreaErrorClassifier.IsHubDisposalRace(ex))
+            return new MarkdownControl(
+                $"**{this.Localize("error.areaReconnecting")}**\n\n{this.Localize("error.areaReconnectingHint")}")
+            {
+                Id = AreaFrameClassifier.HubRecyclingId
+            };
+
         if (AreaErrorClassifier.IsAccessDenied(ex))
             return Controls.Markdown(
                 $"**{this.Localize("error.accessDenied")}**\n\n{this.Localize("error.accessDeniedHint")}");
@@ -1262,7 +1294,15 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     private void FailRendering(Exception ex, string? area)
     {
-        logger.LogWarning(ex, "Rendering failed for area {Area} on {Hub}", area ?? "(default)", Hub.Address);
+        // Same classification as the top-level arm: a hub disposal race is routine lifecycle, not a
+        // render fault, so it must not land on an error dashboard (#2255). The visible frame is
+        // still surfaced below — CreateRenderErrorControl serves the named transient one.
+        if (AreaErrorClassifier.IsHubDisposalRace(ex))
+            logger.LogDebug(ex,
+                "Area {Area} on {Hub} raced a hub disposal — transient, the address reactivates",
+                area ?? "(default)", Hub.Address);
+        else
+            logger.LogWarning(ex, "Rendering failed for area {Area} on {Hub}", area ?? "(default)", Hub.Address);
         if (string.IsNullOrEmpty(area))
             return;
 

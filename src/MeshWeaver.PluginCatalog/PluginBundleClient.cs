@@ -74,8 +74,11 @@ public sealed class PluginBundleClient
         _token = (token ?? "").Trim();
         _httpPool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
                     ?? IoPool.Unbounded;
+        // The BUNDLE client, not the shared registry one: these are megabyte transfers off a slow
+        // index and they need a budget measured in minutes, which a page-rendering caller must not
+        // inherit. See InstanceRegistrationClient.BundleHttpClientName.
         _http = hub.ServiceProvider.GetService<IHttpClientFactory>()
-            ?.CreateClient(InstanceRegistrationClient.HttpClientName) ?? SharedHttp;
+            ?.CreateClient(InstanceRegistrationClient.BundleHttpClientName) ?? SharedHttp;
         _logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger<PluginBundleClient>();
         _ledger = hub.ServiceProvider.GetService<BundleAdoptionLedger>();

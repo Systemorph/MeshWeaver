@@ -42,7 +42,7 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
         var slot = DateTimeOffset.UtcNow.AddHours(6);
         await SeedPostAsync(postPath, status: "Scheduled", scheduledAt: slot.ToString("o"));
 
-        using var watcher = StartWatcher();
+        using var watcher = await StartWatcherAsync();
 
         var armed = await AwaitSubscription(postPath);
         Assert.Equal(EventTriggerType.Timer, armed.TriggerType);
@@ -74,7 +74,7 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
         await SeedPostAsync(controlPath, status: "Scheduled",
             scheduledAt: DateTimeOffset.UtcNow.AddHours(6).ToString("o"));
 
-        using var watcher = StartWatcher();
+        using var watcher = await StartWatcherAsync();
 
         await AwaitSubscription(controlPath);   // the watcher has demonstrably done a pass
 
@@ -91,7 +91,7 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
         var first = DateTimeOffset.UtcNow.AddHours(6);
         await SeedPostAsync(postPath, status: "Scheduled", scheduledAt: first.ToString("o"));
 
-        using var watcher = StartWatcher();
+        using var watcher = await StartWatcherAsync();
         await AwaitSubscription(postPath);
 
         // Move the slot the way an agent or an MCP patch does — straight onto the content field.
@@ -130,7 +130,7 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
         await SeedPostAsync(postPath, status: "Scheduled",
             scheduledAt: DateTimeOffset.UtcNow.AddHours(6).ToString("o"));
 
-        using var watcher = StartWatcher();
+        using var watcher = await StartWatcherAsync();
         var armed = await AwaitSubscription(postPath);
         Assert.Equal(EventSubscriptionStatus.Pending, armed.Status);
 
@@ -166,7 +166,7 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
         await SeedPostAsync(postPath, status: "Scheduled",
             scheduledAt: DateTimeOffset.UtcNow.AddHours(6).ToString("o"));
 
-        using var watcher = StartWatcher();
+        using var watcher = await StartWatcherAsync();
         var armed = await AwaitSubscription(postPath);
 
         // The identity the publish will run as. Asserted exactly, not merely "not blank".
@@ -228,7 +228,7 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
         await SeedPostAsync(controlPath, status: "Scheduled",
             scheduledAt: DateTimeOffset.UtcNow.AddHours(6).ToString("o"));
 
-        using var watcher = StartWatcher();
+        using var watcher = await StartWatcherAsync();
 
         await AwaitSubscription(controlPath);   // the watcher has demonstrably done a pass
 
@@ -237,14 +237,19 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
 
     // ---- helpers ----
 
-    private ScheduledPostWatcher StartWatcher()
+    // 🚨 async, awaited from the (already-async) [Fact]s below — never
+    // `.GetAwaiter().GetResult()`. StartAsync's continuations can, in principle, be posted back
+    // onto the calling thread; blocking that thread waiting for them is the exact self-deadlock
+    // shape #2013 tracks (xUnit's single-threaded sync context self-deadlocking a native wait).
+    // Awaiting suspends the test instead of parking its thread, so it cannot self-deadlock.
+    private async Task<ScheduledPostWatcher> StartWatcherAsync()
     {
         var watcher = new ScheduledPostWatcher(
             Mesh,
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh.ServiceProvider.GetRequiredService<AccessService>(),
             Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<ScheduledPostWatcher>>());
-        watcher.StartAsync(default).GetAwaiter().GetResult();
+        await watcher.StartAsync(default);
         return watcher;
     }
 

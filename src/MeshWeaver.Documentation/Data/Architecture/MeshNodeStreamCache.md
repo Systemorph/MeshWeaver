@@ -115,8 +115,8 @@ There are **two identities on the read path, and they must never be mixed**:
 
 `handle.Update(fn)` is **cold**: nothing happens until `Subscribe`. On subscribe, the write enters the path's **serial update queue**:
 
-1. Your lambda runs against the **freshest** node state (the previous write's echo has already landed on the shared stream).
-2. The handle diffs `current` vs `fn(current)` and ships only the JSON-merge patch.
+1. Your lambda runs against the **freshest** node state — the previous write's result, whether or not its echo has come back yet (see below).
+2. The handle diffs `current` vs `fn(current)` and ships only the JSON-merge patch, **plus the base values it diffed against**.
 3. The owner applies it on its action block and broadcasts; your observable completes with the result.
 
 The queue exists because RFC 7396 merges JSON *objects* key-by-key but **replaces arrays wholesale** — two concurrent writers appending to the same `ImmutableList` from the same snapshot would each ship a full-array replacement and the owner would keep only the last one. Serialising per path makes every lambda see its predecessor's result, so list appends compose instead of clobbering. A stuck owner response can't starve the queue: it advances on a bounded signal while the in-flight write keeps waiting for its real terminal.
@@ -127,6 +127,16 @@ hub.SubmitMessage(threadPath, "first");
 hub.SubmitMessage(threadPath, "second");
 hub.SubmitMessage(threadPath, "third");
 ```
+
+### 🚨 "Freshest" means the predecessor's RESULT, not the mirror
+
+The queue advances on a write's **local** terminal — the owner's ack, or, on a busy owner, an optimistic emit — and deliberately **never waits for the echo**. So step 1 cannot mean "read the mirror": under load the mirror is still showing the node as it was *before* the write that just released the slot. This page used to say the echo "has already landed", and nothing delivered that.
+
+The distinction is not academic. The base values shipped in step 2 are how the owner detects a stale/reordered cross-hub write: a leaf whose live value has moved past the writer's base is REFUSED (`MeshNodePatchMerge`). A successor that diffed against the un-echoed mirror therefore shipped a base **it had itself superseded one write earlier**, and the owner refused the conflicting leaves of a write that nothing was concurrent with — while the write's *other* leaves applied and the whole thing still acked `Success`. Issues #2305 / #2291: an agent response cell that reached `Status = Completed` with `Summary` holding the answer and `Text` still reading `"Generating response..."`, because only `Text` conflicted. Generalised: a streaming cell's text froze at the first chunk that landed, for as long as the echo lagged the write rate.
+
+So the queue **hands each write the node the owner acknowledged taking from its predecessor**, and the write diffs against that. The moment the mirror carries anything newer — the echo, or a genuinely different writer's commit, since the owner mints `Version + 1` on every applied change — the mirror wins again and real cross-mirror conflicts are detected exactly as before. The hand-forward is one-shot (it can inform only the next write), and a `Conflict` re-attempt still re-reads the owner's state. `[UpdateRemote] SELF_REBASE` in the debug log is a write saying it took this path.
+
+🚨 **Acknowledged, not merely computed.** A base taken from the *optimistic* snapshot — a write whose owner ack never arrived — is self-perpetuating, because a write that did not land mints no version and so nothing ever corrects it: a caller that retries the same write then diffs against its own unlanded value, computes an **empty** patch, and skips the write **silently, forever**. `TwoSiloRecycleConvergenceTest` catches exactly that (the post-recycle write retried past a disposing owner and the store never advanced). So a rejected, timed-out or retried write publishes nothing and its successor reads the mirror — the pre-existing behaviour, which is the correct direction to degrade in.
 
 ## Big strings ship as a SPLICE, not as the whole value
 
