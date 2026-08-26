@@ -14,6 +14,17 @@ name: Chart Gate
 # `replicas.portal: 2` was consumed by NOTHING. helm renders that set without complaint, because
 # helm validates syntax, not sense. Nothing else in CI opens the chart at all.
 #
+# 🚨 …AND THE SAME DEFECT IN THE CONFIGMAP, four times over. "A values key consumed by nothing" is
+# not a one-off: SelfUpdate__PollInterval (#1778), SelfUpdate__MinRollInterval (#1780/#1925) and
+# Modules__Root (#1925) were each set in values files and templated nowhere, inert for weeks while
+# reading as configured. #2210 is its expensive form — the GitHub App identity was committed to the
+# per-env overlay one section off, under `config.memex_migration`, which the portal ConfigMap never
+# reads; every deploy therefore rendered those portal keys "" and helm's three-way merge applied
+# the blanking as a DELETION of the live values. GitSync and plugin-registry pulls were down
+# fleet-wide on 2026-08-25. `check-values-are-read.sh` is that invariant, asserted from the files
+# alone; it takes values paths, so the private deployment repo runs the identical check on its
+# overlays before a deploy, where the mis-nesting actually happened.
+#
 # 🛡️ NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input this job reads
 # is in this repository — the chart and the tracked values files. There is no secret, no cluster,
 # no network, and therefore NO condition under which the job may decline to run and still render a
@@ -59,3 +70,17 @@ jobs:
       - run: pip install pyyaml
       - name: Render every values combination and assert it is self-consistent
         run: deploy/aks/scripts/check-chart-invariants.sh
+
+      # The other direction: the step above asks whether the RENDER is coherent, this one asks
+      # whether every key the VALUES set survives into it at all. A key the chart does not
+      # template reaches no container and helm reports success — #1778, #1780, #1925 each shipped
+      # that way, and #2210 was its expensive form: the GitHub App identity committed one section
+      # off, rendering the portal keys "" so a deploy DELETED the live values fleet-wide.
+      #
+      # `!cancelled()` rather than nothing: a failure in the step above must not hide this one's
+      # findings, so a red pull request names everything wrong with the chart in a single run
+      # instead of one thing per push. It is not an input-shaped `if:` — it makes this step run
+      # MORE often, never less, and it cannot render a tick without executing.
+      - name: Assert every config key a values file sets is read by a template
+        if: ${{ !cancelled() }}
+        run: deploy/aks/scripts/check-values-are-read.sh
