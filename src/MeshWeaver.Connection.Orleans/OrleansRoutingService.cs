@@ -589,40 +589,47 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         Task<StreamSubscriptionHandle<IMessageDelivery>?> subscriptionTask,
         CancellationTokenSource cts)
     {
-        async Task Teardown(CancellationToken _)
-        {
-            try
-            {
-                StreamSubscriptionHandle<IMessageDelivery>? subscription = null;
-                // The attach task may have been cancelled or given up (never subscribed) — then there
-                // is nothing to unsubscribe; a faulted/cancelled await here is expected, not an error.
-                try { subscription = await subscriptionTask.ConfigureAwait(false); }
-                catch (OperationCanceledException) { /* cancelled before it subscribed */ }
-                catch (Exception ex)
+        // 🚨 FULLY REACTIVE — no async/await, no state machine. The awaits this replaced were the
+        // reason the old code went fire-and-forget in the first place, so reintroducing them here
+        // would rebuild the trap: `await` on a turn-based scheduler parks the very turn that is
+        // tearing down, and a continuation can lose the ambient AccessContext. Both pool and queue
+        // take a TASK-RETURNING lambda, so the leaf is bridged by RETURNING its task — never by
+        // awaiting it.
+        var teardown =
+            // The attach task may have been cancelled or given up (never subscribed). A cancelled or
+            // faulted attach is EXPECTED at teardown, not an error — degrade to "nothing to
+            // unsubscribe" rather than letting it terminate the sequence.
+            subscriptionTask.ToObservable()
+                .Catch<StreamSubscriptionHandle<IMessageDelivery>?, Exception>(ex =>
                 {
-                    logger.LogDebug(ex, "Stream subscription task faulted before teardown for {Address}", address);
-                }
-
-                if (subscription is not null)
-                    await subscription.UnsubscribeAsync().ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address);
-            }
-            finally
-            {
-                cts.Dispose();
-            }
-        }
+                    if (ex is not OperationCanceledException)
+                        logger.LogDebug(ex, "Stream subscription task faulted before teardown for {Address}", address);
+                    return Observable.Return<StreamSubscriptionHandle<IMessageDelivery>?>(null);
+                })
+                .SelectMany(subscription => subscription is null
+                    ? Observable.Return(Unit.Default)
+                    // The genuinely-async leaf, bridged through the pool by RETURNING the task.
+                    : ioPool.Invoke(_ => subscription.UnsubscribeAsync()))
+                .Catch<Unit, Exception>(ex =>
+                {
+                    logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address);
+                    return Observable.Return(Unit.Default);
+                })
+                // Disposed only once the work above has finished. It used to run immediately after
+                // Cancel(), while the attach task still held this token — disposing a source that is
+                // still observed throws ObjectDisposedException where nothing is watching.
+                .Finally(cts.Dispose);
 
         if (asyncDisposeQueue is not null)
-            asyncDisposeQueue.Enqueue(Teardown);
+            // The ONE place a Task appears, and only because the queue's contract is Task-shaped —
+            // the sanctioned boundary conversion, with the body above staying reactive.
+            asyncDisposeQueue.Enqueue(_ => teardown.DefaultIfEmpty(Unit.Default).LastAsync().ToTask());
         else
-            ioPool.Invoke(Teardown)
-                .Subscribe(
-                    _ => { },
-                    ex => logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address));
+            // No queue registered (a bare mesh in a unit test): there is no async teardown to join,
+            // so the previous detached behaviour is correct rather than a regression.
+            teardown.Subscribe(
+                _ => { },
+                ex => logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address));
     }
 
     /// <summary>
