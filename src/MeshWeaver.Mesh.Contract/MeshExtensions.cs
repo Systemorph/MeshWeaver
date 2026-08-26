@@ -4099,12 +4099,35 @@ public static class MeshExtensions
     ///
     /// <para>Idempotent: once MainNode differs from Path the node is returned unchanged, so calling
     /// it twice on one write is safe.</para>
+    ///
+    /// <para>🚨 <b>A satellite is recognised by its ID as well as by its type</b> (#2383). Gating
+    /// this on <c>IsSatelliteNodeType</c> alone covered only the types whose definition node carries
+    /// <see cref="MeshNode.IsSatelliteType"/> — the ones that also live in their own satellite TABLE.
+    /// The <c>_</c>-prefixed SIBLINGS that share <c>mesh_nodes</c> (<c>_Policy</c>, <c>_Provider</c>,
+    /// <c>_GitSync</c>, <c>_DefaultInstallLedger</c>) were therefore normalised by NOTHING, and every
+    /// writer had to remember the field by hand — which most of them did not, leaving self-referential
+    /// satellites in <c>mesh_nodes</c>. Flagging those types instead was not an option: the flag also
+    /// RELOCATES a node (<c>CreateLayoutArea</c> files a flagged type under <c>{ns}/_{Type}/{id}</c>)
+    /// and routes it to a satellite table, which would hide <c>{ns}/_Policy</c> from the permission
+    /// evaluator's <c>id = '_Policy'</c> lookup. Parentage and storage are different questions; this
+    /// asks only the first, via <see cref="SatelliteTableMapping.IsSiblingSatellite"/>.</para>
+    ///
+    /// <para>The owner still comes from <see cref="SatelliteTableMapping.OwnerOfSatellitePath"/> over
+    /// the NAMESPACE, which is what keeps a satellite CONTAINER collapsing correctly
+    /// (<c>{owner}/_Access</c> → <c>{owner}</c>) while leaving a partition that merely happens to
+    /// start with an underscore intact (<c>_Setting/_Policy</c> → <c>_Setting</c>, NOT <c>""</c> —
+    /// the empty prefix is a ROOT-scope grant under <c>COALESCE(main_node, namespace)</c>).</para>
+    ///
+    /// <para>The trigger stays <c>MainNode == Path</c>, so this can only ever rewrite the record's
+    /// never-explicitly-set default — a MainNode a caller set deliberately is untouched, and a genuine
+    /// main node has no satellite-shaped id to match.</para>
     /// </summary>
     private static MeshNode NormalizeSatelliteMainNode(MeshNode node, MeshConfiguration meshConfig) =>
         !string.IsNullOrEmpty(node.NodeType)
         && !string.IsNullOrEmpty(node.Namespace)
-        && meshConfig.IsSatelliteNodeType(node.NodeType)
         && node.MainNode == node.Path
+        && (meshConfig.IsSatelliteNodeType(node.NodeType)
+            || SatelliteTableMapping.IsSiblingSatellite(node))
             ? node with { MainNode = SatelliteTableMapping.OwnerOfSatellitePath(node.Namespace) }
             : node;
 
