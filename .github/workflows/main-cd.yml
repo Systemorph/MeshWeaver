@@ -1038,6 +1038,21 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
+      # 🚨 The plugins are BUILT HERE, in the same run and against the same image as the platform's
+      # own content — maintainer decision 2026-08-26 ("run full plugin build in main memex build";
+      # "plugins should not have a lane in this sense"). One run, one framework identity, one
+      # sealed publish: a plugin bundle can no longer carry bytes from a framework that is not the
+      # one shipping (#1814's class), and its version is the version THIS run computed (#695's
+      # class — see the publish step). Same repo as portal-image's checkout; PlatformBakeLaneGuard
+      # asserts it is the only foreign repository in this file.
+      - name: Check out MeshWeaver.Plugins (every plugin is baked in this run)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          path: plugins-repo
+          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+          fetch-depth: 1
       - name: "Preflight: the publish targets must be provisioned"
         run: |
           set -euo pipefail
@@ -1276,6 +1291,74 @@ jobs:
           {
             echo "### 🔑 Bake address verified"
             echo "- \`$BAKED\` — resolved by BOTH the bake host and the promoted \`memex-portal-ai\` image (linux/amd64)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: "BAKE every plugin against the SAME image (compiler-driven, no mesh)"
+        env:
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
+          [ -f "$PLUGINS/plugin-gate.allow" ] || { echo "::error::plugins-repo/plugin-gate.allow is missing — the known-debt ratchet the plugin bake is configured against. Refusing to bake without it."; exit 1; }
+          PLUGINS_SHA="$(git -C "$PLUGINS" rev-parse HEAD)"
+          echo "plugins_sha=$PLUGINS_SHA" >> "$GITHUB_OUTPUT"
+          BAKE_PLUGINS="$RUNNER_TEMP/bake-plugins"
+          rm -rf "$BAKE_PLUGINS"; mkdir -p "$BAKE_PLUGINS"; chmod 777 "$BAKE_PLUGINS"
+          echo "── baking /plugins (every module) against $IMAGE at plugins $PLUGINS_SHA"
+          docker run --rm --init --pull never --platform linux/amd64 -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" compile /plugins \
+            --output /bake --allow /plugins/plugin-gate.allow --source-sha "$PLUGINS_SHA"
+          # Postconditions, not hopes — same as the platform bake above.
+          if [ ! -s "$BAKE_PLUGINS/framework-mvid.txt" ]; then
+            echo "::error::the plugin bake ran green but wrote no identity — the bake stage regressed."; exit 1
+          fi
+          if ! ls "$BAKE_PLUGINS"/*.zip >/dev/null 2>&1; then
+            echo "::error::the plugin bake ran green but produced no bundles — nothing could be published."; exit 1
+          fi
+          echo "BAKE_PLUGINS_DIR=$BAKE_PLUGINS" >> "$GITHUB_ENV"
+          echo "PLUGINS_SHA=$PLUGINS_SHA" >> "$GITHUB_ENV"
+          echo "plugin bake identity: $(cat "$BAKE_PLUGINS/framework-mvid.txt")"
+          ls "$BAKE_PLUGINS"/*.zip | wc -l | xargs echo "plugin bundles:"
+      - name: "GATE the plugin bake: render + execute Tests areas on the BAKED bytes"
+        env:
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
+          echo "── gating /plugins against $IMAGE, consuming the bake in /bake"
+          docker run --rm --init --pull never --platform linux/amd64 -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS_DIR:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" /plugins \
+            --allow /plugins/plugin-gate.allow --seed /bake
+      # 🚨 The whole point of building plugins HERE: their identity must be the platform's, by
+      # construction. Assert it rather than trust it — a divergence means the two bakes did not run
+      # against the same image, and publishing both would ship bundles no portal can adopt together.
+      - name: "Assert the plugin bake's identity equals the platform bake's"
+        run: |
+          set -euo pipefail
+          PLATFORM="$(tr -d '[:space:]' < "$BAKE_DIR/framework-mvid.txt")"
+          PLUGINS="$(tr -d '[:space:]' < "$BAKE_PLUGINS_DIR/framework-mvid.txt")"
+          if [ "$PLATFORM" != "$PLUGINS" ]; then
+            echo "::error::plugin bake identity ($PLUGINS) differs from the platform bake identity ($PLATFORM) in the SAME run — they did not build against the same image. Refusing to publish either."
+            exit 1
+          fi
+          echo "identities agree: $PLATFORM"
+      # 🚨 RELEASE_VERSION is REQUIRED here and is the version THIS run computed. It is not read
+      # from any manifest.lock: a bundle's version must be minted by the run that produced its
+      # bytes (Plugins#695 — a version that moves on a lock file while the bytes come from
+      # elsewhere is how an already-fixed defect kept shipping, #2356).
+      - name: "Publish the plugin bundles to every portal target (same identity, same version)"
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ -n "$RELEASE_VERSION" ] || { echo "::error::no release version from portal-image — refusing to publish plugin bundles under an unknown version (Plugins#695)."; exit 1; }
+          .github/scripts/publish-bake-bundles.sh "$BAKE_PLUGINS_DIR" "plugins" \
+            "$PLUGINS_SHA" "$RELEASE_VERSION"
+          {
+            echo "### 🧩 Plugin bundles published (built in this run)"
+            echo "- identity: \`$(cat "$BAKE_PLUGINS_DIR/framework-mvid.txt")\` (equal to the platform bake's, asserted)"
+            echo "- version: \`$RELEASE_VERSION\` (this run's, not manifest.lock)"
+            echo "- plugins commit: \`$PLUGINS_SHA\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: "Publish bundles to every portal target"
         env:
