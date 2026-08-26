@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using AspNet.Security.OAuth.Apple;
 using MeshWeaver.Blazor.Portal.Authentication;
+using MeshWeaver.Hosting.AspNetCore.Portal.Authentication;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
