@@ -222,9 +222,12 @@ public class ModelProviderService(IMeshService meshService, IMessageHub hub, ILo
                                 SyncBehavior = syncBehavior,
                                 Content = modelDef,
                             };
-                            return accessService is null || ctx is null
-                                ? meshService.CreateNode(modelNode)
-                                : Observable.Using(() => accessService.SwitchAccessContext(ctx), _ => meshService.CreateNode(modelNode));
+                            // RunAs, never Observable.Using: the latter opens the AsyncLocal scope on
+                            // the SUBSCRIBING thread and disposes it on whichever thread the work
+                            // terminates, leaving the subscriber latched as the impersonated identity
+                            // (#1790). RunAs already defers when access or identity is null, so it
+                            // subsumes the null branch this replaced.
+                            return accessService.RunAs(ctx, () => meshService.CreateNode(modelNode));
                         })
                         .Catch<MeshNode, Exception>(ex =>
                         {
