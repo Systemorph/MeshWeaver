@@ -45,7 +45,7 @@
 # ~331 s each. Adding shards below that buys nothing.
 #
 # SPLIT RULE: split a project only when its solo weight exceeds the ideal shard
-# load (sum ÷ SHARD_TOTAL, currently 2792 ÷ 6 ≈ 465 s), because only then is it
+# load (sum ÷ SHARD_TOTAL, currently 2758 ÷ 6 ≈ 460 s), because only then is it
 # the binding floor. Monolith (662 s) qualifies; nothing else does. AI.Test's
 # split was dropped here — at 189 s it is far below the floor, so splitting it
 # bought no balance and cost a class enumeration plus shipping its bin to two
@@ -109,9 +109,7 @@ WEIGHTS=$(cat <<'EOF'
 27 MeshWeaver.InstanceSync.Test
 26 MeshWeaver.Layout.Test
 25 Memex.Portal.Shared.Test
-20 MeshWeaver.Hosting.Blazor.Test
 18 MeshWeaver.NodeOperations.Test
-14 MeshWeaver.MemexTemplate.Test
 13 MeshWeaver.Markdown.Test
 10 MeshWeaver.PathResolution.Test
 9 MeshWeaver.PythonDemo.Test

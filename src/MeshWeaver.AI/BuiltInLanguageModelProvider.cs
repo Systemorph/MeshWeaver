@@ -478,6 +478,31 @@ public class LanguageModelCatalogOptions
 /// — there is NO central registry. Consumers (Models settings tab,
 /// <c>ModelProviderService.CreateProvider</c>) enumerate the live
 /// <see cref="LanguageModelCatalogOptions.Sources"/>.</para>
+///
+/// <para>🚨 <b>The primary constructor of this record is a SHIPPED BINARY CONTRACT — do not add a
+/// parameter to it, not even one with a default.</b> Provider modules
+/// (<c>MeshWeaver.AI.Anthropic</c>, <c>.OpenAI</c>, <c>.AzureFoundry</c>, <c>.ClaudeCode</c>,
+/// <c>.Copilot</c>, <c>.WebSearch</c>) are compiled separately, land at runtime under
+/// <c>/data/modules</c>, and — per <c>ModuleLandingService</c> — "bind by simple name, and their
+/// contract is API compatibility, not build identity". A call site that omits the optional
+/// arguments still emits a call to the FULL primary constructor as it stood at ITS compile time,
+/// so adding a parameter REPLACES that signature and every already-landed module fails with
+/// <c>MissingMethodException</c> the moment its type initializer runs — which aborts the host.
+/// Prefer an <c>init</c> property for new optional state; if a parameter really must be added,
+/// the OLD signature has to stay reachable, as the overload below keeps it.</para>
+///
+/// <para>This is not hypothetical. Adding <c>Description</c> here as a ninth parameter shipped
+/// green through every source-level gate (it had a default, so nothing failed to compile) and
+/// then crash-looped <c>systemorph</c> for 100 minutes on the next roll: the landed Anthropic
+/// module called the 8-argument constructor that no longer existed. The old pods kept serving,
+/// so every health probe stayed green while helm waited on a pod that could never start.</para>
+///
+/// <para><b>And the repair is additive, because REMOVING a signature is the same mistake pointing
+/// the other way.</b> Dropping <c>Description</c> back out of the primary constructor would fix
+/// every module compiled before the change and break any compiled after it — so the ninth
+/// parameter stays, and the eight-parameter form is restored beside it. Both populations bind.
+/// (<c>scripts/check-record-signatures.py</c> refuses either direction; it landed eleven hours
+/// after the break it would have caught.)</para>
 /// </summary>
 public record LanguageModelCatalogSource(
     string SectionName,
@@ -490,6 +515,29 @@ public record LanguageModelCatalogSource(
     ProviderKind Kind = ProviderKind.Api,
     string? Description = null)
 {
+    /// <summary>
+    /// The eight-parameter form every AI provider module compiled before 2026-08-25 binds to.
+    ///
+    /// <para>🚨 <b>Do not delete this.</b> It is not dead code and it has no source-level callers
+    /// by design — the callers are separately-compiled assemblies in another repository that land
+    /// at runtime under <c>/data/modules</c> and bind by simple name. Removing it re-breaks them
+    /// exactly as adding the ninth parameter did, and nothing in this solution would go red.
+    /// <c>LanguageModelCatalogSourceBinaryContractTest</c> pins it.</para>
+    /// </summary>
+    public LanguageModelCatalogSource(
+        string SectionName,
+        string ProviderName,
+        int Order,
+        string? DisplayLabel,
+        string? DefaultEndpoint,
+        ImmutableArray<string> DefaultModelIds,
+        bool RequiresApiKey,
+        ProviderKind Kind)
+        : this(SectionName, ProviderName, Order, DisplayLabel, DefaultEndpoint,
+               DefaultModelIds, RequiresApiKey, Kind, null)
+    {
+    }
+
     /// <summary>Effective display label — falls back to <see cref="ProviderName"/> when not supplied.</summary>
     public string EffectiveLabel => DisplayLabel ?? ProviderName;
 

@@ -16,14 +16,6 @@
     <!-- The two stylesheets whose z-index values must stay ordered relative to one another
          (PortalOverlayLayeringTest). Linked in as content so the assertion reads the SHIPPED
          rules from a clean checkout rather than a hand-copied duplicate that could drift. -->
-    <Content Include="..\..\src\MeshWeaver.Blazor\wwwroot\standard-page-layout.css">
-      <Link>PortalCss\standard-page-layout.css</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="..\..\src\MeshWeaver.Blazor.Portal\Layout\PortalLayoutBase.razor.css">
-      <Link>PortalCss\PortalLayoutBase.razor.css</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
   </ItemGroup>
 
   <ItemGroup>
@@ -36,7 +28,6 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
   </ItemGroup>
 </Project>

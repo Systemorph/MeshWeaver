@@ -248,7 +248,7 @@ public sealed class DynamicTypePreWarmerHostedService(
         // Verified in production on all three portals (2026-08-11, ci.2982/ci.2990):
         //   memex-cloud  237/237 in 62s (the same fleet took 18m55s on the activation path)
         //   memex        83 already baked + 1 pending in 6.9s
-        //   atioz        39/39 in 38s; the follower pod finished in 1.1s off the shared store
+        //   third portal 39/39 in 38s; the follower pod finished in 1.1s off the shared store
         // all with compileErrors=0, timedOut=0, contentBroken=0.
         //
         // The default is what every deployment gets, so it must be the verified path — carrying it

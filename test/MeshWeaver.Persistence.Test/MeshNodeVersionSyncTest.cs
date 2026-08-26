@@ -59,8 +59,10 @@ public class MeshNodeVersionSyncTest : MonolithMeshTestBase
     // Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.
     protected override bool ShareMeshAcrossTests => true;
 
+    // 🚨 Not a `.FirstAsync().ToTask().GetAwaiter().GetResult()` bridge (#2013) — see
+    // SaveNodeSynchronously's doc for why that shape is a latent wedge risk and this isn't.
     private static void SaveNode(InMemoryStorageAdapter persistence, MeshNode node)
-        => persistence.SaveNode(node, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        => persistence.SaveNodeSynchronously(node, SetupJsonOptions);
 
     /// <summary>
     /// Seeds two compilable NodeTypes the legal way (see

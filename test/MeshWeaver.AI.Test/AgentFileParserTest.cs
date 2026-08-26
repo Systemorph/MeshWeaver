@@ -1,0 +1,613 @@
+using System.Threading.Tasks;
+using MeshWeaver.AI;
+using MeshWeaver.AI.Persistence;
+using MeshWeaver.Hosting.Persistence.Parsers;
+using MeshWeaver.Mesh;
+using Xunit;
+
+namespace MeshWeaver.AI.Test;
+
+/// <summary>
+/// Unit tests for AgentFileParser - parsing and serialization of agent markdown files with YAML front matter.
+/// </summary>
+public class AgentFileParserTest
+{
+    private readonly AgentFileParser _parser = new();
+
+    #region Parse Tests
+
+    /// <summary>
+    /// 🌍 A <c>translations:</c> block reaches the configuration and survives the sync-back —
+    /// Parse → Serialize → Parse. Without the serialize half, editing an agent in the mesh would
+    /// silently write its translations away, and the file would come back English-only with
+    /// nothing red (issue #1626).
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public void Parse_TranslationsBlock_ReachesTheConfiguration_AndRoundTrips()
+    {
+        var content =
+            "---\n" +
+            "nodeType: Agent\n" +
+            "name: Tutor\n" +
+            "description: Guides trainees through a course.\n" +
+            "translations:\n" +
+            "  de:\n" +
+            "    name: Tutor\n" +
+            "    description: Begleitet Lernende durch einen Kurs.\n" +
+            "---\n\n" +
+            "You are the course tutor.\n";
+
+        var node = _parser.Parse("/Agent/Tutor.md", content, "Agent/Tutor.md");
+        node.Should().NotBeNull();
+        var config = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        config.Translations.Should().NotBeNull();
+        config.Translations!["de"].Description.Should().Be("Begleitet Lernende durch einen Kurs.");
+
+        // 🚨 The MODEL-facing description is the delegation catalogue and stays the authored text —
+        // translating it would make agent routing depend on the viewer's UI language.
+        config.Description.Should().Be("Guides trainees through a course.");
+        // The system prompt (the body) is likewise untouched.
+        config.Instructions.Should().Be("You are the course tutor.");
+
+        var reparsed = _parser.Parse("/Agent/Tutor.md", _parser.Serialize(node), "Agent/Tutor.md");
+        reparsed.Should().NotBeNull();
+        var round = reparsed!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        round.Translations.Should().NotBeNull();
+        round.Translations!["de"].Name.Should().Be("Tutor");
+        round.Translations["de"].Description.Should().Be("Begleitet Lernende durch einen Kurs.");
+    }
+
+    /// <summary>An untranslated agent gains no empty <c>translations:</c> key on the way back out.</summary>
+    [Fact(Timeout = 20000)]
+    public void Serialize_UntranslatedAgent_WritesNoTranslationsKey()
+    {
+        var content = "---\nnodeType: Agent\nname: Plain\ndescription: Plain agent.\n---\n\nBody.\n";
+        var node = _parser.Parse("/Agent/Plain.md", content, "Agent/Plain.md");
+        node.Should().NotBeNull();
+        _parser.Serialize(node!).Should().NotContain("translations:");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void ParseAsync_ValidAgentMarkdown_ReturnsAgentConfiguration()
+    {
+        // Arrange
+        var content = """
+            ---
+            nodeType: Agent
+            name: Test Agent
+            description: A test agent
+            icon: Bot
+            category: Testing
+            ---
+
+            You are a test agent. Do testing things.
+            """;
+
+        // Act
+        var node = _parser.Parse("/test/TestAgent.md", content, "test/TestAgent.md");
+
+        // Assert
+        node.Should().NotBeNull();
+        node!.Id.Should().Be("TestAgent");
+        node.Namespace.Should().Be("test");
+        node.NodeType.Should().Be("Agent");
+        node.Name.Should().Be("Test Agent");
+        node.Icon.Should().Be("Bot");
+        node.Category.Should().Be("Testing");
+        // Node-level metadata lives on the MeshNode, not duplicated on the content.
+        node.Description.Should().Be("A test agent");
+
+        var agentConfig = node.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        agentConfig.Id.Should().Be("TestAgent");
+        agentConfig.Description.Should().Be("A test agent");
+        agentConfig.Instructions.Should().Be("You are a test agent. Do testing things.");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void ParseAsync_WithDelegations_ParsesDelegationsList()
+    {
+        // Arrange
+        var content = """
+            ---
+            nodeType: Agent
+            name: Orchestrator
+            delegations:
+              - agentPath: Specialist
+                instructions: Handle planning tasks
+              - agentPath: Worker
+                instructions: Execute actions
+            ---
+
+            You are Orchestrator.
+            """;
+
+        // Act
+        var node = _parser.Parse("/Orchestrator.md", content, "Orchestrator.md");
+
+        // Assert
+        node.Should().NotBeNull();
+        var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        agentConfig.Delegations.Should().HaveCount(2);
+        agentConfig.Delegations![0].AgentPath.Should().Be("Specialist");
+        agentConfig.Delegations[0].Instructions.Should().Be("Handle planning tasks");
+        agentConfig.Delegations[1].AgentPath.Should().Be("Worker");
+        agentConfig.Delegations[1].Instructions.Should().Be("Execute actions");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void ParseAsync_InstructionsInMarkdownBody_ExtractsToInstructions()
+    {
+        // Arrange
+        var content = """
+            ---
+            nodeType: Agent
+            name: Research Agent
+            ---
+
+            # Research Agent
+
+            You are a research agent. Your tasks:
+            - Search for information
+            - Summarize findings
+            - Report results
+
+            ## Guidelines
+
+            Be thorough and accurate.
+            """;
+
+        // Act
+        var node = _parser.Parse("/Research.md", content, "Research.md");
+
+        // Assert
+        node.Should().NotBeNull();
+        var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        agentConfig.Instructions.Should().Contain("# Research Agent");
+        agentConfig.Instructions.Should().Contain("- Search for information");
+        agentConfig.Instructions.Should().Contain("## Guidelines");
+        agentConfig.Instructions.Should().Contain("Be thorough and accurate.");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void ParseAsync_WithAllProperties_ParsesAllProperties()
+    {
+        // Arrange
+        var content = """
+            ---
+            nodeType: Agent
+            name: Full Agent
+            description: Agent with all properties
+            icon: Star
+            category: Full
+            groupName: TestGroup
+            isDefault: true
+            exposedInNavigator: true
+            contextMatchPattern: address=like=*Test*
+            preferredModel: gpt-4
+            order: 10
+            ---
+
+            Full agent instructions.
+            """;
+
+        // Act
+        var node = _parser.Parse("/FullAgent.md", content, "FullAgent.md");
+
+        // Assert — group + order are node-level (groupName maps onto the node's Category);
+        // only agent-specific behaviour is on the configuration content.
+        node.Should().NotBeNull();
+        node!.Category.Should().Be("TestGroup");
+        node.Order.Should().Be(10);
+        var agentConfig = node.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        agentConfig.IsDefault.Should().BeTrue();
+        agentConfig.ExposedInNavigator.Should().BeTrue();
+        agentConfig.ContextMatchPattern.Should().Be("address=like=*Test*");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void ParseAsync_NonAgentNodeType_ReturnsNull()
+    {
+        // Arrange
+        var content = """
+            ---
+            nodeType: Markdown
+            name: Not an Agent
+            ---
+
+            This is markdown content.
+            """;
+
+        // Act
+        var node = _parser.Parse("/test.md", content, "test.md");
+
+        // Assert
+        node.Should().BeNull();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void ParseAsync_NoYamlFrontMatter_ReturnsNull()
+    {
+        // Arrange
+        var content = """
+            # Just Markdown
+
+            No YAML front matter here.
+            """;
+
+        // Act
+        var node = _parser.Parse("/test.md", content, "test.md");
+
+        // Assert
+        node.Should().BeNull();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void ParseAsync_WithHandoffs_ParsesHandoffsList()
+    {
+        // Arrange
+        var content = """
+            ---
+            nodeType: Agent
+            name: Orchestrator
+            delegations:
+              - agentPath: Researcher
+                instructions: Look up information
+            handoffs:
+              - agentPath: Specialist
+                instructions: Handle planning tasks
+              - agentPath: Worker
+                instructions: Execute actions directly
+            ---
+
+            You are Orchestrator.
+            """;
+
+        // Act
+        var node = _parser.Parse("/Orchestrator.md", content, "Orchestrator.md");
+
+        // Assert
+        node.Should().NotBeNull();
+        var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        agentConfig.Delegations.Should().HaveCount(1);
+        agentConfig.Delegations![0].AgentPath.Should().Be("Researcher");
+
+        agentConfig.Handoffs.Should().HaveCount(2);
+        agentConfig.Handoffs![0].AgentPath.Should().Be("Specialist");
+        agentConfig.Handoffs[0].Instructions.Should().Be("Handle planning tasks");
+        agentConfig.Handoffs[1].AgentPath.Should().Be("Worker");
+        agentConfig.Handoffs[1].Instructions.Should().Be("Execute actions directly");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void ParseAsync_WithHandoffsOnly_ParsesHandoffs()
+    {
+        // Arrange
+        var content = """
+            ---
+            nodeType: Agent
+            name: Specialist
+            handoffs:
+              - agentPath: Worker
+                instructions: Execute the planned tasks
+            ---
+
+            You are Specialist.
+            """;
+
+        // Act
+        var node = _parser.Parse("/Specialist.md", content, "Specialist.md");
+
+        // Assert
+        node.Should().NotBeNull();
+        var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        agentConfig.Delegations.Should().BeNull();
+        agentConfig.Handoffs.Should().HaveCount(1);
+        agentConfig.Handoffs![0].AgentPath.Should().Be("Worker");
+    }
+
+    #endregion
+
+    #region Serialize Tests
+
+    [Fact(Timeout = 20000)]
+    public void SerializeAsync_AgentNode_ProducesValidMarkdown()
+    {
+        // Arrange — node-level metadata on the node; only behaviour on the content.
+        var agentConfig = new AgentConfiguration
+        {
+            Id = "TestAgent",
+            Description = "A test agent",
+            Instructions = "You are a test agent.",
+            IsDefault = false,
+            ExposedInNavigator = true
+        };
+
+        var node = new MeshNode("TestAgent", "test")
+        {
+            NodeType = "Agent",
+            Name = "Test Agent",
+            Description = "A test agent",
+            Icon = "Bot",
+            Category = "Testing",
+            Content = agentConfig
+        };
+
+        // Act
+        var result = _parser.Serialize(node);
+
+        // Assert
+        result.Should().Contain("---");
+        result.Should().Contain("nodeType: Agent");
+        result.Should().Contain("name: Test Agent");
+        result.Should().Contain("description: A test agent");
+        result.Should().Contain("exposedInNavigator: true");
+        result.Should().Contain("groupName: Testing");
+        result.Should().Contain("You are a test agent.");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void SerializeAsync_WithDelegations_SerializesDelegations()
+    {
+        // Arrange
+        var agentConfig = new AgentConfiguration
+        {
+            Id = "Orchestrator",
+            Instructions = "Navigate requests.",
+            Delegations =
+            [
+                new AgentDelegation { AgentPath = "Specialist", Instructions = "Plan tasks" },
+                new AgentDelegation { AgentPath = "Worker", Instructions = "Execute tasks" }
+            ]
+        };
+
+        var node = new MeshNode("Orchestrator")
+        {
+            NodeType = "Agent",
+            Name = "Orchestrator",
+            Content = agentConfig
+        };
+
+        // Act
+        var result = _parser.Serialize(node);
+
+        // Assert
+        result.Should().Contain("delegations:");
+        result.Should().Contain("agentPath: Specialist");
+        result.Should().Contain("instructions: Plan tasks");
+        result.Should().Contain("agentPath: Worker");
+        result.Should().Contain("instructions: Execute tasks");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void SerializeAsync_WithHandoffs_SerializesHandoffs()
+    {
+        // Arrange
+        var agentConfig = new AgentConfiguration
+        {
+            Id = "Orchestrator",
+            Instructions = "Navigate requests.",
+            Delegations =
+            [
+                new AgentDelegation { AgentPath = "Researcher", Instructions = "Look up info" }
+            ],
+            Handoffs =
+            [
+                new AgentHandoff { AgentPath = "Specialist", Instructions = "Plan tasks" },
+                new AgentHandoff { AgentPath = "Worker", Instructions = "Execute tasks" }
+            ]
+        };
+
+        var node = new MeshNode("Orchestrator")
+        {
+            NodeType = "Agent",
+            Name = "Orchestrator",
+            Content = agentConfig
+        };
+
+        // Act
+        var result = _parser.Serialize(node);
+
+        // Assert
+        result.Should().Contain("delegations:");
+        result.Should().Contain("agentPath: Researcher");
+        result.Should().Contain("handoffs:");
+        result.Should().Contain("agentPath: Specialist");
+        result.Should().Contain("instructions: Plan tasks");
+        result.Should().Contain("agentPath: Worker");
+        result.Should().Contain("instructions: Execute tasks");
+    }
+
+    [Fact(Timeout = 20000)]
+    public void RoundTrip_WithHandoffs_PreservesHandoffs()
+    {
+        // Arrange
+        var originalContent = """
+            ---
+            nodeType: Agent
+            name: Orchestrator
+            description: Routes requests
+            delegations:
+              - agentPath: Researcher
+                instructions: Look up info
+            handoffs:
+              - agentPath: Specialist
+                instructions: Plan tasks
+              - agentPath: Worker
+                instructions: Execute tasks
+            ---
+
+            You are Orchestrator.
+            """;
+
+        // Act - Parse then serialize
+        var node = _parser.Parse("/Orchestrator.md", originalContent, "Orchestrator.md");
+        var serialized = _parser.Serialize(node!);
+
+        // Re-parse to verify
+        var reparsed = _parser.Parse("/Orchestrator.md", serialized, "Orchestrator.md");
+
+        // Assert
+        reparsed.Should().NotBeNull();
+        var agentConfig = reparsed!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        agentConfig.Delegations.Should().HaveCount(1);
+        agentConfig.Delegations![0].AgentPath.Should().Be("Researcher");
+
+        agentConfig.Handoffs.Should().HaveCount(2);
+        agentConfig.Handoffs![0].AgentPath.Should().Be("Specialist");
+        agentConfig.Handoffs[0].Instructions.Should().Be("Plan tasks");
+        agentConfig.Handoffs[1].AgentPath.Should().Be("Worker");
+        agentConfig.Handoffs[1].Instructions.Should().Be("Execute tasks");
+    }
+
+    #endregion
+
+    #region CanSerialize Tests
+
+    [Fact(Timeout = 20000)]
+    public void CanSerialize_AgentNode_ReturnsTrue()
+    {
+        var node = new MeshNode("test") { NodeType = "Agent" };
+        _parser.CanSerialize(node).Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void CanSerialize_AgentConfigurationContent_ReturnsTrue()
+    {
+        var node = new MeshNode("test")
+        {
+            Content = new AgentConfiguration { Id = "test" }
+        };
+        _parser.CanSerialize(node).Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void CanSerialize_MarkdownNode_ReturnsFalse()
+    {
+        var node = new MeshNode("test")
+        {
+            NodeType = "Markdown",
+            Content = "# Some markdown"
+        };
+        _parser.CanSerialize(node).Should().BeFalse();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void CanSerialize_OtherNodeType_ReturnsFalse()
+    {
+        var node = new MeshNode("test")
+        {
+            NodeType = "Space",
+            Content = new { Id = "test" }
+        };
+        _parser.CanSerialize(node).Should().BeFalse();
+    }
+
+    #endregion
+
+    #region Round-Trip Tests
+
+    [Fact(Timeout = 20000)]
+    public void RoundTrip_PreservesAllProperties()
+    {
+        // Arrange
+        var originalContent = """
+            ---
+            nodeType: Agent
+            name: Complete Agent
+            description: Agent with all properties
+            icon: Star
+            category: Testing
+            groupName: TestGroup
+            isDefault: true
+            exposedInNavigator: true
+            contextMatchPattern: address=like=*Test*
+            preferredModel: gpt-4
+            order: 5
+            delegations:
+              - agentPath: Helper
+                instructions: Help with tasks
+            ---
+
+            # Complete Agent Instructions
+
+            This agent handles everything.
+
+            ## Rules
+            - Be helpful
+            - Be accurate
+            """;
+
+        // Act - Parse then serialize
+        var node = _parser.Parse("/test/CompleteAgent.md", originalContent, "test/CompleteAgent.md");
+        var serialized = _parser.Serialize(node!);
+
+        // Re-parse to verify
+        var reparsed = _parser.Parse("/test/CompleteAgent.md", serialized, "test/CompleteAgent.md");
+
+        // Assert
+        reparsed.Should().NotBeNull();
+        reparsed!.NodeType.Should().Be("Agent");
+        reparsed.Name.Should().Be("Complete Agent");
+        // Group + order are node-level (groupName round-trips through the node's Category).
+        reparsed.Category.Should().Be("TestGroup");
+        reparsed.Order.Should().Be(5);
+
+        var agentConfig = reparsed.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        agentConfig.IsDefault.Should().BeTrue();
+        agentConfig.ExposedInNavigator.Should().BeTrue();
+        agentConfig.ContextMatchPattern.Should().Be("address=like=*Test*");
+        agentConfig.Delegations.Should().HaveCount(1);
+        agentConfig.Delegations![0].AgentPath.Should().Be("Helper");
+        agentConfig.Instructions.Should().Contain("# Complete Agent Instructions");
+        agentConfig.Instructions.Should().Contain("- Be helpful");
+    }
+
+    #endregion
+
+    #region IsAgentMarkdown Tests
+
+    [Fact(Timeout = 20000)]
+    public void IsAgentMarkdown_WithAgentNodeType_ReturnsTrue()
+    {
+        var content = """
+            ---
+            nodeType: Agent
+            name: Test
+            ---
+            Instructions
+            """;
+
+        AgentFileParser.IsAgentMarkdown(content).Should().BeTrue();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void IsAgentMarkdown_WithMarkdownNodeType_ReturnsFalse()
+    {
+        var content = """
+            ---
+            nodeType: Markdown
+            name: Test
+            ---
+            Content
+            """;
+
+        AgentFileParser.IsAgentMarkdown(content).Should().BeFalse();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void IsAgentMarkdown_WithNoYaml_ReturnsFalse()
+    {
+        var content = "# Just markdown content";
+
+        AgentFileParser.IsAgentMarkdown(content).Should().BeFalse();
+    }
+
+    [Fact(Timeout = 20000)]
+    public void IsAgentMarkdown_WithEmptyContent_ReturnsFalse()
+    {
+        AgentFileParser.IsAgentMarkdown("").Should().BeFalse();
+        AgentFileParser.IsAgentMarkdown("   ").Should().BeFalse();
+    }
+
+    #endregion
+}

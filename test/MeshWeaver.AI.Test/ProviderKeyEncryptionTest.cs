@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
-using Memex.Portal.Shared.Models;
+using MeshWeaver.AI.Portal;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
