@@ -82,10 +82,13 @@ from pathlib import Path
 ALLOW_FILE = "scripts/type-forwards.allow"
 
 # `public sealed record Foo(` / `public partial class Bar<T> :` / `public enum Baz` / `public
-# delegate void Qux(`. Anchored at column 0 so NESTED types (always indented in this repo, and
-# never independently bindable by their simple name) are out of scope.
+# delegate void Qux(`. The leading indent is CAPTURED rather than forbidden: 38 files under `src/`
+# still use a block-scoped namespace, which indents every top-level type by four spaces
+# (`MeshWeaver.Data/TypeDescription.cs`), and anchoring at column 0 skipped all of them — a gate
+# that quietly covers less is the exact failure mode this change exists to stop. Nesting is then
+# excluded by comparing that indent against the enclosing namespace's form (see TOP_LEVEL_INDENT).
 TYPE_RE = re.compile(
-    r"^public\s+"
+    r"^(?P<indent>[ \t]*)public\s+"
     r"(?:(?:sealed|abstract|partial|readonly|ref|unsafe|static)\s+)*"
     r"(?:class|record|struct|interface|enum|delegate)\s+"
     r"(?:(?:class|struct)\s+)?"          # `record class` / `record struct`
@@ -93,8 +96,15 @@ TYPE_RE = re.compile(
     re.MULTILINE,
 )
 
-# `namespace Foo.Bar;` (file-scoped) or `namespace Foo.Bar {`
-NAMESPACE_RE = re.compile(r"^namespace\s+(?P<ns>[A-Za-z_][\w.]*)\s*[;{]", re.MULTILINE)
+# `namespace Foo.Bar;` (file-scoped), `namespace Foo.Bar {`, or `namespace Foo.Bar` with the brace
+# on the next line. The terminator is captured because it decides where a TOP-LEVEL type sits.
+NAMESPACE_RE = re.compile(
+    r"^namespace\s+(?P<ns>[A-Za-z_][\w.]*)[ \t]*(?P<form>[;{]|$)", re.MULTILINE
+)
+
+# Column at which a top-level type is declared, by namespace form. A DEEPER indent is a nested
+# type, which no module binds by its own simple name and which is therefore out of scope.
+TOP_LEVEL_INDENT = {";": 0, "{": 4, "": 4}
 
 FORWARD_RE = re.compile(
     r"\[assembly:\s*TypeForwardedTo\s*\(\s*typeof\(\s*(?P<type>[A-Za-z_][\w.]*)\s*\)\s*\)\s*\]"
@@ -134,18 +144,27 @@ def _assembly_of(path: str) -> str:
     return path.split("/")[1]
 
 
+def _indent_width(raw: str) -> int:
+    return sum(4 if ch == "\t" else 1 for ch in raw)
+
+
 def parse_declarations(path: str, text: str) -> list[Decl]:
-    """Public top-level types declared by one file, with the namespace in force."""
+    """Public TOP-LEVEL types declared by one file, with the namespace in force."""
     assembly = _assembly_of(path)
-    namespaces = [(m.start(), m.group("ns")) for m in NAMESPACE_RE.finditer(text)]
+    namespaces = [
+        (m.start(), m.group("ns"), TOP_LEVEL_INDENT[m.group("form") or ""])
+        for m in NAMESPACE_RE.finditer(text)
+    ]
     out: list[Decl] = []
     for m in TYPE_RE.finditer(text):
-        ns = ""
-        for start, candidate in namespaces:
+        ns, expected = "", 0
+        for start, candidate, indent in namespaces:
             if start < m.start():
-                ns = candidate
+                ns, expected = candidate, indent
             else:
                 break
+        if _indent_width(m.group("indent")) != expected:
+            continue  # nested inside another type — not independently bindable by its simple name
         out.append(Decl(assembly, ns, m.group("name")))
     return out
 
@@ -332,7 +351,14 @@ OPS_NEW_NS = "namespace MeshWeaver.Mesh;\npublic class MeshOperations\n{\n}\n"
 AI_KEEP = "namespace MeshWeaver.AI;\npublic class MeshPlugin\n{\n}\n"
 FOO_N = "namespace N;\npublic sealed record Foo(int X);\n"
 FOO_GENERIC = "namespace N;\npublic sealed record class Foo<T> where T : notnull\n{\n}\n"
-FOO_BLOCK_NS = "namespace N\n{\n}\npublic class Foo\n{\n}\n"
+FOO_BLOCK_NS = "namespace N\n{\n    public record Foo(int X);\n}\n"
+FOO_BLOCK_NS_BRACE = "namespace N {\n    public record Foo(int X);\n}\n"
+FOO_BLOCK_NS_NESTED = (
+    "namespace N\n{\n    public class Foo\n    {\n        public class Inner\n        {\n"
+    "        }\n    }\n}\n"
+)
+INNER_MOVED = "namespace M;\npublic class Inner\n{\n}\n"
+KEEP_A_BLOCK = "namespace N\n{\n    public class Keep\n    {\n    }\n}\n"
 KEEP_A = "namespace N;\npublic class Keep\n{\n}\n"
 DOC_KEEP = "namespace MeshWeaver.Documentation;\npublic class Doc\n{\n}\n"
 BLAZOR_PORTAL_APP = "namespace MeshWeaver.Blazor.Infrastructure;\npublic class PortalApplication\n{\n}\n"
@@ -475,10 +501,29 @@ SELF_TESTS: list[tuple[str, dict[str, str], dict[str, str], bool]] = [
         False,
     ),
     (
-        "block-scoped namespaces resolve to the enclosing declaration",
-        {"src/A/Foo.cs": FOO_BLOCK_NS, "src/A/Keep.cs": KEEP_A},
-        {"src/B/Foo.cs": FOO_BLOCK_NS, "src/A/Keep.cs": KEEP_A},
+        # 38 files under src/ still declare a block-scoped namespace, which indents every top-level
+        # type by four. An earlier revision anchored the matcher at column 0 and skipped all of
+        # them — covering less while still reporting green.
+        "a block-scoped namespace indents its TOP-LEVEL types, and they are still in scope",
+        {"src/A/Foo.cs": FOO_BLOCK_NS, "src/A/Keep.cs": KEEP_A_BLOCK},
+        {"src/B/Foo.cs": FOO_BLOCK_NS, "src/A/Keep.cs": KEEP_A_BLOCK},
         False,
+    ),
+    (
+        "…with the brace on the namespace's own line, too",
+        {"src/A/Foo.cs": FOO_BLOCK_NS_BRACE, "src/A/Keep.cs": KEEP_A_BLOCK},
+        {"src/B/Foo.cs": FOO_BLOCK_NS_BRACE, "src/A/Keep.cs": KEEP_A_BLOCK},
+        False,
+    ),
+    (
+        "…but a type NESTED inside a block-scoped namespace's type stays out of scope",
+        {"src/A/Foo.cs": FOO_BLOCK_NS_NESTED, "src/A/Keep.cs": KEEP_A_BLOCK},
+        {
+            "src/A/Foo.cs": "namespace N\n{\n    public class Foo\n    {\n    }\n}\n",
+            "src/A/Keep.cs": KEEP_A_BLOCK,
+            "src/B/Inner.cs": INNER_MOVED,
+        },
+        True,
     ),
     (
         "an in-mesh doc sample is not compiled, so it is not a binary move",
