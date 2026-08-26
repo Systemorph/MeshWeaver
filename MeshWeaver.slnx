@@ -35,7 +35,6 @@
     <File Path="README.md" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/MeshWeaver.AI.Application/MeshWeaver.AI.Application.csproj" />
     <Project Path="src/MeshWeaver.AI/MeshWeaver.AI.csproj" />
     <Project Path="src/MeshWeaver.Application.Styles/MeshWeaver.Application.Styles.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Portal/MeshWeaver.Blazor.Portal.csproj" />

@@ -114,12 +114,11 @@ public static class GitHubSyncConfiguration
                     o.KeepCommitsPerRepo = keep;
             });
         services.AddSingleton<GitModuleReplica>();
-        // Writes the live Agent + Skill partitions back to the repo's content/ai section — the inverse
-        // of the built-in providers that READ that section. Dev-time (source checkout) only.
-        services.AddSingleton<AiContentDiskWriter>();
-        // AI-drafted PR title/body. Default delegates to the PullRequestWriter agent via the
-        // existing chat surface (mirrors DescriptionGenerator); tests override with a stub.
-        services.AddSingleton<IPullRequestDraftService, PullRequestDraftService>();
+        // The PR title/body drafter. This is the FALLBACK — a deterministic title and a body that
+        // asks the human to edit it — registered with TryAdd so the AI module's real drafter wins
+        // whichever configures first (AddAI uses a plain AddSingleton). PR creation therefore never
+        // depends on AI being installed; tests override with a stub. See #2276.
+        services.TryAddSingleton<IPullRequestDraftService, PlaceholderPullRequestDraftService>();
         // Factory so the optional HttpClient param is explicitly defaulted (the service
         // creates its own) — no bare-HttpClient registration required in the container.
         services.AddSingleton(sp => new GitHubOAuthService(
@@ -209,13 +208,12 @@ public static class GitHubSyncConfiguration
             .WithServices(s =>
             {
                 s.TryAddEnumerable(ServiceDescriptor.Scoped<INodeMenuProvider, GitHubSyncMenuProvider>());
-                // "Sync to repo" on Agent/Skill nodes — self-gates to a source checkout + platform admin.
-                s.TryAddEnumerable(ServiceDescriptor.Scoped<INodeMenuProvider, AiContentSyncMenuProvider>());
+                // "Sync to repo" on Agent/Skill nodes rides AddAI() — it is an AI-content feature
+                // that happens to write through this repo client, not a GitHub feature (#2276).
                 return s;
             })
             .AddLayout(layout => layout
-                .WithView(GitHubActionArea.AreaName, GitHubActionArea.Render)
-                .WithView(AiContentSyncArea.AreaName, AiContentSyncArea.Render)));
+                .WithView(GitHubActionArea.AreaName, GitHubActionArea.Render)));
         return builder;
     }
 }

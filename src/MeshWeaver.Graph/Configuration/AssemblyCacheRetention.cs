@@ -144,6 +144,15 @@ public sealed record AssemblyCacheSweepResult(
 /// <summary>
 /// 🚨 THE ASSEMBLY CACHE GROWS BY ONE WHOLE GENERATION PER DEPLOY, AND NOTHING USED TO REMOVE ONE.
 ///
+/// <para>🚨 <b>This is ONE of the cache's two growth axes, and it can only see its own.</b> This
+/// class buckets by framework GENERATION and keeps whole generations. The other axis is per-TYPE
+/// version accumulation INSIDE one generation — one dll/pdb pair per recompile, measured at 4,184
+/// files for a single type on memex-cloud (#2086) — which no amount of generation retention can
+/// bucket, because every one of those files carries the same tag. That axis is collected at write
+/// time by <see cref="FileSystemAssemblyStore.KeepVersionsPerType"/>, on the argument this class
+/// cannot make: within one generation the worst case of a wrong answer is a cache MISS (recompile),
+/// whereas across generations it is loading another image's bytes.</para>
+///
 /// <para><b>Why it grows.</b> <see cref="FileSystemAssemblyStore"/> keys every file
 /// <c>v{version}-{frameworkTag}-{contentHash}.dll</c>, where the tag is the first 8 chars of the
 /// <c>MeshWeaver.Graph</c> MVID. Under <c>CIRun</c> the build stamps a fresh
@@ -194,62 +203,17 @@ public static class AssemblyCacheGenerations
     public const string ClaimsDirectoryName = ".generations";
 
     /// <summary>
-    /// Width of the framework tag the store writes — <c>FrameworkVersion[..8]</c>, see
-    /// <see cref="FileSystemAssemblyStore.FrameworkTag"/>.
-    /// </summary>
-    private const int FrameworkTagLength = 8;
-
-    /// <summary>
-    /// Width of the content hash the store writes — 12 hex chars (<c>ToHexString</c> of the first
-    /// 6 SHA-256 bytes), see <c>FileSystemAssemblyStore.ContentHash</c>.
-    /// </summary>
-    private const int ContentHashLength = 12;
-
-    /// <summary>
     /// The framework generation a cache filename belongs to, or <c>null</c> when the name is not one
     /// this store wrote. Strict on purpose — everything this refuses is something the sweep will
     /// never delete, so the shape it accepts IS the deletion boundary.
+    ///
+    /// <para>🚨 <b>The shape is decoded in exactly ONE place</b>,
+    /// <see cref="AssemblyCacheFileName"/>, beside the writer that emits it. The store's own
+    /// per-type eviction-at-write (#2086) deletes on the SAME attribution rule, and two collectors
+    /// disagreeing about which names this store wrote is precisely how one of them would remove a
+    /// file the other treats as foreign.</para>
     /// </summary>
-    public static string? TagOf(string fileName)
-    {
-        var extension = Path.GetExtension(fileName);
-        if (!string.Equals(extension, ".dll", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(extension, ".pdb", StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        // v{version}-{frameworkTag}-{contentHash} — exactly three segments, no more, no less. A
-        // pre-tag legacy name (v{version}-{hash}) has two and is therefore never attributed, so it
-        // is never collected either.
-        var parts = Path.GetFileNameWithoutExtension(fileName).Split('-');
-        if (parts.Length != 3)
-            return null;
-        if (parts[0].Length < 2 || (parts[0][0] != 'v' && parts[0][0] != 'V'))
-            return null;
-        if (!long.TryParse(parts[0].AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out _))
-            return null;
-        // 🚨 The WIDTHS are part of the shape, not decoration. The store always emits an 8-char tag
-        // and a 12-char hash, so accepting any hex length would let a foreign name like
-        // `v1-ab-cd.dll` be attributed to a generation — and attribution is what makes a file
-        // deletable. Matching exactly what the writer emits is what keeps "only files this store
-        // wrote are ever deleted" literally true.
-        return IsGenerationTag(parts[1])
-               && parts[2].Length == ContentHashLength && IsHex(parts[2])
-            ? parts[1].ToLowerInvariant()
-            : null;
-    }
-
-    // The three tag shapes the store has ever written (FrameworkVersion[..8], see
-    // FileSystemAssemblyStore.FrameworkTag): 8 hex chars for an MVID identity (local builds, and
-    // every build before #1660 WS3), 'g' + 7 hex chars for a commit identity (manifest-less CI
-    // processes since #1660 WS3), or 's' + 7 hex chars for the API-surface identity (hosts that
-    // ship a surface manifest — the portals and the bake host). Anything else stays unattributed
-    // and therefore undeletable.
-    private static bool IsGenerationTag(string s) =>
-        s.Length == FrameworkTagLength
-        && (IsHex(s) || ((s[0] is 'g' or 'G' or 's' or 'S') && IsHex(s[1..])));
-
-    private static bool IsHex(string s) =>
-        s.Length > 0 && s.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');
+    public static string? TagOf(string fileName) => AssemblyCacheFileName.TagOf(fileName);
 
     /// <summary>
     /// Enumerate the cache: one entry per framework generation, plus a count of the files whose names

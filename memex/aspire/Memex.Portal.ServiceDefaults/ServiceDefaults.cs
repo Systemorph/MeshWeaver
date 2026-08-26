@@ -48,9 +48,65 @@ public static class ServiceDefaults
         // designed opt-in, and it is the ONLY way to override the defaults pipeline per client
         // without stacking a second retry-inside-retry pipeline on top of it.
 #pragma warning disable EXTEXP0001
+        // 🚨 TWO clients, because the registry serves two call shapes with OPPOSITE budgets.
+        //
+        // What the standard defaults (10s per attempt, 30s total) cost us, measured 2026-08-26 from
+        // inside two production portals: GET /api/plugins/bundles/index.json — an 8.7 KB document —
+        // connects in ~0.03s and then takes 12–19s to first byte, because the registry evaluates
+        // entitlement per package and runs a mesh query on every request. TTFB alone exceeds the
+        // 10s ATTEMPT timeout, so every attempt is cancelled, all three retries are cancelled the
+        // same way, and the pipeline reports TotalRequestTimeout at 30s.
+        //
+        // In production that read as `Module 'MeshWeaver.SelfUpdate.Aks' of Hosting: landing
+        // failed`, repeatedly, on memex.systemorph.com — three consequences deep, none naming a
+        // timeout:
+        //   1. modules stopped landing — 40 present against a sibling's 55;
+        //   2. the ones that did land pre-dated the asset fix, so `_content/…` 404'd and pages
+        //      died with "Importing a module script failed";
+        //   3. MeshWeaver.SelfUpdate.Aks never landed, so the real Kubernetes patcher was never
+        //      registered, IDeploymentUpdater stayed DetectOnly, and the instance recorded an
+        //      available version forever while patching nothing. Self-update was silently off.
+        //
+        // Raising the budget is a MITIGATION, not the cure — a registry this slow to serve 8.7 KB
+        // is its own defect and wants caching — but a client whose budget cannot cover the server's
+        // OBSERVED latency keeps failing after the server improves, and it fails invisibly.
+        //
+        // 🚨 The raise must NOT be shared, though, and that is the half worth reading twice. Bundle
+        // transfers are megabytes off that slow index and legitimately want minutes. Registration
+        // and the /Store catalog listing are rendered on a PAGE, where minutes are not resilience —
+        // they are a hang. One pipeline for both would have traded a silent module failure for a
+        // /Store that spins for five minutes against an unreachable registry.
+        //
+        // Polly validates each set against itself: TotalRequestTimeout must exceed AttemptTimeout,
+        // and the breaker's SamplingDuration must be at least twice AttemptTimeout — so the three
+        // values move together or the handler throws at startup.
+
+        // Both names are STRING LITERALS on purpose: this assembly does not reference
+        // MeshWeaver.PluginCatalog and should not start to for two constants. They must match
+        // InstanceRegistrationClient.HttpClientName / .BundleHttpClientName, whose doc comments say
+        // the same thing from the other side. A name that drifts does not fail — the factory simply
+        // hands back an unconfigured client and the budget below applies to nothing.
+
+        // Page-facing: registration + the catalog listing. Generous enough to cover the measured
+        // 12–19s TTFB with headroom, bounded tightly enough that a user is never left waiting.
         builder.Services.AddHttpClient("plugin-registry")
             .RemoveAllResilienceHandlers()
-            .AddStandardResilienceHandler();
+            .AddStandardResilienceHandler(options =>
+            {
+                options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(30);
+                options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(90);
+                options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(60);
+            });
+
+        // Transfer-facing: bundle downloads only. Nothing renders behind this, so it may wait.
+        builder.Services.AddHttpClient("plugin-registry-bundles")
+            .RemoveAllResilienceHandlers()
+            .AddStandardResilienceHandler(options =>
+            {
+                options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(120);
+                options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(5);
+                options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(240);
+            });
 #pragma warning restore EXTEXP0001
 
         builder.Services.AddRequestTimeouts();
