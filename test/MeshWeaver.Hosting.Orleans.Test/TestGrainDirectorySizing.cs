@@ -47,12 +47,16 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///   <item>Wall clock is UNCHANGED on an 18-core dev box — 74.9–98.8 s without, 75.8–92.4 s with.
 ///   (An earlier "30% faster" reading of mine was machine load; it is retracted here rather than
 ///   left standing. The memory number is the one that holds.)</item>
-///   <item>Flake rate: <b>2 failures / 17 runs without, 5 / 21 with</b> — not distinguishable at this
-///   sample size (Fisher p ≈ 0.4), and the families overlap: <c>OrleansGrainTeardownStragglerTest</c>
-///   (#2301's "activation never leaves the catalog") failed in BOTH arms, and the delegation family
-///   failed in both too (<c>OrleansThreadStreamingTest</c> without, <c>OrleansNodeChangePropagationTest</c>
-///   with). That is the ambient population this change neither causes nor cures — it is recorded here
-///   so nobody has to re-derive it, and so a later measurement has a baseline to beat.</item>
+///   <item>Flake rate: <b>2 failures / 17 runs without, 6 / 24 with</b> (12% vs 25%) — not
+///   distinguishable at this sample size (Fisher p ≈ 0.4), and the families OVERLAP, which is the part
+///   that actually attributes: <c>OrleansGrainTeardownStragglerTest</c> (#2301's "activation never
+///   leaves the catalog") failed in BOTH arms, and the delegation family failed in both too
+///   (<c>OrleansThreadStreamingTest</c> without, <c>OrleansNodeChangePropagationTest</c> with; plus one
+///   <c>PodHubTransportTest</c>). Six named tests across 41 runs, no two arms sharing a majority
+///   member: that is the #2346 population, which this change neither causes nor cures. Recorded rather
+///   than rounded off, so a later measurement has a baseline to beat — and because the only mechanism
+///   by which a SMALLER cache could touch these at all is timing (less GC, faster silo start
+///   reshuffles interleavings); it cannot evict, so it cannot change an answer.</item>
 /// </list>
 ///
 /// <para><b>Not a tuning knob.</b> Nothing here raises a bound to make a test pass; it stops a test
