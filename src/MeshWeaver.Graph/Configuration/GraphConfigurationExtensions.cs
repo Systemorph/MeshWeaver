@@ -228,6 +228,16 @@ public static class GraphConfigurationExtensions
                 // IMessageHub, so the registry checked is the validating hub's own chain.
                 services.AddScoped<INodeValidator, Security.ContentDiscriminatorValidator>();
 
+                // Write-boundary guard for the OTHER collision class in the same family
+                // (#2160/#2161/#2162, #2245, #2358): a NodeType declaration (Content IS a
+                // NodeTypeDefinition) must never also claim, via its own MeshNode.NodeType, to
+                // be an INSTANCE of a type. #2245 retyped the three known offenders and added a
+                // static ratchet test, but nothing stopped a FUTURE create/update (a repair
+                // path, a plugin install) from reintroducing the same collision at runtime,
+                // where a static-registration-only ratchet cannot see it. Stateless, like
+                // CodeNodeSegmentNameValidator below.
+                services.AddScoped<INodeValidator, Security.NodeTypeDeclarationSelfTypingValidator>();
+
                 // Keeps the batch bake's "the union is every Code node" claim true BY
                 // CONSTRUCTION (issue #1235): a Code node named after a code-table routing
                 // segment (Source/Test) lands in the code table but has a namespace that
