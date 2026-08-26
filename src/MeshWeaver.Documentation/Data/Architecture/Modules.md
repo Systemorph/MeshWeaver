@@ -141,6 +141,50 @@ never reach disk), and a refusal of any module whose entry DLL name collides wit
 assembly — `ResolveModulePath` probes `modules/<name>/` first, so such a module would silently
 shadow the platform's own binary at the next boot.
 
+### 🚨 "Keeps loading across ordinary platform updates" is a promise the PLATFORM owes (#2370)
+
+The semver floor above is not a weaker gate than MVID equality — it is a **different contract**, and
+the platform side of it is: *a public type a module can bind must keep its full name and keep being
+reachable from the assembly it was bound in*. A module's IL holds neither a `using` nor a source
+reference; it holds
+
+```
+TypeRef  MeshWeaver.AI.MeshOperations     scope: AssemblyRef MeshWeaver.AI
+```
+
+so **moving a public type to another assembly, or renaming its namespace, breaks every module
+compiled earlier** — at the next roll, with no warning anywhere:
+
+```
+System.TypeLoadException: Could not load type 'MeshWeaver.AI.MeshOperations'
+    from assembly 'MeshWeaver.AI, Version=3.0.0.0, Culture=neutral, PublicKeyToken=null'
+```
+
+That is #2370. `MeshOperations` moved to `MeshWeaver.Mesh.Operations` and the store-installed
+`MeshWeaver.Mcp` could no longer construct `McpMeshPlugin`; because the MCP SDK builds its tool
+target per invocation, EVERY tool call — `get`, `search`, `create`, `render_area`, the LSP and chunk
+tools — failed identically. A full outage of the deployment's `/mcp` surface, for every external
+client, from a change that was source-compatible and reviewed as a refactor.
+
+**The move is fine; losing the name is not.** Leave a forwarder in the old assembly and keep the
+type's ORIGINAL full name in its new home — a forwarder cannot rename:
+
+```csharp
+// src/MeshWeaver.AI/TypeForwards.cs
+[assembly: TypeForwardedTo(typeof(MeshWeaver.AI.MeshOperations))]
+```
+
+The CLR then resolves the module's TypeRef through the old assembly to ONE type identity — not a
+shim, which would mint a second identity and reintroduce the `as`/`is` trap-door.
+
+🚨 **No repo-local build can see this break, and two green gates specifically cannot.**
+`landed-modules-gate` compiles the plugins repo's module SOURCE against the PR, which is a different
+question from whether the module ALREADY PUBLISHED still binds — and on #2370 it passed, because the
+module's source carried `using` directives for both namespaces. The semver floor cannot see a type at
+all. `scripts/check-type-forwards.py` (wired into the *Public surface (binary compatibility)* job
+beside #2298's `check-record-signatures.py`) is what refuses the next one; its allow file is a
+statement that no shipped module can hold the TypeRef, not a way to make it quiet.
+
 ### 🚨 An ACTIVATED entry with no bytes — the boot-GC race (#2303)
 
 The "Missing DLL" skip above is the SYMPTOM; #2303 traced one concrete way an entry ends up
