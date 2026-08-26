@@ -157,7 +157,19 @@ concurrency:
   # folded (`>-`) scalar, continuation lines indented deeper than the first are preserved
   # literally rather than folded, so a "tidier" multi-line version silently changes the
   # string rather than just its layout.
-  group: build-test-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  # 🚨 `main` groups by SHA, not by ref (#2412 follow-up). `cancel-in-progress: false` below
+  # protects a run that is ALREADY RUNNING — it does not protect a QUEUED one: GitHub keeps only
+  # ONE pending run per group and supersedes the older pending run whatever this setting says. That
+  # distinction is invisible while runners are free (a run starts within seconds, so "queued" barely
+  # exists) and decisive when they are not: on 2026-08-26 the shared 60-job pool was saturated by a
+  # sibling repo, main's runs never reached in-progress, and each merge cancelled the previously
+  # PENDING one — including `7faac22`, the very commit that merged the never-cancel fix. Six
+  # consecutive main commits produced no completed run, so CD's gate stayed `skipped` and no image
+  # published for hours while production ran ~11-hour-old code.
+  # Grouping by SHA gives each main commit its own group, so nothing can supersede it, queued or
+  # running. PR runs keep grouping by ref — superseding there is correct and is where #2316's
+  # runner saving comes from.
+  group: build-test-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref == 'refs/heads/main' && github.sha || github.ref }}
   # 🚨 NEVER cancel a run on `main` (#2412). Superseding is safe on a PR branch — the later
   # push tests a strict successor of what was cancelled, and that is where #2316's ~28% of
   # runner demand is saved. On `main` it is neither safe nor recoverable, for two reasons:
