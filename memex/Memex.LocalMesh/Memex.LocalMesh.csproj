@@ -22,13 +22,14 @@
          portal's endpoint does — so the sidecar compiles and runs whether or not voice is
          installed. The Whisper client itself arrives as a MODULE (below). -->
     <ProjectReference Include="..\..\src\MeshWeaver.Speech.Contract\MeshWeaver.Speech.Contract.csproj" />
-    <!-- The AI engine (Thread/Agent/Skill node types + the chat runtime), the portal's thin lane:
-         the DLL rides the app closure so ResolveModulePath's BaseDirectory fallback finds it, and
-         Modules:Assemblies in appsettings.json is what activates it (a MeshNodeProviderAttribute
-         is read ONLY by InstallConfiguredModules — the reference alone contributes nothing).
-         Without it the sidecar refuses every chat send with "NodeType 'Thread' is not
-         registered" — the RN shells' composer is a dead surface on the local mesh. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <!-- 🚨 The AI engine is NOT referenced here — deliberately, and this comment is the reason.
+         It arrives the same way every other module does: MeshWeaver.AI is on the CLOSURE lane
+         (memex/MeshModulesPublish.targets), so its bits land in modules/MeshWeaver.AI/ and
+         Modules:Assemblies in appsettings.json is what activates it. A ProjectReference would put
+         the engine back in this app's own closure — the double-ship that makes the switch control
+         nothing, exactly as the Speech note below describes — and it would trip
+         MeshModulesGuardPublishAppRoot, which refuses a closure module found in the app root.
+         MeshWeaver.AI.csproj is also the ONE reference standing between this repo and #2276. -->
   </ItemGroup>
 
   <!-- ═════════ The RN web client is BAKED at publish — never hand-copied ═════════
@@ -88,14 +89,30 @@
     <Message Importance="high" Text="BakeRnWebClient: baked @(RnWebFiles->Count()) files into $(PublishDir)wwwroot/" />
   </Target>
 
-  <!-- ═════════ Voice ships as a module, not as a reference ═════════
-       MeshWeaver.Speech lands in modules/MeshWeaver.Speech/ and is activated by
-       Modules:Assemblies in appsettings.json — the same lane and the same DLL identity the portals
-       use. A ProjectReference would put the Whisper client back in this app's own closure, which
-       is exactly the double-ship that kept it from being a module in the sense that matters: the
-       bits shipped either way and the switch controlled nothing.
+  <!-- ═════════ Modules ship as MODULES here, not as references ═════════
+       The principle this host was already documented as following, now actually wired: a module's
+       bits arrive under modules/<Name>/ and Modules:Assemblies decides whether it RUNS. A
+       ProjectReference instead puts the module in this app's own closure — the double-ship that
+       kept it from being a module in the sense that matters: the bits shipped either way and the
+       switch controlled nothing.
 
-       MeshModulesClosureSubset narrows the shared lane to the one module this host wants, so no
-       publish+prune is hand-rolled here. -->
+       🚨 The import is the half that was missing. It lived in Memex.Portal.Distributed and
+       Memex.Portal.Monolith, and left with them when the portal GUI moved to MeshWeaver.Plugins
+       (83356b3d5) — this host never had it. So the lane's Build hook never ran here and modules/
+       was never created, which is why the AI engine was wired the only way that then worked: a
+       ProjectReference riding the app closure (8dd8eeecf). With the import in place that
+       workaround is gone and the engine arrives the same way it does on the portals.
+
+       MeshModulesClosureSubset names what THIS host lays out. Without it the sidecar would also
+       carry the Cosmos and Snowflake drivers, which ship in the portal IMAGE on purpose (a
+       Store-installed module needs storage to already work) and are dead weight in a local
+       sidecar that never selects either backend. See the 🚨 in MeshModulesPublish.targets: the
+       prohibition is on a GLOBAL subset (-p: narrows every project in the build, including an
+       image's own layout), not on a project-scoped one — this is a PropertyGroup, so it cannot
+       leak past this project. -->
+  <PropertyGroup>
+    <MeshModulesClosureSubset>MeshWeaver.AI</MeshModulesClosureSubset>
+  </PropertyGroup>
+  <Import Project="..\MeshModulesPublish.targets" />
 
 </Project>

@@ -12,7 +12,7 @@
        about the shipped layout. (A pack that is NOT in the subset has no modules/ folder staged
        here at all, so referencing it is safe; see MeshWeaver.Blazor.Analysis below.) -->
   <PropertyGroup>
-    <MeshModulesClosureSubset>MeshWeaver.Hosting.Cosmos;MeshWeaver.Hosting.Snowflake</MeshModulesClosureSubset>
+    <MeshModulesClosureSubset>MeshWeaver.Hosting.Cosmos;MeshWeaver.Hosting.Snowflake;MeshWeaver.AI</MeshModulesClosureSubset>
   </PropertyGroup>
   <Import Project="..\..\memex\MeshModulesPublish.targets" />
 
