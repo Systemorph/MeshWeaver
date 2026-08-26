@@ -1,10 +1,10 @@
 using System.Reactive.Linq;
-using MeshWeaver.AI;
+using MeshWeaver.GitSync;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.GitSync;
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// The hub-extension surface for the AI-content sync-back: write the agents &amp; skills edited in the

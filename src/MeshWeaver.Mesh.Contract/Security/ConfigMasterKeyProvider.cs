@@ -3,7 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.Mesh.Security;
 
 /// <summary>
 /// Default <see cref="IMasterKeyProvider"/> — reads a base64 master key from

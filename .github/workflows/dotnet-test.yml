@@ -1239,7 +1239,7 @@ jobs:
   # green — but against the framework THIS PR just built, not a published tag. It reuses shard
   # 0's build output, so it costs a download and the tester run, not a rebuild.
   plugin-gate:
-    name: "Plugins compile against this PR"
+    name: "Plugins build, test and bake against this PR"
     # `preflight` is what guarantees the credential exists, so nothing in this job needs to
     # check for it. If preflight fails, this job skips — and `collect-results` turns that skip
     # into a RED required check (see its "Fail if a required CI input is missing" step).
@@ -1251,12 +1251,19 @@ jobs:
     if: needs.build.result == 'success' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     # ⏱️ WALL-CLOCK: this job depends on `build` — the SAME dependency the test shards have — so it
-    # runs CONCURRENTLY with them, not after. Total run time is max(slowest shard, this), so while
-    # the gate stays under a shard it costs the PR nothing. That is why it is scoped to two modules
-    # and reuses shard 0's artifact instead of rebuilding: both choices exist to keep it under that
-    # bar. The timeout is deliberately well below the shard job's 20 min — if the gate ever becomes
-    # the long pole it should fail and be re-scoped, not silently stretch every PR.
-    timeout-minutes: 12
+    # runs CONCURRENTLY with them, not after. Total run time is max(slowest shard, this), so the
+    # gate costs the PR nothing while it stays under a shard's 20 min. It still reuses shard 0's
+    # artifact rather than rebuilding, which is where the saving actually comes from.
+    #
+    # 🚨 It used to gate TWO modules (Store, Essentials) to stay cheap, and that scoping is now
+    # gone: the full sweep runs here. Measured on the plugins repo's own equivalent job, the whole
+    # tree — 53 packages — compiles, renders and tests in ~4m15s, comfortably inside a shard, so
+    # the narrow version was buying a few minutes at the cost of the coverage this gate exists for.
+    # Everything the narrow gate could not see was found LATER and elsewhere: in the plugins repo's
+    # CI (after the break is on main), or in production. The timeout stays under the shard bar — if
+    # this ever becomes the long pole it must fail and be re-scoped from evidence, never silently
+    # stretch every PR.
+    timeout-minutes: 18
     # The failing CHECK and the node(s) it failed on, lifted verbatim from the tester's verdict
     # line, so the required check downstream can name the real cause instead of guessing one.
     # Empty whenever the gate died before producing a verdict (checkout fault, missing tester) —
@@ -1307,21 +1314,20 @@ jobs:
         path: plugins-repo
         ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
         fetch-depth: 1
-    - name: "Compile + run the VITAL plugins against this PR"
+    - name: "Compile + render + test + bake EVERY plugin against this PR"
       id: gate
       env:
-        # 🚨 The vital organs only — NOT the whole repo. This gate sits in the PR critical path,
-        # so it buys the most breakage-detection per minute rather than maximum coverage:
-        #   Store      — EVERY plugin declares `requires: Store` and compiles against
-        #                Store/Plugin/Source (`shared=@Store/Plugin/Source`). If Store's types
-        #                break, every plugin root node in the mesh falls back to an untyped
-        #                overlay. It is the single choke point through which a framework API
-        #                change reaches all of them.
-        #   Essentials — the default skills and agents every installation gets.
-        # The full-repo sweep still runs in the PLUGINS repo's own CI (which narrows by affected
-        # module) and on main-cd's refreshed mw-plugin-test image. Widen this list only if a
-        # module turns out to be a second choke point; each addition costs PR wall-clock.
-        VITAL_MODULES: "Store Essentials"
+        # 🚨 THE WHOLE REPO, not a chosen few. This gated only Store + Essentials — the two
+        # choke points — on the argument that it bought the most breakage-detection per minute of
+        # PR wall-clock. The argument was sound and the conclusion was wrong: everything outside
+        # those two was checked only AFTER a break reached main, by the plugins repo's own CI, and
+        # that is where this session's failures kept surfacing. Widening costs ~4 min against a
+        # 20-minute shard bar; the narrow version cost a day of misattributed reds.
+        #
+        # There is no module list here on purpose. The tester gates every package it DISCOVERS
+        # under the root, so the checkout IS the set — a list in this repo would go stale the first
+        # time the plugins repo adds a module, and it would go stale SILENTLY, the gate reporting
+        # green while covering less. (The same reason landed-modules-gate discovers its projects.)
         # A crash of the tester itself (SIGSEGV'd on main 2026-08-20, mid NodeType compile —
         # exit 139, verdictless) must leave a dump the failure can be analyzed from: the runner's
         # core file dies with the VM, so the CLR writes a minidump-with-heap to a path the
@@ -1337,17 +1343,9 @@ jobs:
           echo "::error::mw-plugin-test.dll not in the build output — the gate cannot run."
           exit 1
         fi
-        # The tester gates every package it DISCOVERS under the root, so the staged tree IS the
-        # filter — the same mechanism the plugins repo uses to narrow to affected modules.
-        STAGE="${RUNNER_TEMP:-/tmp}/vital"
-        mkdir -p "$STAGE"
-        for m in $VITAL_MODULES; do
-          if [ ! -d "$GITHUB_WORKSPACE/plugins-repo/$m" ]; then
-            echo "::error::vital module '$m' is not in the plugins checkout — the gate would silently test less than it claims."
-            exit 1
-          fi
-          cp -R "$GITHUB_WORKSPACE/plugins-repo/$m" "$STAGE/"
-        done
+        # The checkout itself is the root — no staging copy, because there is nothing left to
+        # narrow to and copying the tree would only add I/O.
+        STAGE="$GITHUB_WORKSPACE/plugins-repo"
         # The ratchet is REQUIRED, and its absence is reported here rather than left to the tester
         # (#1741): `--allow` at a path that does not exist is a configuration error, and a `|| true`
         # that swallowed the failed copy only moved the report one process further away.
@@ -1355,8 +1353,16 @@ jobs:
           echo "::error::plugins-repo/plugin-gate.allow is missing — the known-debt ratchet this gate is configured with cannot be read, and a gate that cannot read its input must not look like one that passed. Commit the file (EMPTY = no known debt)."
           exit 1
         fi
-        cp "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow" "$STAGE/"
-        echo "gating: $VITAL_MODULES"
+        # (no copy: the ratchet already sits at the root of the tree being gated)
+        echo "gating every package under $STAGE"
+        # 🚨 No discovery pre-check here, deliberately. "A gate that discovers nothing must not
+        # look like one that passed" is right, and the TESTER already enforces it: PluginGateRunner
+        # returns a GateReport with FatalError "No node-repo packages (top-level folders with an
+        # index.json root)" when it finds none, and a FatalError exits red. A shell count beside it
+        # would be a SECOND discovery rule that has to agree with the first forever — and it would
+        # not: the tester filters on the index.json CONTENT (DeclaresNodeType), a find(1) count
+        # cannot, so a layout change would false-red every PR in this repo while the tester was
+        # perfectly happy. One source of truth for what counts as a package.
         # plugin-gate.allow is the plugins repo's known-debt ratchet: listed failures are
         # tolerated, NEW failures fail this PR. Same one-way contract the plugins CI uses, so the
         # two gates cannot disagree about what is acceptable.

@@ -68,6 +68,8 @@
   "error.checkUnavailableHint": "Etwas auf unserer Seite hat nicht rechtzeitig geantwortet, daher konnte dieser Inhalt nicht geprüft werden. Er ist weiterhin vorhanden, und an Ihrem Zugriff hat sich nichts geändert — bitte einen Moment warten und die Seite neu laden.",
   "error.viewFailed": "Diese Ansicht konnte nicht dargestellt werden.",
   "error.areaFailed": "Dieser Bereich konnte nicht dargestellt werden.",
+  "error.areaReconnecting": "Diese Ansicht wird neu verbunden …",
+  "error.areaReconnectingHint": "Der zugehörige Dienst startet gerade neu. Die Ansicht kommt in einem Moment von selbst zurück — es geht nichts verloren und es ist nichts zu tun.",
   "error.dialogFailed": "Dieser Dialog konnte nicht dargestellt werden.",
   "error.notFound": "Nicht gefunden",
   "error.validationFailed": "Validierung fehlgeschlagen",

@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.Mesh.Security;
 
 /// <summary>
 /// AES-256-GCM <see cref="IProviderKeyProtector"/>. Stored form is

@@ -249,14 +249,19 @@ public sealed class UserIdentityCache : IDisposable
         // not shorten a list, it changes who the portal thinks you are.
         //
         //   • Complete() — the query is UNPINNED (no path:/namespace:), so on Postgres it is
-        //     served by the cross-schema fan-out, which answers a request that states no limit
-        //     with a PAGE: the 50 most recently modified matches, ordered last_modified DESC
-        //     (PostgreSqlCrossSchemaQueryProvider.DefaultFanOutLimit). Every user outside that
-        //     page fell out of the index. And because a User node's last_modified only moves when
-        //     the PROFILE is written, the omission is self-reinforcing: the longer you go without
-        //     editing your profile, the more certainly you are missing — the identical shape as
-        //     #1216 (baked 237 NodeTypes against 50 Code nodes) and #1326 (9 of 43 Spaces
-        //     permanently stale). This is an ENUMERATION, so it says so.
+        //     served by the cross-schema fan-out. When that fan-out substituted a 50-row default
+        //     for a request stating no limit, every user outside the 50 most recently modified
+        //     matches fell out of the index — and because a User node's last_modified only moves
+        //     when the PROFILE is written, the omission was self-reinforcing: the longer you went
+        //     without editing your profile, the more certainly you were missing (the identical
+        //     shape as #1216 and #1326).
+        //     🚨 That default is GONE (#2048 deleted the paging fan-out shape, which no runtime
+        //     caller could reach), so this call no longer changes what THIS query returns — and
+        //     saying so is the point, because a call credited with a truncation the runtime does
+        //     not perform is one nobody can test. It stays because it is the DECLARATION that this
+        //     read is an enumeration: it overrides any limit that reaches the request, and it is
+        //     what a future bound would have to honour. UserDirectoryCompletenessTests pins it as
+        //     a property of the query, which is where it is falsifiable.
         //   • AsSystem() — the directory is process-wide and is consumed to resolve the CALLING
         //     user's own identity, so it must not be scoped to whichever caller happened to
         //     resolve this singleton first. MeshService.StampViewer pins the viewer from the
