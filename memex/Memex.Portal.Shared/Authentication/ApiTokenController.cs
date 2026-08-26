@@ -1,7 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
-using MeshWeaver.Blazor.Infrastructure; // PortalApplication
+using MeshWeaver.Hosting.AspNetCore.Portal; // PortalApplication
 using MeshWeaver.Messaging;             // AccessService / AccessContext
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
