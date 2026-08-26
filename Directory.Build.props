@@ -137,7 +137,7 @@
        != '' ("pure saved work" once the per-leg bin/obj isolation above killed the PR #552
        CopyRefAssembly collisions). Since #1660 WS3's surface identity, the framework build
        identity hashes each compile reference's REFERENCE-ASSEMBLY content (the
-       _MeshWeaverWriteSurfaceManifest target below reads @(ReferencePathWithRefAssemblies)) — so
+       _MeshWeaverWriteSurfaceManifest target in MeshWeaverSurfaceManifest.targets reads @(ReferencePathWithRefAssemblies)) — so
        a publish without ref assemblies would fall back to hashing implementation assemblies,
        fork the image's identity away from the Build-and-Test bake's, and silently decline every
        CI-baked NodeType bundle at boot. Do not re-add the disable. The per-leg isolation above
@@ -333,76 +333,12 @@
        SourceRevisionId is preferred over GITHUB_SHA because it names the CHECKED-OUT commit; on
        a workflow_run-triggered CD job GITHUB_SHA can be the branch tip rather than the commit
        being built, which would fork the identity. -->
-  <!-- 🚨 The API-SURFACE manifest (issue #1660 WS3, "rebuild only when we need to"): entry apps
-       that opt in with <MeshWeaverSurfaceManifest>true</MeshWeaverSurfaceManifest> (the portals,
-       mw-plugin-test — the processes that compile or bake dynamic NodeTypes) get a
-       meshweaver-surface.manifest beside their binaries: one `<AssemblyName>=<SHA-256>` line per
-       MeshWeaver.* COMPILE REFERENCE, hashed over the assembly the COMPILER actually saw —
-       @(ReferencePathWithRefAssemblies) substitutes each project reference's REFERENCE ASSEMBLY,
-       which is byte-stable under body-only / private-member edits and changes on any surface
-       change (the compiler's own definition of "the API surface"; for IVT'd assemblies the
-       internal surface counts too, which is correct conservatism). The runtime
-       (FrameworkBuildIdentity.ResolveProcessIdentity) hashes the manifest's canonical subset into
-       the framework build identity `s<hash>` — so a NodeType bake stays valid across
-       internal-only framework merges and is invalidated exactly by breaking changes.
-
-       🚨 SCOPE OF THAT STABILITY — corrected by #1725, because the previous claim here ("so the
-       Build-and-Test bake host and the main-cd image compute the SAME identity") was FALSE and a
-       whole delivery lane was built on it. Ref-assembly bytes are stable across REBUILDS OF THE
-       SAME BUILD INVOCATION (from-clean, non-incremental, same project, same output paths) — that
-       is what makes an internal-only merge keep its identity. They are NOT stable across DIFFERENT
-       build invocations. Measured on commit babb3bc, same sources, same runner path, Build-and-Test
-       `dotnet build` output vs the `dotnet publish -t:PublishContainer` image:
-         * all 37 canonical assemblies' IMPLEMENTATION MVIDs differ (Data, Layout, AI, Utils
-           included) — so every FullMvidAssemblies member contributes a different id;
-         * 4 of the 37 canonical REFERENCE assemblies differ too (MeshWeaver.Graph, .Hosting,
-           .Kernel, .Markdown.Collaboration), and the same four differ between the amd64 and arm64
-           variants of ONE multi-arch image.
-       So: the identity is a property of the exact binaries a host SHIPS, not of the source they
-       were built from — which is what makes it a real ABI proof. The consequence for delivery is
-       absolute: a NodeType bake is adoptable only when its producer ran the SAME binaries as the
-       consumer. That is why the platform's own content is baked INSIDE the shipped image
-       (main-cd's publish-bake, exactly as every satellite repo bakes), never from a CI build
-       output. Do NOT reintroduce a cross-build bake hop on the strength of "the sources are
-       identical". See Doc/Architecture/CiContentBake. -->
-  <Target Name="_MeshWeaverWriteSurfaceManifest"
-          AfterTargets="Build"
-          Condition="'$(MeshWeaverSurfaceManifest)' == 'true'">
-    <ItemGroup>
-      <_MeshWeaverSurfaceRef Include="@(ReferencePathWithRefAssemblies)"
-                             Condition="$([System.String]::new('%(Filename)').StartsWith('MeshWeaver.'))" />
-    </ItemGroup>
-    <GetFileHash Files="@(_MeshWeaverSurfaceRef)" Algorithm="SHA256">
-      <Output TaskParameter="Items" ItemName="_MeshWeaverSurfaceRefHashed" />
-    </GetFileHash>
-    <WriteLinesToFile File="$(TargetDir)meshweaver-surface.manifest"
-                      Lines="@(_MeshWeaverSurfaceRefHashed->'%(Filename)=%(FileHash)')"
-                      Overwrite="true"
-                      WriteOnlyWhenDifferent="true" />
-  </Target>
-  <!-- 🚨 AfterTargets="ComputeFilesToPublish" — NOT BeforeTargets="CopyFilesToPublishDirectory".
-       The copy is performed by CopyFilesToPublishDirectory's DEPENDENCIES
-       (_ComputeResolvedFilesToPublishTypes splits @(ResolvedFileToPublish) into the
-       Always/PreserveNewest copy lists, then _CopyResolvedFilesToPublish* copy them), and a
-       BeforeTargets hook on the orchestrator runs AFTER its dependencies — so the previous shape
-       added the item once every copy had already happened. The result (#1699): every published
-       output — plain publish AND -t:PublishContainer, i.e. EVERY SHIPPED IMAGE — silently lacked
-       the manifest, portals fell back to the commit identity g<sha>, and the s<hash>-keyed CI
-       bake publication was never adopted: pods recompiled all shipped content at boot. This hook
-       point (the documented publish extension point) runs after the list is computed and before
-       it is split, and PublishContainer consumes the same list. -->
-  <Target Name="_MeshWeaverAddSurfaceManifestToPublish"
-          AfterTargets="ComputeFilesToPublish"
-          DependsOnTargets="_MeshWeaverWriteSurfaceManifest"
-          Condition="'$(MeshWeaverSurfaceManifest)' == 'true'">
-    <ItemGroup>
-      <ResolvedFileToPublish Include="$(TargetDir)meshweaver-surface.manifest"
-                             Condition="Exists('$(TargetDir)meshweaver-surface.manifest')">
-        <RelativePath>meshweaver-surface.manifest</RelativePath>
-        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      </ResolvedFileToPublish>
-    </ItemGroup>
-  </Target>
+  <!-- The framework-identity surface manifest (Doc/Architecture/CiContentBake) is emitted by targets in
+       MeshWeaverSurfaceManifest.targets — a SEPARATE file so a host built in another repo (the memex portal
+       lives in MeshWeaver.Plugins since #2293) can import the same targets against $(MeshWeaverRoot). Keeping
+       them inline here was invisible to that repo: the first portal image built there (3.0.0-rc8.ci.5768)
+       declared MeshWeaverSurfaceManifest=true and shipped NO manifest — the #1699 fallback identity. -->
+  <Import Project="$(MSBuildThisFileDirectory)MeshWeaverSurfaceManifest.targets" />
   <Target Name="AddCommitHashMetadata"
           BeforeTargets="CoreGenerateAssemblyInfo"
           DependsOnTargets="InitializeSourceControlInformation"
