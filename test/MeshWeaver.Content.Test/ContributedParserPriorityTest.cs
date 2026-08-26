@@ -3,7 +3,7 @@ using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using Xunit;
 
-namespace MeshWeaver.AI.Test;
+namespace MeshWeaver.Content.Test;
 
 /// <summary>
 /// <see cref="FileFormatParserRegistry"/>'s ORDERING contract: a contributed parser is tried before
@@ -17,12 +17,21 @@ namespace MeshWeaver.AI.Test;
 /// ceases to exist. Ordering is therefore part of the contract, and pinned here rather than left to
 /// registration accident.</para>
 ///
-/// <para>The contributor here is a test-local <see cref="ProbeFileParser"/> rather than a real
-/// module's parser, deliberately (#2276). This is a test of the REGISTRY, and it should hold for
-/// every contributor — including ones that do not exist yet. Pinning it against one particular
-/// module's parser both coupled core's test suite to that module and quietly narrowed the assertion
-/// to "this one client works". The real-parser proof for the agent format lives beside the parser
-/// itself, in <c>MeshWeaver.AI.Test.AgentParserContributionTest</c>.</para>
+/// <para>🚨 <b>Why this lives in CORE, and why its contributor is a test-local
+/// <see cref="ProbeFileParser"/>.</b> This test was briefly moved to <c>MeshWeaver.AI.Test</c>
+/// while clearing core's content suite of its AI reference (#2276) — reasonably, since its
+/// contributor at the time was the AI module's <c>AgentFileParser</c>. But
+/// <see cref="FileFormatParserRegistry"/> is CORE, and <c>MeshWeaver.AI.Test</c> is leaving the
+/// repository with the module: the registry's ordering contract would have travelled with it,
+/// leaving core with a registry whose priority behaviour nothing here verifies. A contract does
+/// not belong to whichever client happened to exercise it first.</para>
+///
+/// <para>So the contributor is a test-local probe, and that is a strengthening rather than a
+/// concession: this is a test of the REGISTRY, and it should hold for every contributor —
+/// including ones that do not exist yet. Pinning it against one particular module's parser both
+/// coupled core's suite to that module and quietly narrowed the assertion to "this one client
+/// works". The real-parser proof for the agent format lives beside the parser itself, in
+/// <c>MeshWeaver.AI.Test.AgentParserContributionTest</c>.</para>
 /// </summary>
 public class ContributedParserPriorityTest
 {
