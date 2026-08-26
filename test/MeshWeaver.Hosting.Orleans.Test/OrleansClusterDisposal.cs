@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Mesh.Threading;
 using Orleans.TestingHost;
 
@@ -35,10 +36,31 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 internal static class OrleansClusterDisposal
 {
-    // Each cluster's stop→dispose as a hot, replayed observable — its completion is what the final
-    // drain blocks on. Replay-backed so a disposal that finishes before the drain subscribes still
-    // replays its OnCompleted.
-    private static readonly ConcurrentBag<IObservable<Unit>> Pending = new();
+    // 🚨 What lives here is a COMPLETION SIGNAL per in-flight teardown — never the drain itself,
+    // and never an entry that has already settled.
+    //
+    // It used to be a ConcurrentBag<IObservable<Unit>> of CONNECTED Replay(1) drains. A connected
+    // Replay holds its SOURCE for as long as the connectable itself is reachable, and the source
+    // here is the SelectMany chain built in DisposeInBackground — whose lambdas close over the
+    // TestCluster AND the Orleans client IHost. Nothing was ever removed from the bag, so every
+    // cluster this assembly ever built was reachable from a static field until the process exited:
+    // ~90 test classes × one silo + client host each (Autofac container, grain catalog, serializer
+    // codecs, mesh hubs, workspaces, seeded MeshNodes, collectible NodeType ALCs). "Dispose it in
+    // the background" is supposed to mean the cluster goes away once its disposal finishes; storing
+    // the drain meant it never did.
+    //
+    // 🚨 Necessary, NOT sufficient — say so plainly, because the number does not move on its own.
+    // A heap dump taken 95 s into a local run WITH this fix already applied still found all 194
+    // LruGrainDirectoryCache instances live: the silos are ALSO rooted by undisposed timers sitting
+    // in the process-wide System.Threading.TimerQueue (gcroot: TimerQueueTimer → GrainTimer →
+    // PersistentStreamPullingManager → … → Orleans.Runtime.Silo, and a second family through an
+    // Rx Sample(…) periodic timer). Removing one of two roots frees nothing, which is exactly what
+    // the before/after RSS showed. What DID move the heap is TestGrainDirectorySizing — see that
+    // file for the measurement and for why a large heap fails TESTS. This entry is still a real
+    // root and is now guarded by ClusterDisposalRetentionTest; the timer roots are a separate,
+    // unfixed finding recorded on issue #2346.
+    private static readonly ConcurrentDictionary<long, AsyncSubject<Unit>> Pending = new();
+    private static long drainId;
 
     /// <summary>
     /// Hand a cluster's disposal to the I/O pool — NEVER awaited on the teardown thread. Null-safe
@@ -102,14 +124,50 @@ internal static class OrleansClusterDisposal
     }
 
     /// <summary>
-    /// Makes an ordered drain hot NOW so the disposal proceeds concurrently with the next
-    /// class booting, and replays its terminal notification to the (later) synchronous drain.
+    /// Makes an ordered drain hot NOW so the disposal proceeds concurrently with the next class
+    /// booting, and publishes its terminal notification to the (later) synchronous drain.
+    ///
+    /// <para>🚨 The registry is handed an <see cref="AsyncSubject{T}"/> — a signal that references
+    /// NOTHING — and the entry is removed the instant the drain settles, so the only thing holding
+    /// the <see cref="TestCluster"/> graph is the live subscription, which Rx releases on
+    /// termination. A cluster therefore becomes collectable the moment its own disposal finishes,
+    /// which is what "dispose in the background" was always supposed to mean. Storing the drain
+    /// (as a connected <c>Replay</c>) instead rooted every silo for the life of the process — see
+    /// the field comment above and issue #2346.</para>
+    ///
+    /// <para><see cref="AsyncSubject{T}"/> is the right signal precisely because it replays its
+    /// terminal notification: a drain that settles before <see cref="WaitAll"/> subscribes is
+    /// already gone from the dictionary, and one that settles between the snapshot and the
+    /// subscribe still hands <see cref="WaitAll"/> a completion rather than hanging it.</para>
     /// </summary>
-    private static void Enqueue(IObservable<Unit> drain)
+    internal static void Enqueue(IObservable<Unit> drain)
     {
-        var replayed = drain.Replay(1);
-        replayed.Connect();
-        Pending.Add(replayed);
+        var id = Interlocked.Increment(ref drainId);
+        var settled = new AsyncSubject<Unit>();
+        Pending[id] = settled;
+
+        // Subscribe (not Connect+retain) is what makes the drain hot. Every terminal path — value,
+        // error, completion — settles exactly once; RunVoid already Catch-swallows a benign
+        // shutdown race per leg, so OnError here would be genuinely unexpected and must still
+        // release the entry rather than strand WaitAll on it.
+        drain.Subscribe(
+            _ => { },
+            _ => Settle(id, settled),
+            () => Settle(id, settled));
+    }
+
+    /// <summary>
+    /// Teardowns still in flight. The registry must return to its prior depth as drains settle —
+    /// a monotonically growing count is the retention bug of #2346 coming back.
+    /// </summary>
+    internal static int PendingCount => Pending.Count;
+
+    /// <summary>Releases one drain's registry entry and publishes its completion.</summary>
+    private static void Settle(long id, AsyncSubject<Unit> settled)
+    {
+        Pending.TryRemove(id, out _);
+        settled.OnNext(Unit.Default);
+        settled.OnCompleted();
     }
 
     /// <summary>
@@ -143,6 +201,20 @@ internal static class OrleansClusterDisposal
     /// re-derive "starvation" from the rotating names — that has now been asserted and refuted
     /// three times.</para>
     ///
+    /// <para>🚨 <b>Scope of the two paragraphs above, corrected 2026-08-26 (#2346).</b> They are
+    /// about CPU and about PARALLELISM, and both still hold: the bound is not the fix, and removing
+    /// <c>maxParallelThreads:4</c> changes nothing. They do NOT cover the process's HEAP, and that
+    /// turned out to be a second condition with the same rotating-victim signature. This test host
+    /// reached 4.2–4.5 GB, and under workstation GC the resulting gen-2 pauses froze the WHOLE
+    /// process for seconds — Orleans' own <c>LocalSiloHealthMonitor</c> and <c>Watchdog</c> logged
+    /// 1.9 s ThreadPool delays and a 3.55 s runtime stall (2.74 s of it GC) at 3775 MB in the CI run
+    /// that failed <c>OrleansGrainTeardownStragglerTest</c>. A stall like that is invisible in a
+    /// MEDIAN — which is exactly why the "everything else runs at full speed" reading above missed
+    /// it, and why it could reach a cluster-free, pure-CPU test (<c>RoutingBackpressureShapeTest</c>)
+    /// that has no silo to blame. Where the memory actually went, and the fix, is
+    /// <see cref="TestGrainDirectorySizing"/>. It does not explain the 45 s silo-silent window
+    /// described above; that one is still open.</para>
+    ///
     /// <para>Bounding is the framework's own prescription for this ("concurrency bounding channels
     /// through <c>IIoPool</c>"), not a tuning knob: it keeps teardown off the xUnit thread — which is
     /// what avoids the original deadlock. Legs of different clusters never wait on each other, so a
@@ -168,12 +240,14 @@ internal static class OrleansClusterDisposal
     /// </summary>
     public static void WaitAll(TimeSpan timeout)
     {
-        var all = Pending.ToArray();
+        // Only teardowns that have NOT settled are still in the dictionary — a settled one needs no
+        // waiting and, by then, holds no cluster.
+        var all = Pending.Values.ToArray();
         if (all.Length == 0)
             return;
         try
         {
-            // Merge every replayed completion; block on the merged stream's terminal notification.
+            // Merge every pending completion; block on the merged stream's terminal notification.
             // DefaultIfEmpty guards a leg that replays only OnCompleted (no OnNext). Timeout abandons
             // a genuinely-wedged silo instead of hanging the run.
             Observable.Merge(all).DefaultIfEmpty(Unit.Default).Timeout(timeout).Wait();
