@@ -5,7 +5,6 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
-using MeshWeaver.AI;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
