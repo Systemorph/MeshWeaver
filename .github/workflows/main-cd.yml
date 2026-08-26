@@ -1001,13 +1001,18 @@ jobs:
   # artifact hop was — it proves the shipped content compiles against the binaries that SHIP, not
   # against a build output that never leaves CI.
   #
-  # 🚨 ARCHITECTURE IS PART OF THE IDENTITY, so the platform is pinned explicitly. The same four
-  # reference assemblies differ between the amd64 and arm64 variants of ONE image, so a multi-arch
-  # image carries two identities. Every AKS node is amd64, so the bake must be taken on amd64 —
-  # `--platform linux/amd64` says so out loud instead of inheriting whatever the runner happens to
-  # be. An arm64 install (memex-local) resolves the other identity and compiles locally, exactly as
-  # it does today; publishing under a second identity to "cover" it is forbidden — that is the
-  # adopt-what-you-did-not-resolve shape, not a fix.
+  # 🚨 ARCHITECTURE IS PART OF THE IDENTITY, so the platform is pinned explicitly — never inherited
+  # from whatever the runner happens to be. The same four reference assemblies differ between the
+  # amd64 and arm64 variants of ONE image, so a multi-arch image carries two identities.
+  #
+  # This used to be a single amd64 bake, because every AKS node is amd64 and an arm64 install
+  # (memex-local, any Apple Silicon host) simply resolved the other identity and compiled locally.
+  # It is now ONE LANE PER ARCHITECTURE: each leg pins `--platform` to its own matrix value and
+  # runs ON that architecture, so each publishes the bytes it actually produced under the identity
+  # those bytes resolve. That is the opposite of the forbidden shape, not an exception to it —
+  # publishing amd64 bytes under a second identity to "cover" arm64 remains the
+  # adopt-what-you-did-not-resolve defect, and publish-bake-bundles.sh refuses it outright
+  # (architecture.txt) rather than relying on this file staying careful.
   #
   # 🚨 The CONFIG is preflighted RED, not skipped: BAKE_PUBLISH_TARGETS missing means no portal can
   # ever receive a bake — a grey skip would hide that forever (AGENTS.md: a gate never tests its own
@@ -1020,12 +1025,59 @@ jobs:
   # stays all-or-nothing inside `publish-bake-bundles.sh`: every bundle first, the `_complete`
   # sentinel strictly LAST, and pods seed only sealed directories.
   publish-bake:
-    name: "Bake platform content in the shipped image + publish"
+    name: "Bake platform content in the shipped image + publish (${{ matrix.arch }})"
     # portal-image is here for its `version` output — the release marker below is keyed by the
     # platform version the self-updater compares, not by the commit.
     needs: [gate, plugin-test-image, portal-image, promote]
-    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
-    runs-on: ubuntu-latest
+    # 🚨 The arm64 leg is OFF until BAKE_ARM64 is set, and that is deliberate belt-and-braces.
+    # delivery-verdict reads `needs.publish-bake.result`, which for a matrix is the AGGREGATE, and
+    # whether a continue-on-error leg reports `success` THERE is a GitHub semantic I could not
+    # verify from here. Being wrong about it would red-line delivery of the architecture the whole
+    # fleet runs — so the default keeps this workflow byte-identical in behaviour to today (a
+    # skipped leg cannot fail an aggregate), and turning arm64 on is one deliberate repo-variable
+    # flip whose FIRST run someone watches, rather than a surprise discovered in production.
+    #
+    # This is a feature flag on a NEW publication lane, not a gate skipping its own inputs
+    # (AGENTS.md): with the flag off nothing anywhere claims arm64 is covered — arm64 installs
+    # compile at boot exactly as they always have, and the compile is itself the honest signal.
+    # Delete the flag once a green arm64 publication has been observed.
+    if: >-
+      needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+      && (matrix.arch == 'linux-x64' || vars.BAKE_ARM64 == 'true')
+    # ═══════════ ONE LANE PER ARCHITECTURE (#1728 "just give path to correct arch") ═══════════
+    # A bake is an ABI claim about BYTES, and the bytes differ per architecture: four reference
+    # assemblies genuinely differ between the amd64 and arm64 variants of one image, so each
+    # resolves its own surface identity (s<hash>) and publishes to its own directory. That is why
+    # this is a matrix and not a second `--platform` on one job: the two lanes must each be taken
+    # ON the architecture they describe. Publishing amd64 bytes under an arm64 label is the
+    # adopt-what-you-did-not-resolve shape CiContentBake.md forbids, and publish-bake-bundles.sh
+    # now REFUSES it outright (architecture.txt) rather than trusting this file to be careful.
+    #
+    # Both images already ship both architectures — mw-plugin-test via
+    # ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"', the portal set asserted multi-arch by
+    # check-image-set.sh — so nothing new has to be built for the arm64 leg to run.
+    strategy:
+      # 🚨 An arm64 failure must never cancel the amd64 leg: amd64 is what every AKS node runs.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: linux-x64
+            docker_platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: linux-arm64
+            docker_platform: linux/arm64
+            # Free for public repositories, which this repo is; no larger-runner configuration.
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # 🚨 The arm64 leg is LOUD BUT NON-BLOCKING, and this is not a skip-trapdoor (AGENTS.md).
+    # delivery-verdict consumes `needs.publish-bake.result`, which for a matrix is the AGGREGATE —
+    # so without this a brand-new lane could red-line delivery of the architecture the fleet
+    # actually runs. What an arm64 failure hides is nothing: arm64 installs keep compiling at boot,
+    # exactly as they do today, and the leg still shows red with its reason in the log. Compare the
+    # forbidden shape — a GATE that passes on no evidence. This gates nothing; it publishes an
+    # ADDITIONAL architecture, and publication is all-or-nothing behind the sentinel, so a partial
+    # arm64 publish can never be adopted.
+    continue-on-error: ${{ matrix.arch != 'linux-x64' }}
     # The bake compiles every shipped NodeType twice over (Doc + samples) inside the container;
     # the doc-gate's equivalent budget is 12 min, and the pull plus the publish add to it.
     timeout-minutes: 40
@@ -1094,7 +1146,7 @@ jobs:
           attempts=5
           ok=0
           for attempt in $(seq 1 $attempts); do
-            if az acr login --name meshweaver && docker pull --quiet --platform linux/amd64 "$IMAGE"; then
+            if az acr login --name meshweaver && docker pull --quiet --platform ${{ matrix.docker_platform }} "$IMAGE"; then
               echo "$IMAGE: registry reached and image pulled on attempt $attempt"
               ok=1; break
             fi
@@ -1178,7 +1230,7 @@ jobs:
           # --pull never: the image is already in the local store (the retrying step above pulled
           # it), so a registry blip here can no longer be mistaken for a bake failure.
           echo "── baking /repo/doc against $IMAGE (no mesh)"
-          docker run --rm --init --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
+          docker run --rm --init --pull never --platform ${{ matrix.docker_platform }} -v "$STAGE:/repo" -v "$BAKE:/bake" \
             --entrypoint /app/mw-plugin-test "$IMAGE" compile /repo/doc \
             --output /bake --allow /repo/doc-gate.allow --source-sha "$SHA"
           # Postconditions, not hopes: a green bake that wrote no identity, or no bundles, is a
@@ -1217,7 +1269,7 @@ jobs:
           set -euo pipefail
           STAGE="$RUNNER_TEMP/bake-stage"
           echo "── gating /repo/doc against $IMAGE, consuming the bake in /bake"
-          docker run --rm --init --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE_DIR:/bake" \
+          docker run --rm --init --pull never --platform ${{ matrix.docker_platform }} -v "$STAGE:/repo" -v "$BAKE_DIR:/bake" \
             --entrypoint /app/mw-plugin-test "$IMAGE" /repo/doc \
             --allow /repo/doc-gate.allow --seed /bake
       # ─────────── THE ADDRESS CHECK — publish only to an address the portal actually reads ───────────
@@ -1242,7 +1294,7 @@ jobs:
       # release rather than be filed under an address nobody reads. The release marker is then never
       # written, so the deployment gate (#1754) holds too — fail-safe in both directions.
       #
-      # 🚨 --platform linux/amd64 on BOTH pulls, out loud. The identity is per-architecture (the same
+      # 🚨 --platform ${{ matrix.docker_platform }} on BOTH pulls, out loud. The identity is per-architecture (the same
       # four reference assemblies differ between the amd64 and arm64 legs of one multi-arch image), so
       # a multi-arch image carries two identities and comparing across legs would be meaningless. Every
       # AKS node is amd64 and the bake above already pins amd64; this pins the portal side to match.
@@ -1267,11 +1319,11 @@ jobs:
           # The STAGING tag is this run's exact, immutable image — `main`/`latest` are moving
           # pointers a concurrent CD run can re-aim mid-job, which would compare this bake against
           # somebody else's build.
-          docker pull --quiet --platform linux/amd64 "$PORTAL_IMAGE"
+          docker pull --quiet --platform ${{ matrix.docker_platform }} "$PORTAL_IMAGE"
           STAGE="$RUNNER_TEMP/portal-image"
           rm -rf "$STAGE"
           mkdir -p "$STAGE"
-          cid="$(docker create --platform linux/amd64 "$PORTAL_IMAGE")"
+          cid="$(docker create --platform ${{ matrix.docker_platform }} "$PORTAL_IMAGE")"
           trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
           # /app is ~306 MB (it is the app, not the base image), so copying it whole is cheap and
           # uses nothing but `docker cp` — no tar wildcard flags that differ between tar flavours.
@@ -1285,7 +1337,7 @@ jobs:
           # The verb prints the portal's identity, compares it with the bake's, and on a mismatch
           # names the canonical assemblies whose absence caused it — the actual defect in #1814 was
           # eight of them, not "a hash that differs".
-          docker run --rm --init --platform linux/amd64 -v "$STAGE/app:/portal:ro" \
+          docker run --rm --init --platform ${{ matrix.docker_platform }} -v "$STAGE/app:/portal:ro" \
             --entrypoint /app/mw-plugin-test "$BAKE_IMAGE" \
             framework-identity /portal --expect "$BAKED"
           {
@@ -1303,7 +1355,7 @@ jobs:
           BAKE_PLUGINS="$RUNNER_TEMP/bake-plugins"
           rm -rf "$BAKE_PLUGINS"; mkdir -p "$BAKE_PLUGINS"; chmod 777 "$BAKE_PLUGINS"
           echo "── baking /plugins (every module) against $IMAGE at plugins $PLUGINS_SHA"
-          docker run --rm --init --pull never --platform linux/amd64 -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS:/bake" \
+          docker run --rm --init --pull never --platform ${{ matrix.docker_platform }} -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS:/bake" \
             --entrypoint /app/mw-plugin-test "$IMAGE" compile /plugins \
             --output /bake --allow /plugins/plugin-gate.allow --source-sha "$PLUGINS_SHA"
           # Postconditions, not hopes — same as the platform bake above.
@@ -1324,7 +1376,7 @@ jobs:
           set -euo pipefail
           PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
           echo "── gating /plugins against $IMAGE, consuming the bake in /bake"
-          docker run --rm --init --pull never --platform linux/amd64 -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS_DIR:/bake" \
+          docker run --rm --init --pull never --platform ${{ matrix.docker_platform }} -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS_DIR:/bake" \
             --entrypoint /app/mw-plugin-test "$IMAGE" /plugins \
             --allow /plugins/plugin-gate.allow --seed /bake
       # 🚨 The whole point of building plugins HERE: their identity must be the platform's, by
@@ -1347,6 +1399,7 @@ jobs:
       - name: "Publish the plugin bundles to every portal target (same identity, same version)"
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          BAKE_ARCHITECTURE: ${{ matrix.arch }}
           RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
         run: |
           set -euo pipefail
@@ -1362,6 +1415,7 @@ jobs:
       - name: "Publish bundles to every portal target"
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          BAKE_ARCHITECTURE: ${{ matrix.arch }}
           RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
         run: |
           set -euo pipefail
@@ -1398,6 +1452,7 @@ jobs:
       - name: "Assert the armed release is one an environment can be rolled to"
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          BAKE_ARCHITECTURE: ${{ matrix.arch }}
           RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
         run: .github/scripts/check-release-availability.sh "$RELEASE_VERSION" meshweaver-content
 
