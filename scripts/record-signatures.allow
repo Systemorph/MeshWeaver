@@ -1,0 +1,12 @@
+# Records whose primary constructor may change in this PR.
+#
+# An entry is a STATEMENT THAT THE ATOMIC MOVE IS PLANNED — every bundle rebuilt and
+# republished for the new signature, then the image rolled — not a way to make the gate quiet.
+# There is no image that can serve a mixed set of module builds: a consumer compiled against
+# the old arity aborts the host at boot, in both directions.
+#
+# One fully-qualified type per line, then a reason. DELETE the line once the change has shipped:
+# a stale entry FAILS the gate, because an entry that outlives its change hides the next break.
+#
+# Example:
+#   BurstAggregation  #2234 — bundles republished in the same wave, image rolled after

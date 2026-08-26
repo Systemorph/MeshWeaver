@@ -41,6 +41,21 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     public ImmutableList<string> PrunedPaths { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// How many source nodes this import could NOT land — the per-file failures the
+    /// <c>ImportedWithErrors</c> outcome and the activity's ⚠ lines report.
+    ///
+    /// <para>🚨 This exists so the caller's last-sync guard can ask "did anything fail" instead of
+    /// string-matching one outcome literal. It string-matched <c>"Failed"</c> only, and
+    /// <c>ImportedWithErrors</c> is a DIFFERENT string — so a partial failure advanced
+    /// <c>LastSyncCommitSha</c> past the commit whose nodes never landed, and
+    /// <c>GitHubWebhookProcessor.SkipReason</c> then answered "already at this commit" for every
+    /// later green build. The failure became permanent until the repo produced a new commit
+    /// (#2229 item C); the invariant the guard's own comment states — "a FAILED import must ALSO
+    /// not advance the baseline" — was never implemented for this outcome.</para>
+    /// </summary>
+    public int Failed { get; init; }
+
+    /// <summary>
     /// The node paths this import could NOT create because a claim (a <see cref="SyncBehavior"/> other
     /// than <see cref="SyncBehavior.Include"/>, on the node or an ancestor) refuses them while the mesh
     /// has no node there at all. Non-empty means the source declares content that can never appear, and
@@ -1338,6 +1353,10 @@ public static class StaticRepoImporter
                             {
                                 WrittenPaths = count.Written,
                                 PrunedPaths = prunedPaths,
+                                // 🚨 Carried to the CALLER, not just to the activity's ⚠ lines: the
+                                // last-sync guard has to know a node did not land, or it advances
+                                // the baseline past it and the miss is permanent (#2229 item C).
+                                Failed = failed,
                                 BlockedCreatePaths = blockedCreates,
                             };
                         });
