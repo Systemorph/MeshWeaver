@@ -158,7 +158,25 @@ concurrency:
   # literally rather than folded, so a "tidier" multi-line version silently changes the
   # string rather than just its layout.
   group: build-test-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  # 🚨 NEVER cancel a run on `main` (#2412). Superseding is safe on a PR branch — the later
+  # push tests a strict successor of what was cancelled, and that is where #2316's ~28% of
+  # runner demand is saved. On `main` it is neither safe nor recoverable, for two reasons:
+  #
+  #  1. **Nothing then builds the combination that landed.** With `strict: false` each PR is
+  #     tested against the main it branched from, so the MERGED tree is first compiled by the
+  #     main run itself. Cancel that and a semantic conflict between two independently-green
+  #     PRs ships unbuilt — which is exactly how `CS0246: MeshOperations` reached main on
+  #     2026-08-26, from five merges inside fifteen seconds.
+  #  2. **Nothing publishes.** `main-cd.yml` gates delivery on the required check
+  #     `Consolidate test results` reaching `success` FOR THAT SHA. A cancelled run does fire
+  #     `workflow_run` (`types: [completed]` includes cancelled), so CD wakes up and finds no
+  #     success to act on. A burst of merges therefore publishes nothing at all, and the tail
+  #     is left to the hourly reconciler.
+  #
+  # Measured the day this was written: main's five consecutive runs between 20:28 and 20:38
+  # were ALL `cancelled`, each by the next merge. The cost of this line is one full run per
+  # merge to main; that is the price of every landed commit being both tested and shippable.
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
 
 # publish-unit-test-result-action runs per shard AND in the collector — both need
 # checks: write to create check-runs and pull-requests: write to comment.
