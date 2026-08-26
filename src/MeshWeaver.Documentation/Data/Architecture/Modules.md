@@ -141,6 +141,39 @@ never reach disk), and a refusal of any module whose entry DLL name collides wit
 assembly — `ResolveModulePath` probes `modules/<name>/` first, so such a module would silently
 shadow the platform's own binary at the next boot.
 
+### 🚨 An ACTIVATED entry with no bytes — the boot-GC race (#2303)
+
+The "Missing DLL" skip above is the SYMPTOM; #2303 traced one concrete way an entry ends up
+pointing at nothing: a race between `ModuleLandingService.CollectGarbage` (run at every pod's boot,
+before its own module set is computed) and a landing happening on a DIFFERENT replica at the same
+moment.
+
+A landing is two writes on the shared `/data` volume, deliberately ordered bytes-then-entry: it
+`Directory.Move`s the new generation into place, THEN writes the sidecar entry that names it
+(`LandCore`). Those two writes are adjacent in one synchronous call on the landing replica, but
+nothing serializes them against a GC pass on ANOTHER replica — the per-module sidecar file and the
+landing service's IO pool both bound a single process, not a cross-process sequence. If a GC pass
+reads the sidecar in the gap between the other replica's two writes, the new generation directory
+is on disk but no entry references it YET — indistinguishable from a genuinely orphaned directory —
+and GC deletes it a moment before the landing's `WriteEntry` lands, pointing a real, enabled
+activation entry at bytes that no longer exist. Nothing throws anywhere: the landing that raced GC
+reports success (both of ITS writes succeeded), and the entry only reveals itself as unresolvable
+the next time something reads it — `ModuleActivationStatus.Unresolvable`'s loud startup report and
+`Degraded` health check (#2093), or a boot that silently skips the module via the "Missing DLL" rule
+above. That is the exact shape #2303 reported for `MeshWeaver.Blazor.EntityViews`: an ACTIVATED
+entry whose landed assembly was gone, with no exception or stack frame naming why — likeliest to
+fire during a rolling restart landing (or auto-updating) a module while sibling pods are cycling
+through boot at the same time.
+
+The fix cannot be a lock — replica coordination here is deliberately structural, not a gate. Instead
+`CollectGarbage` carries a grace period (`ModuleLandingService.DefaultGarbageMinAge`, 5 minutes):
+an unreferenced generation (or `.staging-`/`.pending-` leftover) younger than the window is left for
+a LATER pass rather than reclaimed immediately. A directory that survives the window and is STILL
+unreferenced is a genuine orphan and is collected exactly as before — the grace period defers
+reclamation, it does not disable it. The two writes of a real landing are back-to-back with no I/O
+between them, so the actual exposure the window has to cover is low-single-digit seconds even over
+a slow network volume; five minutes is generous headroom on top of that.
+
 Why a sidecar file and not a mesh node: the list is consumed before any storage provider, hub, or
 connection string exists, and it must move with the DLLs it describes — the landing service writes
 both in one operation onto the same volume, so they cannot drift apart.
