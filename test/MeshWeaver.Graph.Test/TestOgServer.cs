@@ -6,6 +6,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -32,11 +34,11 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 internal sealed class TestOgServer : IAsyncDisposable
 {
-    private readonly WebApplication app;
+    private WebApplication app = null!;
     private int requestCount;
 
     /// <summary>The served page's base URL, e.g. <c>http://127.0.0.1:{port}/</c>.</summary>
-    public string BaseUrl { get; }
+    public string BaseUrl { get; private set; } = string.Empty;
 
     /// <summary>Requests served so far.</summary>
     public int RequestCount => Volatile.Read(ref requestCount);
@@ -56,8 +58,24 @@ internal sealed class TestOgServer : IAsyncDisposable
     /// restarting.</summary>
     public volatile bool OmitOgTags;
 
-    public TestOgServer()
+    private TestOgServer()
     {
+    }
+
+    /// <summary>
+    /// Starts the server and resolves the port Kestrel actually bound.
+    ///
+    /// <para>🚨 <b>Async all the way down, deliberately.</b> The obvious shape — a constructor
+    /// calling <c>app.Start()</c> from a field initializer — is a synchronous bridge over async
+    /// host startup (<c>Start</c> is <c>StartAsync().GetAwaiter().GetResult()</c>), which can
+    /// deadlock under a test runner's synchronization context and is the shape
+    /// <c>BlockingBridgeInTestRatchetGuard</c> exists to keep out of this repo. The consumer is
+    /// <c>IAsyncLifetime</c>, so there is somewhere honest to await this.</para>
+    /// </summary>
+    public static async Task<TestOgServer> StartAsync()
+    {
+        var server = new TestOgServer();
+
         // An EMPTY builder: no appsettings.json, no environment variables, no command line. A test
         // helper that picked up ambient configuration would be one more thing to explain when it
         // behaves differently on a developer's box than on CI.
@@ -66,14 +84,20 @@ internal sealed class TestOgServer : IAsyncDisposable
         builder.Services.AddRoutingCore();
         builder.Logging.ClearProviders();
 
-        app = builder.Build();
-        app.Run(ServeAsync);
-        app.Start();
+        var app = builder.Build();
+        app.Run(server.ServeAsync);
+        await app.StartAsync().ConfigureAwait(false);
 
-        // Kestrel reports the address it actually bound, which is the whole point of :0. It comes
+        // Read the bound address from the server feature rather than `app.Urls`: this is the
+        // authority Kestrel writes after binding, and it is what makes :0 usable at all. It comes
         // back without a trailing slash; callers concatenate paths onto BaseUrl, so add one.
-        var address = app.Urls.First();
-        BaseUrl = address.EndsWith('/') ? address : address + "/";
+        var address = app.Services.GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()!
+            .Addresses.First();
+
+        server.app = app;
+        server.BaseUrl = address.EndsWith('/') ? address : address + "/";
+        return server;
     }
 
     private async Task ServeAsync(HttpContext context)

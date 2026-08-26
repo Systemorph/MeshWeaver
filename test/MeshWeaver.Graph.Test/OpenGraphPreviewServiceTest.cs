@@ -18,7 +18,7 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public sealed class OpenGraphPreviewServiceTest : IAsyncLifetime
 {
-    private readonly TestOgServer server = new();
+    private TestOgServer server = null!;
     private readonly IoPoolRegistry pools = new();
     private readonly HttpClient http = new();
 
@@ -161,7 +161,7 @@ public sealed class OpenGraphPreviewServiceTest : IAsyncLifetime
     public void IsFetchable_AllowsPublicTargets(string url) =>
         Assert.True(CreateService(allowLoopback: false).IsFetchable(url));
 
-    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
+    public async ValueTask InitializeAsync() => server = await TestOgServer.StartAsync();
 
     // Async teardown because the Kestrel-backed TestOgServer stops asynchronously (#2436); a
     // blocking bridge here is what BlockingBridgeInTestRatchetGuard exists to prevent.
