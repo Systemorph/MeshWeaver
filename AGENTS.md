@@ -221,7 +221,7 @@ a live daily throttle, until #1778.
 `main-cd.yml` builds and pushes the deployment images. Its `workflow_run` path is still gated on
 `event == 'push' && head_branch == 'main'` — that gate is what stops a **fork's** pull_request run
 (whose `head_branch` can also be "main") from publishing untrusted code with this repo's secrets,
-so never relax it. Two consequences that trip people up, both SILENT:
+so never relax it. Three consequences that trip people up, all SILENT:
 
 1. **No Build-and-Test run on main at all.** CD reacts to that workflow completing; if it never ran
    on the merge commit (a CI incident, a stalled queue), CD sits `SKIPPED` with nothing to react to.
@@ -229,8 +229,42 @@ so never relax it. Two consequences that trip people up, both SILENT:
    Test" --ref main` RUNS and genuinely tests the merge commit, so main shows a **green
    Build-and-Test** — but its `event` is `workflow_dispatch`, not `push`, so CD still skips. The
    most convincing possible "it shipped" signal, and no image.
+3. 🚨 **Back-to-back merges CANCEL each other's main run, so a merge burst publishes NOTHING.**
+   `dotnet-test.yml`'s concurrency group is `build-test-${{ … || github.ref }}` — every push to main
+   groups as `refs/heads/main`, so each merge cancels the in-flight run for the previous one (#2316,
+   which buys ~28% of runner demand and is worth keeping). CD **does** still fire on those runs —
+   `main-cd.yml` subscribes with `types: [completed]`, and a cancelled run is "completed" — but its
+   delivery gate keys on the required check **`Consolidate test results` reaching `success` for that
+   SHA**, which a cancelled run never produces. So CD wakes, decides "nothing will be built", and
+   every intermediate publish that "would have happened" simply does not. Observed
+   2026-08-26: #2316 merged at 12:55:25Z and main's next **five** runs were cancelled back-to-back,
+   leaving 45 minutes with no completed run and no publish.
 
-**Neither is terminal any more.** CD carries a **reconciler**: an hourly `schedule` (plus its own
+   Publishing only the **tip** of a burst is correct — intermediate commits never needed their own
+   image set, and it is the batching `CD_BATCH_WINDOW_MINUTES` already wants. So do NOT wait between
+   ordinary merges; batching them is right, and the tip's image contains them all.
+
+   🚨 **The wait is owed to a merge that must ship ON ITS OWN** (a CD fix, a hotfix someone is
+   verifying): merge it, then wait for **that merge commit's** Build-and-Test to COMPLETE — and
+   check the completed run's **head SHA is your merge commit**, because "a run completed" and "the
+   run for my commit completed" diverge during exactly the burst you are working around.
+
+   🚨 **A merge cancels whatever is in flight — including a run ANOTHER SESSION is waiting on.**
+   Several sessions merge into this repo at once, so "wait for the run" only works if *everyone*
+   waits; two sessions each merging politely still cancel each other. Before merging, check whether
+   main has a run in flight that someone is gating a deploy on, and if so **hold and say so**. On
+   2026-08-26 a routine merge killed the run another session was watching to end a CD freeze — no
+   damage beyond a lost cycle, but the fix is coordination, not care.
+
+   🚨 **A hold reaches your hands, NOT your subagents' — push it to them explicitly.** An agent
+   briefed to "root-cause and open a PR" follows this file's own merge-on-green default, which is
+   correct on any other day. The same 2026-08-26 hold was then broken **twice more, by two
+   subagents**, each merging a perfectly good fix at exactly the wrong moment. When you take a hold:
+   message every running agent, tell them to push and PARK, and disarm any auto-merge already
+   armed. The general form — **a constraint is only as complete as the set of hands it reaches** —
+   applies to anything you delegate, not just merges.
+
+**None of these is terminal any more.** CD carries a **reconciler**: an hourly `schedule` (plus its own
 `workflow_dispatch`) resolves main's tip through the API, asks ACR whether that commit has the
 complete four-image set, and publishes only when it does not — bounded at 3 attempts per commit,
 with every attempt and the final give-up written to the `ci-failure` issue. So:
@@ -465,7 +499,7 @@ The `memex` portal runs on the shared **AKS cluster** `<aks-cluster>` (RG `<aks-
 ```bash
 az acr login -n meshweaver
 # Portal (custom base) AND migration (the migration is what creates schema + the matview):
-dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
+dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-portal-ai -p:ContainerImageTag=<tag> \
   -p:ContainerBaseImage=meshweaver.azurecr.io/memex-portal-ai-base:latest
@@ -500,10 +534,10 @@ old `C:\dev\MeshWeaver` here predated the worktree rule above). Avoid chained co
 dotnet build                                              # Build solution (ONE project arg max — several is an MSB1008 no-op)
 dotnet build test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj   # Build one project — required before --no-build
 dotnet test test/MeshWeaver.Data.Test --no-build          # Run one test project (built above; unbuilt = silent exit 0)
-dotnet run --project memex/Memex.Portal.Monolith          # Monolith standalone (https://localhost:7122, http://localhost:5022)
-dotnet run --project memex/aspire/Memex.AppHost           # Aspire (requires Docker) — portal at https://localhost:7202, http://localhost:5202
-aspire run --project memex/aspire/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`) — same URLs as above
-aspire start --no-build --project memex/aspire/Memex.AppHost  # Background + NO rebuild — fast bring-up; `aspire ps` / `aspire stop` to manage. --no-build reuses the last build (won't pick up source edits)
+dotnet run --project ../MeshWeaver.Plugins/src/Memex.Portal.Monolith          # Monolith standalone (https://localhost:7122, http://localhost:5022)
+dotnet run --project ../MeshWeaver.Plugins/src/Memex.AppHost           # Aspire (requires Docker) — portal at https://localhost:7202, http://localhost:5202
+aspire run --project ../MeshWeaver.Plugins/src/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`) — same URLs as above
+aspire start --no-build --project ../MeshWeaver.Plugins/src/Memex.AppHost  # Background + NO rebuild — fast bring-up; `aspire ps` / `aspire stop` to manage. --no-build reuses the last build (won't pick up source edits)
 ```
 
 ### Restarting just the Portal (no full Aspire restart)
@@ -512,7 +546,7 @@ When you change code in `Memex.Portal.Distributed` or any project it references,
 
 1. **Hot reload (cheapest)** — start with `dotnet watch` instead of `dotnet run` / `aspire run`:
    ```bash
-   dotnet watch --project memex/aspire/Memex.AppHost
+   dotnet watch --project ../MeshWeaver.Plugins/src/Memex.AppHost
    ```
    File save → Aspire restarts the affected resource only. Preserves the dashboard, the Postgres container, and the SignalR endpoints. Most code changes apply within seconds.
 2. **Aspire dashboard UI** — open `https://localhost:17200/` → Resources tab → click the ⋯ next to `memex-portal-distributed` → **Restart**. Runs `dotnet build` + restart in-place.
@@ -807,8 +841,8 @@ Full treatment: [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Arch
 | Environment | Base URL |
 |---|---|
 | Prod | `https://memex.meshweaver.cloud` |
-| Dev — Aspire (`memex/aspire/Memex.AppHost`) | `https://localhost:7202` (HTTP fallback `http://localhost:5202`) |
-| Dev — Monolith standalone (`memex/Memex.Portal.Monolith`) | `https://localhost:7122` (HTTP fallback `http://localhost:5022`) |
+| Dev — Aspire (`../MeshWeaver.Plugins/src/Memex.AppHost`) | `https://localhost:7202` (HTTP fallback `http://localhost:5202`) |
+| Dev — Monolith standalone (`../MeshWeaver.Plugins/src/Memex.Portal.Monolith`) | `https://localhost:7122` (HTTP fallback `http://localhost:5022`) |
 
 ## `@/` is Local-Only
 
@@ -856,7 +890,7 @@ Actor-model message hub (`MeshWeaver.Messaging.Hub`) with address-based partitio
 |---|---|
 | `src/` | Core framework (50+ projects) |
 | `samples/Graph/Data/` | Sample data nodes (ACME, Northwind, Cornerstone, etc.) |
-| `memex/Memex.Portal.Monolith/` | Dev portal with full Graph + Documentation support |
+| `../MeshWeaver.Plugins/src/Memex.Portal.Monolith/` | Dev portal with full Graph + Documentation support |
 | `memex/aspire/` | Microservices with .NET Aspire orchestration |
 
 **Request-Response:** `hub.Observe<TResponse>(request, o => o.WithTarget(address)).Subscribe(resp => …, ex => …)`  

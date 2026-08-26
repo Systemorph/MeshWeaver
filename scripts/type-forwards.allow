@@ -1,0 +1,20 @@
+# Public types that may move between src/ assemblies in this PR WITHOUT a type forwarder.
+#
+# An entry is a STATEMENT THAT NO SHIPPED MODULE CAN BE HOLDING THAT TypeRef — not a way to make
+# the gate quiet. A module's IL binds `Namespace.Type` scoped to an AssemblyRef, so moving a public
+# type between assemblies (or renaming its namespace) is binary-breaking for every module compiled
+# earlier: it dies with `TypeLoadException: Could not load type '…'` the moment the platform rolls.
+# That is #2370 — it took down the whole /mcp surface of a production deployment.
+#
+# The FIX is normally a forwarder, not an entry here:
+#
+#     [assembly: TypeForwardedTo(typeof(Old.Namespace.TheType))]     // in src/<OldAssembly>
+#
+# and, because a forwarder cannot rename, the type keeps its ORIGINAL full name in its new home.
+#
+# One `Assembly:Namespace.Type` per line, then a reason. DELETE the line once the change has
+# shipped: a stale entry FAILS the gate, because an entry that outlives its change hides the
+# next break.
+#
+# Example:
+#   MeshWeaver.Foo:MeshWeaver.Foo.Widget  #1234 — added and moved inside one unreleased wave

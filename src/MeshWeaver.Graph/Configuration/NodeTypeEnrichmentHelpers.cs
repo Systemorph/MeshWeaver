@@ -1546,7 +1546,12 @@ internal static class NodeTypeEnrichmentHelpers
                     {
                         instanceHub.RegisterForDisposal(ArmOverlaySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
-                            instanceHub, nodeType, typeVersionAtOverlay, logger,
+                            instanceHub.Address.ToString(),
+                            instanceHub.JsonSerializerOptions,
+                            recycle: () => instanceHub.Post(
+                                new DisposeRequest(), o => o.WithTarget(instanceHub.Address)),
+                            reportStuck: () => ReportStuckOverlayToAdmins(instanceHub, nodeType, logger),
+                            nodeType, typeVersionAtOverlay, logger,
                             guards: NodeTypeCompilationHelpers.GuardsOf(meshHub),
                             // The escape hatch out of a permanently silent type stream — see
                             // ArmOverlaySelfHeal's re-evaluation route (issue #1814 defect B).
@@ -1799,9 +1804,23 @@ internal static class NodeTypeEnrichmentHelpers
     /// hub that holds this watcher, so a pair whose re-enrichment faults again would otherwise
     /// re-arm at the first rung forever. Null applies no spacing.
     /// </param>
+    /// <remarks>
+    /// 🚨 Takes ONLY what the firing contract needs — <paramref name="instancePath"/> (logging),
+    /// <paramref name="jsonOptions"/> (ContentAs), <paramref name="recycle"/> (the self-heal
+    /// action) and <paramref name="reportStuck"/> (best-effort admin notify) — deliberately NOT a
+    /// whole <c>IMessageHub</c>. <see cref="WithOverlaySelfHeal"/> is the one real caller and
+    /// closes over the actual hub to build these; <c>OverlaySelfHealWatcherTest</c> is the reason
+    /// the seam is this narrow: its non-converging-instance contract drives a synchronous,
+    /// <c>TestScheduler</c>-timed recycle→dispose→re-arm loop across a SIMULATED hour, which a real
+    /// hub's genuinely-async <c>Post</c> cannot do inline with a virtual clock, and AGENTS.md
+    /// forbids standing in a mocked <c>IMessageHub</c> for it (Systemorph/MeshWeaver#1810).
+    /// </remarks>
     internal static IDisposable ArmOverlaySelfHeal(
         IObservable<MeshNode> typeStream,
-        IMessageHub instanceHub,
+        string instancePath,
+        JsonSerializerOptions jsonOptions,
+        Action recycle,
+        Action reportStuck,
         string nodeType,
         long? typeVersionAtOverlay,
         ILogger? logger,
@@ -1811,7 +1830,6 @@ internal static class NodeTypeEnrichmentHelpers
         OverlayHealBudget? budget = null)
     {
         var clock = scheduler ?? Scheduler.Default;
-        var instancePath = instanceHub.Address.ToString();
 
         // ContentAs, never `is NodeTypeDefinition` — the #1669 blindness on un-materialized JSON
         // emissions; see ArmStaleAssemblySelfHeal's predicate note. Deserialize ONCE per node and
@@ -1819,7 +1837,7 @@ internal static class NodeTypeEnrichmentHelpers
         // degraded-content warning logs.
         (NodeTypeDefinition? Def, bool Usable) Evaluate(MeshNode? t)
         {
-            var def = t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger);
+            var def = t?.ContentAs<NodeTypeDefinition>(jsonOptions, logger);
             return (def, def is not null
                 && NodeTypeCompilationHelpers.HasUsableBuild(t!, def, guards));
         }
@@ -1846,7 +1864,7 @@ internal static class NodeTypeEnrichmentHelpers
                 "Overlay self-heal: the NodeType stream for '{NodeType}' (instance '{InstancePath}') faulted — "
                 + "the type is not readable from here right now (absent on this replica, or its owner is "
                 + "recycling). The watcher stays armed and heals through the re-read ladder instead of dying.",
-                nodeType, instanceHub.Address);
+                nodeType, instancePath);
             return Observable.Never<MeshNode>();
         });
 
@@ -1943,15 +1961,15 @@ internal static class NodeTypeEnrichmentHelpers
                     var heals = budget?.RecordHeal(instancePath, nodeType, clock.Now) ?? 1;
                     logger?.LogInformation(
                         "Overlay self-heal: NodeType '{NodeType}' reached a usable build (version {Version}, at-overlay {VersionAtOverlay}, self-heal #{Heals}) — recycling stuck instance '{InstancePath}'",
-                        nodeType, t.Version, typeVersionAtOverlay, heals, instanceHub.Address);
+                        nodeType, t.Version, typeVersionAtOverlay, heals, instancePath);
                     // The RecycleLayoutArea idiom: the hub disposes itself, the
                     // grain deactivates, and the next access re-enriches from
                     // scratch against the now-usable NodeType.
-                    instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                    recycle();
                 },
                 ex => logger?.LogWarning(ex,
                     "Overlay self-heal watcher for NodeType '{NodeType}' (instance '{InstancePath}') faulted — falling back to manual Recycle",
-                    nodeType, instanceHub.Address));
+                    nodeType, instancePath));
 
         void ReportReEvaluation(
             int attempt, MeshNode? typeNode, (NodeTypeDefinition? Def, bool Usable) verdict)
@@ -1989,7 +2007,7 @@ internal static class NodeTypeEnrichmentHelpers
                 {
                     if (Volatile.Read(ref healed) != 0)
                         return;
-                    ReportStuckOverlayToAdmins(instanceHub, nodeType, logger);
+                    reportStuck();
                 },
                 ex => logger?.LogWarning(ex,
                     "Overlay stuck-reporter for NodeType '{NodeType}' faulted", nodeType));
