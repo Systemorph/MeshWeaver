@@ -43,11 +43,26 @@ The EA agent declares the `Mesh` + `ExecutiveAssistant` plugins. The `ExecutiveA
 | Area | Tools |
 |---|---|
 | Mail | `ListInbox`, `SearchMail`, `ReadMail`, `SendMail`, `ReplyToMail` |
-| Calendar | `ListEvents`, `CreateEvent` (book + invite attendees), `CancelEvent` |
+| Calendar | `ListEvents`, `GetEvent`, `CreateEvent` (book + invite attendees), `UpdateEvent`, `CancelEvent` |
 
 Example asks: *"Book 30 min with Alice next Tuesday afternoon and invite her"*, *"reply to the vendor that
 we accept"*, *"clear my Friday"*, *"email me when an approval needs me"* (the last manages your
 [notification rules](/Doc/GUI/NotificationPreferences)).
+
+### Editing an event is READ then PATCH, never cancel-and-recreate
+
+`GetEvent` and `UpdateEvent` exist because their absence caused real data loss. With only
+`ListEvents` / `CreateEvent` / `CancelEvent`, "add one line to that meeting's agenda" had exactly one
+possible shape — cancel the event and create a new one — and `ListEvents` returned no body, so the
+agent could not read what it was replacing. On 2026-08-16 that wiped an eight-item checklist the user
+then had to re-dictate by hand; the original was unrecoverable (no mail, no mesh node, the cancelled
+event gone).
+
+So the amend flow is **`GetEvent` → edit the returned body → `UpdateEvent`**: a Graph `PATCH` that
+carries only the fields you pass, leaving every omitted one at its stored value. `CancelEvent` means
+*cancel the meeting*, not *change it*. `ListEvents` now also returns a `preview` for quick triage, but
+a body you intend to REPLACE must be read in full with `GetEvent` first — `UpdateEvent` replaces the
+whole body, so whatever you do not send back is gone.
 
 ## Architecture
 
@@ -60,8 +75,11 @@ we accept"*, *"clear my Friday"*, *"email me when an approval needs me"* (the la
   if the user hasn't connected, returns the connect link instead of acting.
 - **`EaCredential`** — the encrypted refresh token, one per user under `Auth/_EaCredential/{objectId}`.
 
-These live in `Memex.Portal.Shared` (they reuse the portal's Microsoft sign-in app + the master-key
-`IProviderKeyProtector`); the agent definition is `Agent/ExecutiveAssistant`.
+The consent/credential half lives in the portal (it reuses the portal's Microsoft sign-in app + the
+master-key `IProviderKeyProtector`); `ExecutiveAssistantPlugin` itself ships in the
+**`MeshWeaver.Mail.MicrosoftGraph` module** (`Systemorph/MeshWeaver.Plugins`), which is why a
+deployment that sends no mail pays neither the 43 MB Graph/Kiota closure nor its Roslyn reference
+cost. The agent definition is `Agent/ExecutiveAssistant`.
 
 ## Azure setup (one-time, by an admin)
 
