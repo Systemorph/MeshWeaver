@@ -66,8 +66,14 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
     private readonly PromiseSlot<McpClient> _connect = new();
 
     /// <summary>
-    /// Creates a remote-mesh client targeting a portal's <c>/mcp</c> endpoint. The
+    /// Creates a remote-mesh client targeting a portal's MCP endpoint. The
     /// MCP connection is opened lazily on first use, not in the constructor.
+    ///
+    /// <para>Deliberately composes the <c>/mcp</c> COMPATIBILITY path, not the primary
+    /// <c>/api/mcp</c>: this client dials REMOTE portals whose version is unknown, and
+    /// <c>/mcp</c> is the alias every portal generation serves (the primary path exists only
+    /// on portals carrying the <c>McpEndpointRoutes</c> alias). <c>/mcp</c> is permanent by
+    /// contract — do not "modernize" this line.</para>
     /// </summary>
     /// <param name="remoteBaseUrl">Base URL of the remote MeshWeaver portal; <c>/mcp</c> is appended. Required.</param>
     /// <param name="remoteToken">API token sent as <c>Authorization: Bearer</c> on every request. Required.</param>

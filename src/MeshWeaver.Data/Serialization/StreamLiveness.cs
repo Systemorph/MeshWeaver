@@ -33,11 +33,23 @@ namespace MeshWeaver.Data.Serialization;
 /// terminal), so the replacement fails the same check and the loop never terminates.</description></item>
 /// </list>
 ///
+/// <para>🚨 <b>A FAULTED stream is dead in exactly the same way, and that had to be said out loud
+/// (Systemorph/MeshWeaver#2387).</b> A store is a <c>ReplaySubject</c>, so a terminal <c>OnError</c>
+/// is permanent under the Rx grammar — the stream can never emit again, and every later subscriber
+/// replays that error INSTANTLY. Nothing disposes it either: the terminal arm of
+/// <c>CreateExternalClient</c> faults the stream and tears down only its keep-alive, leaving the
+/// object "errored but undisposed". So while this predicate asked about disposal alone, a cache
+/// kept handing the corpse back for the whole process lifetime, and the symptom was the opposite of
+/// a hang: a 30-second initial-state bound reported after 0.07 ms, because nothing waited for
+/// anything. Refusing to serve it is not a retry — the next natural caller opens a fresh stream,
+/// and a stream that is BORN dead is handed back rather than re-created, so create → fault → create
+/// cannot spin.</para>
+///
 /// <para><b>The verdict.</b> A stream is usable when it and every ancestor in its reduce chain is
-/// undisposed and owns a hub that has not begun winding down. <see cref="MessageHub.IsDisposing"/>
-/// is checked as well as <see cref="IMessageHub.RunLevel"/> because hub shutdown is asynchronous:
-/// right after <c>Dispose()</c> the RunLevel still reads <c>Started</c> while hosted-hub creation
-/// is already frozen.</para>
+/// undisposed, unfaulted, and owns a hub that has not begun winding down.
+/// <see cref="MessageHub.IsDisposing"/> is checked as well as <see cref="IMessageHub.RunLevel"/>
+/// because hub shutdown is asynchronous: right after <c>Dispose()</c> the RunLevel still reads
+/// <c>Started</c> while hosted-hub creation is already frozen.</para>
 /// </summary>
 internal static class StreamLiveness
 {
@@ -50,11 +62,11 @@ internal static class StreamLiveness
 
     /// <summary>
     /// True when <paramref name="stream"/> may be handed to a caller from a cache: it and every
-    /// ancestor in its reduce chain are undisposed and hub-backed.
+    /// ancestor in its reduce chain are undisposed, unfaulted and hub-backed.
     /// </summary>
     /// <param name="stream">The stream to judge, or <c>null</c>.</param>
-    /// <returns><c>false</c> for <c>null</c>, for a disposed stream, and for a live stream whose
-    /// source chain contains a disposed stream.</returns>
+    /// <returns><c>false</c> for <c>null</c>, for a disposed or terminally faulted stream, and for
+    /// a live stream whose source chain contains one.</returns>
     public static bool IsUsable(ISynchronizationStream? stream)
     {
         if (stream is null)
@@ -63,7 +75,16 @@ internal static class StreamLiveness
         var current = stream;
         for (var depth = 0; depth < MaxChainDepth; depth++)
         {
-            if (current is IStreamLivenessSource { IsDisposed: true })
+            // 🚨 FAULTED counts exactly as much as DISPOSED — Systemorph/MeshWeaver#2387.
+            // A stream's store is a ReplaySubject, so a terminal OnError is permanent: it can
+            // never emit again and every later subscriber replays that same error INSTANTLY. A
+            // cache that judged liveness on disposal alone therefore kept handing the corpse back
+            // for the whole process lifetime, and the symptom was the opposite of a hang — a
+            // 30-second bound reported after 0.07 ms, because nothing waited for anything. On the
+            // boot path that turned ONE unanswered SubscribeRequest to a busy per-node hub into a
+            // package this pod could never install again, including by the installer's own
+            // fall-back-to-full-install repair, which re-entered the same dead mirror.
+            if (current is IStreamLivenessSource { IsDisposed: true } or IStreamLivenessSource { IsFaulted: true })
                 return false;
             if (current.Hub is not { } hub
                 || hub.RunLevel > MessageHubRunLevel.Started
@@ -82,6 +103,23 @@ internal static class StreamLiveness
         // whether the chain was merely long or genuinely circular.
         return false;
     }
+
+    /// <summary>
+    /// True when <paramref name="stream"/> ITSELF took a terminal error — the one reason for being
+    /// unusable that a cache can and must CLOSE, rather than merely stop serving.
+    ///
+    /// <para>The distinction matters at teardown. A stream that is unusable because its hub is
+    /// winding down is already being disposed by that cascade, and closing it a second time from a
+    /// cache lookup would post an <c>UnsubscribeRequest</c> at a dying owner — which on Orleans
+    /// re-activates the very grain the teardown is retiring. A FAULTED stream has no such owner:
+    /// its store is terminal, so it can neither notify a reader nor be revived, and nothing else
+    /// will ever close it. Deliberately does NOT walk the source chain — a faulted ancestor is the
+    /// ancestor's cache's business, not this one's.</para>
+    /// </summary>
+    /// <param name="stream">The stream to judge, or <c>null</c>.</param>
+    /// <returns><c>true</c> only when this exact stream's store holds a terminal error.</returns>
+    public static bool HasFaulted(ISynchronizationStream? stream)
+        => stream is IStreamLivenessSource { IsFaulted: true };
 }
 
 /// <summary>
@@ -113,4 +151,11 @@ internal interface IStreamLivenessSource
     /// Whether this stream has been disposed. Its store is completed and it will never emit again.
     /// </summary>
     bool IsDisposed { get; }
+
+    /// <summary>
+    /// Whether this stream's store took a terminal error. It will never emit again either, and —
+    /// unlike a completed store — every later subscriber replays that error the instant it
+    /// subscribes, so serving it from a cache turns one transient failure into a permanent one.
+    /// </summary>
+    bool IsFaulted { get; }
 }

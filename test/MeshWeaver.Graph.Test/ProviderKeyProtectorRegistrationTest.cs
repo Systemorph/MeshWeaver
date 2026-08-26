@@ -1,3 +1,4 @@
+using MeshWeaver.AI;   // IProviderKeyProtector & co keep their ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh.Security;
 using Microsoft.Extensions.DependencyInjection;

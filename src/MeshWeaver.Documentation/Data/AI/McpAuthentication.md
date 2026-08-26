@@ -14,7 +14,7 @@ Tags:
   - "API Tokens"
 ---
 
-The MeshWeaver MCP endpoint (`/mcp`) uses bearer token authentication. Every MCP client — Claude Code, Cursor, or a custom integration — must include a valid API token in its `Authorization` header. Without one, requests receive `401 Unauthorized` and never reach the MCP handler.
+The MeshWeaver MCP endpoint (`/api/mcp`, with `/mcp` as a permanent compatibility alias — both serve the identical endpoint) uses bearer token authentication. Every MCP client — Claude Code, Cursor, or a custom integration — must include a valid API token in its `Authorization` header. Without one, requests receive `401 Unauthorized` and never reach the MCP handler.
 
 Tokens are personal. Each token is tied to a specific user, so all MCP operations run under that user's identity with full row-level security (RLS) enforced.
 
@@ -104,7 +104,7 @@ Add the MCP server to your Claude Code configuration (`.claude/settings.json` or
   "mcpServers": {
     "meshweaver": {
       "type": "sse",
-      "url": "https://your-portal.com/mcp",
+      "url": "https://your-portal.com/api/mcp",
       "headers": {
         "Authorization": "Bearer mw_dGhpcyBpcyBhIHNhbXBsZSB0b2tlbg"
       }
@@ -126,7 +126,7 @@ Authorization: Bearer mw_<your-token>
 #### Smoke-test with curl
 
 ```bash
-curl -X POST https://your-portal.com/mcp \
+curl -X POST https://your-portal.com/api/mcp \
   -H "Authorization: Bearer mw_dGhpcyBpcyBhIHNhbXBsZSB0b2tlbg" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}'

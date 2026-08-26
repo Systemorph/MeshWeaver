@@ -170,7 +170,23 @@ def parse_declarations(path: str, text: str) -> list[Decl]:
 
 
 def parse_forwards(text: str) -> set[str]:
-    return {m.group("type") for m in FORWARD_RE.finditer(text)}
+    # 🚨 A COMMENTED-OUT forwarder must not count. FORWARD_RE is a plain regex over the file text,
+    # so before this line `// [assembly: TypeForwardedTo(typeof(X))]` satisfied the gate — the exact
+    # false-PASS shape this gate exists to prevent, and the likeliest way a forwarder gets disabled
+    # during a refactor (comment first, delete later). Found by running the gate's own negative
+    # control while fixing #2398: commenting the six new lines out left it GREEN, deleting them
+    # turned it red, so "the forwarder is disabled" and "the forwarder is there" read identically.
+    #
+    # Line comments only. A forwarder buried in a /* ... */ block would still count; closing that
+    # needs a real C# tokenizer rather than a regex, which is out of proportion for a CI script and
+    # a far less likely way to disable one line. Truncating at `//` can also cut a string literal
+    # containing a URL; harmless here, because the two regexes match declarations and assembly
+    # attributes, neither of which lives inside a string.
+    return {
+        m.group("type")
+        for line in text.splitlines()
+        for m in FORWARD_RE.finditer(line.split("//", 1)[0])
+    }
 
 
 # ─────────────────────────────── tree readers ───────────────────────────────
@@ -417,6 +433,40 @@ SELF_TESTS: list[tuple[str, dict[str, str], dict[str, str], bool]] = [
             "src/B/Foo.cs": FOO_N,
             "src/A/Keep.cs": KEEP_A,
             "src/A/Fwd.cs": "using N;\n[assembly: TypeForwardedTo(typeof(Foo))]\n",
+        },
+        True,
+    ),
+    (
+        # The gate's own negative control found this hole (#2398): commenting the forwarders out
+        # left the gate GREEN, so a disabled forwarder and a present one read the same.
+        "a COMMENTED-OUT forwarder does not count",
+        {"src/A/Foo.cs": FOO_N, "src/A/Keep.cs": KEEP_A},
+        {
+            "src/B/Foo.cs": FOO_N,
+            "src/A/Keep.cs": KEEP_A,
+            "src/A/Fwd.cs": "// [assembly: TypeForwardedTo(typeof(N.Foo))]\n",
+        },
+        False,
+    ),
+    (
+        "...nor one left behind mid-line in a note about its removal",
+        {"src/A/Foo.cs": FOO_N, "src/A/Keep.cs": KEEP_A},
+        {
+            "src/B/Foo.cs": FOO_N,
+            "src/A/Keep.cs": KEEP_A,
+            "src/A/Fwd.cs": "// dropped in #9999: [assembly: TypeForwardedTo(typeof(N.Foo))]\n",
+        },
+        False,
+    ),
+    (
+        # ...but a REAL forwarder carrying a trailing comment is still a forwarder. Without this
+        # row, "strip everything after //" would look correct while silencing live forwarders.
+        "a forwarder followed by an explanatory comment still counts",
+        {"src/A/Foo.cs": FOO_N, "src/A/Keep.cs": KEEP_A},
+        {
+            "src/B/Foo.cs": FOO_N,
+            "src/A/Keep.cs": KEEP_A,
+            "src/A/Fwd.cs": "[assembly: TypeForwardedTo(typeof(N.Foo))]  // moved in #1234\n",
         },
         True,
     ),

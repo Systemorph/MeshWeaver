@@ -84,7 +84,12 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         // content route mesh images/PDFs/downloads use (issue #587).
         "/api/content",
         "/favicon.ico",
+        // Both MCP endpoint paths. The McpEndpointRoutes front-of-pipeline rewrite normally
+        // turns /api/mcp into /mcp before this middleware runs; the explicit /api/mcp entry is
+        // defense-in-depth against pipeline reordering — an MCP client bounced to /onboarding
+        // cannot follow the redirect.
         "/mcp",
+        "/api/mcp",
         "/signin-",
         "/bootstrap",
         "/api/email",
