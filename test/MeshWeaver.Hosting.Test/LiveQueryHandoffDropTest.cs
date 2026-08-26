@@ -175,8 +175,11 @@ public class LiveQueryHandoffDropTest
     {
         var warmInner = new InMemoryStorageAdapter();
         var warmProvider = new StorageAdapterMeshQueryProvider(warmInner);
-        var warmInitial = new ManualResetEventSlim(false);
-        var warmLive = new ManualResetEventSlim(false);
+        // Disposed deterministically (not left to Wait()'s lazily-allocated kernel WaitHandle to
+        // finalize) — this helper is also exercised repeatedly by ad-hoc repro loops, and an
+        // undisposed ManualResetEventSlim leaks its handle once Wait() forces it into existence.
+        using var warmInitial = new ManualResetEventSlim(false);
+        using var warmLive = new ManualResetEventSlim(false);
         using (warmProvider
                    .Query<MeshNode>(
                        MeshQueryRequest.FromQueries(["path:warmup/_Usage scope:children"], "system-security"),
@@ -189,12 +192,18 @@ public class LiveQueryHandoffDropTest
         {
             // Generous, uncontested-by-design budget: this phase primes the JIT, it does not pin
             // the handoff — a slow warm-up is not the defect under test, so it is allowed to be
-            // slow. If it genuinely never completes, the environment is unusable for ANY test, not
-            // just this one.
-            warmInitial.Wait(TimeSpan.FromSeconds(30));
+            // slow. But it must FAIL FAST and LOUD if it doesn't complete: silently falling through
+            // would run the gated scenario below against a STILL-cold pipeline and could then
+            // misreport its own timeout as "dropped row" — exactly the misleading signal this
+            // warm-up exists to prevent.
+            Assert.True(warmInitial.Wait(TimeSpan.FromSeconds(30)),
+                "warm-up: Initial never arrived — the environment is too degraded to even JIT-prime "
+                + "this pipeline, so the gated assertions below cannot be trusted either");
             warmInner.Write(new MeshNode("x", "warmup/_Usage") { NodeType = "TokenUsage" }, Options)
                 .Subscribe();
-            warmLive.Wait(TimeSpan.FromSeconds(30));
+            Assert.True(warmLive.Wait(TimeSpan.FromSeconds(30)),
+                "warm-up: live update never arrived — the environment is too degraded to even "
+                + "JIT-prime this pipeline, so the gated assertions below cannot be trusted either");
         }
     }
 
