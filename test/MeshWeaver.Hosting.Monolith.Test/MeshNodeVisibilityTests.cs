@@ -94,11 +94,11 @@ public class SearchExclusionIntegrationTest : MonolithMeshTestBase
         var persistence = new InMemoryStorageAdapter();
 
         // Parent so path:ACME resolves (Group is a stock AddGraph type — no extra module needed).
-        Save(persistence, MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Group" });
+        persistence.SaveNodeSynchronously(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Group" }, SetupJsonOptions);
         // Ordinary, searchable node.
-        Save(persistence, MeshNode.FromPath("ACME/Visible") with { Name = "Visible", NodeType = "Markdown" });
+        persistence.SaveNodeSynchronously(MeshNode.FromPath("ACME/Visible") with { Name = "Visible", NodeType = "Markdown" }, SetupJsonOptions);
         // Hidden node under a _Memex dotfile namespace — same shape as {user}/_Memex/ThreadComposer.
-        Save(persistence, MeshNode.FromPath("ACME/_Memex/Hidden") with { Name = "Hidden", NodeType = "Markdown" });
+        persistence.SaveNodeSynchronously(MeshNode.FromPath("ACME/_Memex/Hidden") with { Name = "Hidden", NodeType = "Markdown" }, SetupJsonOptions);
 
         return builder
             .UseMonolithMesh()
@@ -106,9 +106,6 @@ public class SearchExclusionIntegrationTest : MonolithMeshTestBase
             .AddGraph()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
-
-    private static void Save(InMemoryStorageAdapter persistence, MeshNode node) =>
-        persistence.SaveNode(node, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
 
     [Fact(Timeout = 20000)]
     public async Task Search_Context_Excludes_UnderscorePrefixedPaths()
