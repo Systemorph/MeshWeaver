@@ -59,7 +59,7 @@ Each package = "a remote participant + the `MeshOperations` surface, in-language
 2. **fire-and-forget** — send a delivery.
 3. **stream** — send a subscribe request, demux change events by stream id.
 
-`get`/`search`/`watch`/`patch`/… are thin compositions of these over the existing mesh request types — a port of `MeshWeaver.AI.MeshOperations`.
+`get`/`search`/`watch`/`patch`/… are thin compositions of these over the existing mesh request types — a port of `MeshWeaver.Mesh.Operations.MeshOperations`.
 
 - **Python**: `clients/python` (`meshweaver`) — `grpc.aio` transport, `Mesh` operations, async with a notebook-friendly surface.
 - **Bun/Node**: `clients/typescript` (`@meshweaver/client`) — same surface, `AsyncIterable` streams. *(planned)*
