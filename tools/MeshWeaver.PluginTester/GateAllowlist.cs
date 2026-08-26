@@ -25,6 +25,18 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
     /// Optional third token marking an entry whose check FLAPS. Such an entry is exempt from
     /// stale-detection: passing once does not prove the debt is paid, so the ratchet must not
     /// demand its removal. It still suppresses only the scope/check it names.
+    ///
+    /// <para>🚨 This is a REAL WEAKENING and its failure mode is social, not technical: the next
+    /// person with a deterministic red they cannot fix will find this token and reach for it. It is
+    /// legitimate for a check that genuinely flaps and for nothing else — marking a deterministic
+    /// failure intermittent silences the ratchet permanently, which is the band-aid the ratchet
+    /// exists to prevent. Prove the flap first (two runs of one commit disagreeing, or an entry
+    /// dropped as stale and restored in this file's history).</para>
+    ///
+    /// <para>The sibling rule is the same idea from the other direction: an entry listed but ABSENT
+    /// from a narrowed run is <c>Unverifiable</c> — warned, never failed. That one refuses to infer
+    /// from a check that did not run; this one refuses to infer from a check that ran once and
+    /// happened to pass. Both are <i>one observation is not proof</i>.</para>
     /// </summary>
     public const string IntermittentMarker = "intermittent";
 
@@ -52,7 +64,8 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
                     $"allow file line {number}: expected '<scope> <check>' (optionally followed by " +
                     $"'{IntermittentMarker}') with check one of " +
                     $"[{string.Join(", ", Checks)}], got '{line}'");
-            entries.Add(new AllowEntry(parts[0], parts[1].ToLowerInvariant(), intermittent));
+            entries.Add(new AllowEntry(parts[0], parts[1].ToLowerInvariant())
+                { Intermittent = intermittent });
         }
         return new GateAllowlist(entries);
     }
@@ -109,8 +122,16 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
 }
 
 /// <summary>One known-debt entry: a scope (package id or NodeType path) and a check name.</summary>
-public sealed record AllowEntry(string Scope, string Check, bool Intermittent = false)
+public sealed record AllowEntry(string Scope, string Check)
 {
+    /// <summary>
+    /// Whether this entry's check FLAPS — see <see cref="GateAllowlist.IntermittentMarker"/>.
+    /// Deliberately an init-only PROPERTY rather than a primary-constructor parameter: adding a
+    /// defaulted parameter to a public record's primary ctor is a binary-breaking change, which the
+    /// "Public record signatures" gate refuses. It caught exactly that on the first attempt here.
+    /// </summary>
+    public bool Intermittent { get; init; }
+
     /// <summary>Case-insensitive match, exact scope — no globs: an entry must name exactly the
     /// debt it tolerates, or the ratchet stops ratcheting.</summary>
     public bool Matches(string scope, string check) =>
