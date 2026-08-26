@@ -410,6 +410,18 @@ So the mesh teardown awaits **all three**, in order, before the scope is dispose
    ThreadPool thread then dereferences a collectible node ALC's freed metadata after unload, a
    native use-after-unload **SIGSEGV**. `DrainAll()` cancels every leaf so it stops, then joins, and
    returns the count it had to leak.
+   🚨 **The cancel runs on its own thread, never on the joining one.**
+   `CancellationTokenSource.Cancel()` executes every registered callback *synchronously on the
+   caller*, and this token's callbacks are not bookkeeping: `SubscribeThroughPool` registers one per
+   live pooled subscription that runs that subscription's whole downstream teardown, and every gated
+   leaf links its subscriber token to the pool's, so cancelling also resumes each leaf's gate wait
+   into its observer. Cancelling inline therefore ran arbitrary application teardown on the
+   MESH TEARDOWN thread with no budget over it — the drain timeout covers only the gate join that
+   comes *after* — so one clean-up leg that would not finish parked teardown silently and forever
+   (#2394: a whole test assembly killed at its 8 min cap with no test named). `IoPool` now issues the
+   cancel on a dedicated thread and joins it last, under the same budget, adding it to the residual
+   when it does not finish. `Dispose()` issues it the same way and never joins — its wait lives on
+   `Disposed`.
 3. `AsyncDisposeQueue.DrainAsync(timeout)` — the queued async cleanup. A TPL `ActionBlock` drains it;
    `DrainAsync` `Complete()`s the block and awaits the remainder (bounded), so it converges even under
    continuous influx — a *version-target* wait would not (the queue is a message stream / endless
