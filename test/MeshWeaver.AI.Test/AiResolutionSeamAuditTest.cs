@@ -62,7 +62,11 @@ public class AiResolutionSeamAuditTest
         ("src/MeshWeaver.AI/Stores/MeshAgentSkillsSource.cs", "ObserveSkillQueries("),
         ("src/MeshWeaver.AI/Completion/SkillAutocompleteProvider.cs", "SkillQueries("),
         ("src/MeshWeaver.AI/AgentPickerProjection.cs", "ObserveModelQueries("),
-        ("src/MeshWeaver.Blazor.Portal/Chat/ThreadChatView.razor.cs", "ObserveResolvedModels("),
+        // ThreadChatView moved to MeshWeaver.Plugins with the GUI, so this audit can no longer
+        // reach it — the same split the #1814 surface-manifest pin took. The chat view still
+        // resolves through the seam (ObserveResolvedModels( is present in that repo's copy);
+        // what changed is WHERE that is asserted. The plugins-side audit owns it now, and this
+        // list stays authoritative for the entry points that are still in THIS repo.
         ("src/MeshWeaver.AI/AiSettingsNodeType.cs", "AiSourceCatalog.Resolve("),
     };
 
