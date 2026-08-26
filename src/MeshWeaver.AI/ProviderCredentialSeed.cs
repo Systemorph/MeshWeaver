@@ -36,10 +36,9 @@ public enum ProviderSeedOutcome
     Seeded,
 
     /// <summary>
-    /// 🚨 REFUSED: no <c>Ai:KeyProtection:MasterKey</c> is configured, so
-    /// <see cref="IProviderKeyProtector.Protect"/> is a plaintext passthrough and writing here
-    /// would put a live credential into Postgres in the clear. The node is left keyless and the
-    /// refusal is logged at Error — the one outcome an operator must act on.
+    /// 🚨 REFUSED: no <c>Ai:KeyProtection:MasterKey</c> is configured, so nothing can be encrypted
+    /// and writing here would put a live credential into Postgres in the clear. The node is left
+    /// keyless and the refusal is logged at Error — the one outcome an operator must act on.
     /// </summary>
     RefusedUnprotected,
 
@@ -83,12 +82,17 @@ public sealed record ProviderCredentialSeedResult(
 ///
 /// <para>🚨 <b>Never writes an unprotected key.</b> Whatever is written goes through
 /// <see cref="IProviderKeyProtector.Protect"/> and is verified to carry the <c>enc:</c> tag BEFORE
-/// the write. With no <c>Ai:KeyProtection:MasterKey</c> configured, Protect is a silent plaintext
-/// passthrough — so the seed REFUSES (<see cref="ProviderSeedOutcome.RefusedUnprotected"/>, logged
-/// at Error) rather than quietly persisting a live credential in the clear. Checking the produced
-/// VALUE rather than probing the master-key provider is deliberate: it is the exact bytes about to
-/// be persisted that must be tagged, whichever <see cref="IMasterKeyProvider"/> a hardened
-/// deployment plugs in.</para>
+/// the write — the exact bytes about to be persisted must be tagged, whichever
+/// <see cref="IProviderKeyProtector"/> a hardened deployment plugs in.</para>
+///
+/// <para>With no <c>Ai:KeyProtection:MasterKey</c> configured the seed REFUSES
+/// (<see cref="ProviderSeedOutcome.RefusedUnprotected"/>, logged at Error) rather than persisting a
+/// live credential in the clear. It establishes that by asking <see cref="IMasterKeyProvider"/>
+/// BEFORE protecting: <see cref="IProviderKeyProtector.Protect"/> now throws in that state (it used
+/// to degrade to a plaintext passthrough, which is the defect this whole path exists to make
+/// impossible), and a throw would fault the entire boot seed instead of reporting ONE provider's
+/// refusal. This is the only caller that owns such a structured refusal; everywhere else the throw
+/// is the intended answer.</para>
 ///
 /// <para><b>Two replicas booting together both run it, and that is fine.</b> Whichever writes first
 /// wins; the other reads a keyed node and reports
@@ -112,10 +116,10 @@ public static class ProviderCredentialSeed
 
     /// <summary>
     /// True when <paramref name="stored"/> is a value <see cref="IProviderKeyProtector"/> has
-    /// actually encrypted (rather than passed through untouched because encryption is disabled).
-    /// Pure — the master-key check the seed makes before every write.
+    /// actually encrypted (rather than a literal, or nothing at all because the seed never got as
+    /// far as protecting). Pure — the last check the seed makes on the exact bytes before a write.
     /// </summary>
-    /// <param name="stored">The value <see cref="IProviderKeyProtector.Protect"/> produced.</param>
+    /// <param name="stored">The value <see cref="IProviderKeyProtector.Protect"/> produced, if any.</param>
     public static bool IsProtected(string? stored) =>
         !string.IsNullOrEmpty(stored) && stored.StartsWith(ProtectedPrefix, StringComparison.Ordinal);
 
@@ -202,6 +206,7 @@ public static class ProviderCredentialSeed
             return Observable.Empty<ProviderCredentialSeedResult>();
 
         var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
+        var masterKeys = hub.ServiceProvider.GetService<IMasterKeyProvider>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var expectedPaths = candidates
             .Select(c => $"{ModelProviderNodeType.RootNamespace}/{c.Source.ProviderName}")
@@ -215,10 +220,21 @@ public static class ProviderCredentialSeed
                     providers.TryGetValue(path, out var node);
                     var current = node.ContentAs<ModelProviderConfiguration>(hub.JsonSerializerOptions, logger);
 
-                    // 🚨 Protect FIRST, then decide on the RESULT. What must carry the enc: tag is
-                    // the exact value about to be persisted — not a probe, and not an inference from
-                    // which IMasterKeyProvider happens to be registered.
-                    var protectedKey = protector is null ? c.ApiKey : protector.Protect(c.ApiKey);
+                    // 🚨 ASK the master-key seam FIRST, then protect, then decide on the RESULT.
+                    //
+                    // The seed used to discover "encryption is off" by calling Protect and looking
+                    // at what came back — which only worked because Protect DEGRADED to a plaintext
+                    // passthrough. That passthrough is gone (it is what persisted a live provider
+                    // key in the clear), so Protect now THROWS in that state, and a throw here would
+                    // fault the whole boot seed instead of reporting one provider's refusal. Hence
+                    // the question is asked directly: this is the one caller that owns a structured,
+                    // non-writing refusal (RefusedUnprotected) and must report it rather than raise.
+                    //
+                    // It is a question, NOT a licence — answering "no" skips the write entirely;
+                    // there is no branch here that persists an unprotected key. And the produced
+                    // VALUE is still what decides: the exact bytes about to be persisted must carry
+                    // the enc: tag, whichever IProviderKeyProtector a hardened deployment plugs in.
+                    var protectedKey = ProtectOrNothing(protector, masterKeys, c.ApiKey);
                     var outcome = Decide(current, hasConfiguredKey: true, protectionAvailable: IsProtected(protectedKey));
                     var endpoint = EndpointToSeed(current, c.Endpoint);
 
@@ -230,6 +246,30 @@ public static class ProviderCredentialSeed
                 // may have been created seconds earlier by the import, and a fan-out of cold per-node
                 // hub activations is what crashes those writes (the install-path rule).
                 .Concat()));
+    }
+
+    /// <summary>
+    /// The protected form of <paramref name="configuredKey"/>, or <c>null</c> when this deployment
+    /// cannot encrypt at all.
+    ///
+    /// <para>🚨 <b>Null here is a DECISION NOT TO WRITE, not a fallback.</b> The caller feeds the
+    /// result to <see cref="IsProtected"/>, so <c>null</c> becomes
+    /// <see cref="ProviderSeedOutcome.RefusedUnprotected"/> and nothing is persisted — this method
+    /// never returns the plaintext, and there is no path from here to a write. The distinction
+    /// matters because the shape it replaces (<c>protector?.Protect(key) ?? key</c>) looked
+    /// identical and DID return the plaintext.</para>
+    ///
+    /// <para>Asking <see cref="IMasterKeyProvider"/> up front is what the boot seed needs and no
+    /// other caller does: <see cref="IProviderKeyProtector.Protect"/> refuses by THROWING, and a
+    /// throw inside the seed's sequential per-provider pipeline would abort every remaining
+    /// provider instead of reporting one refusal.</para>
+    /// </summary>
+    private static string? ProtectOrNothing(
+        IProviderKeyProtector? protector, IMasterKeyProvider? masterKeys, string? configuredKey)
+    {
+        if (protector is null || masterKeys?.GetMasterKey() is null)
+            return null;
+        return protector.Protect(configuredKey);
     }
 
     /// <summary>Configuration indexer read that never throws on a malformed section.</summary>
@@ -338,8 +378,8 @@ public static class ProviderCredentialSeed
                 // Postgres in the clear — the failure mode this whole path exists to make impossible.
                 logger?.LogError(
                     "[ProviderCredentialSeed] {Path}: REFUSED to seed the API key configured in section "
-                    + "'{Section}' because no '{MasterKeyConfigKey}' is configured — provider-key "
-                    + "encryption is a plaintext passthrough on this deployment and the seed will not "
+                    + "'{Section}' because no '{MasterKeyConfigKey}' is configured — nothing can be "
+                    + "encrypted at rest on this deployment and the seed will not "
                     + "persist a credential in the clear. Set a master key (env "
                     + "'Ai__KeyProtection__MasterKey') and restart; until then this provider stays "
                     + "keyless and its models are reported unusable.",

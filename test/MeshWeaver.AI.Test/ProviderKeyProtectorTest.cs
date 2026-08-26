@@ -56,10 +56,23 @@ public class ProviderKeyProtectorTest
     }
 
     [Fact]
-    public void NoMasterKey_Passthrough()
+    public void NoMasterKey_RefusesToWrite_ButStillReads()
     {
+        // This test asserted the OPPOSITE until 2026-08-24: that Protect passes the key through
+        // when no master key is configured. That passthrough is the defect — it PERSISTED A RAW
+        // PROVIDER KEY, and was found in production with a live OpenRouter key in cleartext in
+        // Provider/OpenRouter node content. A missing master key is a configuration fault, not a
+        // degraded mode, so the write fails and the caller hears about it.
         var p = WithoutKey();
-        p.Protect("plain").Should().Be("plain");
+
+        var refusal = Record.Exception(() => p.Protect("plain"));
+        refusal.Should().BeOfType<InvalidOperationException>();
+        refusal!.Message.Should().Contain(ConfigMasterKeyProvider.ConfigKey,
+            "the error has to name the setting to configure, or it is unactionable");
+
+        // Reads stay tolerant in the same state — that asymmetry is the point. A deployment
+        // already holding legacy plaintext keeps working after an upgrade; it just cannot write
+        // any more until it is configured. Fail on the way IN, tolerate on the way OUT.
         p.Unprotect("plain").Should().Be("plain");
     }
 

@@ -59,20 +59,28 @@ endpoint in the same edit.
 That path (`ModelProviderLayoutAreas.SaveKey`) does exactly this — replicate it if you script it:
 
 ```csharp
-var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
-var stored = protector is null ? newKey : protector.Protect(newKey);   // plaintext → enc:v1:…
-hub.GetWorkspace().GetMeshNodeStream("Provider/Anthropic")
-   .Update(n => n.Content is ModelProviderConfiguration cfg
-        ? n with { Content = cfg with { ApiKey = stored } }            // (+ Endpoint = … if changing it)
-        : n)
+// Protect INSIDE the chain: Protect REFUSES (throws) when no master key is configured, and a
+// refusal computed before the chain escapes an OnNext with nowhere to go. Deferred, it lands on
+// the same onError the write already reports through — the key is not stored, and you hear why.
+Observable.Defer(() => Observable.Return(
+        hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>().Protect(newKey)))
+   .SelectMany(stored => hub.GetWorkspace().GetMeshNodeStream("Provider/Anthropic")
+        .Update(n => n.ContentAs<ModelProviderConfiguration>(hub.JsonSerializerOptions) is { } cfg
+             ? n with { Content = cfg with { ApiKey = stored } }       // (+ Endpoint = … if changing it)
+             : n))
    .Subscribe(updated => hub.Post(new SaveMeshNodeRequest(updated),
         o => o.WithTarget(new Address("Provider/Anthropic"))),
-        ex => logger.LogWarning(ex, "Saving provider key failed"));
+        ex => logger.LogError(ex, "Saving provider key failed — the key was NOT stored"));
 ```
 
 Notes that keep it correct, not a band-aid:
-- **Always `Protect()` first.** A raw key written without encryption *functions* (the read path
-  passes untagged values through) but sits **plaintext at rest** in Postgres. Don't.
+- **Always `Protect()` first, and never with a fallback.** `protector?.Protect(k) ?? k` and
+  `protector is null ? k : protector.Protect(k)` are the shapes that put a live key in cleartext
+  into production — they read as defensive and are a silent leak. `GetRequiredService`, then call
+  `Protect` unconditionally: a credential that cannot be encrypted must not be stored.
+  (`NoPlaintextCredentialFallbackGuard` fails the build on any of those shapes.)
+- **`ContentAs<T>`, never `n.Content is T`.** An `is` cast returns the node UNCHANGED when the
+  content arrived as a degraded `JsonElement` — a save that silently does nothing.
 - The write runs under **the caller's identity** so RLS gates it — **no `ImpersonateAsSystem`**.
 - The trailing `SaveMeshNodeRequest` force-persists: sync-driven nodes don't always fire the
   per-node save subscription, so the `Update` alone can be lost on a synced partition.
@@ -131,8 +139,11 @@ have been rotated on the provider side since.
 
 `apiKey` is stored as `enc:v1:{base64(nonce|ciphertext|tag)}` — AES-256-GCM via
 `IProviderKeyProtector`. The master key comes from config **`Ai:KeyProtection:MasterKey`**
-(env `Ai__KeyProtection__MasterKey`); a **null** master key disables encryption (passthrough —
-keys stored plaintext). A fresh random nonce per encrypt means the same key encrypts to
+(env `Ai__KeyProtection__MasterKey`); a **null** master key means this deployment **cannot store a
+credential at all** — `Protect` throws rather than falling back to plaintext, so entering a key,
+saving a GitHub credential, minting a registry sync-token signing key and rotating the Entra
+credential all refuse until it is configured. (Reads stay tolerant, so legacy plaintext keeps
+working.) A fresh random nonce per encrypt means the same key encrypts to
 different ciphertext each time — **the stored blob is not a fingerprint** of the key; don't
 compare blobs to tell two keys apart.
 
