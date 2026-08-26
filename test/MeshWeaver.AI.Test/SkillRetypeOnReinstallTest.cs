@@ -1,6 +1,5 @@
 #pragma warning disable CS1591
 
-using MeshWeaver.AI;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -8,8 +7,10 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.PluginCatalog;   // moved out of MeshWeaver.PluginCatalog.Test (#2276):
+                                  // the parent namespace no longer resolves implicitly.
 
-namespace MeshWeaver.PluginCatalog.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// #1984's BACKFILL, answered by measurement rather than by a migration. Eleven skills are stored
