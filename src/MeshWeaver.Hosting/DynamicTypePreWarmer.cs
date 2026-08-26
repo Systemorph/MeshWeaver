@@ -324,11 +324,22 @@ public static class DynamicTypePreWarmer
 
         // 🚨 System-scoped: enumerating + activating dynamic NodeType defs across EVERY
         // partition is infrastructure, not a user-attributable read (mirrors the enrichment
-        // probe + activation reads). Observable.Using holds the scope across the live
-        // subscription, not just the synchronous build.
-        return Observable.Using(
-            () => AccessContextScope.AsSystem(accessService),
-            _ => meshService
+        // probe + activation reads).
+        //
+        // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790) —
+        // and `AccessContextScope.AsSystem(x)` IS `x.ImpersonateAsSystem()`, so routing through the
+        // helper does not make it a different animal. `Using` opens the AsyncLocal on the
+        // SUBSCRIBING thread and disposes it when the inner observable TERMINATES (for these
+        // cross-hub reads, the owning hub's response thread), so the subscriber — the bootstrap
+        // hosted service — is left holding `system-security` for everything it does afterwards.
+        // What used to stand here read "Observable.Using holds the scope across the live
+        // subscription, not just the synchronous build", i.e. the defect described as the feature.
+        // RunAsSystem seals both ends inside one Subscribe: the whole cold pipeline below is
+        // composed and subscribed impersonated (so every Query/stream read is issued as System and
+        // every continuation it schedules captures that ExecutionContext), and the scope is left on
+        // the way out of that same Subscribe.
+        return accessService.RunAsSystem(
+            () => meshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
                 .Take(1)
                 .Timeout(EnumerationBudget)
@@ -434,10 +445,10 @@ public static class DynamicTypePreWarmer
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
 
         // System-scoped for the same reason the sweep is: enumerating NodeType definitions across
-        // every partition is infrastructure, not a user-attributable read.
-        return Observable.Using(
-            () => AccessContextScope.AsSystem(accessService),
-            _ => meshService
+        // every partition is infrastructure, not a user-attributable read. RunAsSystem, never
+        // `Observable.Using(AccessContextScope.AsSystem, …)` — see WarmDynamicTypes (#1444/#1790).
+        return accessService.RunAsSystem(
+            () => meshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
                 .Take(1)
                 .Timeout(EnumerationBudget)
@@ -815,9 +826,11 @@ public static class DynamicTypePreWarmer
         string typePath,
         TimeSpan budget,
         ILogger? logger)
-        => Observable.Using(
-                () => AccessContextScope.AsSystem(accessService),
-                _ =>
+        // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see
+        // WarmDynamicTypes (#1444/#1790). The whole flip-and-wait below stays inside the work
+        // factory, so its emission-time behaviour is unchanged.
+        => accessService.RunAsSystem(
+                () =>
                 {
                     var stream = workspace.GetMeshNodeStream(typePath);
                     return stream
@@ -1076,11 +1089,14 @@ public static class DynamicTypePreWarmer
         var workspace = mesh.GetWorkspace();
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
         // System-scoped for the same reason the sweep's reads are: watching a NodeType record
-        // across partitions is infrastructure, not a user-attributable read.
-        return Observable
-            .Using(
-                () => AccessContextScope.AsSystem(accessService),
-                _ =>
+        // across partitions is infrastructure, not a user-attributable read. RunAsSystem, never
+        // `Observable.Using(AccessContextScope.AsSystem, …)` — see WarmDynamicTypes (#1444/#1790).
+        // This one is the worst shape of the family: the watch is LONG-LIVED, so `Using` would hold
+        // the scope open until recovery lands (or shutdown) while the subscriber — a hosted service
+        // — ran on latched as System the whole time.
+        return accessService
+            .RunAsSystem(
+                () =>
                 {
                     // One shared handle (IMeshNodeStreamCache): the baseline read and the wait are
                     // the SAME stream, and it replays its latest node to the second subscriber — so
@@ -1164,9 +1180,10 @@ public static class DynamicTypePreWarmer
         // its compile watcher settling, the state write coming back. That is the number worth
         // having, because it is the one the bootstrap's liveness deadline is actually spent on.
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        return Observable.Using(
-                () => AccessContextScope.AsSystem(accessService),
-                _ => workspace.GetMeshNodeStream(typePath)
+        // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see
+        // WarmDynamicTypes (#1444/#1790).
+        return accessService.RunAsSystem(
+                () => workspace.GetMeshNodeStream(typePath)
                     // Unavailable is terminal too — a driver already gave up determining
                     // the state, so waiting out the rest of the budget for a write that
                     // is not coming only slows the sweep down.

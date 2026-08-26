@@ -126,7 +126,7 @@ public static class ActivityRunner
             // its Append/Finish writes fire on IIoPool / reactive scheduler hops
             // where the originating AsyncLocal AccessContext has cleared — so we
             // re-establish the activity owner (created.CreatedBy) AT THE SUBSCRIBE
-            // via Observable.Using(FromNode). Mirrors the thread-round owner model
+            // via RunAs (below). Mirrors the thread-round owner model
             // (ThreadExecution.InstallExecRoundWatcher) exactly. The owner snapshot
             // is also threaded into Append/Finish so each cross-hub write re-stamps
             // it at its own .Update() invocation (those fire from arbitrary command
@@ -134,89 +134,104 @@ public static class ActivityRunner
             // Update to the partition MainNode, so only a principal who can Update
             // the partition — the owner, by construction — may write it.
             var owner = OwnerContextOf(created);
-            return ScheduleOffHubTurn(Observable.Using(
-                () => AccessContextScope.FromNode(created, accessService, logger),
-                _ =>
-                {
-                    // Register the run as in flight for the WHOLE of its life, released in the
-                    // Finally below — i.e. at TERMINAL (succeeded / failed / cancelled), not when
-                    // it was merely dispatched. Teardown quiesces on this: it stops starting new
-                    // work and waits for what is running, instead of walking away from it while
-                    // the command still executes against a tearing-down mesh.
-                    var runRegistration = hub.ServiceProvider.GetService<ActivityTracker>()?.Track();
+            // 🚨 RunAsSystem/RunAs, never `Observable.Using(AccessContextScope.FromNode, …)`
+            // (#1444/#1790). `FromNode` is `SwitchAccessContext(owner)` — the banned shape wearing a
+            // helper's name. `Using` opens the AsyncLocal on the SUBSCRIBING thread and disposes it
+            // when the inner observable TERMINATES, which for this run is whichever IoPool/response
+            // thread the command finishes on: the subscriber (an MCP session hub turn, the portal
+            // host hub behind a click) is left latched as the activity OWNER for everything it does
+            // next. RunAs seals both ends inside one Subscribe — the run below is still composed and
+            // subscribed under the owner, and the per-write re-stamps in Append/Finish cover the
+            // writes that fire past it, exactly as before.
+            //
+            // The identity is resolved HERE rather than inside a scope factory so the fallback is
+            // visible: FromNode's rule is CreatedBy, else LastModifiedBy, else System.
+            var scopeIdentity = owner ?? ContextOf(created.LastModifiedBy);
+            IObservable<string> Run()
+            {
+                // Register the run as in flight for the WHOLE of its life, released in the
+                // Finally below — i.e. at TERMINAL (succeeded / failed / cancelled), not when
+                // it was merely dispatched. Teardown quiesces on this: it stops starting new
+                // work and waits for what is running, instead of walking away from it while
+                // the command still executes against a tearing-down mesh.
+                var runRegistration = hub.ServiceProvider.GetService<ActivityTracker>()?.Track();
 
-                    var cts = new CancellationTokenSource();
-                    // Cancel watcher: RequestedStatus = Cancelled trips the command's token
-                    // (Activity Control Plane). Subscribed for the life of the run; disposed on
-                    // completion.
-                    //
-                    // 🚨 Gated on an EXACT-PATH query first, never a bare exact-path subscribe AND
-                    // never a children listing. STEP 1 above (CreateNode) proves the activity is
-                    // PERSISTED, not that it is ROUTABLE — the read route can answer an authoritative
-                    // NotFound for a path whose write has already landed (Systemorph/MeshWeaver#2229
-                    // item A: "the create SUCCEEDS and the REPLY is lost" / reads that lie for minutes
-                    // under load). An exact-path GetMeshNodeStream hitting that NotFound TERMINATES the
-                    // stream with an error — and this subscribe had no onError, so an unhandled
-                    // OnError rethrows on whatever thread is delivering it.
-                    //
-                    // `path:{x}` with no `scope:` qualifier is QueryScope.Exact, whose contract for an
-                    // absent path is "answered ZERO ROWS with no error" — empty-on-absent, no routing
-                    // NotFound, no storm-breaker window, same as a listing. UNLIKE a `scope:children …`
-                    // listing, it cannot page past the one row it can return — `_Activity` is
-                    // explicitly un-pruned (StaticRepoImport.md), so it grows without bound, and a
-                    // children listing anchored at the CONTAINER can miss this activity once the
-                    // partition has enough of them (the same false "not there yet" this fix exists to
-                    // remove, reintroduced by a rarer route). See PackageInstaller.WaitForGating and
-                    // CqrsAndContentAccess.md → "An OPTIONAL node".
-                    //
-                    // No `select:` projection: MeshNode.Path is COMPUTED (Namespace + "/" + Id), so a
-                    // projection omitting either input yields an empty path — the query below relies
-                    // on Count, not a path comparison, but the same trap applies to any `select:`
-                    // added here later.
-                    var cancelWatch = meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                            $"path:{activityPath} nodeType:Activity"))
-                        .Where(change => change.Items.Count > 0)
-                        .Take(1)
-                        .SelectMany(_ => workspace.GetMeshNodeStream(activityPath))
-                        .Select(n => n.ContentAs<ActivityLog>(hub.JsonSerializerOptions)?.RequestedStatus)
-                        .Where(s => s == ActivityStatus.Cancelled)
-                        .Take(1)
-                        .Subscribe(
-                            _ =>
-                            {
-                                logger?.LogInformation("Activity {Path} cancel requested", activityPath);
-                                try { cts.Cancel(); } catch { /* already disposed */ }
-                            },
-                            ex => logger?.LogDebug(ex,
-                                "Activity {Path} cancel-watch could not attach; cancel requests will not be observed",
-                                activityPath));
-
-                    var ctx = new ActivityContext(activityPath, cts.Token,
-                        (msg, level) => Append(workspace, accessService, owner, activityPath, msg, level, logger));
-
-                    // Run the command; on terminal, write the final Status + dispose watcher/cts.
-                    return command(ctx)
-                        .DefaultIfEmpty(Unit.Default)
-                        .TakeLast(1)
-                        .SelectMany(_ => Finish(workspace, accessService, owner, activityPath, ActivityStatus.Succeeded, null, logger))
-                        .Catch<Unit, Exception>(ex =>
+                var cts = new CancellationTokenSource();
+                // Cancel watcher: RequestedStatus = Cancelled trips the command's token
+                // (Activity Control Plane). Subscribed for the life of the run; disposed on
+                // completion.
+                //
+                // 🚨 Gated on an EXACT-PATH query first, never a bare exact-path subscribe AND
+                // never a children listing. STEP 1 above (CreateNode) proves the activity is
+                // PERSISTED, not that it is ROUTABLE — the read route can answer an authoritative
+                // NotFound for a path whose write has already landed (Systemorph/MeshWeaver#2229
+                // item A: "the create SUCCEEDS and the REPLY is lost" / reads that lie for minutes
+                // under load). An exact-path GetMeshNodeStream hitting that NotFound TERMINATES the
+                // stream with an error — and this subscribe had no onError, so an unhandled
+                // OnError rethrows on whatever thread is delivering it.
+                //
+                // `path:{x}` with no `scope:` qualifier is QueryScope.Exact, whose contract for an
+                // absent path is "answered ZERO ROWS with no error" — empty-on-absent, no routing
+                // NotFound, no storm-breaker window, same as a listing. UNLIKE a `scope:children …`
+                // listing, it cannot page past the one row it can return — `_Activity` is
+                // explicitly un-pruned (StaticRepoImport.md), so it grows without bound, and a
+                // children listing anchored at the CONTAINER can miss this activity once the
+                // partition has enough of them (the same false "not there yet" this fix exists to
+                // remove, reintroduced by a rarer route). See PackageInstaller.WaitForGating and
+                // CqrsAndContentAccess.md → "An OPTIONAL node".
+                //
+                // No `select:` projection: MeshNode.Path is COMPUTED (Namespace + "/" + Id), so a
+                // projection omitting either input yields an empty path — the query below relies
+                // on Count, not a path comparison, but the same trap applies to any `select:`
+                // added here later.
+                var cancelWatch = meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                        $"path:{activityPath} nodeType:Activity"))
+                    .Where(change => change.Items.Count > 0)
+                    .Take(1)
+                    .SelectMany(_ => workspace.GetMeshNodeStream(activityPath))
+                    .Select(n => n.ContentAs<ActivityLog>(hub.JsonSerializerOptions)?.RequestedStatus)
+                    .Where(s => s == ActivityStatus.Cancelled)
+                    .Take(1)
+                    .Subscribe(
+                        _ =>
                         {
-                            var cancelled = ex is OperationCanceledException || cts.IsCancellationRequested;
-                            logger?.LogWarning(ex, "Activity {Path} {Outcome}", activityPath,
-                                cancelled ? "cancelled" : "failed");
-                            return Finish(workspace, accessService, owner, activityPath,
-                                cancelled ? ActivityStatus.Cancelled : ActivityStatus.Failed,
-                                cancelled ? "Cancelled." : ex.Message, logger);
-                        })
-                        .Finally(() =>
-                        {
-                            cancelWatch.Dispose();
-                            cts.Dispose();
-                            // Terminal: the run is no longer in flight, so teardown may proceed.
-                            runRegistration?.Dispose();
-                        })
-                        .Select(_ => activityPath);
-                }));
+                            logger?.LogInformation("Activity {Path} cancel requested", activityPath);
+                            try { cts.Cancel(); } catch { /* already disposed */ }
+                        },
+                        ex => logger?.LogDebug(ex,
+                            "Activity {Path} cancel-watch could not attach; cancel requests will not be observed",
+                            activityPath));
+
+                var ctx = new ActivityContext(activityPath, cts.Token,
+                    (msg, level) => Append(workspace, accessService, owner, activityPath, msg, level, logger));
+
+                // Run the command; on terminal, write the final Status + dispose watcher/cts.
+                return command(ctx)
+                    .DefaultIfEmpty(Unit.Default)
+                    .TakeLast(1)
+                    .SelectMany(_ => Finish(workspace, accessService, owner, activityPath, ActivityStatus.Succeeded, null, logger))
+                    .Catch<Unit, Exception>(ex =>
+                    {
+                        var cancelled = ex is OperationCanceledException || cts.IsCancellationRequested;
+                        logger?.LogWarning(ex, "Activity {Path} {Outcome}", activityPath,
+                            cancelled ? "cancelled" : "failed");
+                        return Finish(workspace, accessService, owner, activityPath,
+                            cancelled ? ActivityStatus.Cancelled : ActivityStatus.Failed,
+                            cancelled ? "Cancelled." : ex.Message, logger);
+                    })
+                    .Finally(() =>
+                    {
+                        cancelWatch.Dispose();
+                        cts.Dispose();
+                        // Terminal: the run is no longer in flight, so teardown may proceed.
+                        runRegistration?.Dispose();
+                    })
+                    .Select(_ => activityPath);
+            }
+
+            return ScheduleOffHubTurn(scopeIdentity is null
+                ? accessService.RunAsSystem(Run)
+                : accessService.RunAs(scopeIdentity, Run));
         });
 
         // 🚨 THE ACTIVITY EXECUTION MUST NOT RUN ON THE CALLING HUB'S TURN — it self-deadlocks.
@@ -257,17 +272,21 @@ public static class ActivityRunner
                 : source.SubscribeOn(TaskPoolScheduler.Default);
     }
 
+    /// <summary>An identity-scope principal from a raw principal id; null when there is none.</summary>
+    private static AccessContext? ContextOf(string? principalId) =>
+        string.IsNullOrEmpty(principalId)
+            ? null
+            : new AccessContext { ObjectId = principalId, Name = principalId };
+
     /// <summary>
     /// The owner identity to re-stamp on every activity-execution write. Reads the
     /// created node's <see cref="MeshNode.CreatedBy"/> (the principal who triggered
     /// the activity). Null for framework-owned nodes with no CreatedBy — Append/Finish
-    /// then leave the ambient untouched (the outer <c>FromNode</c> already chose System
-    /// for that case).
+    /// then leave the ambient untouched; the outer scope (<c>RunAs</c>/<c>RunAsSystem</c>)
+    /// has already resolved that case to LastModifiedBy or System.
     /// </summary>
     private static AccessContext? OwnerContextOf(MeshNode created) =>
-        string.IsNullOrEmpty(created.CreatedBy)
-            ? null
-            : new AccessContext { ObjectId = created.CreatedBy, Name = created.CreatedBy };
+        ContextOf(created.CreatedBy);
 
     private static void Append(
         IWorkspace workspace, AccessService? accessService, AccessContext? owner,
