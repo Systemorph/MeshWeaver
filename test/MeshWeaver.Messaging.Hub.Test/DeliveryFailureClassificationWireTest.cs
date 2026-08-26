@@ -79,6 +79,65 @@ public class DeliveryFailureClassificationWireTest(ITestOutputHelper output) : H
     }
 
     /// <summary>
+    /// 🚨 The verdict a FAILING SITE recorded on the DELIVERY must survive the wire too.
+    ///
+    /// <para><c>Failed(message, ErrorType)</c> exists so the classification is decided where the
+    /// condition is known and CARRIED, "never reconstructed downstream by pattern-matching the
+    /// message text". It is carried in <c>Properties["FailureErrorType"]</c>, an
+    /// <c>IReadOnlyDictionary&lt;string, object&gt;</c> — and every consumer reads it back through
+    /// <c>GetFailureErrorType</c>, whose test is <c>value is ErrorType</c>.</para>
+    ///
+    /// <para>That is the trap-door AGENTS.md names: an <c>object</c> that crossed a hub boundary is
+    /// no longer the CLR type it was written as. The dictionary converter writes each value by its
+    /// runtime type, so an <see cref="ErrorType"/> goes out as the JSON STRING the enum converter
+    /// produces and comes back — via <c>ObjectPolymorphicConverter</c>, which materialises a JSON
+    /// string as <see cref="string"/> — as a string. The type test then fails and every consumer
+    /// silently reads the FALLBACK instead of the verdict.</para>
+    ///
+    /// <para>Concretely: the disposal race is classified <see cref="ErrorType.ShuttingDown"/> at the
+    /// hub (#2350) and read back as the fallback by the router — which is why a delivery that raced
+    /// a hub's disposal kept reaching the sender as terminal even after every producing site had
+    /// been fixed to classify it (#2346).</para>
+    /// </summary>
+    [Theory]
+    [InlineData(ErrorType.ShuttingDown)]
+    [InlineData(ErrorType.Unavailable)]
+    [InlineData(ErrorType.NotFound)]
+    [InlineData(ErrorType.CompilationFailed)]
+    public void ADeliveryCarriedVerdict_SurvivesTheWire(ErrorType errorType)
+    {
+        var options = GetHost().JsonSerializerOptions;
+        var delivery = ADelivery().Failed("Hub is shutting down", errorType);
+
+        var json = JsonSerializer.Serialize(delivery, delivery.GetType(), options);
+        Output.WriteLine(json);
+        var round = JsonSerializer.Deserialize<IMessageDelivery>(json, options)!;
+
+        round.GetFailureErrorType(ErrorType.Unknown).Should().Be(errorType,
+            "the verdict is what the router acts on; falling back silently turns a transient "
+            + "race into a terminal answer. Serialized as: {0}", json);
+    }
+
+    /// <summary>
+    /// The answer-once flag rides the same dictionary, and it is what stops one request being
+    /// answered twice with contradictory verdicts. Key PRESENCE is the contract, so it must not
+    /// depend on the value's CLR type surviving either.
+    /// </summary>
+    [Fact]
+    public void TheAnswerOnceFlag_SurvivesTheWire()
+    {
+        var options = GetHost().JsonSerializerOptions;
+        var delivery = ADelivery().FailedAndNacked("Hub is shutting down");
+
+        var json = JsonSerializer.Serialize(delivery, delivery.GetType(), options);
+        var round = JsonSerializer.Deserialize<IMessageDelivery>(json, options)!;
+
+        round.SenderWasNacked.Should().BeTrue(
+            "the owning hub already answered the sender; a second NACK makes the classification "
+            + "a coin toss. Serialized as: {0}", json);
+    }
+
+    /// <summary>
     /// 🚨 ONE request, ONE failure response.
     ///
     /// <para>A caller's <c>Observe(...)</c> resolves on the FIRST DeliveryFailure it sees, so two
