@@ -31,14 +31,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Check out MeshWeaver.Plugins (holds the portal host)
-        uses: actions/checkout@v7
-        with:
-          repository: Systemorph/MeshWeaver.Plugins
-          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
-          path: plugins-repo
-          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
-          fetch-depth: 1
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
@@ -98,8 +90,7 @@ jobs:
       # 2. portal-ai app image (SDK container build, layered on the multi-arch base; CLIs baked in).
       - name: Build + push portal-ai
         run: >
-          dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
-          -p:MeshWeaverRoot=${{ github.workspace }}
+          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:Version=$VERSION
@@ -111,8 +102,7 @@ jobs:
       # 3. lean portal app image (default — already multi-arch — SDK aspnet base, no co-hosted CLIs).
       - name: Build + push portal (lean)
         run: >
-          dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
-          -p:MeshWeaverRoot=${{ github.workspace }}
+          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:Version=$VERSION
