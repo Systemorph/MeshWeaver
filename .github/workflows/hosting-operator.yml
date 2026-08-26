@@ -124,6 +124,25 @@ jobs:
       - name: Behaviour tests
         run: deploy/aks/operator/test/run-tests.sh
 
+      # 🚨 memex-local is the OTHER operator script in this repo — ~2000 lines that stand up every
+      # developer's local portal — and nothing in CI opened it until MeshWeaver#2367. What that
+      # cost, in one file: `memex-local help` was an unbounded FORK BOMB (a backtick in an unquoted
+      # heredoc re-entered main()); `helm_deploy` aborted on macOS bash 3.2 for the paths the script
+      # itself calls normal; and `up`/`update` reported success on a portal with no sign-in page and
+      # no view packs. Three live defects, zero red ticks, because nothing ever ran it.
+      - name: memex-local parses
+        run: bash -n deploy/homebrew/bin/memex-local
+
+      - name: shellcheck (memex-local)
+        run: shellcheck -S warning deploy/homebrew/bin/memex-local deploy/homebrew/test/run-tests.sh
+
+      # 🚨 This runner is bash 5 and has no colima/kubectl/helm, so what it CAN prove is asserted by
+      # running the CLI against stub tools (every red state of the usability verification, plus that
+      # a green one is reachable) and by static assertions for the two traps a Linux runner can
+      # never reach by execution — the heredoc backtick and macOS bash 3.2's empty-array abort.
+      - name: Behaviour tests (memex-local)
+        run: deploy/homebrew/test/run-tests.sh
+
   image:
     name: Operator image builds
     runs-on: ubuntu-latest

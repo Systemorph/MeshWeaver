@@ -75,7 +75,7 @@ public class SnowflakeVersionQuery : IVersionQuery
         // The Snowflake I/O pool runs the DB fetch on the ThreadPool behind its concurrency gate
         // with ConfigureAwait(false) — no custom TaskScheduler (Orleans) is ever captured.
         => _ioPool.Invoke(ct => FetchVersionsAsync(path, ct))
-            .SelectMany(versions => versions.ToObservable());
+            .SelectMany(versions => versions.ToInlineObservable());
 
     /// <summary>
     /// I/O leaf for <see cref="GetVersions"/>: fetches every version summary for a node,

@@ -5,9 +5,15 @@ using System.Threading;
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
-/// 🚨 Per-path DURABLE-VERSION HIGH-WATER for the post-commit flush — the record of what the
-/// cross-hub patch path has ALREADY written to storage, so the per-node persistence sampler does
-/// not write it a second time (#1249).
+/// 🚨 Per-path DURABLE-VERSION HIGH-WATER — the record of what is ALREADY in storage, so the
+/// per-node persistence sampler does not write it a second time (#1249).
+///
+/// <para>Two things raise it, and they are the two ways a hub comes to hold state it did not mint:
+/// the post-commit flush confirming its own write (<see cref="Claim"/> → <see cref="Record"/>), and
+/// a DURABLE READ observing the row (<see cref="RecordObservedDurable"/> — the per-node hub's
+/// activation seed; <c>MeshNodeStreamHandle.AdoptPersisted</c> does the same for a storage change
+/// notification). Both mean "the row is durable at or above V", which is exactly what the skip
+/// predicate below needs.</para>
 ///
 /// <para><b>The defect it closes.</b> One patch-driven own-node change reached durable storage by
 /// TWO independent routes:</para>
@@ -65,11 +71,12 @@ namespace MeshWeaver.Mesh.Services;
 /// <c>Version = 1</c> is never mistaken for already-persisted state — the same rule
 /// <c>MonotonicWriteGuardStorageAdapter.Forget</c> follows.</para>
 ///
-/// <para>Footprint: one <c>path → (long, timestamp)</c> entry per node this process has patched,
-/// dropped on delete and TTL-bounded (same shape and the same amortised time-gated sweep as
-/// <see cref="RecentlyDeletedRegistry"/>) so a portal that patches many distinct paths over a long
-/// uptime cannot accumulate entries forever. Instance state on a mesh-scoped singleton — it dies
-/// with the mesh, never a static.</para>
+/// <para>Footprint: one <c>path → (long, timestamp)</c> entry per node this process has patched or
+/// activated, dropped on delete and TTL-bounded (same shape and the same amortised time-gated sweep
+/// as <see cref="RecentlyDeletedRegistry"/>) so a portal that touches many distinct paths over a
+/// long uptime cannot accumulate entries forever — the 30 s window is what bounds it, and it is two
+/// orders of magnitude above the 200 ms sampler debounce every reader is racing. Instance state on
+/// a mesh-scoped singleton — it dies with the mesh, never a static.</para>
 /// </summary>
 public sealed class PostCommitFlushRegistry
 {
@@ -147,16 +154,62 @@ public sealed class PostCommitFlushRegistry
             return new Entry(Math.Max(current.Version, version), now, null);
         });
         Resolve(resolved, persisted: true);
+        PruneExpired(now);
+    }
 
+    /// <summary>
+    /// Amortised, time-gated sweep of expired entries — at most one O(n) pass per <see cref="Ttl"/>,
+    /// so a write (or read) burst stays O(1) per call while the map stays bounded even for paths
+    /// nothing ever looks up again (<see cref="HighWater"/> only prunes the key it is asked for).
+    ///
+    /// <para>🚨 EVERY method that can ADD an entry must call this. It used to live inline in
+    /// <see cref="Record"/>, which was sound only while the flush was the sole way in. It is not:
+    /// <see cref="RecordObservedDurable"/> adds an entry per node ACTIVATION, and a process that
+    /// only mirrors — reading and activating many nodes, writing none — never reaches
+    /// <see cref="Record"/> at all. Leaving the sweep on the write path alone would let exactly that
+    /// process accumulate one entry per path it ever activated, for its whole uptime.</para>
+    /// </summary>
+    private void PruneExpired(DateTimeOffset now)
+    {
         var last = Interlocked.Read(ref lastPruneTicks);
-        if (now.UtcTicks - last > Ttl.Ticks
-            && Interlocked.CompareExchange(ref lastPruneTicks, now.UtcTicks, last) == last)
-        {
-            foreach (var kv in highWater)
-                // Never prune an entry with an unresolved claim — someone is waiting on it.
-                if (kv.Value.Pending is null && now - kv.Value.At > Ttl)
-                    highWater.TryRemove(kv.Key, out _);
-        }
+        if (now.UtcTicks - last <= Ttl.Ticks
+            || Interlocked.CompareExchange(ref lastPruneTicks, now.UtcTicks, last) != last)
+            return;
+        foreach (var kv in highWater)
+            // Never prune an entry with an unresolved claim — someone is waiting on it.
+            if (kv.Value.Pending is null && now - kv.Value.At > Ttl)
+                highWater.TryRemove(kv.Key, out _);
+    }
+
+    /// <summary>
+    /// Raises the mark from a DURABLE READ — the caller has just read <paramref name="path"/> out
+    /// of storage at <paramref name="version"/>, so the row IS durable at or above it. Used by the
+    /// per-node hub's activation seed (<c>MeshNodeTypeSource.DurableSeed</c>), so the persistence
+    /// sampler cannot write that read straight back (#2008).
+    ///
+    /// <para>🚨 <b>Why not <see cref="Record"/>.</b> Record is the FLUSH's completion signal: it
+    /// clears <c>Pending</c> and answers every waiter "persisted: true". A read is not a completed
+    /// write, and a read that happens to land while a flush's claim is unresolved would resolve
+    /// that claim on the flush's behalf — telling a deferred <c>SaveMeshNodeRequest</c> to drop
+    /// itself for a write that may still fail. That turns this suppression into the lost-write bug
+    /// <see cref="PendingClaim"/> exists to prevent. So an observation NEVER touches a claim: while
+    /// one is unresolved the flush owns the entry and this call is a no-op (the claim resolves in
+    /// its own turn, and the redundant echo it lets through in that narrow window is the
+    /// equal-version rewrite the store has always accepted). It also never lowers the mark, and
+    /// never leaves a waiter stranded — the two ways a raise here could do harm.</para>
+    /// </summary>
+    public void RecordObservedDurable(string? path, long version)
+    {
+        if (string.IsNullOrEmpty(path) || version <= 0)
+            return;
+        var now = DateTimeOffset.UtcNow;
+        highWater.AddOrUpdate(path, new Entry(version, now, null), (_, current) =>
+            current.Pending is not null || current.Version >= version
+                ? current
+                : new Entry(version, now, null));
+        // This path ADDS entries — one per node activation — and a mirror-only process never calls
+        // Record, so the sweep has to run from here too or nothing ever bounds the map.
+        PruneExpired(now);
     }
 
     /// <summary>

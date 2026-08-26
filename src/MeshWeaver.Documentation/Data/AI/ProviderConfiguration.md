@@ -77,7 +77,7 @@ MeshWeaver speaks to multiple LLM providers — Claude via Anthropic, GPT-class 
 
 ## One Azure Foundry Key, Two Providers
 
-A single Aspire parameter — `azure-foundry-key`, declared in `memex/aspire/Memex.AppHost/Program.cs:51` — backs both the Anthropic and AzureAIS credentials:
+A single Aspire parameter — `azure-foundry-key`, declared in `../MeshWeaver.Plugins/src/Memex.AppHost/Program.cs:51` — backs both the Anthropic and AzureAIS credentials:
 
 | Env var | Provider | Endpoint path |
 |---|---|---|
@@ -99,7 +99,7 @@ Endpoints are never literal strings in source code. In development they come fro
 | `embedding-endpoint` | `Embedding__Endpoint` |
 | `embedding-model` | `Embedding__Model` |
 
-> **Section-name caveat (latent bug):** the code binds the **`AzureFoundry:`** section (`AzureFoundryConfiguration`, `AddAzureFoundry`, and the catalog source). The Aspire AppHost currently emits `AzureAIS__Endpoint` / `AzureAIS__ApiKey`, which **nothing in `src/` binds** — so that config is dead. Use `AzureFoundry__*`. The Helm chart (`deploy/helm`) already uses the correct names; the AppHost (`memex/aspire/Memex.AppHost/Program.cs`) should be renamed `AzureAIS__* → AzureFoundry__*`.
+> **Section-name caveat (latent bug):** the code binds the **`AzureFoundry:`** section (`AzureFoundryConfiguration`, `AddAzureFoundry`, and the catalog source). The Aspire AppHost currently emits `AzureAIS__Endpoint` / `AzureAIS__ApiKey`, which **nothing in `src/` binds** — so that config is dead. Use `AzureFoundry__*`. The Helm chart (`deploy/helm`) already uses the correct names; the AppHost (`../MeshWeaver.Plugins/src/Memex.AppHost/Program.cs`) should be renamed `AzureAIS__* → AzureFoundry__*`.
 
 The embedding pair establishes the canonical pattern — a sibling `endpoint` + `model` parameter per provider. Chat providers follow the same shape.
 
@@ -206,7 +206,7 @@ To wire in a new provider (a second Azure OpenAI deployment, a hosted local mode
 
 1. **Implement `IChatClientFactory`** and register it via DI (`services.AddAzureOpenAI(...)` or similar).
 2. **Bind its options** from a new section in `MemexConfiguration.cs` — endpoint and auth fields only, **not** model names.
-3. **Add Aspire parameters** in `memex/aspire/Memex.AppHost/Program.cs` for the endpoint (and a key, if it doesn't share `azure-foundry-key`).
+3. **Add Aspire parameters** in `../MeshWeaver.Plugins/src/Memex.AppHost/Program.cs` for the endpoint (and a key, if it doesn't share `azure-foundry-key`).
 4. **Label the new model's node** with a `tier` (`ModelDefinition.Tier`), so agents reach it by declaring `modelTier` in their front matter. An agent names a tier, never a model id — there is no per-agent "preferred model" field.
 
 > **Do not hardcode model identifiers in framework code.** If you find yourself writing `"gpt-4o"` or `"claude-sonnet-4-5"` in a `.cs` file outside an agent definition, that is precisely the pattern this page exists to prevent.
