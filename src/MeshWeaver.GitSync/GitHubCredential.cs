@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Security;
 using System.ComponentModel;
 
 namespace MeshWeaver.GitSync;
@@ -6,7 +7,7 @@ namespace MeshWeaver.GitSync;
 /// A per-user GitHub OAuth credential, stored as a MeshNode at
 /// <c>{userId}/_Provider/GitHub</c> on the user's own partition. The
 /// <see cref="AccessToken"/> (and optional <see cref="RefreshToken"/>) are
-/// encrypted at rest via <see cref="MeshWeaver.AI.IProviderKeyProtector"/>
+/// encrypted at rest via <see cref="MeshWeaver.Mesh.Security.IProviderKeyProtector"/>
 /// (AES-256-GCM, <c>enc:v1:…</c>) — the same protector that guards LLM provider
 /// keys. The token is the <b>committing user's</b>: every push authenticates as
 /// this user and the commit is authored as them.

@@ -133,6 +133,7 @@ public static class FrameworkBuildIdentity
         "MeshWeaver.Markdown",
         "MeshWeaver.Markdown.Collaboration",
         "MeshWeaver.Mesh.Contract",
+        "MeshWeaver.Mesh.Operations",
         "MeshWeaver.Messaging.Contract",
         "MeshWeaver.Messaging.Hub",
         "MeshWeaver.NuGet",

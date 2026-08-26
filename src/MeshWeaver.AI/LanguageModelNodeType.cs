@@ -96,13 +96,9 @@ public static class LanguageModelNodeType
         {
             services.TryAddSingleton<LanguageModelCatalogOptions>();
             services.TryAddSingleton<BuiltInLanguageModelProvider>();
-            // Encryption-at-rest for ModelProvider.ApiKey. Default master key
-            // comes from config (Ai:KeyProtection:MasterKey); swap in a
-            // KMS/Key Vault IMasterKeyProvider for hardened deployments. With
-            // no key configured both are pure passthrough (plaintext), so this
-            // is safe to register unconditionally.
-            services.TryAddSingleton<IMasterKeyProvider, ConfigMasterKeyProvider>();
-            services.TryAddSingleton<IProviderKeyProtector, ProviderKeyProtector>();
+            // Encryption-at-rest for ModelProvider.ApiKey is registered by AddGraph() — the
+            // protector is platform (GitHub PATs, the EA credential and the plugin catalog's
+            // signing key ride it too), so it must exist on a deployment with no AI at all.
             // 🧊 The mesh's SHARED resolver is warmed by whoever builds it — here. Reads are pure
             // (they never open the catalog subscription), so warming is an owner's decision rather
             // than a side effect of the first lookup. Every consumer resolves the resolver from DI,

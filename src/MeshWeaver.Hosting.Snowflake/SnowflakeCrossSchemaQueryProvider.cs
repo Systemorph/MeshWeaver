@@ -16,14 +16,14 @@ namespace MeshWeaver.Hosting.Snowflake;
 /// <c>PostgreSqlCrossSchemaQueryProvider</c>. The schema list is maintained in the central
 /// <c>searchable_schemas</c> table (in <see cref="SnowflakeStorageOptions.Schema"/>, default
 /// <c>public</c>), exactly like PG.
-/// <para><b>No stored procedure.</b> PG's primary fan-out delegates to the
-/// <c>public.search_across_schemas(...)</c> plpgsql function; Snowflake has no such routine, so
-/// ALL THREE <c>QueryAcrossSchemasAsync</c> overloads generate the UNION in C# via
-/// <see cref="SnowflakeSqlGenerator.GenerateCrossSchemaSelectQuery"/>. The stored proc's implicit
-/// behaviors are reproduced explicitly by the primary overload (see its remarks): the
-/// <c>main_node = path</c> branch filter, the <c>last_modified DESC</c> / <c>LIMIT 50</c>
-/// defaults, the empty-registry short-circuit, and the per-schema <c>to_regclass</c>
-/// access-control guard — the latter replaced by <see cref="GetSchemasWithAclTablesAsync"/>,
+/// <para><b>No stored procedure.</b> Both <c>QueryAcrossSchemasAsync</c> overloads generate the
+/// UNION in C# via <see cref="SnowflakeSqlGenerator.GenerateCrossSchemaSelectQuery"/>. PG's
+/// <c>public.search_across_schemas(...)</c> plpgsql function backed a THIRD, paging overload that
+/// this class also mirrored — <c>LIMIT 50</c> default and all. Both are deleted (#2048): no
+/// runtime caller ever reached that shape on either backend, since
+/// <c>SnowflakePartitionedMeshQuery.EnumerateFanOutAsync</c> — the path for every unpinned
+/// query — has only ever called the table-name overload, which applies no default limit at all.
+/// Its per-schema access-control guard lives on in <see cref="GetSchemasWithAclTablesAsync"/>,
 /// ONE information_schema probe feeding the generator's <c>aclSchemas</c> set.</para>
 /// <para><b>Dialect</b>: every identifier is double-quoted lowercase via
 /// <see cref="SnowflakeIdentifiers"/>, EXCEPT information_schema references, which are
@@ -358,78 +358,6 @@ public class SnowflakeCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         return schemas.ToImmutable();
     }
 
-    /// <inheritdoc />
-    /// <remarks>
-    /// PG delegates this overload to the <c>public.search_across_schemas(...)</c> stored
-    /// procedure; here the SAME UNION is generated in C# via
-    /// <see cref="SnowflakeSqlGenerator.GenerateCrossSchemaSelectQuery"/>, reproducing the
-    /// proc's implicit behaviors explicitly:
-    /// <list type="bullet">
-    ///   <item><b><c>WHERE n.main_node = n.path</c> on every branch</b> — reproduced by passing
-    ///     <c>IsMain = true</c> on the <see cref="ParsedQuery"/> (the generator emits exactly
-    ///     that predicate).</item>
-    ///   <item><b><c>ORDER BY last_modified DESC</c> default</b> — reproduced via an
-    ///     <see cref="OrderByClause"/> fallback when the query has no explicit sort. Deliberate
-    ///     deviation: a FREE-TEXT query without an explicit sort keeps the generator's
-    ///     relevance-score ordering (which ends in the same <c>last_modified DESC</c>
-    ///     tiebreaker) instead of the proc's flat recency sort — the tsvector ranking PG's
-    ///     provider layered on top does not exist here, and the ILIKE relevance ladder is its
-    ///     designated replacement (see the generator's full-text dialect note).</item>
-    ///   <item><b><c>LIMIT 50</c> default</b> — reproduced via a <c>Limit</c> fallback.</item>
-    ///   <item><b>Empty registry → no rows</b> — the proc returned nothing when
-    ///     <c>searchable_schemas</c> was empty; reproduced by the empty-<paramref name="schemas"/>
-    ///     short-circuit. (The proc re-read the registry itself and ignored the caller's list;
-    ///     here the caller-supplied list — sourced from <see cref="GetSearchableSchemasAsync"/> —
-    ///     drives the UNION.)</item>
-    ///   <item><b>Per-schema <c>to_regclass</c> ACL guard</b> — replaced by
-    ///     <see cref="GetSchemasWithAclTablesAsync"/> feeding the generator's
-    ///     <c>aclSchemas</c> set (skipped entirely for system access, where the proc emitted no
-    ///     ACL SQL either).</item>
-    /// </list>
-    /// The filter/scope/text predicates the PG provider inlined into <c>p_where_clause</c> are
-    /// the generator's own <c>GenerateWhereClause</c>/scope push-down here — parameters stay
-    /// BOUND instead of PG's string-inlined values. Content-chunk omnibox branches are NOT
-    /// added on this overload (the proc had none; parity with PG, which folds content only in
-    /// the table-name overload).
-    /// </remarks>
-    public async IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
-        ParsedQuery query,
-        JsonSerializerOptions options,
-        IReadOnlyList<string> schemas,
-        string? userId = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        if (schemas.Count == 0)
-            yield break;
-
-        var effectiveQuery = query with
-        {
-            IsMain = true,
-            // Three cases, and conflating the last two is how an enumeration silently becomes a
-            // page: no limit stated → the default page; MeshQueryRequest.NoLimit (non-positive) →
-            // the caller declared this an ENUMERATION, so every match; a positive limit → honour it.
-            Limit = query.Limit switch { null => 50, <= 0 => int.MaxValue, var stated => stated },
-            OrderBy = query.OrderBy ?? (string.IsNullOrEmpty(query.TextSearch)
-                ? new OrderByClause("last_modified", Descending: true)
-                : null)
-        };
-
-        var aclSchemas = await GetAclSchemasOrEmptyAsync(schemas, userId, ct).ConfigureAwait(false);
-
-        var generator = new SnowflakeSqlGenerator();
-        var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(
-            effectiveQuery, schemas, aclSchemas, userId);
-
-        _logger?.LogInformation(
-            "[CrossSchema] Cross-schema query: schemas={Count}, aclSchemas={AclCount}, userId={User}, order={Order}, limit={Limit}",
-            schemas.Count, aclSchemas.Count, userId, effectiveQuery.OrderBy?.Property, effectiveQuery.Limit);
-
-        await foreach (var node in EnumerateReaderOrEmptyOnMissingObjectAsync(
-            sql, parameters, options, schemas, "mesh_nodes", ct).WithCancellation(ct).ConfigureAwait(false))
-        {
-            yield return node;
-        }
-    }
 
     /// <inheritdoc />
     public async Task<IReadOnlyCollection<QueryResult>> AutocompleteTopLevelAsync(

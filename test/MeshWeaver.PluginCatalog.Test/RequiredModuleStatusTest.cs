@@ -40,6 +40,110 @@ public class RequiredModuleStatusTest
             required, baseline, loaded ?? Loaded(), resolves ?? (_ => false),
             activation, bytes ?? BytesPresent, floor ?? FloorSatisfied);
 
+    private static ImmutableList<RequiredModuleVerdict> ClassifyWithBroken(
+        string[] required,
+        string[] baseline,
+        IReadOnlySet<string> loaded,
+        params Mesh.IncompatibleModule[] broken) =>
+        RequiredModuleStatus.Classify(
+            required, baseline, loaded, _ => false, null, BytesPresent, FloorSatisfied, broken);
+
+    private static Mesh.IncompatibleModule Skewed(string name) =>
+        Mesh.IncompatibleModule.From(
+            $"{name}.dll",
+            new MissingMethodException(
+                "Method not found: 'Void MeshWeaver.AI.LanguageModelCatalogSource..ctor(String, String, Int32)'."));
+
+    // ── a module that LOADED but could not register (#2234) ──────────────────────────────────────
+
+    /// <summary>
+    /// The lie this state exists to prevent. The assembly IS loaded — so the "is it loaded?"
+    /// question answers yes — but its registration threw and it contributes nothing. Reporting
+    /// Present here is how a replica missing an entire feature passes as healthy, and nobody finds
+    /// out until a user reports the feature gone.
+    /// </summary>
+    [Fact]
+    public void LoadedButUnregistered_IsIncompatible_NotPresent()
+    {
+        var verdicts = ClassifyWithBroken(
+            ["MeshWeaver.AI.AzureFoundry.dll"],
+            ["MeshWeaver.AI.AzureFoundry.dll"],
+            Loaded("MeshWeaver.AI.AzureFoundry"),
+            Skewed("MeshWeaver.AI.AzureFoundry"));
+
+        var verdict = Assert.Single(verdicts);
+        Assert.Equal(RequiredModuleState.Incompatible, verdict.State);
+        Assert.NotEqual(RequiredModuleState.Present, verdict.State);
+        // The remedy has to be in the sentence: the two halves must move together.
+        Assert.Contains("CONTRIBUTING NOTHING", verdict.Reason);
+        Assert.Contains("move BOTH halves together", verdict.Reason);
+    }
+
+    /// <summary>
+    /// The partner. Same shape, nothing broken — a loaded module is still Present, so the check
+    /// above is discriminating rather than answering Incompatible for everything.
+    /// </summary>
+    [Fact]
+    public void Loaded_AndNothingBroken_IsStillPresent()
+    {
+        var verdicts = ClassifyWithBroken(
+            ["MeshWeaver.AI.AzureFoundry.dll"],
+            ["MeshWeaver.AI.AzureFoundry.dll"],
+            Loaded("MeshWeaver.AI.AzureFoundry"));
+
+        Assert.Equal(RequiredModuleState.Present, Assert.Single(verdicts).State);
+    }
+
+    /// <summary>
+    /// One skewed module must not change the verdict for a healthy sibling — the same blast-radius
+    /// property at the reporting layer that the boot path now has at the loading layer.
+    /// </summary>
+    [Fact]
+    public void OneIncompatibleModule_DoesNotTaintTheOthers()
+    {
+        var verdicts = ClassifyWithBroken(
+            ["MeshWeaver.AI.AzureFoundry.dll", "MeshWeaver.Speech.dll"],
+            ["MeshWeaver.AI.AzureFoundry.dll", "MeshWeaver.Speech.dll"],
+            Loaded("MeshWeaver.AI.AzureFoundry", "MeshWeaver.Speech"),
+            Skewed("MeshWeaver.AI.AzureFoundry"));
+
+        Assert.Equal(
+            RequiredModuleState.Incompatible,
+            verdicts.Single(v => v.Name == "MeshWeaver.AI.AzureFoundry").State);
+        Assert.Equal(
+            RequiredModuleState.Present,
+            verdicts.Single(v => v.Name == "MeshWeaver.Speech").State);
+    }
+
+    /// <summary>
+    /// The missing signature is the sentence an operator acts on — #2234 was diagnosed by reading
+    /// exactly this string out of a previous container's log. Losing it costs a day.
+    /// </summary>
+    [Fact]
+    public void TheReportNamesTheMissingSignature()
+    {
+        var module = Skewed("MeshWeaver.AI.AzureFoundry");
+        Assert.Equal(
+            "Void MeshWeaver.AI.LanguageModelCatalogSource..ctor(String, String, Int32)",
+            module.MissingMember);
+        Assert.Contains(module.MissingMember!, module.Report());
+    }
+
+    /// <summary>
+    /// The seven-argument overload still compiles and behaves — a host built against the previous
+    /// platform must keep working, which is the whole point of not having added an optional
+    /// parameter to the existing signature.
+    /// </summary>
+    [Fact]
+    public void TheOriginalOverloadStillAnswers()
+    {
+        var verdicts = RequiredModuleStatus.Classify(
+            ["MeshWeaver.Speech.dll"], ["MeshWeaver.Speech.dll"],
+            Loaded("MeshWeaver.Speech"), _ => false, null, BytesPresent, FloorSatisfied);
+
+        Assert.Equal(RequiredModuleState.Present, Assert.Single(verdicts).State);
+    }
+
     // ── the hard gate keeps its teeth ────────────────────────────────────────────────────────────
 
     /// <summary>

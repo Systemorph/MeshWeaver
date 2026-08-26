@@ -647,6 +647,42 @@ wired by `AddAssemblyCacheRetention` (`src/MeshWeaver.Hosting/AssemblyCacheReten
 `BlobAssemblyStore` is unaffected: it keys `v{version}` with no framework tag, so a new image
 overwrites rather than accrues.
 
+#### 🚨 The cache grows on a SECOND axis, and generation retention is blind to it
+
+Generations are one axis. The other is **per-type version accumulation *inside* one generation** —
+one dll/pdb pair per recompile, forever, every file carrying the same tag. Measured on memex-cloud
+2026-08-22, when the 16 GiB `/data` PVC hit 100% and every NodeType recompile failed with
+`No space left on device` (surfacing four steps away as `compilationStatus: Error`, while the
+migration pod crash-looped 66 times):
+
+| | |
+|---|---|
+| files in `Store_Plugin`'s directory alone | **4,184** (`v100` … `v8800+`, since June) |
+| framework generations they span | **one** |
+
+Keeping three *generations* of that shape still keeps ~12.5k files, so no setting of
+`KeepGenerations` could ever have been the answer. The collector for this axis is therefore in the
+**writer**: after `FileSystemAssemblyStore.PutWithLocation` publishes a new version it prunes that
+type's directory to the newest `KeepVersionsPerType` versions (default **3**, override
+`AssemblyCache:Retention:KeepVersionsPerType`). The pass that made the directory grow is the one
+that trims it, so nothing has to walk the tree to discover the growth.
+
+**Why this one may delete on defaults while the generation sweep may not.** Different worst cases:
+
+| | generation sweep | per-type eviction |
+|---|---|---|
+| removes | a whole framework generation | older versions **within the writer's own generation** |
+| whose bytes belong to | possibly **another image**, on another live pod | this image |
+| worst case of a wrong answer | `BadImageFormatException` → failed grain activations → portal wedge | a cache **miss** → `TryGetAssemblyPath` returns null → activation recompiles |
+| therefore needs | a live **claim** before deleting; armed by an operator | nothing beyond staying inside its own tag |
+
+Eviction never crosses the tag boundary, only removes names
+`AssemblyCacheFileName.Parse` attributes to this store (so `.tmp-*` leftovers, bake leases, claim
+files and pre-tag legacy DLLs are untouchable), never removes the file it just wrote, and treats a
+delete that throws as "leave it alone" — a file that will not unlink is one something is holding.
+Both collectors share that one parser deliberately: two collectors disagreeing about which names this
+store wrote is how one of them would remove a file the other treats as foreign.
+
 ### 🚨 In-MEMORY generations accumulate the same way — a superseded build stays ROOTED while any instance serves it
 
 The store section above is about disk; the same generation arithmetic plays out inside every

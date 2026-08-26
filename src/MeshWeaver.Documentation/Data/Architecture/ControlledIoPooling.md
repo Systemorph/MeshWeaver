@@ -449,6 +449,32 @@ value written inside the leaf is not visible to the caller. Capture what the lea
 before handing it over — see [AsyncLocal Across Scheduler Hops](/Doc/Architecture/AsyncLocalAcrossHops)
 and, for identity specifically, [AccessContext Propagation](/Doc/Architecture/AccessContextPropagation).
 
+### 🚨 The pool releases its gate on an ADMISSION COUNT, never on "is anyone running?"
+
+`Dispose()` must not block (a synchronous 30 s join parks a pool thread while the leaves it waits for
+need pool threads to observe cancellation — a starvation deadlock on a 4-vCPU runner). So it cancels,
+returns, and lets the **last caller out** release `_gate` / `_poolCts` / the blocking-idle signal.
+That makes "who is still using them?" the load-bearing question, and the obvious answers are all
+wrong:
+
+- `CurrentInFlight` is raised only once `WaitAsync` has **granted** a permit. A leaf between the
+  grant and the increment holds a permit and counts as zero, so disposal releases the gate and the
+  resumed leaf calls `Release()` on it (issue #2146).
+- A `_disposed` flag read at the top of the entry point is read when the **cold observable is built**,
+  while `_poolCts.Token` and `_gate.WaitAsync` are touched on **subscribe**. Everything the pool
+  returns is cold, so that gap is arbitrarily wide — and a chain built during a render and subscribed
+  as teardown lands threw `ObjectDisposedException` out of the reactive chain (#2134 / #2135).
+
+`IoPool` therefore counts **admissions**, not executions: every path that may touch those primitives —
+each of the four entry points, `Drain()`, and `Dispose()` itself — brackets its whole reach in
+`TryEnterGateRegion()` / `LeaveGateRegion()`, and disposal completes only at zero. Entry is
+publish-then-recheck (increment, then re-read the disposal flag; `Dispose` publishes the flag before
+it reads the count), so of the two check-then-act orders at least one side always observes the other:
+either disposal defers, or the caller is refused and answers `OperationCanceledException`. **A leaf
+the pool will not run is a CANCELLATION, never an `ObjectDisposedException`** — that is the contract
+the region exists to keep, and it is why there is no `catch (ObjectDisposedException)` anywhere in the
+file. Adding one would hide a region that was never entered.
+
 ---
 
 ## Applied to (current scope)

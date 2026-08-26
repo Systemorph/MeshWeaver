@@ -27,13 +27,19 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 ///
 /// <para><b>The defect was invisible to every in-memory test.</b> Discovery issues ONE global
 /// <c>nodeType:Code</c> fetch. That query carries no <c>namespace:</c> and no <c>path:</c>, so on
-/// Postgres it is the UNPINNED shape served by the cross-schema fan-out — and
-/// <c>PostgreSqlCrossSchemaQueryProvider.QueryAcrossSchemasAsync</c> answers a query with no stated
-/// limit by substituting a hard default of <b>50</b>. The in-memory
+/// Postgres it is the UNPINNED shape served by the cross-schema fan-out — which at the time
+/// answered a query with no stated limit by substituting a hard default of <b>50</b>. The in-memory
 /// <c>StorageAdapterMeshQueryProvider</c> and the per-schema <c>PostgreSqlMeshQuery</c> both treat
 /// "no limit" as UNBOUNDED, so the identical code path is correct on the adapter every unit test
 /// uses. On memex-cloud 2026-08-11 the pass reported <c>resolved 50 Code node(s) … for 237 pending
 /// type(s)</c> and 169 types compiled against NOTHING.</para>
+///
+/// <para>🚨 That default is deleted (#2048) — it lived on a paging fan-out overload no runtime
+/// caller could reach — so this test no longer reproduces the #1216 truncation through the storage
+/// layer. It still earns its place, and its subject has shifted to the thing that DID survive: the
+/// discovery limit is now stated EXPLICITLY (<c>NodeTypeBatchBake.SourceDiscoveryLimit</c>), and
+/// what must hold is that a two-partition mesh resolves every type's full source set through it —
+/// identically to the activation path. A reintroduced default clip, on either shape, fails here.</para>
 ///
 /// <para><b>What this pins.</b> A mesh holding MORE Code nodes than that default, spread across two
 /// partitions, must resolve EVERY type's full source set — and resolve exactly what the ACTIVATION
@@ -49,8 +55,8 @@ public class BatchBakeSourceDiscoveryScaleTests(PostgreSqlFixture fixture, ITest
     private readonly PostgreSqlFixture _fixture = fixture;
 
     /// <summary>
-    /// Code nodes per type. Two types ⇒ 60 in total, comfortably above the cross-schema fan-out's
-    /// 50-row default — the whole point of the test. Anything at or below it reproduces nothing.
+    /// Code nodes per type. Two types ⇒ 60 in total, comfortably above the 50 the deleted paging
+    /// fan-out substituted — kept above it so a reintroduced default clip still fails here.
     /// </summary>
     private const int SourcesPerType = 30;
 
