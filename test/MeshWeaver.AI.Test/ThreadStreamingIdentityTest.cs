@@ -5,7 +5,6 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
-using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -23,7 +22,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
-namespace MeshWeaver.Security.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// Tests that thread chat streaming works end-to-end with RLS enabled.

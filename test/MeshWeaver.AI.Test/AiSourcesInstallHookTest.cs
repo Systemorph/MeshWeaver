@@ -4,7 +4,6 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
-using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -14,7 +13,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// 🚨 #1127: pins <see cref="AiSourcesInstallHook"/>'s user enumeration against the <c>User</c>

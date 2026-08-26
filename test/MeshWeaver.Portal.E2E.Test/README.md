@@ -10,7 +10,7 @@ browser and **Skip themselves** unless E2E is enabled.
 
 ```bash
 # 1. Start the standalone monolith (one terminal). Note the URL it prints.
-dotnet run --project memex/Memex.Portal.Monolith
+dotnet run --project ../MeshWeaver.Plugins/src/Memex.Portal.Monolith
 
 # 2. First time only — install the browser the tests drive.
 dotnet build test/MeshWeaver.Portal.E2E.Test
@@ -24,7 +24,7 @@ E2E_BASE_URL=https://localhost:7122 dotnet test test/MeshWeaver.Portal.E2E.Test
 
 ```bash
 E2E_LAUNCH=1 dotnet test test/MeshWeaver.Portal.E2E.Test
-# Boots memex/Memex.Portal.Monolith on http://localhost:5099, runs, then tears it down.
+# Boots ../MeshWeaver.Plugins/src/Memex.Portal.Monolith on http://localhost:5099, runs, then tears it down.
 ```
 
 ## Configuration (environment variables)
