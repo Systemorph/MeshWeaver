@@ -8,9 +8,15 @@
 #
 #     <base>/prebuilt-bundles/<framework-identity>/<source-name>/<bundle>.zip
 #
-# where <framework-identity> comes from the bake's framework-mvid.txt (for CI builds: the commit
-# identity g<sha>, identical for every CI build of the same commit — that determinism is what
-# makes this publication findable by the images built from the same commit). <source-name> is the
+# where <framework-identity> comes from the bake's framework-mvid.txt. 🚨 This used to say "for CI
+# builds: the commit identity g<sha>", and that went stale when the surface identity landed: the
+# bake host IS mw-plugin-test, which opts into the surface manifest
+# (MeshWeaver.PluginTester.csproj) and therefore resolves the SURFACE identity s<hash>. g<sha> is
+# now only the fallback for manifest-LESS processes (FrameworkBuildIdentity). The distinction is
+# not cosmetic — s<hash> is architecture-SENSITIVE (four reference assemblies differ between the
+# amd64 and arm64 variants of one image) while g<sha> is not, which is exactly what decides
+# whether two architectures can publish side by side or collide. See the guard below.
+# <source-name> is the
 # producing repo's segment (e.g. meshweaver-content, plugins, education) so multiple independent
 # producers publish without clobbering; the bundle manifests inside carry the exact source SHA.
 #
@@ -77,6 +83,30 @@ if [ ! -s "$IDENTITY_FILE" ]; then
   exit 1
 fi
 IDENTITY="$(tr -d '[:space:]' < "$IDENTITY_FILE")"
+
+# 🚨 ARCHITECTURE IS PART OF THE COMPATIBILITY CLAIM, and the identity does not always carry it.
+# FrameworkBuildIdentity resolves surface identity (s<hash>) -> stamped commit identity (g<sha>)
+# -> MVID set. The FIRST is architecture-sensitive: four reference assemblies genuinely differ
+# between the amd64 and arm64 variants of one multi-arch image, so the two resolve different
+# s<hash> values and cannot collide. The SECOND is NOT: g<sha> is the same string for every CI
+# build of a commit, whatever it was built on.
+#
+# So the moment a second architecture publishes, a g<sha> lane has two producers writing ONE
+# directory, and both outcomes are silent and wrong: same source commit => the sealed-skip below
+# fires and the second architecture NEVER publishes while its pods adopt the first one's bytes;
+# different source => it unseals and OVERWRITES. Adopting bytes from an identity you did not
+# resolve is the exact shape CiContentBake.md forbids ("never publish a bake under several
+# identities, never let a pod scan for a nearest one") and it surfaces as a TypeLoadException
+# inside a collectible ALC at activation — no overlay, no compile error, nothing to grep.
+#
+# Recording it makes the collision DETECTABLE, and the guard below makes it LOUD.
+BAKE_ARCHITECTURE="${BAKE_ARCHITECTURE:-linux-x64}"
+case "$BAKE_ARCHITECTURE" in
+  linux-x64|linux-arm64) ;;
+  *)
+    echo "::error::BAKE_ARCHITECTURE='$BAKE_ARCHITECTURE' is not a known architecture (linux-x64|linux-arm64). It keys a compatibility claim, so an unrecognised value must never be published."
+    exit 1 ;;
+esac
 # -s passes a whitespace-only file; an empty identity would silently publish under
 # 'prebuilt-bundles//<source>' — a directory no pod's identity ever resolves to.
 if [ -z "$IDENTITY" ]; then
@@ -116,6 +146,13 @@ for zip in "${BUNDLES[@]}"; do basename "$zip"; done | sort > "$SENTINEL_LOCAL"
 SOURCE_MARKER="source-commit.txt"
 SOURCE_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$SOURCE_MARKER"
 printf '%s\n' "${SOURCE_SHA:-unknown}" > "$SOURCE_MARKER_LOCAL"
+
+# The ARCHITECTURE marker — same contract as the content marker: not part of the reader's
+# contract (SeedPublishedRoot seeds only what the sentinel lists), written BEFORE the sentinel so
+# a sealed directory always carries one, and read by the cross-architecture guard below.
+ARCH_MARKER="architecture.txt"
+ARCH_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$ARCH_MARKER"
+printf '%s\n' "$BAKE_ARCHITECTURE" > "$ARCH_MARKER_LOCAL"
 
 # The release-marker directory (must match PublishedBundleCatalogue.ReleaseMarkerDirectoryName).
 # Leading underscore so it can never collide with a framework-identity directory (s… / g…).
@@ -188,6 +225,9 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   az storage file upload --account-name "$account" --share-name "$share" \
     --path "$dest" --source "$SOURCE_MARKER_LOCAL" \
     --auth-mode login --backup-intent --only-show-errors > /dev/null
+  az storage file upload --account-name "$account" --share-name "$share" \
+    --path "$dest" --source "$ARCH_MARKER_LOCAL" \
+    --auth-mode login --backup-intent --only-show-errors > /dev/null
   # LAST write — the atomic completeness marker. Anything that dies before this line leaves the
   # directory sentinel-less: unreadable to portals, re-published wholesale by the next run.
   az storage file upload --account-name "$account" --share-name "$share" \
@@ -230,9 +270,67 @@ for target in $BAKE_PUBLISH_TARGETS; do
   # (idempotent overwrites) instead of freezing the identity incomplete forever. The read side
   # (ShippedPrebuiltBundles.SeedPublishedRoot) honours the same contract: a source directory
   # without its sentinel is never seeded.
+  # 🚨 CROSS-ARCHITECTURE GUARD — runs BEFORE the skip/reseal decision below, because the SKIP is
+  # itself one of the two silent failures: a second architecture publishing the same source commit
+  # under a g<sha> identity would be told "already published" and ship nothing, leaving its pods to
+  # adopt the other architecture's bytes. Refusing is always safe (the lane fails, an operator
+  # reads why); overwriting or skipping is not.
+  #
+  # Deliberately NOT a skip and NOT a warning. A warning here would be read as noise by the one
+  # run that most needs to stop, and a skip is the defect.
+  # 🚨 EXISTENCE FIRST, and fail CLOSED. Reading the marker with `download … || echo ""` would
+  # turn every failure — a transient fault, an expired credential, a CLI error — into "no marker
+  # recorded", which is the one answer that lets the publish proceed. A guard whose error path is
+  # indistinguishable from its permissive path is not a guard.
+  arch_exists=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
+    --path "$DEST/$ARCH_MARKER" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  if [ "$arch_exists" != "true" ] && [ "$arch_exists" != "false" ]; then
+    echo "::error::could not determine whether $ACCOUNT/$SHARE holds $DEST/$ARCH_MARKER (az returned no usable answer). Refusing rather than assuming the marker is absent — that assumption is what would let one architecture overwrite another's publication."
+    exit 1
+  fi
+  published_arch=""
+  if [ "$arch_exists" = "true" ]; then
+    if ! az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
+        --path "$DEST/$ARCH_MARKER" --dest "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER" \
+        --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
+      echo "::error::$DEST/$ARCH_MARKER EXISTS under $ACCOUNT/$SHARE but could not be read. Refusing: an unreadable marker is not an absent one."
+      exit 1
+    fi
+    published_arch="$(tr -d '[:space:]' < "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER")"
+    rm -f "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER"
+    if [ -z "$published_arch" ]; then
+      echo "::error::$DEST/$ARCH_MARKER under $ACCOUNT/$SHARE is present but EMPTY — the incumbent's architecture cannot be established, so this publication cannot be proven safe. Refusing."
+      exit 1
+    fi
+  fi
+  if [ -n "$published_arch" ] && [ "$published_arch" != "$BAKE_ARCHITECTURE" ]; then
+    echo "::error::$ACCOUNT/$SHARE holds a publication under $DEST built for '$published_arch', but this bake is '$BAKE_ARCHITECTURE'. One framework identity cannot hold two architectures: the reference assemblies differ, so pods resolving this identity would adopt bytes they did not build against (TypeLoadException inside a collectible ALC at activation). This means the identity is architecture-INDEPENDENT — a g<sha> commit stamp rather than an s<hash> surface hash — so the two lanes need distinct identities before both can publish. Refusing rather than overwriting '$published_arch'."
+    exit 1
+  fi
   complete=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
     --path "$DEST/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
     --only-show-errors 2>/dev/null || echo false)
+  # An incumbent with NO architecture marker predates this recording, and the only lane that has
+  # ever published is amd64 — so it is treated as linux-x64.
+  if [ -z "$published_arch" ] && [ "$complete" = "true" ]; then
+    if [ "$BAKE_ARCHITECTURE" = "linux-x64" ]; then
+      # 🚨 BACKFILL, and it must happen HERE — before the sealed-skip below, which `continue`s.
+      # Without it the two rules deadlock: the arm64 lane refuses an unmarked incumbent and points
+      # at this lane to stamp it, while this lane recognises its own publication, skips, and never
+      # writes the marker — so the arm64 lane is blocked forever by an instruction that can never
+      # be carried out. Stamping is safe precisely because the refusal below is sound: only the
+      # amd64 lane has ever published, and this IS that lane.
+      az storage file upload --account-name "$ACCOUNT" --share-name "$SHARE" \
+        --path "$DEST" --source "$ARCH_MARKER_LOCAL" \
+        --auth-mode login --backup-intent --only-show-errors > /dev/null
+      echo "::notice::stamped $DEST/$ARCH_MARKER = $BAKE_ARCHITECTURE on a pre-existing publication (it predates architecture recording). Another architecture can now establish whether it may publish under this identity."
+      published_arch="$BAKE_ARCHITECTURE"
+    else
+      echo "::error::$ACCOUNT/$SHARE holds a COMPLETE publication under $DEST with no $ARCH_MARKER — it predates architecture recording, so it can only be the linux-x64 lane. This bake is '$BAKE_ARCHITECTURE' and would overwrite it. The next linux-x64 publication to this target stamps the marker automatically (even when it skips the bundles); retry after it has run."
+      exit 1
+    fi
+  fi
   resealing=false
   if [ "$complete" = "true" ]; then
     published_sha=$(az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
@@ -257,4 +355,4 @@ for target in $BAKE_PUBLISH_TARGETS; do
   PUBLISHED=$((PUBLISHED + 1))
 done
 
-echo "bake published: identity=$IDENTITY source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} targets-published=$PUBLISHED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"
+echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} targets-published=$PUBLISHED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"

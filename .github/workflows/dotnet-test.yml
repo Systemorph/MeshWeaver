@@ -158,7 +158,25 @@ concurrency:
   # literally rather than folded, so a "tidier" multi-line version silently changes the
   # string rather than just its layout.
   group: build-test-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  # 🚨 NEVER cancel a run on `main` (#2412). Superseding is safe on a PR branch — the later
+  # push tests a strict successor of what was cancelled, and that is where #2316's ~28% of
+  # runner demand is saved. On `main` it is neither safe nor recoverable, for two reasons:
+  #
+  #  1. **Nothing then builds the combination that landed.** With `strict: false` each PR is
+  #     tested against the main it branched from, so the MERGED tree is first compiled by the
+  #     main run itself. Cancel that and a semantic conflict between two independently-green
+  #     PRs ships unbuilt — which is exactly how `CS0246: MeshOperations` reached main on
+  #     2026-08-26, from five merges inside fifteen seconds.
+  #  2. **Nothing publishes.** `main-cd.yml` gates delivery on the required check
+  #     `Consolidate test results` reaching `success` FOR THAT SHA. A cancelled run does fire
+  #     `workflow_run` (`types: [completed]` includes cancelled), so CD wakes up and finds no
+  #     success to act on. A burst of merges therefore publishes nothing at all, and the tail
+  #     is left to the hourly reconciler.
+  #
+  # Measured the day this was written: main's five consecutive runs between 20:28 and 20:38
+  # were ALL `cancelled`, each by the next merge. The cost of this line is one full run per
+  # merge to main; that is the price of every landed commit being both tested and shippable.
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
 
 # publish-unit-test-result-action runs per shard AND in the collector — both need
 # checks: write to create check-runs and pull-requests: write to comment.
@@ -1027,6 +1045,9 @@ jobs:
         # fails the shard on anything non-zero.
         set +e
         : > test/test-results.log
+        # Truncated, not appended: a stale file would let the drift report below describe
+        # units this shard never ran.
+        : > test/measured-weights.tsv
         mkdir -p /tmp/coredumps
 
         # ── Shard assignment ────────────────────────────────────────────────
@@ -1106,9 +1127,16 @@ jobs:
             trxname="$name.part$part"
             echo "$label: ${#classargs[@]} of ${#allclasses[@]} classes"
           fi
+          started=$SECONDS
           ( cd "$dir" && timeout --signal=TERM --kill-after=30s 8m \
               dotnet "$name.dll" -trx "TestResults/$trxname.trx" "${classargs[@]}" )
           rc=$?
+          # Wall-clock for THIS unit. This is the number shard-assign.sh's weight table is
+          # made of, so record it rather than making the next person reconstruct it from
+          # log timestamps — a table nobody can cheaply re-measure is a table that rots,
+          # and the 2026-08-04 one rotted for three weeks at ~170 s of long pole per run.
+          elapsed=$(( SECONDS - started ))
+          printf '%s\t%s\n' "$entry" "$elapsed" >> test/measured-weights.tsv
           # ── Classify the host's exit code ─────────────────────────────────
           # 🚨 xUnit v3's native host returns THE COUNT OF FAILING TESTS as its
           # exit code. So an ordinary "one assertion failed" run exits 1 — which
@@ -1152,10 +1180,60 @@ jobs:
                 marker="[CI] $label exit=$rc MASKED (trx records $trxfails failing test(s), which does not explain exit=$rc — host crashed after streaming results)"
               fi ;;
           esac
-          echo "$marker"
-          echo "$marker" >> test/test-results.log
+          echo "$marker elapsed=${elapsed}s"
+          echo "$marker elapsed=${elapsed}s" >> test/test-results.log
           echo "::endgroup::"
         done
+
+        # ── Weight-table drift report (SUMMARY ONLY — never a gate) ──────────
+        # 🚨 Deliberately not a failing check. A shard that ran green must never go red
+        # because a project got slower; that would make an ordinary perf change look like
+        # a test failure. But drift must not be SILENT either: the LPT loop balances the
+        # NUMBERS in the table, so when they stop matching the clock it still reports six
+        # perfectly even shards while one runner sits on the long pole. The only symptom
+        # is a slow run nobody attributes to the table, and that is exactly how the
+        # 2026-08-04 weights rotted for three weeks at ~170 s of long pole per run.
+        #
+        # The table comes from shard-assign.sh --print-weights — the SAME table the
+        # assignment uses, read ONCE. Never inline a second copy here.
+        if [ -s test/measured-weights.tsv ]; then
+          .github/scripts/shard-assign.sh --print-weights > /tmp/weight-table.txt 2>/dev/null || : > /tmp/weight-table.txt
+          {
+            echo "### ⏱️ Shard ${SHARD_INDEX} — measured vs. weight table"
+            echo
+            echo "| unit | table | measured | drift |"
+            echo "|---|--:|--:|--:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          while IFS=$'\t' read -r entry secs; do
+            [ -z "${entry:-}" ] && continue
+            csproj="${entry%%#*}"
+            nm="$(basename "$csproj" .csproj)"
+            pspec="${entry#*#}"
+            if [ "$pspec" = "$entry" ]; then np=1; unit="$nm"; else
+              np="${pspec##*/}"; unit="$nm (part ${pspec%%/*}/${np})"
+            fi
+            # Whole-project weight from the table; a part carries 1/np of it.
+            tw=$(awk -v n="$nm" '$2 == n { print $1; exit }' /tmp/weight-table.txt)
+            if [ -n "${tw:-}" ] && [ "$np" -gt 0 ] && [ "$tw" -gt 0 ]; then
+              expect=$(( tw / np ))
+              [ "$expect" -lt 1 ] && expect=1
+              d=$(( (secs - expect) * 100 / expect ))
+              delta=$(( secs - expect )); abs=${delta#-}; absd=${d#-}
+              # Worth re-measuring only when the drift is BOTH proportionally and
+              # absolutely large — a 1 s project doubling to 2 s is noise, not drift.
+              flag=""
+              if [ "$absd" -ge 25 ] && [ "$abs" -gt 30 ]; then flag=" ⚠️"; fi
+              echo "| \`${unit}\` | ${expect}s | ${secs}s | ${d}%${flag} |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| \`${unit}\` | _unlisted_ | ${secs}s | — |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done < test/measured-weights.tsv
+          {
+            echo
+            echo "> ⚠️ = re-measure this entry in \`.github/scripts/shard-assign.sh\` (drift ≥25% and >30 s)."
+            echo "> Table weights are wall-clock seconds for the WHOLE project; a split unit shows its share."
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
         exit 0
     - name: Collect test logs for artifact
       if: always()
