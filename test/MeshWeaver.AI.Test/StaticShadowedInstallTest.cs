@@ -16,8 +16,10 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.PluginCatalog;   // moved out of MeshWeaver.PluginCatalog.Test (#2276):
+                                  // the parent namespace no longer resolves implicitly.
 
-namespace MeshWeaver.PluginCatalog.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// #1209 — A STATIC node must not silently shadow durable content at the same path.

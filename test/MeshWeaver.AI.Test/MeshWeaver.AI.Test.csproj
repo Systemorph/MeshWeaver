@@ -18,6 +18,10 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <!-- The plugin-catalog install tests that exercise serveFromPartition travel with the
+         engine (#2276): that capability exists ONLY on MeshWeaver.AI's node types, so the
+         coverage cannot stay in core once AI leaves. Maintainer decision, 2026-08-26. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
     <!-- Build-only: the deterministic fake CLI that drives the ConnectStrategy
          tests. ReferenceOutputAssembly=false so its Exe entry point doesn't

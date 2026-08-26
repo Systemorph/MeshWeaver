@@ -70,6 +70,13 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     // RegisterForDisposal(IDisposable) is synchronous; the async unsubscribe is bridged
     // onto this pool so nothing async ever runs on the disposing hub/grain scheduler.
     private readonly IIoPool ioPool;
+
+    /// <summary>
+    /// The mesh's async-teardown queue, or null in a bare-mesh container that has none.
+    /// Stream unsubscribe is genuinely async, so it cannot run inside a synchronous Dispose —
+    /// it is ENQUEUED here, which is what makes the mesh's drain wait for it.
+    /// </summary>
+    private readonly AsyncDisposeQueue? asyncDisposeQueue;
     private volatile bool disposed;
 
     /// <summary>
@@ -179,6 +186,9 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         this.logger = logger;
         ioPool = serviceProvider.GetService<IoPoolRegistry>()?.Get(StreamPoolName)
                  ?? IoPool.Unbounded;
+        // Optional exactly like the lifetime above: a bare mesh in a unit test has no queue, and
+        // then the teardown below degrades to the old detached behaviour rather than throwing.
+        asyncDisposeQueue = serviceProvider.GetService<AsyncDisposeQueue>();
         // Optional by design: a non-host DI container (a bare mesh in a unit test) has no
         // application lifetime, and then there is no shutdown window to detect — the token
         // stays uncancelled and every routing decision below behaves exactly as before.
@@ -393,15 +403,37 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             {
                 if (result.State == MessageDeliveryState.Failed)
                 {
-                    // Grain returned a non-transient failure (e.g., node doesn't exist).
                     // Preserve the RoutingGrain's message so the GUI's
                     // IsExpectedUserActionFailure classifier can match it.
                     var failureMessage = result.Properties.TryGetValue("Error", out var errObj) && errObj is string errStr
                         ? errStr
                         : $"Delivery failed to {address}";
-                    logger.LogWarning("Orleans: delivery FAILED for {MessageType} to {Address}: {FailureMessage}",
-                        msgType, address, failureMessage);
-                    SendDeliveryFailure(delivery, failureMessage);
+                    // 🚨 NOT every Failed result is terminal, and assuming so cost this project the
+                    // shard-0 Orleans flake cluster. This comment used to read "Grain returned a
+                    // non-transient failure (e.g. node doesn't exist)" and SendDeliveryFailure
+                    // defaults to the TERMINAL ErrorType.Failed — so a delivery that raced a target
+                    // hub's disposal came back Failed("Hub is shutting down"), and this line
+                    // relabelled a documented TRANSIENT rejection as terminal.
+                    //
+                    // The hub's own NACK (MessageService.NackThroughParent) says ShuttingDown and
+                    // travels via the parent; this path says Failed and travels via the mesh hub.
+                    // TWO answers for one request with contradictory classification, and Observe
+                    // resolves on whichever lands first — so a caller that correctly retries only
+                    // on ShuttingDown gave up at random. That is
+                    // OrleansMeshTests.HubWorksAfterDisposal failing in ~1.7 s with the right prose
+                    // and the wrong ErrorType, which read as a timing flake for months because the
+                    // WINNER of the race varied while both answers were always sent.
+                    //
+                    // Classifying by message text is the codebase's existing contract for exactly
+                    // this, not an invention: AreaErrorClassifier.IsTransientHubFailure,
+                    // MeshNodeStreamCache.IsTransientOwnerFailure and RoutingGrain.IsTransientFailure
+                    // all already treat "is shutting down" as retry-worthy, and NackThroughParent's
+                    // own comment calls the wording CONTRACT. This makes the fourth layer agree with
+                    // the other three rather than contradict them.
+                    var failureErrorType = ClassifyRoutedFailure(failureMessage);
+                    logger.LogWarning("Orleans: delivery FAILED for {MessageType} to {Address}: {FailureMessage} (as {ErrorType})",
+                        msgType, address, failureMessage, failureErrorType);
+                    SendDeliveryFailure(delivery, failureMessage, failureErrorType);
                 }
                 else
                 {
@@ -501,6 +533,35 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     }
 
     /// <summary>
+    /// How the SENDER should read a delivery the grain returned <see cref="MessageDeliveryState.Failed"/>:
+    /// <see cref="ErrorType.ShuttingDown"/> when the target hub said it is going away,
+    /// <see cref="ErrorType.Failed"/> (terminal) otherwise.
+    ///
+    /// <para>🚨 <b>These are two different statements deserving two different policies</b>, and
+    /// collapsing them into the terminal default is what made
+    /// <c>OrleansMeshTests.HubWorksAfterDisposal</c> a member of the shard-0 flake cluster.
+    /// "No node found" says the address does not exist, so retrying forever is a message storm.
+    /// "Hub X is shutting down" says the address EXISTS and is coming back — a per-node hub recycle
+    /// is a routine lifecycle event — so a terminal verdict makes every correct caller give up on
+    /// an address that answers moments later.</para>
+    ///
+    /// <para>Classifying on the message TEXT is this codebase's established contract for exactly
+    /// this decision, not an invention here: <c>AreaErrorClassifier.IsTransientHubFailure</c>,
+    /// <c>MeshNodeStreamCache.IsTransientOwnerFailure</c> and <c>RoutingGrain.IsTransientFailure</c>
+    /// all match the same phrase, and <c>MessageService.NackThroughParent</c> documents the wording
+    /// as CONTRACT ("MUST NOT CONTAIN any marker … notably 'is shutting down'"). This makes the
+    /// fourth layer agree with the other three instead of contradicting them — which matters
+    /// because the hub ALSO answers, via its parent, with <see cref="ErrorType.ShuttingDown"/>:
+    /// whichever of the two answers wins the race, the caller now reads the same verdict.</para>
+    /// </summary>
+    /// <param name="failureMessage">The message lifted from the failed delivery's <c>Error</c> property.</param>
+    internal static ErrorType ClassifyRoutedFailure(string? failureMessage) =>
+        !string.IsNullOrEmpty(failureMessage)
+        && failureMessage.Contains("is shutting down", StringComparison.OrdinalIgnoreCase)
+            ? ErrorType.ShuttingDown
+            : ErrorType.Failed;
+
+    /// <summary>
     /// The LOCAL route for <paramref name="address"/>, or null when this silo hosts no hub there —
     /// the same step-1 short-circuit <see cref="DeliverMessage"/> takes, exposed so the FAILURE leg
     /// can take it too (issue #1486).
@@ -597,22 +658,86 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // pod it left, or the new owner's Attach lands on the old one and has to bounce off it.
             podHub.Dispose();
             cts.Cancel();
-            ioPool.Invoke(async _ =>
-                {
-                    StreamSubscriptionHandle<IMessageDelivery>? subscription = null;
-                    // The attach task may have been cancelled or given up (never subscribed) — then there is
-                    // nothing to unsubscribe; a faulted/cancelled await here is expected, not an error.
-                    try { subscription = await subscriptionTask.ConfigureAwait(false); }
-                    catch (OperationCanceledException) { /* cancelled before it subscribed — nothing to tear down */ }
-                    catch (Exception ex) { logger.LogDebug(ex, "Stream subscription task faulted before teardown for {Address}", address); }
-                    if (subscription is not null)
-                        await subscription.UnsubscribeAsync().ConfigureAwait(false);
-                })
-                .Subscribe(
-                    _ => { },
-                    ex => logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address));
-            cts.Dispose();
+            // 🚨 ENQUEUED, not fire-and-forget. This used to be `ioPool.Invoke(...).Subscribe(_ => {})`
+            // — the handle dropped on the floor — so Dispose() reported "torn down" while the Orleans
+            // unsubscribe was still running on a pooled thread. That is a use-after-unload waiting to
+            // happen: DisposalCompleted covers a hub's action blocks and message round-trips but NOT
+            // mesh-shared pooled I/O leaves (see MessageHubGrain.OnDeactivateAsync's per-ALC note), so
+            // UnloadContextIfSafe could unload this hub's collectible context while this leaf was still
+            // executing types from it. A leaf touching unloaded code is a native SIGSEGV (exit 139),
+            // not an exception anything can catch.
+            //
+            // AsyncDisposeQueue exists for exactly this shape: a resource whose cleanup is genuinely
+            // async enqueues it from its SYNCHRONOUS Dispose, and the mesh drains the queue AFTER
+            // reactive disposal has completed and BEFORE the DI scope is torn down. Enqueuing is what
+            // makes the drain WAIT for this work instead of racing it — the await stays inside the
+            // queued lambda, off this turn, which is why no hub scheduler is parked.
+            EnqueueStreamTeardown(address, subscriptionTask, cts);
         });
+    }
+
+    /// <summary>
+    /// Tears down one address's Orleans stream subscription, on the mesh's async-teardown queue.
+    ///
+    /// <para>The whole point is that the caller's synchronous <c>Dispose()</c> does NOT wait for
+    /// this, but mesh teardown DOES: <see cref="AsyncDisposeQueue"/> is drained after reactive
+    /// disposal and before the DI scope dies, so the unsubscribe can no longer outlive the context
+    /// whose types it is running.</para>
+    ///
+    /// <para>The <see cref="CancellationTokenSource"/> is disposed HERE, after the awaited work has
+    /// finished, rather than immediately after <c>Cancel()</c>: the attach task holds this token, and
+    /// disposing the source while it is still observed throws <c>ObjectDisposedException</c> from a
+    /// place nothing is watching.</para>
+    ///
+    /// <para>Falls back to the previous detached behaviour when no queue is registered — a bare mesh
+    /// in a unit test has no async teardown to join, and degrading there is correct.</para>
+    /// </summary>
+    private void EnqueueStreamTeardown(
+        Address address,
+        Task<StreamSubscriptionHandle<IMessageDelivery>?> subscriptionTask,
+        CancellationTokenSource cts)
+    {
+        // 🚨 FULLY REACTIVE — no async/await, no state machine. The awaits this replaced were the
+        // reason the old code went fire-and-forget in the first place, so reintroducing them here
+        // would rebuild the trap: `await` on a turn-based scheduler parks the very turn that is
+        // tearing down, and a continuation can lose the ambient AccessContext. Both pool and queue
+        // take a TASK-RETURNING lambda, so the leaf is bridged by RETURNING its task — never by
+        // awaiting it.
+        var teardown =
+            // The attach task may have been cancelled or given up (never subscribed). A cancelled or
+            // faulted attach is EXPECTED at teardown, not an error — degrade to "nothing to
+            // unsubscribe" rather than letting it terminate the sequence.
+            subscriptionTask.ToObservable()
+                .Catch<StreamSubscriptionHandle<IMessageDelivery>?, Exception>(ex =>
+                {
+                    if (ex is not OperationCanceledException)
+                        logger.LogDebug(ex, "Stream subscription task faulted before teardown for {Address}", address);
+                    return Observable.Return<StreamSubscriptionHandle<IMessageDelivery>?>(null);
+                })
+                .SelectMany(subscription => subscription is null
+                    ? Observable.Return(Unit.Default)
+                    // The genuinely-async leaf, bridged through the pool by RETURNING the task.
+                    : ioPool.Invoke(_ => subscription.UnsubscribeAsync()))
+                .Catch<Unit, Exception>(ex =>
+                {
+                    logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address);
+                    return Observable.Return(Unit.Default);
+                })
+                // Disposed only once the work above has finished. It used to run immediately after
+                // Cancel(), while the attach task still held this token — disposing a source that is
+                // still observed throws ObjectDisposedException where nothing is watching.
+                .Finally(cts.Dispose);
+
+        if (asyncDisposeQueue is not null)
+            // The ONE place a Task appears, and only because the queue's contract is Task-shaped —
+            // the sanctioned boundary conversion, with the body above staying reactive.
+            asyncDisposeQueue.Enqueue(_ => teardown.DefaultIfEmpty(Unit.Default).LastAsync().ToTask());
+        else
+            // No queue registered (a bare mesh in a unit test): there is no async teardown to join,
+            // so the previous detached behaviour is correct rather than a regression.
+            teardown.Subscribe(
+                _ => { },
+                ex => logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address));
     }
 
     /// <summary>

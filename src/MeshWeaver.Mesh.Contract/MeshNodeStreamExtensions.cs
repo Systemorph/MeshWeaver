@@ -1239,8 +1239,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     ex =>
                     {
                         if (ex is TimeoutException)
+                            // 🚨 Carry the original as INNER. The wait is bounded at 30s, but the
+                            // terminal that ends it may be something else entirely — an owner that
+                            // never answered the SubscribeRequest inside the request budget reads
+                            // as a TimeoutException too, and flattening it to this sentence is
+                            // what made the boot-install failures unreadable (#2387).
                             observer.OnError(new TimeoutException(
-                                $"Update aborted: no initial state arrived for '{_path}' within 30s."));
+                                $"Update aborted: no initial state arrived for '{_path}' within 30s.", ex));
                         else observer.OnError(ex);
                     });
             composite.Add(initialSub);
@@ -1789,12 +1794,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             _workspace.Hub.Address, _path, ex.GetType().Name);
                         if (ex is TimeoutException)
                         {
+                            // 🚨 The original rides as INNER — this sentence names the bound, not
+                            // the terminal that ended the wait, and the two are routinely different
+                            // (an owner that never answered the SubscribeRequest inside the request
+                            // budget errors with a TimeoutException of its own). Flattening it left
+                            // the boot-install failures claiming a 30s wait that never happened
+                            // (#2387).
                             observer.OnError(new TimeoutException(
                                 $"Update aborted: no initial state arrived for '{_path}' within 30s. " +
                                 "Likely causes — (1) RLS silently rejected the prior CreateNode, " +
                                 "(2) the path is misspelled / points at a namespace no NodeType claims, " +
                                 "(3) the node was deleted between create and update, or (4) the per-node " +
-                                "hub activated but its MeshDataSource didn't load the node from persistence."));
+                                "hub activated but its MeshDataSource didn't load the node from persistence.",
+                                ex));
                         }
                         else
                         {
