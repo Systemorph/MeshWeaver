@@ -172,13 +172,43 @@ For a patch, both used to fire. That is not merely a wasted write: **the two are
 
 **`PostCommitFlushRegistry` is what keeps it to one.** The flush records `path → durable version` on the write's emission; `HandleSaveMeshNode` and the dispose-time `FlushPendingOwnSave` drop any sampled state at or below that mark. Three properties make the predicate sound:
 
-- **A version, not a snapshot stamp.** The sampler's gate chain runs in the *same synchronous fan-out* as the flush and — having subscribed at hub init — runs **first**, so nothing the flush stamps can be visible to it. The mark is therefore read at **handler** time, after the flush settled. (This is why `OwnNodeCache.PersistedSnapshot`, which works fine for the initial-**load** echo, cannot serve here.)
+- **A version, not a snapshot stamp.** The sampler's gate chain runs in the *same synchronous fan-out* as the flush and — having subscribed at hub init — runs **first**, so nothing the flush stamps can be visible to it. The mark is therefore read at **handler** time, after the flush settled. `OwnNodeCache.PersistedSnapshot` cannot serve here — and, it turned out, could not serve the initial-**load** echo it was written for either: see below.
 - **`<=` cannot suppress newer content.** Two distinct own states never share a version — `MeshNodeTypeSource.UpdateImpl` re-stamps any own update arriving at or below its previous version with `NextVersion`.
 - **It fails open.** The mark is raised only on a write that actually emitted (a failed flush, or the try-then-claim `null` sentinel, leaves the sampler as the writer of record), and it is dropped on delete so a same-id recreate at `Version = 1` is never read as already-persisted.
 
 It is registered at the mesh **root** (`MeshBuilder`, next to `RecentlyDeletedRegistry`) because the flush is a mesh-level singleton while its reader runs on the per-node owner hub; a hub-level registration would hand each side its own instance and neither would see the other's writes.
 
 Pinned by `PatchWriteRouteCollapseTest`: one patch ⇒ exactly one durable write; a sequential writer's deleted text is not resurrected; and a genuine second writer still trips the guard, merge and `_Activity/write-conflict-*` record.
+
+### The activation seed is an observation, and it goes on the same mark
+
+A hub's **durable activation seed** — the row `MeshNodeTypeSource.DurableSeed` reads at startup — is
+state the hub did not mint, so it must never reach either write route. That was supposed to be the
+job of the sampler's initial-load gate, a reference comparison against
+`OwnNodeCache.PersistedSnapshot`. **It does not hold, and never did.** `PersistedSnapshot` is one
+slot, while `Initialize` builds **two** collections back to back — the durable seed, then the
+routing-supplied leg — before the workspace hands either to the sampler. The slot therefore holds
+the *routing* instance, the *seed* emission fails the reference test, and the sampler dispatches the
+row the hub had just read as though it were a local edit.
+
+On a quiet node that is an equal-version rewrite and invisible. On a node another replica is writing
+it is the regression this whole page is about: the guard refuses the echo, `AdoptDurableTruth`
+correctly rebases the refusing owner at `durable + 1`, and a hub that **never edited anything** ends
+up holding a revision the store never held, with an `_Activity/write-conflict-*` record to match
+([issue #2008](https://github.com/Systemorph/MeshWeaver/issues/2008) — it surfaced as an
+intermittent cross-process test failure at ~1.3% of CI runs, because whether the echo or the real
+write reached the store first was a coin flip).
+
+So `DurableSeed` raises the same high-water, through `PostCommitFlushRegistry.RecordObservedDurable`
+— a **read-sourced** raise, distinct from `Record`: it never resolves an in-flight `Claim`, because
+a read is not a completed write and answering a waiter "persisted" on a write that may still fail
+would trade this duplicate-write bug for a lost-write one. `MeshNodeStreamHandle.AdoptPersisted`
+already did the equivalent for the *other* durable-observation path (a storage change notification);
+the activation seed was the one that did not. A real edit is unaffected — `UpdateImpl` mints it
+strictly above the seed, so it is above the mark and still writes.
+
+Pinned by `CrossProcessChangeFeedTest.AMirroringProcess_NeverWritesTheNode_NotEvenItsActivationSeed`:
+a process that only mirrors a node performs **zero** writes to it.
 
 ## Never-Mutated Nodes Keep Their Seed Version
 

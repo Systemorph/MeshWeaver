@@ -74,6 +74,29 @@ public static class AreaErrorClassifier
     }
 
     /// <summary>
+    /// 🚨 True when the render itself raced a hub's DISPOSAL — a
+    /// <see cref="HubDisposingException"/>, at any wrapping depth.
+    ///
+    /// <para>Distinct from <see cref="IsHubRecycling"/>, which matches the messaging layer's
+    /// <b>NACK text</b> for a delivery that was refused by a shutting-down target. This one matches
+    /// the TYPED refusal raised in-process when a stream cannot host its own sub-hub because
+    /// hosted-hub creation is frozen (<c>SynchronizationStream</c>'s constructor,
+    /// <c>CreateExternalClient</c>) — the exception the layout reduce pipeline throws straight
+    /// through <c>SynchronizationStream.Reduce</c>'s REFLECTIVE invocation, so it arrives wrapped in
+    /// a <see cref="System.Reflection.TargetInvocationException"/> whose own message is the useless
+    /// "Exception has been thrown by the target of an invocation". A text-matching predicate cannot
+    /// see it — which is why a routine teardown race was rendered as a permanent area failure and
+    /// auto-filed as an incident (#2255).</para>
+    ///
+    /// <para>The condition is TRANSIENT by the exception's own contract ("the address may reactivate
+    /// (recycle / restart); retry to get the authoritative answer"), and the honest answer for the
+    /// render is a NAMED transient frame — never a hard failure, and never a retry loop on a host
+    /// that is itself being torn down.</para>
+    /// </summary>
+    /// <param name="ex">The exception to classify; may be null.</param>
+    public static bool IsHubDisposalRace(Exception? ex) => HubDisposingException.IsHubDisposal(ex);
+
+    /// <summary>
     /// Returns the NodeType path of a <see cref="ErrorType.CompilationInProgress"/> NACK
     /// (so the GUI can swap to that NodeType's Progress view at once), or <c>null</c>.
     /// This is NOT retried — it has dedicated, immediate handling.

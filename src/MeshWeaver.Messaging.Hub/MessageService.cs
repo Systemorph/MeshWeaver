@@ -53,6 +53,23 @@ public class MessageService : IMessageService
     private readonly IMessageHub hub;
 
     /// <summary>
+    /// The activation-identity token every <see cref="ErrorType.ShuttingDown"/> NACK a caller can
+    /// re-probe against (<c>GetMeshNodeOutcome</c>'s paced loop, #2025) must embed. Stable for
+    /// THIS hub instance's whole lifetime and different across activations — the datum that lets
+    /// the re-probe loop count DISTINCT owner activations instead of raw probes, i.e. tell "one
+    /// hub wedged in teardown" from "a recycle storm" (opposite fixes).
+    ///
+    /// <para>🚨 Factored into ONE place deliberately (Copilot review on #2376 caught two NACK
+    /// sites that had drifted from each other: one embedded no activation identity at all, the
+    /// other paired it with a per-DELIVERY id that varies on every retry even against the SAME
+    /// activation — either shape defeats the counter, in opposite directions). Every ShuttingDown
+    /// NACK this service mints for a delivery the reader can re-probe must call this, not inline
+    /// its own <c>RuntimeHelpers.GetHashCode</c>.</para>
+    /// </summary>
+    private string ActivationTag() =>
+        $"activation #{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(hub):X8}";
+
+    /// <summary>
     /// The hub tree's handler-side trail for awaited requests (issue #981). Every stage recorded
     /// below is guarded by <c>Find(id)</c> returning non-null — i.e. SOMEONE in this tree is
     /// currently awaiting a reply to that delivery — so an ordinary fire-and-forget message costs
@@ -124,6 +141,8 @@ public class MessageService : IMessageService
     private readonly SyncDelivery postPipeline;
     private readonly AsyncDelivery deliveryPipeline;
     private readonly CancellationTokenSource hangDetectionCts = new();
+    /// <summary>0 until <see cref="Dispose"/> has been entered; the CAS that makes it idempotent.</summary>
+    private int disposed;
     private readonly ConcurrentDictionary<string, Predicate<IMessageDelivery>> gates;
     private readonly Lock gateStateLock = new();
 
@@ -239,13 +258,42 @@ public class MessageService : IMessageService
         var stillClosed = string.Join(",", gates.Keys);
         var reason = $"Message hub {Address} failed to initialize in {hub.Configuration.StartupTimeout} — gates still closed: [{stillClosed}]";
         logger.LogError(reason);
-        foreach (var (_, tracker) in deferredDeliveries)
+        DrainDeferredDeliveries(delivery => ReportFailure(delivery.WithProperty("Error", reason)));
+    }
+
+    /// <summary>
+    /// Answers and retires every delivery currently parked behind the gates — the ONE drain shared
+    /// by <see cref="NotifyStartupFailure"/>, <see cref="FailDeferredBacklog"/> and
+    /// <see cref="Dispose"/>.
+    ///
+    /// <para>🚨 <c>TryRemove</c> IS THE CLAIM, and that is the whole point of this method (issue
+    /// #2176). All three sites used to iterate <see cref="deferredDeliveries"/> and cancel + dispose
+    /// each tracker IN PLACE, removing nothing until a trailing <c>Clear()</c>. So an entry stayed
+    /// visible — and already disposed — for the rest of the loop, and every other path that retires
+    /// a deferral (<see cref="ProcessDeferredMessage"/> draining it, the
+    /// <see cref="ScheduleDeferralTimeout"/> continuation firing on the ThreadPool, or another of
+    /// these three drains) could claim the same tracker and cancel it a second time. That is a
+    /// double dispose of a <see cref="CancellationTokenSource"/>, i.e.
+    /// <c>ObjectDisposedException: The CancellationTokenSource has been disposed.</c> thrown out of
+    /// <c>Dispose()</c> itself and logged by the hub as <c>Error during shutdown of hub …</c>
+    /// (prod, memex-cloud, hub <c>Store/Catalog</c>, 2026-08-24). Removing first makes exactly one
+    /// caller the owner of any given tracker, so the cancel + dispose can only ever run once.</para>
+    ///
+    /// <para>There is deliberately no trailing <c>Clear()</c>. Clearing dropped anything added
+    /// during the loop WITHOUT answering it — the silent abandonment this whole path exists to
+    /// prevent. A deferral arriving after the snapshot keeps its own timeout tracker and is retired
+    /// by whichever claimant reaches it next.</para>
+    /// </summary>
+    private void DrainDeferredDeliveries(Action<IMessageDelivery> answer)
+    {
+        foreach (var id in deferredDeliveries.Keys)
         {
+            if (!deferredDeliveries.TryRemove(id, out var tracker))
+                continue; // someone else owns this tracker — it will answer and dispose it
             tracker.TimeoutCts.Cancel();
             tracker.TimeoutCts.Dispose();
-            ReportFailure(tracker.Delivery.WithProperty("Error", reason));
+            answer(tracker.Delivery);
         }
-        deferredDeliveries.Clear();
     }
 
     /// <summary>
@@ -351,13 +399,7 @@ public class MessageService : IMessageService
     /// </summary>
     private void FailDeferredBacklog(string reason)
     {
-        foreach (var (_, tracker) in deferredDeliveries)
-        {
-            tracker.TimeoutCts.Cancel();
-            tracker.TimeoutCts.Dispose();
-            AnswerUnreleasableDelivery(tracker.Delivery, reason);
-        }
-        deferredDeliveries.Clear();
+        DrainDeferredDeliveries(delivery => AnswerUnreleasableDelivery(delivery, reason));
         // The parked turns are the same deliveries, already answered — running them later
         // (a subsequent OpenGate, the disposal drain) would answer them a second time.
         lock (turnGate)
@@ -785,10 +827,39 @@ public class MessageService : IMessageService
             // path, and ANY terminal treatment killed the sync stream's resubscribe latch —
             // each wedged every read of the mid-recycle NodeType.
             fate?.Add($"DROPPED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
-            NackThroughParent(delivery,
-                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process "
-                + $"{typeName}; the address may reactivate (recycle / restart). Rejecting now.");
-            return delivery.Failed("Hub is shutting down");
+
+            // 🚨 Both halves matter, and this site got both wrong until #2350.
+            //
+            // NackThroughParent DECLINES (returns false) when there is no parent, or the parent is
+            // itself past DisposeHostedHubs. Ignoring the result meant: answered → the reporting
+            // path NACKed a SECOND time, because only FailedAndNacked sets SenderWasNacked;
+            // declined → the sender got nothing from here at all. In both cases the delivery
+            // carried NO classification, so ReportFailure fell back to ErrorType.Unavailable while
+            // the message still read "Hub is shutting down" — a transient race wearing an
+            // authoritative label.
+            //
+            // That defeats every consumer written against the documented contract, which is the
+            // whole reason Failed(string, ErrorType) exists: SynchronizationStream's resubscribe
+            // latch, MeshNodeStreamCache's shutdown-drop handling and PackageInstaller's retry all
+            // ride out ShuttingDown and treat anything else as terminal. Same idiom as
+            // AnswerUnreleasableDelivery above: honour the return value, and classify either way.
+            //
+            // 🚨 The ACTIVATION identity rides on the NACK too, and it is not decoration. A caller
+            // re-probing a ShuttingDown address (GetMeshNodeOutcome's paced loop) can otherwise
+            // not tell ONE hub wedged in teardown from a RECYCLE STORM — a hundred activations
+            // each dying before it can answer. Those have opposite fixes, and #2025 spent a full
+            // CI cycle on exactly that ambiguity: "still recycling after 110 probes" says nothing
+            // about whether it was 110 probes at one corpse or at 110 of them. The object hash is
+            // stable for an activation's lifetime and differs across activations, which is the
+            // whole question.
+            var reason =
+                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}, {ActivationTag()}) "
+                + $"— cannot process {typeName}; the address may reactivate (recycle / restart). "
+                + "Rejecting now.";
+
+            return NackThroughParent(delivery, reason)
+                ? delivery.FailedAndNacked("Hub is shutting down")
+                : delivery.Failed("Hub is shutting down", ErrorType.ShuttingDown);
         }
 
         // STORM CIRCUIT-BREAKER. Detect an unbounded retry/resubscribe/repost loop —
@@ -1233,12 +1304,33 @@ public class MessageService : IMessageService
     private void ScheduleDeferralTimeout(IMessageDelivery delivery)
     {
         var cts = new CancellationTokenSource();
-        deferredDeliveries[delivery.Id] = (delivery, cts);
+        var tracker = (delivery, cts);
+
+        // 🚨 RETIRE THE DISPLACED TRACKER. This write used to be a bare indexer assignment, so a
+        // re-deferred id (a repost keeps its Id) silently orphaned the previous tracker: with the
+        // pair-exact claim below, the old timer's TryRemove now correctly fails and returns — which
+        // means NOTHING would ever cancel or dispose it, and its CancellationTokenSource plus a live
+        // 30 s Task.Delay would linger to the deadline. TryRemove IS the claim here too (the same
+        // discipline DrainDeferredDeliveries uses), so exactly one caller retires it. Cancelling
+        // makes the displaced timer's continuation see IsCanceled and return without touching
+        // anything, so the dispose that follows is safe.
+        if (deferredDeliveries.TryRemove(delivery.Id, out var displaced))
+        {
+            displaced.TimeoutCts.Cancel();
+            displaced.TimeoutCts.Dispose();
+        }
+        deferredDeliveries[delivery.Id] = tracker;
         _ = Task.Delay(DeferralTimeout, cts.Token).ContinueWith(t =>
         {
             if (t.IsCanceled) return;
-            if (!deferredDeliveries.TryRemove(delivery.Id, out var tracker)) return;
-            tracker.TimeoutCts.Dispose();
+            // 🚨 PAIR-EXACT claim, not TryRemove(id). The dictionary is written with the INDEXER, so
+            // a delivery deferred twice under the same id (a repost) replaces the entry — and a
+            // by-key removal here would hand this stale timer the LIVE tracker and dispose a
+            // CancellationTokenSource its owner is still using. Same double-dispose class as #2176,
+            // one level down. Removing the exact (delivery, cts) pair means this timer can only
+            // ever retire the tracker it armed.
+            if (!deferredDeliveries.TryRemove(new(delivery.Id, tracker))) return;
+            cts.Dispose();
             var stillClosed = string.Join(",", gates.Keys);
             // 🚨 Unavailable, not the default Unknown. A hub that has not opened its init gates is
             // still STARTING — the read reached no verdict and the same request will succeed once
@@ -1431,8 +1523,13 @@ public class MessageService : IMessageService
             // gate and be dropped — the very reason NackThroughParent exists. It applies the
             // tombstone fork itself (transient ShuttingDown for an address that may reactivate,
             // authoritative NotFound for a deleted one) and skips traffic nobody awaits.
+            //
+            // 🚨 ActivationTag() rides here too (#2025, Copilot review on #2376), separate from the
+            // per-DELIVERY `(id=...)` right after it: the delivery id is unique to THIS message and
+            // varies on every retry even against the SAME activation, so a re-probe loop counting
+            // distinct owners must key off the activation tag, never the whole message text.
             NackThroughParent(delivery,
-                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — "
+                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}, {ActivationTag()}) — "
                 + $"{delivery.Message.GetType().Name} (id={delivery.Id}) was accepted before "
                 + "disposal began and its turn came too late to process. The address may "
                 + "reactivate (recycle / restart); retry to get the authoritative answer.");
@@ -1787,7 +1884,13 @@ public class MessageService : IMessageService
             }
 
             postFate?.Add($"POST_REFUSED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
-            return ((IMessageDelivery)delivery).Failed("Hub is shutting down");
+
+            // Classified, for the same reason as the intake gate (#2350): a refused POST during
+            // shutdown is transient — the address may reactivate — and an unclassified failure
+            // reaches the sender as ErrorType.Unavailable, which its recovery machinery reads as
+            // terminal. This site does NOT answer the sender itself, so Failed (not
+            // FailedAndNacked) stays correct; only the classification was missing.
+            return ((IMessageDelivery)delivery).Failed("Hub is shutting down", ErrorType.ShuttingDown);
         }
 
         // TODO V10: Which cancellation token to pass here? (12.01.2025, Roland Bürgi)
@@ -1822,6 +1925,18 @@ public class MessageService : IMessageService
     /// </summary>
     public void Dispose()
     {
+        // 🚨 IDEMPOTENT — a second call must be a no-op, not a second teardown. MessageHub reaches
+        // here from TWO places: the ShutDown phase of HandleShutdownCore and the watchdog's
+        // force-teardown, which can both run for one hub. The second pass re-cancelled an already
+        // disposed hangDetectionCts and re-disposed the storm breaker; both throw
+        // ObjectDisposedException and were only invisible because they sit inside catch-and-log
+        // blocks — i.e. the .NET IDisposable contract was being met by a swallow.
+        if (Interlocked.CompareExchange(ref disposed, 1, 0) != 0)
+        {
+            logger.LogDebug("Message service in {Address} already disposed — ignoring", Address);
+            return;
+        }
+
         var totalStopwatch = Stopwatch.StartNew();
         logger.LogDebug("Starting disposal of message service in {Address}", Address);
         // Open all remaining initialization gates to release any buffered messages
@@ -1867,17 +1982,18 @@ public class MessageService : IMessageService
         //
         // The NACK is transient (ErrorType.ShuttingDown) — a recycled address reactivates on
         // the next access, so the sender must read this as "ask again", never as "gone".
-        foreach (var (_, tracker) in deferredDeliveries)
-        {
-            tracker.TimeoutCts.Cancel();
-            tracker.TimeoutCts.Dispose();
-            NackThroughParent(tracker.Delivery,
-                $"Hub {Address} was disposed while {tracker.Delivery.Message.GetType().Name} "
-                + $"(id={tracker.Delivery.Id}) was still deferred behind its initialization gates "
+        //
+        // 🚨 The drain CLAIMS each tracker with TryRemove before touching it — see
+        // DrainDeferredDeliveries. Cancelling in place, as this loop used to, let the deferral
+        // timeout continuation (or a gate drain) dispose the same CancellationTokenSource
+        // concurrently, and this Cancel() then threw ObjectDisposedException out of Dispose itself
+        // — logged as "Error during shutdown of hub …" (issue #2176).
+        DrainDeferredDeliveries(delivery =>
+            NackThroughParent(delivery,
+                $"Hub {Address} was disposed while {delivery.Message.GetType().Name} "
+                + $"(id={delivery.Id}) was still deferred behind its initialization gates "
                 + $"[{string.Join(",", gates.Keys)}] — the message was never processed. The address "
-                + "may reactivate (recycle / restart); retry to get the authoritative answer.");
-        }
-        deferredDeliveries.Clear();
+                + "may reactivate (recycle / restart); retry to get the authoritative answer."));
 
         // No buffers to Complete — ScheduleNotify drops post-shutdown messages and the
         // pump drains whatever is already queued.

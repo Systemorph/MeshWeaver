@@ -70,6 +70,20 @@ internal static class NodeTypeCompilationHelpers
     /// </summary>
     private static int _watcherInstallCount;
 
+    /// <summary>
+    /// How long the on-demand adoption attempt (#1782 gap 4) may take before the compile
+    /// proceeds anyway. Matches the git-sync push path's budget: the sources it reads are the
+    /// same image directory and CI-published root, so the cost profile is the same.
+    /// </summary>
+    private static readonly TimeSpan OnDemandAdoptionBudget = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long to wait for an adoption's write-back to actually land on the node before
+    /// treating the reported adoption as not having happened. Short on purpose: this is a
+    /// confirmation of a write that has already been made, not a wait for work.
+    /// </summary>
+    private static readonly TimeSpan AdoptionStampBudget = TimeSpan.FromSeconds(5);
+
     public static IDisposable InstallCompileWatcher(
         IMessageHub hub,
         IWorkspace workspace,
@@ -85,6 +99,12 @@ internal static class NodeTypeCompilationHelpers
         // The adoption interlock (#1763) — absent on a host that never composed AddGraph's
         // registry, in which case the kickoff behaves exactly as it did before.
         var adoptionRegistry = hub.ServiceProvider.GetService<NodeTypeAdoptionRegistry>();
+        // On-demand adoption attempts (#1782 gap 4) are started from INSIDE the watcher's
+        // callback, so they are not part of any pipeline the returned disposable already covers.
+        // Each is bounded and self-completing, but an untracked subscription still roots the hub
+        // for the length of its timeout after disposal — so they are tracked here and removed on
+        // completion, which keeps the composite from growing one entry per compile miss.
+        var onDemandAdoptionSubs = new CompositeDisposable();
         // The live build guards (#1664 step 11, #1707 slice 2) — the per-type dependency-record
         // resolver plus the legacy installed-module fingerprint — join HasUsableBuild /
         // HasStaleFrameworkBuild below so a module-only update re-drives the compile the same
@@ -219,22 +239,19 @@ internal static class NodeTypeCompilationHelpers
                     // through InstallReleaseRequestWatcher, which un-parks BEFORE promoting to
                     // Pending — so this guard never blocks a legitimate retry, only a stray
                     // re-trigger (a persisted-Compiling recovery kickoff, a legacy direct flip).
-                    if (parkRegistry?.IsParked(hubPath) == true)
+                    // 🅿️ Wedge-close: a Pending flip we refuse to dispatch was already WRITTEN to
+                    // the node. Without a settle write-back the type would sit at Pending forever —
+                    // every settle-waiter (get_diagnostics' / the compile tool's Where(Ok|Error),
+                    // WaitForLatestRelease) hangs to its timeout and the stray trigger never
+                    // reaches a sink. Re-settle Pending → Error with the given reason so the
+                    // trigger is answered (bounded, no Roslyn). Same fire-and-forget UpdateOwn
+                    // shape as the kickoffs below; System scope because re-settling framework
+                    // state is infrastructure, not a user write.
+                    // 🚨 #2264: the TWO call sites of this local function need DIFFERENT
+                    // FailedBuildInputs treatment, so `formedUnderLiveInputs` is not decoration —
+                    // see ApplyGateSettle's doc for why.
+                    void SettleAsError(string? reason, bool formedUnderLiveInputs)
                     {
-                        logger?.LogDebug(
-                            "Compile watcher: {HubPath} is PARKED (terminal compile failure) — " +
-                            "skipping recompile, serving cached error", hubPath);
-                        // 🅿️ Wedge-close: the Pending flip we refuse to dispatch was already
-                        // WRITTEN to the node. Without a settle write-back the type would sit
-                        // at Pending forever — every settle-waiter (get_diagnostics' / the
-                        // compile tool's Where(Ok|Error), WaitForLatestRelease) hangs to its
-                        // timeout and the stray trigger never reaches a sink. Re-settle
-                        // Pending → Error with the CACHED parked error so the trigger is
-                        // answered (bounded, no Roslyn) while the park stays in place. Same
-                        // fire-and-forget UpdateOwn shape as the kickoffs below; System scope
-                        // because re-settling framework state is infrastructure, not a user
-                        // write.
-                        var parkedError = parkRegistry.GetParkedError(hubPath);
                         using (accessService?.ImpersonateAsSystem())
                             workspace.GetMeshNodeStream().Update(curr =>
                             {
@@ -247,45 +264,226 @@ internal static class NodeTypeCompilationHelpers
                                     return curr;
                                 return curr with
                                 {
-                                    Content = parkedDef with
-                                    {
-                                        CompilationStatus = CompilationStatus.Error,
-                                        CompilationError = parkedError
-                                            ?? parkedDef.CompilationError
-                                            ?? "Compilation is parked after a terminal failure; request a release (Compile) to retry."
-                                    }
+                                    Content = ApplyGateSettle(
+                                        parkedDef, reason, formedUnderLiveInputs, guards.ModulesHash)
                                 };
                             }).Subscribe(
                                 _ => { },
                                 ex => logger?.LogWarning(ex,
                                     "Compile watcher: failed to re-settle parked {HubPath} from Pending to Error",
                                     hubPath));
+                    }
+
+                    if (parkRegistry?.IsParked(hubPath) == true)
+                    {
+                        // 🅿️ …unless THIS Pending flip is the one sanctioned automatic retry
+                        // (#2260). The failed-verdict re-drive used to un-park so its flip would
+                        // not be swallowed here — which left the type un-parked for the whole
+                        // round-trip until a second failure re-parked it, and un-parked FOREVER
+                        // whenever the re-drive's own re-check then declined to flip. It now asks
+                        // for a one-shot ADMISSION instead, so the park never moves and the
+                        // containment guarantee ("parked ⇒ no later trigger can storm") holds at
+                        // every instant. Consuming the admission is what lets this single flip
+                        // through; every other trigger still takes the short-circuit below.
+                        if (parkRegistry.TryConsumeRetryAdmission(hubPath))
+                        {
+                            logger?.LogDebug(
+                                "Compile watcher: {HubPath} is PARKED but this Pending flip carries the "
+                                + "sanctioned one-shot retry admission — letting it through WITHOUT "
+                                + "un-parking (the park holds for every other trigger).", hubPath);
+                        }
+                        else
+                        {
+                            logger?.LogDebug(
+                                "Compile watcher: {HubPath} is PARKED (terminal compile failure) — " +
+                                "skipping recompile, serving cached error", hubPath);
+                            // The verdict being RE-SERVED is the ORIGINAL failure's, formed under
+                            // ITS inputs — stamping the live ones here would mask a genuine input
+                            // change since that failure and defeat #1793's whole recovery path.
+                            SettleAsError(parkRegistry.GetParkedError(hubPath), formedUnderLiveInputs: false);
+                            return;
+                        }
+                    }
+
+                    // 🚨 #1782 gap 4 — ADOPTION MUST BE REACHABLE AT ANY TIME.
+                    //
+                    // Until now a prebuilt assembly could only arrive at two moments: boot
+                    // default-install, and an install / git-sync push. EVERY other route into a
+                    // compile — a first access, a release request, a self-heal kick, a
+                    // framework-stale rebuild — went straight to Roslyn (or, under
+                    // RequirePrebuilt, straight to a park) without ever asking the deployment's
+                    // bundle sources whether the assembly already existed. That was survivable
+                    // while every instance pre-baked at boot; with instance-level pre-bake gone
+                    // in favour of lazy compile-on-access (#1746) it made the fetch path
+                    // unreachable at exactly the moment it became the PRIMARY way assemblies
+                    // arrive.
+                    //
+                    // Every route into a compile converges on this handler, so this is the one
+                    // place that makes adoption universal rather than adding a fourth special
+                    // case: give the bundle sources one bounded chance HERE, before the
+                    // adopt-only gate turns a miss into a park and before any Roslyn pass.
+                    //
+                    // Bounded and never fatal, exactly like the install and push paths: a host
+                    // with no consumer registered, a source that times out, and a source that
+                    // faults all fall through to the behaviour that existed before — "the
+                    // release pipeline compiles, as it would have anyway".
+                    var prebuiltConsumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
+                    if (prebuiltConsumer is null)
+                    {
+                        DispatchOrPark();
                         return;
                     }
 
-                    logger?.LogDebug(
-                        "Compile watcher: saw Pending for {HubPath} — posting DispatchCompileTrigger to OWN hub (system identity)",
-                        hubPath);
-                    // 🚨 Compilation runs under SYSTEM identity — circumventing
-                    // RLS by design. The access check that gates compilation is
-                    // upstream: the user has to be permitted to flip
-                    // RequestedReleaseAt on the NodeType's MeshNode (checked by
-                    // the owning hub's AccessControl pipeline at submit time).
-                    // Once requested, the compile activity runs as
-                    // system-security so it can read every source file across
-                    // the mesh, write the activity log without per-flag RLS
-                    // probing, and emit the compiled assembly. NOT FromNode —
-                    // compile-as-the-last-editor-of-the-NodeType would deny
-                    // access to source files owned by other users.
-                    using (MeshWeaver.Mesh.Security.AccessContextScope.AsSystem(accessService))
+                    var attempt = new SingleAssignmentDisposable();
+                    onDemandAdoptionSubs.Add(attempt);
+                    attempt.Disposable = prebuiltConsumer.SeedForTypes([hubPath])
+                        .Take(1)
+                        .Timeout(OnDemandAdoptionBudget)
+                        .SelectMany(AdoptionLanded)
+                        .Catch<bool, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "Compile watcher: on-demand prebuilt adoption for {HubPath} failed — "
+                                + "compiling instead.", hubPath);
+                            return Observable.Return(false);
+                        })
+                        .Finally(() => onDemandAdoptionSubs.Remove(attempt))
+                        .Subscribe(
+                            landed =>
+                            {
+                                if (!landed)
+                                {
+                                    DispatchOrPark();
+                                    return;
+                                }
+                                logger?.LogInformation(
+                                    "Compile watcher: {HubPath} adopted a prebuilt assembly on demand — "
+                                    + "settling without a Roslyn pass.", hubPath);
+                            },
+                            ex =>
+                            {
+                                logger?.LogWarning(ex,
+                                    "Compile watcher: on-demand prebuilt adoption for {HubPath} faulted — "
+                                    + "compiling instead.", hubPath);
+                                DispatchOrPark();
+                            });
+                    return;
+
+                    // 🚨 Trust the STAMP, never the reported count. A consumer that reports an
+                    // adoption it never wrote back would leave this type at Pending for ever, and
+                    // a STRANDED type is the one outcome worse than a redundant compile: every
+                    // settle-waiter (get_diagnostics, the compile tool, WaitForLatestRelease)
+                    // hangs to its timeout, and the instance pages hang with them. So an adoption
+                    // counts only when the node ITSELF then satisfies HasUsableBuild — the same
+                    // predicate the compile decision uses. Anything else compiles.
+                    IObservable<bool> AdoptionLanded(int adopted)
                     {
-                        // Fire-and-forget. ActionBlock picks it up and runs
-                        // HandleDispatchCompile on the hub's thread; the
-                        // delivery.AccessContext is stamped with system identity
-                        // so every downstream write inside the activity bypasses
-                        // RLS.
-                        hub.Post(new DispatchCompileTrigger(pendingNode!),
-                            o => o.WithTarget(hub.Address));
+                        if (adopted <= 0)
+                        {
+                            logger?.LogDebug(
+                                "Compile watcher: no prebuilt assembly available for {HubPath} on "
+                                + "demand — compiling.", hubPath);
+                            return Observable.Return(false);
+                        }
+
+                        // 🚨 The watcher's OWN `guards`, never a fresh GuardsOf(hub). BuildGuards
+                        // exists so "which live environment" can never fork between the checks in
+                        // one handler, and it is resolved once per watcher install for exactly
+                        // that reason. Re-resolving here would judge the adopted build against a
+                        // snapshot the kickoff that flipped this type to Pending never saw — a
+                        // decision taken against one observed state while the effect commits
+                        // against another. It also rebuilds the dependency-id resolver and the
+                        // module MVID map on every attempt, for nothing: adoption stamps assembly
+                        // coordinates on the NODE, and changes no part of the environment these
+                        // guards describe.
+                        return ownStream
+                            .Where(n => n?.ContentAs<NodeTypeDefinition>(
+                                            hub.JsonSerializerOptions, logger) is { } adoptedDef
+                                        && HasUsableBuild(n, adoptedDef, guards))
+                            .Take(1)
+                            .Select(_ => true)
+                            .Timeout(AdoptionStampBudget)
+                            .Catch<bool, Exception>(_ =>
+                            {
+                                logger?.LogWarning(
+                                    "Compile watcher: {HubPath} reported {Adopted} adopted "
+                                    + "assembly(ies) but the node still has no usable build "
+                                    + "{Budget}s later — compiling instead, because a stranded type "
+                                    + "is worse than a redundant compile.",
+                                    hubPath, adopted, AdoptionStampBudget.TotalSeconds);
+                                return Observable.Return(false);
+                            });
+                    }
+
+                    void DispatchOrPark()
+                    {
+                        // 🚨 THE ADOPT-ONLY GATE (Modules:RequirePrebuilt, MeshWeaver#2193 §A). On a
+                        // mesh that requires prebuilt assemblies, a Pending flip on a type WITHOUT a
+                        // usable build — first access, a release request, a self-heal kick, a
+                        // framework-stale rebuild — must never reach Roslyn. Every route into a compile
+                        // passes through this handler (a deliberate retry un-parks and then lands
+                        // HERE), so this is the one place that turns "compile on a miss" into a
+                        // PARKED, named refusal: the type settles at Error with a message that says
+                        // what is missing (the assembly for this identity/architecture), what
+                        // publishes it (the package's bundle for this lane) and how to retry — and
+                        // every instance page renders that reason through the compilation-error
+                        // overlay instead of hanging on a compile that would not have been allowed.
+                        // Parking (deterministic — the same miss reproduces until a bundle lands)
+                        // keeps the refusal bounded and visible, exactly like a terminal source error;
+                        // the park registry's attempt counter stays at ZERO, the observable proof no
+                        // Roslyn pass ever started.
+                        if (PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider))
+                        {
+                            var reason = PrebuiltAssemblySeeder.RequiredParkReason(hubPath);
+                            logger?.LogError(
+                                "Compile watcher: {HubPath} has no adopted assembly and this mesh sets {Key} — " +
+                                "PARKING with a named refusal instead of compiling. {Reason}",
+                                hubPath, PrebuiltAssemblySeeder.RequirePrebuiltConfigKey, reason);
+                            // The registry is resolved from the hub's services HERE, exactly as the
+                            // real dispatch does — the watcher's own handle is only ever probed
+                            // null-safely and must not be the thing the park depends on. The park
+                            // carries the type's CURRENT source snapshot so the sources watcher does
+                            // not read "sources changed since the park" against a null baseline and
+                            // un-park into a park/un-park ping-pong; a genuine later source edit
+                            // still re-drives (and is refused again, named, by this gate).
+                            var registry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>()
+                                ?? parkRegistry;
+                            var pendingDef = pendingNode!.ContentAs<NodeTypeDefinition>(
+                                hub.JsonSerializerOptions, logger);
+                            registry?.OnCompileFailed(
+                                hub, hubPath, reason, deterministic: true,
+                                recipientUserId: null, sources: pendingDef?.CurrentSourceVersions, logger);
+                            // The refusal genuinely IS formed under the live compile inputs — stamp
+                            // them so the failed-verdict re-drive (#1793) doesn't treat this as
+                            // "never attempted" and burn a needless automatic re-drive (#2264).
+                            SettleAsError(reason, formedUnderLiveInputs: true);
+                            return;
+                        }
+
+                        logger?.LogDebug(
+                            "Compile watcher: saw Pending for {HubPath} — posting DispatchCompileTrigger to OWN hub (system identity)",
+                            hubPath);
+                        // 🚨 Compilation runs under SYSTEM identity — circumventing
+                        // RLS by design. The access check that gates compilation is
+                        // upstream: the user has to be permitted to flip
+                        // RequestedReleaseAt on the NodeType's MeshNode (checked by
+                        // the owning hub's AccessControl pipeline at submit time).
+                        // Once requested, the compile activity runs as
+                        // system-security so it can read every source file across
+                        // the mesh, write the activity log without per-flag RLS
+                        // probing, and emit the compiled assembly. NOT FromNode —
+                        // compile-as-the-last-editor-of-the-NodeType would deny
+                        // access to source files owned by other users.
+                        using (MeshWeaver.Mesh.Security.AccessContextScope.AsSystem(accessService))
+                        {
+                            // Fire-and-forget. ActionBlock picks it up and runs
+                            // HandleDispatchCompile on the hub's thread; the
+                            // delivery.AccessContext is stamped with system identity
+                            // so every downstream write inside the activity bypasses
+                            // RLS.
+                            hub.Post(new DispatchCompileTrigger(pendingNode!),
+                                o => o.WithTarget(hub.Address));
+                        }
                     }
                 },
             hub.Address,
@@ -669,43 +867,16 @@ internal static class NodeTypeCompilationHelpers
                         liveInputs, total, NodeTypeCompileParkRegistry.MaxAutomaticFailureRedrives,
                         def.CompilationError ?? "(none recorded)");
 
-                    // 🅿️ Un-park FIRST (in-memory + synchronous, so it happens-before the Pending
-                    // emission the compile watcher observes), exactly as the sources watcher's
-                    // parked auto-retry does — otherwise the parked short-circuit would swallow the
-                    // flip and re-settle it to Error. This does not weaken the park: the predicate
-                    // above is false for a type parked in THIS process under THESE inputs, so a
-                    // broken type whose inputs have not moved is never woken.
-                    parkRegistry?.Unpark(hubPath);
                     var redriveAccess = hub.ServiceProvider.GetService<AccessService>();
                     using var systemScope = redriveAccess?.ImpersonateAsSystem();
-                    workspace.GetMeshNodeStream().Update(curr =>
-                    {
-                        if (curr?.Content is not NodeTypeDefinition d) return curr!;
-                        // Never clobber an in-flight compile (a concurrent release request or
-                        // enrichment self-heal may already have flipped Pending/Compiling).
-                        if (d.CompilationStatus is CompilationStatus.Pending
-                                                or CompilationStatus.Compiling)
-                            return curr;
-                        // Re-check inside the lambda — a genuine compile may have settled between
-                        // the outer Where and this write.
-                        if (!HasStaleFailureVerdict(d, guards.ModulesHash)) return curr;
-                        return curr with
-                        {
-                            Content = d with
-                            {
-                                // 🚨 The bookkeeping and the flip land TOGETHER. Stamping the live
-                                // inputs here — not only in ApplyCompileFailure — is what makes the
-                                // re-drive unable to schedule another pass even if the compile
-                                // never writes back at all (process death mid-compile, the parked
-                                // re-settle, a poisoned content read).
-                                FailedBuildInputs = BuildInputsToken(
-                                    guards.ModulesHash, d.CurrentSourceVersions),
-                                CompilationStatus = CompilationStatus.Pending
-                            }
-                        };
-                    }).Subscribe(_ => { },
-                        ex => logger?.LogWarning(ex,
-                            "Failed-verdict re-drive: Update failed for {HubPath}", hubPath));
+                    // 🅿️ The park is NOT lifted here (#2260). Admission and flip are one decision
+                    // and they commit together, inside the lambda — see ApplyFailedVerdictRedrive.
+                    workspace.GetMeshNodeStream()
+                        .Update(curr => ApplyFailedVerdictRedrive(
+                            curr, hubPath, guards.ModulesHash, parkRegistry))
+                        .Subscribe(_ => { },
+                            ex => logger?.LogWarning(ex,
+                                "Failed-verdict re-drive: Update failed for {HubPath}", hubPath));
                 },
                 ex => logger?.LogWarning(ex,
                     "Failed-verdict re-drive: own-stream subscription faulted for {HubPath} — a "
@@ -748,7 +919,7 @@ internal static class NodeTypeCompilationHelpers
 
         return new CompositeDisposable(
             watcherSub, firstBuildKickoffSub, recoveryKickoffSub, frameworkStaleKickoffSub,
-            failedVerdictKickoffSub, stuckDiagnosticSub);
+            failedVerdictKickoffSub, stuckDiagnosticSub, onDemandAdoptionSubs);
     }
 
     /// <summary>
@@ -1653,10 +1824,14 @@ internal static class NodeTypeCompilationHelpers
     /// Error was baked into a committed file — differs from any live token, which is precisely the
     /// one-off recovery those nodes need.</para>
     ///
-    /// <para><see cref="CompilationStatus.Unavailable"/> is included: it records that a compile
-    /// never reached a verdict at all, so it is even less of a reason to stop trying than an
-    /// Error. (<c>NodeTypeContractHandler.EnsureCompileDispatched</c> already re-drives it on the
-    /// next REQUEST; this adds the activation-time path, under the same bound.)</para>
+    /// <para><see cref="CompilationStatus.Unavailable"/> is included, and — unlike an Error — it
+    /// does NOT have to wait for the compile inputs to change. It records that a compile never
+    /// reached a verdict at all, so it is even less of a reason to stop trying than an Error, and
+    /// the input token cannot express the thing that actually changed (a recycling address came
+    /// back). Requiring a token change made this branch unreachable for the #1701 shape: a
+    /// package-root recycle moves no framework, no module and no source.
+    /// (<c>NodeTypeContractHandler.EnsureCompileDispatched</c> already re-drives it on the next
+    /// REQUEST; this adds the activation-time path, under the same <b>count</b> bound.)</para>
     ///
     /// <para>🚨 <b>Never re-drive from an UNESTABLISHED source set.</b> On a cold activation the
     /// sources watcher has not written <see cref="NodeTypeDefinition.CurrentSourceVersions"/> yet,
@@ -1678,10 +1853,147 @@ internal static class NodeTypeCompilationHelpers
         && string.IsNullOrEmpty(def.LatestAssemblyPath)
         // The source set must be ESTABLISHED before it can be compared — see above.
         && def.CurrentSourceVersions is not null
-        && !string.Equals(
-            def.FailedBuildInputs,
-            BuildInputsToken(modulesHash, def.CurrentSourceVersions),
-            StringComparison.Ordinal);
+        && (
+            // 🚨 An UNAVAILABLE verdict is stale ON ITS OWN — the inputs are irrelevant, because the
+            // inputs were never the reason (#1701). Unavailable records "we never found out": the
+            // compile did not run, or it read an address that was recycling. Re-asking is the ONLY
+            // way to find out, and the input token cannot express "the mesh has settled down" — a
+            // package-root recycle changes no framework, no module and no source, so gating the
+            // re-drive on the token made "Retry the read" advice that nothing could follow, exactly
+            // as #1701 reports. The three existing bounds still apply and are what keeps this from
+            // becoming a poll: the flip to Pending stamps the live token in the same write, the
+            // DistinctUntilChanged upstream collapses repeats, and MaxAutomaticFailureRedrives caps
+            // the process at five attempts before giving up LOUDLY. An address that never comes back
+            // therefore costs five compiles and one error line, not a loop.
+            def.CompilationStatus is CompilationStatus.Unavailable
+            || !string.Equals(
+                def.FailedBuildInputs,
+                BuildInputsToken(modulesHash, def.CurrentSourceVersions),
+                StringComparison.Ordinal));
+
+    /// <summary>
+    /// 🅿️ THE failed-verdict re-drive's COMMIT step (#2260) — the whole decision, including the
+    /// retry ADMISSION, as one function of the node state it commits against. Passed as the
+    /// <c>Update</c> lambda so it runs on the data source's action block, exactly once, immediately
+    /// before the write it produces.
+    ///
+    /// <para><b>Two defects this shape closes, both in the old
+    /// <c>parkRegistry.Unpark(hubPath); …Update(…)</c> pair.</b></para>
+    ///
+    /// <para>(1) <b>An un-park decided from a SNAPSHOT.</b> The subscriber's emission is a snapshot;
+    /// by the time the body ran, a terminal failure could have parked the type again
+    /// (<c>NodeTypeCompileParkRegistry.ParkAndNotify</c> is the only writer of that entry). The
+    /// un-park removed a park the decision never observed — and, when the lambda's own re-checks
+    /// then declined to flip, NOTHING re-parked afterwards. The type ended up neither parked nor
+    /// re-driven: exactly the state the park exists to make impossible. Here every early return
+    /// leaves the registry untouched, so the registry is only ever touched by a re-drive that is,
+    /// in the same committed state, genuinely flipping the type back to Pending.</para>
+    ///
+    /// <para>(2) <b>Un-parking at all.</b> Even a perfectly-validated un-park leaves the type
+    /// un-parked for the whole Pending → refusal → re-park round-trip, and any trigger arriving in
+    /// that window is admitted. Under <c>Modules:RequirePrebuilt</c> that window opened on EVERY
+    /// refusal. The re-drive never needed the failure cleared — only its one flip let through — so
+    /// it asks for a one-shot <c>AdmitOneRetry</c> and <see cref="NodeTypeCompileParkRegistry.IsParked"/>
+    /// stays true at every instant. The admission still happens-before the Pending emission the
+    /// compile watcher observes (this lambda runs ahead of the commit), which is what the old
+    /// hoisted-out un-park was buying.</para>
+    /// </summary>
+    /// <param name="curr">The node state this write is committing against (authoritative).</param>
+    /// <param name="hubPath">The NodeType's path.</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the compile inputs.</param>
+    /// <param name="parkRegistry">The park registry, or <c>null</c> on a host that has none.</param>
+    /// <returns><paramref name="curr"/> unchanged when the re-drive declines; otherwise the node
+    /// flipped to <see cref="CompilationStatus.Pending"/> with the live inputs stamped.</returns>
+    internal static MeshNode ApplyFailedVerdictRedrive(
+        MeshNode curr, string hubPath, string? modulesHash,
+        NodeTypeCompileParkRegistry? parkRegistry)
+    {
+        if (curr?.Content is not NodeTypeDefinition d) return curr!;
+        // Never clobber an in-flight compile (a concurrent release request or
+        // enrichment self-heal may already have flipped Pending/Compiling).
+        if (d.CompilationStatus is CompilationStatus.Pending
+                                or CompilationStatus.Compiling)
+            return curr;
+        // Re-check against the state being committed — a genuine compile may have settled, or a
+        // fresh terminal failure may have re-parked, between the outer Where and this write.
+        if (!HasStaleFailureVerdict(d, modulesHash)) return curr;
+        // 🅿️ Committing the flip — and ONLY now — claim the one-shot admission, so the compile
+        // watcher's parked short-circuit lets this Pending emission through. The park itself is
+        // never touched.
+        //
+        // 🚨 …and ONLY while the type is actually PARKED. An admission for an un-parked type is
+        // never consumed — the short-circuit it exists to pass is not taken — so it would sit in
+        // the registry until some LATER park, where a stray Pending flip could spend it and get
+        // through the very containment this restores. That case is the common one, not a corner:
+        // a failure that predates this PROCESS is not in the (in-memory) registry at all. Gating
+        // here makes the leak impossible rather than merely unlikely, because it establishes
+        // "an admission implies a standing park" — and every path that REMOVES a park (Unpark,
+        // OnCompileSucceeded) clears admissions with it, so no admission can outlive the park it
+        // was granted against.
+        if (parkRegistry?.IsParked(hubPath) == true)
+            parkRegistry.AdmitOneRetry(hubPath);
+        return curr with
+        {
+            Content = d with
+            {
+                // 🚨 The bookkeeping and the flip land TOGETHER. Stamping the live
+                // inputs here — not only in ApplyCompileFailure — is what makes the
+                // re-drive unable to schedule another pass even if the compile
+                // never writes back at all (process death mid-compile, the parked
+                // re-settle, a poisoned content read).
+                FailedBuildInputs = BuildInputsToken(modulesHash, d.CurrentSourceVersions),
+                CompilationStatus = CompilationStatus.Pending
+            }
+        };
+    }
+
+    /// <summary>
+    /// 🚨 THE terminal stamp of a Pending flip the compile watcher refuses to dispatch WITHOUT
+    /// running Roslyn (issue #2264) — the shared body of <c>InstallCompileWatcher</c>'s
+    /// <c>SettleAsError</c> local function, extracted so the per-call-site
+    /// <see cref="NodeTypeDefinition.FailedBuildInputs"/> decision is unit-testable without a hub.
+    ///
+    /// <para><c>SettleAsError</c> is the ONLY way a NodeType reaches <see cref="CompilationStatus.Error"/>
+    /// under the adopt-only gate (<c>Modules:RequirePrebuilt</c>, #2193 §A), which never runs a
+    /// compile — so it is the only writer of <see cref="NodeTypeDefinition.FailedBuildInputs"/> for
+    /// such a type, and the two call sites need OPPOSITE answers:</para>
+    ///
+    /// <list type="bullet">
+    ///   <item>the <b>adopt-only gate's refusal</b> (<paramref name="formedUnderLiveInputs"/> =
+    ///     <c>true</c>) is formed under the LIVE compile inputs RIGHT NOW, so stamping them is
+    ///     honest — and is what stops <see cref="HasStaleFailureVerdict"/> from reading an
+    ///     unstamped verdict as "never attempted" and driving one needless automatic re-drive
+    ///     (#1793) per refused type.</item>
+    ///   <item>the <b>parked short-circuit's re-settle</b> (<paramref name="formedUnderLiveInputs"/>
+    ///     = <c>false</c>) re-serves an ALREADY-SETTLED failure's verdict — stamping the CURRENT
+    ///     live inputs there would overwrite (or fabricate, for a type parked before this fix)
+    ///     the record of what THAT original failure was formed under, silently masking a genuine
+    ///     input change since that failure and defeating #1793's whole recovery path. So it leaves
+    ///     whatever <see cref="NodeTypeDefinition.FailedBuildInputs"/> the node already carries
+    ///     untouched — which is exactly what OMITTING the field from the <c>with</c> would do too;
+    ///     spelled out here so the two branches are visibly symmetric instead of one being a
+    ///     silent no-op.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="parkedDef">The NodeType definition as currently persisted (authoritative — read
+    /// inside the <c>Update</c> lambda, never a captured snapshot).</param>
+    /// <param name="reason">The refusal/parked-error message, or <c>null</c> to keep whatever
+    /// <see cref="NodeTypeDefinition.CompilationError"/> is already recorded.</param>
+    /// <param name="formedUnderLiveInputs">Whether THIS settle is itself a decision formed under
+    /// the live compile inputs (see above).</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the compile inputs.</param>
+    internal static NodeTypeDefinition ApplyGateSettle(
+        NodeTypeDefinition parkedDef, string? reason, bool formedUnderLiveInputs, string? modulesHash) =>
+        parkedDef with
+        {
+            CompilationStatus = CompilationStatus.Error,
+            CompilationError = reason
+                ?? parkedDef.CompilationError
+                ?? "Compilation is parked after a terminal failure; request a release (Compile) to retry.",
+            FailedBuildInputs = formedUnderLiveInputs
+                ? BuildInputsToken(modulesHash, parkedDef.CurrentSourceVersions)
+                : parkedDef.FailedBuildInputs,
+        };
 
     /// <summary>
     /// THE terminal stamp of a SUCCESSFUL compile — the exact field set
@@ -1780,6 +2092,26 @@ internal static class NodeTypeCompilationHelpers
         };
 
     /// <summary>
+    /// <c>true</c> when <paramref name="error"/> says the compile never reached a VERDICT — the
+    /// source set could not be established (<see cref="SourceDiscoveryUnavailableException"/>) or a
+    /// mesh address the compile had to read was RECYCLING for the reader's whole budget
+    /// (<see cref="AddressRecyclingException"/>). Both are availability facts about the mesh, never
+    /// statements about the code.
+    ///
+    /// <para>🚨 One predicate, two consumers, and they MUST agree (#1701).
+    /// <see cref="ApplyCompileFailure"/> uses it to stamp <see cref="CompilationStatus.Unavailable"/>
+    /// instead of <see cref="CompilationStatus.Error"/>; the terminal outcome handler in
+    /// <see cref="RunCompile"/> uses it to skip <c>NodeTypeCompileParkRegistry.OnCompileFailed</c>
+    /// entirely. When only the first honoured the distinction, three recycling reads parked the
+    /// type, the compile watcher's parked short-circuit re-settled it as <c>Error</c>, and — since
+    /// the only automatic un-park is a SOURCE change, which a recycle never produces — it stayed
+    /// there until a human pressed Compile. Duplicating the type test at both sites is how they
+    /// drifted apart in the first place, so there is deliberately exactly one.</para>
+    /// </summary>
+    internal static bool IsAvailabilityNonVerdict(Exception? error) =>
+        error is SourceDiscoveryUnavailableException or AddressRecyclingException;
+
+    /// <summary>
     /// THE terminal stamp of a FAILED compile — the exact field set <see cref="RunCompile"/>'s
     /// write-back has always applied on failure, extracted for the same one-stamp-shape reason
     /// as <see cref="ApplyCompileSuccess"/>.
@@ -1804,7 +2136,7 @@ internal static class NodeTypeCompilationHelpers
         string? modulesHash = null)
         => def with
         {
-            CompilationStatus = error is SourceDiscoveryUnavailableException or AddressRecyclingException
+            CompilationStatus = IsAvailabilityNonVerdict(error)
                 ? CompilationStatus.Unavailable
                 : CompilationStatus.Error,
             CompilationError = SummarizeCompileError(result, error),
@@ -2129,10 +2461,35 @@ internal static class NodeTypeCompilationHelpers
                     // (RequestedReleaseBy, set by the Compile-gated Create Release action) is the
                     // bell to notify; a System first-build / seed compile has none → the
                     // notification becomes a satellite of the failing type instead.
+                    //
+                    // 🚨 …EXCEPT an AVAILABILITY non-verdict, which is not a compile failure at all
+                    // and must never consume the park budget (#1701). `SourceDiscoveryUnavailable`
+                    // and `AddressRecycling` both mean the compile never REACHED a verdict — the
+                    // source set could not be established, or a mesh address the compile reads was
+                    // recycling for the reader's whole budget. `ApplyCompileFailure` already stamps
+                    // those as `CompilationStatus.Unavailable` rather than `Error`, precisely
+                    // because they say nothing about the code. Feeding them to `OnCompileFailed`
+                    // threw that distinction away one layer down: the registry only receives a
+                    // string plus `deterministic:false`, so three recycling reads in a row parked
+                    // the type — and a parked type is then re-settled by the watcher's park
+                    // short-circuit as `CompilationStatus.Error`, the "compile=FAILED(Error)"
+                    // verdict #1701 reports for all 33 types of a package whose ROOT was merely
+                    // recycling. Worse, the only automatic un-park is "the SOURCES changed", and a
+                    // recycle changes no source — so the park was permanent until someone pressed
+                    // Compile. Not counting it is the fix: the type stays `Unavailable`, which the
+                    // failed-verdict re-drive treats as stale and retries under its own bounds.
                     if (parkRegistry is not null)
                     {
                         if (ok)
                             parkRegistry.OnCompileSucceeded(hubPath);
+                        else if (IsAvailabilityNonVerdict(outcome.Error))
+                        {
+                            logger?.LogInformation(
+                                "Compile for {HubPath} reached NO VERDICT ({Type}) — an availability fact, "
+                                + "not a compile failure: it does not count towards the park budget and the "
+                                + "type is left at Unavailable for the automatic re-drive to retry. {Error}",
+                                hubPath, outcome.Error!.GetType().Name, outcome.Error.Message);
+                        }
                         else
                         {
                             var hasRoslynErrors =

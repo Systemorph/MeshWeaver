@@ -52,6 +52,22 @@ public sealed class InstanceRegistrationClient(IMessageHub hub)
     /// </summary>
     public const string HttpClientName = "plugin-registry";
 
+    /// <summary>
+    /// The named <see cref="HttpClient"/> for BUNDLE TRANSFERS — <see cref="PluginBundleClient"/>
+    /// and nothing else.
+    ///
+    /// <para>🚨 It is separate from <see cref="HttpClientName"/> because the two call shapes want
+    /// opposite budgets, and one budget cannot serve both. A bundle is MEGABYTES and its index is
+    /// served slowly enough to need minutes; a catalog listing is rendered on a PAGE, where a
+    /// multi-minute budget is not resilience but a hang. Sharing one name meant the raise that
+    /// fixed module landing would also have let <c>/Store</c> spin for five minutes against an
+    /// unreachable registry — trading a silent failure for a stuck page.</para>
+    ///
+    /// <para>A host that registers no pipeline for this name still works: the factory returns a
+    /// plain client, exactly as for the name above.</para>
+    /// </summary>
+    public const string BundleHttpClientName = "plugin-registry-bundles";
+
     private static readonly HttpClient SharedHttp = new();
 
     private readonly IIoPool _httpPool =

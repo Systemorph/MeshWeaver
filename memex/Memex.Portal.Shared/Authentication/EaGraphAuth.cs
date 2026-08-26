@@ -1,12 +1,11 @@
+using MeshWeaver.Mesh.Security;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
-using MeshWeaver.AI;                        // IProviderKeyProtector
-using MeshWeaver.Blazor.Infrastructure;     // PortalApplication
+using MeshWeaver.Hosting.AspNetCore.Portal;     // PortalApplication
 using MeshWeaver.Data;                       // IWorkspace.GetMeshNodeStream
 using MeshWeaver.Graph.Configuration;        // EaCredentialNodeType
 using MeshWeaver.Mesh;                        // EaCredential, MeshNode
-using MeshWeaver.Mesh.Security;               // ImpersonateAsSystem
 using MeshWeaver.Mesh.Services;               // IMeshService
 using MeshWeaver.Messaging;                   // AccessService
 using Microsoft.Extensions.Configuration;
@@ -143,7 +142,9 @@ public sealed class EaGraphAuth(
     private async Task StoreAsync(string userObjectId, string refreshToken, CancellationToken ct)
     {
         using var scope = rootServices.CreateScope();
-        var hub = scope.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
+        // Portal hub when the Blazor shell registered one; the mesh root hub otherwise.
+        var hub = scope.ServiceProvider.GetService<PortalApplication>()?.Hub
+                  ?? scope.ServiceProvider.GetRequiredService<IMessageHub>();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
 
@@ -175,7 +176,9 @@ public sealed class EaGraphAuth(
             if (hub is null)
             {
                 owned = rootServices.CreateScope();
-                hub = owned.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
+                // Portal hub when the Blazor shell registered one; the mesh root hub otherwise.
+                hub = owned.ServiceProvider.GetService<PortalApplication>()?.Hub
+                      ?? owned.ServiceProvider.GetRequiredService<IMessageHub>();
             }
             var ws = hub.GetWorkspace();
             var access = hub.ServiceProvider.GetRequiredService<AccessService>();

@@ -220,8 +220,7 @@ Note the prefix-shadowing order in `MaxConcurrencyFor`: `pg-read:` is tested **b
 **`Routing` is an ISOLATION boundary, not a throttle.** `RoutingGrain` is `[StatelessWorker(1)]` and
 non-reentrant, so a silo has exactly ONE routing turn — and Orleans' request timeout applies to
 callers *waiting on* a grain, never to the turn itself. Anything the turn does inline is therefore
-unbounded by construction and blocks every other message the silo needs to route. Prod (atioz,
-2026-08-07) had one `RouteMessage` turn executing for `06:00:22` with `NonReentrancyQueueSize=541`;
+unbounded by construction and blocks every other message the silo needs to route. Prod (2026-08-07) had one `RouteMessage` turn executing for `06:00:22` with `NonReentrancyQueueSize=541`;
 Orleans' own diagnostics showed the work item still `Running` with `Total processed` frozen — i.e.
 `RouteMessage` had never returned, it was blocked in its own synchronous body. The cure is structural
 (you cannot time out a synchronously blocked thread): `RouteMessage` captures its activation-bound
@@ -448,6 +447,32 @@ never an ambient `await` mid-flow. Full order + failure mode: [Mesh Lifecycle](/
 value written inside the leaf is not visible to the caller. Capture what the leaf needs into the closure
 before handing it over — see [AsyncLocal Across Scheduler Hops](/Doc/Architecture/AsyncLocalAcrossHops)
 and, for identity specifically, [AccessContext Propagation](/Doc/Architecture/AccessContextPropagation).
+
+### 🚨 The pool releases its gate on an ADMISSION COUNT, never on "is anyone running?"
+
+`Dispose()` must not block (a synchronous 30 s join parks a pool thread while the leaves it waits for
+need pool threads to observe cancellation — a starvation deadlock on a 4-vCPU runner). So it cancels,
+returns, and lets the **last caller out** release `_gate` / `_poolCts` / the blocking-idle signal.
+That makes "who is still using them?" the load-bearing question, and the obvious answers are all
+wrong:
+
+- `CurrentInFlight` is raised only once `WaitAsync` has **granted** a permit. A leaf between the
+  grant and the increment holds a permit and counts as zero, so disposal releases the gate and the
+  resumed leaf calls `Release()` on it (issue #2146).
+- A `_disposed` flag read at the top of the entry point is read when the **cold observable is built**,
+  while `_poolCts.Token` and `_gate.WaitAsync` are touched on **subscribe**. Everything the pool
+  returns is cold, so that gap is arbitrarily wide — and a chain built during a render and subscribed
+  as teardown lands threw `ObjectDisposedException` out of the reactive chain (#2134 / #2135).
+
+`IoPool` therefore counts **admissions**, not executions: every path that may touch those primitives —
+each of the four entry points, `Drain()`, and `Dispose()` itself — brackets its whole reach in
+`TryEnterGateRegion()` / `LeaveGateRegion()`, and disposal completes only at zero. Entry is
+publish-then-recheck (increment, then re-read the disposal flag; `Dispose` publishes the flag before
+it reads the count), so of the two check-then-act orders at least one side always observes the other:
+either disposal defers, or the caller is refused and answers `OperationCanceledException`. **A leaf
+the pool will not run is a CANCELLATION, never an `ObjectDisposedException`** — that is the contract
+the region exists to keep, and it is why there is no `catch (ObjectDisposedException)` anywhere in the
+file. Adding one would hide a region that was never entered.
 
 ---
 

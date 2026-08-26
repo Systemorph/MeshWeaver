@@ -376,7 +376,9 @@ public static class PersistenceExtensions
             new MeshWeaver.Compiler.FileSystemAssemblyStore(
                 System.IO.Path.Combine(System.IO.Path.GetTempPath(),
                     $"MeshWeaver-AssemblyStore-pid{System.Environment.ProcessId}"),
-                sp.GetRequiredService<ILogger<MeshWeaver.Compiler.FileSystemAssemblyStore>>()));
+                sp.GetRequiredService<ILogger<MeshWeaver.Compiler.FileSystemAssemblyStore>>(),
+                MeshWeaver.Compiler.AssemblyStoreExtensions.KeepVersionsPerType(
+                    sp.GetService<Microsoft.Extensions.Configuration.IConfiguration>())));
     }
 
     /// <summary>
@@ -437,6 +439,42 @@ public static class PersistenceExtensions
     public static IServiceCollection AddPersistence(this IServiceCollection services, IStorageAdapter storageAdapter)
     {
         services.AddSingleton(storageAdapter);
+
+        // Register common services and wrapper services
+        return services.AddCoreAndWrapperServices();
+    }
+
+    /// <summary>
+    /// Adds a custom storage adapter built LAZILY from the real container, with in-memory
+    /// persistence service.
+    ///
+    /// <para>🚨 Prefer this over the instance overload whenever the adapter needs anything else out
+    /// of DI. The instance overload forces the caller to have the adapter's dependencies in hand at
+    /// REGISTRATION time, and the shortcut that reaches for — <c>services.BuildServiceProvider()</c>
+    /// mid-registration — silently builds a SECOND, throwaway container: anything registered after
+    /// that line is invisible to it, and any singleton it does resolve is a duplicate of the one the
+    /// real container will hand everyone else. Both PostgreSQL simple-persistence lanes and the
+    /// Snowflake one read their optional <c>IEmbeddingProvider</c> that way, so the adapter took a
+    /// null (or a second instance) purely because of registration ORDER.</para>
+    ///
+    /// <para>The version-writing/write-guard decorator chain resolves the last
+    /// <see cref="IStorageAdapter"/> registration whether it is an instance or a factory, so nothing
+    /// downstream can tell the difference.</para>
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="storageAdapterFactory">Builds the adapter from the real service provider.</param>
+    /// <returns>The service collection for chaining.</returns>
+    public static IServiceCollection AddPersistence(
+        this IServiceCollection services,
+        Func<IServiceProvider, IStorageAdapter> storageAdapterFactory)
+    {
+        // 🚨 The service type is EXPLICIT. `AddSingleton(factory)` has two applicable overloads for a
+        // typed `Func<IServiceProvider, IStorageAdapter>` variable — the factory overload
+        // (TService = IStorageAdapter) and the implementation-INSTANCE overload
+        // (TService = Func<IServiceProvider, IStorageAdapter>, i.e. registering the delegate itself
+        // as the service). Both compile. Picking the second would leave IStorageAdapter
+        // unregistered, which is this PR's whole bug class arriving through the fix for it.
+        services.AddSingleton<IStorageAdapter>(storageAdapterFactory);
 
         // Register common services and wrapper services
         return services.AddCoreAndWrapperServices();

@@ -145,38 +145,75 @@ internal static class NodeTypeEnrichmentHelpers
             {
                 UserId = WellKnownUsers.System,
             };
-            return Observable.Using(
-                    () => (meshHub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem())
-                          ?? System.Reactive.Disposables.Disposable.Empty,
-                    _ => queryCore.Query<MeshNode>(probeRequest, meshHub.JsonSerializerOptions))
+            // 🚨 RunAsSystem, never `Observable.Using(access.ImpersonateAsSystem, …)` (#1790).
+            // Impersonation is an AsyncLocal store/restore pair, and Rx runs the resource factory
+            // on the SUBSCRIBING thread while disposing it when the inner observable TERMINATES —
+            // the owning hub's response thread for a cross-hub query. The subscriber was therefore
+            // left latched as `system-security`, and this probe is subscribed from an activation
+            // that continues doing work afterwards. RunAsSystem seals both ends inside the one
+            // Subscribe, and delivers every notification under the subscriber's OWN identity.
+            // This was the last site on ImpersonationScopeSites.allow for this file — the line is
+            // deleted rather than lowered, which is the only direction that ratchet may move.
+            return meshHub.ServiceProvider.GetService<AccessService>()
+                .RunAsSystem(() => queryCore.Query<MeshNode>(probeRequest, meshHub.JsonSerializerOptions))
                 .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
                 .Take(1)
                 .Timeout(NodeTypeProbeTimeout)
-                .Select(probe => probe.Items.Count > 0 ? ProbeOutcome.Registered : ProbeOutcome.Missing)
+                // 🚨 The probe's question is "is a NodeType REGISTERED at that path", not "does
+                // ANY node live there" — and those diverge the moment two things want the same
+                // name. A Store plugin installs its root at the bare path `Feedback` while its
+                // NodeType is `Feedback/Feedback`, so an instance that named the bare `Feedback`
+                // passed this gate on the PLUGIN ROOT and then bound to the plugin's own hub
+                // configuration, leaving only a lone
+                // `As<NodeTypeDefinition> for Feedback: value is PluginContent` line behind
+                // (Systemorph/MeshWeaver#2230/#2231). Counting the occupant as a registration is
+                // the defect; see ProbeCollision for why the test is deliberately one-sided.
+                .Select(probe =>
+                {
+                    var collision = ProbeCollision(probe.Items, meshHub.JsonSerializerOptions);
+                    return (
+                        Outcome: probe.Items.Count == 0 || collision is not null
+                            ? ProbeOutcome.Missing
+                            : ProbeOutcome.Registered,
+                        Collision: collision);
+                })
                 // 🚨 A FAULTED probe is NOT the same answer as an EMPTY one. Folding
                 // both into "missing" made a ~3s lookup timeout (busy mesh hub, slow
                 // storage, restart in progress) render the genuine-compile-failure
                 // overlay — "There was a compilation error… Please correct the code" —
                 // for a type whose source was never even read (#641). Keep the two
                 // apart and say which one happened.
-                .Catch<ProbeOutcome, Exception>(ex =>
+                .Catch<(ProbeOutcome Outcome, string? Collision), Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
                         "EnrichWithNodeType probe for NodeType '{NodeType}' faulted ({ExceptionType}) — registration is INDETERMINATE, not missing",
                         nodeType, ex.GetType().Name);
-                    return Observable.Return(ProbeOutcome.Indeterminate);
+                    return Observable.Return((ProbeOutcome.Indeterminate, (string?)null));
                 })
-                .SelectMany(outcome =>
+                .SelectMany(result =>
                 {
+                    var (outcome, collision) = result;
                     if (outcome == ProbeOutcome.Missing)
                     {
-                        var msg =
-                            $"NodeType '{nodeType}' is not registered (referenced by instance '{node.Path}'). " +
-                            $"Either register the type via AddXxxType() in your mesh builder, or fix " +
-                            $"the instance's NodeType field. Activation cannot proceed.";
-                        logger?.LogWarning(
-                            "EnrichWithNodeType: NodeType '{NodeType}' has no static registration and no persisted node at that path — applying error overlay to '{InstancePath}'",
-                            nodeType, node.Path);
+                        var msg = collision is null
+                            ? $"NodeType '{nodeType}' is not registered (referenced by instance '{node.Path}'). " +
+                              $"Either register the type via AddXxxType() in your mesh builder, or fix " +
+                              $"the instance's NodeType field. Activation cannot proceed."
+                            : $"NodeType '{nodeType}' is not registered: {collision} (referenced by " +
+                              $"instance '{node.Path}'). Point the instance's NodeType field at the " +
+                              $"declaration's real path, or move whatever occupies '{nodeType}' out of " +
+                              $"the way. Activation cannot proceed.";
+                        if (collision is null)
+                            logger?.LogWarning(
+                                "EnrichWithNodeType: NodeType '{NodeType}' has no static registration and no persisted node at that path — applying error overlay to '{InstancePath}'",
+                                nodeType, node.Path);
+                        else
+                            // Error, not Warning: a name COLLISION is a misconfiguration someone
+                            // has to resolve, and it names both sides so it is actionable without
+                            // a second incident.
+                            logger?.LogError(
+                                "EnrichWithNodeType: path '{NodeType}' is occupied by a node that is not a NodeType declaration ({Collision}) — instance '{InstancePath}' has no type to bind to; applying error overlay",
+                                nodeType, collision, node.Path);
                         // Self-heal with a NULL version gate — there is no type
                         // node at all yet; the first usable state (the type gets
                         // registered/imported and compiled later) recycles this
@@ -262,6 +299,49 @@ internal static class NodeTypeEnrichmentHelpers
 
         /// <summary>The probe timed out or faulted — registration is UNKNOWN, not absent.</summary>
         Indeterminate
+    }
+
+    /// <summary>
+    /// Describes the node squatting on a NodeType's path when it is PROVABLY not a NodeType
+    /// declaration — otherwise <c>null</c>. This is the difference between "a node exists there"
+    /// and "a NodeType is registered there", which only diverge when two things claim one name:
+    /// a Store plugin root at <c>Feedback</c> versus the NodeType at <c>Feedback/Feedback</c>
+    /// (Systemorph/MeshWeaver#2230/#2231).
+    ///
+    /// <para>🚨 <b>The test is deliberately one-sided</b>: it may only ever say "definitely not a
+    /// declaration", never "definitely is one". A false positive fails an activation that would
+    /// have worked, so every uncertain shape has to fall through to the existing chain —
+    /// which is why BOTH of these must hold, for EVERY returned candidate:</para>
+    /// <list type="bullet">
+    ///   <item>the node DECLARES a NodeType that is not <see cref="MeshNode.NodeTypePath"/> — a
+    ///     null/empty <c>NodeType</c> proves nothing (several built-in declarations, e.g. Role and
+    ///     Group, leave it unset), and one that says <c>NodeType</c> is a declaration by
+    ///     construction;</item>
+    ///   <item>and its content does not convert to a <see cref="NodeTypeDefinition"/>. Untyped
+    ///     JSON deserialises into one happily, so this branch is only reached by content typed as
+    ///     something else entirely — <c>PluginContent</c> in the incident.</item>
+    /// </list>
+    ///
+    /// <para>No logger is passed to <c>ContentAs</c> on purpose: a non-convertible candidate is
+    /// this method's normal input, and the caller logs the collision once with both sides. The
+    /// unexplained <c>As&lt;NodeTypeDefinition&gt; for Feedback: value is PluginContent</c> line
+    /// that WAS the only evidence is exactly what this replaces.</para>
+    /// </summary>
+    private static string? ProbeCollision(
+        IReadOnlyCollection<MeshNode> candidates,
+        System.Text.Json.JsonSerializerOptions options)
+    {
+        if (candidates.Count == 0)
+            return null;
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrEmpty(candidate.NodeType)
+                || string.Equals(candidate.NodeType, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase)
+                || candidate.ContentAs<NodeTypeDefinition>(options) is not null)
+                return null;
+        }
+        var occupant = candidates.First();
+        return $"'{occupant.Path}' is a '{occupant.NodeType}' node";
     }
 
     /// <param name="afterIndeterminateProbe">
@@ -1570,7 +1650,11 @@ internal static class NodeTypeEnrichmentHelpers
                         instanceHub.RegisterForDisposal(ArmStaleAssemblySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
                             instanceHub, nodeType, boundAssemblyPath, logger,
-                            guards: NodeTypeCompilationHelpers.GuardsOf(meshHub)));
+                            guards: NodeTypeCompilationHelpers.GuardsOf(meshHub),
+                            // Deployment policy, resolved off the MESH hub's configuration: a
+                            // production portal opts into convergence (auto-recycle), everything
+                            // else keeps the offer. See AutoRecycleConfigKey.
+                            autoRecycle: AutoRecycleOnStaleBuild(meshHub)));
                     }
                     catch (Exception ex)
                     {
@@ -1584,10 +1668,12 @@ internal static class NodeTypeEnrichmentHelpers
 
     /// <summary>
     /// Watcher core of <see cref="WithStaleAssemblySelfHeal"/>, split out so the firing contract is
-    /// unit-testable without building a hub (<c>StaleAssemblySelfHealWatcherTest</c>). Posts exactly
-    /// ONE self-<see cref="DisposeRequest"/> (<c>Take(1)</c>) when the NodeType publishes a USABLE
-    /// build whose <see cref="NodeTypeDefinition.LatestAssemblyPath"/> differs from
-    /// <paramref name="boundAssemblyPath"/>.
+    /// unit-testable without building a hub (<c>StaleAssemblySelfHealWatcherTest</c>). Fires exactly
+    /// ONCE (<c>Take(1)</c>) when the NodeType publishes a USABLE build whose
+    /// <see cref="NodeTypeDefinition.LatestAssemblyPath"/> differs from
+    /// <paramref name="boundAssemblyPath"/> — publishing the <see cref="StaleBuildOffer"/> banner
+    /// by default, or posting the self-<see cref="DisposeRequest"/> when the deployment opted into
+    /// convergence (<paramref name="autoRecycle"/>, from <see cref="AutoRecycleConfigKey"/>).
     ///
     /// <para>Unsettled states, non-<see cref="NodeTypeDefinition"/> content, and republications of
     /// the SAME assembly are ignored — the last of those is what keeps an unrelated node write from
@@ -1601,7 +1687,8 @@ internal static class NodeTypeEnrichmentHelpers
         string boundAssemblyPath,
         ILogger? logger,
         IScheduler? scheduler = null,
-        NodeTypeCompilationHelpers.BuildGuards? guards = null)
+        NodeTypeCompilationHelpers.BuildGuards? guards = null,
+        bool autoRecycle = false)
         // 🚨 ContentAs, never `is NodeTypeDefinition` (#1669): the type node reaches this stream
         // in UN-MATERIALIZED JSON shape whenever the publication just crossed a sync stream — the
         // normal shape for exactly the emission this watcher exists to catch. A CLR type test is
@@ -1628,17 +1715,39 @@ internal static class NodeTypeEnrichmentHelpers
                 x =>
                 {
                     var published = x.Def?.LatestAssemblyPath;
+                    // 🚨 The DEPLOYMENT decides between the two terminal behaviours
+                    // (AutoRecycleConfigKey):
+                    //
+                    // CONVERGE (production portals): post the self-DisposeRequest, so the update
+                    // that published this build ENDS with every instance serving it. This is the
+                    // pre-banner behaviour, re-admitted only behind the guards that did not exist
+                    // when it was removed — the assembly-path gate, the settle-window throttle,
+                    // and Take(1) — so a publish burst costs each instance at most ONE recycle,
+                    // and an unrelated node write costs nothing. Without it, prod after a package
+                    // update is a mixture of old and new assemblies for as long as viewers do not
+                    // click (the 2026-08-25 Store outage).
+                    if (autoRecycle)
+                    {
+                        logger?.LogInformation(
+                            "Stale-build convergence: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — auto-recycling instance '{InstancePath}' ({ConfigKey}=true)",
+                            nodeType, published, boundAssemblyPath, instanceHub.Address,
+                            AutoRecycleConfigKey);
+                        instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                        return;
+                    }
+
                     logger?.LogInformation(
                         "Stale-build offer: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — offering instance '{InstancePath}' a recycle",
                         nodeType, published, boundAssemblyPath, instanceHub.Address);
-                    // 🚨 OFFER, never an automatic restart. This used to post a self-DisposeRequest
-                    // here, so every live instance of the type recycled on every publish —
-                    // publication frequency became restart frequency, and a user mid-edit lost
-                    // their hub without asking. Publishing the offer instead puts a banner above
-                    // the instance's (still working) content and lets the user choose. Stated
+                    // 🚨 OFFER as the DEFAULT. The unconditional self-DisposeRequest that once
+                    // lived here recycled every live instance on every publish — publication
+                    // frequency became restart frequency, and a user mid-edit lost their hub
+                    // without asking. Publishing the offer instead puts a banner above the
+                    // instance's (still working) content and lets the user choose. Stated
                     // consequence: an instance whose viewer never clicks keeps serving the OLDER
                     // assembly indefinitely — safe, since that build worked, but "published" no
-                    // longer implies "every instance is running it".
+                    // longer implies "every instance is running it"; a deployment whose invariant
+                    // is convergence opts into the branch above instead.
                     instanceHub.Get<BehaviorSubject<StaleBuildOffer?>>()
                         ?.OnNext(new StaleBuildOffer(nodeType, published, boundAssemblyPath));
                 },
@@ -1715,7 +1824,33 @@ internal static class NodeTypeEnrichmentHelpers
                 && NodeTypeCompilationHelpers.HasUsableBuild(t!, def, guards));
         }
 
-        var usable = typeStream.Where(t => Evaluate(t).Usable);
+        // 🚨 A FAULTED type stream must not KILL the watcher (#1701, point 4). `typeStream` is the
+        // shared MeshNodeStreamCache handle, and while the NodeType's owner is being recycled — or
+        // when the type does not exist on this replica AT ALL (the `Store/Plugin` case in the
+        // issue: `DeliveryFailureException: No node found at 'Store/Plugin'`) — the cache classifies
+        // that as a negative and forwards OnError to every subscriber. Rx `Merge` propagates a fault
+        // from ANY source and unsubscribes ALL of them, so one such error tore down `advanced`,
+        // `graced` AND the re-read ladder together and hit the terminal `ex =>` arm: the watcher was
+        // dead from birth, and "self-heal on type arrival" silently did not exist for exactly the
+        // state it is there to watch out of.
+        //
+        // Switching to `Never` on a fault — rather than `Empty` — stops this stream delivering
+        // without COMPLETING the merge, so the RE-EVALUATION ladder below (built for precisely this
+        // "the type is not readable from here yet" case, and already Catch-guarded per rung) keeps
+        // running and can still heal. Not a swallow: the fault is logged, and the ladder is the
+        // mechanism that reaches the verdict the stream could not deliver. Not a poller either — the
+        // ladder's own budget/spacing is unchanged.
+        var guardedTypeStream = typeStream.Catch<MeshNode, Exception>(ex =>
+        {
+            logger?.LogWarning(ex,
+                "Overlay self-heal: the NodeType stream for '{NodeType}' (instance '{InstancePath}') faulted — "
+                + "the type is not readable from here right now (absent on this replica, or its owner is "
+                + "recycling). The watcher stays armed and heals through the re-read ladder instead of dying.",
+                nodeType, instanceHub.Address);
+            return Observable.Never<MeshNode>();
+        });
+
+        var usable = guardedTypeStream.Where(t => Evaluate(t).Usable);
 
         // FAST path — the version advanced past the overlay: a genuinely NEW build landed, heal now.
         var advanced = usable.Where(t =>
@@ -2008,6 +2143,40 @@ internal static class NodeTypeEnrichmentHelpers
     /// case this whole watcher exists for is unaffected in substance.</para>
     /// </summary>
     private static readonly TimeSpan AssemblySettleWindow = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Deployment opt-in that turns the stale-build OFFER into an automatic self-recycle: when a
+    /// NodeType publishes a new usable build, instances converge onto it by themselves instead of
+    /// waiting for a viewer to click the banner (<see cref="StaleBuildBanner"/>).
+    ///
+    /// <para>🚨 <b>Default OFF — the banner stays the default.</b> The auto-recycle this key
+    /// re-enables was removed once because it fired per PUBLICATION: every instance of a type
+    /// restarted on every publish, and a user mid-edit lost their hub. The guards that exist now
+    /// make the opted-in behaviour a different animal: the gate is the published ASSEMBLY PATH
+    /// (an unrelated node write cannot fire it), the <see cref="AssemblySettleWindow"/> collapses
+    /// an install's publish burst into one recycle, and <c>Take(1)</c> bounds the cost at one
+    /// recycle per bound assembly. A PRODUCTION portal sets this to <c>true</c> because its
+    /// invariant is "after an update, everything serves the new build" (the 2026-08-25 Store
+    /// outage: green recompiles, every instance banner-stale, the store page wedged until a manual
+    /// recycle); an authoring/dev mesh keeps the default and decides per page.</para>
+    /// </summary>
+    public const string AutoRecycleConfigKey = "Modules:AutoRecycleOnStaleBuild";
+
+    /// <summary>Reads <see cref="AutoRecycleConfigKey"/> off the hub's configuration — absent or
+    /// unparseable means OFF, the banner default. Never throws.</summary>
+    internal static bool AutoRecycleOnStaleBuild(IMessageHub hub)
+    {
+        try
+        {
+            var value = hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Configuration.IConfiguration>()?[AutoRecycleConfigKey];
+            return bool.TryParse(value, out var parsed) && parsed;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     /// <param name="activityPath">
     /// The NodeType's <see cref="NodeTypeDefinition.LastCompilationActivityPath"/>, when

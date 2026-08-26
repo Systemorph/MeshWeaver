@@ -15,6 +15,7 @@
 #   status        Show colima / pods / ingress / port-forward / health.
 #   logs          Tail the portal logs (kubectl logs). --migration for migration.
 #   update        Roll the portal+migration to a newer image (build or ACR pull).
+#   verify        Is the portal USABLE — serving, /login routed, view packs present?
 #   port-forward  (Re)start the host:8443 -> ingress:443 forward (troubleshooting).
 #   observability Install Grafana/Loki/Promtail/Prometheus (LocalColimaMac.md §11).
 #   doctor        Preflight: check required tools + cluster reachability.
@@ -145,7 +146,9 @@ resolve_repo() {
   if [ -n "${MEMEX_REPO:-}" ] && [ -d "$MEMEX_REPO" ]; then
     printf '%s' "$MEMEX_REPO"; return 0
   fi
-  if [ -f "$SELF_DIR/../../../memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" ]; then
+  # Marker must be a file that STAYS in this repo: the portal hosts moved to MeshWeaver.Plugins,
+  # so keying on Memex.Portal.Distributed.csproj stopped identifying the platform checkout.
+  if [ -f "$SELF_DIR/../../../MeshWeaver.slnx" ]; then
     ( cd "$SELF_DIR/../../.." && pwd ); return 0
   fi
   return 1
@@ -236,6 +239,12 @@ base_build_local() {
   docker push "$PORTAL_BASE_REF" >/dev/null
 }
 
+# $1 (optional): --rebuild-base, forwarded to base_build_local.
+#
+# 🚨 It was forwarded from here (`base_build_local "${1:-}"`) and ADVERTISED by that function's own
+# "Pass --rebuild-base to force" line — but no caller ever passed it, because neither `up` nor
+# `update` accepted the flag. A documented escape hatch that nothing can reach. Both accept it now
+# (MeshWeaver#2367); shellcheck's SC2120 is what pointed at it.
 image_build_local() {                                  # §3 Option B
   local repo
   repo="$(resolve_repo)" || die "local build (Option B) needs the repo — set MEMEX_REPO to your MeshWeaver checkout, or use 'up --from-acr'"
@@ -258,6 +267,9 @@ image_build_local() {                                  # §3 Option B
       sleep 5; _w=$((_w + 5))
     done
     echo "$$" > "$_bl/pid"
+    # shellcheck disable=SC2064  # expanding $_bl NOW is the point: it is a local, and by the time
+    # RETURN fires the variable is out of scope, so a single-quoted trap would rm -rf '' and leak
+    # the lock directory to every later build.
     trap "rm -rf '$_bl' 2>/dev/null" RETURN
     ok "Acquired build lock — building serially (set MEMEX_NO_BUILD_LOCK=1 to disable)"
   fi
@@ -268,7 +280,15 @@ image_build_local() {                                  # §3 Option B
   # (main's multi-arch container work), so a bare -t:PublishContainer builds a multi-arch image INDEX and
   # Colima's arm64 node can load the x64 assembly → "assembly architecture is not compatible" crashloop.
   # Pin the single native RID so the local image is arm64-only (restores this step's documented intent).
-  dotnet publish "$repo/memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
+  # 🚨 The portal hosts moved to MeshWeaver.Plugins. This build needs THAT checkout, not this one.
+  # Resolved explicitly and failed LOUDLY when absent -- silently skipping the portal layer would
+  # produce a "successful" run whose image has no portal in it.
+  portal_repo="${MEMEX_PLUGINS_REPO:-$(cd "$repo/.." 2>/dev/null && pwd)/MeshWeaver.Plugins}"
+  if [ ! -f "$portal_repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" ]; then
+    die "The portal source is in MeshWeaver.Plugins, which was not found at '$portal_repo'. \
+Clone it beside this repo, or set MEMEX_PLUGINS_REPO to an existing checkout."
+  fi
+  dotnet publish "$portal_repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
     -c Release -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local \
     -p:ContainerBaseImage="$PORTAL_BASE_REF" \
     -p:ContainerRuntimeIdentifier=linux-arm64 \
@@ -296,6 +316,27 @@ image_build_local() {                                  # §3 Option B
   verify_image_resolvable "$MIGRATION_IMAGE"
 }
 
+# The checkout that holds the web CLIENTS. They left the platform repo (MeshWeaver 044a85618 /
+# Plugins #665) and now live in the plugins checkout — while the .proto they generate from stays
+# in the platform's .NET tree. So this build spans TWO checkouts, and neither is assumed by name:
+# the clients repo is whichever candidate actually carries clients/portal-next/Dockerfile.
+#
+# 🚨 Probe a FILE the clients bring with them, never the directory. After the move the platform's
+# clients/grpc-web/ still had a node_modules/ and a lockfile, so `[ -d clients/grpc-web ]` was
+# still true while the package was gone — the exact reason the first failure read as ENOENT on
+# package.json rather than as a missing checkout.
+resolve_clients_repo() {
+  local p repo
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if [ -f "$p/clients/portal-next/Dockerfile" ]; then printf '%s' "$p"; return 0; fi
+  done < <(plugin_repo_paths)
+  # Pre-move layout: a platform checkout from before 044a85618 still carries them itself.
+  repo="$(resolve_repo 2>/dev/null)" || return 1
+  if [ -f "$repo/clients/portal-next/Dockerfile" ]; then printf '%s' "$repo"; return 0; fi
+  return 1
+}
+
 # Build the Next.js React GUI image (clients/portal-next) into Colima's Docker store so k3s loads
 # it IfNotPresent. The build CONTEXT is clients/ (the app aliases @meshweaver/react +
 # @meshweaver/client-web to their SOURCE trees in ../react + ../grpc-web — see the Dockerfile).
@@ -303,24 +344,29 @@ image_build_local() {                                  # §3 Option B
 # Portal:ReactAppUrl config that lights up the opt-in "Try the new frontend" toggle. This is a
 # fast Node build (no .NET), so it runs OUTSIDE image_build_local's host-saturation lock.
 portal_next_build_local() {
-  local repo
+  local repo clients
   repo="$(resolve_repo)" || die "portal-next build needs the repo — set MEMEX_REPO to your MeshWeaver checkout"
+  clients="$(resolve_clients_repo)" || die "portal-next build needs the web clients — they live in a MeshWeaver.Plugins checkout (clients/portal-next); clone it beside your MeshWeaver checkout or set MEMEX_PLUGIN_REPOS"
   need docker docker
   need node node
   # grpc-web consumes protobuf TS generated from the mesh .proto via `buf generate` — buf +
   # protoc-gen-es are grpc-web devDeps and the .proto (src/MeshWeaver.Hosting.Grpc/Protos) lives in
-  # the .NET tree, OUTSIDE the clients/ Docker context. buf also ships glibc binaries, so we generate
-  # on the HOST (arm64 macOS) rather than inside the musl Alpine image; the output
+  # the PLATFORM tree, OUTSIDE the clients/ Docker context. buf also ships glibc binaries, so we
+  # generate on the HOST (arm64 macOS) rather than inside the musl Alpine image; the output
   # (clients/grpc-web/src/gen, gitignored) is then copied into the build context. grpc-web has no
   # committed lockfile (gitignored), so `npm install` — NOT `npm ci`.
+  #
+  # MESHWEAVER_CORE is passed explicitly: the client's own resolver (scripts/resolve-core.cjs)
+  # would otherwise fall back to guessing a side-by-side checkout, and this script already knows
+  # which platform tree it is building from.
   step "Generating grpc-web protobuf TS on the host (buf generate) for portal-next"
-  npm --prefix "$repo/clients/grpc-web" install --no-audit --no-fund
-  npm --prefix "$repo/clients/grpc-web" run gen
+  npm --prefix "$clients/clients/grpc-web" install --no-audit --no-fund
+  MESHWEAVER_CORE="$repo" npm --prefix "$clients/clients/grpc-web" run gen
   step "Building portal-next (Next.js React GUI) image → $PORTAL_NEXT_IMAGE (arm64)"
   docker build --platform linux/arm64 \
-    -f "$repo/clients/portal-next/Dockerfile" \
+    -f "$clients/clients/portal-next/Dockerfile" \
     -t "$PORTAL_NEXT_IMAGE" \
-    "$repo/clients"
+    "$clients/clients"
   ok "portal-next image built: $PORTAL_NEXT_IMAGE (visible to k3s via IfNotPresent; helm enables /next)"
 }
 
@@ -462,8 +508,14 @@ helm_deploy() {
   # by design, so the mismatch is invisible (an empty catalog, no error). Observed for real: a
   # worktree at /Users/me/code/MWP-main produced source "MWP-main" against InstallByDefault
   # "Plugins/*", and a fresh instance installed nothing at all.
+  # 🚨 ${x[@]+"${x[@]}"}, not "${x[@]}". macOS ships bash 3.2, where `set -u` treats "${x[@]}" on an
+  # EMPTY array as an UNBOUND VARIABLE and kills the script — and every array below is legitimately
+  # empty on a normal run: next_args whenever the portal-next image is absent (which is every
+  # --from-acr / --skip-image run, as the info line above says), plugin_args/install_names whenever
+  # no plugin checkout was found. So the deploy died on "unbound variable" for exactly the paths the
+  # script itself documents as normal. This tool is macOS-only; the guard is not optional here.
   local n i=0
-  for n in "${install_names[@]}"; do
+  for n in ${install_names[@]+"${install_names[@]}"}; do
     plugin_args+=(--set "pluginCatalog.installByDefault[$i]=$n/*")
     i=$((i + 1))
   done
@@ -481,8 +533,8 @@ helm_deploy() {
     -f "$OVERLAY" \
     --set persistDataVolume=true \
     --set "config.memex_portal.Bootstrap__Secret=$LOCAL_BOOTSTRAP_SECRET" \
-    "${plugin_args[@]}" \
-    "${next_args[@]}" \
+    ${plugin_args[@]+"${plugin_args[@]}"} \
+    ${next_args[@]+"${next_args[@]}"} \
     -n "$NAMESPACE" --create-namespace \
     --force-conflicts
 
@@ -566,18 +618,185 @@ uninstall_launchd() {
 }
 
 # ---------------------------------------------------------------------------
-# §14 — end-to-end verify
+# §14 — end-to-end verify: is the portal USABLE, or merely ANSWERING?
+#
+# 🚨 This was `verify_endpoint`, and it could not fail. It curl'd `/` and printed `ok "Portal
+# reachable"` whenever curl itself exited 0 — so a 503, a 404 and a 200 that renders every control
+# as its `ToString()` all produced the same green line. MeshWeaver#2367 is what that costs: a
+# developer ran `memex-local up && memex-local update`, both printed ok, and got a portal with no
+# way to sign in and nothing but debug text where the UI should be. `update` verified NOTHING at all
+# — it ended on `ok "update complete"` straight after `rollout status`.
+#
+# The three things a local portal is unusable without, each asserted, each naming its own remedy:
+#
+#   1. The portal SERVES — an HTTP status in the serving range, not merely a completed conversation.
+#   2. The SIGN-IN route is routed. The login pages compile INTO the image
+#      (MeshWeaver.Plugins/src/Memex.Portal.Gui/Pages/{Login,DevLogin}.razor): they are a shell
+#      concern, not a pack, so a 404 here means the image predates the GUI move (MeshWeaver#2293)
+#      and the remedy is to rebuild it — never to install something.
+#   3. The VIEW PACKS are present. DefaultViews (MeshWeaver.Blazor.Views) and GraphViews
+#      (MeshWeaver.Blazor.Graph) left the image in MeshWeaver#2169 Phase B2 and now reach a
+#      deployment ONLY as registry bundles. Without them every control renders as its `ToString()`
+#      — and the documented repair (Settings ▸ Administration ▸ Plugin Catalog) is itself rendered
+#      by the missing views, so the portal cannot repair itself through its own UI. Which is exactly
+#      why this has to be asserted from OUT HERE.
+#
+# 🚨 Check 3 WAITS rather than samples. Both packs declare `preInstalled: true`, so the boot
+# reconcile installs them on every boot — fresh install or existing — but that install runs
+# sequentially and compiles node types, so sampling the instant `rollout status` returns would
+# false-fail a portal that is merely still working. A gate that cries wolf gets deleted.
+#
+# 🚨 And it REPAIRS the one state that is a missing step rather than a fault: modules landed with
+# the `.pending-restart` marker are on disk but not in the running process. That is one restart,
+# which this performs — the point of MeshWeaver#2367 is that following the docs must not leave a
+# manual recovery step.
 # ---------------------------------------------------------------------------
-verify_endpoint() {
-  step "Verifying TLS + routing end-to-end (§14)"
-  local caroot; caroot="$(mkcert -CAROOT 2>/dev/null)"
-  local url="https://${HOSTNAME_LOCAL}:${HOST_PORT}/"
-  if curl --cacert "$caroot/rootCA.pem" -sS -o /dev/null \
-       -w 'http=%{http_code} ssl_verify=%{ssl_verify_result}\n' "$url"; then
-    ok "Portal reachable at $url"
-  else
-    warn "Portal not reachable yet at $url — give pods a moment, then 'memex-local status'"
+
+# The two packs a Blazor portal cannot render without. MODULE (assembly) names — what the landing
+# lane writes on disk; the catalog package names are DefaultViews and GraphViews.
+readonly VIEW_PACK_MODULES="MeshWeaver.Blazor.Views MeshWeaver.Blazor.Graph"
+
+# One in-pod probe answering the whole of check 3: for each module, is it resolvable at all — landed
+# under <Modules:Root>/modules/<name>[@<generation>]/<name>.dll, or shipped in the image's own app
+# closure — and is a restart pending? Emits parseable lines so the caller never re-execs.
+probe_view_packs() {
+  kubectl -n "$NAMESPACE" exec "deploy/$PORTAL_DEPLOYMENT" -- sh -c '
+    root="${Modules__Root:-/app}"
+    for m in $1; do
+      if ls "$root"/modules/*/"$m".dll >/dev/null 2>&1 || [ -f "/app/$m.dll" ]; then
+        echo "module=$m present"
+      else
+        echo "module=$m missing"
+      fi
+    done
+    if [ -e "$root/modules/activation.d/.pending-restart" ]; then echo "pending-restart=yes"; fi
+    exit 0
+  ' sh "$VIEW_PACK_MODULES" 2>/dev/null
+}
+
+# Has the boot reconcile FINISHED? `[DefaultInstall] reconciled…` is the line it writes when the
+# whole selection has been installed (or failed), so it is the real completion signal — which is
+# what check 3 waits on, rather than a stopwatch. Before it, a missing pack means "still working";
+# after it, the same observation means "it will not arrive", and the wait can stop being patient.
+probe_default_install_done() {
+  kubectl -n "$NAMESPACE" logs "deploy/$PORTAL_DEPLOYMENT" --tail=4000 2>/dev/null \
+    | grep -c '\[DefaultInstall\] reconciled' || true
+}
+
+# The HTTP half. Echoes the STATUS CODE (000 when no request completed), because judging curl's own
+# exit code instead of the code it fetched is the bug this whole function replaces.
+probe_http() {
+  local path="$1" caroot ca=()
+  if command -v mkcert >/dev/null 2>&1; then
+    caroot="$(mkcert -CAROOT 2>/dev/null || true)"
+    if [ -n "$caroot" ] && [ -f "$caroot/rootCA.pem" ]; then ca=(--cacert "$caroot/rootCA.pem"); fi
   fi
+  # ${x[@]+"${x[@]}"} — NOT a style tic. macOS ships bash 3.2, where `set -u` treats "${x[@]}" on an
+  # EMPTY array as an unbound variable and kills the script. This tool is macOS-only, so every
+  # possibly-empty array expansion in this file has to carry the guard (see helm_deploy).
+  curl ${ca[@]+"${ca[@]}"} -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+    "https://${HOSTNAME_LOCAL}:${HOST_PORT}${path}" 2>/dev/null || printf '000'
+}
+
+verify_usable() {
+  local budget=0 repair="no"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --wait) shift; budget="${1:?--wait needs seconds}" ;;
+      --repair) repair="yes" ;;
+      *) die "verify: unknown flag '$1'" ;;
+    esac
+    shift
+  done
+  case "$budget" in ''|*[!0-9]*) die "verify: --wait needs whole seconds, got '$budget'" ;; esac
+
+  step "Verifying the portal is USABLE, not merely answering (§14)"
+  local failed=0 url="https://${HOSTNAME_LOCAL}:${HOST_PORT}" code
+
+  # ── 1. the portal serves ─────────────────────────────────────────────────
+  code="$(probe_http /)"
+  case "$code" in
+    2??|3??) ok "portal serves $url/ (HTTP $code)" ;;
+    000) warn "portal did NOT answer at $url/ — no HTTP status at all.
+     Remedy: 'memex-local status' (is the pod ready, is the port-forward up?), then
+     'memex-local port-forward'."
+         failed=1 ;;
+    *)  warn "portal answered $url/ with HTTP $code — that is not a serving portal.
+     Remedy: 'memex-local logs'. A 503 is the ingress with no ready endpoint behind it."
+        failed=1 ;;
+  esac
+
+  # ── 2. the sign-in route is routed ───────────────────────────────────────
+  code="$(probe_http /login)"
+  case "$code" in
+    2??|3??) ok "sign-in route /login is served (HTTP $code)" ;;
+    404) warn "/login is NOT ROUTED (HTTP 404) — this portal has no way to sign in.
+     The login pages compile INTO the image from MeshWeaver.Plugins/src/Memex.Portal.Gui, so a 404
+     means the image predates the GUI move (MeshWeaver#2293/#2367).
+     Remedy: rebuild it — 'memex-local update --build', with the plugins checkout on main."
+         failed=1 ;;
+    *)  warn "/login answered HTTP $code — the sign-in route is not usable.
+     Remedy: 'memex-local logs'."
+        failed=1 ;;
+  esac
+
+  # ── 3. the view packs are present ────────────────────────────────────────
+  local deadline probe missing pending settled=0
+  deadline=$(( $(date +%s) + budget ))
+  while :; do
+    probe="$(probe_view_packs || true)"
+    missing="$(printf '%s\n' "$probe" | awk '/ missing$/ { sub(/^module=/,""); sub(/ missing$/,""); print }')"
+    pending="$(printf '%s\n' "$probe" | grep -c '^pending-restart=yes$' || true)"
+    if [ -z "$missing" ]; then settled=1; break; fi
+    # The reconcile has reported: a pack still missing now is a verdict, not a work-in-progress.
+    if [ "$(probe_default_install_done)" -gt 0 ]; then settled=1; break; fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then break; fi
+    info "waiting for the boot reconcile to install the view packs (missing: $(echo "$missing" | tr '\n' ' '))…"
+    sleep 10
+  done
+
+  if [ -n "$missing" ] && [ "$settled" -eq 0 ] && [ "$budget" -gt 0 ]; then
+    # 🚨 Distinct from "not installed", deliberately. The install has neither delivered the packs nor
+    # reported that it finished, so the honest answer is "not usable YET, and still working" — which
+    # is still not a success, because the portal cannot render right now.
+    warn "the boot reconcile has not reported completion after ${budget}s, and the view packs are
+     not there yet — the portal is not usable at this moment. This is 'still installing', not
+     'failed': a first boot compiles as it installs.
+     Remedy: watch it with 'memex-local logs | grep DefaultInstall', then 'memex-local verify'."
+    return 1
+  fi
+
+  if [ -z "$probe" ]; then
+    warn "could not read the module state from the portal pod — check 3 verified NOTHING.
+     Remedy: 'kubectl -n $NAMESPACE get pods'; a pod that cannot be exec'd is not a pod serving."
+    failed=1
+  elif [ -n "$missing" ]; then
+    warn "view pack(s) NOT installed: $(echo "$missing" | tr '\n' ' ')
+     Every control renders as its ToString(), and the Plugin Catalog that would repair it is itself
+     one of the missing views — the portal CANNOT repair itself through its own UI (MeshWeaver#2367).
+     DefaultViews/GraphViews declare preInstalled, so the boot reconcile installs them from the
+     plugin repo this install serves. It did not.
+     Remedy: read why with
+       memex-local logs --no-follow --tail 400 | grep DefaultInstall
+     then put the plugins checkout on main and re-run 'memex-local update --skip-image'."
+    failed=1
+  elif [ "$pending" -gt 0 ] && [ "$repair" = "yes" ]; then
+    step "View packs landed but not yet active — restarting the portal once to activate them"
+    kubectl -n "$NAMESPACE" rollout restart "deploy/$PORTAL_DEPLOYMENT"
+    kubectl -n "$NAMESPACE" rollout status "deploy/$PORTAL_DEPLOYMENT" --timeout=300s || \
+      warn "the activation restart did not complete — 'memex-local status'"
+    ok "view packs present and activated"
+  elif [ "$pending" -gt 0 ]; then
+    warn "view packs are LANDED but a restart is PENDING — on disk, not in the running process, so
+     controls still render as ToString().
+     Remedy: 'memex-local verify --repair', or
+       kubectl -n $NAMESPACE rollout restart deploy/$PORTAL_DEPLOYMENT"
+    failed=1
+  else
+    ok "view packs present: $VIEW_PACK_MODULES"
+  fi
+
+  return "$failed"
 }
 
 # ---------------------------------------------------------------------------
@@ -1230,7 +1449,7 @@ cmd_e2e() {
       [ "${1:-}" = "--skip-build" ] && skip_build="yes"
       preflight
       e2e_require_stack
-      [ "$skip_build" = "yes" ] || { image_build_local; portal_next_build_local; }  # §3 Option B — current working tree
+      [ "$skip_build" = "yes" ] || { image_build_local ""; portal_next_build_local; }  # §3 Option B — current working tree
       e2e_ensure_db
       e2e_migrate
       e2e_deploy
@@ -1301,7 +1520,7 @@ cmd_e2e() {
 # Subcommands
 # ===========================================================================
 cmd_up() {
-  local image_source="build" acr_tag="$ACR_DEFAULT_TAG" with_obs="no"
+  local image_source="build" acr_tag="$ACR_DEFAULT_TAG" with_obs="no" rebuild_base=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --from-acr) image_source="acr" ;;
@@ -1309,6 +1528,7 @@ cmd_up() {
       --skip-image) image_source="skip" ;;
       --tag) shift; acr_tag="${1:?--tag needs a value}" ;;
       --with-observability) with_obs="yes" ;;
+      --rebuild-base) rebuild_base="--rebuild-base" ;;
       *) die "up: unknown flag '$1'" ;;
     esac
     shift
@@ -1319,7 +1539,7 @@ cmd_up() {
   start_colima                                   # §2
 
   case "$image_source" in                        # §3
-    build) image_build_local; portal_next_build_local ;;   # portal + migration, then the /next React GUI
+    build) image_build_local "$rebuild_base"; portal_next_build_local ;;   # portal + migration, then the /next React GUI
     acr)   image_pull_acr "$acr_tag" ;;
     skip)  info "Skipping image step (--skip-image); relying on IfNotPresent/cache" ;;
   esac
@@ -1336,7 +1556,11 @@ cmd_up() {
 
   install_launchd                                 # §7
   [ "$with_obs" = "yes" ] && cmd_observability    # §11 (opt-in)
-  verify_endpoint                                 # §14
+  # §14 — and it can FAIL. `up` used to end green on a portal with no sign-in page and no view
+  # packs (MeshWeaver#2367); a command that cannot report that is not a verification.
+  verify_usable --wait 600 --repair || \
+    die "memex is deployed but NOT USABLE — see the checks above. Nothing further will fix itself: \
+each line names its own remedy."
 
   echo
   ok "memex is up — open https://${HOSTNAME_LOCAL}:${HOST_PORT}"
@@ -1396,7 +1620,15 @@ cmd_status() {
     warn "agent '$PLIST_LABEL' not loaded"
   fi
   step "Health"
-  verify_endpoint
+  # Diagnostic: report every check, never abort the rest of `status` on a red one.
+  verify_usable || true
+}
+
+# `memex-local verify` — ask the running install the ONE question `status` used to be unable to
+# answer: is this portal usable? Exits non-zero when it is not, so it composes in a script.
+cmd_verify() {
+  colima_running || die "Colima is not running — run 'memex-local up' first"
+  verify_usable "$@"
 }
 
 cmd_logs() {
@@ -1421,11 +1653,16 @@ cmd_logs() {
 }
 
 cmd_update() {
-  local image_source="build" acr_tag="$ACR_DEFAULT_TAG"
+  local image_source="build" acr_tag="$ACR_DEFAULT_TAG" rebuild_base=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --from-acr|--acr) image_source="acr" ;;
       --build) image_source="build" ;;
+      # Force a rebuild of the portal-ai BASE (the Node + Claude Code + Copilot layer). It is cached
+      # by image presence, so a changed deploy/base-images/portal-ai/Dockerfile is otherwise never
+      # picked up. base_build_local has always advertised this flag; until MeshWeaver#2367 no caller
+      # accepted it, so nothing could reach it.
+      --rebuild-base) rebuild_base="--rebuild-base" ;;
       # Re-apply CONFIG only, reusing the images already in Colima's store. `up` has had this
       # since the start; `update` did not, so re-rendering the chart after a values/flag change
       # forced a full ~10-minute rebuild of images that were already current — or tempted you
@@ -1442,7 +1679,7 @@ cmd_update() {
 
   step "Rolling memex to a newer image ($image_source)"
   case "$image_source" in
-    build) image_build_local; portal_next_build_local ;;   # §3 Option B — portal + migration, then the /next React GUI
+    build) image_build_local "$rebuild_base"; portal_next_build_local ;;   # §3 Option B — portal + migration, then the /next React GUI
     acr)   image_pull_acr "$acr_tag" ;;          # §3 Option A — retags onto the chart's image names
     skip)  info "reusing the images already in Colima's store — config re-apply only" ;;
   esac
@@ -1489,6 +1726,11 @@ cmd_update() {
   fi
   info "A rollout invalidates the old port-forward binding — refreshing it (§8/§14)"
   install_launchd
+  # §14 — `update` verified NOTHING before this: it printed "update complete" straight after the
+  # rollout, which is exactly how MeshWeaver#2367's portal reported success while unusable.
+  verify_usable --wait 600 --repair || \
+    die "the roll completed but the portal is NOT USABLE — see the checks above; each names its \
+own remedy."
   ok "update complete"
   echo
   info "Self-update note: this same chart carries the in-pod self-updater. With"
@@ -1530,7 +1772,7 @@ cmd_doctor() {
   step "Checking required tools"
   local tools=(colima kubectl helm mkcert ollama openssl curl)
   local t
-  for t in "${tools[@]}"; do
+  for t in ${tools[@]+"${tools[@]}"}; do
     if command -v "$t" >/dev/null 2>&1; then ok "$t: $(command -v "$t")"; else warn "$t: MISSING"; fi
   done
   if command -v dotnet >/dev/null 2>&1; then
@@ -1550,6 +1792,13 @@ cmd_doctor() {
 }
 
 cmd_help() {
+  # 🚨 EVERY BACKTICK IN HERE MUST BE \` — this heredoc is UNQUOTED (it interpolates
+  # ${HOSTNAME_LOCAL} / ${HOST_PORT} / ${E2E_PORT}), so a bare backtick is COMMAND SUBSTITUTION, not
+  # punctuation. The autoroll paragraph mentioned the \`main\` tag, and \`main\` is this script's own
+  # entry function: \`memex-local help\` re-entered main → cmd_help → main → …, forking at every
+  # level. It was an unbounded fork bomb until MeshWeaver#2367, and nothing caught it because
+  # nothing in CI had ever run this script. deploy/homebrew/test/run-tests.sh now asserts it
+  # STATICALLY — a regression here hangs, and a hang is not a failure signal.
   cat <<EOF
 memex-local — local memex on Colima k3s (1:1 with LocalColimaMac.md)
 
@@ -1557,7 +1806,7 @@ USAGE:
   memex-local <command> [flags]
 
 COMMANDS:
-  up [--build|--from-acr|--skip-image] [--tag T] [--with-observability]
+  up [--build|--from-acr|--skip-image] [--tag T] [--with-observability] [--rebuild-base]
                   Bring the whole stack up (idempotent). Default image source:
                   --build (Option B, native arm64 into Colima's Docker store —
                   the no-cloud-creds path). --from-acr pulls multi-arch from ACR.
@@ -1581,14 +1830,24 @@ COMMANDS:
   status          colima / pods / ingress / port-forward / health.
   logs [--migration|--postgres] [--tail N] [--no-follow]
                   Tail logs (portal by default). Log level: $LOG_LEVEL.
-  update [--build|--from-acr|--skip-image] [--tag T]
+  update [--build|--from-acr|--skip-image] [--tag T] [--rebuild-base]
                   Roll portal+migration to a newer image, then refresh forward.
+                  --rebuild-base forces a rebuild of the portal-ai base layer
+                  (Node + the Claude Code / Copilot CLIs), which is otherwise
+                  cached by image presence; \`up\` takes it too.
+  verify [--wait S] [--repair]
+                  Is this portal USABLE? Asserts it serves, that /login is routed,
+                  and that the DefaultViews/GraphViews packs are present — without
+                  them every control renders as its ToString() and the Plugin
+                  Catalog that would repair it is one of the missing views.
+                  Exits non-zero when it is not, naming each remedy. \`up\` and
+                  \`update\` run this for you (--wait 600 --repair).
   autoroll <up [--acr]|down|status>
                   Auto-redeploy the portal whenever a fresh local image is built
                   (launchd watcher → rollout restart on a new :latest digest).
-                  With --acr, ALSO track the registry's promoted `main` tag —
-                  every green merge rolls in automatically (needs `az` logged in;
-                  plain `up` returns to build-only for the local dev loop) — and
+                  With --acr, ALSO track the registry's promoted \`main\` tag —
+                  every green merge rolls in automatically (needs \`az\` logged in;
+                  plain \`up\` returns to build-only for the local dev loop) — and
                   keep the mounted Plugins checkout on origin/main so modules and
                   plugin content auto-roll too (restart-as-fan-out, as in prod).
                   The local equivalent of the AKS in-pod self-update.
@@ -1891,6 +2150,7 @@ main() {
     status)        cmd_status "$@" ;;
     logs)          cmd_logs "$@" ;;
     update)        cmd_update "$@" ;;
+    verify)        cmd_verify "$@" ;;
     autoroll)      cmd_autoroll "$@" ;;
     port-forward)  cmd_port_forward "$@" ;;
     observability) cmd_observability "$@" ;;

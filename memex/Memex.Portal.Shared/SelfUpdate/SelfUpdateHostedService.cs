@@ -295,7 +295,7 @@ public class SelfUpdateHostedService : IHostedService
                 // 🚨 BOOKKEEPING, NOT A GATE (#1020). RecordAvailable writes two cosmetic fields
                 // (LatestAvailableTag / CheckedAt) that drive the admin tab; the ROLL-FORWARD does not
                 // depend on them. Chaining Apply after it with .SelectMany made a failed status write
-                // abort the update: on atioz the Admin/UpdatePolicy node hub was unreachable (its
+                // abort the update: in production the Admin/UpdatePolicy node hub was unreachable (its
                 // SubscribeRequest never answered — the silo's routing was wedged), every 6 h tick
                 // timed out after 30 s in this write, and the portal sat 37 h on a stale image while
                 // the poller kept ticking and the ACR check kept succeeding. The update it would not

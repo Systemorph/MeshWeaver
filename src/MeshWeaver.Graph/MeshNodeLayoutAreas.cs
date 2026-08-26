@@ -960,6 +960,9 @@ public static class MeshNodeLayoutAreas
         public int MaxColumns { get; init; } = 3;
         /// <summary><c>?collapsible=false</c> keeps every section expanded.</summary>
         public bool Collapsible { get; init; } = true;
+        /// <summary><c>?hidden=true</c> reveals underscore-prefixed satellite namespaces
+        /// (<c>_Entitlements</c>, <c>_Access</c>, …) that the catalog hides by default.</summary>
+        public bool IncludeHidden { get; init; }
         /// <summary><c>?reactive=false</c> disables live updates on data change.</summary>
         public bool Reactive { get; init; } = true;
         /// <summary><c>?title=</c> — the section title.</summary>
@@ -987,6 +990,7 @@ public static class MeshNodeLayoutAreas
             MaxRows = ReadInt(host, "maxRows", 3),
             MaxColumns = ReadInt(host, "maxColumns", 3),
             Collapsible = ReadBool(host, "collapsible", true),
+            IncludeHidden = ReadBool(host, "hidden", false),
             Reactive = ReadBool(host, "reactive", true),
             Title = host.GetQueryStringParamValue("title")?.Trim() is { Length: > 0 } t ? t : "Catalog",
             Placeholder = host.GetQueryStringParamValue("placeholder")?.Trim() is { Length: > 0 } p
@@ -1037,6 +1041,9 @@ public static class MeshNodeLayoutAreas
             // Each card/folder gets a secondary "Drill down" link to /{path}/Search,
             // so users keep browsing INTO a namespace; the primary click still opens
             // the node's default page /{path} (empty area, never a hardcoded "Overview").
+            // Governance satellites stay out of a browsing catalog by default — ?hidden=true
+            // reveals them (MeshSearchView.HasSatelliteSegmentUnder is the rule).
+            .WithIncludeHidden(o.IncludeHidden)
             .WithDrillDownArea(SearchArea)
             .WithCreateHref($"/{nodePath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(nodePath)}");
         return string.IsNullOrEmpty(o.GroupByProperty) ? search : search.WithGroupBy(o.GroupByProperty);

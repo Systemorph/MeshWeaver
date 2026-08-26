@@ -191,6 +191,26 @@ snapshot and resolves to `Gone`. One that is missing entirely usually means our 
 hydrated yet — and reading that as death on a freshly-started silo would evict a live builder, which
 is the one failure this rule exists to make impossible.
 
+🚨 **…and the mirror image: PRESENCE in the snapshot is not `Alive` either (#2076).** `Alive` is read
+above as *permission-denied-forever* — it is the one verdict that skips the clock entirely — so it
+must mean "the cluster positively recorded this member as RUNNING", not "a row exists for it". Only
+`Active`, `ShuttingDown` and `Stopping` qualify. A silo still `Created`/`Joining` is `Unknown`,
+because **Orleans only probes ACTIVE silos**: a process that dies before finishing its join leaves a
+row no failure detector will ever move to `Dead`. Mapping those to `Alive` made the `ClaimStaleAfter`
+fallback structurally unreachable for exactly the case it exists to cover, and on 2026-08-22 a pod
+deleted MID-BOOT held the claim on memex-cloud while every other pod sat in `FollowGo` for 25+
+minutes — with `PreWarm:GateReadiness=true` that holds the whole rollout. Note this is NOT an
+immediate steal: `Unknown` hands the decision to the heartbeat clock, so a holder that really is
+mid-join and working keeps its claim through the beat it writes.
+
+🚨 **The holder's heartbeat starts with the build, not after its planning phase.** `BakeAsMaster`
+wraps the WHOLE master path in `Observable.Using(StartHeartbeat, …)`, chunk opening included.
+`OpenChunk` waits up to `GrantWindow` per chunk for its own grant, so with dozens of chunks the root
+claim could otherwise go minutes without a beat — and `Observable.Interval` does not fire until one
+full `HeartbeatInterval` after subscribe. Across clusters the holder is `Unknown` **by construction**
+(see above), so the peer's arbiter judges it on `ClaimStaleAfter` alone: a builder working perfectly
+well could age past that budget before its first beat and license a second builder.
+
 The heartbeat needs no defending here: it is a field on the Build node written through
 `stream.Update`, so it is durable mesh state rather than a file's last-write metadata. The
 predecessor lease kept its instant in an SMB timestamp, where Azure Files' metadata caching could
