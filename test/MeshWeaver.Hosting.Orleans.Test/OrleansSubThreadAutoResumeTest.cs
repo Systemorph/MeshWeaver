@@ -70,6 +70,9 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
+        // Test-sized grain directory (#2346). This class builds its own TestCluster rather than
+        // going through OrleansTestCluster.DeployAsync, so it opts in explicitly.
+        builder.AddSiloBuilderConfigurator<TestGrainDirectorySizing>();
         builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<AutoResumeSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
