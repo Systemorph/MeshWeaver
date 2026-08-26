@@ -6,7 +6,6 @@ using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using MeshWeaver.AI;
 using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Hosting.Grpc;
 using MeshWeaver.Blazor.Pages;
@@ -237,31 +236,14 @@ public static class MemexConfiguration
         // 404 and the reply sender self-skips at ApplicationStarted.)
 
         // Shared on-disk WORKSPACE dir the agent→skill sync maintains (.claude/skills + AGENTS.md); both
-        // CLI harnesses set it as the session's working directory so every session sees the MeshWeaver
-        // agents/skills + the mesh-is-via-MCP base instructions. Defaults to a sibling of the per-user
-        // .claude root (e.g. /mnt/users → /mnt/users/_skills) when not explicitly configured.
-        var skillsDir = builder.Configuration["Skills:Directory"];
-        if (string.IsNullOrWhiteSpace(skillsDir))
-        {
-            var claudeRoot = builder.Configuration["ClaudeCode:ConfigDirRoot"]?.TrimEnd('/', '\\');
-            skillsDir = string.IsNullOrEmpty(claudeRoot) ? null : $"{claudeRoot}/_skills";
-        }
 
             // The ClaudeCode/Copilot packs bind their own options (incl. the SkillsDirectory
             // derivation) from configuration when loaded via Modules:Assemblies.
 
-        // Reactive skill→file sync: writes AGENTS.md (the base "mesh-is-via-MCP" instructions + a LISTING
-        // of the platform nodeType:Skill catalog — name, description, load path) to the shared volume and
-        // keeps it in sync as skill nodes change (observable query). Skill BODIES are never written to
-        // disk — the harness reads each on demand via the meshweaver MCP `get`. Runs for the process lifetime.
-        if ((features.Ai.Clis.ClaudeCode || features.Ai.Clis.Copilot) && !string.IsNullOrWhiteSpace(skillsDir))
-        {
-            services.Configure<Skills.AgentSkillSyncOptions>(o => o.Directory = skillsDir);
-            services.AddHostedService<Skills.AgentSkillSyncService>();
-        }
+        // The reactive skill→file sync for the co-hosted CLIs rides the AI module, which reads
+        // Skills:Directory / ClaudeCode:ConfigDirRoot itself (AiMeshModuleAttribute).
 
-        // Register the AI chat services (must be after all factory registrations)
-        services.AddAgentChatServices();
+        // The AI chat services are registered by AddAI() inside the module.
 
         // (The WebSearch agent tools ride the MeshWeaver.AI.WebSearch module — listed under
         // Modules:Assemblies, binding its own WebSearch configuration section. Agent plugins
@@ -290,10 +272,7 @@ public static class MemexConfiguration
             ?? "Memex"));
         // Automatic, token-based MCP back-connection for the co-hosted Claude Code / Copilot CLIs.
         // The chat clients resolve this at spawn to mint/reuse the per-user MCP ApiToken + URL.
-        services.AddSingleton<MeshWeaver.AI.Connect.IMcpBackConnection, McpBackConnectionService>();
-        // ModelProviderService backs the Models settings tab — users store
-        // their own AI provider credentials as MeshNodes in their namespace.
-        services.AddSingleton<Memex.Portal.Shared.Models.ModelProviderService>();
+        services.AddSingleton<MeshWeaver.Mesh.Services.IMcpBackConnection, McpBackConnectionService>();
         // ProviderModelLister moved to MeshWeaver.AI (AddAgentChatServices registers it) — the
         // add-provider flow and the OpenAI module's model-discovery sync both resolve it there.
         // OpenAI-compatible (Ollama) model auto-discovery rides the MeshWeaver.AI.OpenAI MODULE
@@ -324,31 +303,10 @@ public static class MemexConfiguration
         // manifest and drain when the remote is reachable again).
         services.AddInstanceSyncServices();
 
-        // Per-user CLI Connect (Settings → Models, CLI providers). The
-        // ConnectSessionManager is a mesh-scoped singleton holding the live
-        // login Process between "show URL" and "paste code" (instance dict,
-        // 5-min timeout). Each gated CLI registers its IConnectStrategy. The
-        // captured token is persisted as an encrypted ModelProvider via the
-        // ConnectTokenSink (seam over ModelProviderService, so the AI layer
-        // never references the portal assembly).
-        services.AddSingleton<MeshWeaver.AI.Connect.IConnectTokenSink, Memex.Portal.Shared.Models.ConnectTokenSink>();
-        services.AddSingleton<MeshWeaver.AI.Connect.ConnectSessionManager>();
-        if (features.Ai.Clis.ClaudeCode)
-        {
-            services.AddSingleton<MeshWeaver.AI.Connect.IConnectStrategy, MeshWeaver.AI.Connect.ClaudeConnectStrategy>();
-            // Wire the Connect login: bind ClaudeConnect:* overrides, default the PTY wrapper ON for
-            // the co-hosted Linux portal (claude setup-token renders an Ink UI that needs a real TTY —
-            // see ClaudeConnectStrategy), and mirror the per-user .claude root the co-hosted client uses
-            // (ClaudeCode:ConfigDirRoot, e.g. /mnt/users) so each user logs in under their own dir.
-            services.Configure<MeshWeaver.AI.Connect.ClaudeConnectOptions>(o =>
-            {
-                builder.Configuration.GetSection("ClaudeConnect").Bind(o);
-                if (builder.Configuration["ClaudeConnect:UsePseudoTerminal"] is null && !OperatingSystem.IsWindows())
-                    o.UsePseudoTerminal = true;
-                if (string.IsNullOrEmpty(o.ConfigDirRoot))
-                    o.ConfigDirRoot = builder.Configuration["ClaudeCode:ConfigDirRoot"];
-            });
-        }
+        // Per-user CLI Connect, the model-provider service and the AI content sources are
+        // registered by the AI MODULE itself (AiMeshModuleAttribute), which reads the same
+        // configuration this method does. The composition root no longer configures the engine —
+        // that reference is what a Store-delivered module cannot coexist with (#2276).
         // CopilotConnectStrategy registers from the Copilot pack (Modules:Assemblies).
 
         // Social publishing (LinkedIn connect/publish/page-sync + node-menu providers) rides the
@@ -568,7 +526,7 @@ public static class MemexConfiguration
     /// <summary>
     /// The AI (✨) menu's COMPILED remainder: exactly the imperative "New thread" entry. The
     /// navigation entries (Threads / Models / Tiers / Providers / Agents / Skills) migrated to
-    /// seeded <c>UiContribution</c> nodes (<see cref="AiMenuContributions"/>, WS7 slice 3) — they
+    /// seeded <c>UiContribution</c> nodes (<c>AiMenuContributions</c>, WS7 slice 3) — they
     /// are pure links, so they ride the same lane a plugin's AI-menu entry arrives through.
     /// This list stays the SINGLE SOURCE OF TRUTH for the imperative entry, shared by the hub
     /// registration below and the unit tests, so a regression can't quietly drop it.
@@ -807,12 +765,8 @@ public static class MemexConfiguration
             // import — no regression. Default Helm sets ["Doc","Agent","Provider","Harness","Skill"].
             var syncPartitions = features.StaticRepoSync.Partitions
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            // AI content is served as a UNIT: if the config names ANY AI partition, serve them ALL
-            // (Agent/Provider/Harness/Skill), so an incomplete list can't leave Skill (or a future AI
-            // content type) in-memory while the rest go to the DB — and AddAI's per-type serve-from-DB
-            // gating stays consistent with the static-repo import. See MeshWeaver.AI/AiContentSources.
-            if (syncPartitions.Overlaps(AiContentSources.ContentPartitions))
-                syncPartitions.UnionWith(AiContentSources.ContentPartitions);
+            // NB: the AI partitions are expanded to the whole bundle by the AI module itself
+            // (AiMeshModuleAttribute.ServeFromPartitions), next to the sources that rule gates.
             IReadOnlySet<string> serveFromPartition = syncPartitions;
 
             MeshBuilder mb = builder
@@ -876,7 +830,6 @@ public static class MemexConfiguration
                 // as seeded UiContribution nodes — same lane a plugin's AI-menu entry (or a whole
                 // TopBar-declared menu) arrives through. Only the imperative "New thread" stays
                 // compiled (AiMenuItems).
-                .AddAiMenuContributions()
                 .AddSpaceType()
                 // Generic webhook inbox: the WebhookEvent node type behind
                 // POST /api/hooks/{target} (allowlisted via WebhookInbox:Targets).
@@ -886,8 +839,7 @@ public static class MemexConfiguration
                 // the whole-course navigation (EduCourseNavigationProvider, registered per-hub
                 // by the type configuration lambdas). The compiled MeshWeaver.Courses types had
                 // zero instances in any repo or reachable mesh and are deleted.
-                .AddPortalType()
-                .AddAI(serveFromPartition);
+                .AddPortalType();
 
             // The gRPC mesh transport is a MODULE (MeshWeaver.Hosting.Grpc.dll under
             // Modules:Assemblies — GrpcMeshModuleAttribute folds AddGrpcHub over this builder:
@@ -1052,13 +1004,6 @@ public static class MemexConfiguration
                         .WithHeartBeatHandler() // silently ack heartbeats on every per-node hub
                         .AddDefaultLayoutAreas()
                         // The course-shell areas (StartExercise / GoToMyCopy / CourseNav / Learn)
-                        // ship as in-mesh source in the Edu plugin (Plugins#481) — no platform
-                        // registration remains; only the navigation contributor below is compiled.
-                        .AddThreadsLayoutArea()
-                        // Scope-tabbed AI catalogs (Agents/Skills/Providers/Models) with per-tab
-                        // create buttons — the AI-menu targets below point here. Registered on every
-                        // per-node hub so they resolve when anchored on the type roots (/Agent/AiAgents …).
-                        .AddAiCatalogLayoutAreas()
                         .AddApiTokensSettingsTab()
                         // Register your own MeshWeaver installation and get it an instance key.
                         .AddInstancesSettingsTab()
@@ -1184,7 +1129,9 @@ public static class MemexConfiguration
                 // MeshWeaver.Graph.
                 .WithPortalConfiguration(c =>
                 {
-                    c.TypeRegistry.AddAITypes();
+                    // AI types + the thread area are contributed by the AI module's own
+                    // WithPortalConfiguration (PortalConfigurationRegistry), so this stays
+                    // AI-free (#2276).
                     return c.AddData().WithGraphTypes();
                 })
             );

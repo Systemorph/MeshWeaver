@@ -1,3 +1,4 @@
+using MeshWeaver.Layout.Client;
 using System.Reactive.Linq;
 using MeshWeaver.AI.Application.Layout;
 using MeshWeaver.AI.Completion;
@@ -24,6 +25,15 @@ public static class AgentsApplicationExtensions
     public static MessageHubConfiguration ConfigureAgentsApplication(this MessageHubConfiguration application)
         => application
             .AddAIViews()
+            // Every portal hub needs the AI types to deserialize Thread content, and the thread
+            // layout area to render it. Contributed from HERE rather than from a composition root:
+            // PortalConfigurationRegistry exists so a plugin can configure portals it does not
+            // compile against (#2276). A headless host drops it with a warning — never silently.
+            .WithPortalConfiguration(portal =>
+            {
+                portal.TypeRegistry.AddAITypes();
+                return portal.AddThreadsLayoutArea();
+            })
             .WithServices(services => services
                 // Mesh catalog provider — @-references autocomplete from the mesh node
                 // catalog (agents, models, and every other node). The old factory-based

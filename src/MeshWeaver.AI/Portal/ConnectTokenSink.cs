@@ -4,7 +4,7 @@ using MeshWeaver.AI;
 using MeshWeaver.AI.Connect;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Models;
+namespace MeshWeaver.AI.Portal;
 
 /// <summary>
 /// Portal-side implementation of <see cref="IConnectTokenSink"/>: persists a captured CLI

@@ -118,6 +118,62 @@ public static class TokenUsageNodeType
                 .WithContentType<TokenUsage>())
     };
 
+    /// <summary>The sentinel stored when no model identifier reached the recorder.</summary>
+    public const string UnknownModel = "(unknown)";
+
+    /// <summary>
+    /// The identifier a usage satellite is keyed and reported by. Pure.
+    ///
+    /// <para>🚨 <b>Why this exists.</b> <see cref="RecordUsage"/>'s callers pass
+    /// <c>actualModel ?? effectiveModel ?? request.ModelName</c>, and <c>ThreadComposer.ModelName</c>
+    /// is BY DESIGN a node PATH (its <c>[MeshNode]</c> picker persists the catalogue node's path).
+    /// Stored verbatim, a path became the key dimension beside the catalogue id that denotes the very
+    /// same model — measured in production 2026-08-26, where one DeepSeek model was recorded under
+    /// four spellings, one of them <c>_Provider/Anthropic/DeepSeek-V3-0324</c> (a path, under the
+    /// wrong provider). Usage split across rows and no catalogue lookup could price it.</para>
+    ///
+    /// <para>So a registry path is reduced to the catalogue id it denotes: the id is everything after
+    /// <c>{Registry}/{Provider}/</c>, which is exactly how the catalogue node is addressed
+    /// (<c>Provider/OpenRouter/anthropic/claude-opus-5</c> → <c>anthropic/claude-opus-5</c>). The
+    /// legacy underscore registry (<c>_Provider/…</c>) reduces the same way.</para>
+    ///
+    /// <para><b>What this deliberately does NOT do:</b> reconcile a provider's DISPLAY NAME
+    /// (<c>DeepSeek-V4-Pro</c>) with the catalogue id (<c>deepseek/deepseek-v4-pro</c>). That needs a
+    /// catalogue alias lookup, not string surgery — guessing would merge genuinely distinct models.
+    /// Everything that is not a registry path is passed through untouched.</para>
+    /// </summary>
+    /// <param name="modelId">The identifier as handed to the recorder — a catalogue id, a provider's
+    /// reported model, or a catalogue node path.</param>
+    /// <returns>The normalized identifier, or <see cref="UnknownModel"/> when none was supplied.</returns>
+    public static string NormalizeModelId(string? modelId)
+    {
+        if (string.IsNullOrWhiteSpace(modelId))
+            return UnknownModel;
+        var trimmed = modelId.Trim().Trim('/');
+        if (trimmed.Length == 0)
+            return UnknownModel;
+
+        // A registry path is {Registry}/{Provider}/{catalogue id}; the id itself may contain a
+        // slash (vendor/model), so only the first TWO segments are the address, never more.
+        var segments = trimmed.Split('/');
+        if (segments.Length > 2
+            && (segments[0].Equals("Provider", StringComparison.OrdinalIgnoreCase)
+                || segments[0].Equals("_Provider", StringComparison.OrdinalIgnoreCase)))
+            return string.Join('/', segments.Skip(2));
+
+        return trimmed;
+    }
+
+    /// <summary>
+    /// The satellite's node id for a model identifier: <see cref="NormalizeModelId"/> with every
+    /// non-alphanumeric mapped to <c>_</c>, so the key is a path-safe slug and a path keys identically
+    /// to the catalogue id it denotes. Pure.
+    /// </summary>
+    /// <param name="modelId">The identifier as handed to the recorder.</param>
+    /// <returns>The satellite node id (the <c>{modelKey}</c> in <c>{thread}/_Usage/{modelKey}</c>).</returns>
+    public static string SatelliteKey(string? modelId) =>
+        new(NormalizeModelId(modelId).Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+
     /// <summary>
     /// Records ONE round's token usage onto the per-model satellite at
     /// <c>{threadPath}/_Usage/{modelKey}</c>, ACCUMULATING input/output across the thread's rounds
@@ -170,8 +226,8 @@ public static class TokenUsageNodeType
             return Observable.Return(System.Reactive.Unit.Default); // no-token round → no-op
         }
 
-        var model = string.IsNullOrWhiteSpace(modelId) ? "(unknown)" : modelId!;
-        var key = new string(model.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+        var model = NormalizeModelId(modelId);
+        var key = SatelliteKey(modelId);
         var ns = $"{threadPath}/{SatelliteSegment}";
         var usagePath = $"{ns}/{key}";
 

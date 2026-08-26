@@ -41,6 +41,7 @@ public class AiResolutionSeamAuditTest
         ["src/MeshWeaver.AI/ChatClientCredentialResolver.cs"] = "Credential lookup by the MODEL's own partition set — a security seam keyed on the selected model, not a user-facing resolution.",
         ["src/MeshWeaver.AI/Stores/MeshAgentSkillsSource.cs"] = "Consumes AiSettingsNodeType.ObserveSkillQueries; its literal is documentation.",
         ["src/MeshWeaver.AI/Completion/SkillAutocompleteProvider.cs"] = "Consumes ObserveSkillQueries; literal is documentation.",
+        ["src/MeshWeaver.AI/Portal/AgentSkillSyncService.cs"] = "INSTRUCTION PROSE written into AGENTS.md for a CLI harness to read — it tells the model to run `search nodeType:Skill` itself. Not a resolution this process performs; the sync's own catalog read goes through SkillNodeType.SkillQueries. Entered the audit's scope when the service moved out of the portal (#2276).",
         ["src/MeshWeaver.AI/AiSourcesInstallHook.cs"] = "Registers package sources INTO the settings — the write side of the seam.",
         ["src/MeshWeaver.AI/BuiltInSkillProvider.cs"] = "Static-repo import source (writes the platform Skill partition) — not a resolution.",
         ["src/MeshWeaver.AI/BuiltInAgentProvider.cs"] = "Static-repo import source for the offline Agent partition — not a resolution.",

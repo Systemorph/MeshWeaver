@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.AI.Portal;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
@@ -85,6 +86,15 @@ public static class AIExtensions
                     {
                         config.TypeRegistry.AddAITypes();
                         return config
+                            // Scope-tabbed AI catalogs (Agents / Skills / Providers / Models /
+                            // Tiers) with per-tab create buttons — the AI menu entries point here.
+                            // On EVERY per-node hub so they resolve when anchored on the type roots
+                            // (/Agent/AiAgents, /Provider/AiModels, …). Moved off the portal's
+                            // composition root with the rest of the engine (#2276).
+                            .AddAiCatalogLayoutAreas()
+                            // The token-usage settings tab: an AI surface, registered through the
+                            // platform's declarative settings seam rather than by the portal.
+                            .AddTokenUsageSettingsTab()
                             .WithHandler<Plugins.SaveContentRequest>(HandleSaveContent)
                             // "Sync to repo" on Agent/Skill nodes + the area its item navigates to.
                             // Self-gates to a source checkout and a platform admin, so it is inert

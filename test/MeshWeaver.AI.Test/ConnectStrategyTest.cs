@@ -9,7 +9,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
-using Memex.Portal.Shared.Models;
+using MeshWeaver.AI.Portal;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Connect;
 using MeshWeaver.Data;
