@@ -96,6 +96,19 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string MainNode { get; init; } = string.IsNullOrEmpty(Namespace) ? Id : $"{Namespace}/{Id}";
 
     /// <summary>
+    /// A SATELLITE of the node at <paramref name="mainNode"/>: created with <see cref="MainNode"/>
+    /// already pointing at its primary, which is what the doc on <see cref="MainNode"/> promises and
+    /// what every listing relies on to keep satellites out of a node's contents (the catalog's
+    /// <c>is:main</c> is literally <c>MainNode != Path</c>). 🚨 Minting a satellite with
+    /// <c>new MeshNode(id, ns)</c> leaves MainNode defaulting to ITSELF, which makes it a main node
+    /// by definition — that is how <c>Access Policy</c> came to be listed as content on every
+    /// package cover (#2383). Use this for <c>_Policy</c>, <c>_Access</c> and every other
+    /// underscore-prefixed sibling.
+    /// </summary>
+    public static MeshNode Satellite(string id, string mainNode) =>
+        new(id, mainNode) { MainNode = mainNode };
+
+    /// <summary>
     /// Single segments as used for matching and addressing.
     /// Must be a computed property (not a readonly field) so that it reflects
     /// updated Namespace/Id after record copy via 'with {}'.
