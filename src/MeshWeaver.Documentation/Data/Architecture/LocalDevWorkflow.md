@@ -141,10 +141,11 @@ pkill -f Memex.AppHost; pkill -f Memex.Portal.Distributed
 #    process". Killing the portal is NOT enough; you must shut the build server too:
 dotnet build-server shutdown
 
-# 3. Rebuild the portal project. Building Memex.Portal.Distributed also rebuilds every project
-#    it references (MeshWeaver.AI, .Graph, .Blazor.Portal, .Mesh.Contract, …), so ALL your edits
+# 3. Rebuild the portal project (it lives in the sibling MeshWeaver.Plugins checkout; MeshWeaverRoot
+#    resolves back to this repo). Building Memex.Portal.Distributed also rebuilds every project it
+#    references here (MeshWeaver.AI, .Graph, .Mesh.Contract, …) and in plugins (.Blazor.Portal), so ALL your edits
 #    compile — this doubles as your compile gate before bringing the stack up:
-dotnet build memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj --no-restore
+dotnet build ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj --no-restore
 
 # 4. Start fast, reusing the build from step 3 (no second compile):
 aspire start --no-build --project ../MeshWeaver.Plugins/src/Memex.AppHost
