@@ -102,8 +102,9 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// <c>is:main</c> is literally <c>MainNode != Path</c>). 🚨 Minting a satellite with
     /// <c>new MeshNode(id, ns)</c> leaves MainNode defaulting to ITSELF, which makes it a main node
     /// by definition — that is how <c>Access Policy</c> came to be listed as content on every
-    /// package cover (#2383). Use this for <c>_Policy</c>, <c>_Access</c> and every other
-    /// underscore-prefixed sibling.
+    /// package cover (#2383). Use this for <c>_Policy</c> and every other underscore-prefixed
+    /// SIBLING node. (Access assignments are not siblings — they live under a <c>_Access/</c>
+    /// namespace, e.g. <c>Doc/_Access/{id}</c> — so they are not what this factory is for.)
     /// </summary>
     public static MeshNode Satellite(string id, string mainNode) =>
         new(id, mainNode) { MainNode = mainNode };

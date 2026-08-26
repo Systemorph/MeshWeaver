@@ -1,7 +1,7 @@
 using MeshWeaver.Mesh;
 using Xunit;
 
-namespace MeshWeaver.Mesh.Contract.Test;
+namespace MeshWeaver.Data.Test;
 
 public class MeshNodeSatelliteTest
 {
