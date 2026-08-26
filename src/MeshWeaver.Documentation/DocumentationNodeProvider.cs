@@ -42,8 +42,12 @@ public class DocumentationNodeProvider : IStaticNodeProvider
     /// <returns>The full set of static documentation MeshNodes.</returns>
     public IEnumerable<MeshNode> GetStaticNodes()
     {
-        // Read-only policy for the Doc namespace — all documentation is unmodifiable
-        yield return new MeshNode("_Policy", RootNamespace)
+        // Read-only policy for the Doc namespace — all documentation is unmodifiable.
+        // Satellite(): MainNode = "Doc", not the node's own path — see #2383. This provider is
+        // the SECOND Doc policy mint (DocumentationExtensions seeds the same node on the
+        // AddMeshNodes path); both must agree or the DB-synced partition keeps whichever the
+        // static-repo importer wrote first.
+        yield return MeshNode.Satellite("_Policy", RootNamespace) with
         {
             NodeType = "PartitionAccessPolicy",
             Name = "Access Policy",

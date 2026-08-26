@@ -56,6 +56,22 @@ public class NoStaticCollectionsTest
     private static readonly IReadOnlyDictionary<string, string> Allowed = new Dictionary<string, string>
     {
         // ---- CONST: immutable, write-once constant lookups (allowed) ----
+        // Read-only satellite-table lookups built once from SatelliteTableMapping.Defaults and
+        // never written — surfaced when this guard began covering MeshWeaver.AI.Test's own
+        // assembly (#2276), not new violations.
+        ["MeshWeaver.AI.Test.ThreadComposerRoutingTest.SegmentTable"] = "CONST",
+        ["MeshWeaver.AI.Test.ThreadComposerRoutingTest.NodeTypeTable"] = "CONST",
+        // 🚨 Surfaced by WIDENED COVERAGE, not by new code. This guard enumerates
+        // MeshWeaver.*.dll from the running test's bin, so it only ever saw the assemblies that
+        // project happened to reference. Linking it into MeshWeaver.AI.Test (#2276) brought that
+        // project's larger closure into scope for the first time. Each entry below was verified to
+        // be a declaration-with-initializer whose only later uses are reads.
+        ["MeshWeaver.Hosting.AspNetCore.Portal.NonfileRouteConstraint.ExcludedPrefixes"] = "CONST",
+        ["MeshWeaver.Hosting.PostgreSql.PostgreSqlCrossSchemaQueryProvider.ExcludedSchemas"] = "CONST",
+        ["MeshWeaver.Hosting.PostgreSql.PostgreSqlSqlGenerator.AllowedSqlFunctions"] = "CONST",
+        ["MeshWeaver.Hosting.PostgreSql.PostgreSqlSqlGenerator.NonTextColumns"] = "CONST",
+        ["MeshWeaver.Hosting.PostgreSql.PostgreSqlSqlGenerator.PropertyMap"] = "CONST",
+        ["MeshWeaver.Hosting.PostgreSql.PostgreSqlStorageAdapter.TransientPostgresSqlStates"] = "CONST",
         ["MeshWeaver.AI.AccessContextAIFunction.TimeoutExemptTools"] = "CONST",
         ["MeshWeaver.AI.AgentChatClient.BinaryExtensions"] = "CONST",
         ["MeshWeaver.AI.AgentChatClient.ExtensionToMediaType"] = "CONST",

@@ -190,15 +190,27 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
         var path = latest.Path;
         var resolution = MeshNodeConflictMerge.Merge(latest, stale, options);
 
+        // 🚨 The durable row is DESCRIBED, not just counted. This message ends with "find the
+        // writer", and until #2361 it withheld the only evidence that would identify one: on the
+        // plugins gate's intermittent Skill failure the line named the members that diverged
+        // (Category, Order, Content.instructions) and nothing about WHOSE row had won, so the
+        // writer had to be inferred from repo content and stayed unidentified across three full
+        // local repro attempts. LastModifiedBy is the principal that wrote it; the type/name/
+        // category say which SHAPE of node it is. All cheap scalars — no content is serialized
+        // here (a NodeType's content can be a collectible-ALC type, which reflecting over during
+        // teardown is its own crash class).
         logger?.LogWarning(
             "[MonotonicWriteGuard] CONFLICT on {Path}: a write at Version={IncomingVersion} lost the race against "
             + "the durable Version={StoredVersion}. MeshNode.Version is the owner's monotonic persistence clock "
             + "(MeshNode.NextVersion floors every mint at current+1), so the losing write is a STALE snapshot, not a "
             + "newer state. Resolved by merging into the durable row: merged={MergedMembers}; "
-            + "latest-wins (stale values DROPPED)={OverwrittenMembers}. Find the writer that adopted a stale "
+            + "latest-wins (stale values DROPPED)={OverwrittenMembers}. The durable row: nodeType={StoredNodeType} "
+            + "name='{StoredName}' category='{StoredCategory}' lastModifiedBy='{StoredLastModifiedBy}' "
+            + "lastModified={StoredLastModified:O}. Find the writer that adopted a stale "
             + "own-node snapshot; do not relax this guard.",
             path, stale.Version, latest.Version,
-            Describe(resolution.MergedMembers), Describe(resolution.OverwrittenMembers));
+            Describe(resolution.MergedMembers), Describe(resolution.OverwrittenMembers),
+            latest.NodeType, latest.Name, latest.Category, latest.LastModifiedBy, latest.LastModified);
 
         RecordConflictActivity(path, stale.Version, latest.Version, resolution, options);
 

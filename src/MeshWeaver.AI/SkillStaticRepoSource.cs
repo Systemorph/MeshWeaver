@@ -21,6 +21,11 @@ public sealed class SkillStaticRepoSource(BuiltInSkillProvider provider) : IStat
     public bool Versioned => false;
 
     /// <inheritdoc />
+    /// <remarks>A skill/agent/model that exists but is unfindable is indistinguishable
+    /// from one that was never imported — this catalog asserts it reached the index (#354).</remarks>
+    public bool AssertIndexedAfterImport => true;
+
+    /// <inheritdoc />
     // Additive: users add their OWN skills to this partition; the import must never prune them.
     // Only skills the build PREVIOUSLY shipped (in the manifest) but has since dropped are removed.
     public PartitionSyncMode SyncMode => PartitionSyncMode.Additive;
