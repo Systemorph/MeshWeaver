@@ -96,11 +96,16 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Polling progress: a script writes 4 log lines spaced ~150 ms apart. Subscribers
-    /// of the ActivityLog stream must see the message count grow GRADUALLY — not just
-    /// the final 4-message snapshot. Proves the Activity-hosted kernel publishes
-    /// intermediate snapshots via <c>DataChangeRequest.Update</c> as the script runs,
-    /// instead of buffering everything until the script returns.
+    /// Progress streaming: a script writes 4 log lines, each in its own publish window.
+    /// Subscribers of the ActivityLog stream must see the message count grow GRADUALLY — not just
+    /// the final 4-message snapshot. Proves the Activity-hosted kernel publishes intermediate
+    /// snapshots via <c>stream.Update</c> as the script runs, instead of buffering everything
+    /// until the script returns.
+    ///
+    /// <para>🚨 Gated on a <see cref="ProgressGate"/> — see that type for why counting a
+    /// subscriber's snapshots is racy without one, and for the #2421 measurement. The steps are
+    /// 250 ms because <c>ActivityLogLogger</c> coalesces running-state publishes into 100 ms
+    /// windows; one step per window is what "gradually" can mean here.</para>
     /// </summary>
     [Fact]
     public async Task Progress_Messages_Stream_Gradually_Not_Just_At_The_End()
@@ -114,53 +119,61 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
             NodeType = "Code",
             Content = new CodeConfiguration
             {
-                Code = """
+                Code = ProgressGate.ScriptPrologue + """
                        Log.LogInformation("step-1");
-                       System.Threading.Thread.Sleep(200);
+                       System.Threading.Thread.Sleep(250);
                        Log.LogInformation("step-2");
-                       System.Threading.Thread.Sleep(200);
+                       System.Threading.Thread.Sleep(250);
                        Log.LogInformation("step-3");
-                       System.Threading.Thread.Sleep(200);
+                       System.Threading.Thread.Sleep(250);
                        Log.LogInformation("step-4");
                        """,
                 IsExecutable = true
             }
         }).Should().Within(30.Seconds()).Emit();
 
+        var gatePath = await ProgressGate.Seed(mesh, ScriptsPartition);
+
         var exec = (await Mesh.Observe(
-            new ExecuteScriptRequest(),
+            new ExecuteScriptRequest { Inputs = ProgressGate.Inputs(gatePath) },
             o => o.WithTarget(new Address(path)))
             .Should().Within(60.Seconds()).Emit()).Message;
         exec.Success.Should().BeTrue(exec.Error ?? "exec failed");
         exec.ActivityLog.Should().NotBeNullOrEmpty();
 
-        // Collect every distinct snapshot we observe up to and including the
-        // 4-message terminal state. Each snapshot is the full ActivityLog at
-        // that moment; the count of messages grows monotonically.
+        // ONE subscription feeds both the "am I attached?" await and the collection below —
+        // Replay means waiting for attachment cannot cost us the emissions that follow it.
         var workspace = GetClient().GetWorkspace();
-        // Stream every distinct message-count. Close as soon as we observe the
-        // terminal snapshot (4 messages) by using TakeUntil — and re-include
-        // that final emission via the wrapping Concat.
-        var counts = workspace
+        var live = workspace
             .GetMeshNodeStream(exec.ActivityLog!)
-            .Select(change => change?.Content as ActivityLog)
-            .Where(log => log is not null)
-            .Select(log => log!.Messages.Count)
-            .DistinctUntilChanged();
+            .Select(change => (change?.Content as ActivityLog)?.Messages.Count ?? 0)
+            .Replay();
+        using var connection = live.Connect();
 
-        var snapshots = await counts
-            .Where(c => c <= 4)
+        (await live.Should().Within(30.Seconds()).Emit()).Should().Be(0,
+            "the gate must still be shut when the subscription is established — a non-empty first "
+            + "snapshot means the script ran ahead of the gate, and this test would then be "
+            + "measuring subscribe latency instead of gradual delivery");
+
+        // Armed BEFORE the gate opens: ObservableAssertions attaches synchronously on the
+        // calling thread, so nothing between here and the flip below slips past unobserved.
+        var collected = live
+            .DistinctUntilChanged()
             .TakeUntil(c => c >= 4)
             .ToList()
             .Should().Within(30.Seconds()).Emit();
 
-        // Gradual streaming → at least 3 distinct snapshots before we hit 4.
+        await ProgressGate.Release(workspace, gatePath).Should().Within(30.Seconds()).Emit();
+
+        var snapshots = await collected;
+
+        // Gradual streaming → at least 3 distinct snapshots carrying progress.
         // (We allow batching of two adjacent log calls but not all-at-once.)
-        snapshots.Should().HaveCountGreaterThanOrEqualTo(3,
+        snapshots.Where(c => c > 0).Should().HaveCountGreaterThanOrEqualTo(3,
             "ActivityLog should publish intermediate snapshots as messages land — " +
             "not buffer everything until script completion. Snapshots seen: [" +
             string.Join(", ", snapshots) + "]");
-        snapshots.Last().Should().Be(4, "terminal snapshot must contain all 4 log lines");
+        snapshots[^1].Should().Be(4, "the last snapshot must contain all 4 log lines");
     }
 
     [Fact]

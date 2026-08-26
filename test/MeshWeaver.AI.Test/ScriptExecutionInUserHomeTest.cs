@@ -100,45 +100,112 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
-    /// Subscribers must observe progress messages **as they are emitted**, not
-    /// only at the terminal snapshot. Each step in the script sleeps ~80 ms;
-    /// we record the wall-clock time we observed each new message-count and
-    /// assert no two adjacent observations are squashed into a single tick at
-    /// the end. That proves the executor isn't blocking the activity hub.
+    /// Number of progress lines <see cref="GatedFireworksScript"/> logs once released.
+    /// </summary>
+    private const int ProgressLines = 4;
+
+    /// <summary>
+    /// The fireworks script, held at a <see cref="ProgressGate"/> until the subscriber is
+    /// provably attached.
+    ///
+    /// <para>The steps are 250 ms rather than the 80 ms this test used to sleep because
+    /// <c>ActivityLogLogger</c> deliberately coalesces running-state publishes into 100 ms
+    /// windows (its <c>ThrottleMs</c>): four messages inside 240 ms are ENTITLED to arrive as
+    /// two snapshots, so the old script asserted more than the publisher ever promised. One
+    /// step per throttle window is what "incremental" actually means here.</para>
+    /// </summary>
+    private const string GatedFireworksScript = ProgressGate.ScriptPrologue + """
+        Log.LogInformation("Loading fuse...");
+        System.Threading.Thread.Sleep(250);
+        Log.LogInformation("Lighting...");
+        System.Threading.Thread.Sleep(250);
+        Log.LogInformation("3... 2... 1...");
+        System.Threading.Thread.Sleep(250);
+        Log.LogInformation("Boom!");
+        MeshWeaver.Layout.Controls.Html(
+            "<div style='font-size:48px;text-align:center;animation:pulse 1s infinite'>" +
+            "🎆 🎇 🎆 🎇 🎆" +
+            "</div>")
+        """;
+
+    /// <summary>
+    /// Subscribers must observe progress messages <b>as they are emitted</b>, not only at the
+    /// terminal snapshot — that is what proves the executor never blocks the activity hub.
+    ///
+    /// <para>🚨 The subscriber has to be ATTACHED before the progress it asserts on exists, and
+    /// "attached" is not something a test may assume. <c>GetMeshNodeStream</c>'s first emission is
+    /// the OWNER's snapshot AT SUBSCRIBE TIME, so a subscription that lands after the run finished
+    /// correctly sees one terminal snapshot carrying the whole history — no batching anywhere.
+    /// That is exactly what #2421 recorded (<c>Observed: [4@914ms], but found 1</c>): a ~350 ms run
+    /// and a ~914 ms subscribe under CI contention. Measured, not reasoned — delaying this test's
+    /// subscribe by 900 ms reproduces that line verbatim, while a 1.5 s-per-step script delivers
+    /// every step to an attached subscriber within 1–3 ms of its own timestamp.</para>
+    ///
+    /// <para>So the script BLOCKS on a gate node until this test has seen its first snapshot of
+    /// THIS activity, and the test asserts that snapshot is EMPTY. The happens-before is then
+    /// established rather than raced, and no timing bound is involved.</para>
     /// </summary>
     [Fact]
     public async Task Run_StreamsProgressTimely_NotBuffered()
     {
-        var (codePath, _) = await SeedExecutableCode(FireworksScript);
+        var (codePath, mesh) = await SeedExecutableCode(GatedFireworksScript);
+        var gatePath = await ProgressGate.Seed(mesh, UserHome);
 
         var execMessage = (await Mesh.Observe(
-            new ExecuteScriptRequest(),
+            new ExecuteScriptRequest { Inputs = ProgressGate.Inputs(gatePath) },
             o => o.WithTarget(new Address(codePath)))
             .Should().Within(60.Seconds()).Emit()).Message;
-        execMessage.Success.Should().BeTrue();
+        execMessage.Success.Should().BeTrue(execMessage.Error ?? "exec failed");
         var activityPath = execMessage.ActivityLog!;
 
         var sw = Stopwatch.StartNew();
         var workspace = GetClient().GetWorkspace();
-        var observations = await workspace
+        // ONE subscription feeds both the "am I attached?" await and the collection below —
+        // Replay means waiting for attachment cannot cost us the emissions that follow it.
+        var live = workspace
             .GetMeshNodeStream(activityPath)
-            .Select(change => (Count: (change?.Content as ActivityLog)?.Messages.Count ?? 0,
-                               ElapsedMs: sw.ElapsedMilliseconds))
-            .DistinctUntilChanged(o => o.Count)
+            .Select(node => (Log: node?.Content as ActivityLog, ElapsedMs: sw.ElapsedMilliseconds))
+            .Replay();
+        using var connection = live.Connect();
+
+        var attached = await live.Should().Within(30.Seconds()).Emit();
+        (attached.Log?.Messages.Count ?? 0).Should().Be(0,
+            "the gate must still be shut when the subscription is established — a non-empty first "
+            + "snapshot means the script ran ahead of the gate, and this test would then be "
+            + "measuring subscribe latency instead of incremental delivery");
+
+        // Armed BEFORE the gate opens: ObservableAssertions attaches synchronously on the calling
+        // thread, so nothing between here and the flip below can slip past unobserved.
+        var collected = live
+            .DistinctUntilChanged(o => o.Log?.Messages.Count ?? 0)
             // 4 progress lines. The fireworks RETURN VALUE is a control, which UpdateView renders
             // and KernelExecutor deliberately does not also log — so it never becomes a message.
-            .TakeUntil(o => o.Count >= 4)
+            // Terminal status also ends the take, so a script that FAILS reports through the
+            // assertions below instead of timing out with nothing to read.
+            .TakeUntil(o => (o.Log?.Messages.Count ?? 0) >= ProgressLines
+                            || o.Log is { Status: not ActivityStatus.Running })
             .ToList()
             .Should().Within(30.Seconds()).Emit();
 
-        observations.Should().HaveCountGreaterThanOrEqualTo(3,
-            "subscribers should observe at least 3 distinct snapshots before the terminal one — "
-            + "single-tick delivery would mean the executor blocked the activity hub. Observed: ["
-            + string.Join(", ", observations.Select(o => $"{o.Count}@{o.ElapsedMs}ms")) + "]");
+        // Only now does the script get to log anything.
+        await ProgressGate.Release(workspace, gatePath).Should().Within(30.Seconds()).Emit();
 
-        observations.Last().Count.Should().Be(4,
-            "terminal snapshot should contain the 4 progress messages; the fireworks return value "
-            + "is a control, rendered by UpdateView rather than logged as its record ToString()");
+        var observations = await collected;
+        var seen = "Observed: ["
+            + string.Join(", ", observations.Select(o =>
+                $"{o.Log?.Messages.Count ?? 0}@{o.ElapsedMs}ms/{o.Log?.Status}"))
+            + "]";
+
+        observations.Where(o => (o.Log?.Messages.Count ?? 0) > 0).Should()
+            .HaveCountGreaterThanOrEqualTo(3,
+                "an attached subscriber must observe the progress lines arriving one throttle "
+                + "window at a time — single-tick delivery would mean the executor blocked the "
+                + "activity hub. " + seen);
+
+        (observations[^1].Log?.Messages.Count ?? 0).Should().Be(ProgressLines,
+            "the last snapshot should contain the 4 progress messages; the fireworks return value "
+            + "is a control, rendered by UpdateView rather than logged as its record ToString(). "
+            + seen);
     }
 
     /// <summary>
