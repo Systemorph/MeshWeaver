@@ -42,6 +42,18 @@ namespace MeshWeaver.Hosting.Test;
 /// <para>The cure is structural: ONE subscription for the query's whole lifetime, whose routing
 /// decision — backlog vs live buffer — is made inside the same critical section that publishes the
 /// buffer. Then a notification lands in exactly one of the two and can never fall between them.</para>
+///
+/// <para>🚨 <b>Issue #2319 (2026-08-26): a SECOND, unrelated timing hazard, now closed by
+/// <see cref="WarmUpJitAndTypeLoad"/>.</b> After the fix above landed, this test still failed
+/// intermittently on CI's shard 2 — every single time on the FIRST test of the whole assembly to
+/// exercise this reactive pipeline in a fresh process. Root-caused (not guessed) by reproducing it
+/// in a Linux container capped at CI's 4 CPUs: an instrumented loop that repeats the gated scenario
+/// hundreds of times in one warm process never drops the notification, but the very FIRST call
+/// into <see cref="StorageAdapterMeshQueryProvider"/>'s pipeline in a cold process can itself take
+/// longer than the 10 s per-step budget below under real contention — JIT + generic-Rx-operator
+/// type load, not a dropped row. <see cref="WarmUpJitAndTypeLoad"/> pays that one-time cost on
+/// throwaway objects before the gated scenario begins, so a red below again means exactly what the
+/// class doc above says.</para>
 /// </summary>
 public class LiveQueryHandoffDropTest
 {
@@ -142,9 +154,64 @@ public class LiveQueryHandoffDropTest
             => inner.GetPartitionMaxTimestamp(nodePath, subPath);
     }
 
+    /// <summary>
+    /// Pays the FIRST-EVER-call cost of <see cref="StorageAdapterMeshQueryProvider"/>'s reactive
+    /// pipeline (JIT of <c>ObserveQueryInternal</c>/<c>CollectMatched</c>/<c>FindMatchingNodes</c>/
+    /// <c>ProcessBatch</c> and every generic Rx operator instantiation they touch) OUTSIDE the
+    /// gated scenario's timed waits below.
+    ///
+    /// <para>🚨 This is not a theoretical concern — it is issue #2319, root-caused by running this
+    /// exact test repeatedly inside a Linux container capped at 4 CPUs (matching CI's runner):
+    /// every observed CI failure was on the FIRST test this pipeline ever ran in a fresh process
+    /// (confirmed via an instrumented 400-iteration in-process loop — only ever iteration 0, the
+    /// cold call, ever failed; iterations 1..399 in the SAME warm process never did, even under
+    /// artificial CPU load). Under contention, JITting this pipeline for the first time can itself
+    /// take longer than the per-step budget below — a slow COLD call, not a dropped notification.
+    /// Warming it up here — on throwaway objects, fully independent of the gated scenario — moves
+    /// that one-time cost out of the window the assertions below measure, so a red there again
+    /// means what the class doc says: the row was actually dropped, not merely slow to JIT.</para>
+    /// </summary>
+    private static void WarmUpJitAndTypeLoad()
+    {
+        var warmInner = new InMemoryStorageAdapter();
+        var warmProvider = new StorageAdapterMeshQueryProvider(warmInner);
+        // Disposed deterministically (not left to Wait()'s lazily-allocated kernel WaitHandle to
+        // finalize) — this helper is also exercised repeatedly by ad-hoc repro loops, and an
+        // undisposed ManualResetEventSlim leaks its handle once Wait() forces it into existence.
+        using var warmInitial = new ManualResetEventSlim(false);
+        using var warmLive = new ManualResetEventSlim(false);
+        using (warmProvider
+                   .Query<MeshNode>(
+                       MeshQueryRequest.FromQueries(["path:warmup/_Usage scope:children"], "system-security"),
+                       Options)
+                   .Subscribe(c =>
+                   {
+                       if (c.ChangeType == QueryChangeType.Initial) warmInitial.Set();
+                       else warmLive.Set();
+                   }))
+        {
+            // Generous, uncontested-by-design budget: this phase primes the JIT, it does not pin
+            // the handoff — a slow warm-up is not the defect under test, so it is allowed to be
+            // slow. But it must FAIL FAST and LOUD if it doesn't complete: silently falling through
+            // would run the gated scenario below against a STILL-cold pipeline and could then
+            // misreport its own timeout as "dropped row" — exactly the misleading signal this
+            // warm-up exists to prevent.
+            Assert.True(warmInitial.Wait(TimeSpan.FromSeconds(30)),
+                "warm-up: Initial never arrived — the environment is too degraded to even JIT-prime "
+                + "this pipeline, so the gated assertions below cannot be trusted either");
+            warmInner.Write(new MeshNode("x", "warmup/_Usage") { NodeType = "TokenUsage" }, Options)
+                .Subscribe();
+            Assert.True(warmLive.Wait(TimeSpan.FromSeconds(30)),
+                "warm-up: live update never arrived — the environment is too degraded to even "
+                + "JIT-prime this pipeline, so the gated assertions below cannot be trusted either");
+        }
+    }
+
     [Fact]
     public void A_notification_snapshotted_before_Initial_and_delivered_after_still_reaches_the_query()
     {
+        WarmUpJitAndTypeLoad();
+
         var inner = new InMemoryStorageAdapter();
         var feed = new SnapshotThenDeliverFeed();
         var adapter = new GatedAdapter(inner, feed);

@@ -23,10 +23,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
-    <!-- This SUITE spans both halves: it asserts the AI menu entries integrate with the
-         portal shell. A TEST project may reference the module; the PLATFORM may not,
-         which is the whole point of #2276. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <!-- MapDefaultEndpoints / MapVersionEndpoint live here, beside /health and /alive. -->
     <ProjectReference Include="..\..\memex\aspire\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
     <!-- DbVersionHealthCheckTest drives the portal's own db_version health check: whether a
