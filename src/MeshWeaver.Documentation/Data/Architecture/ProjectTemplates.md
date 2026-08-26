@@ -26,14 +26,23 @@ From NuGet:
 dotnet new install MeshWeaver.MemexTemplate
 ```
 
-Or build it from this repository (useful when working on the template itself) — packing runs
-`tools/generate-memex-template.cs`, which regenerates the template content from the live `memex/`
-source tree into `dist/templates/`, then packs that directory:
+Or build it from source (useful when working on the template itself). The generator lives in
+**MeshWeaver.Plugins**, not here: the six projects the template ships are split across the two
+repositories — that repo holds `Memex.Portal.Monolith`, `Memex.AppHost` and
+`Memex.Portal.Distributed`, while `Memex.Portal.Shared`, `Memex.Database.Migration` and
+`Memex.Portal.ServiceDefaults` stayed here, along with the sample data and the
+`Directory.Packages.props` the template's versions are read from. So it needs BOTH trees, and
+takes the platform checkout as `--core`:
 
 ```bash
-dotnet pack tools/MeshWeaver.MemexTemplate.Pack
-dotnet new install path/to/dist/templates/          # or install the produced .nupkg
+# from a MeshWeaver.Plugins checkout, with a MeshWeaver checkout alongside
+dotnet run tools/generate-memex-template.cs -- <version> . dist/templates \
+    --core ../MeshWeaver --with-gui
+dotnet new install dist/templates/                  # or install the produced .nupkg
 ```
+
+`--with-gui` includes `Memex.Portal.Gui`, which carries the portal's pages and the dev-login
+screen — without it the scaffolded app builds but has no UI.
 
 ### 2. Scaffold a New Project
 
