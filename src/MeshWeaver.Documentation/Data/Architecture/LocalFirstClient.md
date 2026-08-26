@@ -106,4 +106,4 @@ Application writes from the client (a button click, a chat submit) run **off** a
 
 - [SignalR Mesh Participant](/Doc/Architecture/SignalRMeshParticipant) — the transport this builds on.
 - [Cross-Instance Mirror](/Doc/Architecture/CrossInstanceMirror) — the data plane.
-- The `/maui` and `/layout-area` skills — how to build features in the client and UI the implementation-independent way.
+- The `/layout-area` and `/ui-extensibility` skills — how to author UI the implementation-independent way, so a native shell renders it without a Blazor-specific branch.
