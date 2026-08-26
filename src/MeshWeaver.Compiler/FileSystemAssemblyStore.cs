@@ -21,6 +21,14 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
 {
     private readonly string rootDirectory;
     private readonly ILogger<FileSystemAssemblyStore> logger;
+    private readonly int keepVersionsPerType;
+
+    /// <summary>
+    /// The shipped per-type version budget: the live build plus two behind it. Three is what makes a
+    /// mixed-build window survivable (an instance one or two publications behind still finds its
+    /// bytes) without letting a directory grow with the recompile count.
+    /// </summary>
+    public const int DefaultKeepVersionsPerType = 3;
 
     /// <summary>
     /// Initializes a new instance of the filesystem-backed assembly store rooted at the
@@ -28,12 +36,24 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     /// </summary>
     /// <param name="rootDirectory">The root directory under which compiled assemblies are cached.</param>
     /// <param name="logger">The logger for cache hit/miss and write diagnostics.</param>
-    public FileSystemAssemblyStore(string rootDirectory, ILogger<FileSystemAssemblyStore> logger)
+    /// <param name="keepVersionsPerType">
+    /// How many of a type's most recent VERSIONS to keep, within the writing process's own framework
+    /// generation — see <see cref="EvictSupersededVersions"/>. Values below 1 are clamped to 1: a
+    /// budget of zero would evict the file just written.
+    /// </param>
+    public FileSystemAssemblyStore(
+        string rootDirectory,
+        ILogger<FileSystemAssemblyStore> logger,
+        int keepVersionsPerType = DefaultKeepVersionsPerType)
     {
         this.rootDirectory = rootDirectory;
         this.logger = logger;
+        this.keepVersionsPerType = Math.Max(1, keepVersionsPerType);
         Directory.CreateDirectory(rootDirectory);
     }
+
+    /// <summary>How many of a type's most recent versions this store keeps per framework generation.</summary>
+    public int KeepVersionsPerType => keepVersionsPerType;
 
     /// <summary>
     /// Looks up the cached assembly for a (node-type path, version) pair, returning the
@@ -175,7 +195,118 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
             logger.LogDebug(
                 "Assembly already published at {DllPath} by a concurrent writer — kept theirs "
                 + "(identical bytes: the content hash is the file name)", dllPath);
+
+        // 🚨 EVICTION AT WRITE (#2086). The pass that just added a version is the only one that
+        // knows, without a second directory walk from somewhere else, that this type's directory
+        // grew — so it is the one that trims it.
+        EvictSupersededVersions(dir, keep: dllPath);
+
         return Observable.Return(new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath));
+    }
+
+    /// <summary>
+    /// 🚨 <b>Keep the newest <see cref="KeepVersionsPerType"/> VERSIONS of this type, in this
+    /// process's own framework generation. Delete the rest. Nothing else.</b>
+    ///
+    /// <para><b>Why the version axis, and why it needed its own collector.</b> The cache accumulates
+    /// on TWO independent axes and they need two different arguments. Across framework generations a
+    /// whole new fleet of files appears per deploy, and only a live CLAIM can prove one is
+    /// unreferenced — that is <c>AssemblyCacheGenerations</c>'s job, and it is the axis it can see.
+    /// WITHIN one generation a type accrues one dll/pdb pair per recompile, forever: measured on
+    /// memex-cloud 2026-08-22, <c>Store_Plugin</c> alone held 4,184 files spanning v100…v8800+ —
+    /// inside a single generation, where generation retention has nothing to bucket. Three
+    /// generations of that shape is still ~12.5k files, which is why keeping generations could never
+    /// have been the answer to a 16 GiB volume filling up (and taking the DataProtection key ring
+    /// beside it down with the compile cache).</para>
+    ///
+    /// <para><b>Why it is safe to delete a superseded version, when deleting a superseded GENERATION
+    /// is not.</b> A generation belongs to an IMAGE — another pod may be running it, and loading the
+    /// wrong generation's bytes is <c>BadImageFormatException</c> → failed grain activations →
+    /// portal-wide wedge (prod 2026-06-20). That is why this never crosses the tag boundary: it only
+    /// ever removes files carrying <see cref="FrameworkTag"/>, the generation THIS process runs and
+    /// is authoritative about. Within it, the worst case of removing an older version is a cache
+    /// MISS, and a miss is recoverable by construction: <c>TryGetAssemblyPath</c> returns null and
+    /// activation's recompile-and-retry mints the bytes again. An assembly already loaded is
+    /// unaffected — the ALC holds the mapping, and on a filesystem that refuses to unlink an open
+    /// file the delete simply fails and the file stays.</para>
+    ///
+    /// <para><b>Everything here is a KEEP rule and failures never propagate.</b> Only names
+    /// <see cref="AssemblyCacheFileName"/> decodes are candidates — the atomic-write
+    /// <c>.tmp-*</c> leftovers, the bake leases, the generation claims and any legacy pre-tag DLL are
+    /// unattributable and therefore untouchable. The file just written is excluded explicitly rather
+    /// than by trusting that its version is the highest. A delete that throws is logged and skipped:
+    /// the next write reconsiders it, and a locked file is exactly the file we most want to leave
+    /// alone.</para>
+    /// </summary>
+    /// <param name="dir">The type's directory — already created, already the one just written to.</param>
+    /// <param name="keep">The full path of the DLL this call published; never a deletion candidate.</param>
+    private void EvictSupersededVersions(string dir, string keep)
+    {
+        try
+        {
+            var mine = new DirectoryInfo(dir)
+                // The glob NARROWS, it never decides: a legacy directory can hold thousands of
+                // files from generations this process must not touch, and listing all of them on an
+                // Azure Files share once per compile is a real cost for a set that is empty by
+                // construction on a freshly-rolled image. Attribution stays entirely with
+                // AssemblyCacheFileName.Parse plus the tag equality below, which is what keeps this
+                // and the generation sweep agreeing on which names this store wrote.
+                .EnumerateFiles($"*-{FrameworkTag}-*", SearchOption.TopDirectoryOnly)
+                .Select(f => (File: f, Identity: AssemblyCacheFileName.Parse(f.Name)))
+                .Where(x => x.Identity is { } id
+                            && string.Equals(id.Tag, FrameworkTag, StringComparison.OrdinalIgnoreCase))
+                .Select(x => (x.File, Identity: x.Identity!.Value))
+                .ToList();
+
+            var keptVersions = mine
+                .Select(x => x.Identity.Version)
+                .Distinct()
+                .OrderByDescending(v => v)
+                .Take(keepVersionsPerType)
+                .ToHashSet();
+
+            var evicted = 0;
+            var bytes = 0L;
+            foreach (var (file, identity) in mine)
+            {
+                if (keptVersions.Contains(identity.Version))
+                    continue;
+                if (string.Equals(file.FullName, keep, StringComparison.Ordinal)
+                    || string.Equals(file.FullName, Path.ChangeExtension(keep, ".pdb"), StringComparison.Ordinal))
+                    continue;
+                try
+                {
+                    var length = file.Length;
+                    file.Delete();
+                    evicted++;
+                    bytes += length;
+                }
+                catch (Exception ex)
+                {
+                    // Surfaced, not swallowed — and NOT retried. A file we cannot unlink is a file
+                    // something is holding, which is the one we least want to remove; the next write
+                    // into this directory plans it again.
+                    logger.LogDebug(ex,
+                        "Assembly cache: could not evict {Path} — it stays, and the next write for "
+                        + "this type considers it again", file.FullName);
+                }
+            }
+
+            if (evicted > 0)
+                logger.LogInformation(
+                    "Assembly cache: evicted {Evicted} superseded file(s) ({Kb:N0} KB) from {Dir}, "
+                    + "keeping the newest {Keep} version(s) of framework {Tag}",
+                    evicted, bytes / 1024d, dir, keepVersionsPerType, FrameworkTag);
+        }
+        catch (Exception ex)
+        {
+            // Eviction is housekeeping behind a successful publication. The bytes are on disk and the
+            // caller's path is valid whatever happens here, so an unreadable directory must never
+            // turn a good compile into a failed one.
+            logger.LogDebug(ex,
+                "Assembly cache: could not evict superseded versions under {Dir} — the write itself "
+                + "succeeded and the next one plans eviction again", dir);
+        }
     }
 
     /// <summary>

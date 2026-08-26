@@ -673,7 +673,7 @@ public static class MemexConfiguration
             // both: skip, say so on stderr, and boot. A module that is genuinely required makes
             // itself known as a missing FEATURE, which is diagnosable — a portal that will not
             // start is not.
-            var resolvedModules = effectiveModules
+            var loadableModules = effectiveModules
                 // 🚨 ONE resolution, shared with the existence gate above
                 // (ModuleActivationBoot.ResolveLoadPath): a store-landed module resolves to the
                 // directory ITS activation entry points at — the generation the landing wrote —
@@ -681,21 +681,34 @@ public static class MemexConfiguration
                 // the union itself rather than being re-derived here; the gate and the resolver
                 // each deciding for themselves where a module's bytes live is exactly #1949.
                 .Select(module => (
-                    module.Entry,
+                    Module: module,
                     Path: ModuleActivationBoot.ResolveLoadPath(moduleRoot, module)))
                 .Where(candidate =>
                 {
                     if (File.Exists(candidate.Path))
                         return true;
                     Console.Error.WriteLine(
-                        $"[ModuleActivation] SKIPPED module '{candidate.Entry}': no assembly at "
+                        $"[ModuleActivation] SKIPPED module '{candidate.Module.Entry}': no assembly at "
                         + $"'{candidate.Path}'. It is listed in Modules:Assemblies but this image "
                         + "does not ship it — delist it, or install it as a module. Booting without "
                         + "it; whatever it provided is absent.");
                     return false;
                 })
-                .Select(candidate => candidate.Path)
                 .ToArray();
+            var resolvedModules = loadableModules.Select(candidate => candidate.Path).ToArray();
+
+            // 🚨 #2223 — SAY WHICH COPY IS BEING LOADED. A view-pack fix can merge, build, land in
+            // the module store and still not run, because a baseline Modules:Assemblies entry
+            // resolves to the IMAGE copy and dedupes the store entry away by name. Every lane
+            // reported green; the only evidence lived in /proc/1/maps on a prod pod. This reports
+            // the paths that are about to be loaded — the SAME array, so the line and the load
+            // cannot disagree — and warns when the store holds a newer, different copy. It warns
+            // and boots: a pod that refuses to start cannot be given the fix for what is wrong
+            // with it.
+            ModuleLoadReport.Write(
+                ModuleLoadReport.Describe(moduleRoot, loadableModules),
+                Console.WriteLine,
+                Console.Error.WriteLine);
 
             if (resolvedModules.Length > 0)
                 builder.InstallAssemblies(resolvedModules);

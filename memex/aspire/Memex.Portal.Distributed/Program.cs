@@ -106,6 +106,14 @@ else
     // first registration wins and the blob factory (which needs a keyed BlobServiceClient
     // we deliberately don't register here) is never constructed.
     var assemblyCache = Path.Combine(dataRoot, "assembly-cache");
+    // 🚨 The store PRUNES AS IT WRITES (#2086): after publishing a version it keeps only the newest
+    // AssemblyCache:Retention:KeepVersionsPerType (default 3) versions OF THAT TYPE, within its OWN
+    // framework generation. That is the OTHER growth axis — the one the generation sweep below
+    // cannot see, because every file in it carries the same tag. On 2026-08-22 it filled this very
+    // volume: Store_Plugin alone held 4,184 files spanning v100…v8800 inside ONE generation, and
+    // every recompile then failed with `No space left on device`, surfacing as compilationStatus:
+    // Error four steps away. Unlike the sweep, this needs no arming: within one generation the worst
+    // case of removing one version too many is a cache MISS, which recompiles.
     builder.Services.AddFileSystemAssemblyStore(assemblyCache);
 
     // 🚨 ONE POD BAKES — coordinated by the build protocol (Doc/Architecture/BuildCoordination):
