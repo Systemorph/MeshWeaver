@@ -7,6 +7,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Fixture;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
