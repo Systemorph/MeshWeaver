@@ -33,21 +33,38 @@ external boundary (`.FirstAsync().ToTask()` in an MCP/REST adapter) — never in
 
 ## Reading a node that may not be there
 
-`NodeReadResult` keeps three answers apart — **Found**, **Absent** (a definitive negative, the only
+`NodeReadOutcome` keeps three answers apart — **Found**, **Absent** (a definitive negative, the only
 one that may be reported as `"Not found: …"`), and **Unavailable** (no answer was reached). A caller
 that collapses them into one `null` reports "not found" for a read that simply timed out.
 
-## The namespace is `MeshWeaver.Mesh`, and that is deliberate
+## 🚨 The namespace is `MeshWeaver.AI`, and it may never change
 
-The assembly is new; the namespace is not. Plugin source is type-checked by two gates against two
-different frameworks — `compile-check.py --image` against core `main`, and the pack lane against the
-newest RELEASED framework (rc7, cut 2026-08-22). A brand-new namespace would resolve on neither
-until a release moved the floor, so every plugin using these types would break on the plugins repo's
-MAIN rather than on the PR that caused it.
+The assembly moved. The **names did not, and cannot** — they are a binary contract.
 
-`MeshWeaver.Mesh` exists in rc7, so the move needs no cross-repo coordination at all: the one real
-consumer, `MeshWeaver.Mcp`, already carries `using MeshWeaver.Mesh;` and reaches this assembly
-transitively through its `MeshWeaver.AI` reference. Verified by building it against this branch — 0
-errors, no plugin change. `NodeReadResult` carries its new name for the same reason: at
-`MeshWeaver.Mesh.NodeReadOutcome` it would have collided with the read-classifier type already
-there.
+A module is a plain assembly binding platform types by simple assembly name, gated on a **semver
+floor and never MVID equality**, precisely so that "a landed module keeps loading across ordinary
+platform updates" (`Doc/Architecture/Modules` → the skip rules). That promise is about BINARY
+compatibility, and a module's IL does not hold a `using`; it holds
+
+```
+TypeRef  MeshWeaver.AI.MeshOperations     scope: AssemblyRef MeshWeaver.AI
+```
+
+so the full type name **and** the assembly that carries it are both part of it. The first cut of this
+move renamed the namespace to `MeshWeaver.Mesh` and left nothing behind, and when the platform rolled,
+every MCP tool call in production died in the `McpMeshPlugin` constructor with
+`TypeLoadException: Could not load type 'MeshWeaver.AI.MeshOperations'` — the whole `/mcp` surface,
+for every external client of the deployment (Systemorph/MeshWeaver#2370).
+
+The move survives because `MeshWeaver.AI` leaves **type forwarders** (`src/MeshWeaver.AI/TypeForwards.cs`)
+for `MeshOperations`, `MeshExportManifest`, `MeshExportFileEntry` and `NodeReadOutcome`: the CLR
+resolves the old TypeRef through this assembly, yielding ONE type identity rather than a shim. **A
+forwarder cannot rename**, which is why these types keep `namespace MeshWeaver.AI` in an assembly
+that is not AI, and why `NodeReadOutcome` kept its original name instead of the `NodeReadResult` the
+first cut chose. `MovedTypeBinaryContractTest` fails if either drifts, and
+`scripts/check-type-forwards.py` refuses the next such move repo-wide.
+
+**Source compatibility is not the question.** The first cut was verified by BUILDING the plugins
+repo's `MeshWeaver.Mcp` against the branch — 0 errors — and that build proved nothing about the
+module that was already published. `landed-modules-gate` has the same blind spot by construction: it
+compiles module SOURCE.
