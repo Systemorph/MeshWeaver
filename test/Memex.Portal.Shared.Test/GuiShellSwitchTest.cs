@@ -59,6 +59,7 @@ public class GuiShellSwitchTest
     [InlineData("/login")]
     [InlineData("/next/Doc")]
     [InlineData("/mcp")]
+    [InlineData("/api/mcp")]
     public void NonPageSurfaces_NeverRedirect(string path)
     {
         var (redirect, _) = GuiShellSwitch.Decide("GET", path, Html, null, "next", "Blazor");
