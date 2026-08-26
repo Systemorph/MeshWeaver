@@ -10,7 +10,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.Blazor.Portal;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
