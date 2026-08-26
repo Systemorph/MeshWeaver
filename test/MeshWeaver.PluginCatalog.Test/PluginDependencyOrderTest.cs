@@ -365,7 +365,7 @@ public class PluginDependencyOrderTest(ITestOutputHelper output) : MonolithMeshT
         };
 
     /// <summary>
-    /// THE atioz DEFECT (2026-08-10). The boot pass selected the pre-installed baseline and ORDERED
+    /// THE PRODUCTION DEFECT (2026-08-10). The boot pass selected the pre-installed baseline and ORDERED
     /// it, which quietly assumes every requirement is itself selected. It is not: every pre-installed
     /// package declares <c>requires: ["Store@^1.0.0"]</c> while <c>Store</c> is
     /// <c>preInstalled: false</c>. The instance installed 8 packages that all need the Store, never

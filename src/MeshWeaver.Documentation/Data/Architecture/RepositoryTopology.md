@@ -44,7 +44,7 @@ unchanged, for a second deployment?**
   one environment. They are the shared catalog, and duplicating them into a config repo is how two
   copies drift and the next reader follows whichever they happened to open.
 - **No → it is config, and it goes in `Memex`.** The per-environment overlays
-  (`deployments/aks/{env}/values.{env}.public.yaml` for `memex`, `memex-cloud`, `atioz`, plus the
+  (`deployments/aks/{env}/values.{env}.public.yaml` for `memex` and `memex-cloud`, plus the
   layered `gate`/`ha`/`replica` values and the Key-Vault "vault half" of secrets merged at deploy)
   are the *only* thing that differs between one instance and the next.
 

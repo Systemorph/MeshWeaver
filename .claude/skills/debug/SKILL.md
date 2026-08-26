@@ -120,7 +120,7 @@ write it.
   never re-subscribes."*
 - Unbounded caller-side retry is the OTHER outage: *"resubscribing forever to an inexistent address
   produced an endless `[ROUTE] NotFound` message storm that burned a core and wedged the partition's
-  hub"* (atioz, 2026-06-14).
+  hub"* (production, 2026-06-14).
 
 So the shape that is actually safe is the one `MeshWeaver.Layout/AreaStreamRetry` already implements:
 **bounded** retries, exponential backoff on `Observable.Timer` (never `Task.Delay`), a caller-supplied
