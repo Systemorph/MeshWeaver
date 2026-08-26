@@ -1514,7 +1514,10 @@ jobs:
   #     the hour — so failing there would be noise, and noise is how a real red gets ignored.
   delivery-verdict:
     name: "CD delivered, or had a good reason not to"
-    needs: [gate, promote]
+    # 🚨 Every delivery leg is a NEED, not just [gate, promote]. The verdict cannot assert that a
+    # publish actually happened while it can only see two of the nine jobs that make it happen.
+    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote,
+            publish-bake, notify-platform-update, verify-images]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1584,6 +1587,59 @@ jobs:
           fi
 
           echo "OK — either something was published, or not publishing was the correct answer."
+
+      # 🚨 THE POSITIVE CHECK: a run that DECIDED to publish must have RUN every leg.
+      #
+      # The guards above classify the gate's VERDICT. They say nothing about whether the nine jobs
+      # that carry out a delivery actually executed — and a job that `skipped` renders the same
+      # grey/green tick as one that ran, so a publish missing a leg reports success. That is the
+      # repo's own CI invariant ("a gate that cannot run must not look like a gate that passed")
+      # applied to delivery itself rather than to the decision about delivery.
+      #
+      # Named results, compared to a literal 'success': `skipped`, `cancelled` and `failure` all
+      # fail here. There is deliberately no "if it is empty, assume fine" branch — that assumption
+      # is what made the verdict pass on an empty gate output in the first place.
+      - name: A publishing run must have RUN every leg, not skipped any
+        if: needs.gate.outputs.publish == 'true'
+        env:
+          LEGS: >-
+            preflight=${{ needs.preflight.result }}
+            portal-image=${{ needs.portal-image.result }}
+            migration-image=${{ needs.migration-image.result }}
+            plugin-test-image=${{ needs.plugin-test-image.result }}
+            promote=${{ needs.promote.result }}
+            publish-bake=${{ needs.publish-bake.result }}
+            notify-platform-update=${{ needs.notify-platform-update.result }}
+            verify-images=${{ needs.verify-images.result }}
+        run: |
+          set -euo pipefail
+          bad=""
+          for kv in $LEGS; do
+            name="${kv%%=*}"; res="${kv#*=}"
+            if [ "$res" != "success" ]; then bad="$bad $name=$res"; fi
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::the gate decided to PUBLISH, but these delivery legs did not run to success:$bad. A skipped leg is not a delivery: the promote step tags all-or-nothing, so a missing leg means either no image set was published or one was published without its bake/notify. Read the named job rather than re-running."
+            exit 1
+          fi
+          echo "every delivery leg ran and succeeded: $LEGS"
+
+      # Make the outcome unmissable on the run page. A 3-second success and a 20-minute delivery
+      # are otherwise identical at a glance, which is how a merged fix sat unshipped.
+      - name: Say plainly what this run did
+        if: always()
+        env:
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+          REASON: ${{ needs.gate.outputs.reason }}
+          SHORT: ${{ needs.gate.outputs.short_sha }}
+        run: |
+          if [ "$PUBLISH" = "true" ]; then
+            echo "### ✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -z "$REASON" ]; then
+            echo "### ⚪ NO-OP — not a push to main; no delivery was due" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### 🕐 NO PUBLISH for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   alert-on-failure:
     name: "Alert: CD failed on main"
