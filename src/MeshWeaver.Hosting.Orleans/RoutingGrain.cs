@@ -1013,9 +1013,12 @@ internal class RoutingGrain(
                         // The owning grain resolved but could NOT service the delivery (unmaterializable /
                         // unregistered node type, failed activation, access denial). Surface as a
                         // DeliveryFailure so the caller gets a fast, deterministic OnError instead of parking.
-                        var failMsg = result.Properties.TryGetValue("Error", out var errObj) && errObj is string errStr
-                            ? errStr
-                            : $"Delivery to '{addressPath}' failed at its owning hub.";
+                        // GetFailureMessage, not a raw `is string` test: Properties values come back
+                        // re-materialised from JSON, so the text can arrive as an untyped JsonElement.
+                        // Losing it here costs twice — the sender loses its diagnostic AND the
+                        // classification below loses the phrase its fallback rule matches on.
+                        var failMsg = result.GetFailureMessage()
+                            ?? $"Delivery to '{addressPath}' failed at its owning hub.";
 
                         // 🚨 CARRY the verdict the owning hub recorded; NEVER re-decide it here. This line
                         // read `ErrorType.Failed` — terminal, unconditionally — and that is issue #2346.

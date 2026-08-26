@@ -119,6 +119,69 @@ public class DeliveryFailureClassificationWireTest(ITestOutputHelper output) : H
     }
 
     /// <summary>
+    /// 🚨 The reader runs on the error-REPORTING path, so it must never THROW — the one place a
+    /// throw is worst, because it replaces a failure that was about to be described with a
+    /// different, undescribed one. A junk or out-of-range value is "no verdict was reached", which
+    /// is precisely what the caller's fallback is for.
+    /// </summary>
+    [Theory]
+    [InlineData(long.MaxValue)]      // out of int range — Convert.ToInt32 would throw here
+    [InlineData(long.MinValue)]
+    [InlineData(9999)]               // in range, but no such member
+    public void AnOutOfRangeOrUndefinedVerdict_FallsBackInsteadOfThrowing(long recorded)
+    {
+        var delivery = ADelivery().Failed("boom")
+            .WithProperty(IMessageDelivery.FailureErrorTypeProperty, recorded);
+
+        delivery.GetFailureErrorType(ErrorType.Unavailable).Should().Be(ErrorType.Unavailable,
+            "an unreadable verdict is an absence of one, never an exception on the path whose whole "
+            + "job is to report a failure");
+    }
+
+    /// <summary>
+    /// A verdict written as text that names no member is equally not a verdict — <c>Enum.TryParse</c>
+    /// would also accept a NUMERIC string and mint an undefined member from it.
+    /// </summary>
+    [Theory]
+    [InlineData("NotAnErrorType")]
+    [InlineData("9999")]
+    [InlineData("")]
+    public void AnUnparseableVerdict_FallsBack(string recorded)
+    {
+        var delivery = ADelivery().Failed("boom")
+            .WithProperty(IMessageDelivery.FailureErrorTypeProperty, recorded);
+
+        delivery.GetFailureErrorType(ErrorType.Unavailable).Should().Be(ErrorType.Unavailable);
+    }
+
+    /// <summary>
+    /// The failure TEXT degrades exactly like the verdict does — options without
+    /// <c>ObjectPolymorphicConverter</c> leave it an untyped <see cref="JsonElement"/>. At a routing
+    /// site that costs twice: the sender loses its diagnostic, AND the classification fallback loses
+    /// the phrase it matches on, so a transient teardown silently reads terminal again.
+    /// </summary>
+    [Fact]
+    public void TheFailureText_IsReadableEvenWhenItArrivedAsUntypedJson()
+    {
+        using var doc = JsonDocument.Parse("\"Hub is shutting down\"");
+        var delivery = ADelivery().Failed("placeholder")
+            .WithProperty("Error", doc.RootElement.Clone());
+
+        delivery.GetFailureMessage().Should().Be("Hub is shutting down");
+    }
+
+    /// <summary>
+    /// And a value under that key which is NOT text is not a message: null, so the caller describes
+    /// the failure itself rather than printing a type name at a user.
+    /// </summary>
+    [Fact]
+    public void ANonTextValueUnderTheErrorKey_IsNotAMessage()
+    {
+        ADelivery().Failed("placeholder").WithProperty("Error", 42)
+            .GetFailureMessage().Should().BeNull();
+    }
+
+    /// <summary>
     /// The answer-once flag rides the same dictionary, and it is what stops one request being
     /// answered twice with contradictory verdicts. Key PRESENCE is the contract, so it must not
     /// depend on the value's CLR type surviving either.

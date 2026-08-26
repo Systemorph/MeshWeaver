@@ -404,10 +404,11 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 if (result.State == MessageDeliveryState.Failed)
                 {
                     // Preserve the RoutingGrain's message so the GUI's
-                    // IsExpectedUserActionFailure classifier can match it.
-                    var failureMessage = result.Properties.TryGetValue("Error", out var errObj) && errObj is string errStr
-                        ? errStr
-                        : $"Delivery failed to {address}";
+                    // IsExpectedUserActionFailure classifier can match it. GetFailureMessage, not a
+                    // raw `is string` test: a delivery that crossed a hub boundary can carry the text
+                    // as an untyped JsonElement, and dropping it would also drop the phrase the
+                    // classification fallback below matches on.
+                    var failureMessage = result.GetFailureMessage() ?? $"Delivery failed to {address}";
                     // 🚨 NOT every Failed result is terminal, and assuming so cost this project the
                     // shard-0 Orleans flake cluster. This comment used to read "Grain returned a
                     // non-transient failure (e.g. node doesn't exist)" and SendDeliveryFailure
