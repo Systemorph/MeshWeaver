@@ -5,7 +5,7 @@ using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using Xunit;
 
-namespace MeshWeaver.Content.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// Unit tests for AgentFileParser - parsing and serialization of agent markdown files with YAML front matter.
