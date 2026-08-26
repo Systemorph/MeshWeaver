@@ -24,16 +24,32 @@
 # ALC-heaviest projects — onto shard 0 and made it the ~19-minute long pole of
 # every run.
 #
-# Weights are wall-clock SECONDS, the MAX over two green runs (30903428924 and
-# 30903158378, both 2026-08-04) so a shard is sized for the bad case, not the
-# average. The per-project `[CI] <name> exit=` markers in the test job's log ARE
-# the measurement: take the delta between each `::group::<name>` and its marker.
-# Re-measure when a project's runtime changes materially — the previous table
-# (2026-07-13) had drifted far enough to cost ~100 s of long pole (Monolith
-# 200→345, Data 25→73, PluginTester 60→8, Persistence 165→97).
+# Weights are wall-clock SECONDS, the MAX over three green runs (32917064578,
+# 32914770924 and 32912903460, all 2026-08-26) so a shard is sized for the bad
+# case, not the average. The per-project `[CI] <name> exit=` markers in the test
+# job's log ARE the measurement: take the delta between each `::group::<name>`
+# and its marker.
 #
-# The floor for ANY sharding is the heaviest single project: today
-# Hosting.Monolith.Test at 345 s. Adding shards below that buys nothing.
+# 🚨 RE-MEASURE WHEN A PROJECT GROWS — nothing here does it for you, and a stale
+# table is INVISIBLE: the LPT loop still reports six perfectly balanced shards
+# (it balances the NUMBERS, not the clock), so the only symptom is a long pole
+# nobody attributes to this file. The 2026-08-04 table drifted for three weeks
+# and cost ~170 s of long pole on EVERY run: it reported loads of 338/338/337/
+# 337/337/337 while the shards actually ran 369/634/536/288/604/357. Two entries
+# were most of it — PluginCatalog 30→347 s (it grew from 15 to 82 test files and
+# now runs 646 tests) and Monolith 345→662 s. The 2026-07-13 table before it had
+# drifted the same way (Monolith 200→345, Data 25→73, PluginTester 60→8).
+#
+# The floor for ANY sharding is the heaviest single SCHEDULABLE UNIT — a project,
+# or one part of a split one. Today that is Hosting.Monolith.Test's two halves at
+# ~331 s each. Adding shards below that buys nothing.
+#
+# SPLIT RULE: split a project only when its solo weight exceeds the ideal shard
+# load (sum ÷ SHARD_TOTAL, currently 2792 ÷ 6 ≈ 465 s), because only then is it
+# the binding floor. Monolith (662 s) qualifies; nothing else does. AI.Test's
+# split was dropped here — at 189 s it is far below the floor, so splitting it
+# bought no balance and cost a class enumeration plus shipping its bin to two
+# shards' artifacts instead of one.
 #
 # Unlisted projects get DEFAULT_WEIGHT — a deliberate over-estimate, since an
 # unlisted project is a NEW one whose cost nobody has measured yet.
@@ -52,78 +68,85 @@
 # that runs one of its parts.
 set -euo pipefail
 
-: "${SHARD_INDEX:?SHARD_INDEX must be set}"
-: "${SHARD_TOTAL:?SHARD_TOTAL must be set}"
-
+# `--print-weights` dumps the table below and exits, so the test job's drift report can
+# compare measured seconds against the SAME table the assignment uses. It deliberately
+# runs BEFORE the SHARD_INDEX/SHARD_TOTAL guards — printing the table is not sharding and
+# needs neither. 🚨 Never copy the table into a workflow to avoid this flag: two copies is
+# exactly how the assignment and the packing could disagree, which is why the whole file
+# exists.
 DEFAULT_WEIGHT=10
+
+if [ "${1:-}" = "--print-weights" ]; then
+  print_weights=1
+else
+  print_weights=0
+  : "${SHARD_INDEX:?SHARD_INDEX must be set}"
+  : "${SHARD_TOTAL:?SHARD_TOTAL must be set}"
+fi
 
 # "<seconds> <project-name>", heaviest first.
 WEIGHTS=$(cat <<'EOF'
-345 MeshWeaver.Hosting.Monolith.Test 2
-263 MeshWeaver.AI.Test 2
-239 MeshWeaver.Hosting.Orleans.Test
-130 MeshWeaver.Hosting.PostgreSql.Test
-104 MeshWeaver.Threading.Test
-97 MeshWeaver.Persistence.Test
-91 MeshWeaver.Content.Test
-73 MeshWeaver.FutuRe.Test
-73 MeshWeaver.Data.Test
-62 MeshWeaver.Acme.Test
-53 MeshWeaver.Security.Test
-51 MeshWeaver.GitSync.Test
-49 MeshWeaver.Autocomplete.Test
-49 MeshWeaver.Query.Test
-33 MeshWeaver.Auth.Test
-31 MeshWeaver.Graph.Test
-30 MeshWeaver.Hosting.Cosmos.Test
-30 MeshWeaver.PluginCatalog.Test
-27 MeshWeaver.NodeOperations.Test
-26 MeshWeaver.InstanceSync.Test
-22 MeshWeaver.Messaging.Hub.Test
-18 MeshWeaver.Layout.Test
-15 MeshWeaver.Markdown.Test
-15 MeshWeaver.Import.Test
-12 MeshWeaver.PathResolution.Test
-12 MeshWeaver.ContentCollections.Indexing.Graph.Test
-12 MeshWeaver.MemexTemplate.Test
-9 MeshWeaver.Northwind.Test
-8 MeshWeaver.PluginTester.Test
-8 MeshWeaver.PythonDemo.Test
-7 MeshWeaver.ContentCollections.Indexing.PostgreSql.Test
+663 MeshWeaver.Hosting.Monolith.Test 2
+348 MeshWeaver.PluginCatalog.Test
+269 MeshWeaver.Hosting.Orleans.Test
+218 MeshWeaver.Hosting.PostgreSql.Test
+189 MeshWeaver.AI.Test
+91 MeshWeaver.Data.Test
+76 MeshWeaver.Messaging.Hub.Test
+74 MeshWeaver.PluginTester.Test
+69 MeshWeaver.Graph.Test
+65 MeshWeaver.Persistence.Test
+65 MeshWeaver.Content.Test
+54 MeshWeaver.GitSync.Test
+53 MeshWeaver.Acme.Test
+51 MeshWeaver.FutuRe.Test
+50 MeshWeaver.Query.Test
+48 MeshWeaver.Autocomplete.Test
+46 MeshWeaver.Security.Test
+44 MeshWeaver.Auth.Test
+42 MeshWeaver.Threading.Test
+28 MeshWeaver.Hosting.Cosmos.Test
+27 MeshWeaver.InstanceSync.Test
+26 MeshWeaver.Layout.Test
+25 Memex.Portal.Shared.Test
+20 MeshWeaver.Hosting.Blazor.Test
+18 MeshWeaver.NodeOperations.Test
+14 MeshWeaver.MemexTemplate.Test
+13 MeshWeaver.Markdown.Test
+10 MeshWeaver.PathResolution.Test
+9 MeshWeaver.PythonDemo.Test
+9 MeshWeaver.ContentCollections.Indexing.Graph.Test
+8 MeshWeaver.Hosting.Test
+7 MeshWeaver.ContentCollections.Test
+6 MeshWeaver.Hosting.Grpc.Test
+6 MeshWeaver.Documentation.Test
 6 MeshWeaver.AccessControl.Test
-5 MeshWeaver.Hosting.Grpc.Test
 5 MeshWeaver.Todo.Test
-4 MeshWeaver.MathDemo.Test
-4 MeshWeaver.Hosting.Test
-3 Memex.Portal.Shared.Test
-3 MeshWeaver.Social.Test
-3 MeshWeaver.Hosting.Sqlite.Test
-3 MeshWeaver.Hosting.Blazor.Test
-3 MeshWeaver.ContentCollections.Test
-3 MeshWeaver.Documentation.Test
-6 MeshWeaver.Json.Test
-2 MeshWeaver.Serialization.Test
-2 MeshWeaver.Markdown.Export.Test
+5 MeshWeaver.MathDemo.Test
+4 MeshWeaver.Hosting.Sqlite.Test
+4 MeshWeaver.Serialization.Test
+3 MeshWeaver.Json.Test
+2 MeshWeaver.ContentCollections.Indexing.Test
+2 MeshWeaver.Kernel.Test
+2 MeshWeaver.Search.Test
+2 MeshWeaver.Markdown.Collaboration.Test
+2 MeshWeaver.Social.Test
+2 MeshWeaver.PluginImage.Test
+2 MeshWeaver.Hosting.Snowflake.Test
+2 MeshWeaver.Portal.E2E.Test
+2 MeshWeaver.Connection.SignalR.Test
+2 MeshWeaver.Reactive.Assertions.Test
 1 MeshWeaver.TestDomain
 1 MeshWeaver.Data.TestDomain
 1 MeshWeaver.Hub.Fixture
 1 MeshWeaver.AI.Test.FakeCli
-1 MeshWeaver.Portal.E2E.Test
-1 MeshWeaver.Search.Test
-1 MeshWeaver.Reactive.Assertions.Test
-1 MeshWeaver.DataSetReader.Test
-1 MeshWeaver.Markdown.Collaboration.Test
-1 MeshWeaver.Maui.E2E.Test
-1 MeshWeaver.Maui.Abstractions.Test
-1 MeshWeaver.Maui.Integration.Test
-1 MeshWeaver.PluginImage.Test
-1 MeshWeaver.Hosting.Snowflake.Test
-1 MeshWeaver.Connection.SignalR.Test
-1 MeshWeaver.Speech.Test
-1 MeshWeaver.ContentCollections.Indexing.Test
-1 MeshWeaver.Kernel.Test
 EOF
 )
+
+if [ "$print_weights" = "1" ]; then
+  printf '%s\n' "$WEIGHTS"
+  exit 0
+fi
 
 weights_file=$(mktemp)
 trap 'rm -f "$weights_file"' EXIT
