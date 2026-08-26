@@ -221,7 +221,7 @@ a live daily throttle, until #1778.
 `main-cd.yml` builds and pushes the deployment images. Its `workflow_run` path is still gated on
 `event == 'push' && head_branch == 'main'` — that gate is what stops a **fork's** pull_request run
 (whose `head_branch` can also be "main") from publishing untrusted code with this repo's secrets,
-so never relax it. Two consequences that trip people up, both SILENT:
+so never relax it. Three consequences that trip people up, all SILENT:
 
 1. **No Build-and-Test run on main at all.** CD reacts to that workflow completing; if it never ran
    on the merge commit (a CI incident, a stalled queue), CD sits `SKIPPED` with nothing to react to.
@@ -229,8 +229,24 @@ so never relax it. Two consequences that trip people up, both SILENT:
    Test" --ref main` RUNS and genuinely tests the merge commit, so main shows a **green
    Build-and-Test** — but its `event` is `workflow_dispatch`, not `push`, so CD still skips. The
    most convincing possible "it shipped" signal, and no image.
+3. 🚨 **Back-to-back merges CANCEL each other's main run, so a merge burst publishes NOTHING.**
+   `dotnet-test.yml`'s concurrency group is `build-test-${{ … || github.ref }}` — every push to main
+   groups as `refs/heads/main`, so each merge cancels the in-flight run for the previous one (#2316,
+   which buys ~28% of runner demand and is worth keeping). But CD needs a run that **completes**:
+   a `cancelled` run never fires `workflow_run`. So during a burst main carries no completed run at
+   all, and every intermediate publish that "would have happened" simply does not. Observed
+   2026-08-26: #2316 merged at 12:55:25Z and main's next **five** runs were cancelled back-to-back,
+   leaving 45 minutes with no completed run and no publish.
 
-**Neither is terminal any more.** CD carries a **reconciler**: an hourly `schedule` (plus its own
+   Publishing only the **tip** of a burst is correct — intermediate commits never needed their own
+   image set, and it is the batching `CD_BATCH_WINDOW_MINUTES` already wants. The trap is that the
+   burst has to **end**: keep merging and the tip run is cancelled every time, the push path stops
+   publishing entirely, and the hourly reconciler silently becomes the only publisher. So when a
+   merge must actually ship (a fix you are waiting on), **merge, then wait for that merge commit's
+   Build-and-Test to COMPLETE before merging the next** — ~20 min per merge, and the only way
+   "merge on green" still means "an image ships".
+
+**None of these is terminal any more.** CD carries a **reconciler**: an hourly `schedule` (plus its own
 `workflow_dispatch`) resolves main's tip through the API, asks ACR whether that commit has the
 complete four-image set, and publishes only when it does not — bounded at 3 attempts per commit,
 with every attempt and the final give-up written to the `ci-failure` issue. So:

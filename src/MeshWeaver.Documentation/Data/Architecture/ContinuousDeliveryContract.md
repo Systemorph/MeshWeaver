@@ -126,8 +126,8 @@ is preserved by a stronger check rather than by a proxy.
 
 ## The standing trap — verify the IMAGE, never the tick
 
-CD's `workflow_run` trigger reacts to a **real push**. Two consequences trip people up, and both are
-silent:
+CD's `workflow_run` trigger reacts to a **real push**, and — more exactly — to one that
+**completes**. The consequences below all trip people up, and all are silent:
 
 1. **No Build-and-Test run on the merge commit at all** (a CI incident, a stalled queue). CD reacts
    to that workflow completing; with nothing to react to it sits `SKIPPED`.
@@ -145,6 +145,25 @@ silent:
    never a quiet skip.** The operator move is unchanged by the alarm: read the failing test; a
    flake → `gh run rerun <id> --failed` (a green rerun fires a fresh `workflow_run`, which
    publishes by itself); a real failure → fixing main IS the release path.
+
+4. 🚨 **A merge burst cancels its own runs, and publishes nothing.** `dotnet-test.yml` groups by
+   `build-test-${{ … || github.ref }}`, so every push to main shares the group `refs/heads/main` and
+   each merge **cancels the in-flight run of the one before it** (#2316 — worth ~28% of runner
+   demand, keep it). A `cancelled` run never fires `workflow_run`, so through a burst main carries
+   no completed run and no publish happens. Observed 2026-08-26: #2316 merged 12:55:25Z, the next
+   **five** main runs cancelled back-to-back, 45 minutes with no completed run.
+
+   Publishing only the burst's **tip** is the right outcome — intermediate commits never needed
+   their own image set, and it is the same batching `CD_BATCH_WINDOW_MINUTES` wants. The hazard is
+   that the burst must **end**: while merges keep arriving the tip run is cancelled every time, the
+   push path stops publishing altogether, and the hourly reconciler quietly becomes the only
+   publisher — which reads exactly like "CD is frozen".
+
+   **When a specific merge must ship, merge it and then wait for that merge commit's Build-and-Test
+   to COMPLETE before merging the next.** ~20 min per merge, and the only way "merge on green" still
+   means "an image ships". 🚨 Do not diagnose this from the tag alone: "no new tag" here has at
+   least three causes — the batch window, a repoint/version-step failure on a run that *did*
+   complete, and this. They stack, and naming only one leaves the other live.
 
 Two diagnosis cheats, both learned the hard way on 2026-08-22:
 
