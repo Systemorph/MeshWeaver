@@ -22,6 +22,27 @@
          portal's endpoint does — so the sidecar compiles and runs whether or not voice is
          installed. The Whisper client itself arrives as a MODULE (below). -->
     <ProjectReference Include="..\..\src\MeshWeaver.Speech.Contract\MeshWeaver.Speech.Contract.csproj" />
+
+    <!-- 🚨 Not used by any code here — this reference exists to make the CENTRAL pin BITE.
+         ModelContextProtocol.Core pulls Microsoft.Extensions.AI.Abstractions transitively at
+         10.4.1, and CentralPackageTransitivePinningEnabled is NOT set repo-wide (see the note in
+         Directory.Packages.props), so a bare PackageVersion cannot reach a pure-transitive
+         dependency. While the engine was a ProjectReference its own direct 10.8.3 reference
+         unified this app's graph; dropping that reference silently floated the app root down to
+         10.4.1 while modules/MeshWeaver.AI/ still binds 10.8.3.
+
+         That split is NOT cosmetic: InstallAssemblies uses Assembly.LoadFrom, which loads into the
+         DEFAULT AssemblyLoadContext — first assembly of a simple name wins, and the app root is
+         probed before a module's load-from path. MCP would load 10.4.1 first, the engine would
+         bind against it, and a 10.8-only member surfaces as the MissingMethodException that #2234's
+         per-module isolation catches: the module drops out, reported incompatible, and every chat
+         send is refused with "NodeType 'Thread' is not registered" again — on a green build.
+
+         The narrow remedy named in Directory.Packages.props ("adding the direct reference where the
+         package flows"), not repo-wide transitive pinning, which has a resolution-wide blast radius
+         and belongs in its own PR. With the versions unified the prune drops the module's copy as a
+         same-identity duplicate, so ONE copy ships. -->
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <!-- 🚨 The AI engine is NOT referenced here — deliberately, and this comment is the reason.
          It arrives the same way every other module does: MeshWeaver.AI is on the CLOSURE lane
          (memex/MeshModulesPublish.targets), so its bits land in modules/MeshWeaver.AI/ and
