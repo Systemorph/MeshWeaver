@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
-using MeshWeaver.AI;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -31,8 +30,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         // ConfigureMeshBase adds persistence + RLS + graph
-        var configured = ConfigureMeshBase(builder)
-            .AddThreadType();
+        var configured = ConfigureMeshBase(builder);
 
         // Seed every per-test AccessAssignment statically (via AddMeshNodes →
         // IStaticNodeProvider → SecurityService._staticAccessAssignments).
@@ -563,7 +561,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var threadNode = new MeshNode("Thread1", parentPath)
         {
             Name = "Editor Thread",
-            NodeType = "Thread"
+            NodeType = "Markdown"
         };
         var editorResponse = await client.Observe(new CreateNodeRequest(threadNode) { CreatedBy = editorId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
 
@@ -571,7 +569,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var commenterThread = new MeshNode("Thread2", parentPath)
         {
             Name = "Commenter Thread",
-            NodeType = "Thread"
+            NodeType = "Markdown"
         };
         var commenterResponse = await client.Observe(new CreateNodeRequest(commenterThread) { CreatedBy = commenterId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
 
