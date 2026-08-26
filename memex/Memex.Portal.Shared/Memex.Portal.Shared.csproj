@@ -53,9 +53,12 @@
          landing refuses the same-identity module (409 on every instance). -->
     <!-- MeshWeaver.Blazor.Graph is deliberately NOT referenced (the EntityViews/#1974 shape): its
          GraphViewsViewPackModuleAttribute registers the node views when the DLL is listed under
-         Modules:Assemblies; the bits ship via the modules/<Name>/ lane. Blazor.Portal REMAINS a
-         compiled reference for now — it is SHELL infrastructure (PortalLayoutBase, auth,
-         viewport), tracked for extraction as #2169 Phase B3. -->
+         Modules:Assemblies; the bits ship via the modules/<Name>/ lane. The MeshWeaver.Blazor.Portal
+         PROJECT was removed from this repo (#2293): the shell infrastructure it held —
+         PortalLayoutBase, auth, viewport — moved to MeshWeaver.Plugins with the portal hosts,
+         completing the extraction this comment used to track as #2169 Phase B3. The assembly
+         NAME still appears here on purpose: the InternalsVisibleTo below grants the plugins-built
+         MeshWeaver.Blazor.Portal.dll the internals it always had. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.SignalR\MeshWeaver.Hosting.SignalR.csproj" />

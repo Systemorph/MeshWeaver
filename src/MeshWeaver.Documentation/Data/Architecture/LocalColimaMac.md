@@ -123,9 +123,27 @@ Both pipelines build **multi-arch manifest lists** (`linux/amd64` + `linux/arm64
 
 When you've changed source that isn't in any pushed tag, build straight into Colima's Docker store. The verified rebuild loop (a few minutes on an M-series Mac):
 
+> **🚨 The portal host lives in `MeshWeaver.Plugins`, not here.** The GUI extraction (#2169 / #2293)
+> moved `Memex.Portal.Distributed`, `Memex.Portal.Monolith`, `Memex.AppHost` **and the login pages**
+> (`Memex.Portal.Gui/Pages/{Login,DevLogin,DevLoginConfirm}.razor`) into the plugins repo. The
+> commands below publish from a checkout of it beside this one; `memex-local` resolves the same path
+> and fails loudly if it is missing (override with `MEMEX_PLUGINS_REPO`). The migration image stays
+> here — it is not GUI.
+>
+> Two consequences worth stating, because each presented as something else when they were missed
+> (#2367): **the login UI is compiled INTO the image** (it is shell, not a pack — a portal serving
+> 404 on `/login` is running an image built before the move, and the fix is to rebuild), while
+> **the view packs are NOT** — `DefaultViews`/`GraphViews` left the image in #2169 Phase B2 and
+> arrive only as registry bundles, which the boot reconcile installs because both declare
+> `preInstalled`. A portal missing them renders every control as its `ToString()`, and the Plugin
+> Catalog that would repair it is itself one of the missing views. `memex-local up`/`update` verify
+> both and refuse to report success otherwise; `memex-local verify` asks the same question of a
+> running install at any time.
+
 ```bash
 # 1. Publish a native arm64 container image straight into Colima's Docker store.
-dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
+#    ../MeshWeaver.Plugins is the sibling checkout; $(MeshWeaverRoot) defaults to this repo.
+dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
   -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local
 
 # 2. Tag it to the name the chart expects (IfNotPresent then finds it locally).
@@ -306,7 +324,7 @@ If you want the URL without the `:8443` suffix, forward the privileged port 443.
 
 ## 9. Auth — Microsoft Entra OAuth
 
-The Distributed portal authenticates via **Microsoft Entra OAuth** (the callback path is `/signin-microsoft`, set in `AuthenticationBuilderExtensions.cs`). Create a **dedicated app registration** for local dev (so its redirect URIs don't collide with the cloud apps):
+The Distributed portal authenticates via **Microsoft Entra OAuth** (the callback path is `/signin-microsoft`, set in `MeshWeaver.Plugins/src/MeshWeaver.Blazor.Portal/Authentication/AuthenticationBuilderExtensions.cs` — the portal GUI moved there with #2293). The sign-in page itself is `Memex.Portal.Gui/Pages/Login.razor` in the same repo, and it is compiled into the image: `curl -sk -o /dev/null -w '%{http_code}' https://memex.localhost:8443/login` answering 404 means the image predates the move, not that a package is missing. Create a **dedicated app registration** for local dev (so its redirect URIs don't collide with the cloud apps):
 
 1. Azure Portal → **App registrations** → **New registration** (or reuse a dedicated local-dev app).
 2. Under **Authentication → Web → Redirect URIs**, register the local callbacks. Register both the no-port (443) and `:8443` forms so either port works:
@@ -323,7 +341,7 @@ The Distributed portal authenticates via **Microsoft Entra OAuth** (the callback
 
 OAuth over `http://localhost` originally failed with `/login?error=auth_failed` and a portal log line `AuthenticationFailureException: Correlation failed` (`.AspNetCore.Correlation.* cookie not found`). Root cause: the OIDC **correlation + nonce cookies are `SameSite=None`** (the Microsoft callback is a cross-site `form_post`), and browsers **drop a `SameSite=None` cookie that isn't also `Secure`**. The handler's default `SecurePolicy = SameAsRequest` left them non-Secure over plain HTTP, so they were never stored.
 
-The fix in `src/MeshWeaver.Blazor.Portal/Authentication/AuthenticationBuilderExtensions.cs` (`AddMicrosoftAuthentication`) forces them Secure:
+The fix in `MeshWeaver.Plugins/src/MeshWeaver.Blazor.Portal/Authentication/AuthenticationBuilderExtensions.cs` (`AddMicrosoftAuthentication`) forces them Secure:
 
 ```csharp
 options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
@@ -409,7 +427,7 @@ So a "Local" tab is unmistakable next to Test/Prod, the portal supports two opti
 | `Portal__InstanceName` | Browser-tab **title** becomes this name, and the favicon becomes a distinct **colored badge** showing the name's initial. Empty (prod) = default Memex branding. |
 | `Portal__InstanceColor` | Badge fill color (hex, e.g. `#f59e0b`). Empty = amber default. |
 
-These are implemented in `memex/Memex.Portal.Shared/App.razor`: when `Portal:InstanceName` is set it emits an inline-SVG data-URI favicon (a rounded-square badge with the initial) and a small `MutationObserver` that pins the tab title to the instance name. Unset → the standard `favicon.ico` and `Memex Portal` title. Set `Portal__InstanceName: "Local"` in your overlay so your local tab is obvious at a glance.
+These are implemented in `MeshWeaver.Plugins/src/Memex.Portal.Gui/App.razor` (the portal GUI moved there with #2293): when `Portal:InstanceName` is set it emits an inline-SVG data-URI favicon (a rounded-square badge with the initial) and a small `MutationObserver` that pins the tab title to the instance name. Unset → the standard `favicon.ico` and `Memex Portal` title. Set `Portal__InstanceName: "Local"` in your overlay so your local tab is obvious at a glance.
 
 🚨 **On a node page the NODE's icon wins over the badge, by design.** `ApplicationPage` publishes the
 node's own icon into the head from inside `HeadOutlet`, which App.razor places *after* the badge —
@@ -456,8 +474,23 @@ The result: every device trusts the cert out of the box (no mkcert CA install), 
 | `instance up` fails `409 — Instance id '<id>' is already registered` | An instance id is claimed **globally** on the registry, and dropping the instance's database does not release it. Use `memex-local instance down --id <id>` (which releases the claim and restarts the registry) before re-running, or pick a new id. |
 | A plugin install fails with `NodeType(s) not registered: <Other>/<Type>` | The package depends on another that is not installed yet. The default install orders by the manifest's `requires`; a package that depends on something **outside** the granted set cannot be ordered against and will fail. Grant the dependency too (§16). |
 | Instance pod OOMs mid-install (`OutOfMemoryException`, often surfacing inside Npgsql) and the remaining packages never install | A first boot compiles every default-installed plugin's node types back to back, and each compile **retains** its collectible ALC. `memex-local` sizes the instance pod 3cpu/6Gi for this; a smaller pod dies partway. Installing fewer packages by default (a narrower `InstallByDefault`) is the other lever. |
+| **Every control renders as debug text** — `NamedAreaControl { Id = , Style = , … }` instead of UI | The **view packs are not installed**. `DefaultViews`/`GraphViews` left the image in #2169 Phase B2 and arrive only as registry bundles; without them nothing has a view and the control falls back to its `ToString()`. 🚨 The documented repair — Settings ▸ Administration ▸ Plugin Catalog — is *itself* rendered by the missing views, so the portal cannot repair itself through its own UI. Diagnose from outside: `memex-local verify`. Both packs declare `preInstalled`, so the boot reconcile installs them from your checkout on every boot; if it did not, `memex-local logs --no-follow --tail 400 \| grep DefaultInstall` says why (a source name that matches no grant, an unreadable repo, a platform floor). (#2367) |
+| **`/login` 404s** — no way to sign in at all | The login pages are Blazor pages compiled **into** the image (`MeshWeaver.Plugins/src/Memex.Portal.Gui/Pages/`), so this is an image built before the GUI move (#2293), not a missing package. Rebuild: `memex-local update --build`, with the plugins checkout on `main`. (#2367) |
 
-**Verify end-to-end** that TLS + routing + the app are all working:
+**Verify end-to-end** that the portal is *usable*, not merely answering:
+
+```bash
+memex-local verify
+# Asserts three things and exits non-zero, naming a remedy, if any fails:
+#   • the portal SERVES        — an HTTP status in the serving range (a 503 is not "reachable")
+#   • /login is ROUTED         — there is a way to sign in
+#   • the view packs are there — MeshWeaver.Blazor.Views + MeshWeaver.Blazor.Graph
+```
+
+🚨 `up` and `update` run this for you and refuse to report success without it. The check it replaced
+curl'd `/` and printed "Portal reachable" whenever **curl** exited 0 — so a 503, a 404 and a portal
+rendering every control as its `ToString()` all produced the same green line (#2367). If you want the
+raw TLS/routing signal on its own:
 
 ```bash
 curl --cacert "$(mkcert -CAROOT)/rootCA.pem" \

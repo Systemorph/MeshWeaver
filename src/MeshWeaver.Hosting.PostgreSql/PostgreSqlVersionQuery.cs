@@ -49,7 +49,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
         // The pg I/O pool runs the DB fetch on the ThreadPool behind its concurrency gate
         // with ConfigureAwait(false) — no custom TaskScheduler (Orleans) is ever captured.
         => _ioPool.Invoke(ct => FetchVersionsAsync(path, ct))
-            .SelectMany(versions => versions.ToObservable());
+            .SelectMany(versions => versions.ToInlineObservable());
 
     private async Task<List<MeshNodeVersion>> FetchVersionsAsync(string path, CancellationToken ct)
     {

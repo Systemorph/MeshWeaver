@@ -43,17 +43,32 @@ namespace MeshWeaver.Hosting.Test;
 /// decision — backlog vs live buffer — is made inside the same critical section that publishes the
 /// buffer. Then a notification lands in exactly one of the two and can never fall between them.</para>
 ///
-/// <para>🚨 <b>Issue #2319 (2026-08-26): a SECOND, unrelated timing hazard, now closed by
-/// <see cref="WarmUpJitAndTypeLoad"/>.</b> After the fix above landed, this test still failed
-/// intermittently on CI's shard 2 — every single time on the FIRST test of the whole assembly to
-/// exercise this reactive pipeline in a fresh process. Root-caused (not guessed) by reproducing it
-/// in a Linux container capped at CI's 4 CPUs: an instrumented loop that repeats the gated scenario
-/// hundreds of times in one warm process never drops the notification, but the very FIRST call
-/// into <see cref="StorageAdapterMeshQueryProvider"/>'s pipeline in a cold process can itself take
-/// longer than the 10 s per-step budget below under real contention — JIT + generic-Rx-operator
-/// type load, not a dropped row. <see cref="WarmUpJitAndTypeLoad"/> pays that one-time cost on
-/// throwaway objects before the gated scenario begins, so a red below again means exactly what the
-/// class doc above says.</para>
+/// <para>🚨 <b>Issue #2319: a SECOND, unrelated timing hazard.</b> After the fix above landed, this
+/// test still failed intermittently on CI — every single time on the FIRST test of the whole
+/// assembly to exercise this reactive pipeline in a fresh process. An instrumented loop at CI's 4
+/// CPUs showed the gated scenario never drops the notification once warm (400 iterations, only ever
+/// iteration 0 failed), so <see cref="WarmUpJitAndTypeLoad"/> was added to pay the one-time
+/// JIT/type-load cost on throwaway objects before the gated scenario's budgets start. That is real
+/// and it stays.</para>
+///
+/// <para>🚨 <b>Issue #2377: it was NOT the whole story, and the rest was a framework bug.</b> The
+/// test kept failing afterwards — now inside the warm-up itself, the phase built to absorb cold JIT,
+/// stuck for its full 30 s against an EMPTY store. That is not slowness: a warm-process loop is
+/// structurally blind to anything that only manifests cold or via cross-test state, so it had never
+/// ruled anything out. Reproduced at ~23% by running the whole assembly cold in a Linux container
+/// capped at 4 CPUs, and traced: <c>Subscribe</c> returned having never walked, with no error and no
+/// completion, and the Initial never arrived at all.</para>
+///
+/// <para>Cause: the scope walk emitted its path lists with the parameterless
+/// <c>IEnumerable.ToObservable()</c>, which Rx schedules on <c>CurrentThreadScheduler</c> — and that
+/// scheduler only ENQUEUES while another trampoline is running on the thread. The captured stack
+/// shows whose: the hub's own <c>MessageService.DrainOne</c> pump opened one, ~500 frames down a
+/// <c>.ToTask()</c> resolved, and .NET resumed its awaiter INLINE on that stack — so xUnit carried on
+/// running tests inside a stranger's trampoline. This test then subscribed there and blocked on its
+/// own Initial, and the enqueued walk could not be drained until the blocked frame returned, which it
+/// never would. Fixed at the source with <c>ToInlineObservable()</c>
+/// (<see cref="InlineObservableExtensions"/>); <c>LiveQueryForeignTrampolineTest</c> pins it
+/// deterministically. A red below therefore means exactly what the class doc above says.</para>
 /// </summary>
 public class LiveQueryHandoffDropTest
 {
@@ -170,6 +185,12 @@ public class LiveQueryHandoffDropTest
     /// Warming it up here — on throwaway objects, fully independent of the gated scenario — moves
     /// that one-time cost out of the window the assertions below measure, so a red there again
     /// means what the class doc says: the row was actually dropped, not merely slow to JIT.</para>
+    ///
+    /// <para>🚨 It is NOT, however, what made this test fail AFTER the warm-up landed: that was the
+    /// framework bug in issue #2377 (a scope walk queued on a foreign Rx trampoline, so the Initial
+    /// never arrived at all), fixed in <c>StorageAdapterMeshQueryProvider</c>. Both budgets below
+    /// stay at 30 s and both stay FAIL-FAST: falling through silently would run the gated scenario
+    /// against a still-cold pipeline and let it misreport its own timeout as a dropped row.</para>
     /// </summary>
     private static void WarmUpJitAndTypeLoad()
     {
