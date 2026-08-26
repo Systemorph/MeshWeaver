@@ -119,7 +119,20 @@ public static class SignalRClientExtensions
         hub.RegisterForDisposal(Disposable.Create(() =>
         {
             connection.Reconnecting -= Connect;
-            _ = connection.DisposeAsync();
+            // Fire-and-forget, but OBSERVED. A synchronous disposal callback must not block on async
+            // work — this one can run on a hub turn, and parking it there is the deadlock the actor
+            // model does not tolerate. What it must not do either is DISCARD the ValueTask: a
+            // faulting DisposeAsync then surfaces as an UnobservedTaskException with no connection
+            // to this line, or as nothing at all. So the task is kept and its fault is logged.
+            var disposal = connection.DisposeAsync();
+            if (!disposal.IsCompletedSuccessfully)
+                disposal.AsTask().ContinueWith(
+                    t => hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger(typeof(SignalRClientExtensions))
+                        .LogWarning(t.Exception, "SignalR connection disposal faulted for {Address}", hub.Address),
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
         }));
 
         await connection.StartAsync();
