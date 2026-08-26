@@ -149,8 +149,12 @@ CD's `workflow_run` trigger reacts to a **real push**, and — more exactly — 
 4. 🚨 **A merge burst cancels its own runs, and publishes nothing.** `dotnet-test.yml` groups by
    `build-test-${{ … || github.ref }}`, so every push to main shares the group `refs/heads/main` and
    each merge **cancels the in-flight run of the one before it** (#2316 — worth ~28% of runner
-   demand, keep it). A `cancelled` run never fires `workflow_run`, so through a burst main carries
-   no completed run and no publish happens. Observed 2026-08-26: #2316 merged 12:55:25Z, the next
+   demand, keep it). CD still **fires** on those runs — this workflow subscribes with
+   `types: [completed]` and a cancelled run counts as completed — but the delivery gate keys on the
+   required check **`Consolidate test results` reaching `success` for that SHA**, which a cancelled
+   run never produces (and gating on the required check rather than the run's umbrella conclusion is
+   deliberate — see the DELIVERY GATE comment). So CD wakes, decides "nothing will be built", and
+   through a burst nothing publishes. Observed 2026-08-26: #2316 merged 12:55:25Z, the next
    **five** main runs cancelled back-to-back, 45 minutes with no completed run.
 
    Publishing only the burst's **tip** is the right outcome — intermediate commits never needed
