@@ -126,7 +126,15 @@ public class PatchAckWriteIdentityTest
 
         public override CountingPayload Read(
             ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-            => new();
+        {
+            // A converter MUST leave the reader positioned on the last token of the value it
+            // consumed; returning without advancing would strand the reader mid-value and throw
+            // on the next read. This converter exists to count WRITES, so the value itself is
+            // discarded — but it is still consumed properly, so the type stays deserializable if
+            // a later test round-trips it.
+            reader.Skip();
+            return new();
+        }
 
         public override void Write(
             Utf8JsonWriter writer, CountingPayload value, JsonSerializerOptions options)
@@ -173,8 +181,11 @@ public class PatchAckWriteIdentityTest
         var node = new PayloadNode("Anthropic", 13, new CountingPayload());
 
         // Control: the instrument fires when the document really is built.
-        JsonSerializer.SerializeToNode(node, node.GetType(), options);
+        var document = JsonSerializer.Serialize(node, node.GetType(), options);
         counter.Writes.Should().Be(1, "the converter must be reached by a genuine serialisation");
+        // ...and the probe type really does round-trip, so the converter's Read consumes its
+        // value rather than stranding the reader mid-document.
+        JsonSerializer.Deserialize<PayloadNode>(document, options)!.Id.Should().Be("Anthropic");
 
         for (var i = 0; i < 50; i++)
         {
