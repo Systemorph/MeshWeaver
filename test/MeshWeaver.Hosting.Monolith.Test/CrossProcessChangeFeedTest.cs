@@ -131,6 +131,102 @@ public class CrossProcessChangeFeedTest(ITestOutputHelper output) : MonolithMesh
             + "nowhere, is not a mirror learning of a write");
     }
 
+    /// <summary>
+    /// The ROOT of #2008, as a deterministic assertion rather than the race it surfaces as:
+    /// <b>a process that only MIRRORS a node must never write that node</b> — not even the
+    /// activation seed it just read out of the same store.
+    ///
+    /// <para>Against the unfixed framework this fails on every run: process B's per-node hub reads
+    /// the durable row as its activation seed, and the persistence sampler dispatches that read
+    /// straight back to storage as if it were a local edit. The sampler's echo suppression is a
+    /// reference comparison against <c>OwnNodeCache.PersistedSnapshot</c>, which is ONE slot, while
+    /// <c>MeshNodeTypeSource.Initialize</c> builds TWO collections back-to-back (the durable seed,
+    /// then the routing-supplied leg) before the workspace hands either to the sampler — so the
+    /// slot holds the routing instance and the SEED emission is not recognised as a load.</para>
+    ///
+    /// <para><b>Why that write is the version defect and not merely a wasted round-trip.</b> It is
+    /// harmless exactly while the row has not moved. When the other process's real write lands
+    /// first — which is the whole point of a cross-process test, and what CI hits at ~1.3% — the
+    /// seed write is a strict version regression: <c>MonotonicWriteGuardStorageAdapter</c> refuses
+    /// it, and <c>AdoptDurableTruth</c> then correctly (for a hub that has something of its own to
+    /// save) rebases this owner at <c>durable + 1</c>. So a mirror that never edited anything ends
+    /// up holding a revision the store never held, carrying the right content — "converging on
+    /// content by accident, at a version that exists nowhere" (#1432), which is exactly what
+    /// <see cref="AWriteInOneProcess_ReachesTheOtherProcessesLiveMirror_WithoutARecycle"/> reports
+    /// when it fails. That test asserts the SYMPTOM under a race; this one asserts the CAUSE.</para>
+    ///
+    /// <para>🚨 <b>Two nodes, and the reason is the whole point.</b> The mirrored node under test
+    /// (<c>seed</c>) is NEVER written by anyone after B activates, so nothing can rescue B's seed
+    /// echo: the only thing that suppresses it on the unfixed framework is B adopting a HIGHER
+    /// durable version for that same path first (<c>AdoptPersisted</c> records the adopted version
+    /// on <c>PostCommitFlushRegistry</c>, which <c>HandleSaveMeshNode</c> then drops the stale save
+    /// against). Assert on a path A also writes and that rescue fires often enough to turn the red
+    /// into a coin flip — the same coin flip #2008 IS. The second node (<c>clock</c>) supplies the
+    /// wait instead: B converging on a write to a DIFFERENT path proves B ran a full
+    /// notification → re-read → adopt cycle, which begins after activation and ends past the 200 ms
+    /// persistence-sample window that dispatches the seed echo. Load stretches that cycle while the
+    /// sample window stays a wall-clock 200 ms from activation, so a busy runner makes this red
+    /// MORE reliable, not less.</para>
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task AMirroringProcess_NeverWritesTheNode_NotEvenItsActivationSeed()
+    {
+        var seedId = $"seed-echo-{Guid.NewGuid():N}";
+        var seedPath = $"{TestPartition}/{seedId}";
+        var clockId = $"seed-clock-{Guid.NewGuid():N}";
+        var clockPath = $"{TestPartition}/{clockId}";
+
+        await NodeFactory.CreateNode(new MeshNode(seedId, TestPartition)
+            { Name = "v1", NodeType = "Markdown", State = MeshNodeState.Active })
+            .Should().Within(30.Seconds()).Emit();
+        await NodeFactory.CreateNode(new MeshNode(clockId, TestPartition)
+            { Name = "v1", NodeType = "Markdown", State = MeshNodeState.Active })
+            .Should().Within(30.Seconds()).Emit();
+        var durableSeed = await WaitDurable(seedPath, n => n.Name == "v1");
+        await WaitDurable(clockPath, n => n.Name == "v1");
+
+        using var processB = BuildSecondProcess();
+        using var wire = Bridge(processB);
+        var adapterB = processB.ServiceProvider.GetRequiredService<CrossProcessFeedAdapter>();
+
+        // Both mirrors go live — this is what activates B's per-node hubs and runs the durable
+        // activation-seed read whose echo is under test. keepAlive holds them open, so the sampler
+        // window belongs to LIVE hubs rather than ones already tearing down.
+        var mirror = processB.Hub.GetWorkspace().GetMeshNodeStream(seedPath)
+            .Where(n => n is not null).Replay(1).RefCount();
+        using var keepAlive = mirror.Subscribe();
+        var clockMirror = processB.Hub.GetWorkspace().GetMeshNodeStream(clockPath)
+            .Where(n => n is not null).Replay(1).RefCount();
+        using var clockAlive = clockMirror.Subscribe();
+        await mirror.Should().Within(30.Seconds()).Match(n => n.Name == "v1");
+        await clockMirror.Should().Within(30.Seconds()).Match(n => n.Name == "v1");
+
+        // The clock: A writes the OTHER node and we wait for B to learn of it. Never a bare sleep,
+        // and never "the counter is still 0" — that would pass before the sampler had even fired.
+        Mesh.GetWorkspace().GetMeshNodeStream(clockPath)
+            .Update(n => n with { Name = "written-in-A" })
+            .Subscribe(_ => { }, ex => Output.WriteLine($"[A clock write error] {ex.Message}"));
+        await WaitDurable(clockPath, n => n.Name == "written-in-A");
+        await clockMirror.Should().Within(30.Seconds()).Match(n => n.Name == "written-in-A");
+
+        var writesSeed = await Settle(() => adapterB.WriteCount(seedPath));
+        Output.WriteLine($"[B writes] seed={writesSeed} clock={adapterB.WriteCount(clockPath)} "
+            + $"(store seed v={_rows[seedPath].Version})");
+
+        writesSeed.Should().Be(0,
+            "a mirroring process READS this node and never edits it, so nothing it holds may reach "
+            + "storage. The activation seed IS the durable row — writing it back is an observation "
+            + "entering the write path, and the moment another process's write gets there first "
+            + "that echo becomes a version REGRESSION the monotonic guard refuses, after which the "
+            + "refusal rebase leaves this mirror at durable+1 (#1432/#2008)");
+
+        // …and the store is untouched: the seed row still sits at exactly the version A created it
+        // at, no rewrite of any kind.
+        _rows[seedPath].Version.Should().Be(durableSeed.Version,
+            "nobody wrote this node after it was created, so its durable revision must not have "
+            + "moved — a store that advanced has taken a write from a process that only mirrors");
+    }
+
     [Fact(Timeout = 90_000)]
     public async Task AnEntitylessEchoOfTheOwnWrite_IsSuppressed_AndWritesNothingBack()
     {
@@ -291,16 +387,30 @@ public class CrossProcessChangeFeedTest(ITestOutputHelper output) : MonolithMesh
         // MeshNodeTypeSource.LogDebug/LogWarning call from its own-node reconcile (adds/updates/
         // deletes counts, durable-seed reads) went nowhere, not xUnit output, not the log file, on
         // every run, including a failing one. See #2008.
-        services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+        var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Logging:LogLevel:Default"] = "Warning",
                 ["Logging:LogLevel:MeshWeaver.Graph.MeshNodeTypeSource"] = "Debug",
             })
-            .Build());
+            .Build();
+        services.AddSingleton<IConfiguration>(configuration);
         services.AddLogging(l =>
         {
             l.ClearProviders();
+            // AddConfiguration is what makes the override above REAL, and it is the half #2348
+            // missed. Registering a provider only wires WHERE a record goes; the level deciding
+            // whether it is emitted at all lives in LoggerFilterOptions, which ILoggerFactory
+            // consults BEFORE any provider and which defaults to Information. So process B
+            // delivered its Warning/Error records (already a strict improvement on the
+            // ClearProviders-with-nothing-added-back state, which delivered none) while every
+            // LogDebug the same change added — including the MeshNodeTypeSource own-node
+            // reconcile lines the exercise was for — was still dropped by the factory, and the
+            // Debug lines that then showed up in CI were process A's. Process A gets this wiring
+            // from ServiceSetup.CreateServiceCollection; B builds its own container, so B must do
+            // it itself. Verified by reading ILogger<MeshNodeTypeSource>.IsEnabled(Debug) in both
+            // processes: A true, B false.
+            l.AddConfiguration(configuration.GetSection("Logging"));
             l.Services.AddSingleton<ILoggerProvider>(sp => new XUnitFileLoggerProvider(() => FileOutput, sp));
         });
         services.AddOptions();

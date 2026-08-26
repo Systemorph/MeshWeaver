@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using MeshWeaver.AI;
 using MeshWeaver.Documentation;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -797,8 +796,12 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
 }
 
 /// <summary>
-/// Tests that static node providers (Doc, Agent, Role) enforce read-only policies
+/// Tests that static node providers (Doc, Role) enforce read-only policies
 /// via PartitionAccessPolicy nodes emitted from their GetStaticNodes() methods.
+/// <para>The Agent provider's own policy is pinned beside it, in
+/// <c>MeshWeaver.AI.Test.AgentNamespacePolicyTest</c> (#2276): the contract is general, but
+/// each instance of it belongs with the provider that emits it — MeshWeaver.AI is leaving
+/// this repository, and a policy test for its provider must leave with it.</para>
 /// </summary>
 public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -809,12 +812,10 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
     {
         return ConfigureMeshBase(builder)
             .AddDocumentation()
-            .AddAgentType()
             .AddRowLevelSecurity()
             .AddMeshNodes(
                 AssignmentNodeFactory.UserRole("admin_doc", "Admin", ""),
                 AssignmentNodeFactory.UserRole("editor_doc", "Editor", "Doc"),
-                AssignmentNodeFactory.UserRole("admin_agent", "Admin", ""),
                 AssignmentNodeFactory.UserRole("admin_role", "Admin", ""),
                 AssignmentNodeFactory.UserRole("admin_other", "Admin", ""),
                 AssignmentNodeFactory.UserRole("admin_docroot", "Admin", ""));
@@ -834,14 +835,6 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         var expected = Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export;
         await Mesh.GetEffectivePermissions("Doc/AI/AgenticAI", "editor_doc")
             .Should().Match(p => p == expected, "Doc namespace allows read + comment + thread + export but not create/update/delete");
-    }
-
-    [Fact(Timeout = 20000)]
-    public async Task AgentNamespace_AdminCappedToReadOnly()
-    {
-        var expected = Permission.Read | Permission.Execute | Permission.Api | Permission.Export;
-        await Mesh.GetEffectivePermissions("Agent/ThreadNamer", "admin_agent")
-            .Should().Match(p => p == expected, "Agent namespace has a static read-only policy");
     }
 
     [Fact(Timeout = 20000)]

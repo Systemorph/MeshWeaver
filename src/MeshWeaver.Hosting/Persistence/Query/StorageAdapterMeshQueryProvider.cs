@@ -646,7 +646,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             return WalkAdapter(basePath, QueryScope.Descendants)
                 .Where(path => !string.IsNullOrEmpty(path))
                 .ToList()
-                .SelectMany(allPaths => NamespaceFrontier.Frontier(basePath, allPaths).ToObservable())
+                .SelectMany(allPaths => NamespaceFrontier.Frontier(basePath, allPaths).ToInlineObservable())
                 .Where(path => emittedFrontier.Add(path))
                 .SelectMany(path => persistence.Read(path, options)
                     .Take(1)
@@ -764,7 +764,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         }
 
         var matchedScopeNodes = walkPairs
-            .ToObservable()
+            .ToInlineObservable()
             .SelectMany(pair => WalkAdapter(pair.Root, pair.Scope))
             .Where(path => !string.IsNullOrEmpty(path))
             .Where(path => emittedPaths.Add(path))
@@ -836,12 +836,12 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 string.Join(",", level.Item2 ?? Enumerable.Empty<string>())))
             .SelectMany(level =>
             {
-                var nodePaths = (level.Item1 ?? Enumerable.Empty<string>()).ToObservable();
+                var nodePaths = (level.Item1 ?? Enumerable.Empty<string>()).ToInlineObservable();
                 if (!recursive)
                     return nodePaths;
                 var nodesAndDeeper = nodePaths.SelectMany(p =>
                     Observable.Return(p).Concat(WalkLevel(p, recursive: true)));
-                var dirs = (level.Item2 ?? Enumerable.Empty<string>()).ToObservable()
+                var dirs = (level.Item2 ?? Enumerable.Empty<string>()).ToInlineObservable()
                     .SelectMany(d => WalkLevel(d, recursive: true));
                 return nodesAndDeeper.Concat(dirs);
             })
@@ -944,7 +944,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     logger?.LogDebug("Validator {Validator} rejected read on node {Path}: {Error}",
                         v.GetType().Name, node.Path, r.ErrorMessage);
             }))
-            .ToObservable()
+            .ToInlineObservable()
             .Concat()
             .All(r => r.IsValid);
     }

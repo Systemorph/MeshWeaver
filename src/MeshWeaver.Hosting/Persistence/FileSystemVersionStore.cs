@@ -111,7 +111,7 @@ public class FileSystemVersionStore : IVersionQuery
                     path, x.Version, new FileInfo(x.File).LastWriteTimeUtc,
                     null, null, null));
 
-            return versions.ToObservable();
+            return versions.ToInlineObservable();
         });
 
     /// <inheritdoc />
