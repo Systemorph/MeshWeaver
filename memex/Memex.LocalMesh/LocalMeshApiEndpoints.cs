@@ -1,3 +1,4 @@
+using MeshWeaver.AI;   // MeshOperations — the namespace is its frozen binary contract (#2370)
 using MeshWeaver.Mesh;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;

@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
