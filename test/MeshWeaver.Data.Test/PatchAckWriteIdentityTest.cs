@@ -112,6 +112,118 @@ public class PatchAckWriteIdentityTest
         acked.Should().Be(CommitV13);
     }
 
+    /// <summary>Probe payload whose converter COUNTS every time the node is turned into a
+    /// document — the instrument for the O(1) pin below. Instance state on a per-test options
+    /// object, never static.</summary>
+    private sealed class CountingPayload
+    {
+        public string Text { get; init; } = "payload";
+    }
+
+    private sealed class CountingPayloadConverter : System.Text.Json.Serialization.JsonConverter<CountingPayload>
+    {
+        public int Writes { get; private set; }
+
+        public override CountingPayload Read(
+            ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => new();
+
+        public override void Write(
+            Utf8JsonWriter writer, CountingPayload value, JsonSerializerOptions options)
+        {
+            Writes++;
+            writer.WriteStartObject();
+            writer.WriteString("text", value.Text);
+            writer.WriteEndObject();
+        }
+    }
+
+    private sealed record PayloadNode(string Id, long Version, CountingPayload Payload);
+
+    private static JsonSerializerOptions CountingOptions(
+        CountingPayloadConverter counter, JsonNamingPolicy? namingPolicy = null)
+    {
+        var options = new JsonSerializerOptions
+        {
+            // Explicit so the gate's contract lookup is available on the FIRST call — a bare
+            // options object has no resolver until something serializes through it.
+            TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver(),
+            PropertyNamingPolicy = namingPolicy
+        };
+        options.Converters.Add(counter);
+        return options;
+    }
+
+    /// <summary>
+    /// 🚨 The gate must answer from the node's two identity scalars WITHOUT materialising the
+    /// node — issue #2339. It is evaluated once per still-pending patch on EVERY emission of the
+    /// owner's reduced stream, so a burst of K concurrent cross-hub writes runs it K(K+1)/2
+    /// times; building the whole document each time made that O(K² · nodeSize) and, because a
+    /// slower emission leaves MORE patches pending, self-amplifying — the owner applied 288
+    /// writes in 1.5 s while its subscribers saw a ~2.7 s wall with no frames at all.
+    /// <para>Deterministic, not a timing assertion: the payload converter fires exactly when a
+    /// document is built, so the count IS the observation. The explicit serialisation first is
+    /// the control — it proves the instrument can fire, so the zero after it means something.</para>
+    /// </summary>
+    [Fact]
+    public void TheGate_AnswersWithoutMaterialisingTheNode()
+    {
+        var counter = new CountingPayloadConverter();
+        var options = CountingOptions(counter);
+        var node = new PayloadNode("Anthropic", 13, new CountingPayload());
+
+        // Control: the instrument fires when the document really is built.
+        JsonSerializer.SerializeToNode(node, node.GetType(), options);
+        counter.Writes.Should().Be(1, "the converter must be reached by a genuine serialisation");
+
+        for (var i = 0; i < 50; i++)
+        {
+            GateWith(node, "Anthropic", 13, options).Should().BeTrue();
+            GateWith(node, "Anthropic", 14, options).Should().BeFalse();
+            GateWith(node, "Other", 13, options).Should().BeFalse();
+        }
+
+        counter.Writes.Should().Be(1,
+            "150 gate evaluations must not build a single document — the ack watcher runs this "
+            + "predicate once per pending patch per emission, so any per-call serialisation is "
+            + "quadratic in the burst and self-amplifying (#2339)");
+    }
+
+    /// <summary>The contract read must resolve the SAME identity the document path resolves,
+    /// including under a naming policy — the keys it matches are the effective JSON names.</summary>
+    [Fact]
+    public void TheGate_ResolvesTheSameIdentity_UnderACamelCasePolicy()
+    {
+        var counter = new CountingPayloadConverter();
+        var options = CountingOptions(counter, JsonNamingPolicy.CamelCase);
+        var node = new PayloadNode("Anthropic", 13, new CountingPayload());
+
+        DataExtensions.ChangeContainsStampedWrite(node, "Anthropic", 13, "id", "version", options)
+            .Should().BeTrue("camelCase is the naming policy the mesh hub serializes MeshNode with");
+        DataExtensions.ChangeContainsStampedWrite(node, "Anthropic", 14, "id", "version", options)
+            .Should().BeFalse();
+        counter.Writes.Should().Be(0);
+    }
+
+    /// <summary>A version the serializer OMITS (0 under WhenWritingDefault) must read as 0 —
+    /// the same default the document path applies when the key is absent.</summary>
+    [Fact]
+    public void NeverStampedVersion_ReadsAsZero_AndCannotAck()
+    {
+        var counter = new CountingPayloadConverter();
+        var options = CountingOptions(counter);
+        var node = new PayloadNode("Anthropic", 0, new CountingPayload());
+
+        GateWith(node, "Anthropic", 1, options).Should().BeFalse(
+            "a node still at Version 0 cannot contain a write stamped at 1");
+        GateWith(node, "Anthropic", 0, options).Should().BeTrue(
+            "stampedVersion 0 is satisfied by version 0 — the >= rule, unchanged");
+    }
+
+    private static bool GateWith(object? value, string? stampedId, long stampedVersion, JsonSerializerOptions options)
+        => DataExtensions.ChangeContainsStampedWrite(
+            value, stampedId, stampedVersion, IdKey, VersionKey, options);
+
     [Fact]
     public void CounterfactualOldCountingShape_TakesTheLoadEcho()
     {
