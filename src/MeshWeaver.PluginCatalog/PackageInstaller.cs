@@ -120,7 +120,7 @@ public static class PackageInstaller
 
         var nodes = files
             .Where(f => !IsManifest(f.RelativePath))
-            .Select(f => ParseNode(parsers, partition!, sourceFolder, f, logger))
+            .Select(f => ParseNode(parsers, partition!, sourceFolder, f, logger, hub.JsonSerializerOptions))
             .Where(n => n is not null).Select(n => n!)
             .ToArray();
 
@@ -1798,7 +1798,7 @@ public static class PackageInstaller
 
         var sourceNodes = files
             .Where(f => !IsManifest(f.RelativePath))
-            .Select(f => ParseNode(parsers, nodeTypePath, sourceFolder, f, logger))
+            .Select(f => ParseNode(parsers, nodeTypePath, sourceFolder, f, logger, hub.JsonSerializerOptions))
             .Where(n => n is not null).Select(n => n!)
             .ToArray();
 
@@ -2106,7 +2106,7 @@ public static class PackageInstaller
             .Where(f => ModuleManifest.IsManifestPath(f.RelativePath))
             .Select(f => ModuleManifest.TryParse(f.Content, logger))
             .FirstOrDefault(m => m is not null);
-        var nodes = ParseAll(parsers, files, manifest.Id, logger);
+        var nodes = ParseAll(parsers, files, manifest.Id, logger, hub.JsonSerializerOptions);
 
         if (nodes.Length == 0)
             return Observable.Throw<InstallResult>(new InvalidOperationException(
@@ -2662,7 +2662,7 @@ public static class PackageInstaller
     {
 
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
-        var nodes = ParseAll(parsers, changedFiles, manifest.Id, logger);
+        var nodes = ParseAll(parsers, changedFiles, manifest.Id, logger, hub.JsonSerializerOptions);
 
         if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
             return shadowed;
@@ -2834,11 +2834,12 @@ public static class PackageInstaller
     /// </para>
     /// </summary>
     private static MeshNode[] ParseAll(
-        FileFormatParserRegistry parsers, IReadOnlyList<PackageFile> files, string packageId, ILogger? logger)
+        FileFormatParserRegistry parsers, IReadOnlyList<PackageFile> files, string packageId,
+        ILogger? logger, JsonSerializerOptions? options = null)
     {
         var unparsed = new List<string>();
         var nodes = files
-            .Select(f => ParseCanonical(parsers, f, logger, unparsed))
+            .Select(f => ParseCanonical(parsers, f, logger, options, unparsed))
             .Where(n => n is not null).Select(n => n!)
             .ToArray();
 
@@ -2876,7 +2877,8 @@ public static class PackageInstaller
         || ContentAssetMapper.IsContentPath(relativePath);
 
     private static MeshNode? ParseCanonical(
-        FileFormatParserRegistry parsers, PackageFile file, ILogger? logger, List<string>? unparsed = null)
+        FileFormatParserRegistry parsers, PackageFile file, ILogger? logger,
+        JsonSerializerOptions? options = null, List<string>? unparsed = null)
     {
         if (IsNotANodeFile(file.RelativePath))
             return null;
@@ -2889,7 +2891,7 @@ public static class PackageInstaller
             return null;
         }
         var (id, ns) = NodeFileMapper.FromRelativePath(file.RelativePath);
-        return AsAuthored(parsed, file, logger) with
+        return AsAuthored(parsed, file, logger, options) with
         {
             Id = id,
             Namespace = ns,
@@ -2924,23 +2926,49 @@ public static class PackageInstaller
     /// (<see cref="NodeTypeDefinition"/>, markdown, access assignments) is a real, process-unique
     /// registration rather than a name guess, so it stays typed: the installer's own ordering and
     /// compile-trigger logic reads <c>Content is NodeTypeDefinition</c>.</para>
+    ///
+    /// <para>🚨 #2266: the re-read here MUST tolerate exactly what the PRIMARY parse tolerated —
+    /// <see cref="FileFormatParserRegistry.TryParse"/> already produced <paramref name="parsed"/>
+    /// from this very <paramref name="file"/>, after stripping a leading UTF-8 BOM
+    /// (<see cref="FileFormatParserRegistry.WithoutBom"/>) and applying <paramref name="options"/>'s
+    /// comment/trailing-comma leniency. Re-parsing the RAW, un-stripped <c>file.Content</c> under
+    /// <see cref="JsonDocumentOptions"/>' strict defaults made the fallback below reachable for
+    /// every BOM'd file the primary parse tolerated — <c>samples/Graph/Data/PensionFund</c> ships
+    /// its Currency/Position/Year instances BOM'd, so every one of them silently installed the
+    /// materialised (possibly wrong-package) value instead of the authored file, which is also what
+    /// made the CHF/EUR/USD Currency nodes fail the idempotence check on a second install (#2271):
+    /// the wrongly-installed materialised value is what the unchanged-skip then compared against.</para>
     /// </summary>
     // Internal for the InstallAuthoredContentTest pin (InternalsVisibleTo).
-    internal static MeshNode AsAuthored(MeshNode parsed, PackageFile file, ILogger? logger)
+    internal static MeshNode AsAuthored(
+        MeshNode parsed, PackageFile file, ILogger? logger, JsonSerializerOptions? options = null)
     {
         if (parsed.Content is null || !parsed.Content.GetType().Assembly.IsCollectible)
             return parsed;
         try
         {
-            using var doc = JsonDocument.Parse(file.Content);
+            // Same three tolerances JsonFileParser.Parse copies off the hub's own options — this
+            // read must never be STRICTER than the parse that already succeeded on this content.
+            var documentOptions = options is null
+                ? default
+                : new JsonDocumentOptions
+                {
+                    CommentHandling = options.ReadCommentHandling,
+                    AllowTrailingCommas = options.AllowTrailingCommas,
+                    MaxDepth = options.MaxDepth,
+                };
+            using var doc = JsonDocument.Parse(
+                FileFormatParserRegistry.WithoutBom(file.Content), documentOptions);
             if (doc.RootElement.ValueKind == JsonValueKind.Object
                 && doc.RootElement.TryGetProperty("content", out var authored))
                 return parsed with { Content = authored.Clone() };
         }
         catch (JsonException)
         {
-            // Unreachable in practice — a file that produced a typed content parsed as JSON once
-            // already. Fall through rather than invent a content shape.
+            // Reachable only for content that is genuinely malformed in a way the primary parse's
+            // OWN deserialization somehow tolerated (e.g. the "content" property itself is odd
+            // enough for JsonFileParser's typed deserialize to accept but this raw re-read cannot
+            // structurally locate) — fall through rather than invent a content shape.
         }
         logger?.LogWarning(
             "[PackageInstaller] {Path} materialised the runtime-compiled content type {Type}, and the "
@@ -2973,7 +3001,8 @@ public static class PackageInstaller
     // Parse one package file into a node rebased under the target partition (mirrors
     // GitHubSyncService.ParseFile). The package.json manifest is filtered out before this.
     private static MeshNode? ParseNode(
-        FileFormatParserRegistry parsers, string partition, string sourceFolder, PackageFile file, ILogger? logger)
+        FileFormatParserRegistry parsers, string partition, string sourceFolder, PackageFile file,
+        ILogger? logger, JsonSerializerOptions? options = null)
     {
         var rel = FolderRelative(file.RelativePath, sourceFolder);
 
@@ -2992,7 +3021,7 @@ public static class PackageInstaller
 
         var (id, ns) = NodeFileMapper.FromRelativePath(rel);
         var rebasedNs = string.IsNullOrEmpty(ns) ? partition : $"{partition}/{ns}";
-        return AsAuthored(parsed, file, logger) with
+        return AsAuthored(parsed, file, logger, options) with
         {
             Id = id,
             Namespace = rebasedNs,
