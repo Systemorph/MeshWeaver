@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
-using MeshWeaver.AI;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -31,8 +30,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         // ConfigureMeshBase adds persistence + RLS + graph
-        var configured = ConfigureMeshBase(builder)
-            .AddThreadType();
+        var configured = ConfigureMeshBase(builder);
 
         // Seed every per-test AccessAssignment statically (via AddMeshNodes →
         // IStaticNodeProvider → SecurityService._staticAccessAssignments).
@@ -550,7 +548,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact]
-    public async Task CreateThread_RequiresUpdatePermission()
+    public async Task CreateNode_RequiresUpdatePermission()
     {
         // Arrange — "editor_thr"/"commenter_thr" seeded statically with Editor/Commenter at parentPath.
         var client = GetClient();
@@ -559,25 +557,25 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string commenterId = "commenter_thr";
         const string parentPath = "rls/threads";
 
-        // Act - editor creates a Thread
-        var threadNode = new MeshNode("Thread1", parentPath)
+        // Act - editor creates a node
+        var editorNode = new MeshNode("Node1", parentPath)
         {
-            Name = "Editor Thread",
-            NodeType = "Thread"
+            Name = "Editor Node",
+            NodeType = "Markdown"
         };
-        var editorResponse = await client.Observe(new CreateNodeRequest(threadNode) { CreatedBy = editorId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
+        var editorResponse = await client.Observe(new CreateNodeRequest(editorNode) { CreatedBy = editorId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
 
-        // Commenter tries to create a Thread
-        var commenterThread = new MeshNode("Thread2", parentPath)
+        // Commenter tries to create a node
+        var commenterNode = new MeshNode("Node2", parentPath)
         {
-            Name = "Commenter Thread",
-            NodeType = "Thread"
+            Name = "Commenter Node",
+            NodeType = "Markdown"
         };
-        var commenterResponse = await client.Observe(new CreateNodeRequest(commenterThread) { CreatedBy = commenterId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
+        var commenterResponse = await client.Observe(new CreateNodeRequest(commenterNode) { CreatedBy = commenterId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
 
         // Assert
         editorResponse.Message.Success.Should().BeTrue("Editor has Update permission");
-        commenterResponse.Message.Success.Should().BeFalse("Commenter lacks Update permission for Thread creation");
+        commenterResponse.Message.Success.Should().BeFalse("Commenter lacks Update permission for node creation");
         commenterResponse.Message.RejectionReason.Should().Be(NodeCreationRejectionReason.ValidationFailed);
     }
 

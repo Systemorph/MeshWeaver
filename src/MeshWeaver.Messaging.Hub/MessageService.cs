@@ -53,6 +53,23 @@ public class MessageService : IMessageService
     private readonly IMessageHub hub;
 
     /// <summary>
+    /// The activation-identity token every <see cref="ErrorType.ShuttingDown"/> NACK a caller can
+    /// re-probe against (<c>GetMeshNodeOutcome</c>'s paced loop, #2025) must embed. Stable for
+    /// THIS hub instance's whole lifetime and different across activations — the datum that lets
+    /// the re-probe loop count DISTINCT owner activations instead of raw probes, i.e. tell "one
+    /// hub wedged in teardown" from "a recycle storm" (opposite fixes).
+    ///
+    /// <para>🚨 Factored into ONE place deliberately (Copilot review on #2376 caught two NACK
+    /// sites that had drifted from each other: one embedded no activation identity at all, the
+    /// other paired it with a per-DELIVERY id that varies on every retry even against the SAME
+    /// activation — either shape defeats the counter, in opposite directions). Every ShuttingDown
+    /// NACK this service mints for a delivery the reader can re-probe must call this, not inline
+    /// its own <c>RuntimeHelpers.GetHashCode</c>.</para>
+    /// </summary>
+    private string ActivationTag() =>
+        $"activation #{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(hub):X8}";
+
+    /// <summary>
     /// The hub tree's handler-side trail for awaited requests (issue #981). Every stage recorded
     /// below is guarded by <c>Find(id)</c> returning non-null — i.e. SOMEONE in this tree is
     /// currently awaiting a reply to that delivery — so an ordinary fire-and-forget message costs
@@ -826,9 +843,19 @@ public class MessageService : IMessageService
             // latch, MeshNodeStreamCache's shutdown-drop handling and PackageInstaller's retry all
             // ride out ShuttingDown and treat anything else as terminal. Same idiom as
             // AnswerUnreleasableDelivery above: honour the return value, and classify either way.
+            //
+            // 🚨 The ACTIVATION identity rides on the NACK too, and it is not decoration. A caller
+            // re-probing a ShuttingDown address (GetMeshNodeOutcome's paced loop) can otherwise
+            // not tell ONE hub wedged in teardown from a RECYCLE STORM — a hundred activations
+            // each dying before it can answer. Those have opposite fixes, and #2025 spent a full
+            // CI cycle on exactly that ambiguity: "still recycling after 110 probes" says nothing
+            // about whether it was 110 probes at one corpse or at 110 of them. The object hash is
+            // stable for an activation's lifetime and differs across activations, which is the
+            // whole question.
             var reason =
-                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process "
-                + $"{typeName}; the address may reactivate (recycle / restart). Rejecting now.";
+                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}, {ActivationTag()}) "
+                + $"— cannot process {typeName}; the address may reactivate (recycle / restart). "
+                + "Rejecting now.";
 
             return NackThroughParent(delivery, reason)
                 ? delivery.FailedAndNacked("Hub is shutting down")
@@ -1496,8 +1523,13 @@ public class MessageService : IMessageService
             // gate and be dropped — the very reason NackThroughParent exists. It applies the
             // tombstone fork itself (transient ShuttingDown for an address that may reactivate,
             // authoritative NotFound for a deleted one) and skips traffic nobody awaits.
+            //
+            // 🚨 ActivationTag() rides here too (#2025, Copilot review on #2376), separate from the
+            // per-DELIVERY `(id=...)` right after it: the delivery id is unique to THIS message and
+            // varies on every retry even against the SAME activation, so a re-probe loop counting
+            // distinct owners must key off the activation tag, never the whole message text.
             NackThroughParent(delivery,
-                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — "
+                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}, {ActivationTag()}) — "
                 + $"{delivery.Message.GetType().Name} (id={delivery.Id}) was accepted before "
                 + "disposal began and its turn came too late to process. The address may "
                 + "reactivate (recycle / restart); retry to get the authoritative answer.");

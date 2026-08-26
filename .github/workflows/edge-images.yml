@@ -36,6 +36,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # The SDK container build overflows the runner's ~14 GB; reclaim preinstalled tooling.
+      - name: Check out MeshWeaver.Plugins (holds the portal host)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          path: plugins-repo
+          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+          fetch-depth: 1
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -57,7 +65,7 @@ jobs:
         id: vars
         run: |
           set -euo pipefail
-          VERSION=$(dotnet msbuild memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
+          VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
           EDGE_VERSION="${VERSION/.ci./.edge.}"          # rc:    3.0.0-rc1.ci.N -> 3.0.0-rc1.edge.N
           EDGE_VERSION="${EDGE_VERSION/-ci./-edge.}"      # clean: 3.0.0-ci.N    -> 3.0.0-edge.N
@@ -81,7 +89,8 @@ jobs:
       # %3B is the MSBuild escape for a literal ';' inside a `;`-separated property value.
       - name: Build + push portal-ai (edge)
         run: >
-          dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
+          -p:MeshWeaverRoot=${{ github.workspace }}
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
           -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
