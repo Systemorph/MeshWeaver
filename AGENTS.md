@@ -256,6 +256,14 @@ so never relax it. Three consequences that trip people up, all SILENT:
    2026-08-26 a routine merge killed the run another session was watching to end a CD freeze — no
    damage beyond a lost cycle, but the fix is coordination, not care.
 
+   🚨 **A hold reaches your hands, NOT your subagents' — push it to them explicitly.** An agent
+   briefed to "root-cause and open a PR" follows this file's own merge-on-green default, which is
+   correct on any other day. The same 2026-08-26 hold was then broken **twice more, by two
+   subagents**, each merging a perfectly good fix at exactly the wrong moment. When you take a hold:
+   message every running agent, tell them to push and PARK, and disarm any auto-merge already
+   armed. The general form — **a constraint is only as complete as the set of hands it reaches** —
+   applies to anything you delegate, not just merges.
+
 **None of these is terminal any more.** CD carries a **reconciler**: an hourly `schedule` (plus its own
 `workflow_dispatch`) resolves main's tip through the API, asks ACR whether that commit has the
 complete four-image set, and publishes only when it does not — bounded at 3 attempts per commit,

@@ -172,7 +172,13 @@ CD's `workflow_run` trigger reacts to a **real push**, and — more exactly — 
    🚨 **And a merge cancels whatever is in flight, including a run another session is waiting on.**
    With several sessions merging into one repo, "wait for the run" only works if everyone waits —
    two sessions each merging politely still cancel each other. Check for an in-flight run someone is
-   gating a deploy on before you merge, and hold if there is one. 🚨 Do not diagnose this from the tag alone: "no new tag" here has at
+   gating a deploy on before you merge, and hold if there is one.
+
+   🚨 **A hold does not propagate to subagents.** An agent told to "root-cause and open a PR" will
+   merge on green, because that is this repo's documented default. On 2026-08-26 one hold was broken
+   three times — once by the operator and twice by subagents — each time by a correct fix landing at
+   the wrong moment. Push the hold to every running agent explicitly and disarm any armed
+   auto-merge: **a constraint is only as complete as the set of hands it reaches.** 🚨 Do not diagnose this from the tag alone: "no new tag" here has at
    least three causes — the batch window, a repoint/version-step failure on a run that *did*
    complete, and this. They stack, and naming only one leaves the other live.
 
