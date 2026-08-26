@@ -149,15 +149,35 @@ public static class ActivityRunner
                     // Cancel watcher: RequestedStatus = Cancelled trips the command's token
                     // (Activity Control Plane). Subscribed for the life of the run; disposed on
                     // completion.
-                    var cancelWatch = workspace.GetMeshNodeStream(activityPath)
+                    //
+                    // 🚨 Gated on a children LISTING first, never a bare exact-path subscribe. STEP 1
+                    // above (CreateNode) proves the activity is PERSISTED, not that it is ROUTABLE —
+                    // the read route can answer an authoritative NotFound for a path whose write has
+                    // already landed (Systemorph/MeshWeaver#2229 item A: "the create SUCCEEDS and the
+                    // REPLY is lost" / reads that lie for minutes under load). An exact-path
+                    // GetMeshNodeStream hitting that NotFound TERMINATES the stream with an error —
+                    // and this subscribe had no onError, so an unhandled OnError rethrows on whatever
+                    // thread is delivering it. A listing is empty-on-absent and LIVE, so it costs at
+                    // most one extra beat and never errors; the point subscribe only opens once the
+                    // index has corroborated the node. See CqrsAndContentAccess.md → "An OPTIONAL node".
+                    var cancelWatch = meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                            $"path:{partitionPath}/_Activity scope:children nodeType:Activity select:path,id,namespace"))
+                        .Where(change => change.Items.Any(n =>
+                            string.Equals(n.Path, activityPath, StringComparison.OrdinalIgnoreCase)))
+                        .Take(1)
+                        .SelectMany(_ => workspace.GetMeshNodeStream(activityPath))
                         .Select(n => n.ContentAs<ActivityLog>(hub.JsonSerializerOptions)?.RequestedStatus)
                         .Where(s => s == ActivityStatus.Cancelled)
                         .Take(1)
-                        .Subscribe(_ =>
-                        {
-                            logger?.LogInformation("Activity {Path} cancel requested", activityPath);
-                            try { cts.Cancel(); } catch { /* already disposed */ }
-                        });
+                        .Subscribe(
+                            _ =>
+                            {
+                                logger?.LogInformation("Activity {Path} cancel requested", activityPath);
+                                try { cts.Cancel(); } catch { /* already disposed */ }
+                            },
+                            ex => logger?.LogDebug(ex,
+                                "Activity {Path} cancel-watch could not attach; cancel requests will not be observed",
+                                activityPath));
 
                     var ctx = new ActivityContext(activityPath, cts.Token,
                         (msg, level) => Append(workspace, accessService, owner, activityPath, msg, level, logger));

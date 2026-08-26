@@ -428,8 +428,22 @@ public static class MarkdownViewLogic
         // address ("No node found at …/_Activity/markdown-…"). The node's own stream is served BY that hub,
         // so its first emission proves the hub is live and routable. The create/routing error is SURFACED,
         // never swallowed (a swallowed kernel-unavailable was the old bug; see RoutingServiceBase NotFound).
+        //
+        // 🚨 Gated on a children LISTING first, never a bare exact-path subscribe straight off CreateNode.
+        // "Persisted" and "routable" are different facts (Systemorph/MeshWeaver#2229 item A: "the create
+        // SUCCEEDS and the REPLY is lost" / an authoritative read route that can answer NotFound for a path
+        // whose write already landed, for minutes under load). An exact-path GetMeshNodeStream hitting that
+        // NotFound TERMINATES the stream with an error rather than waiting — which is exactly the interactive
+        // kernel silently never activating that this method exists to avoid. A listing is empty-on-absent and
+        // LIVE, so it costs at most one extra beat and never errors; the point subscribe only opens once the
+        // index has corroborated the node. See CqrsAndContentAccess.md → "An OPTIONAL node".
         meshService.CreateNode(activityNode)
-            .SelectMany(_ => senderHub.GetMeshNodeStream(activityPath)
+            .SelectMany(_ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{activityNamespace} scope:children nodeType:Activity select:path,id,namespace"))
+                .Where(change => change.Items.Any(n =>
+                    string.Equals(n.Path, activityPath, StringComparison.OrdinalIgnoreCase)))
+                .Take(1)
+                .SelectMany(_ => senderHub.GetMeshNodeStream(activityPath))
                 .Where(node => node is not null)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(15)))
