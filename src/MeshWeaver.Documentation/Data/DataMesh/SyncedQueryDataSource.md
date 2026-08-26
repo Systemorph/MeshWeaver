@@ -216,7 +216,16 @@ behind for the process lifetime — [#1324](https://github.com/Systemorph/MeshWe
 
 The full integrity story is a plain dictionary, single-threaded access, and shared-by-default semantics — made safe entirely by the actor model.
 
-The `RemoteStreamCacheTest` (`test/MeshWeaver.Query.Test`) pins this contract: two `GetRemoteStream(...)` calls for the same key are reference-equal, and a disposed **or faulted** stream is evicted before the next caller receives it.
+The `RemoteStreamCacheTest` (`test/MeshWeaver.Query.Test`) pins this contract: two calls for the same
+key are reference-equal, and a disposed **or faulted** stream is evicted before the next caller
+receives it. Two details the test makes explicit and this page should not blur:
+
+* **The key is a triple** — `(address, reference, subscribing identity)`, the identity resolved from
+  the same helper that stamps `SubscribeRequest.Identity`, so a stream can only ever be served back
+  to the identity it was subscribed for. It is not keyed on `(owner, reference)` alone.
+* **The test calls `GetRemoteStreamUnchecked<…>`**, deliberately bypassing the MeshNode guard — that
+  guard is not what is under test here, and going through it would make the test assert two things
+  at once.
 
 ---
 
