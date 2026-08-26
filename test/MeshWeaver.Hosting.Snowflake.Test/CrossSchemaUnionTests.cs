@@ -602,7 +602,7 @@ public class CrossSchemaUnionTests
         // takes for every unpinned query, and since #2048 the only cross-schema shape there is.
         await foreach (var node in provider.QueryAcrossSchemasAsync(
                            query, _options, schemas, "mesh_nodes",
-                           userId, activityUserId: null, ct))
+                           userId, activityUserId: null, excludedNodeTypes: null, ct))
             results.Add(node);
         return results;
     }
