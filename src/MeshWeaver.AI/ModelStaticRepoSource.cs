@@ -28,6 +28,11 @@ public sealed class ModelStaticRepoSource(BuiltInLanguageModelProvider provider)
     public bool Versioned => false;
 
     /// <inheritdoc />
+    /// <remarks>A skill/agent/model that exists but is unfindable is indistinguishable
+    /// from one that was never imported — this catalog asserts it reached the index (#354).</remarks>
+    public bool AssertIndexedAfterImport => true;
+
+    /// <inheritdoc />
     // Additive: admins add their OWN providers/models (e.g. a bring-your-own OpenAI-compatible
     // endpoint) into the Provider partition; the import must never prune them. Only providers/models the
     // build PREVIOUSLY shipped (in the manifest) but has since dropped are removed.

@@ -383,7 +383,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         // way the chat input would when treating it as an @reference.
         var insertedRef = match.InsertText.TrimEnd();
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
-        var contextResolved = MeshOperations.ResolveContextPath(
+        var contextResolved = AgentChatPaths.ResolveContextPath(
             new MockAgentChat { Context = new AgentContext { Address = new Address(nodePath), Context = nodePath } },
             insertedRef);
         Output.WriteLine($"Inserted ref: {insertedRef}");

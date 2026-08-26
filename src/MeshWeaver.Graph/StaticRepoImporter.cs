@@ -173,6 +173,15 @@ public static class StaticRepoImporter
         if (sources.Length == 0)
             return Observable.Empty<StaticRepoImportResult>();
 
+        // When the caller names no assertion set, ask the SOURCES: each declares whether its catalog
+        // must be verified against the search index (#354). The portal used to pass the AI partition
+        // names here, which made the composition root know them — and a module cannot be delisted
+        // from a list the host hard-codes (#2276). Same set, declared by its owner.
+        indexedCatalogAssertions ??= sources
+            .Where(source => source.AssertIndexedAfterImport)
+            .Select(source => source.Partition)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         // Deploy-time per-partition mode override (Features:StaticRepoSync:Modes) — case-insensitive.
         // When a partition isn't listed the source's own default SyncMode is used (FullReplace for most,
         // Additive for the built-in AI catalogs). Null/empty = every source keeps its own default.

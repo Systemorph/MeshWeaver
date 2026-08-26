@@ -46,8 +46,6 @@ public static class PlatformSettingsTabAreas
     /// <summary>Layout area rendering <see cref="PublishedSettingsTab.BuildContent"/> (admin-gated).</summary>
     public const string PublishedArea = "SettingsPublished";
 
-    /// <summary>Layout area rendering <see cref="TokenUsageSettingsTab.BuildContent"/> (admin-gated).</summary>
-    public const string TokenUsageArea = "SettingsTokenUsage";
 
     /// <summary>
     /// Registers the tranches' tab contents as layout areas on the per-node hubs. The settings
@@ -69,9 +67,7 @@ public static class PlatformSettingsTabAreas
             .WithView(UpdatePolicyArea, (host, _) => AdminGated(host,
                 () => UpdatePolicySettingsTab.BuildContent(host, PaneStack())))
             .WithView(PublishedArea, (host, _) => AdminGated(host,
-                () => PublishedSettingsTab.BuildContent(host, PaneStack())))
-            .WithView(TokenUsageArea, (host, _) => AdminGated(host,
-                () => TokenUsageSettingsTab.BuildContent(host, PaneStack()))));
+                () => PublishedSettingsTab.BuildContent(host, PaneStack()))));
 
     /// <summary>
     /// The admin-gated area body. Each admin tab's contributed entry hides the tab via
@@ -96,12 +92,12 @@ public static class PlatformSettingsTabAreas
     internal static IReadOnlyList<string> Areas { get; } =
     [
         WhatsNewArea, AboutArea, PrivacyArea, InvitationsArea, InboxArea,
-        UpdatePolicyArea, PublishedArea, TokenUsageArea,
+        UpdatePolicyArea, PublishedArea,
     ];
 
     /// <summary>
     /// The seeded menu entries, exposed for the pinning tests (same contract as
-    /// <see cref="AiMenuContributions.Seeds"/>). Node id = the tab's former compiled tab id,
+    /// <c>AiMenuContributions.Seeds</c>). Node id = the tab's former compiled tab id,
     /// keeping every <c>/GlobalSettings/{Id}</c> deep link stable across the migration; every
     /// label/icon/order/group is copied EXACTLY from the former compiled definition.
     /// </summary>
@@ -174,19 +170,6 @@ public static class PlatformSettingsTabAreas
             Label = "Published to the web",
             LabelKey = "settings.published",
             Icon = "Globe",
-            Group = "Administration",
-            GroupKey = "settings.groupAdministration",
-            GroupIcon = "Shield",
-            Order = 320,
-            Gates = new UiContributionGates { AdminOnly = true },
-        }),
-        Seed(TokenUsageSettingsTab.TabId, "Token Usage", new UiContribution
-        {
-            Context = UiContribution.SettingsContext,
-            Area = TokenUsageArea,
-            Label = "Token Usage",
-            LabelKey = "settings.tokenUsage",
-            Icon = "Database",
             Group = "Administration",
             GroupKey = "settings.groupAdministration",
             GroupIcon = "Shield",

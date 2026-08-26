@@ -17,9 +17,9 @@ name: Chart Drift
 #   * check-chart-drift.sh itself treats an unreadable cluster as FAILURE, never as "no drift",
 #     and refuses to report success unless it actually compared a minimum number of fields.
 #
-# ⚠️ EXPECT THIS WORKFLOW TO BE RED UNTIL ITEM 3 IS FIXED. That is the design, not a defect: the
-# honest report of "drift detection is not wired up" is a failing check that names the missing
-# piece, not a green one that checked nothing.
+# ⚠️ EXPECT THIS WORKFLOW TO BE RED UNTIL TWO THINGS ARE PROVISIONED. That is the design, not a
+# defect: the honest report of "drift detection is not wired up" is a failing check that names the
+# missing pieces, not a green one that checked nothing.
 #
 #   1. [DONE 2026-08-17] AKS command access for the CI identity. This item was written from an
 #      ASSUMPTION — that the AZURE_* OIDC identity had ACR rights only — and the assumption was
@@ -48,37 +48,25 @@ name: Chart Drift
 #
 #      Regenerate after any deliberate helm change, or the gate compares against a stale intent.
 #
-#   3. [OUTSTANDING — but NOT for the reason this line used to give] A fine-grained read-only PAT
-#      for Systemorph/Memex (Contents: Read-only, nothing else) as secrets.MEMEX_DEPLOY_REPO_TOKEN.
-#      A PAT cannot be minted through the API or CLI, so this step is necessarily manual. Do NOT
-#      substitute the existing broad `GH_PAT` (it widens what this job can reach for no benefit),
-#      and do NOT move the overlays into this public repo to dodge the token — that would publish
-#      the deployment inventory.
+#   3. [DONE] Read access to Systemorph/Memex, as a GitHub App installation token minted per run
+#      (secrets.MESHWEAVER_APP_ID + MESHWEAVER_APP_PRIVATE_KEY, the org's `meshweaver-cloud` App).
 #
-#      🚨 THE SECRET IS PROVISIONED AND HAS NEVER WORKED. This item read "unprovisioned" for eight
-#      days while the truth was one API call away, so state it exactly: the secret was created
-#      2026-08-17T11:12:42Z (`gh api repos/Systemorph/MeshWeaver/actions/secrets/…` reports the
-#      same value for created_at and updated_at, i.e. it has never been re-set), and EVERY run
-#      since — the 11:12:53Z dispatch that followed it by eleven seconds, then eight consecutive
-#      schedules through 2026-08-25; nine runs, no exceptions — has died at the same place:
+#      🚨 This step used to read "a fine-grained read-only PAT ... a PAT cannot be minted through
+#      the API or CLI, so this step is necessarily manual". The first half is true and the second
+#      does not follow: an App INSTALLATION token is mintable, and the org already had an App
+#      installed with access to this repo. The PAT route was tried and it rotted precisely as PATs
+#      do — provisioned 2026-08-17, HTTP 401 "Bad credentials" on all nine runs after, so the check
+#      never ran once (#1709). A stored PAT has no owner, no expiry anyone watches, and fails in a
+#      way indistinguishable from a scope problem. The installation token is minted fresh each run
+#      and scoped to `repositories: Memex` with `permission-contents: read`, which is narrower than
+#      the PAT it replaces. Rotation has ONE home: Key Vault `Systemorph/github-app-privatekey`.
 #
-#          ##[error]secrets.MEMEX_DEPLOY_REPO_TOKEN is set but GitHub rejects it
-#                   (HTTP 401, Bad credentials).
+#      Still true, and still worth saying: do NOT substitute the broad `GH_PAT` (it widens what this
+#      job can reach for no benefit), and do NOT move the overlays into this public repo to dodge
+#      the credential — that would publish the deployment inventory.
 #
-#      So the remaining action is RE-MINT, not provision: the stored value authenticates as
-#      nothing. 401 (not 403, not 404) rules out both scope and org approval — GitHub answers 404
-#      for a repo a valid token may not read and 403 for a valid token pending owner approval, and
-#      this is neither. What is left is a value that is not a token: revoked, expired, truncated on
-#      copy, or never the token at all (a clipboard-piped `gh secret set` stores whatever was on
-#      the clipboard). Re-mint at https://github.com/settings/personal-access-tokens and store it
-#      again; the probe below re-checks it on the next run and says which of 401/403/404 remains.
-#
-#      Do not read the daily red as "items 1 and 2 are also outstanding" — they are done, and
-#      preflight simply never gets far enough to exercise them.
-#
-# Until 3 lands, every run fails with the list above and nobody is misled about whether the cluster
-# matches the chart. Drift found by a run that DOES complete is reported the same way: red, with
-# each divergence classified CLUSTER-ONLY / CHART-ONLY / DIFFERS.
+# Drift found by a run that completes is reported red, with each divergence classified
+# CLUSTER-ONLY / CHART-ONLY / DIFFERS.
 #
 # 🔒 WHICH ENVIRONMENTS EXIST IS NOT PUBLIC. This workflow used to carry the namespace list and the
 # cluster/resource-group names inline — deployment identities, in a public repo, describing an
@@ -123,13 +111,15 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          MEMEX_DEPLOY_REPO_TOKEN: ${{ secrets.MEMEX_DEPLOY_REPO_TOKEN }}
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
         run: |
           missing=()
           [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID        OIDC app registration for azure/login")
           [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID        the Systemorph AAD tenant")
           [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID  the subscription holding the AKS cluster")
-          [ -n "$MEMEX_DEPLOY_REPO_TOKEN" ] || missing+=("secrets.MEMEX_DEPLOY_REPO_TOKEN  read-only PAT for $DEPLOY_REPO, where the per-env values.<env>.public.yaml overlays live (see this file's header — they must be committed there first, secret-free)")
+          [ -n "$MESHWEAVER_APP_ID" ]     || missing+=("secrets.MESHWEAVER_APP_ID          app id of the org GitHub App that reads $DEPLOY_REPO, where the per-env values.<env>.public.yaml overlays live")
+          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::chart-drift cannot run — provision the following, then re-run:"
             for m in "${missing[@]}"; do echo "  • $m"; done
@@ -149,9 +139,23 @@ jobs:
       # the real API, and name what each rejection means, because the three causes are
       # indistinguishable from the checkout error and take very different fixes. Read-only, one
       # request, no `if:`, no continue-on-error: it fails RED like everything else here.
+      # Cross-repo reads are a GitHub App installation token minted per run, never a stored PAT.
+      # A PAT was the original design and it rotted exactly as PATs do: provisioned 2026-08-17,
+      # HTTP 401 on every run after (#1709). An installation token cannot rot — it is minted fresh
+      # here, expires in an hour, and is scoped to the one repository named below.
+      - name: Mint an installation token for the deploy repo
+        id: deploy-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          repositories: Memex
+          permission-contents: read
+
       - name: The token can actually READ the deploy repo
         env:
-          MEMEX_DEPLOY_REPO_TOKEN: ${{ secrets.MEMEX_DEPLOY_REPO_TOKEN }}
+          DEPLOY_TOKEN: ${{ steps.deploy-token.outputs.token }}
         run: |
           # 🚨 `|| code=000` is not defensive noise. `run:` steps are `bash -e`, so a curl that
           # fails at the TRANSPORT level (DNS, TLS, connection refused) makes this assignment
@@ -163,56 +167,31 @@ jobs:
           # answer into a 20-minute one.
           code=$(curl -sS -o /dev/null -w '%{http_code}' \
             --connect-timeout 10 --max-time 30 \
-            -H "Authorization: Bearer $MEMEX_DEPLOY_REPO_TOKEN" \
+            -H "Authorization: Bearer $DEPLOY_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/$DEPLOY_REPO") || code=000
           case "$code" in
             200)
-              echo "secrets.MEMEX_DEPLOY_REPO_TOKEN reads $DEPLOY_REPO (HTTP 200)." ;;
+              echo "The minted installation token reads $DEPLOY_REPO (HTTP 200)." ;;
             401)
-              echo "::error::secrets.MEMEX_DEPLOY_REPO_TOKEN is set but GitHub rejects it (HTTP 401, Bad credentials)."
-              echo "  The stored value is not a usable token. Most often it is not the token at all —"
-              echo "  a clipboard-piped 'gh secret set' stores whatever was on the clipboard — or the"
-              echo "  token was revoked, expired, or truncated on copy. Re-mint at"
-              echo "  https://github.com/settings/personal-access-tokens and store it again."
-              echo
-              # 🚨 SAY WHAT IS ACTUALLY STORED. This branch fired every day from 2026-08-17 to
-              # 2026-08-25 with the four lines above and nothing changed, because "not a usable
-              # token" does not tell an operator WHICH mistake they made — and the two commonest
-              # are both mechanical and both invisible in the Actions UI, which renders every
-              # secret as ***. These are DERIVED facts (a length bucket, a prefix CLASS, a
-              # whitespace yes/no); none of them prints, or narrows, the value itself.
-              n=${#MEMEX_DEPLOY_REPO_TOKEN}
-              case "$MEMEX_DEPLOY_REPO_TOKEN" in
-                github_pat_*) shape="fine-grained PAT (github_pat_…) — the right kind" ;;
-                ghp_*)        shape="classic PAT (ghp_…) — works, but scope it down to a fine-grained PAT" ;;
-                gho_*|ghu_*|ghs_*|ghr_*)
-                              shape="an OAuth/app/refresh token (gho_/ghu_/ghs_/ghr_…), NOT a PAT — these expire fast" ;;
-                *)            shape="NO recognised GitHub token prefix — this is very likely not a token at all" ;;
-              esac
-              echo "  What is stored: $n characters, $shape."
-              case "$MEMEX_DEPLOY_REPO_TOKEN" in
-                *[[:space:]]*)
-                  echo "  🚨 It CONTAINS WHITESPACE. That alone produces this 401: the value goes"
-                  echo "     straight into an Authorization header, and a trailing newline from"
-                  echo "     'gh secret set NAME < token.txt' malforms it. Re-store with"
-                  echo "     'printf %s \"\$TOKEN\" | gh secret set MEMEX_DEPLOY_REPO_TOKEN' — printf,"
-                  echo "     not echo, and no here-string." ;;
-              esac
+              echo "::error::The minted installation token is rejected (HTTP 401, Bad credentials)."
+              echo "  The mint step succeeded, so the App id and key are a matching pair — but the"
+              echo "  token GitHub returned is not being accepted. This is the one outcome that"
+              echo "  should be impossible here; treat it as a GitHub-side fault and re-run. If it"
+              echo "  persists, confirm the App has not been deleted out from under the install."
               exit 1 ;;
             403)
-              echo "::error::secrets.MEMEX_DEPLOY_REPO_TOKEN is refused (HTTP 403)."
-              echo "  The token exists but is not authorised for $DEPLOY_REPO's organisation. A"
-              echo "  fine-grained PAT whose resource owner is an org stays inert until an org owner"
-              echo "  APPROVES it — check https://github.com/settings/personal-access-tokens for a"
-              echo "  'Pending owner approval' badge, and the org's pending-requests page to grant it."
+              echo "::error::The minted installation token is refused (HTTP 403)."
+              echo "  The App is installed but suspended, or its installation permissions were"
+              echo "  narrowed below Contents: Read. Check the App's installation on the Systemorph"
+              echo "  org and re-approve the permissions it requests."
               exit 1 ;;
             404)
-              echo "::error::secrets.MEMEX_DEPLOY_REPO_TOKEN authenticates but cannot see $DEPLOY_REPO (HTTP 404)."
+              echo "::error::The token authenticates but cannot see $DEPLOY_REPO (HTTP 404)."
               echo "  GitHub returns 404 rather than 403 for a repository a token may not read, so this"
-              echo "  is a SCOPE problem: the PAT's repository access does not include $DEPLOY_REPO, or"
-              echo "  it lacks 'Contents: Read-only'. Re-scope it — no other permission is needed."
+              echo "  is a SCOPE problem: the App's installation no longer includes $DEPLOY_REPO. Add"
+              echo "  the repository to the installation — no other permission is needed."
               exit 1 ;;
             000)
               echo "::error::Could not reach api.github.com to probe $DEPLOY_REPO (no HTTP response)."
@@ -227,7 +206,7 @@ jobs:
               echo "  re-run when the incident clears. Failing closed: indeterminate is not a pass."
               exit 1 ;;
             *)
-              echo "::error::Unexpected HTTP $code probing $DEPLOY_REPO with secrets.MEMEX_DEPLOY_REPO_TOKEN."
+              echo "::error::Unexpected HTTP $code probing $DEPLOY_REPO with the minted token."
               echo "  Treating as FAILURE: an indeterminate answer must never read as a working token."
               exit 1 ;;
           esac
@@ -241,11 +220,24 @@ jobs:
       aks_cluster: ${{ steps.envs.outputs.aks_cluster }}
       aks_resource_group: ${{ steps.envs.outputs.aks_resource_group }}
     steps:
+      # Cross-repo reads are a GitHub App installation token minted per run, never a stored PAT.
+      # A PAT was the original design and it rotted exactly as PATs do: provisioned 2026-08-17,
+      # HTTP 401 on every run after (#1709). An installation token cannot rot — it is minted fresh
+      # here, expires in an hour, and is scoped to the one repository named below.
+      - name: Mint an installation token for the deploy repo
+        id: deploy-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          repositories: Memex
+          permission-contents: read
       - name: Check out the deployment repo
         uses: actions/checkout@v7
         with:
           repository: ${{ env.DEPLOY_REPO }}
-          token: ${{ secrets.MEMEX_DEPLOY_REPO_TOKEN }}
+          token: ${{ steps.deploy-token.outputs.token }}
           path: deploy-repo
       # No `if:`, no `continue-on-error:` — same rule as preflight, and for a sharper reason. An
       # empty or unreadable manifest yields an empty matrix, and an empty matrix SKIPS every drift
@@ -310,11 +302,24 @@ jobs:
         env: ${{ fromJson(needs.discover.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
+      # Cross-repo reads are a GitHub App installation token minted per run, never a stored PAT.
+      # A PAT was the original design and it rotted exactly as PATs do: provisioned 2026-08-17,
+      # HTTP 401 on every run after (#1709). An installation token cannot rot — it is minted fresh
+      # here, expires in an hour, and is scoped to the one repository named below.
+      - name: Mint an installation token for the deploy repo
+        id: deploy-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          repositories: Memex
+          permission-contents: read
       - name: Check out the per-env overlays
         uses: actions/checkout@v7
         with:
           repository: ${{ env.DEPLOY_REPO }}
-          token: ${{ secrets.MEMEX_DEPLOY_REPO_TOKEN }}
+          token: ${{ steps.deploy-token.outputs.token }}
           path: deploy-repo
       - name: Install helm
         uses: azure/setup-helm@v5

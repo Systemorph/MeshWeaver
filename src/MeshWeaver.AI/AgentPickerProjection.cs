@@ -789,9 +789,22 @@ public static class AgentPickerProjection
                 byPath[node.Path] = info;
         }
 
+        // 🚨 Provider is the PRIMARY key, not Order (#2331). `Order` does double duty: a global
+        // minimum picks the deployment DEFAULT (ObserveDefaultComposer re-sorts by it independently
+        // of this display order) and a per-model pin (ModelOrdering.Defaults) promotes ONE model
+        // within its provider (e.g. z-ai/glm-5.3 at -2 among OpenRouter's uniform Order-6 siblings).
+        // Sorting by Order first let that pin lift the model out of its provider's run entirely —
+        // the group stopped being contiguous, so the picker (which renders a header whenever the
+        // group key changes, same as ProjectAgents' harness grouping) rendered the provider TWICE.
+        // Grouping by Provider first makes every block contiguous BY CONSTRUCTION — same shape as
+        // ProjectAgents' GroupName-first sort — and Order still does its promotion job as the
+        // tie-break INSIDE the group, which is exactly what a pin is for.
         return byPath.Values
-            .OrderBy(m => m.Order)
+            // Auto (the router / composer default) leads every concrete provider, mirroring its
+            // RouterOrder = -10 intent — it is the one entry meant to sort ahead of everything else.
+            .OrderByDescending(m => m.IsRouter)
             .ThenBy(m => m.Provider, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(m => m.Order)
             .ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }

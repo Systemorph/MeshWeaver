@@ -247,7 +247,10 @@ internal static class NodeTypeCompilationHelpers
                     // trigger is answered (bounded, no Roslyn). Same fire-and-forget UpdateOwn
                     // shape as the kickoffs below; System scope because re-settling framework
                     // state is infrastructure, not a user write.
-                    void SettleAsError(string? reason)
+                    // 🚨 #2264: the TWO call sites of this local function need DIFFERENT
+                    // FailedBuildInputs treatment, so `formedUnderLiveInputs` is not decoration —
+                    // see ApplyGateSettle's doc for why.
+                    void SettleAsError(string? reason, bool formedUnderLiveInputs)
                     {
                         using (accessService?.ImpersonateAsSystem())
                             workspace.GetMeshNodeStream().Update(curr =>
@@ -261,13 +264,8 @@ internal static class NodeTypeCompilationHelpers
                                     return curr;
                                 return curr with
                                 {
-                                    Content = parkedDef with
-                                    {
-                                        CompilationStatus = CompilationStatus.Error,
-                                        CompilationError = reason
-                                            ?? parkedDef.CompilationError
-                                            ?? "Compilation is parked after a terminal failure; request a release (Compile) to retry."
-                                    }
+                                    Content = ApplyGateSettle(
+                                        parkedDef, reason, formedUnderLiveInputs, guards.ModulesHash)
                                 };
                             }).Subscribe(
                                 _ => { },
@@ -299,7 +297,10 @@ internal static class NodeTypeCompilationHelpers
                             logger?.LogDebug(
                                 "Compile watcher: {HubPath} is PARKED (terminal compile failure) — " +
                                 "skipping recompile, serving cached error", hubPath);
-                            SettleAsError(parkRegistry.GetParkedError(hubPath));
+                            // The verdict being RE-SERVED is the ORIGINAL failure's, formed under
+                            // ITS inputs — stamping the live ones here would mask a genuine input
+                            // change since that failure and defeat #1793's whole recovery path.
+                            SettleAsError(parkRegistry.GetParkedError(hubPath), formedUnderLiveInputs: false);
                             return;
                         }
                     }
@@ -452,7 +453,10 @@ internal static class NodeTypeCompilationHelpers
                             registry?.OnCompileFailed(
                                 hub, hubPath, reason, deterministic: true,
                                 recipientUserId: null, sources: pendingDef?.CurrentSourceVersions, logger);
-                            SettleAsError(reason);
+                            // The refusal genuinely IS formed under the live compile inputs — stamp
+                            // them so the failed-verdict re-drive (#1793) doesn't treat this as
+                            // "never attempted" and burn a needless automatic re-drive (#2264).
+                            SettleAsError(reason, formedUnderLiveInputs: true);
                             return;
                         }
 
@@ -1942,6 +1946,54 @@ internal static class NodeTypeCompilationHelpers
             }
         };
     }
+
+    /// <summary>
+    /// 🚨 THE terminal stamp of a Pending flip the compile watcher refuses to dispatch WITHOUT
+    /// running Roslyn (issue #2264) — the shared body of <c>InstallCompileWatcher</c>'s
+    /// <c>SettleAsError</c> local function, extracted so the per-call-site
+    /// <see cref="NodeTypeDefinition.FailedBuildInputs"/> decision is unit-testable without a hub.
+    ///
+    /// <para><c>SettleAsError</c> is the ONLY way a NodeType reaches <see cref="CompilationStatus.Error"/>
+    /// under the adopt-only gate (<c>Modules:RequirePrebuilt</c>, #2193 §A), which never runs a
+    /// compile — so it is the only writer of <see cref="NodeTypeDefinition.FailedBuildInputs"/> for
+    /// such a type, and the two call sites need OPPOSITE answers:</para>
+    ///
+    /// <list type="bullet">
+    ///   <item>the <b>adopt-only gate's refusal</b> (<paramref name="formedUnderLiveInputs"/> =
+    ///     <c>true</c>) is formed under the LIVE compile inputs RIGHT NOW, so stamping them is
+    ///     honest — and is what stops <see cref="HasStaleFailureVerdict"/> from reading an
+    ///     unstamped verdict as "never attempted" and driving one needless automatic re-drive
+    ///     (#1793) per refused type.</item>
+    ///   <item>the <b>parked short-circuit's re-settle</b> (<paramref name="formedUnderLiveInputs"/>
+    ///     = <c>false</c>) re-serves an ALREADY-SETTLED failure's verdict — stamping the CURRENT
+    ///     live inputs there would overwrite (or fabricate, for a type parked before this fix)
+    ///     the record of what THAT original failure was formed under, silently masking a genuine
+    ///     input change since that failure and defeating #1793's whole recovery path. So it leaves
+    ///     whatever <see cref="NodeTypeDefinition.FailedBuildInputs"/> the node already carries
+    ///     untouched — which is exactly what OMITTING the field from the <c>with</c> would do too;
+    ///     spelled out here so the two branches are visibly symmetric instead of one being a
+    ///     silent no-op.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="parkedDef">The NodeType definition as currently persisted (authoritative — read
+    /// inside the <c>Update</c> lambda, never a captured snapshot).</param>
+    /// <param name="reason">The refusal/parked-error message, or <c>null</c> to keep whatever
+    /// <see cref="NodeTypeDefinition.CompilationError"/> is already recorded.</param>
+    /// <param name="formedUnderLiveInputs">Whether THIS settle is itself a decision formed under
+    /// the live compile inputs (see above).</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the compile inputs.</param>
+    internal static NodeTypeDefinition ApplyGateSettle(
+        NodeTypeDefinition parkedDef, string? reason, bool formedUnderLiveInputs, string? modulesHash) =>
+        parkedDef with
+        {
+            CompilationStatus = CompilationStatus.Error,
+            CompilationError = reason
+                ?? parkedDef.CompilationError
+                ?? "Compilation is parked after a terminal failure; request a release (Compile) to retry.",
+            FailedBuildInputs = formedUnderLiveInputs
+                ? BuildInputsToken(modulesHash, parkedDef.CurrentSourceVersions)
+                : parkedDef.FailedBuildInputs,
+        };
 
     /// <summary>
     /// THE terminal stamp of a SUCCESSFUL compile — the exact field set

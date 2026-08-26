@@ -331,7 +331,7 @@ public sealed class SqliteStorageAdapter : IStorageAdapter, IDisposable
                     ? (JsonSerializer.Deserialize<List<object>>(json, options) ?? new()).ToArray()
                     : [];
             }
-        }).SelectMany(arr => arr.ToObservable());
+        }).SelectMany(arr => arr.ToInlineObservable());
 
     /// <inheritdoc />
     public IObservable<Unit> SavePartitionObjects(

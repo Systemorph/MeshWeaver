@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a MeshWeaver release. Two channels, both already wired in .github/workflows. CONTINUOUS = merge to main → multi-arch Docker to ACR → CD rolls memex/atioz/memex-cloud AND every install self-updates. OFFICIAL = push a v*.*.* tag → clean multi-arch images (ACR + GHCR) + NuGet packages to nuget.org. Use when shipping a release, tagging a version, publishing packages, or wiring/altering the release pipeline. Read BEFORE tagging — a tag is a public, hard-to-reverse publish.
+description: Cut a MeshWeaver release. Two channels, both already wired in .github/workflows. CONTINUOUS = merge to main → multi-arch Docker to ACR → CD rolls memex/memex-cloud AND every install self-updates. OFFICIAL = push a v*.*.* tag → clean multi-arch images (ACR + GHCR) + NuGet packages to nuget.org. Use when shipping a release, tagging a version, publishing packages, or wiring/altering the release pipeline. Read BEFORE tagging — a tag is a public, hard-to-reverse publish.
 user-invocable: true
 allowed-tools:
   - Read
@@ -40,7 +40,7 @@ safely; the design rationale lives in
 | **Workflow** | `main-cd.yml` (after `MeshWeaver Build and Test` passes) | `release-images.yml` + `release-packages.yml` |
 | **Docker** | **multi-arch** (`linux-x64;linux-arm64` → OCI image-index) → ACR | multi-arch → ACR **+** GHCR |
 | **NuGet** | ❌ never | ✅ **`dotnet pack` → nuget.org** (clean version, no build number) |
-| **Rollout** | CD rolls memex/atioz/memex-cloud + all installs self-update | self-update (Continuous installs already track ACR) |
+| **Rollout** | CD rolls memex/memex-cloud + all installs self-update | self-update (Continuous installs already track ACR) |
 
 So: **merge to main = multi-arch Docker + deploy; NuGet only on a major (clean) release tag.**
 
@@ -61,7 +61,7 @@ gh run list --branch main --limit 3 --json headSha,status,conclusion \
   --jq '.[] | "\(.headSha[0:9]) \(.status) \(.conclusion)"'
 # 2. Merge the PR (UI if gh can't). main-cd.yml then fires automatically on the green test run:
 #    builds multi-arch portal-ai + migration, tags <version>;<sha>;main, pushes to ACR, and
-#    rolls memex/atioz/memex-cloud (kubectl set image + rollout restart + rollout status).
+#    rolls memex/memex-cloud (kubectl set image + rollout restart + rollout status).
 # 3. Every OTHER Continuous install self-updates from ACR within its poll window (no action).
 ```
 
@@ -81,7 +81,7 @@ git tag v3.0.0 && git push origin v3.0.0
 ## "All portals update" — how (and how to confirm)
 
 Two mechanisms, both live:
-- **Push (CD):** `main-cd.yml`'s `deploy` matrix rolls `memex`, `atioz`, `memex-cloud` directly.
+- **Push (CD):** `main-cd.yml`'s `deploy` matrix rolls `memex` and `memex-cloud` directly.
 - **Pull (self-update):** `AddSelfUpdate()` (MemexConfiguration.cs) runs `SelfUpdateHostedService`
   on EVERY install. It reads `Admin/UpdatePolicy` (default **Continuous**), lists ACR tags
   (`AcrTagLister`), and when a newer tag exists patches its own Deployment in-pod
