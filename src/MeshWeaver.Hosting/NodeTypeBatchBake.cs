@@ -209,11 +209,15 @@ internal static class NodeTypeBatchBake
 
         // 🚨 System-scoped: source discovery across every partition is framework infrastructure,
         // not a user-attributable read — the same rule as the compiler's own GetSourceCollection.
-        // Observable.Using holds the scope across the live subscription (the queries emit on IO
-        // threads where the ambient AsyncLocal is gone).
-        return Observable.Using(
-                () => AccessContextScope.AsSystem(accessService),
-                _ =>
+        //
+        // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790):
+        // `AsSystem` IS `ImpersonateAsSystem`, and `Using` splits that AsyncLocal store/restore
+        // pair across two threads — opened on the subscriber, disposed on whichever IO/response
+        // thread the fetch terminates on — so the subscriber stays latched as System. The queries
+        // still run impersonated: they are composed and subscribed INSIDE the work factory, which
+        // RunAsSystem enters before subscribing and leaves on the way out of that same Subscribe.
+        return accessService.RunAsSystem(
+                () =>
                 {
                     var globalFetch = needsGlobalFetch
                         ? GlobalCodeQueries
@@ -491,9 +495,10 @@ internal static class NodeTypeBatchBake
 
         // 🚨 System-scoped end-to-end: the compile reads sources across the mesh and the stamp
         // writes framework state — infrastructure, exactly like RunCompile's deferred pipelines.
-        return Observable.Using(
-                () => AccessContextScope.AsSystem(accessService),
-                _ => compiler
+        // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790) — see
+        // the source-discovery pipeline above.
+        return accessService.RunAsSystem(
+                () => compiler
                     .CompileAndGetConfigurations(typeNode, sources)
                     .Take(1)
                     .Select(result => (Result: result, Error: (Exception?)null))
