@@ -38,7 +38,7 @@ Every storm traces to one of these. Find which, fix THAT:
    request gets `NotFound`/`DeliveryFailure` — and the error is **swallowed** (`.Catch(Observable.
    Empty)`, `catch {}`, `_ => { /* ignore */ }`) or **retried** (a 1 s ticker, a watchdog, a
    resubscribe, a `.Retry()`) instead of surfaced. The amplifier turns one mishandled error into a
-   flood. (The 2026-06-08 outage was an initial-state retry watchdog; the 2026-06-25 atioz outage
+   flood. (The 2026-06-08 outage was an initial-state retry watchdog; the 2026-06-25 outage
    was thread-hub accumulation + a swallowed-and-retried heartbeat read.)
 
 ## The cure (one principle)

@@ -21,6 +21,13 @@ public enum RequiredModuleState
     /// there. Nothing on this deployment can produce it, and the pods of the previous generation
     /// still have it — so the rollout must STALL.</summary>
     Absent,
+
+    /// <summary>It is HERE and it loaded, and its registration threw against this platform build
+    /// (#2234), so it contributes nothing. Never <see cref="Present"/>: the assembly did load, so a
+    /// check asking only "is it loaded?" would call a replica missing the feature healthy. The two
+    /// halves disagree and must move together — which is the one thing a rollout CAN fix, unlike
+    /// <see cref="ExpectedLater"/>.</summary>
+    Incompatible,
 }
 
 /// <summary>One required module's verdict, with the sentence an operator acts on.</summary>
@@ -94,7 +101,33 @@ public static class RequiredModuleStatus
         ModuleActivationList? activation,
         Func<ModuleActivationEntry, bool> landedDllExists,
         Func<string?, string?> platformGate)
+        => Classify(requiredEntries, baselineEntries, loadedAssemblyNames, resolvesFromDeployment,
+            activation, landedDllExists, platformGate, []);
+
+    /// <summary>
+    /// As the seven-argument overload, plus the modules that loaded but could not REGISTER against
+    /// this build (<see cref="Mesh.IncompatibleModule"/>, #2234).
+    ///
+    /// <para>🚨 <b>An overload, deliberately, not an optional parameter on the existing method.</b>
+    /// Adding an optional parameter is source-compatible and BINARY-breaking — the signature is
+    /// replaced, so a caller compiled against the old one gets MissingMethodException at runtime.
+    /// That is precisely the change that aborted every memex-cloud pod for ~90 minutes and the
+    /// reason this overload exists at all; making the fix in the shape of the bug would be a poor
+    /// joke. The seven-argument form stays, forwarding an empty set, so a host compiled against the
+    /// previous platform keeps working.</para>
+    /// </summary>
+    /// <param name="incompatibleModules">Modules whose registration threw at boot, by simple name.</param>
+    public static ImmutableList<RequiredModuleVerdict> Classify(
+        IEnumerable<string?>? requiredEntries,
+        IEnumerable<string?>? baselineEntries,
+        IReadOnlySet<string> loadedAssemblyNames,
+        Func<string, bool> resolvesFromDeployment,
+        ModuleActivationList? activation,
+        Func<ModuleActivationEntry, bool> landedDllExists,
+        Func<string?, string?> platformGate,
+        IReadOnlyCollection<Mesh.IncompatibleModule> incompatibleModules)
     {
+        ArgumentNullException.ThrowIfNull(incompatibleModules);
         ArgumentNullException.ThrowIfNull(loadedAssemblyNames);
         ArgumentNullException.ThrowIfNull(resolvesFromDeployment);
         ArgumentNullException.ThrowIfNull(landedDllExists);
@@ -116,6 +149,18 @@ public static class RequiredModuleStatus
             if (string.IsNullOrWhiteSpace(entry))
                 continue;
             var name = Path.GetFileNameWithoutExtension(entry!);
+
+            // 🚨 BEFORE the loaded check, which an incompatible module would otherwise satisfy:
+            // its assembly IS loaded, it simply registered nothing. Asked in the other order this
+            // reports Present and the operator learns nothing until a user reports a missing feature.
+            var broken = incompatibleModules.FirstOrDefault(
+                module => string.Equals(module.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (broken is not null)
+            {
+                verdicts.Add(new RequiredModuleVerdict(
+                    entry!, name, RequiredModuleState.Incompatible, broken.Report()));
+                continue;
+            }
 
             if (loadedAssemblyNames.Contains(name))
             {
@@ -180,6 +225,17 @@ public static class RequiredModuleStatus
     public static ImmutableList<RequiredModuleVerdict> ExpectedLater(
         IEnumerable<RequiredModuleVerdict> verdicts) =>
         [.. (verdicts ?? []).Where(v => v.State == RequiredModuleState.ExpectedLater)];
+
+    /// <summary>
+    /// Those that ARE here and could not register against this build (#2234). A rollout stalls on
+    /// these, for the same reason it stalls on <see cref="Absent"/> and NOT on
+    /// <see cref="ExpectedLater"/>: the previous generation is serving the feature, and unlike a
+    /// store-delivered module this deployment CAN fix it — by moving the module set and the image
+    /// together instead of one alone.
+    /// </summary>
+    public static ImmutableList<RequiredModuleVerdict> Incompatible(
+        IEnumerable<RequiredModuleVerdict> verdicts) =>
+        [.. (verdicts ?? []).Where(v => v.State == RequiredModuleState.Incompatible)];
 
     /// <summary>One line per module, so the probe payload and the boot log read identically.</summary>
     public static string Describe(IEnumerable<RequiredModuleVerdict> verdicts) =>

@@ -1,7 +1,9 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.AI.Portal;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
+using MeshWeaver.GitSync;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
@@ -70,7 +72,17 @@ public static class AIExtensions
                         // MarkdownContent — so `ContentAs<SkillDefinition>` yields no Instructions
                         // and the skill reads EMPTY (#1984). That is harder to notice than the
                         // original bug it replaced, because the node no longer looks wrong.
-                        .AddSingleton<IFileFormatParser, SkillFileParser>())
+                        .AddSingleton<IFileFormatParser, SkillFileParser>()
+                        // Writes the live Agent + Skill partitions back to the repo's content/ai
+                        // section — the inverse of the built-in providers that READ it. Dev-time
+                        // (source checkout) only, and AI content by definition, so it rides AI
+                        // rather than GitSync (#2276).
+                        .AddSingleton<AiContentDiskWriter>()
+                        // The real PR drafter, delegating to the PullRequestWriter agent through
+                        // the existing chat surface. A plain AddSingleton against GitSync's
+                        // TryAddSingleton fallback: this one wins in EITHER configure order, and a
+                        // deployment without AI still opens PRs with the placeholder draft.
+                        .AddSingleton<IPullRequestDraftService, PullRequestDraftService>())
                     // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
                     .ConfigureHub(config =>
                     {
@@ -81,7 +93,26 @@ public static class AIExtensions
                     {
                         config.TypeRegistry.AddAITypes();
                         return config
-                            .WithHandler<Plugins.SaveContentRequest>(HandleSaveContent);
+                            // Scope-tabbed AI catalogs (Agents / Skills / Providers / Models /
+                            // Tiers) with per-tab create buttons — the AI menu entries point here.
+                            // On EVERY per-node hub so they resolve when anchored on the type roots
+                            // (/Agent/AiAgents, /Provider/AiModels, …). Moved off the portal's
+                            // composition root with the rest of the engine (#2276).
+                            .AddAiCatalogLayoutAreas()
+                            // The token-usage settings tab: an AI surface, registered through the
+                            // platform's declarative settings seam rather than by the portal.
+                            .AddTokenUsageSettingsTab()
+                            .WithHandler<Plugins.SaveContentRequest>(HandleSaveContent)
+                            // "Sync to repo" on Agent/Skill nodes + the area its item navigates to.
+                            // Self-gates to a source checkout and a platform admin, so it is inert
+                            // on a deployment that has neither.
+                            .WithServices(s =>
+                            {
+                                s.TryAddEnumerable(ServiceDescriptor.Scoped<INodeMenuProvider, AiContentSyncMenuProvider>());
+                                return s;
+                            })
+                            .AddLayout(layout => layout
+                                .WithView(AiContentSyncArea.AreaName, AiContentSyncArea.Render));
                     })
                 ;
         }

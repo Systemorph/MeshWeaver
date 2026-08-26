@@ -1,0 +1,39 @@
+# UnthrottledResubscribeSites.allow — the unthrottled-resubscribe ratchet (#2341).
+#
+# Each line would be a test file that waits on a mesh stream with Rx's ARGUMENT-LESS
+#
+#     .Repeat()          .Retry()
+#
+# Both re-subscribe the instant the source terminates, with NO delay of their own. The delay people
+# believe they added lives in a `.Catch(_ => Observable.Empty<T>().Delay(200.Milliseconds()))`
+# handler — and Catch intercepts OnError ONLY. A point read of a node that does not exist yet
+# COMPLETES without emitting, so that handler never runs and the pair is a busy-wait: measured on
+# the #2341 site, 460 000 re-subscribes in 8.4 s (~54 kHz) with zero OnError.
+#
+# Rx subscribes SYNCHRONOUSLY, so the loop runs inside the assertion's own .ToTask() call and the
+# await is never reached — out of reach of .Within(...), [Fact(Timeout)], methodTimeout AND
+# MonolithMeshTestBase's hard-deadline watchdog, all of which need the method to return or park at
+# an await. One xUnit worker pins a core forever, on a 4-vCPU runner it starves the hub that has to
+# create the node it waits for, and CI kills the host at its 8 m cap: `exit=124 TIMEOUT`, no .trx,
+# no failing test named. Twelve occurrences in ~15 h across five branches and main, 2026-08-25/26.
+#
+# Format (should this file ever need an entry): <repo-relative path>\t<count>
+#
+# 🚨 THIS FILE IS DELIBERATELY EMPTY AND MUST STAY EMPTY.
+# There was no inventory to seed: the three sites that existed — SubThreadHangRepro ×1 and
+# SubThreadColdStartRepro ×2, all three waiting on a delegation sub-thread — are fixed in the change
+# that added the guard. Adding a line here is not a fix; it re-arms a defect that kills the shard.
+#
+# The fix at a site is the composition AGENTS.md prescribes for a node that may not exist yet —
+# GetQuery for EXISTENCE (empty-on-absent, live), then the owner's stream for CONTENT:
+#
+#     hub.GetQuery(id, $"path:{parent} scope:children select:path")
+#        .Where(nodes => nodes.Any(n => string.Equals(n.Path, target, StringComparison.OrdinalIgnoreCase)))
+#        .Take(1)
+#        .SelectMany(_ => workspace.GetMeshNodeStream(target))
+#        .Select(n => n.ContentAs<T>(hub.JsonSerializerOptions))
+#        .Should().Within(...).Match(predicate);
+#
+# Where a retry genuinely belongs (an owner that can transiently reject), use
+# `.RetryWhen(errors => errors.Select((_, i) => i).TakeWhile(i => i < n)
+#              .SelectMany(_ => Observable.Timer(...)))` — OnError only, its own timer, bounded.

@@ -372,20 +372,40 @@ public class CosmosMeshQuery : IMeshQueryProvider
             // subscribe to the adapter's Changes BEFORE running the initial query so
             // notifications fired during the initial query's I/O window are captured
             // in a backlog instead of dropped (Changes is a plain Subject — no buffering).
+            //
+            // 🚨 ONE subscription for the query's whole lifetime — it buffers into the backlog
+            // until Initial, then routes into the live buffer. Never a SECOND subscription
+            // attached at Initial with this one disposed: that handoff drops a notification
+            // permanently, because IsolatedChangeFeed snapshots its observer list BEFORE
+            // delivering, so a write published just before the live subscription was attached
+            // reaches only the early observer — which by then sees initialDone == true and
+            // discards it — while the live observer was never in that snapshot. Nothing
+            // re-triggers the re-query, so the row stays invisible to that subscription for its
+            // whole life. Reproduced and measured in MeshWeaver.AI.Test (#1040, #1812, #2001).
             var earlyBacklog = new List<DataChangeNotification>();
             var earlyLock = new object();
             var initialDone = false;
-            var earlySubscription = _adapter.Changes
+            // Published under `earlyLock` in the same critical section that sets initialDone.
+            Subject<DataChangeNotification>? liveBuffer = null;
+            disposables.Add(_adapter.Changes
                 .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
                 .Subscribe(n =>
                 {
+                    Subject<DataChangeNotification>? live;
                     lock (earlyLock)
                     {
                         if (!initialDone)
+                        {
                             earlyBacklog.Add(n);
+                            return;
+                        }
+                        live = liveBuffer;
                     }
-                });
-            disposables.Add(earlySubscription);
+                    if (live is null)
+                        return;
+                    try { live.OnNext(n); }
+                    catch (ObjectDisposedException) { }
+                }));
 
             disposables.Add(RunQuery().Subscribe(
                 initialResults =>
@@ -405,10 +425,6 @@ public class CosmosMeshQuery : IMeshQueryProvider
                     var changeBuffer = new Subject<DataChangeNotification>();
                     disposables.Add(changeBuffer);
                     disposables.Add(
-                        _adapter.Changes
-                            .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
-                            .Subscribe(changeBuffer));
-                    disposables.Add(
                         changeBuffer
                             .Select(n => RunQuery()
                                 .Select(newResults => (batch: (IList<DataChangeNotification>)new[] { n }, newResults)))
@@ -417,14 +433,16 @@ public class CosmosMeshQuery : IMeshQueryProvider
                                 t => ProcessBatch(t.batch, t.newResults, currentItems, parsedQuery, observer),
                                 ex => observer.OnError(ex)));
 
-                    // 2) Snapshot + clear the early backlog under lock.
+                    // 2) Snapshot + clear the backlog, publish the live buffer and flip the gate —
+                    //    ONE critical section, so the feeding subscription's next notification
+                    //    routes to exactly one of the two and can never fall between them.
                     lock (earlyLock)
                     {
                         backlog = earlyBacklog.ToArray();
                         earlyBacklog.Clear();
+                        liveBuffer = changeBuffer;
                         initialDone = true;
                     }
-                    earlySubscription.Dispose();
 
                     observer.OnNext(new QueryResultChange<T>
                     {

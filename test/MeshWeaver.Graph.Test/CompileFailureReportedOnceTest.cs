@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph.Test;
 /// A compile failure is reported EXACTLY ONCE — the log-once contract of the compile pipeline.
 ///
 /// <para><b>The production defect.</b> <c>MeshNodeCompilationService</c> logged ~150 ERROR
-/// lines/24h across the memex / memex-cloud / atioz portals, and every stack pointed at
+/// lines/24h across the production portals, and every stack pointed at
 /// <c>EmitToDiskWithRetry → CompileToDiskAsync</c>, which reads like an emit/IO fault. It is not:
 /// the disk-emit self-heal has fired ZERO times in 7 days of production. Those ~150 lines were
 /// ~72 genuine Roslyn compile errors in mesh content, each logged TWICE — once by the emit site

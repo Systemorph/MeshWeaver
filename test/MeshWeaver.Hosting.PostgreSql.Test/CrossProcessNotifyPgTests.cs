@@ -66,10 +66,19 @@ public class CrossProcessNotifyPgTests(IsolatedPostgreSqlFixture fixture) : IAsy
         _listener = PostgreSqlChangeListener.OwningDataSource(
             _processB.CreateChangeListenerDataSource(), _router);
         await _listener.StartAsync(TestContext.Current.CancellationToken);
-        // The LISTEN session has to be OPEN before the write, or the NOTIFY has no subscriber —
-        // Postgres does not replay. Poll pg_stat_activity for the named session rather than sleep:
-        // a fixed delay is either flaky or slow, and this one is neither.
-        await WaitForListenSession();
+        // 🚨 The LISTEN has to be REGISTERED before the write, or the NOTIFY has no subscriber and
+        // Postgres never replays it — the write then lands, nothing arrives, and this test times
+        // out 30 s later with no clue why (#2281: two CI failures on diffs that cannot reach PG).
+        //
+        // This waits on the listener's OWN signal, raised by the `LISTEN mesh_node_changes`
+        // statement completing. It replaced a poll of pg_stat_activity for the named session,
+        // which could not detect the hazard its own comment named: a backend appears there the
+        // moment the CONNECTION opens, and the loop opens the connection FIRST and issues LISTEN
+        // SECOND — so the gate went green inside exactly the window it existed to close.
+        await _listener.Listening
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(TestContext.Current.CancellationToken);
     }
 
     public async ValueTask DisposeAsync()
@@ -146,20 +155,4 @@ public class CrossProcessNotifyPgTests(IsolatedPostgreSqlFixture fixture) : IAsy
             .ToTask(TestContext.Current.CancellationToken);
     }
 
-    /// <summary>
-    /// Waits until the listener's named session is visible in <c>pg_stat_activity</c> — the positive
-    /// "the LISTEN is open" signal. Bounded: no session inside the budget fails the test rather than
-    /// letting every assertion below time out on a missing subscription.
-    /// </summary>
-    private Task WaitForListenSession()
-        => Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
-            .SelectMany(_ => fixture.DataSource.ScalarLong(
-                "SELECT count(*) FROM pg_stat_activity "
-                + "WHERE application_name = 'meshweaver-change-listener'",
-                TestContext.Current.CancellationToken))
-            .Where(count => count > 0)
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
-            .Select(_ => System.Reactive.Unit.Default)
-            .ToTask(TestContext.Current.CancellationToken);
 }

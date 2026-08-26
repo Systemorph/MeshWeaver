@@ -414,13 +414,18 @@ public sealed class SnowflakePartitionedMeshQuery : IMeshQueryProvider
         // 🚨 Carry the REQUEST-level limit into the parsed query — the same propagation the
         // per-schema delegate does (SnowflakeMeshQuery) and the exact twin of the PostgreSQL fix for
         // issue #1216. Without it `request.Limit` is silently DROPPED on the unpinned path, because
-        // QueryAcrossSchemasAsync reads only ParsedQuery.Limit and substitutes a hard default of 50.
-        // A request that states no limit at all still gets that default: an unanchored UNION over
-        // every partition schema needs SOME bound.
-        // 🚨 POSITIVE limits only — same guard as the PostgreSQL twin. `Limit <= 0` means "do not
-        // clip" upstream (MeshQuery.ClipMergedInitial applies a limit only when `limit > 0`), but in
-        // SQL a zero is a literal `LIMIT 0`: zero rows for a caller that asked for everything.
-        if (request.Limit is > 0)
+        // QueryAcrossSchemasAsync reads only ParsedQuery.Limit. A request that states no limit at
+        // all gets EVERY match: this overload applies no default clip, and the paging overload that
+        // substituted 50 is deleted (#2048) — no runtime caller ever reached it.
+        // 🚨 Propagate the limit WHATEVER its sign, including the non-positive "no clip" encoding
+        // (MeshQueryRequest.NoLimit) — the PostgreSQL twin's shape, adopted here so Complete()
+        // means the SAME thing on both backends. It used to be dropped for `<= 0` because a zero
+        // would reach SQL as a literal `LIMIT 0`; that translation now happens where the SQL is
+        // written (SnowflakeSqlGenerator emits a LIMIT only for `Limit is > 0`), so neither
+        // `LIMIT 0` nor `LIMIT -1` can be produced here. Dropping it instead meant an enumeration
+        // that also carried a `limit:N` in its query STRING was silently paged on Snowflake while
+        // the same read enumerated on Postgres.
+        if (request.Limit is not null)
             queryForSql = queryForSql with { Limit = request.Limit };
 
         var userId = GetEffectiveUserId(request);

@@ -4,7 +4,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
@@ -127,7 +126,8 @@ public class CatalogPartitionIndexSelfHealTests(PostgreSqlFixture fixture, ITest
             .SelectMany(schemas => crossSchema
                 .QueryAcrossSchemasAsync(
                     new QueryParser().Parse($"nodeType:{nodeType}"),
-                    Mesh.JsonSerializerOptions, schemas, userId: null, ct)
+                    Mesh.JsonSerializerOptions, schemas, "mesh_nodes",
+                    userId: null, activityUserId: null, ct)
                 .Collect(ct))
             .Should().Within(30.Seconds()).Emit();
     }

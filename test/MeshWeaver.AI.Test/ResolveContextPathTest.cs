@@ -11,7 +11,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Unit tests for <see cref="MeshOperations.ResolveContextPath"/>. Regression coverage for the
+/// Unit tests for <see cref="AgentChatPaths.ResolveContextPath"/>. Regression coverage for the
 /// 2026-04-15 prod bug where <c>CollaborationPlugin.SuggestEdit</c> / <c>AddComment</c> ignored
 /// the chat's context path — agents calling the tool with a relative path or bare display name
 /// had the request routed to a non-existent grain (e.g. "Final Report – AI Readiness Assessment"),
@@ -28,7 +28,7 @@ public class ResolveContextPathTest
     public void AbsolutePaths_AreReturnedUnchanged(string input, string expected)
     {
         var chat = new StubChat(new AgentContext { Context = "Acme/AIConsulting" });
-        MeshOperations.ResolveContextPath(chat, input).Should().Be(expected);
+        AgentChatPaths.ResolveContextPath(chat, input).Should().Be(expected);
     }
 
     /// <summary>Relative bare names are prefixed with the chat's context path before routing.</summary>
@@ -40,9 +40,9 @@ public class ResolveContextPathTest
         // mesh as "FinalReport" and Orleans threw "Cannot activate grain FinalReport".
         var chat = new StubChat(new AgentContext { Context = "Acme/AIConsulting" });
 
-        MeshOperations.ResolveContextPath(chat, "FinalReport")
+        AgentChatPaths.ResolveContextPath(chat, "FinalReport")
             .Should().Be("@Acme/AIConsulting/FinalReport");
-        MeshOperations.ResolveContextPath(chat, "@FinalReport")
+        AgentChatPaths.ResolveContextPath(chat, "@FinalReport")
             .Should().Be("@Acme/AIConsulting/FinalReport");
     }
 
@@ -53,7 +53,7 @@ public class ResolveContextPathTest
         // "content/report.docx" — UCR prefix path; relative to context.
         var chat = new StubChat(new AgentContext { Context = "Acme/AIConsulting" });
 
-        MeshOperations.ResolveContextPath(chat, "@content/report.docx")
+        AgentChatPaths.ResolveContextPath(chat, "@content/report.docx")
             .Should().Be("@Acme/AIConsulting/content/report.docx");
     }
 
@@ -64,7 +64,7 @@ public class ResolveContextPathTest
         // Legacy colon syntax: "content:file.md" — no slash before colon, so relative.
         var chat = new StubChat(new AgentContext { Context = "Doc/Architecture" });
 
-        MeshOperations.ResolveContextPath(chat, "@content:icon.svg")
+        AgentChatPaths.ResolveContextPath(chat, "@content:icon.svg")
             .Should().Be("@Doc/Architecture/content:icon.svg");
     }
 
@@ -75,7 +75,7 @@ public class ResolveContextPathTest
         // Autocomplete wraps spaced paths in quotes: "@content/My File.md"
         var chat = new StubChat(new AgentContext { Context = "Doc/Architecture" });
 
-        MeshOperations.ResolveContextPath(chat, "\"@content/My File.md\"")
+        AgentChatPaths.ResolveContextPath(chat, "\"@content/My File.md\"")
             .Should().Be("@Doc/Architecture/content/My File.md");
     }
 
@@ -85,8 +85,8 @@ public class ResolveContextPathTest
     {
         var chat = new StubChat(context: null);
 
-        MeshOperations.ResolveContextPath(chat, "FinalReport").Should().Be("FinalReport");
-        MeshOperations.ResolveContextPath(chat, "@FinalReport").Should().Be("@FinalReport");
+        AgentChatPaths.ResolveContextPath(chat, "FinalReport").Should().Be("FinalReport");
+        AgentChatPaths.ResolveContextPath(chat, "@FinalReport").Should().Be("@FinalReport");
     }
 
     /// <summary>Absolute paths still resolve (losing the leading slash) even without a chat context.</summary>
@@ -95,7 +95,7 @@ public class ResolveContextPathTest
     {
         var chat = new StubChat(context: null);
 
-        MeshOperations.ResolveContextPath(chat, "@/OrgA/Doc").Should().Be("@OrgA/Doc");
+        AgentChatPaths.ResolveContextPath(chat, "@/OrgA/Doc").Should().Be("@OrgA/Doc");
     }
 
     /// <summary>An empty input produces an empty output regardless of context.</summary>
@@ -103,7 +103,7 @@ public class ResolveContextPathTest
     public void EmptyPath_ReturnsEmpty()
     {
         var chat = new StubChat(new AgentContext { Context = "OrgA" });
-        MeshOperations.ResolveContextPath(chat, "").Should().Be("");
+        AgentChatPaths.ResolveContextPath(chat, "").Should().Be("");
     }
 
     /// <summary>
@@ -131,7 +131,7 @@ public class ResolveContextPathTest
     {
         var chat = new StubChat(new AgentContext { Context = contextPath });
 
-        MeshOperations.ResolveContextPath(chat, input)
+        AgentChatPaths.ResolveContextPath(chat, input)
             .Should().Be("@" + contextPath,
                 "asking for the context node itself must resolve to that node, not to a "
                 + "non-existent child of it bearing the same name (#1469)");
@@ -150,7 +150,7 @@ public class ResolveContextPathTest
         string contextPath, string input, string expected)
     {
         var chat = new StubChat(new AgentContext { Context = contextPath });
-        MeshOperations.ResolveContextPath(chat, input).Should().Be(expected);
+        AgentChatPaths.ResolveContextPath(chat, input).Should().Be(expected);
     }
 
     /// <summary>

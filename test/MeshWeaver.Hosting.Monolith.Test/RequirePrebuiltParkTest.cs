@@ -85,6 +85,16 @@ public class RequirePrebuiltParkTest(ITestOutputHelper output) : MonolithMeshTes
         def.CompilationError.Should().Contain($"'{Partition}'",
             "…and the package whose bundle would fix it");
 
+        // 🚨 #2264 — the refusal must record the inputs it was formed under. Unstamped, the
+        // failed-verdict re-drive (#1793) reads this as "never attempted" and burns one needless
+        // automatic re-drive per refused type.
+        def.FailedBuildInputs.Should().NotBeNullOrEmpty(
+            "the adopt-only gate's refusal is formed under the LIVE compile inputs, so it must "
+            + "stamp them — the ONLY way this type reaches Error, and unstamped it looks stale "
+            + "forever");
+        def.FailedBuildInputs.Should().Contain(NodeTypeCompilationHelpers.FrameworkVersion,
+            "the stamp names the framework identity the refusal was formed under");
+
         // (b) PARKED — bounded and visible, like any terminal failure.
         parkRegistry.IsParked(NodeTypePath).Should().BeTrue(
             "a require-prebuilt refusal must park the type so no later trigger can storm");

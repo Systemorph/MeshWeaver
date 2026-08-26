@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -29,24 +30,21 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// group GRANT stops reaching its member — and so does a group DENY, which is a revocation that
 /// fails OPEN.</para>
 ///
-/// <para><b>What the first test measures, and why it is at the provider seam.</b> The paging
-/// behaviour lives in <c>PostgreSqlCrossSchemaQueryProvider.QueryAcrossSchemasAsync</c>'s
-/// <c>search_across_schemas</c> form, which clips at
-/// <see cref="PostgreSqlCrossSchemaQueryProvider.DefaultFanOutLimit"/> when the caller states no
-/// limit. The security fold's queries are exactly the shape that form serves, so the guarantee
-/// worth pinning is: fed the fold's OWN query strings, that fan-out returns every match — and it
-/// does so BECAUSE of the stamp, which the unstamped control in the same test proves by getting a
-/// page instead.</para>
+/// <para><b>What the first test measures, and why it is at the provider seam.</b> Through the
+/// fan-out overload the RUNTIME takes (<c>PostgreSqlPartitionedMeshQuery.EnumerateFanOutAsync</c>
+/// → the table-name form), a fold-shaped read is truncated by exactly one thing: a <c>limit:N</c>
+/// carried in the QUERY STRING it was assembled from. So the guarantee worth pinning is that
+/// <see cref="SecurityQueries.Enumeration"/> makes the fold immune to that — the control in the
+/// same test is the identical string WITH a limit, which comes back as a page.</para>
 ///
-/// <para>⚠️ <b>An honest scope note.</b> On this tree the runtime fan-out
-/// (<c>PostgreSqlPartitionedMeshQuery.EnumerateFanOutAsync</c>) always takes the <em>table</em>
-/// overload, which applies NO default limit — so an end-to-end mesh test that merely seeds more
-/// memberships than a page reproduces nothing today, whether or not the fold is stamped (measured:
-/// 62 seeded, 62 returned, both ways). That is a property of the current routing, not a guarantee:
-/// the paging form is still on <c>ICrossSchemaQueryProvider</c>, still implemented on both
-/// backends, and is one routing change away from serving these reads again. The stamp is what makes
-/// the fold indifferent to which form answers it, and the first test is where that is falsifiable.
-/// The second test is the end-to-end guard that the stamp did not break — or widen — the fold.</para>
+/// <para>🚨 <b>This test used to control on a 50-row DEFAULT, and that control was fiction.</b>
+/// The default lived on a second, paging fan-out overload that no runtime caller could reach; it
+/// is deleted (#2048). Its absence is asserted here too, so "an unpinned fold read that states
+/// nothing gets everything" is a pinned property rather than an assumption — and a future default
+/// clip lands as a failing test in the security fold, which is where it would hurt most.</para>
+///
+/// <para>The second test is the end-to-end guard that the stamp did not break — or widen — the
+/// fold.</para>
 /// </summary>
 [Collection("PostgreSql")]
 public class SecurityFoldEnumerationTests(PostgreSqlFixture fixture, ITestOutputHelper output)
@@ -56,9 +54,9 @@ public class SecurityFoldEnumerationTests(PostgreSqlFixture fixture, ITestOutput
     private readonly JsonSerializerOptions _options = new();
 
     /// <summary>
-    /// Membership rows per seeded partition. Two partitions ⇒ 66, comfortably above
-    /// <see cref="PostgreSqlCrossSchemaQueryProvider.DefaultFanOutLimit"/> — at or below it the
-    /// paging test reproduces nothing.
+    /// Membership rows per seeded partition. Two partitions ⇒ 66, comfortably above both the
+    /// control's stated page and the 50 the deleted paging overload substituted — at or below
+    /// either number the truncation reproduces nothing.
     /// </summary>
     private const int RowsPerPartition = 33;
 
@@ -68,13 +66,16 @@ public class SecurityFoldEnumerationTests(PostgreSqlFixture fixture, ITestOutput
 
     /// <summary>
     /// The exact string the fold issued before this fix — kept verbatim as the CONTROL, so the
-    /// paging assertion below is a measurement rather than an assumption.
+    /// assertions below are measurements rather than assumptions.
     /// </summary>
     private const string UnstampedMembershipQuery =
         "nodeType:GroupMembership scope:subtree select:path,id,namespace,name,nodeType,content";
 
+    /// <summary>Rows the control asks for — well under <see cref="TotalRows"/>, so a page is a page.</summary>
+    private const int ControlPage = 20;
+
     [Fact(Timeout = 120_000)]
-    public async Task TheFoldsOwnMembershipQuery_IsCompleteThroughThePagingFanOut()
+    public async Task TheFoldsOwnMembershipQuery_IsCompleteThroughTheRuntimeFanOut()
     {
         var ct = TestContext.Current.CancellationToken;
         await _fixture.CleanDataAsync();
@@ -92,24 +93,39 @@ public class SecurityFoldEnumerationTests(PostgreSqlFixture fixture, ITestOutput
 
         var parser = new QueryParser();
 
-        // 1. THE CONTROL — the string the fold used to issue. It states no limit, so the fan-out
-        //    answers with a page, and nothing in the result says so. In the security fold those
-        //    missing rows are memberships, and a missing membership reads as "not a member".
+        // 1. THE CONTROL — the fold's own string with a limit carried in it, which is how a
+        //    permission read actually gets truncated: assembled from parts, one of which stated a
+        //    page. The fan-out honours it, and nothing in the result says so. In the security fold
+        //    those missing rows are memberships, and a missing membership reads as "not a member".
+        var limited = parser.Parse($"{UnstampedMembershipQuery} limit:{ControlPage}");
+        limited.Limit.Should().Be(ControlPage, "the control must genuinely carry a limit");
+        var page = await Collect(cross, limited, ct);
+        Output.WriteLine($"string-limited: {page.Count} of {TotalRows} membership rows");
+        page.Count.Should().Be(ControlPage,
+            "a permission-deciding read that carries a limit is served a PAGE — which is exactly "
+            + "why the fold overwrites any limit rather than honouring the string it was built "
+            + "from");
+
+        // 1b. …and with NO limit stated at all, the runtime fan-out clips nothing. Pinned rather
+        //     than assumed: a default reintroduced here would silently page every permission read
+        //     on the mesh, which is #1216/#1326 aimed at the security fold (#2048).
         var unstamped = parser.Parse(UnstampedMembershipQuery);
         unstamped.Limit.Should().BeNull("the control must genuinely state no limit");
-        var page = await cross.QueryAcrossSchemasAsync(unstamped, _options, Schemas, ct: ct)
-            .Collect(ct).Should().Within(60.Seconds()).Emit();
-        Output.WriteLine($"unstamped: {page.Count} of {TotalRows} membership rows");
-        page.Count.Should().Be(PostgreSqlCrossSchemaQueryProvider.DefaultFanOutLimit,
-            "a permission-deciding read that states no limit is served a PAGE — which is exactly "
-            + "why the fold has to declare itself an enumeration rather than trust the absence of "
-            + "a limit");
+        var unclipped = await Collect(cross, unstamped, ct);
+        Output.WriteLine($"unstamped: {unclipped.Count} of {TotalRows} membership rows");
+        unclipped.Count.Should().Be(TotalRows,
+            "the runtime fan-out applies no default clip — the fold's completeness must not "
+            + "depend on one being absent by accident");
 
-        // 2. THE FIX — the fold's actual query, taken from the production builder, not retyped.
+        // 2. THE FIX — the fold's actual query, taken from the production builder, not retyped. It
+        //    REPLACES a limit rather than appending to it, which is what makes the control above
+        //    the thing it defends against.
+        SecurityQueries.Enumeration($"{UnstampedMembershipQuery} limit:{ControlPage}")
+            .Should().Contain(MeshQueryRequest.CompleteQualifier)
+            .And.NotContain($"limit:{ControlPage}");
         var stamped = parser.Parse(SecurityQueries.Memberships);
         stamped.Limit.Should().Be(MeshQueryRequest.NoLimit);
-        var complete = await cross.QueryAcrossSchemasAsync(stamped, _options, Schemas, ct: ct)
-            .Collect(ct).Should().Within(60.Seconds()).Emit();
+        var complete = await Collect(cross, stamped, ct);
         Output.WriteLine($"SecurityQueries.Memberships: {complete.Count} of {TotalRows} membership rows");
         complete.Count.Should().Be(TotalRows,
             "every GroupMembership must come back — a viewer's group set is not a list that may be "
@@ -122,6 +138,17 @@ public class SecurityFoldEnumerationTests(PostgreSqlFixture fixture, ITestOutput
         parser.Parse(SecurityQueries.Roles).Limit.Should().Be(MeshQueryRequest.NoLimit);
         parser.Parse(SecurityQueries.GatedNodes("Store/Plugin")).Limit.Should().Be(MeshQueryRequest.NoLimit);
     }
+
+    /// <summary>
+    /// The call the RUNTIME makes for an unpinned read: the table-name overload, which is what
+    /// <c>PostgreSqlPartitionedMeshQuery.EnumerateFanOutAsync</c> takes for every query the
+    /// security fold issues. Asserting through anything else pins a path no request can reach.
+    /// </summary>
+    private Task<System.Collections.Generic.List<MeshNode>> Collect(
+        PostgreSqlCrossSchemaQueryProvider cross, ParsedQuery query, CancellationToken ct)
+        => cross.QueryAcrossSchemasAsync(
+                query, _options, Schemas, "mesh_nodes", userId: null, activityUserId: null, ct)
+            .Collect(ct).Should().Within(60.Seconds()).Emit();
 
     // ── End-to-end guard: the stamped fold still decides correctly, and still denies ────────────
 

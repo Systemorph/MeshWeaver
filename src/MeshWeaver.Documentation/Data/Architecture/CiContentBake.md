@@ -27,7 +27,10 @@ CI already compiles the image's shipped content as a *verdict*: the `doc-gate` j
 the MeshWeaver.Plugins checkout (synced at build time; the checked-out commit is recorded as each
 bundle's `sourceSha`).
 
-With `--bake-output <dir>`, the same run also persists what it compiled:
+Each of those lanes runs the bake and the gate as **two steps** (`.github/scripts/bake-then-gate.sh`
+— the same split `main-cd` makes, described below): `compile <stage> --output <dir>` produces the
+bytes, then the gate runs over the same stage with `--seed <dir>` and consumes them. The bake
+persists:
 
 - one **prebuilt-assembly bundle** per package — `<package>.zip`, written by `BundleWriter`
   (`MeshWeaver.Plugin.Packaging`): the `meshweaver/manifest.json` manifest (node path → assembly,
@@ -41,8 +44,16 @@ tolerates simply has no entry — the consumer compiles it as it would have anyw
 *claims* Ok while the run's assembly store has no bytes for it faults the run: an artifact stage
 that ships less than the verdict claims would be the skip-trapdoor shape CI forbids.
 
-Both gates fail RED when a green run produced no bake identity — the bake stage is a
-postcondition of the verdict, never an optional extra.
+Both gates fail RED when a green run produced no bake identity, produced no bundles, or **adopted
+none of them** — each is a postcondition of the verdict, never an optional extra. That last one
+matters more than it looks: adoption is invisible in a gate verdict by construction (a type the gate
+compiled itself renders and tests exactly like one it adopted), so without an explicit assertion the
+entire consuming half could stop working with every run still green. `assert-bake-consumption.sh`
+reads the gate's own `seed: adopted N of M` line and requires **M > 0** as well as N ≥ M — because
+`BakeSeed.Shortfall()` returns a PASS over an *empty* bake ("adopted everything declared" is
+vacuously true of nothing), which is exactly the vacuous green the split exists to make impossible.
+N may legitimately EXCEED M: `N` counts adoption events and the gate installs every package twice
+(the idempotence pin re-installs the unchanged snapshot), so `adopted 32 of 28` is healthy.
 
 🚨 **What the gates' bake is FOR: proving the bake stage still works, on the PR that breaks it.** It
 is *not* the delivery lane. A gate job's bundles are keyed to that job's own binaries, and no
@@ -52,11 +63,16 @@ baked **inside the shipped image** — see "The delivery" below.
 
 ## BAKE is a build step; GATE is a mesh run that CONSUMES one
 
-The section above describes how the bake worked until issue #1763: `mw-plugin-test` stood up an
-in-process mesh (`new MeshBuilder(...).AddGraph()`), imported the repo's content, let the **mesh**
-compile every NodeType, and `--bake-output` collected what the mesh had produced. That is
-"compile through mesh nodes" — the thing #1707 forbids — and it is where the minutes went: mesh
-startup, the hub scheduler, and one per-type activation for every type in the tree.
+This is how the bake worked until issue #1763: `mw-plugin-test` stood up an in-process mesh
+(`new MeshBuilder(...).AddGraph()`), imported the repo's content, let the **mesh** compile every
+NodeType, and `--bake-output` collected what the mesh had produced. That is "compile through mesh
+nodes" — the thing #1707 forbids — and it is where the minutes went: mesh startup, the hub
+scheduler, and one per-type activation for every type in the tree.
+
+#1763 split CD. **#2064 split the PR lane too** — `dotnet-test.yml`'s `doc-gate` and `plugin-gate`
+were still fused, so the platform's own PR gate was doing the very thing CD had stopped doing, and
+`--bake-output` no longer appears in that workflow at all. The remaining fused caller is
+`node-repo-publish-bake.yml` (the satellite lane).
 
 The two concerns are now split, and they are different kinds of thing:
 
