@@ -41,3 +41,17 @@ PensionFund/BalanceSheet compile
 # default-suppression drops the property whose value equals the type's default. The stored
 # node then differs from the authored file and the unchanged-skip misses.
 PensionFund idempotence intermittent
+
+# 🚨 The `intermittent` token above is a REAL WEAKENING, and its failure mode is social rather than
+# technical: the next person with a deterministic red they cannot fix will find this token and reach
+# for it. It is legitimate for exactly one thing — a check that FLAPS, where a single green run does
+# not prove the debt is paid. It is NOT for a failure that is merely inconvenient, hard, or someone
+# else's. Marking a deterministic failure intermittent silences the ratchet permanently and is the
+# band-aid the ratchet exists to prevent.
+#
+# It buys exemption from STALE-DETECTION and nothing else: the entry still tolerates only the
+# scope/check it names, and a failure it does not name is still a new failure.
+#
+# Before adding one, prove the flap — two runs of the same commit disagreeing, or the git history of
+# this file showing an entry dropped as stale and restored. That is what justified this one:
+# 768f9ba0b dropped it, f32047e0e restored it one commit later.
