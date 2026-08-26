@@ -239,9 +239,14 @@ jobs:
     - name: "Refuse a public type moving assemblies without a forwarder"
       run: |
         set -euo pipefail
-        base="origin/${{ github.base_ref }}"
-        # Already fetched above for the record gate; harmless and explicit if the steps are reordered.
+        # Already fetched above for the record gate; repeated explicitly so the steps can be reordered.
         git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        # 🚨 The MERGE BASE, not the base branch tip. This is a diff question, and a public type that
+        # moves on main while this PR is open reads, against the tip, as THIS PR moving it back — a
+        # red on somebody else's change. Four such moves landed on main in one day (#2398), so this
+        # is the difference between a gate people believe and one they learn to allow-list past.
+        base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+        echo "Comparing against merge base $base"
         python3 scripts/check-type-forwards.py --base "$base"
 
   precheck:
