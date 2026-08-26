@@ -46,15 +46,34 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public class GrainActivationSiteRatchetGuard(ITestOutputHelper output)
 {
     /// <summary>
-    /// The seeded inventory: relative path → how many <c>GetGrain</c> sites that file may carry.
-    /// Every entry is justified in the class remarks; there is no third kind.
+    /// The seeded inventory: relative path → how many <c>GetGrain</c> sites that file may carry, and
+    /// WHY each one is there.
+    ///
+    /// <para>🚨 <b>The reason is not decoration — it is the cost of raising a number.</b> A bare count
+    /// invites a reflexive bump the moment a legitimate change lands, and a ratchet that gets bumped
+    /// without thought is a ratchet that has already died. To raise one of these you must name the
+    /// call you added and state why the invariant does not apply to it, in the same edit. If you
+    /// cannot write that sentence, the call belongs behind the seam instead.</para>
     /// </summary>
-    private static readonly Dictionary<string, int> Allowed = new(StringComparer.Ordinal)
+    private static readonly Dictionary<string, (int Count, string Why)> Allowed = new(StringComparer.Ordinal)
     {
-        // The SEAM. One call, inside GrainWhileRunning, which is the gate.
-        ["src/MeshWeaver.Connection.Orleans/OrleansRoutingService.cs"] = 1,
-        // The DRAIN. Deliberately ungated — see the class remarks.
-        ["src/MeshWeaver.Hosting.Orleans/RoutingGrain.cs"] = 2,
+        // The SEAM itself. Exactly one call, inside GrainWhileRunning, which is the gate — and
+        // TheOnlyUngatedDoorInTheRouterIsTheSeam pins that it is still that call and not another.
+        ["src/MeshWeaver.Connection.Orleans/OrleansRoutingService.cs"] =
+            (1, "the seam: GrainWhileRunning, the one gated door to a grain in this process"),
+
+        // The DRAIN, deliberately UNGATED — every one of these answers or delivers a message that has
+        // ALREADY been accepted for routing, and Orleans' own placement is what sends it to a HEALTHY
+        // silo rather than this one. Named individually so a fourth cannot ride in on the number:
+        //   1. BuildPodHubRoute      → IPodHubGrain.Deliver        — forward leg to a pod-hosted hub.
+        //   2. BuildGrainRoute       → IMessageHubGrain.DeliverMessage — forward leg to a node hub.
+        //   3. PostFailure           → IPodHubGrain.Deliver        — the NACK leg (#1742 residual C).
+        //      Added on main after this guard was seeded. It is drain, not courtesy: refusing it
+        //      would park a waiting sender on a silence, which is the very defect that PR fixed.
+        //      It already limits its own activation churn by asking only for stream-routed sender
+        //      types, so it never mints an activation just to be told PodHubNotHere.
+        ["src/MeshWeaver.Hosting.Orleans/RoutingGrain.cs"] =
+            (3, "the drain: forward legs + the NACK leg, all answering already-accepted deliveries"),
     };
 
     private const string Marker = "GetGrain";
@@ -75,16 +94,20 @@ public class GrainActivationSiteRatchetGuard(ITestOutputHelper output)
 
         foreach (var (file, count) in found.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
-            if (!Allowed.TryGetValue(file, out var budget))
+            if (!Allowed.TryGetValue(file, out var allowance))
                 failures.Add(
                     $"  NEW SITE   {file} ({count}) — a new place that can create a grain activation. "
                     + "Route it through a gated seam (OrleansRoutingService.GrainWhileRunning) so a "
                     + "host that has begun stopping asks Orleans for nothing. Do NOT add a line to "
                     + "the Allowed table.");
-            else if (count > budget)
+            else if (count > allowance.Count)
                 failures.Add(
-                    $"  MORE       {file} ({count} > {budget} allowed) — a site was ADDED to a file "
-                    + "that already carries grain calls. The seam takes new calls; the table does not.");
+                    $"  MORE       {file} ({count} > {allowance.Count} allowed — allowed because: "
+                    + $"{allowance.Why}) — a site was ADDED to a file that already carries grain "
+                    + "calls. If the new call is DRAIN (it delivers or answers a message already "
+                    + "accepted for routing), name it in the Allowed table's comment and raise the "
+                    + "count in the same edit. If it is anything else — a claim, a release, an "
+                    + "announcement, a probe — it must go behind the seam instead.");
         }
 
         // Stale entries are reported, never failed — shrinking is the direction this guard exists to
@@ -92,9 +115,9 @@ public class GrainActivationSiteRatchetGuard(ITestOutputHelper output)
         foreach (var (file, budget) in Allowed.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
             var count = found.GetValueOrDefault(file, 0);
-            if (count < budget)
+            if (count < budget.Count)
                 output.WriteLine(
-                    $"STALE (please tidy): {file} — {count} found, {budget} allowed. "
+                    $"STALE (please tidy): {file} — {count} found, {budget.Count} allowed. "
                     + $"{(count == 0 ? "Delete the line" : $"Lower it to {count}")}.");
         }
 
@@ -130,6 +153,35 @@ public class GrainActivationSiteRatchetGuard(ITestOutputHelper output)
         // The seam's remarks discuss GetGrain in prose. A scanner that counted comments would
         // ratchet against documentation, so prove the masking works: the seam has exactly one CALL.
         Assert.Equal(1, found[seam]);
+    }
+
+    /// <summary>
+    /// The count alone is not the invariant. <c>OrleansRoutingService</c> may hold exactly one
+    /// <c>GetGrain</c>, and this pins that the one it holds is still the GATED one — swapping the
+    /// seam's call for an ungated call elsewhere in the file keeps the count at 1 and would sail
+    /// through the ratchet above while reopening the whole defect.
+    /// </summary>
+    [Fact]
+    public void TheOnlyUngatedDoorInTheRouterIsTheSeam()
+    {
+        var root = FindRepoRoot();
+        var file = Path.Combine(root, "src", "MeshWeaver.Connection.Orleans", "OrleansRoutingService.cs");
+        Assert.True(File.Exists(file), $"the router must exist for this check to mean anything: {file}");
+
+        var code = MaskCommentsAndStrings(File.ReadAllText(file));
+        var at = code.IndexOf("GetGrain", StringComparison.Ordinal);
+        Assert.True(at > 0, "the router must still contain its one grain call");
+
+        // The gate and the call belong to the same expression. Read back far enough to survive
+        // reformatting, but not so far that a neighbouring method could satisfy it.
+        var from = Math.Max(0, at - 300);
+        var window = code[from..at];
+        Assert.True(window.Contains("IsHostStopping", StringComparison.Ordinal),
+            "OrleansRoutingService's GetGrain is no longer guarded by IsHostStopping. The seam "
+            + "(GrainWhileRunning) is the ONLY place this class may reach a grain, because a host "
+            + "that has begun stopping must ask Orleans for nothing — Orleans still reports Active "
+            + "for some seconds after ApplicationStopping fires, and will faithfully create the "
+            + "activation on the silo that is leaving.");
     }
 
     private static Dictionary<string, int> Scan(string root) =>
