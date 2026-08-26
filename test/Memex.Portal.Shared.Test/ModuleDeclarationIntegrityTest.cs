@@ -44,10 +44,12 @@ public class ModuleDeclarationIntegrityTest
     /// <summary>Hosts that declare modules, mapped to the project whose publish builds the image.</summary>
     private static readonly (string Settings, string Project)[] Hosts =
     [
-        ("memex/aspire/Memex.Portal.Distributed/appsettings.json",
-         "memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj"),
-        ("memex/Memex.Portal.Monolith/appsettings.json",
-         "memex/Memex.Portal.Monolith/Memex.Portal.Monolith.csproj"),
+        // 🚨 Memex.Portal.Distributed and Memex.Portal.Monolith are NOT absent by oversight: they
+        // moved to MeshWeaver.Plugins with the GUI extraction, so this repo no longer has their
+        // appsettings to check. The guard must follow its subject — an equivalent over those two
+        // hosts belongs in that repo, and until it exists their module declarations are unguarded.
+        // Listing them here instead would fail on a missing file and say nothing about the
+        // declarations, which is the failure that brought this comment about.
         ("memex/Memex.LocalMesh/appsettings.json",
          "memex/Memex.LocalMesh/Memex.LocalMesh.csproj"),
     ];
