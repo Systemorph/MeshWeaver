@@ -66,12 +66,13 @@ public class AgentPickerModelOrderingTest
         var projected = AgentPickerProjection.ProjectModels(snapshot, Json);
 
         // One contiguous run per provider — no provider's name appears, breaks, then appears again.
-        var providerRuns = projected
-            .Select(m => m.Provider)
-            .Zip(projected.Skip(1).Select(m => m.Provider).Append(null),
-                (current, next) => (current, next))
-            .Count(pair => pair.current != pair.next);
-        var distinctProviders = projected.Select(m => m.Provider).Distinct().Count();
+        // Run count = 1 (for the first element) + the number of adjacent pairs that differ; no
+        // null sentinel needed (Provider is non-nullable).
+        var providers = projected.Select(m => m.Provider).ToList();
+        var providerRuns = providers.Count == 0
+            ? 0
+            : 1 + providers.Zip(providers.Skip(1), (current, next) => current != next).Count(differs => differs);
+        var distinctProviders = providers.Distinct().Count();
         providerRuns.Should().Be(distinctProviders,
             "each provider must render as ONE contiguous block, however its models are pinned");
 
