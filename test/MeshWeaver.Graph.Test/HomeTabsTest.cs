@@ -239,7 +239,10 @@ public class HomeTabsTest
         specs.Single(s => s.Id == "Doc").Name.Should().Be("Documentation");
         var threads = specs.Single(s => s.Id == "Chat");
         threads.Name.Should().Be("Threads");
-        threads.Icon.Should().Be("/static/NodeTypeIcons/chat.svg");
+        // Inline artwork now, not a static glyph URL — the grey chat.svg read as unfinished beside
+        // the Store's tile. Asserted by shape rather than by markup so the artwork can be redrawn
+        // without touching this test; AppIconRenderingTest pins the rules the markup must obey.
+        threads.Icon.Should().StartWith("<svg");
         threads.OpenPath.Should().Be($"{NodePath}/Chat", "the Threads record opens the viewer's own Chat area");
         threads.Plugin.Should().BeNull();
         threads.Target.Should().Be($"{NodePath}/Chat");

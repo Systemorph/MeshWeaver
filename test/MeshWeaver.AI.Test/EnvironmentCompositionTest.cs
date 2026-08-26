@@ -7,7 +7,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
-using MeshWeaver.AI;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -16,8 +15,10 @@ using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.PluginCatalog;   // moved out of MeshWeaver.PluginCatalog.Test (#2276):
+                                  // the parent namespace no longer resolves implicitly.
 
-namespace MeshWeaver.PluginCatalog.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// THE ACCEPTANCE CRITERION, end to end: "<c>memex</c> lists all of Plugins; <c>systemorph</c> the
