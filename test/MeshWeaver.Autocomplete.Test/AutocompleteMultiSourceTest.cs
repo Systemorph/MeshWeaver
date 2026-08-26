@@ -6,6 +6,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.AI;   // MeshOperations — its namespace is a frozen binary contract (#2370)
 using MeshWeaver.Reactive;
 using Memex.Portal.Shared;
 using MeshWeaver.ContentCollections;
