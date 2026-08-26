@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -281,8 +282,27 @@ public class CrossProcessChangeFeedTest(ITestOutputHelper output) : MonolithMesh
     private SecondProcess BuildSecondProcess()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
-        services.AddLogging(l => l.ClearProviders());
+        // 🚨 Wire the SAME XUnitFileLoggerProvider process A gets from TestBase, pointed at the
+        // SAME FileOutput — and grant MeshNodeTypeSource (this test's own file has the matching
+        // "MeshWeaver.Graph.MeshNodeTypeSource": "Debug" override) Debug level via an in-memory
+        // config, since this process builds its OWN IConfiguration rather than loading
+        // appsettings.json. Without this, process B — the mirror this test asserts on, and the
+        // hub #2008's own-node-versioning hypothesis is about — had ZERO logging providers: every
+        // MeshNodeTypeSource.LogDebug/LogWarning call from its own-node reconcile (adds/updates/
+        // deletes counts, durable-seed reads) went nowhere, not xUnit output, not the log file, on
+        // every run, including a failing one. See #2008.
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Logging:LogLevel:Default"] = "Warning",
+                ["Logging:LogLevel:MeshWeaver.Graph.MeshNodeTypeSource"] = "Debug",
+            })
+            .Build());
+        services.AddLogging(l =>
+        {
+            l.ClearProviders();
+            l.Services.AddSingleton<ILoggerProvider>(sp => new XUnitFileLoggerProvider(() => FileOutput, sp));
+        });
         services.AddOptions();
 
         var builder = new MeshBuilder(c => c.Invoke(services), AddressExtensions.CreateMeshAddress())
