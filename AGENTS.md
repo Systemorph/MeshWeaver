@@ -239,12 +239,20 @@ so never relax it. Three consequences that trip people up, all SILENT:
    leaving 45 minutes with no completed run and no publish.
 
    Publishing only the **tip** of a burst is correct — intermediate commits never needed their own
-   image set, and it is the batching `CD_BATCH_WINDOW_MINUTES` already wants. The trap is that the
-   burst has to **end**: keep merging and the tip run is cancelled every time, the push path stops
-   publishing entirely, and the hourly reconciler silently becomes the only publisher. So when a
-   merge must actually ship (a fix you are waiting on), **merge, then wait for that merge commit's
-   Build-and-Test to COMPLETE before merging the next** — ~20 min per merge, and the only way
-   "merge on green" still means "an image ships".
+   image set, and it is the batching `CD_BATCH_WINDOW_MINUTES` already wants. So do NOT wait between
+   ordinary merges; batching them is right, and the tip's image contains them all.
+
+   🚨 **The wait is owed to a merge that must ship ON ITS OWN** (a CD fix, a hotfix someone is
+   verifying): merge it, then wait for **that merge commit's** Build-and-Test to COMPLETE — and
+   check the completed run's **head SHA is your merge commit**, because "a run completed" and "the
+   run for my commit completed" diverge during exactly the burst you are working around.
+
+   🚨 **A merge cancels whatever is in flight — including a run ANOTHER SESSION is waiting on.**
+   Several sessions merge into this repo at once, so "wait for the run" only works if *everyone*
+   waits; two sessions each merging politely still cancel each other. Before merging, check whether
+   main has a run in flight that someone is gating a deploy on, and if so **hold and say so**. On
+   2026-08-26 a routine merge killed the run another session was watching to end a CD freeze — no
+   damage beyond a lost cycle, but the fix is coordination, not care.
 
 **None of these is terminal any more.** CD carries a **reconciler**: an hourly `schedule` (plus its own
 `workflow_dispatch`) resolves main's tip through the API, asks ACR whether that commit has the

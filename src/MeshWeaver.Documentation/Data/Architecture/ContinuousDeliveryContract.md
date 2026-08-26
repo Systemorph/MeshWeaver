@@ -159,9 +159,16 @@ CD's `workflow_run` trigger reacts to a **real push**, and — more exactly — 
    push path stops publishing altogether, and the hourly reconciler quietly becomes the only
    publisher — which reads exactly like "CD is frozen".
 
-   **When a specific merge must ship, merge it and then wait for that merge commit's Build-and-Test
-   to COMPLETE before merging the next.** ~20 min per merge, and the only way "merge on green" still
-   means "an image ships". 🚨 Do not diagnose this from the tag alone: "no new tag" here has at
+   **Ordinary merges should still be batched** — the tip's image contains them all. The wait is owed
+   only to a merge that must ship **on its own** (a CD fix, a hotfix under verification): merge it,
+   wait for **that merge commit's** Build-and-Test to complete, and confirm the completed run's
+   **head SHA is your merge commit** — "a run completed" and "the run for my commit completed"
+   diverge during precisely the burst this is about.
+
+   🚨 **And a merge cancels whatever is in flight, including a run another session is waiting on.**
+   With several sessions merging into one repo, "wait for the run" only works if everyone waits —
+   two sessions each merging politely still cancel each other. Check for an in-flight run someone is
+   gating a deploy on before you merge, and hold if there is one. 🚨 Do not diagnose this from the tag alone: "no new tag" here has at
    least three causes — the batch window, a repoint/version-step failure on a run that *did*
    complete, and this. They stack, and naming only one leaves the other live.
 
