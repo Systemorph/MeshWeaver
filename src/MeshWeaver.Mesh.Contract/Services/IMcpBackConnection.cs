@@ -1,4 +1,4 @@
-namespace MeshWeaver.AI.Connect;
+namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// The coordinates a co-hosted CLI needs to call the portal's MCP endpoint AS THE USER:

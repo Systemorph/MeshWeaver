@@ -40,6 +40,24 @@ public interface IStaticRepoSource
     PartitionSyncMode SyncMode => PartitionSyncMode.FullReplace;
 
     /// <summary>
+    /// Whether the import must ASSERT this source's catalog reached the cross-schema search index
+    /// (#354). After the import, <c>StaticRepoImporter.ImportAll</c> verifies each asserting
+    /// partition is registered, force-re-syncs one that is not, and raises a startup-failure
+    /// notification for any that materialized but stayed unindexed.
+    ///
+    /// <para>Defaults to <c>false</c> — the pre-existing behaviour for every source that does not
+    /// opt in. The built-in AI catalogs (Agent / Provider / Harness / Skill) override to
+    /// <c>true</c>: a skill that exists but is unfindable is indistinguishable from one that was
+    /// never imported, and that is the failure this assertion exists to catch.</para>
+    ///
+    /// <para>🚨 It lives on the SOURCE rather than being passed in by the host. The portal used to
+    /// hand <c>ImportAll</c> the AI partition names, which meant the composition root had to know
+    /// them — and a module cannot be delisted from a list the host hard-codes (#2276). A source
+    /// declaring its own requirement is the same shape as <see cref="SyncMode"/> above.</para>
+    /// </summary>
+    bool AssertIndexedAfterImport => false;
+
+    /// <summary>
     /// All source nodes <b>with full content</b> (e.g. <c>MarkdownContent</c>), in any order
     /// (the fingerprint + import are order-independent). This is the authored content, read
     /// straight from the assembly — never from the live mesh.

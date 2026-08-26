@@ -296,6 +296,27 @@ image_build_local() {                                  # §3 Option B
   verify_image_resolvable "$MIGRATION_IMAGE"
 }
 
+# The checkout that holds the web CLIENTS. They left the platform repo (MeshWeaver 044a85618 /
+# Plugins #665) and now live in the plugins checkout — while the .proto they generate from stays
+# in the platform's .NET tree. So this build spans TWO checkouts, and neither is assumed by name:
+# the clients repo is whichever candidate actually carries clients/portal-next/Dockerfile.
+#
+# 🚨 Probe a FILE the clients bring with them, never the directory. After the move the platform's
+# clients/grpc-web/ still had a node_modules/ and a lockfile, so `[ -d clients/grpc-web ]` was
+# still true while the package was gone — the exact reason the first failure read as ENOENT on
+# package.json rather than as a missing checkout.
+resolve_clients_repo() {
+  local p repo
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if [ -f "$p/clients/portal-next/Dockerfile" ]; then printf '%s' "$p"; return 0; fi
+  done < <(plugin_repo_paths)
+  # Pre-move layout: a platform checkout from before 044a85618 still carries them itself.
+  repo="$(resolve_repo 2>/dev/null)" || return 1
+  if [ -f "$repo/clients/portal-next/Dockerfile" ]; then printf '%s' "$repo"; return 0; fi
+  return 1
+}
+
 # Build the Next.js React GUI image (clients/portal-next) into Colima's Docker store so k3s loads
 # it IfNotPresent. The build CONTEXT is clients/ (the app aliases @meshweaver/react +
 # @meshweaver/client-web to their SOURCE trees in ../react + ../grpc-web — see the Dockerfile).
@@ -303,24 +324,29 @@ image_build_local() {                                  # §3 Option B
 # Portal:ReactAppUrl config that lights up the opt-in "Try the new frontend" toggle. This is a
 # fast Node build (no .NET), so it runs OUTSIDE image_build_local's host-saturation lock.
 portal_next_build_local() {
-  local repo
+  local repo clients
   repo="$(resolve_repo)" || die "portal-next build needs the repo — set MEMEX_REPO to your MeshWeaver checkout"
+  clients="$(resolve_clients_repo)" || die "portal-next build needs the web clients — they live in a MeshWeaver.Plugins checkout (clients/portal-next); clone it beside your MeshWeaver checkout or set MEMEX_PLUGIN_REPOS"
   need docker docker
   need node node
   # grpc-web consumes protobuf TS generated from the mesh .proto via `buf generate` — buf +
   # protoc-gen-es are grpc-web devDeps and the .proto (src/MeshWeaver.Hosting.Grpc/Protos) lives in
-  # the .NET tree, OUTSIDE the clients/ Docker context. buf also ships glibc binaries, so we generate
-  # on the HOST (arm64 macOS) rather than inside the musl Alpine image; the output
+  # the PLATFORM tree, OUTSIDE the clients/ Docker context. buf also ships glibc binaries, so we
+  # generate on the HOST (arm64 macOS) rather than inside the musl Alpine image; the output
   # (clients/grpc-web/src/gen, gitignored) is then copied into the build context. grpc-web has no
   # committed lockfile (gitignored), so `npm install` — NOT `npm ci`.
+  #
+  # MESHWEAVER_CORE is passed explicitly: the client's own resolver (scripts/resolve-core.cjs)
+  # would otherwise fall back to guessing a side-by-side checkout, and this script already knows
+  # which platform tree it is building from.
   step "Generating grpc-web protobuf TS on the host (buf generate) for portal-next"
-  npm --prefix "$repo/clients/grpc-web" install --no-audit --no-fund
-  npm --prefix "$repo/clients/grpc-web" run gen
+  npm --prefix "$clients/clients/grpc-web" install --no-audit --no-fund
+  MESHWEAVER_CORE="$repo" npm --prefix "$clients/clients/grpc-web" run gen
   step "Building portal-next (Next.js React GUI) image → $PORTAL_NEXT_IMAGE (arm64)"
   docker build --platform linux/arm64 \
-    -f "$repo/clients/portal-next/Dockerfile" \
+    -f "$clients/clients/portal-next/Dockerfile" \
     -t "$PORTAL_NEXT_IMAGE" \
-    "$repo/clients"
+    "$clients/clients"
   ok "portal-next image built: $PORTAL_NEXT_IMAGE (visible to k3s via IfNotPresent; helm enables /next)"
 }
 

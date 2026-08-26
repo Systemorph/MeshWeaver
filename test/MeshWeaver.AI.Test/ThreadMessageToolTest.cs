@@ -3,7 +3,7 @@ using MeshWeaver.AI.Plugins;
 using Microsoft.Extensions.AI;
 using Xunit;
 
-namespace MeshWeaver.Content.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// The <c>submit_message</c> tool's REFUSAL contract — the half a model actually collides with.
@@ -26,13 +26,16 @@ public class ThreadMessageToolTest
     private static AIFunction Tool() =>
         (AIFunction)ThreadMessageTool.Create(hub: null!, chat: null!);
 
-    private static string Invoke(string? threadPath, string? text)
+    // await, never a blocking bridge: `.AsTask().GetAwaiter().GetResult()` parks the calling thread
+    // on a continuation that may need it, which is the deadlock shape BlockingBridgeInTestRatchetGuard
+    // exists to keep out of the suite.
+    private static async Task<string> InvokeAsync(string? threadPath, string? text)
     {
-        var result = Tool().InvokeAsync(new AIFunctionArguments
+        var result = await Tool().InvokeAsync(new AIFunctionArguments
         {
             ["threadPath"] = threadPath!,
             ["text"] = text!,
-        }).AsTask().GetAwaiter().GetResult();
+        });
         return result?.ToString() ?? string.Empty;
     }
 
@@ -54,11 +57,11 @@ public class ThreadMessageToolTest
     [InlineData("   ")]
     [InlineData("")]
     [InlineData(null)]
-    public void A_path_that_normalises_to_nothing_is_ANSWERED_not_thrown(string? path)
+    public async Task A_path_that_normalises_to_nothing_is_ANSWERED_not_thrown(string? path)
     {
         // The assertion is as much that this returns at all as what it returns: before the
         // normalised-value check, three of these aborted the round with ArgumentException.
-        var answer = Invoke(path, "hello");
+        var answer = await InvokeAsync(path, "hello");
 
         answer.Should().Contain("submit_message requires");
     }
@@ -67,18 +70,18 @@ public class ThreadMessageToolTest
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
-    public void Empty_text_is_refused_without_sending(string? text)
+    public async Task Empty_text_is_refused_without_sending(string? text)
     {
-        Invoke("alice/_Thread/review", text)
+        (await InvokeAsync("alice/_Thread/review", text))
             .Should().Contain("non-empty text");
     }
 
     [Fact]
-    public void An_ownerless_top_level_thread_path_is_refused_with_the_reason()
+    public async Task An_ownerless_top_level_thread_path_is_refused_with_the_reason()
     {
         // A bare `_Thread/{id}` has no partition and no per-node hub; submitting to it would
         // NotFound-storm the router. Saying so beats an agent retrying the same bad path.
-        var answer = Invoke("_Thread/orphan", "hello");
+        var answer = await InvokeAsync("_Thread/orphan", "hello");
 
         answer.Should().Contain("not a valid thread path");
         answer.Should().Contain("{owner}/_Thread/{id}",

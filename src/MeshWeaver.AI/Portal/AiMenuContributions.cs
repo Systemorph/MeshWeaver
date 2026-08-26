@@ -3,7 +3,7 @@ using MeshWeaver.AI;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 
-namespace Memex.Portal.Shared;
+namespace MeshWeaver.AI.Portal;
 
 /// <summary>
 /// The AI (✨) menu's NAVIGATION entries as seeded <see cref="UiContribution"/> nodes (WS7
