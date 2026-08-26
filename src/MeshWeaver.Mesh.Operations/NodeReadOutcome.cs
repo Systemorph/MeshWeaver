@@ -1,7 +1,11 @@
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Mesh;
+// The namespace is a binary contract, not a filing decision — see MeshOperations.cs. It is also
+// why this type kept its ORIGINAL name: `NodeReadOutcome` (#2283) was a rename chosen to dodge a
+// collision with MeshWeaver.Mesh's read-classifier `NodeReadOutcome`, and in MeshWeaver.AI there
+// is no collision to dodge.
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// The outcome of ONE bounded node read — the seam that keeps "we could not find out" apart from
@@ -32,7 +36,7 @@ namespace MeshWeaver.Mesh;
 /// completed read with a definitive answer ("nothing readable here for you"), so it is not an
 /// availability failure and must not become one.</para>
 /// </summary>
-public sealed record NodeReadResult
+public sealed record NodeReadOutcome
 {
     /// <summary>The node, when the read found one. <c>null</c> on Absent AND on Unavailable —
     /// where it carries no meaning at all.</summary>
@@ -46,13 +50,13 @@ public sealed record NodeReadResult
     public bool IsUnavailable => UnavailableReason is not null;
 
     /// <summary>The read completed and found the node.</summary>
-    public static NodeReadResult Found(MeshNode node) => new() { Node = node };
+    public static NodeReadOutcome Found(MeshNode node) => new() { Node = node };
 
     /// <summary>The read completed; there is nothing readable at this path. Definitive.</summary>
-    public static NodeReadResult Absent { get; } = new();
+    public static NodeReadOutcome Absent { get; } = new();
 
     /// <summary>The read reached no verdict — report unavailable, never absent.</summary>
-    public static NodeReadResult Unavailable(string reason) => new() { UnavailableReason = reason };
+    public static NodeReadOutcome Unavailable(string reason) => new() { UnavailableReason = reason };
 
     /// <summary>
     /// Classifies a read FAULT into Absent vs. Unavailable — decided here, on the TYPED failure,
@@ -71,7 +75,7 @@ public sealed record NodeReadResult
     /// "unavailable" costs a retry, while a false "not found" invites deleting a node that
     /// exists.</para>
     /// </summary>
-    public static NodeReadResult FromReadFailure(string path, Exception error)
+    public static NodeReadOutcome FromReadFailure(string path, Exception error)
     {
         for (var e = error; e is not null; e = e.InnerException)
         {

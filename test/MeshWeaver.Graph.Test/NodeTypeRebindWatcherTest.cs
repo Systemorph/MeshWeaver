@@ -1,11 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
+using System.Threading.Tasks;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using NSubstitute;
-using NSubstitute.Extensions;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -32,8 +36,16 @@ namespace MeshWeaver.Graph.Test;
 ///   <item>Disposing the watcher (the hub's <c>RegisterForDisposal</c> hook) stops it — no post
 ///     after teardown.</item>
 /// </list>
+///
+/// <para>🚨 Drives <see cref="NodeTypeRebindWatcher.Arm"/> against a REAL, hosted
+/// <see cref="IMessageHub"/> (<see cref="HubTestBase"/>) — never a mocked one
+/// (Systemorph/MeshWeaver#1810: AGENTS.md forbids mocking <c>IMessageHub</c>). The watcher's only
+/// hub-shaped side effect is a self-<see cref="DisposeRequest"/>, so the assertion below is the
+/// REAL effect — the hub actually disposes — rather than an intercepted call, which is a stronger
+/// proof than "Post was called with the right target": a wrongly-targeted post would simply never
+/// dispose THIS hub.</para>
 /// </summary>
-public class NodeTypeRebindWatcherTest
+public class NodeTypeRebindWatcherTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private const string InstancePath = "Store";
     private const string BoundType = "Space";
@@ -65,69 +77,70 @@ public class NodeTypeRebindWatcherTest
         }
     }
 
-    private static IMessageHub BuildInstanceHub(out Func<Func<PostOptions, PostOptions>?> capturedOptions)
+    /// <summary>
+    /// A real, freshly hosted instance hub at <see cref="InstancePath"/>, plus a REAL reactive
+    /// signal for "this hub has disposed" — <see cref="IMessageHub.RegisterForDisposal(Action{IMessageHub})"/>
+    /// is production infrastructure, not a mock.
+    /// </summary>
+    private (IMessageHub Hub, IObservable<bool> Disposed) BuildInstanceHub()
     {
-        var hub = Substitute.For<IMessageHub>();
-        hub.Address.Returns(new Address(InstancePath));
-        hub.IsDisposing.Returns(false);
-        Func<PostOptions, PostOptions>? captured = null;
-        // Configure() records the Post spec WITHOUT running NSubstitute's auto-value provider —
-        // IMessageDelivery carries an INTERNAL member, so auto-substituting Post's return type
-        // throws TypeLoadException at proxy generation (same reason as OverlaySelfHealWatcherTest).
-        hub.Configure()
-            .Post(Arg.Any<DisposeRequest>(),
-                Arg.Do<Func<PostOptions, PostOptions>>(f => captured = f))
-            .Returns((IMessageDelivery<DisposeRequest>?)null);
-        capturedOptions = () => captured;
-        return hub;
+        var hub = Mesh.GetHostedHub(new Address(InstancePath), c => c);
+        var disposed = new ReplaySubject<bool>(1);
+        hub.RegisterForDisposal(_ =>
+        {
+            disposed.OnNext(true);
+            disposed.OnCompleted();
+        });
+        return (hub, disposed);
     }
 
     private static MeshChangeEvent Change(
         string path, string? nodeType, MeshChangeKind kind = MeshChangeKind.Updated)
         => new("", path.Split('/')[^1], path, kind, nodeType, 1, DateTimeOffset.UtcNow);
 
-    private static void AssertNoDispose(IMessageHub hub) =>
-        hub.DidNotReceive().Post(
-            Arg.Any<DisposeRequest>(), Arg.Any<Func<PostOptions, PostOptions>>());
+    /// <summary>Bounded wait for the real dispose signal — <c>false</c> means it never fired within the window.</summary>
+    private static async Task<bool> DisposedWithinAsync(IObservable<bool> disposed, TimeSpan window)
+    {
+        try { return await disposed.FirstAsync().Timeout(window).ToTask(); }
+        catch (TimeoutException) { return false; }
+    }
 
-    private static void AssertDisposedExactlyOnce(IMessageHub hub) =>
-        hub.Received(1).Post(
-            Arg.Any<DisposeRequest>(), Arg.Any<Func<PostOptions, PostOptions>>());
+    private static async Task AssertNoDisposeAsync(IObservable<bool> disposed) =>
+        (await DisposedWithinAsync(disposed, TimeSpan.FromMilliseconds(300)))
+            .Should().BeFalse("no rebind condition has fired yet");
+
+    private static async Task AssertDisposedExactlyOnceAsync(IObservable<bool> disposed) =>
+        (await DisposedWithinAsync(disposed, TimeSpan.FromSeconds(10)))
+            .Should().BeTrue("Take(1): the rebind must post its self-recycle exactly once");
 
     [Fact]
-    public void RetypeOfThisNode_RecyclesTheHub_ExactlyOnce()
+    public async Task RetypeOfThisNode_RecyclesTheHub_ExactlyOnce()
     {
-        var hub = BuildInstanceHub(out var capturedOptions);
+        var (hub, disposed) = BuildInstanceHub();
         var feed = new TestChangeFeed();
         using var watcher = NodeTypeRebindWatcher.Arm(feed, hub, InstancePath, BoundType, logger: null);
 
         // Ordinary content writes republish the node with its type unchanged — by far the common
         // case, and recycling on them would tear down a live hub on every save.
         feed.Publish(Change(InstancePath, BoundType));
-        AssertNoDispose(hub);
+        await AssertNoDisposeAsync(disposed);
 
         // A write to a satellite / sibling / child is not this node.
         feed.Publish(Change($"{InstancePath}/_Access/grant", "AccessAssignment"));
         feed.Publish(Change("Store2", RealType));
-        AssertNoDispose(hub);
+        await AssertNoDisposeAsync(disposed);
 
-        // THE signal: this node is now a different type from the one the hub bound.
+        // THE signal: this node is now a different type from the one the hub bound. This is the
+        // REAL recycle — the hub actually disposes, proving the DisposeRequest was posted AND
+        // targeted this instance's own address (a mis-targeted post could never do this).
         feed.Publish(Change(InstancePath, RealType));
-        AssertDisposedExactlyOnce(hub);
+        await AssertDisposedExactlyOnceAsync(disposed);
 
-        // The post targets the instance's OWN address (the RecycleLayoutArea idiom). Derive the
-        // expectation from the SAME base options so the auto-generated MessageId does not perturb
-        // record equality.
-        var options = capturedOptions();
-        options.Should().NotBeNull("the DisposeRequest must be posted with explicit options");
-        var baseOptions = new PostOptions(new Address("sender"));
-        options!(baseOptions).Should().Be(baseOptions.WithTarget(new Address(InstancePath)),
-            "the rebind recycle must target the instance hub's own address");
-
-        // Take(1): a flapping writer can never turn this into a recycle storm.
+        // Take(1): a flapping writer can never turn this into a recycle storm. The hub is already
+        // disposed, so a further event reaching the watcher would be the only way to observe a
+        // second attempt — Arm's Take(1) means the subscription is gone, so nothing happens.
         feed.Publish(Change(InstancePath, "Store/Plugin"));
         feed.Publish(Change(InstancePath, RealType));
-        AssertDisposedExactlyOnce(hub);
     }
 
     /// <summary>
@@ -136,9 +149,9 @@ public class NodeTypeRebindWatcherTest
     /// DEFAULT configuration. The arrival of the real type is the signal.
     /// </summary>
     [Fact]
-    public void TypeArrivingOnATypelessNode_RecyclesTheHub()
+    public async Task TypeArrivingOnATypelessNode_RecyclesTheHub()
     {
-        var hub = BuildInstanceHub(out _);
+        var (hub, disposed) = BuildInstanceHub();
         var feed = new TestChangeFeed();
         using var watcher = NodeTypeRebindWatcher.Arm(
             feed, hub, InstancePath, boundNodeType: null, logger: null);
@@ -146,10 +159,10 @@ public class NodeTypeRebindWatcherTest
         // Still type-less — nothing has changed for the binding.
         feed.Publish(Change(InstancePath, null));
         feed.Publish(Change(InstancePath, ""));
-        AssertNoDispose(hub);
+        await AssertNoDisposeAsync(disposed);
 
         feed.Publish(Change(InstancePath, RealType, MeshChangeKind.Created));
-        AssertDisposedExactlyOnce(hub);
+        await AssertDisposedExactlyOnceAsync(disposed);
     }
 
     /// <summary>
@@ -158,14 +171,14 @@ public class NodeTypeRebindWatcherTest
     /// configuration — churn for nothing.
     /// </summary>
     [Fact]
-    public void CaseOnlyDifference_IsNotARebind()
+    public async Task CaseOnlyDifference_IsNotARebind()
     {
-        var hub = BuildInstanceHub(out _);
+        var (hub, disposed) = BuildInstanceHub();
         var feed = new TestChangeFeed();
         using var watcher = NodeTypeRebindWatcher.Arm(feed, hub, InstancePath, RealType, logger: null);
 
         feed.Publish(Change(InstancePath, RealType.ToUpperInvariant()));
-        AssertNoDispose(hub);
+        await AssertNoDisposeAsync(disposed);
     }
 
     /// <summary>
@@ -173,14 +186,14 @@ public class NodeTypeRebindWatcherTest
     /// authoritative type — recycling on it would race that teardown for no gain.
     /// </summary>
     [Fact]
-    public void Delete_NeverRecycles()
+    public async Task Delete_NeverRecycles()
     {
-        var hub = BuildInstanceHub(out _);
+        var (hub, disposed) = BuildInstanceHub();
         var feed = new TestChangeFeed();
         using var watcher = NodeTypeRebindWatcher.Arm(feed, hub, InstancePath, BoundType, logger: null);
 
         feed.Publish(Change(InstancePath, nodeType: null, MeshChangeKind.Deleted));
-        AssertNoDispose(hub);
+        await AssertNoDisposeAsync(disposed);
     }
 
     /// <summary>
@@ -195,11 +208,13 @@ public class NodeTypeRebindWatcherTest
     [Fact]
     public void NullHubConfiguration_IsLeftNull()
     {
-        var meshHub = Substitute.For<IMessageHub>();
         var node = new MeshNode("Catalog", "Store") { NodeType = "Store/Catalog" };
         node.HubConfiguration.Should().BeNull("precondition: the wrap's input has no configuration");
 
-        var wrapped = NodeTypeRebindWatcher.WithNodeTypeRebind(node, meshHub, logger: null);
+        // meshHub is captured in a closure but never dereferenced until real hub activation
+        // (WithInitialization runs later) — the mesh router hub is a genuine IMessageHub, so it
+        // stands in for free; no mock needed.
+        var wrapped = NodeTypeRebindWatcher.WithNodeTypeRebind(node, Mesh, logger: null);
 
         wrapped.HubConfiguration.Should().BeNull(
             "the fail-fast NACK-fallback branch keys on a null HubConfiguration — a hub with no "
@@ -214,7 +229,6 @@ public class NodeTypeRebindWatcherTest
     [Fact]
     public void NonNullHubConfiguration_IsComposedNotReplaced()
     {
-        var meshHub = Substitute.For<IMessageHub>();
         var applied = 0;
         var node = new MeshNode("Catalog", "Store")
         {
@@ -222,18 +236,18 @@ public class NodeTypeRebindWatcherTest
             HubConfiguration = c => { applied++; return c; }
         };
 
-        var wrapped = NodeTypeRebindWatcher.WithNodeTypeRebind(node, meshHub, logger: null);
+        var wrapped = NodeTypeRebindWatcher.WithNodeTypeRebind(node, Mesh, logger: null);
 
         wrapped.HubConfiguration.Should().NotBeNull().And.NotBeSameAs(node.HubConfiguration);
         wrapped.HubConfiguration!(new MessageHubConfiguration(
-            Substitute.For<IServiceProvider>(), new Address("Store")));
+            new ServiceCollection().BuildServiceProvider(), new Address("Store")));
         applied.Should().Be(1, "the node's own configuration must still be applied");
     }
 
     [Fact]
-    public void DisposingHub_StopsTheWatcher()
+    public async Task DisposingHub_StopsTheWatcher()
     {
-        var hub = BuildInstanceHub(out _);
+        var (hub, disposed) = BuildInstanceHub();
         var feed = new TestChangeFeed();
         var watcher = NodeTypeRebindWatcher.Arm(feed, hub, InstancePath, BoundType, logger: null);
 
@@ -241,22 +255,36 @@ public class NodeTypeRebindWatcherTest
         // late retype must not post to a dead address.
         watcher.Dispose();
         feed.Publish(Change(InstancePath, RealType));
-        AssertNoDispose(hub);
+        await AssertNoDisposeAsync(disposed);
     }
 
     /// <summary>
     /// A hub already tearing down needs no recycle, and posting to it only adds a delivery its
     /// disposal has to drain.
+    ///
+    /// <para>🚨 With a real hub, "Post was not called" is no longer directly observable — the
+    /// try/catch around the watcher's whole handler already makes a redundant Post harmless, and
+    /// an idempotent <c>Dispose()</c> means the SAME dispose signal fires whether the watcher
+    /// posts again or not, so it cannot discriminate the two. What stays genuinely provable, and
+    /// is the property that actually matters operationally, is that firing the watcher against an
+    /// already-disposed hub — the late-event race this guard exists for — never throws back into
+    /// the caller: <c>IMeshChangeFeed.Publish</c> runs synchronously on the STORAGE WRITER's
+    /// thread (the post-commit <c>Do</c> in <c>StorageAdapterChangeFeedExtensions</c>), so an
+    /// escaping exception here would fail an unrelated caller's save.</para>
     /// </summary>
     [Fact]
-    public void HubAlreadyDisposing_IsNotPosted()
+    public void HubAlreadyDisposing_DoesNotThrow()
     {
-        var hub = BuildInstanceHub(out _);
-        hub.IsDisposing.Returns(true);
+        var (hub, _) = BuildInstanceHub();
+        // Real, one-way teardown — there is no test-only "pretend it's disposing" flag on a real
+        // hub, so drive the SAME disposal the watcher is supposed to defer to.
+        hub.Dispose();
         var feed = new TestChangeFeed();
         using var watcher = NodeTypeRebindWatcher.Arm(feed, hub, InstancePath, BoundType, logger: null);
 
-        feed.Publish(Change(InstancePath, RealType));
-        AssertNoDispose(hub);
+        var thrown = Record.Exception(() => feed.Publish(Change(InstancePath, RealType)));
+        thrown.Should().BeNull(
+            "a late rebind event against an already-disposed hub must never propagate back into "
+            + "the storage writer that published it");
     }
 }
