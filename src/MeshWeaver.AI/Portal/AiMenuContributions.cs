@@ -3,14 +3,14 @@ using MeshWeaver.AI;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 
-namespace Memex.Portal.Shared;
+namespace MeshWeaver.AI.Portal;
 
 /// <summary>
 /// The AI (✨) menu's NAVIGATION entries as seeded <see cref="UiContribution"/> nodes (WS7
 /// slice 3, design #1645): Threads / Models / Tiers / Providers / Agents / Skills each open a
 /// catalog URL, so they are pure links — data, not behavior — and ride the same contribution lane
 /// a plugin's AI-menu entry arrives through. The one entry that stays COMPILED is "New thread"
-/// (<see cref="MemexConfiguration.AiMenuItems"/>): it is an imperative click-action sentinel whose
+/// (<c>MemexConfiguration.AiMenuItems</c>): it is an imperative click-action sentinel whose
 /// destination is resolved from the circuit's viewer identity at click time — behavior, which the
 /// closed contribution vocabulary deliberately cannot express.
 /// </summary>
@@ -18,7 +18,7 @@ public static class AiMenuContributions
 {
     /// <summary>
     /// The seeds, exposed for the pinning tests (the same single-source-of-truth contract
-    /// <see cref="MemexConfiguration.AiMenuItems"/> keeps for the imperative entry).
+    /// <c>MemexConfiguration.AiMenuItems</c> keeps for the imperative entry).
     /// </summary>
     internal static IReadOnlyList<MeshNode> Seeds { get; } =
     [

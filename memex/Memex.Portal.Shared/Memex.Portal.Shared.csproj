@@ -101,9 +101,13 @@
          the modules/<Name>/ closure layout in MeshModulesPublish.targets and activates via
          Modules:Assemblies -> MarkdownExportProviderAttribute. Only the wire contract stays in
          the app closure (via MeshWeaver.Blazor -> MeshWeaver.Markdown.Export.Contract). -->
-    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Operations\MeshWeaver.Mesh.Operations.csproj" />
-    <!-- The AI provider packs — MeshWeaver.AI.OpenAI, .AzureFoundry, .ClaudeCode, .Copilot — are
+    <!-- 🚨 MeshWeaver.AI is deliberately NOT referenced (#2276): the engine AND its maintenance
+         application ship as ONE Store entry and activate via Modules:Assemblies ->
+         AiMeshModuleAttribute, which reads this deployment's own configuration to decide what to
+         register. A reference here would put the DLL back in the app closure, where the module
+         landing refuses the same-identity module with a 409 on every instance.
+         The AI provider packs — MeshWeaver.AI.OpenAI, .AzureFoundry, .ClaudeCode, .Copilot — are
          deliberately NOT referenced (#1644 step 2): they ship via the modules/<Name>/ closure
          layout in MeshModulesPublish.targets and activate via Modules:Assemblies -> each pack's
          MeshNodeProviderAttribute (a deployment drops a provider by editing its module list).
