@@ -40,4 +40,4 @@ PensionFund/BalanceSheet compile
 # type is registered, the installer materialises a typed `Currency` and re-serialises it, and
 # default-suppression drops the property whose value equals the type's default. The stored
 # node then differs from the authored file and the unchanged-skip misses.
-PensionFund idempotence
+PensionFund idempotence intermittent
