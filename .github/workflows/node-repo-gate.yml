@@ -162,6 +162,38 @@ jobs:
       # Cross-repo `requires` must resolve for the package roots to bind — the tester installs
       # whatever the mount holds, so the required modules are STAGED into it, exactly like
       # production resolves the requires from the store's package sources.
+      # 🚨 Assert the staging inputs BEFORE minting, so a missing one fails RED naming what to
+      # provision rather than surfacing as an opaque create-github-app-token or checkout error two
+      # steps later (Copilot review, #2310). The `if:` is on the declared INPUT stage-modules —
+      # i.e. whether staging was requested at all — never on whether a secret happens to be set,
+      # which is the skip-trapdoor AGENTS.md forbids.
+      - name: "Preflight: the stage-repo credentials must be provisioned"
+        if: inputs.stage-modules != ''
+        env:
+          STAGE_REPO: ${{ inputs.stage-repo }}
+          STAGE_APP_ID: ${{ secrets.stage-repo-app-id }}
+          STAGE_APP_KEY: ${{ secrets.stage-repo-app-private-key }}
+        run: |
+          set -euo pipefail
+          missing=()
+          case "${STAGE_REPO:-}" in
+            "")  missing+=("stage-repo (input) — owner/name of the repo modules are staged from") ;;
+            */*) : ;;
+            *)   missing+=("stage-repo (input) — must be owner/name, got '${STAGE_REPO}'") ;;
+          esac
+          [ -n "${STAGE_APP_ID:-}" ]  || missing+=("stage-repo-app-id (secret) — app id of a GitHub App able to read ${STAGE_REPO:-the stage repo}")
+          [ -n "${STAGE_APP_KEY:-}" ] || missing+=("stage-repo-app-private-key (secret) — that App's private key, PEM")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::stage-modules is set, so the cross-repo staging inputs are required:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            # 🚨 The store split that made every satellite dependabot PR red (#2249).
+            if [ "${GITHUB_ACTOR:-}" = "dependabot[bot]" ]; then
+              echo "::error::This run reads the DEPENDABOT secret store, not Actions — provision the pair there too (#2249)."
+            fi
+            exit 1
+          fi
+          echo "Staging ${STAGE_REPO} — credentials present."
+
       # 🚨 A PAT here was a permanent two-way failure. It rots — the platform's own copy went
       # HTTP 401 and a daily check never ran once (#1709) — and, because GitHub hands a
       # dependabot-triggered run the DEPENDABOT secret store rather than the Actions one, a PAT
