@@ -268,17 +268,42 @@ public static class SyncedQueryDataSourceExtensions
             // has Read on. PermissionEvaluator caches per-scope via the
             // process-wide IMeshNodeStreamCache so repeated checks for the
             // same user are cheap.
-            return upstream.SelectMany(snapshot =>
-                snapshot.ToObservable()
-                    .SelectMany(node =>
-                        hub.CheckPermission(node.Path ?? string.Empty, userId, Permission.Read)
-                            .Take(1)
-                            .Where(hasPerm => hasPerm)
-                            .Select(_ => node))
-                    .ToList()
-                    .Select(filtered => (IEnumerable<MeshNode>)filtered));
+            return FilterByReadPermission(
+                upstream,
+                node => hub.CheckPermission(node.Path ?? string.Empty, userId, Permission.Read));
         });
     }
+
+    /// <summary>
+    /// The RLS filter itself, with the permission probe as a parameter so it can be exercised
+    /// without a hub: for each upstream snapshot, emit the subset the probe says Read is granted on.
+    ///
+    /// <para>🚨 <c>ToInlineObservable()</c>, never the parameterless <c>ToObservable()</c> (#2087,
+    /// the residual of #2377). This runs on the DELIVERY thread of an upstream emission, which in a
+    /// live portal is routinely inside somebody else's Rx <c>CurrentThreadScheduler</c> trampoline —
+    /// the hub's own pump opens one per operator subscription, and a <c>Task</c> completed inside an
+    /// Rx pipeline resumes its awaiter INLINE there. On such a thread the parameterless overload
+    /// only ENQUEUES the iteration for whoever owns that trampoline, so the inner sequence never
+    /// runs, <c>.ToList()</c> never completes, and this emission is silently dropped: no error, no
+    /// completion, the user's listing simply stays as it was (empty, for a first snapshot) for as
+    /// long as the view is open. That is the same permanent, signal-free stall #2377 fixed on the
+    /// storage read paths, one layer up — and note it strands an EMPTY snapshot too, since even a
+    /// zero-element sequence has to schedule its <c>OnCompleted</c>.</para>
+    /// </summary>
+    /// <param name="upstream">The System-loaded snapshots to filter.</param>
+    /// <param name="canRead">Whether the subscriber may Read the given node.</param>
+    /// <returns>The same stream, with each snapshot narrowed to the readable nodes.</returns>
+    internal static IObservable<IEnumerable<MeshNode>> FilterByReadPermission(
+        IObservable<IEnumerable<MeshNode>> upstream,
+        Func<MeshNode, IObservable<bool>> canRead) =>
+        upstream.SelectMany(snapshot =>
+            snapshot.ToInlineObservable()
+                .SelectMany(node => canRead(node)
+                    .Take(1)
+                    .Where(hasPerm => hasPerm)
+                    .Select(_ => node))
+                .ToList()
+                .Select(filtered => (IEnumerable<MeshNode>)filtered));
 }
 
 /// <summary>
