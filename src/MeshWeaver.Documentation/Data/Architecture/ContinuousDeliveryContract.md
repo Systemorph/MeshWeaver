@@ -191,68 +191,63 @@ what sets that tail.
 the rolls, so each published set restarts every install that selects it. That is the reason the tick
 is hourly and not faster, and it is tracked as #1778 rather than papered over with a slower CD.
 
-## Property 1a — the set spans BOTH repos (planned)
+## Property 1a — how the set already spans repos, and what the GUI move actually breaks
 
-The set today is core's four images. The GUI moving to MeshWeaver.Plugins splits the shipped
-artefacts across two repos with **two publishers on two independent triggers**:
+🚨 **Correction, 2026-08-26.** An earlier draft of this section claimed the shipped artefacts have
+"two publishers on two independent triggers" and proposed unifying them. **That was wrong**, and the
+evidence is in this pipeline's own comments — read them before proposing anything here.
 
-| pipeline | trigger | publishes |
-|---|---|---|
-| core `main-cd.yml` | `workflow_run` on core main | the four core images |
-| plugins `publish-packages.yml` | `push` to plugins main | plugin packages / bundles |
+**What is actually true:**
 
-Two publishers cannot give the property above. All-or-nothing is what makes a partial publication
-impossible, and it is enforced by ONE promote step observing every leg — a second pipeline with its
-own trigger is outside that observation by construction. The image and the landed modules must move
-together (a bidirectional binary break is what happens when they do not), so the direction is one
-pipeline that builds and publishes both trees.
+- **`MeshWeaver.Plugins/publish-packages.yml` publishes NOTHING.** It packs and reports, `dry-run` by
+  design: *"nothing consumes a package feed"*, and a push to `nuget.pkg.github.com` would 403 on the
+  org's Packages billing limit and redden main on every merge. So there is no second publisher, and
+  **no package-release event to hang a webhook on** — the question is well-posed and the premise
+  does not hold here.
+- **Consumers fetch BUNDLES from the registry portal** (`/api/plugins/bundles`) — *"assembled from
+  the very bytes that portal runs"*. Distribution is bundles, not a feed.
+- **Coordination already exists, and it is not a shared pipeline.** Each node repo's
+  `node-repo-publish-bake` lane bakes and publishes its own content **under the SAME framework
+  identity, from the SAME image**. That identity is what makes the sets composable.
+- **`main-cd.yml` checks out no other repository — deliberately.** Its own words: *"there is not one
+  `repository:` input in this file, so it could not compile them even by accident — and must never be
+  given the chance."* Content a deployment receives ALREADY BUILT must be **adopted, not rebuilt**;
+  recompiling it is the expensive half of a bake and re-does work another lane already did.
 
-**The order, and why the template is last** (maintainer, 2026-08-26):
+So "build everything, publish everything from one pipeline" is not a gap to close — it is a reversal
+of a constraint this file states and defends. That may still be the right call, but it is a
+**maintainer decision to change a deliberate design**, not a repair, and it should be argued against
+the reason above rather than around it.
 
-1. **Build all** − template
-2. **Package all** − template
-3. **Build template and test**
-4. **Pack template**
+### What the GUI move DOES break
 
-`tools/generate-memex-template.cs` COPIES six project directories and rewrites their
-`ProjectReference`s to `PackageReference`s. So the generated solution resolves against PACKAGES, and
-it cannot be built before the packages it references exist — step 3 has nothing to resolve against
-until step 2 has run. The template is therefore not "another leg": it is downstream of publication.
+The real exposure is narrower and is not about publication at all:
 
-That also repairs what the split breaks. Three of its six inputs (`Memex.Portal.Monolith`,
-`aspire/Memex.AppHost`, `aspire/Memex.Portal.Distributed`) leave with the GUI while the other three
-stay. **Neither repo has all six**, so moving the generator does not help — it needs a run with both
-trees present, which the unified pipeline gives it.
+1. **Nothing compiles the moved portal hosts.** `MeshWeaver.Plugins/ci.yml` builds named
+   `MeshWeaver.*` module rows; `Memex.Portal.Gui` / `Monolith` / `Distributed` are not rows. Today a
+   break is still caught by **core's image build** — which the deletion removes. Coverage reaches
+   zero at that moment, silently, because nothing reports a check that is not there.
+2. **The template needs a run with both trees.** `tools/generate-memex-template.cs` COPIES six
+   project directories and rewrites their `ProjectReference`s to `PackageReference`s. Three of the
+   six leave with the GUI and three stay, so **neither repo has all six** — moving the generator does
+   not help.
 
-### The mechanism already exists — extend it, do not invent one
+**The maintainer's ordering for the template** — `build all−template → package all−template →
+build+test template → pack template` — follows from the rewrite: the generated solution resolves
+against PACKAGES, so it cannot be built before they exist. The template is **downstream of
+publication**, not another leg.
 
-Every image leg pushes only a non-selectable `staging-<sha>-<run_id>` tag; `promote` applies the real
-tags after all legs succeed. Extending the property means adding the plugins legs to that same
-`needs:` — the atomicity is then the SAME gate, not a second one that must be kept in step with it.
+### If the pipelines are ever unified, the mechanism already exists
 
-### The release event: whoever publishes, emits
+Every image leg pushes only a non-selectable `staging-<sha>-<run_id>`; `promote` applies the real
+tags after all legs succeed. Extending atomicity means adding legs to that same `needs:` — never a
+second gate that has to be kept in step with the first.
 
-Plugins CI/CD must NOT subscribe to a platform-released event (verified 2026-08-26: zero
-`repository_dispatch` in `ci.yml`, `publish-packages.yml`, `portal-next-image.yml` — the property to
-preserve). That settles where the "plugins released" event comes from, and it is not a preference:
-
-> Under a unified pipeline **core does the publishing**. For the plugins repo to emit
-> "plugins released" it must LEARN that core published — and the only way it learns is by
-> subscribing to core, which is the thing forbidden above. So the emitter is the publisher.
-
-This matches the existing grain: the broadcast is emitted on an OBSERVED publication
-(`FrameworkReleaseBroadcaster`), never by a CI step that runs regardless — the same reason
-`delivery-verdict` must not pass on an empty verdict.
-
-### What this costs, stated plainly
-
-- **A red in either tree blocks both publishes.** That is what atomicity MEANS, and it is also a
-  real cost: a plugins flake becomes a core release blocker.
-- **Plugins-only changes need a way in.** `repository_dispatch` from plugins INTO core's CD — the
-  opposite direction from the subscription forbidden above, so it does not reintroduce the coupling.
-- **The reconciler's completeness check must learn the wider set.** It asks whether a commit has the
-  complete four-image set; against a wider set it would otherwise declare a half-published commit
-  healthy — the exact failure this property exists to prevent.
+And the event rule composes only one way: plugins CI must NOT subscribe to a platform-released event
+(verified — zero `repository_dispatch` in its three workflows). Whoever publishes, emits, on an
+OBSERVED publication — the same reason `delivery-verdict` must not pass on an empty verdict (#2311),
+and `FrameworkReleaseBroadcaster` fires on a real release rather than from a CI step that runs
+regardless.
 
 ## Changing the pipeline
 
