@@ -118,7 +118,7 @@ loses the cold-start race.
 | Thread hub | `ThreadExecution.SetThreadHubIdentity` — reads the thread node's `CreatedBy` and stamps it as **both** `Context` and this hub's standing identity (`SetStandingIdentity(hub, owner)`, the carry-forward slot) on hub activation. |
 | Activity hub | The activity control-plane establishes the activity owner the same way (resolve from the activity node, inject as the hub's standing identity). |
 | Per-node data source / sync stream | `SynchronizationStream.Update` resolves the node OWNER **synchronously from the node already in its own `Current`** when neither a live AsyncLocal context nor a captured creation context survives — via `IStreamOwnerResolver`, resolved off `Host.ServiceProvider`. Genuine infra streams (doc sync) carry System. |
-| One-shot helpers | `AccessContextScope.FromNode(node, accessService)` — runs a block under the node's owner (`CreatedBy`/`LastModifiedBy`), falling back to System only for an unattributed node. |
+| One-shot helpers | `AccessContextScope.FromNode(node, accessService)` — runs a **synchronous** block under the node's owner (`CreatedBy`/`LastModifiedBy`), falling back to System only for an unattributed node. 🚨 Never as an `Observable.Using` resource factory — it is `SwitchAccessContext` under another name, and `Using` opens the scope on the subscribing thread and disposes it wherever the work terminates (#1790). Reactive callers resolve the identity and use `access.RunAs(owner, () => work)` / `RunAsSystem`; `ImpersonationScopeSiteRatchetGuard` fails a new site. |
 
 > ✅ **Status: shipped.** The synchronous owner resolver is
 > `IStreamOwnerResolver` (`src/MeshWeaver.Data/Serialization/IStreamOwnerResolver.cs`), implemented

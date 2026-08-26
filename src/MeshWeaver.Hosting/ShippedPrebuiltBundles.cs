@@ -326,10 +326,17 @@ public static class ShippedPrebuiltBundles
 
             // 🚨 System-scoped end-to-end: reading NodeType records across every partition and
             // stamping adopted builds is framework infrastructure, exactly like the sweep this
-            // runs in front of. Observable.Using holds the scope across the live subscription.
-            return Observable.Using(
-                    () => AccessContextScope.AsSystem(accessService),
-                    _ => pool
+            // runs in front of.
+            //
+            // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790).
+            // `AccessContextScope.AsSystem(x)` IS `x.ImpersonateAsSystem()`, so the helper hides the
+            // shape rather than changing it: `Using` opens the AsyncLocal on the SUBSCRIBING thread
+            // and disposes it wherever the inner observable terminates — here an IoPool thread —
+            // leaving the bootstrap subscriber latched as `system-security`. RunAsSystem opens and
+            // closes inside one Subscribe; the whole cold pipeline below stays in the work factory,
+            // so the IoPool work and every stamp write are still issued as System.
+            return accessService.RunAsSystem(
+                    () => pool
                         .InvokeBlocking(_ => enumerateBundles())
                         .SelectMany(bundles =>
                         {

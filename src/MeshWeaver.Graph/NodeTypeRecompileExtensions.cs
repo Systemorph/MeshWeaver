@@ -68,9 +68,16 @@ public static class NodeTypeRecompileExtensions
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
 
-        return Observable.Using(
-                () => AccessContextScope.AsSystem(accessService),
-                _ => meshService
+        // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790).
+        // `AsSystem(x)` IS `x.ImpersonateAsSystem()`, so the helper only hides the shape: `Using`
+        // opens the AsyncLocal on the SUBSCRIBING thread and disposes it on whichever thread the
+        // query terminates, latching the subscriber — here a content-update pipeline that continues
+        // as the USER who pushed. Only the enumeration needs System; the release trigger below
+        // already opens its own synchronous `using (accessService?.ImpersonateAsSystem())` around
+        // the loop, and the prebuilt-adoption leg (ShippedPrebuiltBundles.SeedBundles) opens its
+        // own, so nothing downstream depends on this scope leaking past the query.
+        return accessService.RunAsSystem(
+                () => meshService
                     .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
                     .Take(1)
                     .Timeout(TypeEnumerationBudget))
