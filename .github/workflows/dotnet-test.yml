@@ -112,12 +112,53 @@ on:
 
 # A force-push to a PR branch obsoletes the in-flight run — cancel it instead of
 # finishing a build of dead code (runner minutes + queue latency for 8 jobs/run).
-# Runs on main (and manual dispatches) are never grouped/cancelled: every main
-# push must produce its own complete run because main-cd + the self-update gate
-# key off it (group = run_id ⇒ each run is its own group).
+#
+# ── main is grouped and cancels too, since 2026-08-26 ────────────────────────
+# It did not used to be: `group` was `run_id` for pushes, so every main push got its
+# own group and nothing ever superseded anything. During a merge marathon that is
+# almost pure waste. MEASURED over a 3.6 h window on 2026-08-25: 19 of 21 main runs
+# were obsolete before they finished — merges landed 1–120 SECONDS apart, each
+# spawning a full ~70-runner-minute suite against a commit the next merge had already
+# replaced. ≈1,199 runner-minutes, ~28% of ALL demand in that window, spent testing
+# superseded trees. The org is on the Team plan (60 concurrent hosted jobs) and that
+# day's volume doubled to 1,092 workflow runs, so the ceiling was genuinely binding:
+# the same queue that costs 3 s on a quiet day cost 25 MINUTES that day. This demand
+# is the single largest thing we can remove.
+#
+# 🚨 Why this is safe for DELIVERY, which is what the old comment was protecting:
+#   * The newest run is NEVER the one cancelled — `cancel-in-progress` cancels the
+#     older members of the group. main's tip therefore always runs to completion, and
+#     the tip is exactly what main-cd's reconciler resolves and gates on.
+#   * main-cd no longer depends on a per-commit `workflow_run`: its hourly reconciler
+#     (`cron: 23 * * * *`) asks whether main's TIP has a complete image set and
+#     publishes when it does not, gated on `Consolidate test results` being green on
+#     that commit. Publication is batched anyway (CD_BATCH_WINDOW_MINUTES), so a
+#     superseded commit was never going to get its own image.
+#   * A cancelled run writes no `refs/ci-green` marker — correct, because the tree it
+#     would vouch for is one no future run will ever test again.
+#
+# 🚨 What it COSTS, deliberately accepted (maintainer, 2026-08-26): BISECT RESOLUTION.
+# A red main tip now covers every commit in that merge batch rather than one commit,
+# because the intermediate merge commits are no longer independently tested. Each PR
+# was still tested as `refs/pull/N/merge` before merging, so what goes untested is
+# specifically the INTERACTION between PRs that merged within seconds of each other —
+# which is real, and is what a red tip then has to be bisected for by hand
+# (`gh workflow run "MeshWeaver Build and Test" --ref <sha>` on a candidate commit).
+# If that trade ever stops being worth it, the revert is exactly these two lines:
+#     group: build-test-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+#     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+#
+# workflow_dispatch stays UNGROUPED (`run_id`, no cancel): a manual dispatch is a
+# deliberate act — usually the hand-bisect above — and must never be cancelled by an
+# unrelated push landing on main.
 concurrency:
-  group: build-test-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # PR runs group by `refs/pull/N/merge`, main pushes by `refs/heads/main` — i.e. both
+  # group by ref, and only a manual dispatch needs its own group. Kept on ONE line: in a
+  # folded (`>-`) scalar, continuation lines indented deeper than the first are preserved
+  # literally rather than folded, so a "tidier" multi-line version silently changes the
+  # string rather than just its layout.
+  group: build-test-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 # publish-unit-test-result-action runs per shard AND in the collector — both need
 # checks: write to create check-runs and pull-requests: write to comment.
