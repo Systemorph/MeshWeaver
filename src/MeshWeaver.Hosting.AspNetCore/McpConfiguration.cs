@@ -9,7 +9,8 @@ namespace MeshWeaver.Hosting.AspNetCore;
 /// 🚨 It lives PLATFORM-side, not in <c>MeshWeaver.Mcp</c>, because three surfaces read it and
 /// only one of them is the MCP module: the REST mirror <c>/api/mesh/navigate_to</c> +
 /// <c>/api/mesh/base_url</c>, the co-hosted CLI back-connection (which composes
-/// <c>{BaseUrl}/mcp</c>), and the MCP <c>navigate_to</c> tool itself. Delisting
+/// <c>{BaseUrl}/api/mcp</c> — the primary MCP endpoint path; <c>/mcp</c> is the permanent
+/// compatibility alias), and the MCP <c>navigate_to</c> tool itself. Delisting
 /// <c>MeshWeaver.Mcp</c> from <c>Modules:Assemblies</c> must not take the other two with it.
 /// The section name stays <c>Mcp</c> so no deployment's configuration changes.
 /// </para>

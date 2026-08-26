@@ -83,10 +83,68 @@ public static class CatalogLayoutAreas
     {
         var installed = ObserveInstalled(host);
         return ObserveAvailable(host, source, sourceRef)
-            .CombineLatest(installed, ObserveViewerIsGlobalAdmin(host),
-                (available, inst, isAdmin) => (UiControl?)BuildCatalog(
-                    host, source, sourceRef, description, sourceLabel, available, inst, isAdmin))
+            .CombineLatest(installed, ObserveViewerIsGlobalAdmin(host), ObserveActivation(host),
+                (available, inst, isAdmin, activation) => (UiControl?)BuildCatalog(
+                    host, source, sourceRef, description, sourceLabel, available, inst, isAdmin, activation))
             .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingCatalog")));
+    }
+
+    /// <summary>
+    /// The restart-as-activation state of THIS process, as a live leg of the catalog render (#1979).
+    ///
+    /// <para><b>Why the catalog is where this belongs.</b> Loading a module is restart-as-activation
+    /// by design, so the restart IS the last step of an install that declares one — and an install
+    /// whose last step is invisible reads as a broken install: buy, "installed", the feature is not
+    /// there, and nothing anywhere says why. This is the surface the person is looking at when the
+    /// install completes, which is why the note goes on the package card rather than only on the
+    /// operator health check that already reports the same report object.</para>
+    ///
+    /// <para><b>Why it needs the change signal and not a timer.</b> The module lands strictly AFTER
+    /// the install record is written, so the record's own re-render arrives too early to see it.
+    /// <see cref="ModuleLandingService.ActivationChanged"/> fires on the write itself — one emission
+    /// per landing, nothing polled and nothing retried — and this leg re-derives the report from it.
+    /// Every emission RE-READS: the state changes underneath a running process (that is the whole
+    /// point), so a cached answer would be wrong exactly when it matters.</para>
+    ///
+    /// <para>The read is a small file read, and it runs on the shared FileSystem IO pool rather than
+    /// the render thread or the landing service's own cap-1 pool — the latter would queue this read
+    /// behind the very landing that announced it.</para>
+    /// </summary>
+    private static IObservable<ModuleActivationReport> ObserveActivation(LayoutAreaHost host)
+    {
+        var pending = host.Hub.ServiceProvider.GetService<PendingModuleActivations>();
+        if (pending is null)
+            // No module lane on this host at all (a mesh without the plugin catalog's services).
+            // An EMPTY report, not an undetermined one: nothing here can ever be pending, which is
+            // a known answer, and rendering "could not determine" would be a claim about a
+            // mechanism this deployment does not have.
+            return Observable.Return(new ModuleActivationReport([]));
+
+        var pool = host.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                   ?? IoPool.Unbounded;
+        var landing = host.Hub.ServiceProvider.GetService<ModuleLandingService>();
+        var changed = landing?.ActivationChanged ?? Observable.Empty<System.Reactive.Unit>();
+
+        return changed
+            .StartWith(System.Reactive.Unit.Default)
+            // Switch, not SelectMany: two landings in quick succession must not race their reads
+            // into the view out of order. The newest read wins and an in-flight stale one is
+            // dropped — which is right for a view whose only job is to show the CURRENT state.
+            .Select(_ => pool.InvokeBlocking(ct => pending.Read())
+                .Catch((Exception ex) =>
+                {
+                    // The reader already turns an unreadable record into an UNDETERMINED report; a
+                    // throw here is the pool refusing the work (teardown). Reported as undetermined
+                    // for the same reason — never as "nothing pending", which is the one answer that
+                    // would silently promise the install finished.
+                    Logger(host)?.LogWarning(ex, "Catalog: reading the module activation state failed.");
+                    return Observable.Return(new ModuleActivationReport(
+                        [], "the activation state could not be read on this host"));
+                }))
+            .Switch()
+            // So the catalog renders immediately instead of waiting on a file read — never a
+            // Take(1) anywhere here: this feeds a live data-bound view.
+            .StartWith(new ModuleActivationReport([]));
     }
 
     /// <summary>
@@ -180,7 +238,8 @@ public static class CatalogLayoutAreas
 
     private static UiControl BuildCatalog(
         LayoutAreaHost host, IPackageSource? source, string sourceRef, string? description, string? sourceLabel,
-        IReadOnlyList<PackageManifest> available, IReadOnlyList<MeshNode> installed, bool viewerIsGlobalAdmin)
+        IReadOnlyList<PackageManifest> available, IReadOnlyList<MeshNode> installed, bool viewerIsGlobalAdmin,
+        ModuleActivationReport activation)
     {
         var installedById = installed
             .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
@@ -217,7 +276,8 @@ public static class CatalogLayoutAreas
             n++;
             installedById.TryGetValue(pkg.Id, out var inst);
             container = container.WithView(
-                BuildCard(host, source, sourceRef, pkg, inst, viewerIsGlobalAdmin, available, installedIds),
+                BuildCard(host, source, sourceRef, pkg, inst, viewerIsGlobalAdmin, available, installedIds,
+                    activation),
                 $"pkg-{n}");
         }
 
@@ -316,7 +376,8 @@ public static class CatalogLayoutAreas
     private static UiControl BuildCard(
         LayoutAreaHost host, IPackageSource? source, string sourceRef, PackageManifest pkg,
         PackageManifest? installed, bool viewerIsGlobalAdmin,
-        IReadOnlyList<PackageManifest> catalog, IReadOnlySet<string> installedIds)
+        IReadOnlyList<PackageManifest> catalog, IReadOnlySet<string> installedIds,
+        ModuleActivationReport activation)
     {
         var card = Controls.Stack
             .WithWidth("100%")
@@ -364,6 +425,25 @@ public static class CatalogLayoutAreas
                     return Task.CompletedTask;
                 }));
         }
+
+        // 🚨 The LAST STEP of the install, said out loud (#1979). Loading a module is
+        // restart-as-activation by design, so for a package that declares one the install is not
+        // finished when the content lands — and until this line existed nothing anywhere said so:
+        // the card read "✓ Installed", the feature was absent, and the person who installed it had
+        // no way to learn that a restart was the missing half. Rendered UNDER the status line
+        // rather than instead of it, because both facts are true: the package IS installed, and its
+        // module is not running yet.
+        //
+        // Derived from the report the operator health check reads, so the two surfaces can never
+        // tell different stories — and matched on the install record's PATH, which is exactly what
+        // the landing recorded on the activation entry (InstallOrUpdateCore passes
+        // "{InstalledPartition}/{pkg.Id}" to AdoptModule). A blank/undetermined answer renders
+        // nothing: see ModuleActivationReport.IsPendingForPackage for why silence is the honest
+        // fallback here.
+        if (activation.IsPendingForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}"))
+            card = card.WithView(Controls.Body($"🔄 {host.Localize("ui.restartRequiredToActivate")}")
+                .WithStyle("color: var(--warning-foreground, #9d5d00); font-size: 12px; "
+                           + "display: block; margin-top: 6px;"));
 
         return card;
     }

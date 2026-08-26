@@ -3,6 +3,7 @@ using System.Linq;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Fixture;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;

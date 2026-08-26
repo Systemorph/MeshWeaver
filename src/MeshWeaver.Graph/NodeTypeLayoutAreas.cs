@@ -206,8 +206,16 @@ public static class NodeTypeLayoutAreas
                         .WithAppearance(Appearance.Accent)
                         .WithClickAction(_ =>
                         {
+                            // 🚨 ContentAs, never `curr?.Content is NodeTypeDefinition`. On the
+                            // INSTANCE overlay surface this is a cross-hub write, and UpdateRemote
+                            // hands the lambda the mirror value verbatim — normally an
+                            // un-materialized JsonElement. The CLR type test then fails, the lambda
+                            // returns `curr` unchanged, and the write is a silent no-op: the one
+                            // remedy this stuck page offers the user did nothing at all (#2409).
                             host.Hub.GetMeshNodeStream(nodeTypePath)
-                                .Update(curr => curr?.Content is NodeTypeDefinition cd
+                                .Update(curr => curr
+                                        ?.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions)
+                                        is { } cd
                                     ? curr with
                                     {
                                         Content = cd with
