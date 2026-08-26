@@ -197,13 +197,16 @@ public static class TokenUsageNodeType
     /// terminal path finds the provider reported NOTHING at all (an OpenAI-compatible provider
     /// emits usage exclusively in its terminal chunk, which a cancel or transport failure can
     /// pre-empt) — never in place of a real provider-reported count, and never on the Completed
-    /// path. A positive character count always estimates to at least 1 token (a round that sent
-    /// or streamed *something* consumed at least that much); zero/negative estimates to 0.
+    /// path. CEILING division (not truncating): every character counts toward the estimate, so
+    /// e.g. 5–7 chars round UP to 2 tokens rather than truncating back down to 1 — truncation
+    /// would flatten the estimate's growth for any count not a multiple of 4, defeating the
+    /// point of a monotonic floor (Copilot review, PR #2375). A positive character count always
+    /// estimates to at least 1 token; zero/negative estimates to 0.
     /// </summary>
     /// <param name="charCount">The character length of the text being estimated (a prompt or a
     /// streamed completion).</param>
     /// <returns>The estimated token count.</returns>
-    public static int EstimateTokens(int charCount) => charCount <= 0 ? 0 : Math.Max(1, charCount / 4);
+    public static int EstimateTokens(int charCount) => charCount <= 0 ? 0 : (charCount + 3) / 4;
 
     /// <summary>
     /// Records ONE round's token usage onto the per-model satellite at

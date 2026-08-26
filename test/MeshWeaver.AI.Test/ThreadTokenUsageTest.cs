@@ -447,10 +447,16 @@ public class ThreadTokenUsageTest : AITestBase
         // after the streaming loop has something to estimate from.
         await WaitForCell(threadPath, cellId, m => (m.Text ?? "").Contains(NoReportWorkingText), SettleBudgetMs);
 
+        // ContentAs, not `curr?.Content is MeshThread t` — Copilot review, PR #2375: the trap-door
+        // AGENTS.md forbids (a degraded JsonElement/DOM shape would silently skip the update).
         await client.GetWorkspace().GetMeshNodeStream(threadPath)
-            .Update(curr => curr?.Content is MeshThread t
-                ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
-                : curr!)
+            .Update(curr =>
+            {
+                var t = curr.ContentAs<MeshThread>(Mesh.JsonSerializerOptions);
+                return t is not null
+                    ? curr with { Content = t with { RequestedStatus = ThreadExecutionStatus.Cancelled } }
+                    : curr!;
+            })
             .FirstAsync().ToTask();
 
         await WaitForThread(threadPath,
