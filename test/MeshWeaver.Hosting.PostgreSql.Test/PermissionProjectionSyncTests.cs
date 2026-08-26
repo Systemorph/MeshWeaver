@@ -111,7 +111,8 @@ public class PermissionProjectionSyncTests
         var provider = new PostgreSqlCrossSchemaQueryProvider(_fixture.DataSource);
         var query = new QueryParser().Parse("nodeType:Document is:main");
         return provider
-            .QueryAcrossSchemasAsync(query, _options, [schema], "mesh_nodes", userId, activityUserId: null, ct)
+            .QueryAcrossSchemasAsync(query, _options, [schema], "mesh_nodes", userId,
+                activityUserId: null, excludedNodeTypes: null, ct)
             .Collect(ct)
             .Select(nodes => nodes.Select(n => n.Path).ToList())
             .Should().Within(30.Seconds()).Emit();

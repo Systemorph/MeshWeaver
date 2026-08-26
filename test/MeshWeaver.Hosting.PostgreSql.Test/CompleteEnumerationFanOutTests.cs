@@ -111,7 +111,8 @@ public class CompleteEnumerationFanOutTests(PostgreSqlFixture fixture, ITestOutp
     private Task<System.Collections.Generic.List<MeshNode>> Collect(
         PostgreSqlCrossSchemaQueryProvider cross, ParsedQuery query, System.Threading.CancellationToken ct)
         => cross.QueryAcrossSchemasAsync(
-                query, _options, Schemas, "mesh_nodes", userId: null, activityUserId: null, ct)
+                query, _options, Schemas, "mesh_nodes", userId: null, activityUserId: null,
+                excludedNodeTypes: null, ct)
             .Collect(ct).Should().Within(60.Seconds()).Emit();
 
     private async Task SeedAsync(

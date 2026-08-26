@@ -38,7 +38,7 @@ namespace MeshWeaver.Hosting.Snowflake;
 ///     would be wasted load, not wrong.</item>
 ///   <item><b>Missing namespace / wildcard first segment</b> → fan out
 ///     across every searchable partition via
-///     <see cref="ICrossSchemaQueryProvider.QueryAcrossSchemasAsync(ParsedQuery,JsonSerializerOptions,IReadOnlyList{string},string,string?,string?,CancellationToken)"/>.
+///     <see cref="ICrossSchemaQueryProvider.QueryAcrossSchemasAsync(ParsedQuery,JsonSerializerOptions,IReadOnlyList{string},string,string?,string?,IReadOnlyCollection{string},CancellationToken)"/>.
 ///     Satellite-aware: a <c>nodeType:</c> filter routes the UNION to the
 ///     matching satellite table (Thread → <c>threads</c>, Activity →
 ///     <c>activities</c>, …); <c>source:activity</c> / <c>source:accessed</c>
@@ -120,7 +120,10 @@ public sealed class SnowflakePartitionedMeshQuery : IMeshQueryProvider
         var adapter = _partitionProvider.GetSchemaAdapter(path);
         if (adapter is null) return null;
         return _scopedDelegates.GetOrAdd(adapter, a =>
-            new SnowflakeMeshQuery(a, _accessService, meshConfiguration: null,
+            // The REAL configuration, not null — MeshConfiguration is the only source of the
+            // TYPE-level context exclusion, and this delegate serves every pinned browse. See the
+            // PG twin's note (#2419) for what handing it null silently disabled.
+            new SnowflakeMeshQuery(a, _accessService, meshConfiguration: _meshConfiguration,
                 excludedNamespaces: null, embeddingProvider: _partitionProvider.EmbeddingProvider,
                 ioPoolRegistry: _ioPoolRegistry));
     }
@@ -438,11 +441,20 @@ public sealed class SnowflakePartitionedMeshQuery : IMeshQueryProvider
             "[FanOut] schemas={Count} table={Table} source={Source} userId={User} query={Q}",
             schemas.Count, tableName, parsed.Source, userId, request.Query);
 
+        // Context exclusion, both halves — the twin of the PostgreSQL fan-out. TYPE-level goes
+        // into the UNION's WHERE; instance-level is a per-row check because it lives on the node.
+        var context = request.Context ?? parsed.Context;
+        var excludedNodeTypes = context != null
+            ? _meshConfiguration?.GetExcludedNodeTypes(context)
+            : null;
+
         await foreach (var node in _crossSchema.QueryAcrossSchemasAsync(
                             queryForSql, options, schemas, tableName,
                             userId == WellKnownUsers.System ? null : userId,
-                            activityUserId, ct).ConfigureAwait(false))
+                            activityUserId, excludedNodeTypes, ct).ConfigureAwait(false))
         {
+            if (node.IsExcludedFromContext(context))
+                continue;
             yield return node;
         }
     }
