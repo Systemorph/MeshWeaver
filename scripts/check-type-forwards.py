@@ -261,8 +261,12 @@ def find_moves(
         if not landed:
             continue  # gone from src/ entirely — out of scope, see the module docstring
         moved.add(key)
-        if key in forwards:
-            continue  # the old assembly forwards the ORIGINAL full name: binary-compatible
+        # The old assembly forwards the ORIGINAL full name: binary-compatible. Accept the
+        # unqualified `typeof(Foo)` spelling too — C# resolves it against that file's usings, and a
+        # gate that only understood one of the two spellings would demand a forwarder that is
+        # already there.
+        if key in forwards or f"{old.assembly}:{old.name}" in forwards:
+            continue
         destinations = ", ".join(sorted(f"{d.assembly} ({d.full_name})" for d in landed))
         renamed = all(d.full_name != old.full_name for d in landed)
         remedy = (
@@ -377,6 +381,16 @@ SELF_TESTS: list[tuple[str, dict[str, str], dict[str, str], bool]] = [
             "src/B/Foo.cs": FOO_N,
             "src/A/Keep.cs": KEEP_A,
             "src/A/Fwd.cs": "[assembly: TypeForwardedTo(typeof(N.Foo))]\n",
+        },
+        True,
+    ),
+    (
+        "an UNQUALIFIED forwarder counts — `typeof(Foo)` resolves through the file's usings",
+        {"src/A/Foo.cs": FOO_N, "src/A/Keep.cs": KEEP_A},
+        {
+            "src/B/Foo.cs": FOO_N,
+            "src/A/Keep.cs": KEEP_A,
+            "src/A/Fwd.cs": "using N;\n[assembly: TypeForwardedTo(typeof(Foo))]\n",
         },
         True,
     ),
