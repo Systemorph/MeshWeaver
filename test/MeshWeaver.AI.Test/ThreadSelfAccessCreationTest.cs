@@ -28,9 +28,12 @@ public class ThreadSelfAccessCreationTest(ITestOutputHelper output) : MonolithMe
         => ConfigureMeshBase(builder).AddThreadType();
 
     /// <summary>
-    /// Tests that a user can create a Thread node under their own User node
-    /// via the self-access check (User/{ObjectId} scope).
-    /// This is the permission path used by the dashboard chat to create threads.
+    /// Tests that a user can create a Thread node under their own top-level partition
+    /// via the self-access check.
+    /// <para>The authorized shape is the partition named exactly after the user id —
+    /// <c>{ObjectId}</c> / <c>{ObjectId}/…</c> — NOT a legacy <c>User/{ObjectId}</c> path; the body
+    /// below builds <c>{userId}/TestThread_…</c> accordingly. This is the permission path the
+    /// dashboard chat uses to create threads.</para>
     /// </summary>
     [Fact(Timeout = 15000)]
     public async Task CreateThread_UnderOwnUserNode_Succeeds()
