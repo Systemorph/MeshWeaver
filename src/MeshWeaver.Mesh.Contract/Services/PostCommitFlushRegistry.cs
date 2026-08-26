@@ -154,16 +154,31 @@ public sealed class PostCommitFlushRegistry
             return new Entry(Math.Max(current.Version, version), now, null);
         });
         Resolve(resolved, persisted: true);
+        PruneExpired(now);
+    }
 
+    /// <summary>
+    /// Amortised, time-gated sweep of expired entries — at most one O(n) pass per <see cref="Ttl"/>,
+    /// so a write (or read) burst stays O(1) per call while the map stays bounded even for paths
+    /// nothing ever looks up again (<see cref="HighWater"/> only prunes the key it is asked for).
+    ///
+    /// <para>🚨 EVERY method that can ADD an entry must call this. It used to live inline in
+    /// <see cref="Record"/>, which was sound only while the flush was the sole way in. It is not:
+    /// <see cref="RecordObservedDurable"/> adds an entry per node ACTIVATION, and a process that
+    /// only mirrors — reading and activating many nodes, writing none — never reaches
+    /// <see cref="Record"/> at all. Leaving the sweep on the write path alone would let exactly that
+    /// process accumulate one entry per path it ever activated, for its whole uptime.</para>
+    /// </summary>
+    private void PruneExpired(DateTimeOffset now)
+    {
         var last = Interlocked.Read(ref lastPruneTicks);
-        if (now.UtcTicks - last > Ttl.Ticks
-            && Interlocked.CompareExchange(ref lastPruneTicks, now.UtcTicks, last) == last)
-        {
-            foreach (var kv in highWater)
-                // Never prune an entry with an unresolved claim — someone is waiting on it.
-                if (kv.Value.Pending is null && now - kv.Value.At > Ttl)
-                    highWater.TryRemove(kv.Key, out _);
-        }
+        if (now.UtcTicks - last <= Ttl.Ticks
+            || Interlocked.CompareExchange(ref lastPruneTicks, now.UtcTicks, last) != last)
+            return;
+        foreach (var kv in highWater)
+            // Never prune an entry with an unresolved claim — someone is waiting on it.
+            if (kv.Value.Pending is null && now - kv.Value.At > Ttl)
+                highWater.TryRemove(kv.Key, out _);
     }
 
     /// <summary>
@@ -192,6 +207,9 @@ public sealed class PostCommitFlushRegistry
             current.Pending is not null || current.Version >= version
                 ? current
                 : new Entry(version, now, null));
+        // This path ADDS entries — one per node activation — and a mirror-only process never calls
+        // Record, so the sweep has to run from here too or nothing ever bounds the map.
+        PruneExpired(now);
     }
 
     /// <summary>
