@@ -444,6 +444,14 @@ data:
   # (client secrets) come from the SecretProviderClass, not here.
   Authentication__Provider: "{{ .Values.config.memex_portal.Authentication__Provider | default "" }}"
   Authentication__EnableDevLogin: "{{ .Values.config.memex_portal.Authentication__EnableDevLogin | default "false" }}"
+  {{- /* DevLogin is a PAIR. EnableDevLogin turns the built-in developer login on; DevAdminUsers is
+         the comma-separated list of ids that get platform admin when they sign in that way
+         (DevAuthController.IsConfiguredDevAdmin -> UserOnboardingService.GrantPlatformAdmin).
+         Templating one without the other yields a portal you can log into and then administer
+         nothing on — and it fails SILENTLY, because a key this configmap does not list never
+         reaches a container while helm reports success. Same defect as Modules__Root (#1924) and
+         Modules__Required__N (#2104). */}}
+  Authentication__DevAdminUsers: "{{ .Values.config.memex_portal.Authentication__DevAdminUsers | default "" }}"
   Authentication__Microsoft__ClientId: "{{ .Values.config.memex_portal.Authentication__Microsoft__ClientId | default "" }}"
   Authentication__Microsoft__TenantId: "{{ .Values.config.memex_portal.Authentication__Microsoft__TenantId | default "" }}"
   Authentication__Google__ClientId: "{{ .Values.config.memex_portal.Authentication__Google__ClientId | default "" }}"
