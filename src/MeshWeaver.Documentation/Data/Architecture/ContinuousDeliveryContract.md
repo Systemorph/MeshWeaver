@@ -227,10 +227,17 @@ The real exposure is narrower and is not about publication at all:
    `MeshWeaver.*` module rows; `Memex.Portal.Gui` / `Monolith` / `Distributed` are not rows. Today a
    break is still caught by **core's image build** — which the deletion removes. Coverage reaches
    zero at that moment, silently, because nothing reports a check that is not there.
-2. **The template needs a run with both trees.** `tools/generate-memex-template.cs` COPIES six
-   project directories and rewrites their `ProjectReference`s to `PackageReference`s. Three of the
-   six leave with the GUI and three stay, so **neither repo has all six** — moving the generator does
-   not help.
+2. **The template needs a run with both trees — RESOLVED, and by moving the generator.** It COPIES
+   six project directories and rewrites their `ProjectReference`s to `PackageReference`s. Three of
+   the six leave with the GUI and three stay, so neither repo has all six. This paragraph used to
+   conclude that moving the generator "does not help"; that was wrong, and the reason is a detail
+   that did not exist when it was written: **MeshWeaver.Plugins' CI already clones the platform**
+   (for `check-surface-manifest.py --core`), so it is the one place both trees are present. The
+   generator now lives there and takes `--core <MeshWeaver checkout>`, with each of the six projects
+   tagged by the root it resolves against.
+
+   The trap that made this expensive to see: the generator reads **core's** tree, so its failures do
+   NOT clear when files land in plugins — the dependency runs the opposite way from how it looks.
 
 **The maintainer's ordering for the template** — `build all−template → package all−template →
 build+test template → pack template` — follows from the rewrite: the generated solution resolves
