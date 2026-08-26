@@ -11,7 +11,7 @@ MeshWeaver is an open-source framework for building **data meshes**: documents, 
 ```bash
 git clone https://github.com/Systemorph/MeshWeaver.git
 cd MeshWeaver
-dotnet run --project memex/Memex.Portal.Monolith
+dotnet run --project ../MeshWeaver.Plugins/src/Memex.Portal.Monolith
 ```
 
 Opens at `https://localhost:7122`. Single process, no Docker — if you are unsure which setup to pick, pick this one.
@@ -19,7 +19,7 @@ Opens at `https://localhost:7122`. Single process, no Docker — if you are unsu
 For the microservices setup orchestrated with .NET Aspire (requires Docker):
 
 ```bash
-dotnet run --project memex/aspire/Memex.AppHost
+dotnet run --project ../MeshWeaver.Plugins/src/Memex.AppHost
 ```
 
 Portal at `https://localhost:7202`, with PostgreSQL persistence and the Aspire dashboard.
