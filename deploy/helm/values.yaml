@@ -435,6 +435,11 @@ secrets:
     # catalog seeded for that provider.
     Anthropic__ApiKey: ""
     AzureFoundry__ApiKey: ""
+    # 🚨 Encryption-at-rest master key. Empty here is the NEUTRAL-CHART default, not a
+    # supported deployment state: with no master key an install cannot store ANY
+    # credential — provider key, GitHub PAT, registry sync-token signing key, Entra
+    # credential — it refuses rather than persisting one in plaintext. Every real
+    # deployment must set it in an overlay / --set / Key Vault CSI.
     Ai__KeyProtection__MasterKey: ""
     # Plugin catalog. Consumer: the instance token issued to this install. Registry: the list of
     # tokens it accepts (empty list = serves ANY anonymous caller — dev/e2e only).
