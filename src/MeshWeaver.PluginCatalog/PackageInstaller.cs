@@ -2261,10 +2261,13 @@ public static class PackageInstaller
                     LastModified = now,
                 })
                 .ToArray();
-            return Observable.Using(
-                    () => accessService?.ImpersonateAsSystem()
-                          ?? System.Reactive.Disposables.Disposable.Empty,
-                    _ => persistence.WriteManyAndPublishCreated(stamped, options, changeFeed))
+            // RunAsSystem, never Observable.Using(ImpersonateAsSystem) (#1790): the scope is an
+            // AsyncLocal store/restore pair and Rx can dispose it on a different thread than the
+            // one that created it, latching the subscriber as `system`.
+            // ImpersonationScopeThreadAffinityTest ratchets this; the rest of this file already
+            // uses RunAsSystem for exactly that reason.
+            return accessService.RunAsSystem(
+                    () => persistence.WriteManyAndPublishCreated(stamped, options, changeFeed))
                 .SelectMany(written =>
                 {
                     if (written.Count != batch.Count)
