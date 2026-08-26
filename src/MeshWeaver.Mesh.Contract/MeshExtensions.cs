@@ -961,9 +961,41 @@ public static class MeshExtensions
                         logger.LogWarning(ex, "Node creation failed for path {Path}", node.Path);
                         Respond(CreateNodeResponse.Fail(ex.Message, NodeCreationRejectionReason.ValidationFailed));
                     }
+                    else if (CancellationClassifier.IsCooperativeCancellation(ex))
+                    {
+                        // 🚨 A CANCELLATION IS NOT A FAULT (#2152). The token the create composed
+                        // under fired — the caller went away, the hub is tearing down, the host is
+                        // shutting down, the I/O pool was drained. Nothing failed, no row was
+                        // written, and there is nothing to investigate; reporting it at fail: level
+                        // put 491 lines of routine teardown in front of on-call in three days and
+                        // made a real storage failure on the same path look identical to them.
+                        //
+                        // It is judged by the CONDITION, not by the type: a timeout raised on a
+                        // token carries a TimeoutException cause and stays a fault on the branch
+                        // below, with its exception and its Error level (see CancellationClassifier).
+                        //
+                        // The caller is still ANSWERED, and answered accurately — Unavailable says
+                        // "not evaluated, retry is meaningful", which is exactly true of a create
+                        // that was cut short. Never a swallow.
+                        logger.LogDebug(ex,
+                            "[CreateNode] cancelled path={Path} — {Cancellation}. The create was cut "
+                            + "short before it completed; nothing was written and nothing failed.",
+                            node.Path, CancellationClassifier.Describe(ex));
+                        Respond(CreateNodeResponse.Fail(
+                            $"Node creation at '{node.Path}' was cancelled before it completed.",
+                            NodeCreationRejectionReason.Unavailable));
+                    }
                     else
                     {
-                        logger.LogError(ex, "Unexpected error during node creation at {Path}", node.Path);
+                        // 🚨 The exception type and its own words are IN THE MESSAGE, not only on
+                        // the attached exception (#2153). `LogError(ex, …)` does print the exception
+                        // — that half of the ticket's premise was wrong — but a capture that loses
+                        // the burst's trailing lines keeps the message and drops the exception, and
+                        // the incident then carries no fault at all. Naming the fault in the first
+                        // line makes it survive; the parser reads the type back out of it.
+                        logger.LogError(ex,
+                            "Unexpected error during node creation at {Path}: {ExceptionType}: {ExceptionMessage}",
+                            node.Path, ex.GetType().Name, ex.Message);
                         Respond(CreateNodeResponse.Fail($"Unexpected error: {ex.Message}",
                             NodeCreationRejectionReason.Unknown));
                     }
@@ -2647,6 +2679,16 @@ public static class MeshExtensions
                     // longer happen (the commit now runs under the system identity after
                     // up-front authorization, so this leg is a canary, not a code path).
                     var isUnauthorized = dfxReason == NodeDeletionRejectionReason.Unauthorized;
+                    // 🚨 A CANCELLATION IS NOT A FAULT — and with nothing deleted it is not even an
+                    // inconsistency (#2182). The delete pipeline composes under tokens that fire on
+                    // ordinary teardown (a cleaned-up parent partition cascading into its `_Access`
+                    // satellites, grain/hub deactivation, host shutdown), and `[DeleteNode]
+                    // unexpected … partial-deleted=0` said "unexpected" about a state that is
+                    // neither unexpected nor a state: the node was never touched. The word that has
+                    // to stay LOUD is a torn subtree, and that is the branch below — a delete that
+                    // was cancelled AFTER removing nodes really did leave the tree half-gone.
+                    // A timeout is a different condition and keeps its own branch and its Error.
+                    var isCancelled = !isTimeout && CancellationClassifier.IsCooperativeCancellation(ex);
                     if (isUnauthorized && partial.Count > 0)
                         logger.LogError(ex,
                             "[DeleteNode] permission-denied MID-COMMIT path={Path} — {Partial} node(s) were "
@@ -2669,12 +2711,35 @@ public static class MeshExtensions
                                 ? "-"
                                 : string.Join(", ", unanswered.Take(20))
                                   + (unanswered.Count > 20 ? $" (+{unanswered.Count - 20} more)" : ""));
+                    else if (isCancelled && partial.Count > 0)
+                        // Cancelled MID-COMMIT: nodes are already gone and the rest never will be.
+                        // That IS an inconsistency and stays a loud error, naming what was removed.
+                        logger.LogError(ex,
+                            "[DeleteNode] CANCELLED MID-COMMIT path={Path} — {Partial} node(s) were already "
+                            + "deleted before the cancellation; the subtree is left partially deleted",
+                            path, partial.Count);
+                    else if (isCancelled)
+                        logger.LogDebug(ex,
+                            "[DeleteNode] cancelled path={Path} — {Cancellation}, partial-deleted=0. The "
+                            + "operation was aborted before any node was removed, so nothing is inconsistent.",
+                            path, CancellationClassifier.Describe(ex));
                     else
                         logger.LogError(ex, "[DeleteNode] {Kind} path={Path} partial-deleted={Partial}",
                             isNotFound ? "not-found" : "unexpected", path, partial.Count);
+                    // Say "cancelled", never "Unexpected error" — this string is what a user, an
+                    // agent or a test reads, and retrying a cancelled delete is meaningful in a way
+                    // retrying an "unexpected error" is not. One local so the ACTIVITY LOG and the
+                    // response carry the same sentence; "A task was canceled." is no more readable
+                    // in the activity a user opens than it was in the pod log (#2182).
+                    var cancelledMessage = partial.Count > 0
+                        ? $"Delete of '{path}' was cancelled after removing {partial.Count} node(s) — "
+                          + "the subtree is left partially deleted."
+                        : $"Delete of '{path}' was cancelled before any node was removed.";
                     var failMsgs = collectedMessages.ToImmutable()
                         .Add(new LogMessage(
-                            isNotFound ? $"Node not found at path '{path}'" : ex.Message,
+                            isNotFound
+                                ? $"Node not found at path '{path}'"
+                                : (isCancelled ? cancelledMessage : ex.Message),
                             LogLevel.Error));
                     PostFailed(
                         isTimeout
@@ -2683,19 +2748,21 @@ public static class MeshExtensions
                             // exactly as unreadable there as it was in the log.
                             ? $"Delete of '{path}' exceeded {budget.TotalSeconds:0}s timeout "
                               + $"in stage '{stage}': {ex.Message}"
-                            : (isNotFound
-                                ? $"Node not found at path '{path}'"
-                                : (isUnauthorized
-                                    // Already legible ("Access denied: user 'x' lacks Delete
-                                    // permission on 'y'") — no "Unexpected error:" prefix.
-                                    ? ex.Message
-                                    : $"Unexpected error: {ex.Message}")),
-                        isTimeout
+                            : (isCancelled
+                                ? cancelledMessage
+                                : (isNotFound
+                                    ? $"Node not found at path '{path}'"
+                                    : (isUnauthorized
+                                        // Already legible ("Access denied: user 'x' lacks Delete
+                                        // permission on 'y'") — no "Unexpected error:" prefix.
+                                        ? ex.Message
+                                        : $"Unexpected error: {ex.Message}"))),
+                        isTimeout || isCancelled
                             // 🚨 A stage that ran out of time DECIDED nothing — it is an
                             // availability failure, and Unknown said neither that nor anything
                             // else (#1198). Same vocabulary as NodeRejectionReason.Unavailable and
                             // CompilationStatus.Unavailable: fail-closed, but stop implying the
-                            // content was judged.
+                            // content was judged. A cancellation decided nothing either (#2182).
                             ? NodeDeletionRejectionReason.Unavailable
                             : (dfxReason
                                 ?? (isNotFound
@@ -3400,6 +3467,10 @@ public static class MeshExtensions
             return Observable.Empty<System.Reactive.Unit>();
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        // 🚨 The announcement channel for the additional nodes below (#2087). A bulk/raw storage
+        // write that skips it lands a node that EXISTS in Postgres and does not exist to the
+        // running mesh — see WriteAndPublishCreated for the full mechanism.
+        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
         var handlers = hub.ServiceProvider.GetServices<INodePostCreationHandler>()
             .Where(h => h.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -3447,7 +3518,21 @@ public static class MeshExtensions
                     return handleObs;
 
                 var saveExtras = additional
-                    .Select(extra => persistence.Write(extra with { State = MeshNodeState.Active }, hub.JsonSerializerOptions)
+                    // 🚨 …AndPublishCreated, never a bare Write (#2087). These are BRAND-NEW nodes
+                    // — a Space's creator-Admin grant, an Admin/Partition definition, onboarding
+                    // seeds — written straight to storage on the create path of every node whose
+                    // type has a post-creation handler, i.e. on essentially every imported root.
+                    // Without the announcement the row is in Postgres and does not exist to the
+                    // running mesh: PathResolutionService's cached miss for that path is never
+                    // evicted, MeshNodeStreamCache and the Orleans path-cache invalidator are never
+                    // told, and routing answers "No node found at '…'" for the life of the process.
+                    // The DataChangeRequest.Update posted below is NOT a substitute — it targets the
+                    // new node's own address (which is what has to become reachable in the first
+                    // place) and feeds synced queries, not the resolution caches. This is the
+                    // #817/#824 announce-loss shape on a mutation path that never adopted the
+                    // helpers.
+                    .Select(extra => persistence.WriteAndPublishCreated(
+                            extra with { State = MeshNodeState.Active }, hub.JsonSerializerOptions, changeFeed)
                         .Where(saved => saved is not null)
                         .Select(saved => saved!)
                         .Do(saved =>
@@ -4014,12 +4099,35 @@ public static class MeshExtensions
     ///
     /// <para>Idempotent: once MainNode differs from Path the node is returned unchanged, so calling
     /// it twice on one write is safe.</para>
+    ///
+    /// <para>🚨 <b>A satellite is recognised by its ID as well as by its type</b> (#2383). Gating
+    /// this on <c>IsSatelliteNodeType</c> alone covered only the types whose definition node carries
+    /// <see cref="MeshNode.IsSatelliteType"/> — the ones that also live in their own satellite TABLE.
+    /// The <c>_</c>-prefixed SIBLINGS that share <c>mesh_nodes</c> (<c>_Policy</c>, <c>_Provider</c>,
+    /// <c>_GitSync</c>, <c>_DefaultInstallLedger</c>) were therefore normalised by NOTHING, and every
+    /// writer had to remember the field by hand — which most of them did not, leaving self-referential
+    /// satellites in <c>mesh_nodes</c>. Flagging those types instead was not an option: the flag also
+    /// RELOCATES a node (<c>CreateLayoutArea</c> files a flagged type under <c>{ns}/_{Type}/{id}</c>)
+    /// and routes it to a satellite table, which would hide <c>{ns}/_Policy</c> from the permission
+    /// evaluator's <c>id = '_Policy'</c> lookup. Parentage and storage are different questions; this
+    /// asks only the first, via <see cref="SatelliteTableMapping.IsSiblingSatellite"/>.</para>
+    ///
+    /// <para>The owner still comes from <see cref="SatelliteTableMapping.OwnerOfSatellitePath"/> over
+    /// the NAMESPACE, which is what keeps a satellite CONTAINER collapsing correctly
+    /// (<c>{owner}/_Access</c> → <c>{owner}</c>) while leaving a partition that merely happens to
+    /// start with an underscore intact (<c>_Setting/_Policy</c> → <c>_Setting</c>, NOT <c>""</c> —
+    /// the empty prefix is a ROOT-scope grant under <c>COALESCE(main_node, namespace)</c>).</para>
+    ///
+    /// <para>The trigger stays <c>MainNode == Path</c>, so this can only ever rewrite the record's
+    /// never-explicitly-set default — a MainNode a caller set deliberately is untouched, and a genuine
+    /// main node has no satellite-shaped id to match.</para>
     /// </summary>
     private static MeshNode NormalizeSatelliteMainNode(MeshNode node, MeshConfiguration meshConfig) =>
         !string.IsNullOrEmpty(node.NodeType)
         && !string.IsNullOrEmpty(node.Namespace)
-        && meshConfig.IsSatelliteNodeType(node.NodeType)
         && node.MainNode == node.Path
+        && (meshConfig.IsSatelliteNodeType(node.NodeType)
+            || SatelliteTableMapping.IsSiblingSatellite(node))
             ? node with { MainNode = SatelliteTableMapping.OwnerOfSatellitePath(node.Namespace) }
             : node;
 

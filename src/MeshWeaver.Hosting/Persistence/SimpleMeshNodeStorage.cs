@@ -76,7 +76,7 @@ public abstract class SimpleMeshNodeStorage : IStorageAdapter
     private IObservable<string> WalkPaths(string? parent)
         => ListChildPaths(parent)
             .SelectMany(level =>
-                level.NodePaths.ToObservable()
+                level.NodePaths.ToInlineObservable()
                     .SelectMany(p => Observable.Return(p).Concat(WalkPaths(p)))
-                    .Concat(level.DirectoryPaths.ToObservable().SelectMany(WalkPaths)));
+                    .Concat(level.DirectoryPaths.ToInlineObservable().SelectMany(WalkPaths)));
 }

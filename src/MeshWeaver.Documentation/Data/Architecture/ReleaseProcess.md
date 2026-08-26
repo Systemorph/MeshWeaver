@@ -109,7 +109,7 @@ dotnet pack -c Release                       # → 3.0.0-rc1.ci.<build>.nupkg
 dotnet pack -c Release -p:PublicRelease=true # → 3.0.0-rc1.nupkg
 
 # RELEASED Docker image (CD) — clean 3.0.0-rc1 baked into the binary
-dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
+dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
   -t:PublishContainer -p:PublicRelease=true -p:PlatformVersion=3.0.0-rc1 \
   -p:ContainerImageTag=3.0.0-rc1
 ```

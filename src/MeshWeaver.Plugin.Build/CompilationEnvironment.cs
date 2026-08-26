@@ -75,6 +75,12 @@ public static class CompilationEnvironment
         "MeshWeaver.AI",
         "MeshWeaver.ContentCollections.Indexing",
         "MeshWeaver.Graph",
+        // MapControl and its provider-neutral surface. The three map view packs' example
+        // galleries (AppleMaps, GoogleMaps, OpenStreetMap) `using MeshWeaver.Maps`, which the
+        // portal has loaded and this list did not carry — so they compiled in the mesh and failed
+        // to PACK with CS0234, and because a failed unit pushes NOTHING, one missing reference
+        // held back every package in the repo.
+        "MeshWeaver.Maps",
         "MeshWeaver.PluginCatalog",
     ];
 }

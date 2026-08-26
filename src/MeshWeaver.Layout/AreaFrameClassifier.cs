@@ -50,6 +50,21 @@ public static class AreaFrameClassifier
     /// </summary>
     public const string MissingReferenceId = "reference-missing";
 
+    /// <summary>
+    /// <see cref="UiControl.Id"/> of the frame an area serves when its render raced the DISPOSAL of
+    /// a hub it reduces a stream on (<c>LayoutAreaHost.RenderRenderingError</c> on a
+    /// <c>HubDisposingException</c>) — a recycle, a restart, a node delete. TRANSIENT.
+    ///
+    /// <para>The FOURTH state, and the one that used to be indistinguishable from a hard failure
+    /// (#2255): a deactivating hub is a normal grain-lifecycle event whose own exception says "the
+    /// address may reactivate; retry to get the authoritative answer", yet the area rendered the
+    /// generic error panel and logged at Error — presenting a temporary condition as a permanent
+    /// one, and auto-filing an incident for it. It is part of <see cref="IsTransientFrame"/>: the
+    /// address comes back and the client's own resubscribe renders the real content, so a waiter
+    /// must keep waiting rather than give up.</para>
+    /// </summary>
+    public const string HubRecyclingId = "hub-recycling";
+
     // The pre-id signal, kept as a fallback so a frame that lost its id on the way here (an
     // older peer, a control rebuilt from partial JSON) is still recognised. Never localize:
     // BuildNotFoundControl is deliberately English — it is a framework diagnostic, not UI copy.
@@ -85,6 +100,15 @@ public static class AreaFrameClassifier
         => HasFrameId(control, MissingReferenceId);
 
     /// <summary>
+    /// True for the frame an area serves while a hub it depends on is being RECYCLED. Transient by
+    /// the disposal contract — the address reactivates and the content renders — so it is part of
+    /// <see cref="IsTransientFrame"/> and must never be read as a verdict.
+    /// </summary>
+    /// <param name="control">The rendered control, or <c>null</c>.</param>
+    public static bool IsHubRecycling(UiControl? control)
+        => HasFrameId(control, HubRecyclingId);
+
+    /// <summary>
     /// True for a frame that is not the area's content and will be REPLACED without anyone
     /// acting: the compile-progress page, and the <see cref="RedirectControl"/> it emits once
     /// the build settles. The single predicate a waiter needs — "keep waiting, this is not the
@@ -93,7 +117,7 @@ public static class AreaFrameClassifier
     /// </summary>
     /// <param name="control">The rendered control, or <c>null</c>.</param>
     public static bool IsTransientFrame(UiControl? control)
-        => IsCompileProgress(control) || control is RedirectControl;
+        => IsCompileProgress(control) || IsHubRecycling(control) || control is RedirectControl;
 
     // UiControl.Id is `object?`, so a frame that came back over the sync stream carries it as
     // whatever the deserializer produced for a JSON string (a JsonElement, not a string). Compare

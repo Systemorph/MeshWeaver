@@ -112,12 +112,53 @@ on:
 
 # A force-push to a PR branch obsoletes the in-flight run — cancel it instead of
 # finishing a build of dead code (runner minutes + queue latency for 8 jobs/run).
-# Runs on main (and manual dispatches) are never grouped/cancelled: every main
-# push must produce its own complete run because main-cd + the self-update gate
-# key off it (group = run_id ⇒ each run is its own group).
+#
+# ── main is grouped and cancels too, since 2026-08-26 ────────────────────────
+# It did not used to be: `group` was `run_id` for pushes, so every main push got its
+# own group and nothing ever superseded anything. During a merge marathon that is
+# almost pure waste. MEASURED over a 3.6 h window on 2026-08-25: 19 of 21 main runs
+# were obsolete before they finished — merges landed 1–120 SECONDS apart, each
+# spawning a full ~70-runner-minute suite against a commit the next merge had already
+# replaced. ≈1,199 runner-minutes, ~28% of ALL demand in that window, spent testing
+# superseded trees. The org is on the Team plan (60 concurrent hosted jobs) and that
+# day's volume doubled to 1,092 workflow runs, so the ceiling was genuinely binding:
+# the same queue that costs 3 s on a quiet day cost 25 MINUTES that day. This demand
+# is the single largest thing we can remove.
+#
+# 🚨 Why this is safe for DELIVERY, which is what the old comment was protecting:
+#   * The newest run is NEVER the one cancelled — `cancel-in-progress` cancels the
+#     older members of the group. main's tip therefore always runs to completion, and
+#     the tip is exactly what main-cd's reconciler resolves and gates on.
+#   * main-cd no longer depends on a per-commit `workflow_run`: its hourly reconciler
+#     (`cron: 23 * * * *`) asks whether main's TIP has a complete image set and
+#     publishes when it does not, gated on `Consolidate test results` being green on
+#     that commit. Publication is batched anyway (CD_BATCH_WINDOW_MINUTES), so a
+#     superseded commit was never going to get its own image.
+#   * A cancelled run writes no `refs/ci-green` marker — correct, because the tree it
+#     would vouch for is one no future run will ever test again.
+#
+# 🚨 What it COSTS, deliberately accepted (maintainer, 2026-08-26): BISECT RESOLUTION.
+# A red main tip now covers every commit in that merge batch rather than one commit,
+# because the intermediate merge commits are no longer independently tested. Each PR
+# was still tested as `refs/pull/N/merge` before merging, so what goes untested is
+# specifically the INTERACTION between PRs that merged within seconds of each other —
+# which is real, and is what a red tip then has to be bisected for by hand
+# (`gh workflow run "MeshWeaver Build and Test" --ref <sha>` on a candidate commit).
+# If that trade ever stops being worth it, the revert is exactly these two lines:
+#     group: build-test-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+#     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+#
+# workflow_dispatch stays UNGROUPED (`run_id`, no cancel): a manual dispatch is a
+# deliberate act — usually the hand-bisect above — and must never be cancelled by an
+# unrelated push landing on main.
 concurrency:
-  group: build-test-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # PR runs group by `refs/pull/N/merge`, main pushes by `refs/heads/main` — i.e. both
+  # group by ref, and only a manual dispatch needs its own group. Kept on ONE line: in a
+  # folded (`>-`) scalar, continuation lines indented deeper than the first are preserved
+  # literally rather than folded, so a "tidier" multi-line version silently changes the
+  # string rather than just its layout.
+  group: build-test-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 # publish-unit-test-result-action runs per shard AND in the collector — both need
 # checks: write to create check-runs and pull-requests: write to comment.
@@ -168,6 +209,46 @@ jobs:
   #
   # Cost when it misses: one ~15 s job (checkout + one ls-remote) in front of a
   # ~22 min suite. Cost when it hits: the whole suite, skipped.
+  record-signatures:
+    name: "Public surface (binary compatibility)"
+    timeout-minutes: 8
+    runs-on: ubuntu-latest
+    # 🚨 Runs on PRs only, and deliberately does NOT depend on precheck: this is a DIFF gate, so
+    # a tree that is already green elsewhere still has to answer "is this change binary-breaking
+    # for a consumer compiled earlier?" — a question no repo-local suite can answer.
+    if: github.event_name == 'pull_request'
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        # The gate compares HEAD against the merge base, so the base commit must be present.
+        fetch-depth: 0
+    - name: "Prove the record gate is not vacuous"
+      run: python3 scripts/check-record-signatures.py --self-test
+    - name: "Refuse a binary-breaking primary-constructor change"
+      run: |
+        set -euo pipefail
+        base="origin/${{ github.base_ref }}"
+        git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        python3 scripts/check-record-signatures.py --base "$base"
+    # The OTHER half of the same class (#2370): a public TYPE moving assemblies, which no repo-local
+    # build can see. `landed-modules-gate` compiles the plugins repo's module SOURCE against this PR
+    # and therefore goes GREEN on exactly this break — the module that is already published binds a
+    # TypeRef, not a `using`.
+    - name: "Prove the type-move gate is not vacuous"
+      run: python3 scripts/check-type-forwards.py --self-test
+    - name: "Refuse a public type moving assemblies without a forwarder"
+      run: |
+        set -euo pipefail
+        # Already fetched above for the record gate; repeated explicitly so the steps can be reordered.
+        git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        # 🚨 The MERGE BASE, not the base branch tip. This is a diff question, and a public type that
+        # moves on main while this PR is open reads, against the tip, as THIS PR moving it back — a
+        # red on somebody else's change. Four such moves landed on main in one day (#2398), so this
+        # is the difference between a gate people believe and one they learn to allow-list past.
+        base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+        echo "Comparing against merge base $base"
+        python3 scripts/check-type-forwards.py --base "$base"
+
   precheck:
     name: "Check for an already-green tree"
     timeout-minutes: 5
@@ -1217,7 +1298,7 @@ jobs:
   # green — but against the framework THIS PR just built, not a published tag. It reuses shard
   # 0's build output, so it costs a download and the tester run, not a rebuild.
   plugin-gate:
-    name: "Plugins compile against this PR"
+    name: "Plugins build, test and bake against this PR"
     # `preflight` is what guarantees the credential exists, so nothing in this job needs to
     # check for it. If preflight fails, this job skips — and `collect-results` turns that skip
     # into a RED required check (see its "Fail if a required CI input is missing" step).
@@ -1229,12 +1310,19 @@ jobs:
     if: needs.build.result == 'success' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     # ⏱️ WALL-CLOCK: this job depends on `build` — the SAME dependency the test shards have — so it
-    # runs CONCURRENTLY with them, not after. Total run time is max(slowest shard, this), so while
-    # the gate stays under a shard it costs the PR nothing. That is why it is scoped to two modules
-    # and reuses shard 0's artifact instead of rebuilding: both choices exist to keep it under that
-    # bar. The timeout is deliberately well below the shard job's 20 min — if the gate ever becomes
-    # the long pole it should fail and be re-scoped, not silently stretch every PR.
-    timeout-minutes: 12
+    # runs CONCURRENTLY with them, not after. Total run time is max(slowest shard, this), so the
+    # gate costs the PR nothing while it stays under a shard's 20 min. It still reuses shard 0's
+    # artifact rather than rebuilding, which is where the saving actually comes from.
+    #
+    # 🚨 It used to gate TWO modules (Store, Essentials) to stay cheap, and that scoping is now
+    # gone: the full sweep runs here. Measured on the plugins repo's own equivalent job, the whole
+    # tree — 53 packages — compiles, renders and tests in ~4m15s, comfortably inside a shard, so
+    # the narrow version was buying a few minutes at the cost of the coverage this gate exists for.
+    # Everything the narrow gate could not see was found LATER and elsewhere: in the plugins repo's
+    # CI (after the break is on main), or in production. The timeout stays under the shard bar — if
+    # this ever becomes the long pole it must fail and be re-scoped from evidence, never silently
+    # stretch every PR.
+    timeout-minutes: 18
     # The failing CHECK and the node(s) it failed on, lifted verbatim from the tester's verdict
     # line, so the required check downstream can name the real cause instead of guessing one.
     # Empty whenever the gate died before producing a verdict (checkout fault, missing tester) —
@@ -1285,21 +1373,20 @@ jobs:
         path: plugins-repo
         ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
         fetch-depth: 1
-    - name: "Compile + run the VITAL plugins against this PR"
+    - name: "Compile + render + test + bake EVERY plugin against this PR"
       id: gate
       env:
-        # 🚨 The vital organs only — NOT the whole repo. This gate sits in the PR critical path,
-        # so it buys the most breakage-detection per minute rather than maximum coverage:
-        #   Store      — EVERY plugin declares `requires: Store` and compiles against
-        #                Store/Plugin/Source (`shared=@Store/Plugin/Source`). If Store's types
-        #                break, every plugin root node in the mesh falls back to an untyped
-        #                overlay. It is the single choke point through which a framework API
-        #                change reaches all of them.
-        #   Essentials — the default skills and agents every installation gets.
-        # The full-repo sweep still runs in the PLUGINS repo's own CI (which narrows by affected
-        # module) and on main-cd's refreshed mw-plugin-test image. Widen this list only if a
-        # module turns out to be a second choke point; each addition costs PR wall-clock.
-        VITAL_MODULES: "Store Essentials"
+        # 🚨 THE WHOLE REPO, not a chosen few. This gated only Store + Essentials — the two
+        # choke points — on the argument that it bought the most breakage-detection per minute of
+        # PR wall-clock. The argument was sound and the conclusion was wrong: everything outside
+        # those two was checked only AFTER a break reached main, by the plugins repo's own CI, and
+        # that is where this session's failures kept surfacing. Widening costs ~4 min against a
+        # 20-minute shard bar; the narrow version cost a day of misattributed reds.
+        #
+        # There is no module list here on purpose. The tester gates every package it DISCOVERS
+        # under the root, so the checkout IS the set — a list in this repo would go stale the first
+        # time the plugins repo adds a module, and it would go stale SILENTLY, the gate reporting
+        # green while covering less. (The same reason landed-modules-gate discovers its projects.)
         # A crash of the tester itself (SIGSEGV'd on main 2026-08-20, mid NodeType compile —
         # exit 139, verdictless) must leave a dump the failure can be analyzed from: the runner's
         # core file dies with the VM, so the CLR writes a minidump-with-heap to a path the
@@ -1315,17 +1402,9 @@ jobs:
           echo "::error::mw-plugin-test.dll not in the build output — the gate cannot run."
           exit 1
         fi
-        # The tester gates every package it DISCOVERS under the root, so the staged tree IS the
-        # filter — the same mechanism the plugins repo uses to narrow to affected modules.
-        STAGE="${RUNNER_TEMP:-/tmp}/vital"
-        mkdir -p "$STAGE"
-        for m in $VITAL_MODULES; do
-          if [ ! -d "$GITHUB_WORKSPACE/plugins-repo/$m" ]; then
-            echo "::error::vital module '$m' is not in the plugins checkout — the gate would silently test less than it claims."
-            exit 1
-          fi
-          cp -R "$GITHUB_WORKSPACE/plugins-repo/$m" "$STAGE/"
-        done
+        # The checkout itself is the root — no staging copy, because there is nothing left to
+        # narrow to and copying the tree would only add I/O.
+        STAGE="$GITHUB_WORKSPACE/plugins-repo"
         # The ratchet is REQUIRED, and its absence is reported here rather than left to the tester
         # (#1741): `--allow` at a path that does not exist is a configuration error, and a `|| true`
         # that swallowed the failed copy only moved the report one process further away.
@@ -1333,8 +1412,16 @@ jobs:
           echo "::error::plugins-repo/plugin-gate.allow is missing — the known-debt ratchet this gate is configured with cannot be read, and a gate that cannot read its input must not look like one that passed. Commit the file (EMPTY = no known debt)."
           exit 1
         fi
-        cp "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow" "$STAGE/"
-        echo "gating: $VITAL_MODULES"
+        # (no copy: the ratchet already sits at the root of the tree being gated)
+        echo "gating every package under $STAGE"
+        # 🚨 No discovery pre-check here, deliberately. "A gate that discovers nothing must not
+        # look like one that passed" is right, and the TESTER already enforces it: PluginGateRunner
+        # returns a GateReport with FatalError "No node-repo packages (top-level folders with an
+        # index.json root)" when it finds none, and a FatalError exits red. A shell count beside it
+        # would be a SECOND discovery rule that has to agree with the first forever — and it would
+        # not: the tester filters on the index.json CONTENT (DeclaresNodeType), a find(1) count
+        # cannot, so a layout change would false-red every PR in this repo while the tester was
+        # perfectly happy. One source of truth for what counts as a package.
         # plugin-gate.allow is the plugins repo's known-debt ratchet: listed failures are
         # tolerated, NEW failures fail this PR. Same one-way contract the plugins CI uses, so the
         # two gates cannot disagree about what is acceptable.
@@ -1342,20 +1429,25 @@ jobs:
         # 🚨 The run is TEED, not swallowed: the log still streams to the job, and the copy is read
         # afterwards for the tester's verdict line. `if !` (not `set +e`) so `set -e` stays armed
         # for everything else, and PIPESTATUS[0] is the TESTER's code — tee always exits 0.
-        # 🚨 Since #1660 WS1 the gate also PERSISTS what it compiled (--bake-output): one
-        # MVID-keyed prebuilt bundle per vital module, with the plugins-repo commit it was synced
-        # from recorded in each manifest (--source-sha) so the artifact's provenance is auditable.
-        # Same adoption caveat as the content bake: only consumers sharing THIS run's build (its
-        # Graph.dll MVID) can adopt; anything else declines wholesale until #1660 WS3.
+        # 🚨 TWO STEPS, not one (#2064). The bake is a BUILD step — `compile` resolves each
+        # NodeType's sources straight from the staged tree and compiles them with
+        # MeshWeaver.Compiler: no MeshBuilder, no AddGraph(), no import, no hub. The gate is then a
+        # mesh CONSUMING that bake (`--seed`), so what renders and what runs the `Tests` areas is
+        # the assembly that will actually ship, not a private recompile of the same sources.
+        # bake-then-gate.sh holds the pair — the SAME split main-cd's publish-bake makes — so the
+        # PR lane cannot drift back to baking through a mesh. It also asserts what a green tick
+        # cannot show: that the gate ADOPTED the baked bytes (declared = adopted, adopted > 0)
+        # rather than quietly compiling its own.
+        # The bundles are still MVID-keyed and still carry the plugins-repo commit they were synced
+        # from (--source-sha), so the uploaded artifact's provenance is unchanged. Same adoption
+        # caveat as the content bake: only consumers sharing THIS run's build (its Graph.dll MVID)
+        # can adopt; anything else declines wholesale until #1660 WS3.
         PLUGINS_SHA="$(git -C "$GITHUB_WORKSPACE/plugins-repo" rev-parse HEAD)"
         log="${RUNNER_TEMP:-/tmp}/plugin-gate.log"
         status=0
-        if ! time dotnet "$TESTER" "$STAGE" --allow "$STAGE/plugin-gate.allow" \
-            --bake-output "${RUNNER_TEMP:-/tmp}/bake-plugins" --source-sha "$PLUGINS_SHA" 2>&1 | tee "$log"; then
-          status="${PIPESTATUS[0]}"
-          # tee always exits 0, so a non-zero pipeline with a zero head means tee itself failed.
-          if [ "$status" = "0" ]; then status=1; fi
-        fi
+        bash .github/scripts/bake-then-gate.sh "$TESTER" "$STAGE" \
+          "${RUNNER_TEMP:-/tmp}/bake-plugins" "$STAGE/plugin-gate.allow" "$PLUGINS_SHA" \
+          "${RUNNER_TEMP:-/tmp}/plugin-gate" || status=$?
         # The tester's verdict line IS the message — `GATE FAILED — tests: Store/Catalog — 1 new
         # failure(s), …` (GateReport.FailedPrefix). Lifted verbatim: nothing here re-derives or
         # re-words a cause, which is exactly how this job came to annotate a `tests` failure as
@@ -1405,7 +1497,7 @@ jobs:
           echo "### 📦 Baked plugin bundles (framework $(cat "$mvid_file"))"
           echo
           echo '```'
-          grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/plugin-gate.log" || true
+          grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/plugin-gate-bake.log" || true
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
     - name: "Upload artifact: baked plugin bundles"
@@ -1717,9 +1809,17 @@ jobs:
         set -euo pipefail
         tar -I 'zstd --long=27' -xf build-output-0.tar.zst
         rm -f build-output-0.tar.zst
-    # 🚨 `--bake-output` here is a SMOKE TEST of the bake stage, NOT a delivery lane (#1725).
-    # It costs almost nothing — the tester has already compiled everything, this only persists it —
-    # and it makes a bake-stage regression fail on the PR that causes it rather than in CD.
+    # 🚨 The bake here is a SMOKE TEST of the bake stage, NOT a delivery lane (#1725). It costs
+    # almost nothing and it makes a bake-stage regression fail on the PR that causes it rather than
+    # in CD.
+    #
+    # 🚨 Since #2064 it runs as TWO STEPS — `compile … --output` then the gate with `--seed` — the
+    # same split main-cd's publish-bake makes, held in .github/scripts/bake-then-gate.sh so the two
+    # lanes cannot drift. The PR lane used to bake THROUGH A MESH (one fused `--bake-output` run
+    # that stood up an in-process mesh and let the mesh compile every NodeType), which is the thing
+    # #1763 removed from CD and #2064 removes from here. It also makes this gate strictly stronger:
+    # what renders, and what runs the `Tests` areas, is now the assembly the bake produced rather
+    # than a private recompile of the same sources that nothing ever ships.
     #
     # What it deliberately no longer does is FEED the portals. Until #1725 this job's bundles were
     # uploaded as `baked-assemblies-<identity>` and published to portal storage by main-cd. That can
@@ -1750,29 +1850,25 @@ jobs:
         # .github/doc-gate.allow is THIS repo's known-debt ratchet for doc content: listed
         # failures are tolerated, NEW failures fail the PR, and a listed check that starts
         # passing fails the PR until its line is removed — the list can only shrink.
+        #
+        # ONE bake directory PER TREE. A shared directory would let the doc gate's `--seed` see the
+        # samples bundles (and the reverse), and the "declared ∩ installed" postcondition would then
+        # be satisfied by bundles the run under judgement never installed.
         log="${RUNNER_TEMP:-/tmp}/doc-gate.log"
         status=0
-        if ! time dotnet "$TESTER" "$STAGE" --allow .github/doc-gate.allow \
-            --bake-output "$BAKE" --source-sha "$GITHUB_SHA" 2>&1 | tee "$log"; then
-          status="${PIPESTATUS[0]}"
-          # tee always exits 0, so a non-zero pipeline with a zero head means tee itself failed.
-          if [ "$status" = "0" ]; then status=1; fi
-        fi
-        verdict="$(grep -m1 -- '^GATE FAILED' "$log" || true)"
+        bash .github/scripts/bake-then-gate.sh "$TESTER" "$STAGE" "$BAKE/doc" \
+          .github/doc-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/doc-gate" || status=$?
+        verdict="$(grep -m1 -- '^GATE FAILED' "$log" 2>/dev/null || true)"
         # ── Second stage: the samples trees — the "12k lines of C# no build ever type-checks"
         # from AGENTS.md. Same tester, same mechanics; .github/samples-gate.allow is its own
-        # one-way debt ratchet (seeded with the 8 cross-NodeType source defects the first run
-        # surfaced — a listed entry that starts passing fails the run until removed).
+        # one-way debt ratchet (a listed entry that starts passing fails the run until removed).
         SSTAGE="${RUNNER_TEMP:-/tmp}/samples"
         bash .github/scripts/stage-samples-gate.sh samples/Graph/Data "$SSTAGE"
         slog="${RUNNER_TEMP:-/tmp}/samples-gate.log"
         sstatus=0
-        if ! time dotnet "$TESTER" "$SSTAGE" --allow .github/samples-gate.allow \
-            --bake-output "$BAKE" --source-sha "$GITHUB_SHA" 2>&1 | tee "$slog"; then
-          sstatus="${PIPESTATUS[0]}"
-          if [ "$sstatus" = "0" ]; then sstatus=1; fi
-        fi
-        sverdict="$(grep -m1 -- '^GATE FAILED' "$slog" || true)"
+        bash .github/scripts/bake-then-gate.sh "$TESTER" "$SSTAGE" "$BAKE/samples" \
+          .github/samples-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/samples-gate" || sstatus=$?
+        sverdict="$(grep -m1 -- '^GATE FAILED' "$slog" 2>/dev/null || true)"
         combined="$(printf '%s\n%s' "$verdict" "$sverdict" | grep . | head -1 || true)"
         {
           echo "failure<<GATE_EOF"
@@ -1789,15 +1885,24 @@ jobs:
         fi
     # A green gate that produced no bake identity is a bake-stage REGRESSION — fail RED (no
     # continue-on-error, no "is the file there?" skip: the gate above already proved the tester ran
-    # green, so the identity file is a POSTcondition). This is the whole point of keeping
-    # --bake-output on the PR lane: the bake stage breaks HERE, on the PR that breaks it, instead of
-    # in CD after the merge.
+    # green, so the identity file is a POSTcondition). This is the whole point of keeping the bake
+    # on the PR lane: the bake stage breaks HERE, on the PR that breaks it, instead of in CD after
+    # the merge. bake-then-gate.sh already asserts each tree's own identity and bundles; this step
+    # additionally cross-checks the TWO trees against each other and publishes the summary.
     - name: "Bake summary + identity"
       run: |
         set -euo pipefail
-        mvid_file="${RUNNER_TEMP:-/tmp}/bake/framework-mvid.txt"
-        if [ ! -s "$mvid_file" ]; then
-          echo "::error::the content gate ran green but wrote no bake identity ($mvid_file) — the bake stage regressed."
+        mvid_file="${RUNNER_TEMP:-/tmp}/bake/doc/framework-mvid.txt"
+        smvid_file="${RUNNER_TEMP:-/tmp}/bake/samples/framework-mvid.txt"
+        if [ ! -s "$mvid_file" ] || [ ! -s "$smvid_file" ]; then
+          echo "::error::the content gate ran green but one of its bakes wrote no identity ($mvid_file / $smvid_file) — the bake stage regressed."
+          exit 1
+        fi
+        # Both trees are baked by the SAME binary in the SAME job, so a difference here is not a
+        # cosmetic mismatch — it means one of the two resolved a framework identity the other did
+        # not, and bundles keyed to it would be declined by every consumer that adopts the other.
+        if [ "$(cat "$mvid_file")" != "$(cat "$smvid_file")" ]; then
+          echo "::error::the doc and samples bakes resolved DIFFERENT framework identities ($(cat "$mvid_file") vs $(cat "$smvid_file")) — one of them is keyed to an identity no consumer of the other resolves."
           exit 1
         fi
         {
@@ -1807,7 +1912,7 @@ jobs:
           echo "inside the shipped image. See Doc/Architecture/CiContentBake."
           echo
           echo '```'
-          grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/doc-gate.log" "${RUNNER_TEMP:-/tmp}/samples-gate.log" || true
+          grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/doc-gate-bake.log" "${RUNNER_TEMP:-/tmp}/samples-gate-bake.log" || true
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
     # 🚨 NO artifact upload — deliberately, since #1725. These bundles are keyed to THIS job's
@@ -2227,7 +2332,7 @@ jobs:
     - name: Fail if the clients gate failed
       if: needs.clients-gate.result != 'success'
       run: |
-        echo "::error::The Clients workflow verdict is '${{ needs.clients-gate.outputs.verdict }}' (gate job: ${{ needs.clients-gate.result }}) — see the 'Clients workflow verdict' job. main-cd's portal-next image leg runs the same build, and its promote step is all-or-nothing, so merging this would stop ALL image publication."
+        echo "::error::The Clients workflow verdict is '${{ needs.clients-gate.outputs.verdict }}' (gate job: ${{ needs.clients-gate.result }}) — see the 'Clients workflow verdict' job. The clients tree is now just the Python SDK (the GUI clients moved to MeshWeaver.Plugins, MeshWeaver#2169), so a red verdict is a real SDK regression rather than the image-publication stopper it used to be."
         exit 1
 
     - name: Fail if a required CI input is missing

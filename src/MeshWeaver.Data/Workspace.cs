@@ -439,15 +439,16 @@ public class Workspace : IWorkspace
     // workspace disposal would leak the stream's heartbeat for the process lifetime).
     // Keyed set (value unused) rather than a bag so a per-identity release can remove
     // matching entries without the drain-and-re-add race a ConcurrentBag would force.
-    // 🚨 MUST hash by REFERENCE: SynchronizationStream is a record whose generated
-    // GetHashCode recurses into StreamConfiguration (which holds the stream back) —
-    // value-hashing a stream instance stack-overflows the process. Stream identity
-    // here IS the instance, so reference semantics is also the correct semantics.
+    // Hashes by REFERENCE: stream identity here IS the instance. SynchronizationStream now
+    // declares reference identity itself (the generated structural GetHashCode recursed into
+    // StreamConfiguration, which holds the stream back — an uncatchable StackOverflow, #2163…),
+    // so this comparer is no longer load-bearing for that; it is kept because ISynchronizationStream
+    // is an interface and reference semantics must hold for ANY implementation put in this set.
     private readonly ConcurrentDictionary<ISynchronizationStream, byte> _evictedRemoteStreams =
         new(StreamReferenceComparer.Instance);
 
     /// <summary>Reference-identity comparer for stream instances — see the
-    /// <see cref="_evictedRemoteStreams"/> field note (record GetHashCode recursion).</summary>
+    /// <see cref="_evictedRemoteStreams"/> field note.</summary>
     private sealed class StreamReferenceComparer : IEqualityComparer<ISynchronizationStream>
     {
         public static readonly StreamReferenceComparer Instance = new();

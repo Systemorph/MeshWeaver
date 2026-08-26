@@ -16,7 +16,6 @@
         <PackageReference Include="UglyToad.PdfPig" />
       <!-- Direct on purpose: the app closure no longer carries the view packs (#2169 Phase B) —
            tests that exercise pack types reference them like any other pack test. -->
-      <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Views\MeshWeaver.Blazor.Views.csproj" />
       <ProjectReference Include="..\..\src\MeshWeaver.Social\MeshWeaver.Social.csproj" />
   </ItemGroup>
     <ItemGroup>
@@ -57,7 +56,6 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
-        <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Markdown.Collaboration\MeshWeaver.Markdown.Collaboration.csproj" />
         <!-- Direct on purpose (#1644 step 2): the export engine left Memex.Portal.Shared's
              closure (it ships via modules/), so the export tests reference it themselves. -->

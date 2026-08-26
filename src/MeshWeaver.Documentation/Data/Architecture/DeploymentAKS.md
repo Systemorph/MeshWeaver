@@ -21,7 +21,7 @@ A **code update** is three steps: build the images, point the Deployments at the
 az acr login -n meshweaver
 
 # Portal — needs the prebuilt custom base image. MULTI-ARCH: never pass `-r linux-x64`.
-dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
+dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
   --no-self-contained -t:PublishContainer -p:PublishProfile= \
   -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"' \
   -p:ContainerRegistry=meshweaver.azurecr.io \
@@ -121,7 +121,7 @@ The portal container is `memex-portal` in Deployment `memex-portal-deployment`.
 
 - **Migration ran:** find the Job first — `kubectl -n <NS> get jobs -l app.kubernetes.io/component=memex-migration` — then `kubectl -n <NS> logs job/memex-migration-<revision> --tail=40` → expect `Database migration completed. Version: N`. A Job that reports `Complete` with that line is the success signal.
   - **A `CrashLoopBackOff` on a migration *Deployment* is NOT benign.** That is the legacy shape, and it is exactly the failure the Job replaced: the process exits 0, the Deployment restarts it, and every run rebuilds `public.top_level_index` across every partition schema. The chart records 310 restarts in a day pegging a full core. If you see it, the namespace is still on the legacy Deployment — do not wave it through.
-- **Portal serves:** `curl -sS -o /dev/null -w '%{http_code}' https://<portal-host>/` → `200`. **The host is not derivable from the namespace** — namespace `memex` serves `memex.systemorph.com` (the DNS record `deploy/aks/DEPLOY-RUNBOOK.md` creates), while `memex.meshweaver.cloud` is the *`memex-cloud`* namespace. Read the host off the namespace's own Ingress (`kubectl -n <NS> get ingress -o wide`) rather than templating it, or you will happily verify a portal you did not deploy to.
+- **Portal serves:** `curl -sS -o /dev/null -w '%{http_code}' https://<portal-host>/` → `200`. **The host is not derivable from the namespace** — namespace `memex` serves `memex.systemorph.com` (the DNS record `deploy/aks/README.md` → "Public ingress + TLS + DNS" creates), while `memex.meshweaver.cloud` is the *`memex-cloud`* namespace. Read the host off the namespace's own Ingress (`kubectl -n <NS> get ingress -o wide`) rather than templating it, or you will happily verify a portal you did not deploy to.
 - **Schema/index applied** (when the change was a migration): spot-check via `az aks command invoke … "kubectl -n <NS> exec deployment/memex-portal-deployment -- …"` or an MCP query.
 
 ### The cluster runs what the chart describes — check it, don't assume it
@@ -261,7 +261,7 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
 
 1. **Provision the UAMI + federated credentials** — included in the infra deploy (`deployPortalIdentity` defaults `true`). Read the client id back:
    ```bash
-   # --name is whatever the infra deploy was created with; deploy/aks/DEPLOY-RUNBOOK.md uses memex-aks-infra-sc.
+   # --name is whatever the infra deploy was created with; deploy/aks/README.md uses memex-aks-infra.
    az deployment sub show --name memex-aks-infra-sc \
      --query "properties.outputs.{clientId:portalIdentityClientId.value, principalId:portalIdentityPrincipalId.value}" -o jsonc
    ```
@@ -285,10 +285,15 @@ Deployments** in one pass — `memex-portal-deployment` (container `memex-portal
 `memex-migration-deployment` (container `memex-migration`), the names in `SelfUpdateOptions`.
 
 **🚨 That second patch does not currently run a migration, and this is a known gap, not a working
-mechanism.** `deploy/aks/SELF-UPDATE.md` states it outright: the chart's migration is a Job, but the updater
-and its RBAC target `memex-migration-deployment` — live AKS clusters have that Deployment scaled to 0, so
-the PATCH is a no-op there, and a chart-only environment logs a 404 and skips it. **So a self-update rolls
-the portal image while the schema stays where it was.** A release that carries a migration needs the Job to
+mechanism.** The chart's migration is a **Job**; the updater and its RBAC target
+`memex-migration-deployment`, which the chart does not render at all (`helm template deploy/helm` produces
+`kind: Job` named `memex-migration-<revision>`, and the only occurrence of `memex-migration-deployment` in
+the whole rendered output is the RBAC `resourceNames` grant). On a namespace that still carries the legacy
+Deployment the PATCH lands on a pod spec; on a chart-only environment it **404s, and
+`KubernetesDeploymentUpdater.PatchDeploymentImageAsync` THROWS on any non-success status** — it does not
+"log and skip". The portal is patched FIRST, so the roll itself still happens and the fault surfaces
+afterwards, on the migration leg only. **Either way a self-update rolls the portal image while the schema
+stays where it was.** A release that carries a migration needs the Job to
 run (`helm upgrade`) — do not assume self-update covers it. Verify `admin.mesh_nodes.db_version` after any
 roll that included a schema change.
 
@@ -318,6 +323,14 @@ Note the tension with §2: because the chart's migration is a Job created per He
 ## Diagnostics (private cluster)
 
 - Logs: `az aks command invoke … --command "kubectl -n <NS> logs deployment/memex-portal-deployment --tail=120"`. Note: the Azure CLI can crash on non-ASCII (`→`) in log output on Windows (cp1252) — pipe through `tr -cd '\11\12\15\40-\176'` **inside** the `--command` so az only receives printable text.
+- **Intermittent hangs while most requests succeed** (portal recently synced or baked): suspect a
+  degraded-but-Ready replica, not a global wedge — after startup, readiness and liveness both watch
+  the light `/alive`, so a GC-bound pod never leaves rotation on its own. Run
+  `az aks command invoke … --command "kubectl top pods -n <NS> --no-headers"`; one or two pods far
+  above their siblings in BOTH memory and CPU is the superseded-NodeType-build (ALC) accumulation of
+  issue #2194 — `kubectl delete pod` the outliers (grace-drain; the Deployment replaces them).
+  Mechanism and the convergence key that prevents it:
+  [NodeTypeCompilation](/Doc/Architecture/NodeTypeCompilation).
 - A `MESHWEAVER_MSG_TRACE=1` env var on the portal Deployment turns on the message-flow trace (`/tmp/meshweaver-msg-trace.log` in the pod). Toggling it restarts the pod; remove it (`kubectl set env … MESHWEAVER_MSG_TRACE-`) when done — it writes per-message and adds lock/IO overhead.
 
 ---

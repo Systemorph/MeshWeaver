@@ -11,10 +11,10 @@ namespace Memex.Database.Migration.Migrations;
 /// July, and <c>Publish/Deck</c> (Publish v1.0.8) ships the deck Overview/Present areas compiled
 /// in-mesh from the pack's shared slide source. The platform's built-in registrations are slated
 /// for deletion — but live meshes hold core-typed nodes created directly on the mesh, outside any
-/// git repo (AgenticPension on atioz; PartnerRe / PG3 presentations on systemorph). Deleting the
-/// built-ins with those rows in place would strip the views from production content, so every
-/// install must retype first — this migration is that retype, and the deletion lands only a
-/// release AFTER it has run everywhere.</para>
+/// git repo (deck and slide nodes authored directly on the production portals).
+/// Deleting the built-ins with those rows in place would strip the views from production
+/// content, so every install must retype first — this migration is that retype, and the
+/// deletion lands only a release AFTER it has run everywhere.</para>
 ///
 /// <para><b>Fix.</b> Across every partition schema, retype <c>node_type = 'Slide'</c> rows to
 /// <c>'Publish/Slide'</c> and <c>node_type = 'Deck'</c> rows to <c>'Publish/Deck'</c>. The content
