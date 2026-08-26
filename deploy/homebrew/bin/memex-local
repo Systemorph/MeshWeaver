@@ -145,7 +145,9 @@ resolve_repo() {
   if [ -n "${MEMEX_REPO:-}" ] && [ -d "$MEMEX_REPO" ]; then
     printf '%s' "$MEMEX_REPO"; return 0
   fi
-  if [ -f "$SELF_DIR/../../../memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" ]; then
+  # Marker must be a file that STAYS in this repo: the portal hosts moved to MeshWeaver.Plugins,
+  # so keying on Memex.Portal.Distributed.csproj stopped identifying the platform checkout.
+  if [ -f "$SELF_DIR/../../../MeshWeaver.slnx" ]; then
     ( cd "$SELF_DIR/../../.." && pwd ); return 0
   fi
   return 1
@@ -268,7 +270,15 @@ image_build_local() {                                  # §3 Option B
   # (main's multi-arch container work), so a bare -t:PublishContainer builds a multi-arch image INDEX and
   # Colima's arm64 node can load the x64 assembly → "assembly architecture is not compatible" crashloop.
   # Pin the single native RID so the local image is arm64-only (restores this step's documented intent).
-  dotnet publish "$repo/memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
+  # 🚨 The portal hosts moved to MeshWeaver.Plugins. This build needs THAT checkout, not this one.
+  # Resolved explicitly and failed LOUDLY when absent -- silently skipping the portal layer would
+  # produce a "successful" run whose image has no portal in it.
+  portal_repo="${MEMEX_PLUGINS_REPO:-$(cd "$repo/.." 2>/dev/null && pwd)/MeshWeaver.Plugins}"
+  if [ ! -f "$portal_repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" ]; then
+    die "The portal source is in MeshWeaver.Plugins, which was not found at '$portal_repo'. \
+Clone it beside this repo, or set MEMEX_PLUGINS_REPO to an existing checkout."
+  fi
+  dotnet publish "$portal_repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
     -c Release -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local \
     -p:ContainerBaseImage="$PORTAL_BASE_REF" \
     -p:ContainerRuntimeIdentifier=linux-arm64 \
