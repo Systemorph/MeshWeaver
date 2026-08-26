@@ -126,8 +126,8 @@ is preserved by a stronger check rather than by a proxy.
 
 ## The standing trap — verify the IMAGE, never the tick
 
-CD's `workflow_run` trigger reacts to a **real push**. Two consequences trip people up, and both are
-silent:
+CD's `workflow_run` trigger reacts to a **real push**, and — more exactly — to one that
+**completes**. The consequences below all trip people up, and all are silent:
 
 1. **No Build-and-Test run on the merge commit at all** (a CI incident, a stalled queue). CD reacts
    to that workflow completing; with nothing to react to it sits `SKIPPED`.
@@ -145,6 +145,42 @@ silent:
    never a quiet skip.** The operator move is unchanged by the alarm: read the failing test; a
    flake → `gh run rerun <id> --failed` (a green rerun fires a fresh `workflow_run`, which
    publishes by itself); a real failure → fixing main IS the release path.
+
+4. 🚨 **A merge burst cancels its own runs, and publishes nothing.** `dotnet-test.yml` groups by
+   `build-test-${{ … || github.ref }}`, so every push to main shares the group `refs/heads/main` and
+   each merge **cancels the in-flight run of the one before it** (#2316 — worth ~28% of runner
+   demand, keep it). CD still **fires** on those runs — this workflow subscribes with
+   `types: [completed]` and a cancelled run counts as completed — but the delivery gate keys on the
+   required check **`Consolidate test results` reaching `success` for that SHA**, which a cancelled
+   run never produces (and gating on the required check rather than the run's umbrella conclusion is
+   deliberate — see the DELIVERY GATE comment). So CD wakes, decides "nothing will be built", and
+   through a burst nothing publishes. Observed 2026-08-26: #2316 merged 12:55:25Z, the next
+   **five** main runs cancelled back-to-back, 45 minutes with no completed run.
+
+   Publishing only the burst's **tip** is the right outcome — intermediate commits never needed
+   their own image set, and it is the same batching `CD_BATCH_WINDOW_MINUTES` wants. The hazard is
+   that the burst must **end**: while merges keep arriving the tip run is cancelled every time, the
+   push path stops publishing altogether, and the hourly reconciler quietly becomes the only
+   publisher — which reads exactly like "CD is frozen".
+
+   **Ordinary merges should still be batched** — the tip's image contains them all. The wait is owed
+   only to a merge that must ship **on its own** (a CD fix, a hotfix under verification): merge it,
+   wait for **that merge commit's** Build-and-Test to complete, and confirm the completed run's
+   **head SHA is your merge commit** — "a run completed" and "the run for my commit completed"
+   diverge during precisely the burst this is about.
+
+   🚨 **And a merge cancels whatever is in flight, including a run another session is waiting on.**
+   With several sessions merging into one repo, "wait for the run" only works if everyone waits —
+   two sessions each merging politely still cancel each other. Check for an in-flight run someone is
+   gating a deploy on before you merge, and hold if there is one.
+
+   🚨 **A hold does not propagate to subagents.** An agent told to "root-cause and open a PR" will
+   merge on green, because that is this repo's documented default. On 2026-08-26 one hold was broken
+   three times — once by the operator and twice by subagents — each time by a correct fix landing at
+   the wrong moment. Push the hold to every running agent explicitly and disarm any armed
+   auto-merge: **a constraint is only as complete as the set of hands it reaches.** 🚨 Do not diagnose this from the tag alone: "no new tag" here has at
+   least three causes — the batch window, a repoint/version-step failure on a run that *did*
+   complete, and this. They stack, and naming only one leaves the other live.
 
 Two diagnosis cheats, both learned the hard way on 2026-08-22:
 
