@@ -16,7 +16,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using Xunit;
 
-namespace MeshWeaver.Content.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// Tests that files with spaces in their names work correctly through

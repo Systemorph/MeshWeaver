@@ -3,7 +3,7 @@ using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using Xunit;
 
-namespace MeshWeaver.Content.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// <see cref="FileFormatParserRegistry"/>'s ORDERING contract: a contributed parser is tried before
