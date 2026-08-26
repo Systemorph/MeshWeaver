@@ -158,6 +158,9 @@ internal static class OrleansTestCluster
             // ConnectionRefused. Declaring TcpSocket makes both ends agree — real loopback sockets,
             // which is what TestCluster used by default before the in-memory transport existed.
             builder.Options.ConnectionTransport = ConnectionTransportType.TcpSocket;
+            // 🚨 Size the grain directory for a TEST cluster — BEFORE `configure`, so a test that
+            // genuinely needs a bigger one can still override. See TestGrainDirectorySizing.
+            builder.AddSiloBuilderConfigurator<TestGrainDirectorySizing>();
             configure(builder);
 
             cluster = builder.Build();

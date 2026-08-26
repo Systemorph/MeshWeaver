@@ -198,6 +198,60 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         + "land; re-issue it."))
                     : Observable.Return(node));
 
+    /// <summary>
+    /// 🚨 The base a QUEUED write diffs against — issues #2305 / #2291.
+    ///
+    /// <para><b>The defect.</b> <c>MeshNodeStreamCache</c> funnels every write to a path through one
+    /// per-path serial queue, and its own contract said "the next queued Update sees post-patch state
+    /// via the local Handle". It did not. The queue advances on the write's LOCAL emit (the owner's ack
+    /// or, on a busy owner, the optimistic snapshot) — never on the owner's ECHO — while the next write
+    /// reads <c>mirror.Take(1)</c>, i.e. the mirror as it stands. Under load the echo has not arrived,
+    /// so write N+1 ships a base that PREDATES write N. The owner then three-way-merges an
+    /// already-applied value against a base it has moved past, sees a string changed on both sides with
+    /// overlapping edits, and REFUSES the leaf — keeping the value write N wrote.</para>
+    ///
+    /// <para><b>Why that is not a concurrent-writer conflict.</b> The two writes are the SAME mirror's,
+    /// strictly ordered by the queue. The staleness is self-inflicted: the writer superseded its own
+    /// base and then told the owner otherwise. The owner is right to refuse a stale base — the writer is
+    /// wrong to ship one.</para>
+    ///
+    /// <para><b>The symptom it produced.</b> An agent round's response cell. Push 1 writes
+    /// <c>Text = "Generating response..."</c>; the terminal push writes <c>Text</c> = the answer,
+    /// <c>Status = Completed</c> and <c>Summary</c>. With a stale base only <c>Text</c> conflicts, so
+    /// <c>Status</c> and <c>Summary</c> land and <c>Text</c> is refused — a COMPLETED cell still reading
+    /// "Generating response..." while the answer sits in <c>Summary</c>. Partial per-field resolution is
+    /// intentional (<c>PatchDataRequestTest</c>, <c>CrossHubPatchAtomicityTest</c>) and is NOT what is
+    /// wrong here; the stale base is. More generally this froze a streaming cell's text at the first
+    /// chunk that landed, for as long as the echo lagged the write rate.</para>
+    ///
+    /// <para><b>The rule.</b> While the mirror has not advanced past the state the previous queued write
+    /// produced, that state IS this mirror's freshest knowledge of the node — diff against it. The
+    /// instant the mirror carries anything newer (the echo, or ANOTHER writer's commit — the owner mints
+    /// <c>Version + 1</c> on every applied change) the mirror wins again and a genuine cross-mirror
+    /// conflict is detected exactly as before. So this can only remove FALSE conflicts: it never hides a
+    /// real one, and it never suppresses a base.</para>
+    ///
+    /// <para>Static, with the mirror and the pending state as seams, so the rule is asserted
+    /// deterministically — no hub, no cluster, no wall clock.</para>
+    /// </summary>
+    /// <param name="source">The mirror emission a write would otherwise diff against.</param>
+    /// <param name="pendingSelfWrite">The node the PREVIOUS write on this path's serial queue computed
+    /// locally, or <c>null</c> when there is none (a first write, a write after an error, or a retry —
+    /// a CONFLICT re-attempt must re-read the owner's state, never the value it just superseded).</param>
+    internal static IObservable<MeshNode> PatchBaseSource(
+        IObservable<MeshNode> source,
+        MeshNode? pendingSelfWrite)
+        => pendingSelfWrite is null
+            ? source
+            : source.Select(node =>
+                // Same node, and the mirror has not yet carried anything past what we wrote ⇒ our own
+                // pending state is the freshest base this mirror has. Path equality is a guard against
+                // a mis-keyed hand-off, not an expected case — the queue is per path.
+                string.Equals(node.Path, pendingSelfWrite.Path, StringComparison.OrdinalIgnoreCase)
+                && pendingSelfWrite.Version >= node.Version
+                    ? pendingSelfWrite
+                    : node);
+
     internal MeshNodeStreamHandle(IWorkspace workspace, string? path = null,
         IMeshNodeStreamCache? cache = null, bool bypassCache = false)
     {
@@ -634,6 +688,41 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// rather than letting a <c>Content as T ?? new T()</c> write defaults over real fields.</para>
     /// </summary>
     public IObservable<MeshNode> Update(Func<MeshNode, MeshNode> update)
+        => UpdateQueued(update, pendingSelfWrite: null);
+
+    /// <summary>
+    /// <c>Update</c> with the state the PREVIOUS write on this path's serial queue computed locally.
+    /// Only <see cref="IMeshNodeStreamCache"/>'s per-path queue may pass one — it is the single caller
+    /// that can prove the two writes are ordered and come from this same mirror. See
+    /// <see cref="PatchBaseSource"/> for why the mirror alone is not a sound base (#2305 / #2291).
+    /// <para>A distinct NAME rather than an overload: <c>Update</c> is referenced from a dozen
+    /// <c>&lt;see cref&gt;</c>s across this file and its callers, and an overload makes every one of
+    /// them ambiguous (CS0419).</para>
+    /// </summary>
+    /// <param name="update">The caller's lambda, as for <c>Update</c>.</param>
+    /// <param name="pendingSelfWrite">What the PREVIOUS queued write on this path computed, or null.</param>
+    /// <param name="onLocalState">Receives the node the OWNER has acknowledged taking, to be handed to
+    /// the next queued write as its base.
+    /// <para>🚨 Invoked ONLY on the owner's success ack — never on the optimistic emit, never on a
+    /// rejection, never on a retry. A write that did not land mints no version, so a base published
+    /// from an unlanded write is never corrected by anything: the next write diffs its own unlanded
+    /// value, produces an EMPTY patch, and is skipped as a no-op — silently, and for every retry after
+    /// it. That regression is real and was caught by <c>TwoSiloRecycleConvergenceTest</c>. When the ack
+    /// does not arrive inside the response bound, publishing nothing degrades to the previous
+    /// behaviour, which is the correct direction to fail.</para>
+    /// <para>🚨 Invoked with the node in the shape the write path itself diffs — BEFORE the
+    /// typed-Content projection on the returned observable, and AFTER the audit stamp. Taking it off
+    /// the observable instead would hand the successor a re-typed node whose re-serialisation need not
+    /// match (a recovered <c>$type</c>, a suppressed default), and the successor's diff would then
+    /// carry phantom keys.</para>
+    /// <para>A CONFLICT/OwnerDisposing re-enqueue deliberately does not carry this on either: those run
+    /// asynchronously and could land after a LATER write already published, replacing a newer base with
+    /// an older one.</para>
+    /// </param>
+    internal IObservable<MeshNode> UpdateQueued(
+        Func<MeshNode, MeshNode> update,
+        MeshNode? pendingSelfWrite,
+        Action<MeshNode>? onLocalState = null)
     {
         // 🚨 AccessContext capture for the LAMBDA invocation. The user's
         // `update` lambda runs on whatever thread the underlying writer fires
@@ -729,7 +818,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         // faulted). It also confirms read-after-write (waits for the commit).
                         // Overwrite (full-replace, static-repo import) stays on the
                         // sync-stream path — see Overwrite below.
-                        ? UpdateRemote(wrappedUpdate)
+                        ? UpdateRemote(wrappedUpdate,
+                            pendingSelfWrite: pendingSelfWrite, onLocalState: onLocalState)
                         : throw new InvalidOperationException(
                             $"Cross-hub MeshNode write to '{_path}' requires an IMeshNodeStreamCache "
                             + $"on hub '{_workspace.Hub.Address}', but none is registered. All non-own "
@@ -1177,7 +1267,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// (<see cref="RebaseSource"/>). 0 for a caller write and for the re-enqueue codes that never
     /// reached a merge.</param>
     private IObservable<MeshNode> UpdateRemote(
-        Func<MeshNode, MeshNode> update, int attempt = 0, long refusedBaseVersion = 0)
+        Func<MeshNode, MeshNode> update, int attempt = 0, long refusedBaseVersion = 0,
+        MeshNode? pendingSelfWrite = null, Action<MeshNode>? onLocalState = null)
         => Observable.Create<MeshNode>(observer =>
         {
             var diagLogger = _workspace.Hub.ServiceProvider
@@ -1226,18 +1317,36 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // refused. See RebaseSource: re-running the lambda against the SAME mirror emission
             // recomputes the same values from the same base and is refused identically, so the
             // re-enqueue cannot converge (#1910).
-            var initialSub = RebaseSource(
-                    remoteStream
-                        .Timeout(TimeSpan.FromSeconds(30))
-                        .Where(change => change.Value is not null)
-                        .Select(change => change.Value!),
-                    refusedBaseVersion,
-                    staleVersion => diagLogger?.LogWarning(
-                        "[UpdateRemote] STALE_MIRROR hub={Hub} target={Path} attempt={Attempt} — the "
-                        + "owner refused this write as stale at version {Version}, but this hub's "
-                        + "mirror did not advance past it within {Bound}; rebuilding the patch "
-                        + "against the state it has. The re-attempt may be refused again",
-                        _workspace.Hub.Address, _path, attempt, staleVersion, ConflictRebaseBound))
+            //
+            // 🚨 …and when the PREVIOUS write on this path's serial queue has not been echoed back
+            // yet, the mirror is behind THIS mirror's own last write — diffing against it ships a
+            // base the writer itself superseded, which the owner refuses as a conflict that never
+            // happened (#2305 / #2291). See PatchBaseSource.
+            var initialSub = PatchBaseSource(
+                    RebaseSource(
+                        remoteStream
+                            .Timeout(TimeSpan.FromSeconds(30))
+                            .Where(change => change.Value is not null)
+                            .Select(change => change.Value!),
+                        refusedBaseVersion,
+                        staleVersion => diagLogger?.LogWarning(
+                            "[UpdateRemote] STALE_MIRROR hub={Hub} target={Path} attempt={Attempt} — the "
+                            + "owner refused this write as stale at version {Version}, but this hub's "
+                            + "mirror did not advance past it within {Bound}; rebuilding the patch "
+                            + "against the state it has. The re-attempt may be refused again",
+                            _workspace.Hub.Address, _path, attempt, staleVersion, ConflictRebaseBound)),
+                    pendingSelfWrite)
+                // Says which base this write actually built on — the one question worth asking when a
+                // cross-hub write's field comes back refused. SELF_REBASE means the mirror had not
+                // caught up and we diffed against our own predecessor's result instead.
+                .Do(node =>
+                {
+                    if (ReferenceEquals(node, pendingSelfWrite))
+                        diagLogger?.LogDebug(
+                            "[UpdateRemote] SELF_REBASE hub={Hub} target={Path} version={Version} — the "
+                            + "mirror has not carried the previous queued write yet; diffing against it",
+                            _workspace.Hub.Address, _path, node.Version);
+                })
                 .Subscribe(
                     current =>
                     {
@@ -1268,6 +1377,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         "[UpdateRemote] NO-OP hub={Hub} target={Path} contentType={ContentType} — lambda returned the node unchanged; nothing to write",
                                         _workspace.Hub.Address, _path,
                                         current.Content?.GetType().Name ?? "<null>");
+                                // Nothing written, so nothing new to claim — but `current` is a state
+                                // the owner is believed to hold (the mirror, or a predecessor's ACKED
+                                // result). Carrying it keeps the chain intact across a no-op instead
+                                // of dropping the successor back onto a mirror that may be behind.
+                                onLocalState?.Invoke(current);
                                 observer.OnNext(current);
                                 observer.OnCompleted();
                                 return;
@@ -1294,6 +1408,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 diagLogger?.LogDebug(
                                     "[UpdateRemote] NO-OP hub={Hub} target={Path} — diff empty after serialisation",
                                     _workspace.Hub.Address, _path);
+                                onLocalState?.Invoke(current);
                                 observer.OnNext(current);
                                 observer.OnCompleted();
                                 return;
@@ -1594,6 +1709,23 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         else
                                         {
                                             // Success ack — patch accepted; the activity is started.
+                                            //
+                                            // 🚨 ONLY HERE may this write's result become the next
+                                            // queued write's base (#2305 / #2291). The ack is the
+                                            // owner stating it took the patch, and nothing weaker
+                                            // will do: publishing the OPTIMISTIC snapshot instead
+                                            // hands the successor a value the owner may never have
+                                            // taken, and — because a write that did not land mints
+                                            // no version — nothing ever clears it. A caller that
+                                            // retries the same write then diffs against its own
+                                            // unlanded value, computes an EMPTY patch, and skips
+                                            // the write silently, forever
+                                            // (TwoSiloRecycleConvergenceTest: the post-recycle
+                                            // write retried past a disposing owner and the store
+                                            // never advanced). This runs before EmitTerminal, which
+                                            // is what releases the queue slot, so the successor
+                                            // cannot start before the hand-off.
+                                            onLocalState?.Invoke(updated);
                                             EmitTerminal();
                                         }
                                     },
@@ -1727,7 +1859,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// <see cref="PatchStringSplice.MinSpliceLength"/>, or when the splice would not
     /// actually be smaller, the full value is emitted exactly as before.</para>
     /// </summary>
-    private static System.Text.Json.Nodes.JsonObject ComputeMergePatchDiff(
+    // internal (not private) so a test can drive the REAL diff a cross-hub write ships, rather than a
+    // hand-rolled stand-in that would drift from it — see ResponseTextSurvivesUnechoedWriteTest.
+    internal static System.Text.Json.Nodes.JsonObject ComputeMergePatchDiff(
         System.Text.Json.Nodes.JsonObject current,
         System.Text.Json.Nodes.JsonObject updated)
     {
