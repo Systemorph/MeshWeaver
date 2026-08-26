@@ -465,7 +465,7 @@ The `memex` portal runs on the shared **AKS cluster** `<aks-cluster>` (RG `<aks-
 ```bash
 az acr login -n meshweaver
 # Portal (custom base) AND migration (the migration is what creates schema + the matview):
-dotnet publish memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
+dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-portal-ai -p:ContainerImageTag=<tag> \
   -p:ContainerBaseImage=meshweaver.azurecr.io/memex-portal-ai-base:latest
