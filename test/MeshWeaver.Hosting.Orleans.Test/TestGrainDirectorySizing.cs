@@ -47,9 +47,12 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///   <item>Wall clock is UNCHANGED on an 18-core dev box — 74.9–98.8 s without, 75.8–92.4 s with.
 ///   (An earlier "30% faster" reading of mine was machine load; it is retracted here rather than
 ///   left standing. The memory number is the one that holds.)</item>
-///   <item>Flake rate is unchanged: 1 failure / 9 without, 1 / 8 with — and it is the SAME test both
-///   times, <c>OrleansGrainTeardownStragglerTest</c>, which is the ambient population (#2301's
-///   "activation never leaves the catalog"), not something this change causes or cures.</item>
+///   <item>Flake rate: <b>2 failures / 17 runs without, 5 / 21 with</b> — not distinguishable at this
+///   sample size (Fisher p ≈ 0.4), and the families overlap: <c>OrleansGrainTeardownStragglerTest</c>
+///   (#2301's "activation never leaves the catalog") failed in BOTH arms, and the delegation family
+///   failed in both too (<c>OrleansThreadStreamingTest</c> without, <c>OrleansNodeChangePropagationTest</c>
+///   with). That is the ambient population this change neither causes nor cures — it is recorded here
+///   so nobody has to re-derive it, and so a later measurement has a baseline to beat.</item>
 /// </list>
 ///
 /// <para><b>Not a tuning knob.</b> Nothing here raises a bound to make a test pass; it stops a test
@@ -58,10 +61,12 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// comes within orders of magnitude of <see cref="CacheSize"/> distinct grains, so nothing is evicted
 /// and no behaviour changes.</para>
 ///
-/// <para>Applied centrally by <see cref="OrleansTestCluster.DeployAsync"/>, which every cluster in
-/// this assembly is built through, so a new test class inherits it without doing anything. It is
-/// registered BEFORE the caller's own configurators, so a test that needs a different size can still
-/// set one.</para>
+/// <para>Applied centrally by <see cref="OrleansTestCluster.DeployAsync"/>, so a new test class that
+/// takes the normal path inherits it without doing anything; it is registered BEFORE the caller's own
+/// configurators, so a test that needs a different size can still set one. Ten classes build their own
+/// <c>TestClusterBuilder</c> instead and opt in on the line after they create it —
+/// <see cref="TestClusterSizingGuard"/> is what keeps that from being something anyone has to
+/// remember.</para>
 /// </summary>
 public class TestGrainDirectorySizing : ISiloConfigurator
 {
