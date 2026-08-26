@@ -297,6 +297,9 @@ jobs:
       # The three facts the delivery verdict below judges. Exposed as outputs so the check is a
       # JOB anyone can read in the run summary, not a conclusion buried in this job's log.
       complete: ${{ steps.acr.outputs.complete }}
+      # Reconcile found the images complete: no image build is due, but the content bake still
+      # is — the images being present says nothing about whether the bundles are.
+      bake_only: ${{ steps.decide.outputs.bake_only }}
       green: ${{ steps.required.outputs.green }}
     steps:
       - uses: actions/checkout@v7
@@ -539,8 +542,23 @@ jobs:
           # ── reconcile ────────────────────────────────────────────────────────────────────────
           # Registry first: a complete set means nothing is wrong, whatever the check says. This is
           # the overwhelmingly common tick and it ends here, having cost ~40 s and said nothing.
+          # 🚨 A complete IMAGE set is NOT a complete delivery. The bake — the thing that stops
+          # every pod Roslyn-compiling shipped content at boot — was a CONSEQUENCE of promoting an
+          # image, and this reconciler keyed on the images alone. So once the image set was
+          # complete, CD was permanently satisfied and the bake could never run again: measured
+          # 2026-08-26, NO successful platform bake in the last 60 CD runs, behind a green tick.
+          # This job's own ACR-retry comment already described the hole ("the CD reconciler keys on
+          # the IMAGE set (complete) rather than on the publication, so nothing re-attempts it") —
+          # it was written down and never closed.
+          #
+          # So a reconcile with a complete image set now still runs the BAKE (never the image
+          # build): `bake_only`. Publication stays idempotent — publish-bake-bundles.sh skips a
+          # sealed directory whose content × framework identity already match — so this re-publishes
+          # only when the bundles for the running identity are genuinely absent. Policy: always bake
+          # on CI, never bake on a silo.
           if [ "$COMPLETE" = "true" ]; then
-            decision false "✅ main \`$SHORT\` already has a complete image set — nothing to reconcile"
+            echo "bake_only=true" >> "$GITHUB_OUTPUT"
+            decision false "✅ main \`$SHORT\` already has a complete image set — no image build; re-asserting the content bake (publication is idempotent)"
             exit 0
           fi
 
@@ -1024,7 +1042,19 @@ jobs:
     # portal-image is here for its `version` output — the release marker below is keyed by the
     # platform version the self-updater compares, not by the commit.
     needs: [gate, plugin-test-image, portal-image, promote]
-    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    # Two ways in, and the second is the fix:
+    #   * a real publish — images promoted, bake the content that ships with them;
+    #   * a RECONCILE whose image set is already complete (`bake_only`) — no image is built, but
+    #     the bundles may never have been published for the identity those images resolve. Before
+    #     this, that state was unreachable: the bake could only ever run as a consequence of
+    #     promoting, so a bake that was skipped or failed was never retried and every pod compiled
+    #     shipped content at boot, indefinitely, with CD green.
+    # `always()` is required because `promote` is SKIPPED on the reconcile path — without it this
+    # job inherits the skip and the fix would be inert, which is the exact shape it is fixing.
+    if: >-
+      always() && needs.gate.result == 'success' &&
+      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||
+       needs.gate.outputs.bake_only == 'true')
     runs-on: ubuntu-latest
     # The bake compiles every shipped NodeType twice over (Doc + samples) inside the container;
     # the doc-gate's equivalent budget is 12 min, and the pull plus the publish add to it.
@@ -1088,7 +1118,7 @@ jobs:
       # the bake step with a registry error dressed up as a bake failure.
       - name: "ACR login + pull the bake image (infra, not the bake)"
         env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
         run: |
           set -uo pipefail
           attempts=5
@@ -1152,7 +1182,7 @@ jobs:
       # identity and every bundle it baked would be declined by every portal, silently.
       - name: "BAKE the platform's OWN shipped content (compiler-driven, no mesh)"
         env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
           SHA: ${{ needs.gate.outputs.sha }}
         run: |
           set -euo pipefail
@@ -1212,7 +1242,7 @@ jobs:
       # green having judged none of the bytes that ship (#1814's shape, one level down).
       - name: "GATE the bake: render + execute Tests areas on the BAKED bytes"
         env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
         run: |
           set -euo pipefail
           STAGE="$RUNNER_TEMP/bake-stage"
@@ -1258,7 +1288,7 @@ jobs:
       # that passes on degraded input would be a check that cannot fail.
       - name: "Assert the bake's identity is the one the PROMOTED PORTAL IMAGE resolves"
         env:
-          BAKE_IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+          BAKE_IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
           PORTAL_IMAGE: ${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}
         run: |
           set -euo pipefail
@@ -1294,7 +1324,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: "BAKE every plugin against the SAME image (compiler-driven, no mesh)"
         env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
         run: |
           set -euo pipefail
           PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
@@ -1319,7 +1349,7 @@ jobs:
           ls "$BAKE_PLUGINS"/*.zip | wc -l | xargs echo "plugin bundles:"
       - name: "GATE the plugin bake: render + execute Tests areas on the BAKED bytes"
         env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
         run: |
           set -euo pipefail
           PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
@@ -1344,7 +1374,15 @@ jobs:
       # from any manifest.lock: a bundle's version must be minted by the run that produced its
       # bytes (Plugins#695 — a version that moves on a lock file while the bytes come from
       # elsewhere is how an already-fixed defect kept shipping, #2356).
+      # 🚨 NOT on the reconcile path. RELEASE_VERSION is `3.0.0-ci.<build>` — it embeds the RUN
+      # NUMBER, so a reconcile would mint a DIFFERENT version from the one the promoted image
+      # carries, and publish bytes under a version no run produced. That is precisely the failure
+      # the guard below refuses (Plugins#695: a bundle's version must be minted by the run that
+      # produced its bytes). The platform CONTENT bake above has no such coupling — its key is the
+      # framework identity, which the promoted image resolves identically however many times it is
+      # asked — so the reconcile re-asserts that and stops there.
       - name: "Publish the plugin bundles to every portal target (same identity, same version)"
+        if: needs.gate.outputs.bake_only != 'true'
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
           RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
