@@ -8,9 +8,15 @@
 #
 #     <base>/prebuilt-bundles/<framework-identity>/<source-name>/<bundle>.zip
 #
-# where <framework-identity> comes from the bake's framework-mvid.txt (for CI builds: the commit
-# identity g<sha>, identical for every CI build of the same commit — that determinism is what
-# makes this publication findable by the images built from the same commit). <source-name> is the
+# where <framework-identity> comes from the bake's framework-mvid.txt. 🚨 This used to say "for CI
+# builds: the commit identity g<sha>", and that went stale when the surface identity landed: the
+# bake host IS mw-plugin-test, which opts into the surface manifest
+# (MeshWeaver.PluginTester.csproj) and therefore resolves the SURFACE identity s<hash>. g<sha> is
+# now only the fallback for manifest-LESS processes (FrameworkBuildIdentity). The distinction is
+# not cosmetic — s<hash> is architecture-SENSITIVE (four reference assemblies differ between the
+# amd64 and arm64 variants of one image) while g<sha> is not, which is exactly what decides
+# whether two architectures can publish side by side or collide. See the guard below.
+# <source-name> is the
 # producing repo's segment (e.g. meshweaver-content, plugins, education) so multiple independent
 # producers publish without clobbering; the bundle manifests inside carry the exact source SHA.
 #
