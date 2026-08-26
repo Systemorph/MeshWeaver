@@ -3,7 +3,7 @@ using MeshWeaver.AI.Plugins;
 using Microsoft.Extensions.AI;
 using Xunit;
 
-namespace MeshWeaver.Content.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// The <c>submit_message</c> tool's REFUSAL contract — the half a model actually collides with.

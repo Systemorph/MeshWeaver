@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using MeshWeaver.AI;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Completion;
 using MeshWeaver.Data;
+// 🚨 NOT an AI dependency, despite the name. FuzzyScorer ships in MeshWeaver.Data
+// (src/MeshWeaver.Data/Completion/FuzzyScorer.cs) but declares namespace
+// MeshWeaver.AI.Completion — a namespace/assembly mismatch tracked as #2344. This project
+// has NO ProjectReference to MeshWeaver.AI; removing this using does not remove one.
 using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -18,10 +21,14 @@ namespace MeshWeaver.Content.Test;
 /// <summary>
 /// Tests that files with spaces in their names work correctly through
 /// the autocomplete and content reference pipeline:
-/// 1. MarkdownReferenceExtractor extracts quoted @"path" references
-/// 2. UcrPrefixResolver handles paths with spaces (both / and : format)
-/// 3. ContentAutocompleteProvider.FormatInsertText wraps spaced paths in quotes
-/// 4. ContentAutocompleteProvider.ScoreMatch finds files by partial name
+/// 1. UcrPrefixResolver handles paths with spaces (both / and : format)
+/// 2. ContentAutocompleteProvider.FormatInsertText wraps spaced paths in quotes
+/// 3. ContentAutocompleteProvider.ScoreMatch finds files by partial name
+///
+/// <para>The MarkdownReferenceExtractor half of this pipeline is pinned by
+/// <c>MeshWeaver.AI.Test.MarkdownReferenceExtractorSpacesTest</c> — that extractor ships with
+/// MeshWeaver.AI, and it was the only thing keeping this suite referencing the AI assembly
+/// (#2276).</para>
 /// </summary>
 [Collection("SpacesInFileNameTest")]
 public class SpacesInFileNameTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -29,70 +36,6 @@ public class SpacesInFileNameTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
     protected override bool ShareMeshAcrossTests => true;
 
-    #region Reference Extraction with Spaces
-
-    [Theory]
-    [InlineData("see @\"content/My Report.md\" for details", "content/My Report.md")]
-    [InlineData("embed @\"content/My Documents/Budget Plan.xlsx.md\"", "content/My Documents/Budget Plan.xlsx.md")]
-    [InlineData("check @\"ACME/content/Team Photo.svg\"", "ACME/content/Team Photo.svg")]
-    [InlineData("@\"content/Q1 2025 Results.pdf\"", "content/Q1 2025 Results.pdf")]
-    public void MarkdownExtractor_QuotedPaths_ExtractsCorrectly(string markdown, string expectedPath)
-    {
-        var paths = MarkdownReferenceExtractor.GetUniquePaths(markdown);
-
-        Output.WriteLine($"Input: {markdown}");
-        Output.WriteLine($"Extracted paths: [{string.Join(", ", paths)}]");
-
-        paths.Should().ContainSingle()
-            .Which.Should().Be(expectedPath);
-    }
-
-    [Theory]
-    [InlineData("@\"content:My Report.md\"", "content:My Report.md")]
-    [InlineData("@\"content/My Report.md\"", "content/My Report.md")]
-    public void MarkdownExtractor_QuotedPaths_BothFormats(string markdown, string expectedPath)
-    {
-        var paths = MarkdownReferenceExtractor.GetUniquePaths(markdown);
-        paths.Should().ContainSingle().Which.Should().Be(expectedPath);
-    }
-
-    [Fact]
-    public void MarkdownExtractor_QuotedReference_RemovedCorrectly()
-    {
-        var input = "see @\"content/My Report.md\" for details";
-        var result = MarkdownReferenceExtractor.RemoveReferenceByPath(input, "content/My Report.md");
-
-        Output.WriteLine($"Input:  {input}");
-        Output.WriteLine($"Result: '{result}'");
-
-        result.Should().Be("see for details");
-    }
-
-    [Fact]
-    public void MarkdownExtractor_MixedQuotedAndUnquoted_AllExtracted()
-    {
-        var markdown = "compare @ACME/Reports with @\"content/My Report.md\" and @simple.md";
-        var paths = MarkdownReferenceExtractor.GetUniquePaths(markdown);
-
-        Output.WriteLine($"Paths: [{string.Join(", ", paths)}]");
-
-        paths.Should().HaveCount(3);
-        paths.Should().Contain("ACME/Reports");
-        paths.Should().Contain("content/My Report.md");
-        paths.Should().Contain("simple.md");
-    }
-
-    [Fact]
-    public void MarkdownExtractor_ParenthesesQuotedPaths_ExtractedCorrectly()
-    {
-        // Legacy @("path") format also supports spaces
-        var markdown = "see @(\"content/My Report.md\") for details";
-        var paths = MarkdownReferenceExtractor.GetUniquePaths(markdown);
-
-        paths.Should().ContainSingle().Which.Should().Be("content/My Report.md");
-    }
-
-    #endregion
 
     #region UCR Prefix Resolver with Spaces
 
