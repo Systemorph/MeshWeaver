@@ -55,11 +55,10 @@ A control is done when it renders on EVERY client, not when the Blazor view work
    (`clients/react/src/render/parity.test.ts`) turns the Clients workflow red until it exists;
    never alias or placeholder it.
 4. React Native `rnPack` entry (`MeshWeaver.Plugins/app/react-native/src/parity.test.ts` is its ratchet).
-5. Optional MAUI `MauiViewRegistry.Register` entry.
-6. Every user-visible string: `host.Localize` key in BOTH
+5. Every user-visible string: `host.Localize` key in BOTH
    `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json` AND mirrored into
    `clients/react/src/i18n/` (the drift guard fails otherwise).
-7. A `Doc/GUI` gallery page with an executable `--render` cell — the doc gate compiles and
+6. A `Doc/GUI` gallery page with an executable `--render` cell — the doc gate compiles and
    renders it on every PR.
 
 # 4. Cross-renderer rules (the ones that bite)

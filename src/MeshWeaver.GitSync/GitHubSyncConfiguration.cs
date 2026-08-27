@@ -43,15 +43,19 @@ public static class GitHubSyncConfiguration
             sp.GetService<ILogger<GitHubAppTokenService>>()));
         // Framework-release broadcaster (memex is the broadcast hub): fans a platform release out
         // to the node-repo satellites as repository_dispatch, authenticated with the App above.
-        // The subscriber set is INJECTED by the caller (the Hosting registry) or read from the
-        // FrameworkBroadcast config section as the interim fallback. Inert unless the App is
+        // The subscriber set is either INJECTED by the caller or read from the
+        // FrameworkBroadcast:Subscribers config section — which, until a subscriber registry is
+        // actually built, is the ONLY source that exists (#2235). Inert unless the App is
         // configured, so registering it everywhere is safe — only the control instance has a list.
+        // IConfiguration is passed so an empty list can be reported as what it is: normal on any
+        // other mesh, a silent non-delivery on the instance that receives release events.
         services.AddOptions<FrameworkBroadcastOptions>();
         services.AddSingleton(sp => new FrameworkReleaseBroadcaster(
             sp.GetRequiredService<GitHubAppTokenService>(),
             sp.GetRequiredService<IoPoolRegistry>(),
             sp.GetRequiredService<IOptions<GitHubAppOptions>>(),
             sp.GetRequiredService<IOptions<FrameworkBroadcastOptions>>(),
+            sp.GetService<IConfiguration>(),
             sp.GetService<ILogger<FrameworkReleaseBroadcaster>>()));
         // The production repo client: BULK transfer (push/fetch) over the git protocol — REST
         // paid one request PER FILE, so one big-repo sync exhausted the GitHub App installation's

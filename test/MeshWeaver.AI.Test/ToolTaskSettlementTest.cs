@@ -183,4 +183,72 @@ public class ToolTaskSettlementTest
         subject.OnNext("late");
         subject.OnCompleted();
     }
+
+    /// <summary>
+    /// 🚨 ORDER, not merely occurrence: on cancellation the subscription must be DISPOSED before the
+    /// caller can observe that the call ended (#2346).
+    ///
+    /// <para><b>Why the order is the invariant.</b> The bridge's <c>TaskCompletionSource</c> is
+    /// created <c>RunContinuationsAsynchronously</c>, so <c>TrySetCanceled</c> completes the task and
+    /// schedules the caller's continuation on the pool — which then runs CONCURRENTLY with whatever
+    /// the cancellation callback does next. Settling first therefore let the caller act on "the call
+    /// ended" while the tool's work was still live. A tool call is a leaf on the bounded Ai pool, and
+    /// <c>IoPool.Drain()</c> — the join every teardown performs before disposing the service scope
+    /// and unloading collectible node ALCs — cancels the pool token and then re-acquires permits. So
+    /// "cancelled but not yet torn down" is teardown proceeding over live code, which is the hazard
+    /// this whole file exists for.</para>
+    ///
+    /// <para><b>How it surfaced.</b> As
+    /// <c>AgentToolCancellationTest.GetVersions_ParkedOnAStalledStore_UnwindsWhenTheRoundIsCancelled</c>
+    /// failing <i>"Expected 1 to be greater than 1 because cancelling must dispose the version
+    /// read"</i> in 0.72 s — the test read the store's disposal counter the instant its task threw,
+    /// and on a loaded runner the caller's continuation won the race against the dispose. It fails on
+    /// unrelated branches (a docs-only PR among them), so it reads as a flake; it is an ordering
+    /// defect with a flaky OBSERVER.</para>
+    ///
+    /// <para>Deterministic: the source's disposal parks on a gate this test holds, so "the caller
+    /// observed the cancellation while teardown was still running" is CONSTRUCTED rather than raced
+    /// for. No sleep, no timing assumption.</para>
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task Cancelling_StopsTheWork_BeforeTheCallerCanObserveIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var disposeEntered = new ManualResetEventSlim(false);
+        using var releaseDispose = new ManualResetEventSlim(false);
+        var disposals = 0;
+
+        // A source that ACCEPTS the subscription and never answers — the shape of a stalled storage
+        // leaf — whose teardown parks until this test lets it finish.
+        var parked = Observable.Create<string>(_ => Disposable.Create(() =>
+        {
+            disposeEntered.Set();
+            releaseDispose.Wait(TimeSpan.FromSeconds(20));
+            Interlocked.Increment(ref disposals);
+        }));
+
+        using var round = new CancellationTokenSource();
+        var call = Bridge(parked, round.Token);
+
+        // Cancel off the test's thread: the cancellation callback is where the teardown parks, and
+        // the test has to stay free to observe the task while it is parked.
+        var cancelling = Task.Run(() => round.Cancel(), ct);
+
+        disposeEntered.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue(
+            "cancelling must reach the source's disposal");
+
+        // THE ASSERTION. The work is provably mid-teardown right now, so the caller must not yet be
+        // able to see the call as ended. Pre-fix TrySetCanceled had already run and this is true.
+        call.IsCompleted.Should().BeFalse(
+            "the caller must not observe the cancellation while the tool's work is still being torn "
+            + "down — a teardown that acts on it would be unloading assemblies out from under live code");
+
+        releaseDispose.Set();
+        await cancelling;
+
+        var act = async () => await call.WaitAsync(10.Seconds(), ct);
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        Volatile.Read(ref disposals).Should().Be(1,
+            "the subscription is disposed exactly once, and before the task settles");
+    }
 }

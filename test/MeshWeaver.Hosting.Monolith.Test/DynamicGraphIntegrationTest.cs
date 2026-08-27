@@ -332,7 +332,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await WaitForQueryPathSet(subtreeQuery, set => set.Contains(src));
 
         // Act
-        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).Should().Emit();
+        var response = await ObserveNodeOperation(new MoveNodeRequest(src, dst)).Should().Emit();
         var moved = response.Message.Node;
 
         // Assert
@@ -374,7 +374,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
                 && set.Contains($"{parent}/child1/grandchild"));
 
         // Act
-        await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(parent, newParentPath), o => o).Should().Emit();
+        await ObserveNodeOperation(new MoveNodeRequest(parent, newParentPath)).Should().Emit();
 
         // Assert - old paths should not exist, new paths should exist (catalog-bound).
         // ReadNode on the old paths would falsely succeed via the TestPartition
@@ -427,7 +427,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await WaitForQueryPathSet(subtreeQuery, set => set.Contains(src));
 
         // Act - move via MoveNodeRequest
-        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).Should().Emit();
+        var response = await ObserveNodeOperation(new MoveNodeRequest(src, dst)).Should().Emit();
 
         // Assert - node should be at new path
         response.Message.Success.Should().BeTrue("Move should succeed");
@@ -452,7 +452,9 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     public async Task MoveNodeAsync_ThrowsWhenSourceNotFound()
     {
         // Act - move via MoveNodeRequest (unique names to avoid filesystem collisions)
-        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest($"{TestPartition}/nonexistent-{_uid}", $"{TestPartition}/newpath-{_uid}"), o => o).Should().Within(20.Seconds()).Emit();
+        var response = await ObserveNodeOperation(
+                new MoveNodeRequest($"{TestPartition}/nonexistent-{_uid}", $"{TestPartition}/newpath-{_uid}"))
+            .Should().Within(20.Seconds()).Emit();
 
         // Assert - should fail with source not found
         response.Message.Success.Should().BeFalse("Move should fail when source doesn't exist");
@@ -472,7 +474,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await NodeFactory.CreateNode(MeshNode.FromPath(dst) with { Name = "Target", NodeType = "Markdown" }).Should().Within(20.Seconds()).Emit();
 
         // Act - move via MoveNodeRequest
-        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).Should().Within(20.Seconds()).Emit();
+        var response = await ObserveNodeOperation(new MoveNodeRequest(src, dst)).Should().Within(20.Seconds()).Emit();
 
         // Assert - should fail because target already exists
         response.Message.Success.Should().BeFalse("Move should fail when target already exists");

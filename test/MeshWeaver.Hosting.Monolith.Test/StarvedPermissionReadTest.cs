@@ -117,7 +117,8 @@ public class StarvedPermissionReadTest(ITestOutputHelper output) : MonolithMeshT
             new CreateNodeRequest(new MeshNode("leaf", HealthyScope)
             {
                 Name = "Healthy leaf", NodeType = "Markdown"
-            }));
+            }),
+            o => o.WithTarget(RequestHub.NodeOperationTarget()));
         healthy.Message.Success.Should().Be(true,
             $"a healthy scope must be unaffected — got {healthy.Message.RejectionReason}: {healthy.Message.Error}");
 
@@ -127,7 +128,8 @@ public class StarvedPermissionReadTest(ITestOutputHelper output) : MonolithMeshT
             new CreateNodeRequest(new MeshNode("leaf", StarvedScope)
             {
                 Name = "Starved leaf", NodeType = "Markdown"
-            }));
+            }),
+            o => o.WithTarget(RequestHub.NodeOperationTarget()));
         started.Stop();
         Output.WriteLine(
             $"=== STARVED CREATE → {starved.Message.RejectionReason}: {starved.Message.Error} "

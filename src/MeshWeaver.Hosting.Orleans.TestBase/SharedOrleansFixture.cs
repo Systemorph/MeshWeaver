@@ -1,0 +1,319 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Reflection;
+using System.Threading.Tasks;
+using Microsoft.Agents.AI;
+using MeshWeaver.AI;
+using MeshWeaver.Connection.Orleans;
+using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Security;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
+using MeshWeaver.Hosting.Persistence;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Orleans.Hosting;
+using Orleans.TestingHost;
+using MeshWeaver.Fixture;
+using Xunit;
+
+namespace MeshWeaver.Hosting.Orleans.Test;
+
+/// <summary>
+/// Orleans TestCluster fixture. Despite the name it is no longer shared across the assembly:
+/// <see cref="OrleansSharedTestBase"/> constructs one per test class, so grain state is
+/// isolated by construction.
+///
+/// <para>Configuration: production-like (Graph + AI + RLS + memory persistence). The chat
+/// factory is a <see cref="SwappableChatClientFactory"/> owned by this cluster's silo container
+/// and reachable as <see cref="ChatFactory"/>; it starts on <c>FakeChatClientFactory</c> and a
+/// test that swaps it does NOT have to swap it back, because the factory dies with the
+/// cluster.</para>
+/// </summary>
+public class SharedOrleansFixture : IAsyncLifetime
+{
+    private OrleansTestClusterHost host = null!;
+
+    public TestCluster Cluster => host.Cluster;
+    public IMessageHub ClientMesh => host.ClientServices.GetRequiredService<IMessageHub>();
+
+    /// <summary>
+    /// The Orleans client host's services. <c>Cluster.Client</c> is null on these clusters —
+    /// the client host belongs to <see cref="OrleansTestClusterHost"/> so it can be handed
+    /// per-cluster instances through a closure. See that type's remarks.
+    /// </summary>
+    public IServiceProvider ClientServices => host.ClientServices;
+
+    /// <summary>The Orleans cluster client (grain factory) — <c>Cluster.Client</c>'s replacement.</summary>
+    public IClusterClient ClusterClient => host.ClusterClient;
+
+    /// <summary>
+    /// The swappable chat factory for THIS cluster. Tests replace its inner factory to control
+    /// agent behaviour (<c>Fixture.ChatFactory.SetInner(…)</c>).
+    ///
+    /// <para>It is a singleton of the SILO's own DI container (registered by
+    /// <see cref="SharedSiloConfigurator"/>), so it is per-cluster by construction and is
+    /// discarded with the cluster — which is why there is no <c>Reset()</c> and no test has to
+    /// put it back.</para>
+    /// </summary>
+    internal SwappableChatClientFactory ChatFactory =>
+        host.SiloServices().GetRequiredService<SwappableChatClientFactory>();
+
+    /// <summary>
+    /// Per-client tracker: every hub returned by <see cref="GetClient"/>
+    /// gets recorded along with its routing-stream subscriptions on both the
+    /// client mesh and the silo mesh. Tests dispose these in
+    /// <c>OrleansSharedTestBase.DisposeAsync</c> so the shared cluster's
+    /// stream registries and hosted-hub collection don't grow unboundedly
+    /// across the test run.
+    /// </summary>
+    private readonly ConcurrentDictionary<Address, ClientRegistration> _registrations = new();
+
+    private sealed record ClientRegistration(IMessageHub Hub, IReadOnlyList<IDisposable> Subscriptions);
+
+    public async ValueTask InitializeAsync()
+    {
+        host = await OrleansTestCluster.DeployAsync(
+            builder =>
+            {
+                // Single-silo: avoids per-silo persistence isolation. Both writer (mesh hub)
+                // and reader (per-Thread/per-Message grain) share the same singleton
+                // InMemoryStorageAdapter so the grain's OnActivateAsync persistence
+                // lookup finds the node the mesh hub just saved. Production runs N silos
+                // with backend-shared persistence (PostgreSQL / Cosmos) which doesn't have
+                // this issue; the in-memory test cluster does.
+                builder.Options.InitialSilosCount = 1;
+                builder.AddSiloBuilderConfigurator<SharedSiloConfigurator>();
+                builder.AddClientBuilderConfigurator<TestClientConfigurator>();
+            },
+            // The Orleans client borrows the silo's InMemoryStorageAdapter so the two hosts are
+            // one logical store — the shape prod gets for free from a shared PG database.
+            configureClientServices: OrleansTestCluster.ShareSiloNodeStore);
+
+        // 🚨 Register the client's mesh hub as an Orleans memory-stream
+        // subscriber so the silo can route response messages back to it.
+        // The client mesh hub at `mesh/{guid}` isn't a grain — it's a
+        // hosted hub on the client process. Without this registration, a
+        // SubscribeRequest the client mesh posts to a remote path (e.g.
+        // GetMeshNodeStream(remotePath).Update) gets handled on the silo,
+        // but the response is targeted back to `mesh/{guid}` which the
+        // silo's RoutingGrain can't resolve → NotFound. RegisterStream
+        // subscribes the hub to the memory stream so the silo's RoutingGrain
+        // memory-stream fallback delivers responses correctly.
+        ClientServices.GetRequiredService<IRoutingService>()
+            .RegisterStream(ClientMesh.Address, ClientMesh.DeliverMessage);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        OrleansClusterDisposal.DisposeInBackground(host);
+        return ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// Creates a client hub with user identity — same as Blazor portal.
+    /// Each test should use a unique clientId to avoid address collisions.
+    /// The returned hub is tracked; pass it to <see cref="CleanupClientAsync"/>
+    /// at test teardown so its routing registrations on the shared cluster
+    /// (client + silo mesh) and the hub itself are released.
+    /// </summary>
+    public IMessageHub GetClient(string clientId, string userId = "TestUser")
+    {
+        var client = ClientMesh.ServiceProvider.CreateMessageHub(
+            new Address("client", clientId),
+            config =>
+            {
+                config.TypeRegistry.AddAITypes();
+                return config.AddLayoutClient();
+            });
+        var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetHostIdentity(new AccessContext
+        {
+            ObjectId = userId,
+            Name = userId,
+            Email = $"{userId.ToLowerInvariant()}@test.com"
+        });
+        var subscriptions = new List<IDisposable>(2);
+
+        // Register on BOTH client and silo routing services so responses can route back
+        var clientSub = ClientServices.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
+        subscriptions.Add(clientSub);
+
+        // Register on the SILO's routing service so responses route back to client.
+        // In prod, portal and silo share one IRoutingService. In TestCluster they're separate.
+        // Without this, response routing tries to activate a grain for the client address → fails.
+        // Access silo's IRoutingService via reflection (InProcessSiloHandle.SiloHost.Services)
+        // Try multiple paths to find the silo's IRoutingService
+        var primarySilo = Cluster.Primary;
+        var siloHost = primarySilo.GetType().GetProperty("SiloHost")?.GetValue(primarySilo) as IHost;
+        var siloRouting = siloHost?.Services.GetService<IRoutingService>()
+            ?? siloHost?.Services.GetService<IMessageHub>()?.ServiceProvider.GetService<IRoutingService>();
+        if (siloRouting != null)
+        {
+            var siloSub = siloRouting.RegisterStream(client.Address,
+                (d, _) => Observable.Return(client.DeliverMessage(d)));
+            subscriptions.Add(siloSub);
+        }
+
+        _registrations[client.Address] = new ClientRegistration(client, subscriptions);
+        return client;
+    }
+
+    /// <summary>
+    /// Releases the routing-stream registrations and disposes the client hub
+    /// returned by <see cref="GetClient"/>. Idempotent: safe to call
+    /// twice and safe to call on an unknown client (e.g., after the fixture
+    /// itself disposed). Tests should call this from <c>DisposeAsync</c> for
+    /// every client they created so the shared cluster's stream maps and
+    /// hosted-hub collection don't accumulate dead entries between tests.
+    /// </summary>
+    public async Task CleanupClientAsync(IMessageHub client)
+    {
+        if (client is null) return;
+        if (!_registrations.TryRemove(client.Address, out var reg)) return;
+
+        foreach (var sub in reg.Subscriptions)
+        {
+            try { sub.Dispose(); }
+            catch { /* tearing-down — swallow so other cleanups still run */ }
+        }
+
+        try { reg.Hub.Dispose(); }
+        catch { /* same */ }
+        if (reg.Hub.IsDisposing)
+        {
+            // Bridge reactive completion → Task at this teardown edge; swallow faults/timeout.
+            try
+            {
+                await reg.Hub.DisposalCompleted
+                    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+                    .FirstOrDefaultAsync()
+                    .ToTask()
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch { /* timeout / already-faulted — don't block teardown */ }
+        }
+    }
+
+    /// <summary>
+    /// Best-effort: disposes silo-side hosted hubs whose address path starts
+    /// with the given prefix. Used to deactivate the per-node grain hubs a
+    /// single test created (its unique <c>{prefix}</c> in test paths) so they
+    /// don't keep state alive into the next test.
+    /// <br/>
+    /// Grain disposal flows through <c>MessageHubGrain</c>: disposing the
+    /// hosted hub triggers <c>DeactivateOnIdle()</c> on the owning grain
+    /// (see <c>MessageHubGrain.OnActivateAsync</c>).
+    /// </summary>
+    public void CleanupSiloHubsWithPrefix(string pathPrefix)
+    {
+        if (string.IsNullOrEmpty(pathPrefix)) return;
+        foreach (var siloHandle in Cluster.Silos)
+        {
+            var siloHost = siloHandle.GetType().GetProperty("SiloHost")?.GetValue(siloHandle) as IHost;
+            var meshHub = siloHost?.Services.GetService<IMessageHub>();
+            if (meshHub is null) continue;
+
+            // hostedHubs is private; reach it via reflection (test-only).
+            var field = meshHub.GetType().GetField("hostedHubs", BindingFlags.Instance | BindingFlags.NonPublic);
+            var hosted = field?.GetValue(meshHub) as HostedHubsCollection;
+            if (hosted is null) continue;
+
+            foreach (var hub in hosted.Hubs.ToArray())
+            {
+                if (hub.Address.ToString().StartsWith(pathPrefix, StringComparison.Ordinal))
+                {
+                    try { hub.Dispose(); } catch { /* swallow */ }
+                }
+            }
+        }
+    }
+}
+
+/// <summary>
+/// Swappable IChatClientFactory that delegates to an inner factory.
+/// Tests swap the inner factory to control agent behavior.
+/// Thread-safe via volatile reference.
+///
+/// <para>One instance per cluster, owned by <see cref="SharedOrleansFixture.ChatFactory"/>.
+/// There is deliberately no <c>Reset()</c>: the instance is discarded with its fixture, so a
+/// test never has to put the inner factory back — and a <c>finally</c> that was skipped can
+/// no longer leak a fake into the next class's cluster.</para>
+/// </summary>
+internal class SwappableChatClientFactory : IChatClientFactory
+{
+    private volatile IChatClientFactory _inner = new FakeChatClientFactory();
+
+    public string Name => _inner.Name;
+    public IReadOnlyList<string> Models => _inner.Models;
+    public int Order => _inner.Order;
+
+    public void SetInner(IChatClientFactory factory) => _inner = factory;
+
+    public ChatClientAgent CreateAgent(
+        AgentConfiguration config, IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
+        => _inner.CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName);
+
+    public Task<ChatClientAgent> CreateAgentAsync(
+        AgentConfiguration config, IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
+        => _inner.CreateAgentAsync(config, chat, existingAgents, hierarchyAgents, modelName);
+}
+
+/// <summary>
+/// Production-like silo: Graph + AI + RLS + memory persistence.
+/// Pre-seeds TestUser user, public access policy and chat history via
+/// <see cref="OrleansTestSeedProvider"/> (an <see cref="IStaticNodeProvider"/>)
+/// so the seeds are an immutable activation fallback rather than an initial
+/// snapshot that tests could mutate or rewrite via persistence.
+/// Uses SwappableChatClientFactory so tests can control agent behavior.
+/// </summary>
+public class SharedSiloConfigurator : ISiloConfigurator, IHostConfigurator
+{
+    public void Configure(ISiloBuilder siloBuilder)
+    {
+        siloBuilder.ConfigureMeshWeaverServer()
+            .AddMemoryGrainStorageAsDefault()
+            .ConfigureLogging(logging => logging.AddXUnitLogger());
+    }
+
+    public void Configure(IHostBuilder hostBuilder)
+    {
+        hostBuilder.UseOrleansMeshServer()
+            .ConfigurePortalMesh()
+            .AddGraph()
+            .AddAI()
+            .AddRowLevelSecurity()
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton<IStaticNodeProvider, OrleansTestSeedProvider>();
+                // 🚨 Registered as a TYPE, not an instance. Orleans instantiates this
+                // configurator via new(), so it cannot be handed the fixture's object — but it
+                // does not need to be: letting the silo's own DI container build the singleton
+                // makes it per-cluster by construction, and SharedOrleansFixture.ChatFactory
+                // reads it back out of that container. That is what replaced the process-wide
+                // SwappableFactory static (issue #999).
+                services.AddSingleton<SwappableChatClientFactory>();
+                services.AddSingleton<IChatClientFactory>(sp =>
+                    sp.GetRequiredService<SwappableChatClientFactory>());
+                return services;
+            })
+            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
+    }
+}

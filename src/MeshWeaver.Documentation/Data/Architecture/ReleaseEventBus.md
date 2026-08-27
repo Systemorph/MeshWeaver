@@ -44,10 +44,29 @@ An event asserts *something happened*; only a query establishes *what is true no
 | **Ingest** | `POST /webhooks/github` — `GitHubWebhookEndpoints`, HMAC-verified (`GitHub:Webhook:Secret`), dispatched by `GitHubWebhookProcessor.Process(eventType, payload)` | **exists** — already switches on `push`, `workflow_run`, `issues`, `issue_comment`; needs a `release` branch |
 | **Storage** | a `Release` node per `(repository, packageId, version)` | to build |
 | **Query** | "are all my dependencies satisfied?" | `ModulePublish` already gates a placement on the module's declared `MinMeshVersion` — the same predicate, widened from one floor to a declared set |
-| **Fan-out** | `FrameworkReleaseBroadcaster` — memex holds the GitHub App and the subscriber list | **exists** |
+| **Fan-out** | `FrameworkReleaseBroadcaster` — memex holds the GitHub App and the subscriber list | **exists, and has never dispatched** — see below |
 
 The ingest surface is not new, which matters: a new public endpoint is a new thing to secure, and
 this one is already HMAC-verified and already routes by event type.
+
+🚨 **"Exists" is not "delivers", and the fan-out is the standing proof (#2235).** The broadcaster
+has been built, unit-tested and DI-registered since 2026-08-23 and has dispatched **zero** events.
+Three joints have to be closed for one release to reach one satellite, and each is silent when it
+is open:
+
+| joint | switched on by | when it is open |
+|---|---|---|
+| the inbox accepts the release event | `WebhookInbox__Targets__N` on the control instance | 404 — byte-identical to a wrong URL |
+| the delivery verifies | `Hosting__PlatformWebhookSecret` | the watcher drops it as unverifiable; the POST already answered 2xx |
+| the verified release fans out | a caller of `Broadcast(...)`, and `FrameworkBroadcast__Subscribers__N` | `0 dispatched, 0 failed` — identical to a mesh that is not the control instance |
+
+Two lessons the rest of this design should inherit. **A key the code reads and no chart renders can
+never be set**, so its feature is permanently off while reading as "off by choice" —
+`FrameworkBroadcast:Subscribers` was in that state, in both repos, for the whole life of the
+feature. And **prose naming a mechanism that does not exist stops the search**: `main-cd.yml` said
+the subscriber set "lives in the Hosting fleet registry", a registry with no node type, no reader
+and no writer anywhere, and that sentence survived two investigations into why nothing arrived.
+`ReleaseDeliveryChainGuard` (`test/MeshWeaver.Documentation.Test`) fails RED on both shapes.
 
 ## The release fact
 

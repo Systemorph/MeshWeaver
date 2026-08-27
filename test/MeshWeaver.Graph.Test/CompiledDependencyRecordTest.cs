@@ -209,4 +209,75 @@ public class CompiledDependencyRecordTest
                 def, storeHasBytes: true, NodeTypeCompilationHelpers.FrameworkVersion)
             .Should().Be(BakeState.Baked);
     }
+
+    /// <summary>
+    /// 🚨 A framework roll must be reported as <see cref="BakeState.FrameworkStale"/> — the
+    /// ordinary, documented-as-benign every-deploy state — and NOT as a dependency drift.
+    ///
+    /// <para>The reserved <c>!toolchain</c> entry hashes the <c>FullMvidAssemblies</c> closure's
+    /// implementation MVIDs, and the framework identity folds those same MVIDs, so a roll moves
+    /// the record BY CONSTRUCTION and the dependency check fires on every deploy. Before this was
+    /// enforced, DependencyStale swallowed FrameworkStale whole: memex-cloud 2026-08-27 reported
+    /// 273 of 273 uncovered types as "a bound module/toolchain dependency changed" with zero
+    /// FrameworkStale, and nothing had changed but the image.</para>
+    /// </summary>
+    [Fact]
+    public void Classify_FrameworkRoll_ReportsFrameworkStale_NotADependencyDrift()
+    {
+        // Stamped under the PREVIOUS image: its toolchain id and every platform ref-asm hash
+        // moved with the framework, exactly as a real roll produces.
+        var record = CompiledDependencies.Compute(
+            ["MeshWeaver.Layout"], Resolver(("MeshWeaver.Layout", "ref:old")), "mvid:toolchain-old");
+        var rolled = UsableDef(record) with { CompiledFrameworkVersion = "s-the-previous-image" };
+
+        NodeTypeBakeStatus.Classify(
+                rolled, storeHasBytes: false,
+                NodeTypeCompilationHelpers.FrameworkVersion,
+                Resolver(("MeshWeaver.Layout", "ref:new")), Toolchain)
+            .Should().Be(BakeState.FrameworkStale,
+                "the framework identity already accounts for the record moving");
+
+        // The verdict is unchanged in every way that matters operationally: it still needs a bake,
+        // and it is still a regression-gate candidate.
+        var entry = new NodeTypeBakeEntry("T", BakeState.FrameworkStale);
+        entry.NeedsBake.Should().BeTrue();
+        entry.WasHealthy.Should().BeTrue();
+
+        // A drift under an UNCHANGED framework is still a genuine DependencyStale.
+        NodeTypeBakeStatus.Classify(
+                UsableDef(CompiledDependencies.Compute(
+                    ["Custom.Module"], Resolver(("Custom.Module", "mvid:v1")), Toolchain)),
+                storeHasBytes: false,
+                NodeTypeCompilationHelpers.FrameworkVersion,
+                Resolver(("Custom.Module", "mvid:v2")), Toolchain)
+            .Should().Be(BakeState.DependencyStale,
+                "the framework held still, so the moved binding IS the finding");
+    }
+
+    /// <summary>
+    /// The mismatch reason must reach the caller. It was computed and discarded, so every stale
+    /// type printed one fixed sentence and no operator could tell WHICH dependency moved.
+    /// </summary>
+    [Fact]
+    public void ClassifyDetailed_NamesTheDependencyThatMoved()
+    {
+        var record = CompiledDependencies.Compute(
+            ["Custom.Module"], Resolver(("Custom.Module", "mvid:v1")), Toolchain);
+
+        var verdict = NodeTypeBakeStatus.ClassifyDetailed(
+            UsableDef(record), storeHasBytes: true,
+            NodeTypeCompilationHelpers.FrameworkVersion,
+            Resolver(("Custom.Module", "mvid:v2")), Toolchain);
+
+        verdict.State.Should().Be(BakeState.DependencyStale);
+        verdict.DependencyMismatch.Should().NotBeNull()
+            .And.Contain("Custom.Module").And.Contain("mvid:v1").And.Contain("mvid:v2");
+
+        // A clean build carries no reason to report.
+        NodeTypeBakeStatus.ClassifyDetailed(
+                UsableDef(record), storeHasBytes: true,
+                NodeTypeCompilationHelpers.FrameworkVersion,
+                Resolver(("Custom.Module", "mvid:v1")), Toolchain)
+            .DependencyMismatch.Should().BeNull();
+    }
 }

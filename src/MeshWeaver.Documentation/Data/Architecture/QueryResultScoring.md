@@ -93,7 +93,7 @@ Source: `src/MeshWeaver.Hosting/Persistence/Query/StorageAdapterMeshQueryProvide
 
 ### `PostgreSqlMeshQuery` and `PostgreSqlPartitionedMeshQuery`
 
-Sources: `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlMeshQuery.cs`, `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionedMeshQuery.cs`, `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSqlGenerator.cs`
+Sources: `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlMeshQuery.cs`, `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionedMeshQuery.cs`, `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSqlGenerator.cs`
 
 There are **two distinct rankings** in the PostgreSQL layer; do not conflate them.
 

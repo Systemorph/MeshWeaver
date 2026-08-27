@@ -141,7 +141,7 @@ Parameters live in `deploy/aks/infra/main.parameters.json`:
 
 The Postgres connection uses the **server FQDN + password + SSL** (`Host=<pg-server>.postgres.database.azure.com;…;SslMode=Require;Trust Server Certificate=true`). The servers moved to the FQDN on 2026-08-24.
 
-> 🚨 This page previously said the opposite — *"do not use the public FQDN form, a `database.azure.com` hostname routes the portal into its managed-identity-token branch"* — and that would now talk an operator out of the correct configuration. It stopped being true with `9e468aa70`: `AzurePostgres.UsesManagedIdentityAuth` (`src/MeshWeaver.Hosting.PostgreSql/AzurePostgres.cs`) takes the Entra-token path only when the host carries the Azure suffix **AND no password is present**, so FQDN + password deliberately takes plain Npgsql. `AzurePostgresAuthSelectionTests` pins exactly that case.
+> 🚨 This page previously said the opposite — *"do not use the public FQDN form, a `database.azure.com` hostname routes the portal into its managed-identity-token branch"* — and that would now talk an operator out of the correct configuration. It stopped being true with `9e468aa70`: `AzurePostgres.UsesManagedIdentityAuth` (`MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/AzurePostgres.cs`) takes the Entra-token path only when the host carries the Azure suffix **AND no password is present**, so FQDN + password deliberately takes plain Npgsql. `AzurePostgresAuthSelectionTests` pins exactly that case.
 
 ---
 

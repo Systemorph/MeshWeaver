@@ -308,6 +308,42 @@ Alternatively, start the assertion first without awaiting it (`var assertion = o
 
 ---
 
+## "One Emission Carrying Everything" — Batched or Late? The First Snapshot Decides
+
+A test that asserts progress **streams** (several distinct snapshots, not one lump) fails with a
+single emission for two opposite reasons, and they demand opposite fixes:
+
+* **BATCHED** — the producer really did coalesce or stall, and the emissions were released together.
+  A product defect.
+* **LATE** — the subscription attached *after* the work finished, so the owner's first snapshot
+  already contains the final state. Correct behaviour; a racy test.
+
+🚨 **The discriminator is whether the FIRST emission has content.** `GetMeshNodeStream(path)` emits
+the owner's snapshot **at subscribe time**, so a healthy run starts empty and grows:
+
+```
+healthy:  0@44ms, 1@86ms, 3@247ms, 4@335ms     ← first snapshot EMPTY
+late:     [4@931ms]                            ← first snapshot already terminal
+```
+
+Both fail the same `>= 3 snapshots` assertion, and the failure message looks identical. On
+2026-08-26 a single `Observed: [4@914ms], but found 1` was argued at length as a batching defect
+before measurement showed it was a late subscribe (#2421) — the production path was correct all
+along. **Print the first emission's count in the failure message, and read it before theorising.**
+
+**Fix a late subscribe by ordering, never by tolerance.** Do not widen the deadline or lower the
+snapshot count — that hides the real thing the test checks. Make the work wait for the subscriber:
+gate the producer on a node the test flips *after* it has observed its own (empty) first snapshot,
+and **assert that snapshot is empty** before releasing. `ProgressGate` in `MeshWeaver.AI.Test` is
+the worked example.
+
+🚨 **Also check your stimulus against the publisher's coalescing window.** `ActivityLogLogger`
+coalesces at **100 ms**, so a script emitting four messages at 80 ms intervals is *entitled* to
+deliver them as two snapshots — the test would be under-specified, not the product wrong. Space the
+stimulus wider than the window rather than loosening the assertion.
+
+---
+
 ## Orleans Tests — Clients Must Be Mesh Nodes
 
 > **A client that posts mesh requests must itself be a registered MeshNode.** Without registration, routing cannot recognise it as a participant — responses targeted back at the client address cannot route, type-registry lookups for its deliveries are missing, and assertions time out with no clear cause.
