@@ -390,6 +390,8 @@
   "auth.avatarUrl": "Avatar URL",
   "auth.getStarted": "Get started",
   "auth.loadingPersons": "Loading persons...",
+  "auth.noUsersFound": "No users found on this mesh.",
+  "auth.errorLoadingUsers": "Could not load the list of users: {0}",
   "auth.publishing": "Publishing",
   "error.notFoundTitle": "Not found",
   "error.nothingAtAddress": "Sorry, there's nothing at this address.",
