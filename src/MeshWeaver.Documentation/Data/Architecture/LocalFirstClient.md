@@ -6,7 +6,9 @@ order: 35
 
 # Local-First Client & Bootstrap
 
-A native Memex client (the MAUI app) is **not** a thin shell around a remote portal. It hosts its **own in-process monolith mesh** — SQLite node storage + file-system content, fully offline — and **joins other meshes** (the public portal, a team portal, …) as a SignalR participant. Local data is a first-class mesh; remote portals are other meshes it federates with.
+A local-first Memex host — today **`Memex.LocalMesh`**, the sidecar that serves the React
+Native shells (its retired predecessor was the in-process MAUI client) — is **not** a thin
+shell around a remote portal. It hosts its **own in-process monolith mesh** — SQLite node storage + file-system content, fully offline — and **joins other meshes** (the public portal, a team portal, …) as a SignalR participant. Local data is a first-class mesh; remote portals are other meshes it federates with.
 
 This is the inverse of the server: instead of one big partitioned portal, the client is a small mesh that *also* participates in bigger ones.
 
@@ -56,7 +58,7 @@ hub.ServiceProvider.GetRequiredService<AccessService>()
 
 ## 3. Config as mesh nodes — read with `GetQuery`
 
-The client's config is **not** a `Preferences`/JSON side store — it is mesh nodes. Each connectable mesh is a `MemexInstance` node (base URL + token) in the local mesh. The bootstrap reads them with `hub.GetQuery(...)` (per-user RLS query) and binds the UI to them via `GetMeshNodeStream` / `stream.Update` — the standard [Data Binding](/Doc/GUI/DataBinding) pattern, native variant in [Data Binding in a MAUI Client](/Doc/GUI/DataBindingMaui). The only on-device non-mesh state is the bootstrap secret (first token in `SecureStorage`).
+The client's config is **not** a `Preferences`/JSON side store — it is mesh nodes. Each connectable mesh is a `MemexInstance` node (base URL + token) in the local mesh. The bootstrap reads them with `hub.GetQuery(...)` (per-user RLS query) and binds the UI to them via `GetMeshNodeStream` / `stream.Update` — the standard [Data Binding](/Doc/GUI/DataBinding) pattern. The only on-device non-mesh state is the bootstrap secret (first token in `SecureStorage`).
 
 ## 4. Connecting to other meshes — a Settings feature of *every* mesh
 
@@ -85,9 +87,9 @@ The client ships the **same** mesh setup everywhere; only the JIT-dependent feat
 
 Threading note: iOS forbids `fork()` (→ no Postgres) and JIT (→ no Roslyn), but **threads are fine** — the actor hubs, `IIoPool`, and Rx all run. See [Controlled IO Pooling](/Doc/Architecture/ControlledIoPooling) and [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls).
 
-## Rendering the portal natively (`MeshWeaver.Maui`) — the reduce-`ChangeType` contract
+## Local layout-area reads — the reduce-`ChangeType` contract
 
-The MAUI client renders layout-area control trees with the **native view pack** `MeshWeaver.Maui` (the AspNetCore-free counterpart of `MeshWeaver.Blazor` — a `BlazorWebView` drags in `Microsoft.AspNetCore.App`, which has no maccatalyst/iOS runtime pack → `NETSDK1082`). `AddMaui()` = `AddLayoutClient()` + a `MauiViewRegistry`/`IMauiControlRenderer`; a `LayoutAreaView` reads a local area exactly like the Blazor one: `workspace.GetStream(reference).Reduce(new JsonPointerReference("/")).GetControlStream(area)`.
+A native renderer reading a LOCAL area (the retired MAUI view pack did; any in-process reader does) binds exactly like the Blazor one: `workspace.GetStream(reference).Reduce(new JsonPointerReference("/")).GetControlStream(area)`.
 
 🚨 **A local reduced stream MUST preserve the source `ChangeType`.** The layout render path delivers an area's generator-produced control as a **`Full`** snapshot (empty `Updates`); `GetControlStream`/`GetStream<UiControl>` re-evaluates its pointer only on `first || ChangeType==Full || a matching Update`. `StandardReducers.ReduceEntityStoreTo(JsonPointerReference)` used to **hardcode `ChangeType.Patch`**, turning the `Full` into a `Patch` with empty `Updates` → a control produced *after* a single-subscribe reader's first frame was dropped forever (`GetControlStream` returned `null`). The remote owner→client sync labels snapshots `Full`, so the two-hub path was immune; the single-hub local reduce violated the contract. **Fixed by preserving `current.ChangeType`** (`StandardReducers.cs`). Blazor masked the latent bug by re-subscribing each render pass; MAUI's `RenderArea` subscribes once, so it hit it deterministically.
 
@@ -104,5 +106,4 @@ Application writes from the client (a button click, a chat submit) run **off** a
 
 - [SignalR Mesh Participant](/Doc/Architecture/SignalRMeshParticipant) — the transport this builds on.
 - [Cross-Instance Mirror](/Doc/Architecture/CrossInstanceMirror) — the data plane.
-- [Data Binding in a MAUI Client](/Doc/GUI/DataBindingMaui) — config/UI as mesh nodes on the client.
-- The `/maui` and `/layout-area` skills — how to build features in the client and UI the implementation-independent way.
+- The `/layout-area` and `/ui-extensibility` skills — how to author UI the implementation-independent way, so a native shell renders it without a Blazor-specific branch.

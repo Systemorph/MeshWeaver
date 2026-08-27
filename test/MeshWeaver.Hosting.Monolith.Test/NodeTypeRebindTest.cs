@@ -130,7 +130,7 @@ public class NodeTypeRebindTest(ITestOutputHelper output) : MonolithMeshTestBase
         // 2. ACTIVATE its hub in that state. Ping is answered by every hub, so the response is
         //    proof the hub exists — and from here on it is PINNED by address: routing
         //    short-circuits on GetHostedHub and never resolves the path again.
-        await Mesh.Observe(new PingRequest(), o => o.WithTarget(new Address(instancePath)))
+        await RequestHub.Observe(new PingRequest(), o => o.WithTarget(new Address(instancePath)))
             .Should().Within(60.Seconds()).Emit();
         Output.WriteLine(
             $"Activated {instancePath} as NodeType '{activationNodeType ?? "(none)"}'.");

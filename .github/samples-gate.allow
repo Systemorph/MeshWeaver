@@ -1,9 +1,3 @@
-FutuRe/AmericasIns/LineOfBusiness compile
-FutuRe/AmericasIns/TransactionMapping compile
-FutuRe/AsiaRe/LineOfBusiness compile
-FutuRe/AsiaRe/TransactionMapping compile
-FutuRe/EuropeRe/LineOfBusiness compile
-FutuRe/EuropeRe/TransactionMapping compile
 
 # ── PensionFund: revealed by #2063, NOT caused by it ────────────────────────────────────────────
 # PensionFund ships 72 files, 62 of them BOM'd, including all 5 of its NodeTypes. Until #2063 the

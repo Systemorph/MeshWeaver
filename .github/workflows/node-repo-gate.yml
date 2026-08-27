@@ -90,6 +90,44 @@ on:
         required: false
         type: boolean
         default: true
+      upstream-seed:
+        description: >-
+          Consume the caller's UPSTREAMS as pre-built bundles instead of staging their source:
+          a whitespace-separated list of bake-source segments (e.g. `plugins`), each fetched from
+          the portals' storage under `prebuilt-bundles/<framework-identity>/<source>/` — the
+          SEALED publication for the exact identity this gate's image resolves — and handed to
+          the tester as `--seed`. The tester then stands its mesh up on those bytes and REFUSES a
+          run that could not adopt them (`BakeSeedConsumer.Shortfall`), so a green gate here
+          means the dependency was installed, not recompiled.
+
+          This is step 2 of the plugin build contract (Doc/Architecture/PluginBuildContract):
+          "install my dependencies" — as artifacts, served by MeshWeaver. Requires the
+          publication to carry NODE DEFINITIONS (core #2478), and the caller to grant
+          `id-token: write` and pass the three azure-* secrets, exactly as for publish-bake.
+          Empty = no upstream is consumed (today's behaviour, where stage-repo copies SOURCE).
+          Fails RED — never skips — when a named upstream has no sealed publication for this
+          identity: a gate that silently compiled its upstream is indistinguishable from one
+          that installed it.
+        required: false
+        type: string
+        default: ''
+      registry-url:
+        description: >-
+          The registry that SERVES sealed publications (MeshWeaver#2487), e.g.
+          https://memex.meshweaver.cloud. With registry-key set, upstream-seed fetches over
+          HTTPS with an instance key and never touches Azure — and it works on pull_request.
+        required: false
+        type: string
+        default: ''
+      bake-publish-targets:
+        description: >-
+          Where upstream-seed READS the upstream publication from — the same
+          <account>/<share>[/<base-path>] value the caller's publish-bake WRITES to
+          (vars.BAKE_PUBLISH_TARGETS). The first target is read; publish-bake writes every
+          target all-or-nothing, so one is the set. Required when upstream-seed is set.
+        required: false
+        type: string
+        default: ''
       capture-coredumps:
         description: >-
           Run the tester with minidump-on-crash enabled and upload any dumps as a run artifact
@@ -104,6 +142,21 @@ on:
       acr-password:
         description: Registry password for that user.
         required: true
+      # The same OIDC identity publish-bake uses, read-only here: the gate FETCHES the caller's
+      # upstream publication to seed from. Required only when upstream-seed is set; the preflight
+      # below fails RED naming whichever is missing rather than letting the step skip.
+      registry-key:
+        description: An instance key (mwi_…) holding a whole-source grant on each upstream (upstream-seed via registry-url).
+        required: false
+      azure-client-id:
+        description: Client id of the Azure identity that can read the portals' storage (upstream-seed only).
+        required: false
+      azure-tenant-id:
+        description: Tenant of that identity (upstream-seed only).
+        required: false
+      azure-subscription-id:
+        description: Subscription of that identity (upstream-seed only).
+        required: false
       stage-repo-app-id:
         description: >
           App id of a GitHub App installed on stage-repo's org with Contents: Read (needed only
@@ -123,6 +176,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
     steps:
       - uses: actions/checkout@v7
         with:
@@ -218,6 +272,130 @@ jobs:
           owner: ${{ steps.stage-repo-parts.outputs.owner }}
           repositories: ${{ steps.stage-repo-parts.outputs.name }}
           permission-contents: read
+      # ─────────── Step 2 of the plugin build contract: INSTALL the upstreams ───────────
+      # Fetch the caller's upstream publications — the sealed bundles baked for the EXACT framework
+      # identity this gate's image resolves — into a seed directory the tester consumes. This is
+      # what makes "install my dependencies" an install rather than a rebuild: the tester stands
+      # its mesh up on the upstream's baked bytes and node definitions, and its Shortfall verdict
+      # REFUSES a run that compiled what it was handed. See Doc/Architecture/PluginBuildContract.
+      #
+      # 🚨 Fails RED, never skips. A named upstream with no sealed publication for this identity
+      # is not "nothing to seed" — it is a gate about to compile its dependency and pass, which
+      # is indistinguishable from a gate that installed it (BakeSeed's own warning).
+      - name: "Preflight: the upstream-seed credentials must be provisioned"
+        if: inputs.upstream-seed != ''
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.azure-client-id }}
+          AZURE_TENANT_ID: ${{ secrets.azure-tenant-id }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.azure-subscription-id }}
+          TARGETS: ${{ inputs.bake-publish-targets }}
+          REGISTRY_URL: ${{ inputs.registry-url }}
+          REGISTRY_KEY: ${{ secrets.registry-key }}
+        run: |
+          set -euo pipefail
+          missing=()
+          if [ -n "${REGISTRY_URL:-}" ]; then
+            [ -n "${REGISTRY_KEY:-}" ] || missing+=("registry-key (secret) — registry-url is set, so the fetch is over HTTPS with an instance key")
+          else
+            [ -n "${AZURE_CLIENT_ID:-}" ]       || missing+=("azure-client-id (secret)")
+            [ -n "${AZURE_TENANT_ID:-}" ]       || missing+=("azure-tenant-id (secret)")
+            [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] || missing+=("azure-subscription-id (secret)")
+            [ -n "${TARGETS:-}" ]               || missing+=("bake-publish-targets (input) — the storage target to read the upstream publication from")
+          fi
+          if [ "${#missing[@]}" -gt 0 ]; then
+            for m in "${missing[@]}"; do echo "::error::upstream-seed is set but missing: ${m}"; done
+            echo "::error::upstream-seed cannot fetch a publication without these. This job fails RED rather than skipping the seed: a gate that silently compiled its upstream would look exactly like one that installed it."
+            exit 1
+          fi
+      - name: Azure login (OIDC) for the upstream publication
+        if: inputs.upstream-seed != '' && inputs.registry-url == ''
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.azure-client-id }}
+          tenant-id: ${{ secrets.azure-tenant-id }}
+          subscription-id: ${{ secrets.azure-subscription-id }}
+      - name: Resolve the framework identity this gate's image resolves
+        if: inputs.upstream-seed != ''
+        id: seed-identity
+        env:
+          TEST_IMAGE: ${{ inputs.test-image }}
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+        run: |
+          set -euo pipefail
+          # The SAME image reference the tester step composes below — pinned by digest when one
+          # is given — so the identity the seed is addressed to is the identity that will consume it.
+          if [ -n "${IMAGE_DIGEST:-}" ]; then IMAGE="${TEST_IMAGE%%:*}@${IMAGE_DIGEST}"; else IMAGE="$TEST_IMAGE"; fi
+          line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$IMAGE" --print-framework-identity)
+          identity="${line#*identity=}"; identity="${identity%% *}"
+          [ -n "$identity" ] || { echo "::error::could not resolve a framework identity from the gate image (got: '$line') — cannot address an upstream publication"; exit 1; }
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+          echo "this gate resolves framework identity $identity; upstream bundles must be sealed under it"
+      - name: Fetch the upstream publications into the seed directory
+        if: inputs.upstream-seed != ''
+        id: seed
+        env:
+          UPSTREAMS: ${{ inputs.upstream-seed }}
+          IDENTITY: ${{ steps.seed-identity.outputs.identity }}
+          TARGETS: ${{ inputs.bake-publish-targets }}
+          REGISTRY_URL: ${{ inputs.registry-url }}
+          REGISTRY_KEY: ${{ secrets.registry-key }}
+        run: |
+          set -euo pipefail
+          SEED_DIR="${RUNNER_TEMP:-/tmp}/upstream-seed"
+          mkdir -p "$SEED_DIR"
+          if [ -n "${REGISTRY_URL:-}" ]; then
+            # The REGISTRY serves the sealed publication (MeshWeaver#2487) — HTTPS + instance key,
+            # no Azure, works on pull_request. Fails RED on 404 (unsealed) or 401/403 (no grant).
+            fetched=0
+            for src in $UPSTREAMS; do
+              base="${REGISTRY_URL%/}/api/plugins/bundles/prebuilt/$IDENTITY/$src"
+              code=$(curl -sS -o "$SEED_DIR/.index.json" -w '%{http_code}' -H "Authorization: Bearer $REGISTRY_KEY" "$base")
+              case "$code" in
+                200) ;;
+                404) echo "::error::upstream '$src' has no SEALED publication on $REGISTRY_URL for identity $IDENTITY. Not compiling it instead."; exit 1 ;;
+                401|403) echo "::error::the registry refused registry-key for '$src' ($code) — the instance needs a whole-source grant '$src/*'."; exit 1 ;;
+                *) echo "::error::registry answered $code for $base — refusing."; exit 1 ;;
+              esac
+              for name in $(jq -r '.bundles[]' "$SEED_DIR/.index.json"); do
+                curl -sSf -H "Authorization: Bearer $REGISTRY_KEY" -o "$SEED_DIR/$name" "$base/$name" || { echo "::error::could not fetch $name"; exit 1; }
+                fetched=$((fetched+1))
+              done
+              rm -f "$SEED_DIR/.index.json"
+              echo "upstream '$src': fetched from $REGISTRY_URL"
+            done
+            printf '%s' "$IDENTITY" > "$SEED_DIR/framework-mvid.txt"
+            [ "$fetched" -gt 0 ] || { echo "::error::sealed but empty — refusing an empty seed"; exit 1; }
+            echo "dir=$SEED_DIR" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The FIRST target is read — every target holds the same publication (publish-bake
+          # writes them all-or-nothing), so one read is the set.
+          target=$(printf '%s\n' $TARGETS | head -1)
+          account="${target%%/*}"; rest="${target#*/}"
+          share="${rest%%/*}"; base=""
+          case "$rest" in */*) base="${rest#*/}" ;; esac
+          fetched=0
+          for src in $UPSTREAMS; do
+            dir="${base:+$base/}prebuilt-bundles/$IDENTITY/$src"
+            # EXISTENCE FIRST, fail CLOSED (the publish script's own rule): an unreadable answer
+            # is not "absent", and absent is a red gate, not an empty seed.
+            sealed=$(az storage file exists --account-name "$account" --share-name "$share" \
+              --path "$dir/_complete" --auth-mode login --backup-intent --query exists -o tsv --only-show-errors 2>/dev/null || echo unknown)
+            if [ "$sealed" != "true" ]; then
+              echo "::error::upstream '$src' has no SEALED publication under $account/$share/$dir for framework identity $IDENTITY (exists=$sealed). This gate cannot install its dependency and will not compile it instead. The upstream's own publish-bake for this identity re-enables this run."
+              exit 1
+            fi
+            az storage file download-batch --account-name "$account" --share-name "$share" \
+              --source "$share/$dir" --destination "$SEED_DIR" --pattern '*.zip' \
+              --auth-mode login --backup-intent --only-show-errors > /dev/null
+            n=$(ls "$SEED_DIR"/*.zip 2>/dev/null | wc -l | tr -d ' ')
+            echo "upstream '$src': $n bundle(s) from $account/$share/$dir"
+            fetched=$((fetched + n))
+          done
+          # The tester keys a seed to this file; without it the seed is refused as unaddressable.
+          printf '%s' "$IDENTITY" > "$SEED_DIR/framework-mvid.txt"
+          [ "$fetched" -gt 0 ] || { echo "::error::upstream publications were sealed but held no bundles — refusing an empty seed"; exit 1; }
+          echo "dir=$SEED_DIR" >> "$GITHUB_OUTPUT"
       - name: Stage cross-repo modules
         if: inputs.stage-modules != ''
         uses: actions/checkout@v7
@@ -234,6 +412,8 @@ jobs:
           ALLOW_FILE: ${{ inputs.allow-file }}
           AFFECTED_MOUNT: ${{ steps.affected.outputs.mount }}
           AFFECTED_RUN_ALL: ${{ steps.affected.outputs.run_all }}
+          # Empty unless upstream-seed fetched a publication — then the tester consumes it.
+          SEED_DIR: ${{ steps.seed.outputs.dir }}
         # Allow entries whose module is not mounted on a narrowed run are "unverifiable" —
         # warned, never failed — so narrowing cannot trip the ratchet. On a narrowed run the
         # affected closure is STAGED into its own tree and mounted as /repo — the tester gates
@@ -296,9 +476,20 @@ jobs:
           # crash exits 134 immediately. The tester itself no longer lets an exception escape
           # `Main`, but this covers what a `catch` cannot — a stack overflow, an OOM abort, an
           # unhandled throw on a background thread.
-          docker run --rm --init -v "$REPO_MOUNT:/repo" "${DUMP_ARGS[@]}" \
+          # Step 2 of the plugin build contract: hand the tester the upstream seed, mounted
+          # read-only. The tester checks it BEFORE the mesh boots (BakeSeed.Read — a seed it
+          # cannot consume is a usage error, exit 2, never a green gate) and REFUSES a run that
+          # compiled a type the seed declared (BakeSeedConsumer.Shortfall).
+          SEED_ARGS=()
+          if [ -n "${SEED_DIR:-}" ]; then
+            SEED_MOUNT=(-v "$SEED_DIR:/seed:ro")
+            SEED_ARGS=(--seed /seed)
+          else
+            SEED_MOUNT=()
+          fi
+          docker run --rm --init -v "$REPO_MOUNT:/repo" "${SEED_MOUNT[@]}" "${DUMP_ARGS[@]}" \
             --entrypoint /app/mw-plugin-test "$IMAGE" /repo \
-            "${ALLOW_ARGS[@]}"
+            "${ALLOW_ARGS[@]}" "${SEED_ARGS[@]}"
       # 🚨 The dump is written by the CONTAINER, which runs as root, so the file lands owned by
       # root with a restrictive mode — a core dump can contain anything that was in memory, so the
       # runtime writes it 0600 on purpose. `chmod 0777` on the mount DIRECTORY (above) lets the

@@ -203,12 +203,20 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     ///
     /// <para><b>The defect.</b> <c>MeshNodeStreamCache</c> funnels every write to a path through one
     /// per-path serial queue, and its own contract said "the next queued Update sees post-patch state
-    /// via the local Handle". It did not. The queue advances on the write's LOCAL emit (the owner's ack
-    /// or, on a busy owner, the optimistic snapshot) — never on the owner's ECHO — while the next write
-    /// reads <c>mirror.Take(1)</c>, i.e. the mirror as it stands. Under load the echo has not arrived,
-    /// so write N+1 ships a base that PREDATES write N. The owner then three-way-merges an
-    /// already-applied value against a base it has moved past, sees a string changed on both sides with
-    /// overlapping edits, and REFUSES the leaf — keeping the value write N wrote.</para>
+    /// via the local Handle". It did not. The queue advanced on the write's LOCAL emit — never on the
+    /// owner's ECHO — while the next write read <c>mirror.Take(1)</c>, i.e. the mirror as it stands.
+    /// Under load the echo has not arrived, so write N+1 ships a base that PREDATES write N. The owner
+    /// then three-way-merges an already-applied value against a base it has moved past, sees a string
+    /// changed on both sides with overlapping edits, and REFUSES the leaf — keeping the value write N
+    /// wrote.</para>
+    ///
+    /// <para><b>The residual, and why the symptom came back (#2346).</b> This hand-off closes the gap
+    /// only when there IS a pending state to hand forward, and the first fix published one solely on
+    /// an ack that arrived inside <c>UpdateResponseWaitBound</c>. On a busy owner the ack does not,
+    /// the caller takes its optimistic emit — and THAT released the queue slot. So on exactly the
+    /// runs where the owner is slow, the successor got no base at all and the defect above reappeared
+    /// verbatim. The slot is now released by the hand-off itself (see <c>onLocalState</c>), and a LATE
+    /// ack publishes just like an early one.</para>
     ///
     /// <para><b>Why that is not a concurrent-writer conflict.</b> The two writes are the SAME mirror's,
     /// strictly ordered by the queue. The staleness is self-inflicted: the writer superseded its own
@@ -701,28 +709,34 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// </summary>
     /// <param name="update">The caller's lambda, as for <c>Update</c>.</param>
     /// <param name="pendingSelfWrite">What the PREVIOUS queued write on this path computed, or null.</param>
-    /// <param name="onLocalState">Receives the node the OWNER has acknowledged taking, to be handed to
-    /// the next queued write as its base.
-    /// <para>🚨 Invoked ONLY on the owner's success ack — never on the optimistic emit, never on a
-    /// rejection, never on a retry. A write that did not land mints no version, so a base published
-    /// from an unlanded write is never corrected by anything: the next write diffs its own unlanded
-    /// value, produces an EMPTY patch, and is skipped as a no-op — silently, and for every retry after
-    /// it. That regression is real and was caught by <c>TwoSiloRecycleConvergenceTest</c>. When the ack
-    /// does not arrive inside the response bound, publishing nothing degrades to the previous
-    /// behaviour, which is the correct direction to fail.</para>
+    /// <param name="onLocalState">The queue's HAND-OFF. Invoked with the node the OWNER has
+    /// acknowledged taking — to be handed to the next queued write as its base — or with
+    /// <c>null</c> to say "the verdict is in, there is nothing to hand forward". Either way it is
+    /// what RELEASES the per-path queue slot, so the successor starts on a known outcome instead of
+    /// on this write's optimistic emit (#2346).
+    /// <para>🚨 A NODE is published ONLY on the owner's success ack — early or LATE — and on a
+    /// no-op; never on the optimistic emit, never on a rejection, never from inside a retry. A write
+    /// that did not land mints no version, so a base published from an unlanded write is never
+    /// corrected by anything: the next write diffs its own unlanded value, produces an EMPTY patch,
+    /// and is skipped as a no-op — silently, and for every retry after it. That regression is real
+    /// and was caught by <c>TwoSiloRecycleConvergenceTest</c>.</para>
+    /// <para>🚨 <c>null</c> is the other half, and it is not optional: a re-enqueued attempt or a
+    /// terminal late NACK will never produce a base, so without it the successor would sit out the
+    /// whole <c>QueueAdvanceBound</c> waiting for a signal that cannot come.</para>
     /// <para>🚨 Invoked with the node in the shape the write path itself diffs — BEFORE the
     /// typed-Content projection on the returned observable, and AFTER the audit stamp. Taking it off
     /// the observable instead would hand the successor a re-typed node whose re-serialisation need not
     /// match (a recovered <c>$type</c>, a suppressed default), and the successor's diff would then
     /// carry phantom keys.</para>
-    /// <para>A CONFLICT/OwnerDisposing re-enqueue deliberately does not carry this on either: those run
-    /// asynchronously and could land after a LATER write already published, replacing a newer base with
-    /// an older one.</para>
+    /// <para>A CONFLICT/OwnerDisposing re-enqueue carries a SETTLE-ONLY wrapper: it may release the
+    /// slot when its own verdict lands (the re-attempt is still this write, so the successor must not
+    /// start alongside it) but it may never publish a base — a re-attempt runs asynchronously and
+    /// could land after a LATER write already published, replacing a newer base with an older one.</para>
     /// </param>
     internal IObservable<MeshNode> UpdateQueued(
         Func<MeshNode, MeshNode> update,
         MeshNode? pendingSelfWrite,
-        Action<MeshNode>? onLocalState = null)
+        Action<MeshNode?>? onLocalState = null)
     {
         // 🚨 AccessContext capture for the LAMBDA invocation. The user's
         // `update` lambda runs on whatever thread the underlying writer fires
@@ -1273,7 +1287,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// reached a merge.</param>
     private IObservable<MeshNode> UpdateRemote(
         Func<MeshNode, MeshNode> update, int attempt = 0, long refusedBaseVersion = 0,
-        MeshNode? pendingSelfWrite = null, Action<MeshNode>? onLocalState = null)
+        MeshNode? pendingSelfWrite = null, Action<MeshNode?>? onLocalState = null)
         => Observable.Create<MeshNode>(observer =>
         {
             var diagLogger = _workspace.Hub.ServiceProvider
@@ -1558,6 +1572,17 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             {
                                 if (resp.Success && resp.NodeError is null)
                                 {
+                                    // 🚨 A LATE ack is STILL the owner's ack — the one signal that
+                                    // may become the next queued write's base (#2346). It arrives
+                                    // here rather than above only because the owner was busy past
+                                    // UpdateResponseWaitBound, which is precisely the load under
+                                    // which the successor most needs a sound base: without this the
+                                    // hand-off was skipped on every slow owner and the successor
+                                    // diffed against a mirror that predated this very write, which
+                                    // the owner then refused as a conflict that never happened.
+                                    // Publishing here also RELEASES the queue slot, so the successor
+                                    // starts on the ack instead of sitting out QueueAdvanceBound.
+                                    onLocalState?.Invoke(updated);
                                     diagLogger?.LogDebug(
                                         "[UpdateRemote] LATE_ACK hub={Hub} target={Path} — write applied after the optimistic emit",
                                         _workspace.Hub.Address, _path);
@@ -1591,19 +1616,31 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     // the hub's own, and the re-posted patch must carry the
                                     // ORIGINAL caller's AccessContext (UpdateRemote's eager
                                     // capture runs synchronously inside Subscribe).
+                                    // 🚨 Settle-only hand-off, same rule as the early re-enqueue:
+                                    // the slot (if this NACK beat QueueAdvanceBound) is released by
+                                    // the re-attempt's verdict, and a re-attempt's result is never
+                                    // published as a successor's base.
                                     using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
                                         ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
                                         : null)
                                     {
-                                        UpdateRemote(update, attempt + 1, lateRebaseFrom).Subscribe(
-                                            _ => { },
-                                            ex2 => diagLogger?.LogWarning(ex2,
-                                                "[UpdateRemote] LATE_NACK_REENQUEUE failed hub={Hub} target={Path} attempt={Attempt}",
-                                                _workspace.Hub.Address, _path, attempt + 1));
+                                        UpdateRemote(update, attempt + 1, lateRebaseFrom,
+                                                onLocalState: onLocalState is null
+                                                    ? null
+                                                    : _ => onLocalState(null))
+                                            .Subscribe(
+                                                _ => { },
+                                                ex2 => diagLogger?.LogWarning(ex2,
+                                                    "[UpdateRemote] LATE_NACK_REENQUEUE failed hub={Hub} target={Path} attempt={Attempt}",
+                                                    _workspace.Hub.Address, _path, attempt + 1));
                                     }
                                 }
                                 else
                                 {
+                                    // Terminal: the write provably did not apply and will not be
+                                    // retried, so there is nothing to hand forward and nothing left
+                                    // to wait for — release the slot rather than stall it.
+                                    onLocalState?.Invoke(null);
                                     diagLogger?.LogWarning(
                                         "[UpdateRemote] LATE_NACK_TERMINAL hub={Hub} target={Path} code={Code} attempt={Attempt} msg={Msg} — the optimistically-acked write did NOT apply and is not auto-retryable",
                                         _workspace.Hub.Address, _path, lateErr.Code, attempt, lateErr.Message);
@@ -1697,11 +1734,26 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                 diagLogger?.LogWarning(
                                                     "[UpdateRemote] OWNER_NACK_REENQUEUE hub={Hub} target={Path} code={Code} attempt={Attempt} — the patch was never applied; re-enqueueing rebased on state newer than {RebaseFrom}",
                                                     _workspace.Hub.Address, _path, err.Code, attempt + 1, rebaseFrom);
+                                                // 🚨 The queue slot stays HELD across the re-attempt
+                                                // and is released by ITS verdict — the re-attempt is
+                                                // this write, still in flight, and letting the
+                                                // successor start alongside it would put two writes
+                                                // on the same path at once, which is the exact thing
+                                                // the queue exists to prevent. The settle-only
+                                                // callback passed down releases the slot without
+                                                // publishing a base: a re-attempt's result must never
+                                                // become a successor's base, because it runs
+                                                // asynchronously and could land after a LATER write
+                                                // already published, replacing a newer base with an
+                                                // older one.
                                                 using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
                                                     ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
                                                     : null)
                                                 {
-                                                    composite.Add(UpdateRemote(update, attempt + 1, rebaseFrom)
+                                                    composite.Add(UpdateRemote(update, attempt + 1, rebaseFrom,
+                                                            onLocalState: onLocalState is null
+                                                                ? null
+                                                                : _ => onLocalState(null))
                                                         .Subscribe(observer.OnNext, observer.OnError, observer.OnCompleted));
                                                 }
                                                 return;

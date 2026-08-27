@@ -79,7 +79,7 @@ public class CompileSingleDriverConsistencyTest(ITestOutputHelper output) : Mono
     }
 
     private IObservable<GetCompilationPathResponse> Compile(string nodeTypePath) =>
-        Mesh.Observe(
+        RequestHub.Observe(
                 (IRequest<GetCompilationPathResponse>)new GetCompilationPathRequest(),
                 o => o.WithTarget(new Address(nodeTypePath)))
             .Select(d => d.Message);
