@@ -58,7 +58,9 @@ public class QueuedWriteAdvancesOnHandoffTest(ITestOutputHelper output) : Monoli
         // control: with it, a queued write's base read emits synchronously inside Subscribe, so the
         // pre-fix dispatch below provably happens before the gate is released — the negative arm of
         // this test cannot accidentally pass by reading a base that is already correct.
-        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+        // 🚨 RequestHub, not Mesh — the root mesh hub is the ROUTER and must never be an END of a
+        // delivery (RouterAsTestRequestOriginRatchetGuard / #2423).
+        await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
             .Should().Emit();
         var workspace = Mesh.GetWorkspace();
         var warm = await workspace.GetMeshNodeStream(path)
