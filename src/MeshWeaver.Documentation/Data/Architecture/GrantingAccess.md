@@ -260,4 +260,4 @@ After creating or updating an assignment, run through this checklist:
 | `src/MeshWeaver.Mesh.Contract/Services/AccessAssignmentGuard.cs` | Write-boundary guard: `mainNode` must equal the scope the path encodes; no write-conferring grant on a system-owned (GitSynced) partition |
 | `src/MeshWeaver.GitSync/SystemOwnedAccessRetractionHandler.cs` | Same predicate, applied as a sweep when a `_GitSync` is wired — retracts privileged grants that predate the sync |
 | `test/MeshWeaver.Graph.Test/ShippedAccessGrantsTest.cs` | Structural guard: no `_Access` file committed to this repo may confer write, or name an undefined role |
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs` | `access_changed` trigger that rebuilds `partition_access` and `user_effective_permissions` |
+| `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs` | `access_changed` trigger that rebuilds `partition_access` and `user_effective_permissions` |

@@ -102,7 +102,8 @@ jobs:
           -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
       - name: Build + push migration (edge)
         run: >
-          dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
+          dotnet publish plugins-repo/src/Memex.Database.Migration/Memex.Database.Migration.csproj
+          -p:MeshWeaverRoot=${{ github.workspace }}
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:RuntimeIdentifiers="linux-x64%3Blinux-arm64"
           -p:ContainerRuntimeIdentifiers="linux-x64%3Blinux-arm64"
