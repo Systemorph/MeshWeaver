@@ -390,6 +390,8 @@
   "auth.avatarUrl": "Avatar-URL",
   "auth.getStarted": "Loslegen",
   "auth.loadingPersons": "Personen werden geladen…",
+  "auth.noUsersFound": "Auf diesem Mesh wurden keine Benutzer gefunden.",
+  "auth.errorLoadingUsers": "Die Benutzerliste konnte nicht geladen werden: {0}",
   "auth.publishing": "Veröffentlichung",
   "error.notFoundTitle": "Nicht gefunden",
   "error.nothingAtAddress": "Unter dieser Adresse ist leider nichts zu finden.",
