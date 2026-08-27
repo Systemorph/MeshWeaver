@@ -1469,6 +1469,33 @@ jobs:
       # produced its bytes). The platform CONTENT bake above has no such coupling — its key is the
       # framework identity, which the promoted image resolves identically however many times it is
       # asked — so the reconcile re-asserts that and stops there.
+      # 🚨 RE-AUTHENTICATE IMMEDIATELY BEFORE PUBLISHING — the job outruns its own credential.
+      # The OIDC assertion is minted by the `Azure login` step at the TOP of this job and is valid
+      # for ~5 minutes. Everything between here and there is the bake: it compiles every shipped
+      # NodeType twice over (Doc + samples) inside the container, which takes longer than that. So
+      # the publish below reached Azure with an assertion that had already expired:
+      #
+      #   ERROR: AADSTS700024: Client assertion is not within its valid time range.
+      #     Current time: 2026-08-27T00:20:39Z, expiry time of assertion: 2026-08-27T00:14:34Z
+      #
+      # Measured on CD run 33024861072: promote had succeeded, the image pulled on attempt 1, the
+      # bake compiled — and the run still published nothing, six minutes past the credential.
+      #
+      # 🚨 This failure was LATENT, not new: the login has always been taken at job start, and the
+      # bake has always been the long part. It surfaces now because #2452 makes this job run in
+      # situations where it previously did not, so the window is exercised far more often.
+      #
+      # A fresh login here costs seconds and removes the coupling between bake duration and
+      # credential lifetime entirely. It is NOT `continue-on-error`: if the identity cannot be
+      # obtained, publishing must fail loudly rather than skip — a bake that produced bundles and
+      # published none is the exact state the bake lane exists to prevent.
+      - name: "Azure login (OIDC) — refreshed for the publish"
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: "Publish the plugin bundles to every portal target (same identity, same version)"
         if: needs.gate.outputs.bake_only != 'true'
         env:
