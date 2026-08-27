@@ -330,7 +330,16 @@ public static class MemexConfiguration
             // them byte-identical — an additive mechanism that changed a configured instance's
             // storage would be a data-loss bug, not a feature.
             var graphStorageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
-            if (graphStorageConfig is null && setupManifest?.Storage is { } chosen)
+            // 🚨 COMPLETE, and with a real backend named (Copilot review). A manifest that exists
+            // is not a manifest that ANSWERS: the wizard's own starting point is
+            // State=AwaitingStorage with a pre-filled type, and an Unreadable one answers nothing
+            // at all. Treating either as configured storage would boot past setup and fail later,
+            // deeper, on an unknown backend or a missing connection string — a worse failure than
+            // the setup surface, and further from its cause.
+            if (graphStorageConfig is null
+                && setupManifest is { State: InstanceSetupState.Complete } complete
+                && complete.HasStorage
+                && complete.Storage is { } chosen)
             {
                 graphStorageConfig = new GraphStorageConfig
                 {
@@ -358,11 +367,25 @@ public static class MemexConfiguration
                 // storage backend, because a wrong guess writes real data somewhere nobody chose
                 // (an ephemeral container path, silently lost on the next roll — issue #435's
                 // shape).
+                // Say WHICH of the three states this is — "no manifest" would be a lie for an
+                // unreadable or half-answered one, and setup/boot diagnostics are exactly where a
+                // misleading message costs the most (Copilot review).
+                var manifestState = setupManifest switch
+                {
+                    null => "no instance manifest exists there",
+                    { State: InstanceSetupState.Unreadable } =>
+                        "the instance manifest there could NOT BE READ (see the error above) — "
+                        + "repair or delete it to re-run setup",
+                    { State: var state } =>
+                        $"the instance manifest there is INCOMPLETE (state {state}"
+                        + $"{(setupManifest.HasStorage ? "" : ", no storage chosen")}) — finish the "
+                        + "setup wizard",
+                };
                 Console.Error.WriteLine(
-                    "[InstanceSetup] No Graph:Storage configuration and no instance manifest at "
-                    + $"{InstanceManifest.PathFor(moduleRoot)} — this instance is AWAITING SETUP. "
-                    + "Configure Graph:Storage in appsettings, or complete the setup wizard, which "
-                    + "writes the manifest and restarts into a configured mesh.");
+                    "[InstanceSetup] No Graph:Storage configuration, and "
+                    + $"{manifestState} ({InstanceManifest.PathFor(moduleRoot)}). This instance is "
+                    + "AWAITING SETUP. Configure Graph:Storage in appsettings, or complete the "
+                    + "setup wizard, which writes the manifest and restarts into a configured mesh.");
                 builder.MarkAwaitingSetup();
                 return builder;
             }
