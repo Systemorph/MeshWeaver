@@ -1046,3 +1046,20 @@ MVID rationale) · [Build Coordination](/Doc/Architecture/BuildCoordination) (wh
 replicas boot) · [Modules](/Doc/Architecture/Modules) · [Release Availability
 Gates](/Doc/Architecture/ReleaseGates) (who READS these publications, and the
 `_releases/<version>` marker that names each release's identity).
+
+## A reconcile must know which release it heals
+
+The release version (`3.0.0-rc8.ci.<run#>`) is minted by `portal-image` **per run**, and a
+bake-only reconcile skips that job — so its output is empty there. The first reconcile that ever
+fired (2026-08-27, run 33063843072, once #2491 gave the cron its own concurrency lane) published
+the bake correctly and then failed the availability assert on an empty argument; quietly, it had
+also written **no release marker**, which is the one thing a reconcile exists to write.
+
+The version is not recomputable, but it is **recorded**: promote's Phase C arms the release as
+`memex-portal-ai:<version>` on the same digest Phase A tagged `<short-sha>` — the tags
+`SelfUpdateHostedService` rolls from. So `publish-bake` resolves the version ONCE, in a `release`
+step (this run's output, else the promoted image's tag set via `az acr manifest list-metadata`),
+and both the publish and the assert read that step. A sha with no version tag was never armed as
+a release; the step stops loudly rather than publishing a marker for an invented version.
+Pinned by `PlatformBakeLaneGuard.PlatformBake_ResolvesTheReleaseVersionOnce_AndEveryConsumerReadsIt`.
+
