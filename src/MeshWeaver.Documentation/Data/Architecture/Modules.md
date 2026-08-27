@@ -308,9 +308,11 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.Hosting.Snowflake.dll` | Snowflake storage backend (persistence, change feed, cross-schema query, access projection) | selected by `Graph:Storage:Type` = `Snowflake` |
 | `MeshWeaver.AI.dll` | The AI ENGINE — the agent runtime (threads, rounds, delegation, tool calling, harnesses, token accounting) **and** the catalogs that administer it (Agents, Skills, Providers, Models, Tiers) | `Features:StaticRepoSync:Partitions`, `Features:Ai:Clis:*`, `Skills:Directory`, `ClaudeConnect` |
 
-🚨 **The AI engine is registry-served, so it is listed under `Modules:Required` and NEVER under
-`Modules:Assemblies`** — see *Deciding* below for why those two lists are mutually exclusive for one
-name. Its Store entry is `preInstalled`, so a first-party deployment lands it unattended, and
+🚨 **On a deployment with a plugin catalog the AI engine is registry-served, so it is listed under
+`Modules:Required` and NOT under `Modules:Assemblies`** — see *Deciding* below for why those two
+lists are mutually exclusive for one name. (`Modules:Assemblies` remains the correct lane for the
+engine on a host that has no catalog and therefore ships it in its own closure — the LocalMesh case
+immediately below. The rule is about not listing it in BOTH, not about one lane being wrong.) Its Store entry is `preInstalled`, so a first-party deployment lands it unattended, and
 `Required` is what turns an absence into a degraded readiness report rather than a silently
 model-less portal (no chat, no models, and `Provider/*` empty — the catalog is engine-projected).
 
