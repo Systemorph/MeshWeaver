@@ -1377,7 +1377,13 @@ jobs:
       - name: "Assert the bake's identity is the one the PROMOTED PORTAL IMAGE resolves"
         env:
           BAKE_IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
-          PORTAL_IMAGE: ${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}
+          # Same rule as the mw-plugin-test references above, and I missed this one in #2452:
+          # a RECONCILE builds no image, so there IS no staging tag for this run and pulling one
+          # fails `manifest unknown`. Measured on scheduled CD run 33032017673 — the bake correctly
+          # ran (which is #2452 working) and then died reaching for
+          # `memex-portal-ai:staging-842e6c5-33032017673`, a tag no run ever created. On that path
+          # the promoted image IS the commit tag.
+          PORTAL_IMAGE: ${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
         run: |
           set -euo pipefail
           BAKED="$(tr -d '[:space:]' < "$BAKE_DIR/framework-mvid.txt")"
