@@ -5,8 +5,8 @@ using Xunit;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// Assembly-scoped drain for the backgrounded <see cref="TestCluster"/> disposals
-/// (<see cref="OrleansClusterDisposal.DisposeInBackground"/>). xUnit v3 constructs this once and
+/// Assembly-scoped drain for the backgrounded <c>TestCluster</c> disposals
+/// (<c>OrleansClusterDisposal.DisposeInBackground</c>). xUnit v3 constructs this once and
 /// disposes it AFTER every test class has run its per-class teardown (backgrounding its cluster's
 /// stop→dispose onto the I/O pool) but BEFORE the native in-process runner does its foreground-thread
 /// check. A SYNCHRONOUS <see cref="IDisposable.Dispose"/> (no <c>async</c>/<c>await</c>) blocks on the

@@ -24,4 +24,12 @@
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The gRPC wire contract of the mesh (meshweaver.v1.Mesh). It lives with the platform contract,
+         not with the server that implements it: MeshWeaver.Hosting.Grpc compiles it from here, the
+         python client (clients/python/scripts/gen_proto.sh) and the JS clients in MeshWeaver.Plugins
+         generate from here, so there is ONE contract and no copies. Packed so a NuGet consumer gets
+         it too. -->
+    <None Include="Protos/mesh.proto" Pack="true" PackagePath="protos/" />
+  </ItemGroup>
 </Project>

@@ -49,7 +49,7 @@ internal sealed class OrleansTestBackingStore
     /// Points a host's <see cref="InMemoryStorageAdapter"/> at this cluster's dictionaries.
     ///
     /// <para>What is shared is the STORE, not the change feed: each host still constructs its
-    /// own adapter, so each has its own <see cref="IStorageAdapter.Changes"/> Subject. That
+    /// own adapter, so each has its own <c>IStorageAdapter.Changes</c> Subject. That
     /// mirrors prod, where every silo has a per-process Subject fed by PG LISTEN/NOTIFY —
     /// a cross-silo signal is delivered through <c>IMeshChangeFeed</c>, not through this store.</para>
     /// </summary>
@@ -71,7 +71,7 @@ internal sealed class OrleansTestBackingStore
 }
 
 /// <summary>
-/// A deployed Orleans <see cref="TestCluster"/> together with the Orleans client host that
+/// A deployed Orleans <c>TestCluster</c> together with the Orleans client host that
 /// <see cref="OrleansTestCluster.DeployAsync"/> created for it.
 ///
 /// <para><b>Why the client host is ours.</b> Orleans instantiates
@@ -125,7 +125,7 @@ internal static class OrleansTestCluster
     /// silo/client configurator types.</param>
     /// <param name="configureClientServices">Per-cluster service registrations applied to the
     /// Orleans client host AFTER its configurators have run. The deployed
-    /// <see cref="TestCluster"/> is passed in so the client can borrow instances the silos
+    /// <c>TestCluster</c> is passed in so the client can borrow instances the silos
     /// already own — see <see cref="ShareSiloNodeStore"/>.</param>
     /// <param name="withClient">False for silo-only clusters (no Orleans client host is created).</param>
     public static async Task<OrleansTestClusterHost> DeployAsync(
@@ -269,7 +269,7 @@ internal static class OrleansTestCluster
         };
 }
 
-/// <summary>Reaching a silo host's services from a <see cref="TestCluster"/>.</summary>
+/// <summary>Reaching a silo host's services from a <c>TestCluster</c>.</summary>
 internal static class OrleansTestClusterExtensions
 {
     public static IServiceProvider SiloServices(this TestCluster cluster, int index = 0) =>
