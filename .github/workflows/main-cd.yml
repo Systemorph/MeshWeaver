@@ -838,6 +838,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
+      - name: Check out MeshWeaver.Plugins (holds the migration worker)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          path: plugins-repo
+          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+          fetch-depth: 1
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
@@ -852,7 +860,8 @@ jobs:
         id: vars
         run: |
           set -euo pipefail
-          VERSION=$(dotnet msbuild memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj \
+          VERSION=$(dotnet msbuild plugins-repo/src/Memex.Database.Migration/Memex.Database.Migration.csproj \
+            -p:MeshWeaverRoot=${{ github.workspace }} \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
@@ -870,9 +879,10 @@ jobs:
       # <RuntimeIdentifiers> lives in Memex.Database.Migration.csproj (project-local, same reason as above).
       - name: Build + push migration (staging tag)
         run: >
-          dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
+          dotnet publish plugins-repo/src/Memex.Database.Migration/Memex.Database.Migration.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
+          -p:MeshWeaverRoot=${{ github.workspace }}
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration

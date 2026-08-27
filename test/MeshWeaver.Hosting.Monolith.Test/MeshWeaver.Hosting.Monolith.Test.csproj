@@ -45,10 +45,8 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
         <!-- GrpcModuleContributionTest pins the gRPC transport's module shape (mesh half +
              endpoint half, anonymous-by-explicit-opt-out). -->
-        <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Grpc\MeshWeaver.Hosting.Grpc.csproj" />
         <!-- RouterTrafficTest pins that SignalRConnectionRegistry issues its per-connection
              ValidateTokenRequest on its own transport portal hub, never on the root mesh hub. -->
-        <ProjectReference Include="..\..\src\MeshWeaver.Hosting.SignalR\MeshWeaver.Hosting.SignalR.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />

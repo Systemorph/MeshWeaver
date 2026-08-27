@@ -112,7 +112,7 @@ WHERE EXISTS (
   AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\';
 ```
 
-Implementation: `MeshNodeEmbeddingBackfill` / `SchemaInitialization` in `memex/aspire/Memex.Database.Migration/Migrations/` use exactly this shape.
+Implementation: `MeshNodeEmbeddingBackfill` / `SchemaInitialization` in `MeshWeaver.Plugins/src/Memex.Database.Migration/Migrations/` use exactly this shape.
 
 ---
 
@@ -139,7 +139,7 @@ Partitions with `Versioned = true` also get a sibling `{schema}_versions` schema
 |---|---|
 | `mesh_node_history` | Append-only history of every `mesh_nodes` write |
 
-The mesh DDL plus all triggers and stored procedures are emitted by `PostgreSqlSchemaInitializer` (`src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs`).
+The mesh DDL plus all triggers and stored procedures are emitted by `PostgreSqlSchemaInitializer` (`MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs`).
 
 ---
 
@@ -169,10 +169,10 @@ The set is **configurable**, not hardcoded: per host via `PostgreSqlStorageOptio
 2. If no match but a `nodeType` is provided → `ResolveTableByNodeType(nodeType)`.
 3. Otherwise → `mesh_nodes`.
 
-Implementation: `PostgreSqlStorageAdapter.ResolveTable` (`src/MeshWeaver.Hosting.PostgreSql/PostgreSqlStorageAdapter.cs`).
+Implementation: `PostgreSqlStorageAdapter.ResolveTable` (`MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlStorageAdapter.cs`).
 
 > ⚠ **Footgun — wrong segment, wrong table.**
-> If you write an `AccessAssignment` whose namespace does **not** end in `_Access` (e.g. you write `Admin/Groups/G1` instead of `Admin/Groups/_Access/G1`), the row lands in `mesh_nodes` instead of `access`. The `access_changed` trigger will never fire, and `rebuild_user_effective_permissions` will not see the assignment. This was the bug behind Repair v1 (`memex/aspire/Memex.Database.Migration/Program.cs:133`).
+> If you write an `AccessAssignment` whose namespace does **not** end in `_Access` (e.g. you write `Admin/Groups/G1` instead of `Admin/Groups/_Access/G1`), the row lands in `mesh_nodes` instead of `access`. The `access_changed` trigger will never fire, and `rebuild_user_effective_permissions` will not see the assignment. This was the bug behind Repair v1 (`MeshWeaver.Plugins/src/Memex.Database.Migration/Program.cs:133`).
 
 ### The `_` prefix means *hidden*, not *satellite*
 
@@ -292,7 +292,7 @@ Partitions with `Versioned = true` (the default for content partitions) get a si
 
 ## Repair migrations
 
-`memex/aspire/Memex.Database.Migration/Program.cs` runs idempotent **schema initialisation** on every start (`PostgreSqlSchemaInitializer.InitializeAsync`) and **versioned data repairs** that execute once per database. The DB version is stored in `admin.mesh_nodes` at `(namespace='', id='db_version')`.
+`MeshWeaver.Plugins/src/Memex.Database.Migration/Program.cs` runs idempotent **schema initialisation** on every start (`PostgreSqlSchemaInitializer.InitializeAsync`) and **versioned data repairs** that execute once per database. The DB version is stored in `admin.mesh_nodes` at `(namespace='', id='db_version')`.
 
 | Version | Fix |
 |---|---|
@@ -307,7 +307,7 @@ Partitions with `Versioned = true` (the default for content partitions) get a si
 | v9 | Rename `_Source/_Test` namespace segments to `Source/Test` |
 | v10 … | see below |
 
-The table above is the **early history only**. Migrations now live as one file per version in `memex/aspire/Memex.Database.Migration/Migrations/` (`V01_…` … `V51_…` at the time of writing) — **read that directory, not this table**, for the current head version and for what each step does. Notable later ones: `V10_PerUserPartitions`, `V27_RenameUserSchemaToAuthAndMirrorApiTokens`, `V28_RenameOrganizationToSpace`, `V38_DropLegacyProviderSchema`, `V45_AddNodeAuthorshipColumns`, `V50_RescopePlatformAdminGrants`, `V51_DropInvalidPartitionSchemas`.
+The table above is the **early history only**. Migrations now live as one file per version in `MeshWeaver.Plugins/src/Memex.Database.Migration/Migrations/` (`V01_…` … `V51_…` at the time of writing) — **read that directory, not this table**, for the current head version and for what each step does. Notable later ones: `V10_PerUserPartitions`, `V27_RenameUserSchemaToAuthAndMirrorApiTokens`, `V28_RenameOrganizationToSpace`, `V38_DropLegacyProviderSchema`, `V45_AddNodeAuthorshipColumns`, `V50_RescopePlatformAdminGrants`, `V51_DropInvalidPartitionSchemas`.
 
 🚨 **Fresh databases fast-forward.** `MigrationRunner` skips the legacy `user`-schema repair chain (V05/V10/V14/V15/V17/V18/V20/V22/V25/V27/V31 — all reference the long-gone `user` schema) when `SchemaInitialization.DetectFreshDbAsync` reports no CONTENT partition schemas. Framework schemas (`admin`/`auth`/`system_*`) are excluded from that count so they can never make a fresh DB look non-fresh.
 
@@ -337,11 +337,11 @@ The table above is the **early history only**. Migrations now live as one file p
 
 | File | Contents |
 |---|---|
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs` | DDL, stored procedures, triggers (~2 500 lines) |
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPathRoutingAdapter.cs` | First-segment → schema/table routing (no probe, no cache) |
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionStorageProvider.cs` | `EnsurePartitionProvisioned` — the ONE schema-creation entry point |
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlStorageAdapter.cs` | Write-side table resolution (`ResolveTable`) |
+| `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs` | DDL, stored procedures, triggers (~2 500 lines) |
+| `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPathRoutingAdapter.cs` | First-segment → schema/table routing (no probe, no cache) |
+| `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionStorageProvider.cs` | `EnsurePartitionProvisioned` — the ONE schema-creation entry point |
+| `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlStorageAdapter.cs` | Write-side table resolution (`ResolveTable`) |
 | `src/MeshWeaver.Mesh.Contract/SatelliteTableMapping.cs` | The configurable satellite defaults |
 | `src/MeshWeaver.Mesh.Contract/PartitionDefinition.cs` | `TableMappings` / `NodeTypeTableMappings` and `ResolveTable` |
-| `memex/aspire/Memex.Database.Migration/Migrations/` | One file per versioned migration (`V01_…` … `V51_…`) |
-| `memex/aspire/Memex.Database.Migration/Program.cs` | Migration harness + idempotent schema init + embedding backfills |
+| `MeshWeaver.Plugins/src/Memex.Database.Migration/Migrations/` | One file per versioned migration (`V01_…` … `V51_…`) |
+| `MeshWeaver.Plugins/src/Memex.Database.Migration/Program.cs` | Migration harness + idempotent schema init + embedding backfills |
