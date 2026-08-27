@@ -300,6 +300,21 @@ jobs:
       # Reconcile found the images complete: no image build is due, but the content bake still
       # is — the images being present says nothing about whether the bundles are.
       bake_only: ${{ steps.decide.outputs.bake_only }}
+      # 🚨 THE tag every consumer of an image built for this commit must use — resolved ONCE, here.
+      #
+      # A publishing run reads its own staging tag, which exists only because this run pushed it.
+      # A bake-only RECONCILE builds nothing, so that tag never exists; what it must read is the
+      # already-PROMOTED short-SHA tag, which `promote`'s phase A pushed for every repo when the
+      # commit was first delivered.
+      #
+      # This is one output rather than a conditional at each reference because the conditional
+      # form was wrong SEVEN times: #2452 converted the six `mw-plugin-test` references and left
+      # `memex-portal-ai` on the staging tag, and #2464 was opened to fix precisely that and did
+      # not land on the line. Both looked complete — the reconcile got far enough to prove the
+      # gating fix worked, then died on `manifest unknown` at the identity assert. A per-reference
+      # conditional is a rule you have to remember at every future reference; an output is one you
+      # cannot forget, because there is no second place to state it.
+      image_tag: ${{ steps.decide.outputs.bake_only == 'true' && steps.target.outputs.short_sha || steps.target.outputs.staging_tag }}
       green: ${{ steps.required.outputs.green }}
       # The architectures publish-bake runs a lane for — see that job's matrix.
       bake_arches: ${{ steps.arches.outputs.json }}
@@ -1202,9 +1217,37 @@ jobs:
       # The image is PULLED here rather than left to `docker run`'s implicit pull, so the retry
       # covers the pull too — a login that succeeds and a pull that is refused would otherwise fail
       # the bake step with a registry error dressed up as a bake failure.
+      # 🚨 The tag this job reads must MATCH the reason it is running, and it has silently not
+      # matched twice. A bake-only reconcile that reaches for `staging-<sha>-<run>` is reaching for
+      # a tag no run ever pushed: nothing exists to build it, so the failure arrives as
+      # `manifest unknown` from whichever step happens to pull first — a registry-shaped error for
+      # a resolution bug, four steps and several minutes from the line that caused it.
+      #
+      # This is a two-line assertion rather than a lint over the workflow because the value is what
+      # is wrong, not the text: `image_tag` could be right at every reference and still resolve to
+      # a tag that cannot exist if the gate's own condition drifted. Assert the VALUE, once, before
+      # anything depends on it.
+      - name: "Assert the image tag matches why this run exists"
+        env:
+          TAG: ${{ needs.gate.outputs.image_tag }}
+          BAKE_ONLY: ${{ needs.gate.outputs.bake_only }}
+        run: |
+          set -euo pipefail
+          [ -n "$TAG" ] || { echo "::error::gate resolved an EMPTY image_tag — every pull below would ask the registry for ':' and fail as a registry error"; exit 1; }
+          if [ "$BAKE_ONLY" = "true" ]; then
+            case "$TAG" in
+              staging-*) echo "::error::this is a bake-only reconcile (no image was built by this run), but image_tag is the staging tag '$TAG', which only a publishing run pushes. It must be the PROMOTED short-SHA tag."; exit 1 ;;
+            esac
+            echo "bake-only reconcile → promoted tag '$TAG'"
+          else
+            case "$TAG" in
+              staging-*) echo "publishing run → this run's staging tag '$TAG'" ;;
+              *) echo "::error::this run publishes images under a staging tag, but image_tag is '$TAG' — the bake would verify an image this run did not build."; exit 1 ;;
+            esac
+          fi
       - name: "ACR login + pull the bake image (infra, not the bake)"
         env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.image_tag }}
         run: |
           set -uo pipefail
           attempts=5
@@ -1268,7 +1311,7 @@ jobs:
       # identity and every bundle it baked would be declined by every portal, silently.
       - name: "BAKE the platform's OWN shipped content (compiler-driven, no mesh)"
         env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.image_tag }}
           SHA: ${{ needs.gate.outputs.sha }}
         run: |
           set -euo pipefail
@@ -1328,7 +1371,7 @@ jobs:
       # green having judged none of the bytes that ship (#1814's shape, one level down).
       - name: "GATE the bake: render + execute Tests areas on the BAKED bytes"
         env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.image_tag }}
         run: |
           set -euo pipefail
           STAGE="$RUNNER_TEMP/bake-stage"
@@ -1376,8 +1419,8 @@ jobs:
       # that passes on degraded input would be a check that cannot fail.
       - name: "Assert the bake's identity is the one the PROMOTED PORTAL IMAGE resolves"
         env:
-          BAKE_IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
-          PORTAL_IMAGE: ${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}
+          BAKE_IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.image_tag }}
+          PORTAL_IMAGE: ${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.image_tag }}
         run: |
           set -euo pipefail
           BAKED="$(tr -d '[:space:]' < "$BAKE_DIR/framework-mvid.txt")"
@@ -1412,7 +1455,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: "BAKE every plugin against the SAME image (compiler-driven, no mesh)"
         env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.image_tag }}
         run: |
           set -euo pipefail
           PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
@@ -1437,7 +1480,7 @@ jobs:
           ls "$BAKE_PLUGINS"/*.zip | wc -l | xargs echo "plugin bundles:"
       - name: "GATE the plugin bake: render + execute Tests areas on the BAKED bytes"
         env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.bake_only == 'true' && needs.gate.outputs.short_sha || needs.gate.outputs.staging_tag }}
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.image_tag }}
         run: |
           set -euo pipefail
           PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
