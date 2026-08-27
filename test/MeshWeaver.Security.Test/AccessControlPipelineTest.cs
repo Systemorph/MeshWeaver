@@ -218,7 +218,7 @@ public class UserHubAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetHostIdentity(new AccessContext { ObjectId = "unprivileged@example.com", Name = "Unprivileged User" });
 
-        var response = await Mesh
+        var response = await RequestHub
             .Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(new Address("User")))
             .Should().Emit();
 
@@ -233,7 +233,7 @@ public class UserHubAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(
         accessService.SetHostIdentity(new AccessContext { ObjectId = "", Name = "" });
 
         Func<Task> act = () =>
-            Mesh.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(new Address("User")))
+            RequestHub.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(new Address("User")))
                 .FirstAsync()
                 .ToTask();
 

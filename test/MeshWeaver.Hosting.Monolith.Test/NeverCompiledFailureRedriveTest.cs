@@ -251,7 +251,7 @@ public class NeverCompiledFailureRedriveTest(ITestOutputHelper output) : Monolit
         string prefix, Func<string, string> source)
     {
         var typePath = await CreateType(prefix, source);
-        await Mesh.Observe(new GetCompilationPathRequest(), o => o.WithTarget(new Address(typePath)))
+        await RequestHub.Observe(new GetCompilationPathRequest(), o => o.WithTarget(new Address(typePath)))
             .Should().Within(90.Seconds()).Emit();
         var okNode = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
             .Should().Within(60.Seconds())

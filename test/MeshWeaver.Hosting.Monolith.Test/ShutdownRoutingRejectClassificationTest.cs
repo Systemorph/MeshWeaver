@@ -113,6 +113,13 @@ public class ShutdownRoutingRejectClassificationTest(ITestOutputHelper output) :
                 "the stalling handler must own the action block before the interleaving is queued");
 
             // 2. Queue the probe. Observe pre-registers the response callback before posting.
+            // 🚨 Posted on `Mesh` DELIBERATELY — do NOT move this to RequestHub (#2423). The
+            // interleaving under test is an ORDERING on the router's own action block: the stall
+            // owns it, this probe must land in that queue, and only THEN may the ShutdownRequest
+            // from step 3 queue behind it. Posting from a client hub makes the enqueue a routed
+            // hop, so Mesh.Dispose() could beat the probe into the queue and the reject would come
+            // from a different branch. The router IS the subject here, so the ROUTER_TRAFFIC line
+            // this emits is honest.
             probe = Mesh.Observe(
                     new GetDataRequest(new MeshNodeReference()),
                     o => o.WithTarget(new Address(path)))
