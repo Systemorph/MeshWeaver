@@ -29,7 +29,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// assembly un-parallelisable: class B's init cleared the dictionaries while class A was
 /// mid-test. See AGENTS.md → "No static collections" and issue #999.</para>
 ///
-/// <para>Only <see cref="TwoSiloCacheUpdateFixture"/> needs this type. Everywhere else the
+/// <para>Only <c>TwoSiloCacheUpdateFixture</c> (MeshWeaver.AI.Orleans.TestBase) needs this type. Everywhere else the
 /// per-cluster store is simply the SILO's own <see cref="InMemoryStorageAdapter"/> DI
 /// singleton — already per-cluster by construction — which the Orleans client borrows via
 /// <see cref="OrleansTestCluster.ShareSiloNodeStore"/>.</para>

@@ -84,6 +84,7 @@ public class TestClusterSizingGuard(ITestOutputHelper output)
         {
             Path.Combine(dir.FullName, "test", "MeshWeaver.Hosting.Orleans.Test"),
             Path.Combine(dir.FullName, "src", "MeshWeaver.Hosting.Orleans.TestBase"),
+            Path.Combine(dir.FullName, "src", "MeshWeaver.AI.Orleans.TestBase"),
         };
         foreach (var home in homes)
             if (!Directory.Exists(home))
