@@ -81,6 +81,25 @@ public sealed record GateOptions
     /// a strictly stronger claim than judging a private compile of the same sources.</para>
     /// </summary>
     public BakeSeed? Seed { get; init; }
+
+    /// <summary>
+    /// Module entry assemblies to activate IN ADDITION to the ones this image ships — absolute
+    /// paths, typically a node repo's own freshly-built modules mounted into the container.
+    ///
+    /// <para>🚨 <b>Why the gate needs this at all.</b> The gate judges a node repo's content, and
+    /// that content may declare node types a MODULE provides (an <c>Agent</c> or <c>Skill</c> node
+    /// needs the AI engine's types registered, or the install is refused "not registered"). While
+    /// a module's SOURCE lives in the platform repo, the tester lands it from its own closure lane
+    /// and nothing else is needed. Once the source moves to a node repo, the platform image can no
+    /// longer build it — and the only build of those bytes is the one the node repo's own CI just
+    /// produced. This is the seam that lets that build reach the gate, and it is what unblocks
+    /// moving a module's source out of the platform repo at all.</para>
+    ///
+    /// <para>Absolute paths pass through <c>MeshBuilder.ResolveModulePath</c> untouched, so a
+    /// mounted path is used exactly as given — no probing, no image fallback that could silently
+    /// substitute a different copy.</para>
+    /// </summary>
+    public IReadOnlyList<string> ExternalModules { get; init; } = [];
 }
 
 /// <summary>
@@ -110,7 +129,7 @@ public static class PluginGateRunner
     public static IObservable<GateReport> Run(GateOptions options) =>
         Observable.Defer(() =>
         {
-            var harness = GateMesh.Create(options.Output, options.Seed);
+            var harness = GateMesh.Create(options.Output, options.Seed, options.ExternalModules);
             var pool = harness.ServiceProvider.GetRequiredService<IoPoolRegistry>()
                 .Get("plugin-test:files");
             return LocalNodeRepo.Load(options.RepoRoot, pool)
@@ -564,7 +583,9 @@ public static class PluginGateRunner
         /// <summary>Boots the gate mesh (blocking — runs once at the console boundary).</summary>
         /// <param name="output">Progress sink.</param>
         /// <param name="seed">The bake this run consumes, or null to compile the content itself.</param>
-        public static GateMesh Create(TextWriter output, BakeSeed? seed = null)
+        public static GateMesh Create(
+            TextWriter output, BakeSeed? seed = null,
+            IReadOnlyList<string>? externalModules = null)
         {
             var services = new ServiceCollection();
             services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
@@ -622,16 +643,30 @@ public static class PluginGateRunner
             // stale when the engine gains a partition. The DB-served shape is load-bearing, not a
             // preference: a statically-served AI partition refuses Agent/Skill package installs
             // (StaticShadowedReason — the 2026-08-11 30s-hang-per-package incident).
+            //
+            // 🚨 EXTERNAL modules (--module) are activated the SAME way, and are REQUIRED too. They
+            // are how a module whose source has left the platform repo still reaches the gate: the
+            // node repo's own CI built the bytes, mounts them, and names them here. Absolute paths
+            // pass through ResolveModulePath untouched, so a mounted module is used exactly as
+            // given — an image copy can never silently substitute for it.
+            var moduleEntries = new Dictionary<string, string?>
+            {
+                ["Modules:Assemblies:0"] = "MeshWeaver.AI.dll",
+                // The .dll suffix is the convention every host uses AND load-bearing: the
+                // resolver derives the folder with GetFileNameWithoutExtension, so a bare
+                // "MeshWeaver.AI" would probe modules/MeshWeaver/ and read as absent.
+                ["Modules:Required:0"] = "MeshWeaver.AI.dll",
+                ["Features:StaticRepoSync:Partitions:0"] = "Agent",
+            };
+            var externalIndex = 1;
+            foreach (var module in externalModules ?? [])
+            {
+                moduleEntries[$"Modules:Assemblies:{externalIndex}"] = module;
+                moduleEntries[$"Modules:Required:{externalIndex}"] = module;
+                externalIndex++;
+            }
             var gateModules = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["Modules:Assemblies:0"] = "MeshWeaver.AI.dll",
-                    // The .dll suffix is the convention every host uses AND load-bearing: the
-                    // resolver derives the folder with GetFileNameWithoutExtension, so a bare
-                    // "MeshWeaver.AI" would probe modules/MeshWeaver/ and read as absent.
-                    ["Modules:Required:0"] = "MeshWeaver.AI.dll",
-                    ["Features:StaticRepoSync:Partitions:0"] = "Agent",
-                })
+                .AddInMemoryCollection(moduleEntries)
                 .Build();
             // 🚨 A gate never tests its own inputs (AGENTS.md): a missing engine module fails RED
             // here, never a booted mesh without the AI node types that then refuses every install
@@ -642,9 +677,10 @@ public static class PluginGateRunner
                 throw new InvalidOperationException(
                     "the gate's required module(s) did not resolve beside the binary: "
                     + string.Join(", ", missingModules)
-                    + ". The MeshModulesPublish closure lane in MeshWeaver.PluginTester.csproj "
-                    + "lays modules/MeshWeaver.AI/ into the build and publish output — a run "
-                    + "whose layout is missing cannot gate.");
+                    + ". Modules this image ships come from the MeshModulesPublish closure lane "
+                    + "in MeshWeaver.PluginTester.csproj; modules passed with --module must exist "
+                    + "at the absolute path given (mount them into the container). A run whose "
+                    + "modules are missing cannot gate.");
             var builder = new MeshBuilder(c => c.Invoke(services), AddressExtensions.CreateMeshAddress())
                 .UseMonolithMesh()
                 .AddInMemoryPersistence()
