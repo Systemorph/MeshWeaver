@@ -92,10 +92,21 @@ public static class ModuleGenerationPin
 
     private static void CopyTree(string source, string destination)
     {
+        // Reparse points (symlinks/junctions) are never followed: a landed generation is plain
+        // files by construction, so a link inside one is corruption or crafting, and following it
+        // would pull arbitrary filesystem content into the pin (huge copies, unintended reads).
+        // Parent directories are created per file, so no directory pass traverses links either.
         Directory.CreateDirectory(destination);
-        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
-            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
-            File.Copy(file, Path.Combine(destination, Path.GetRelativePath(source, file)), overwrite: false);
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            AttributesToSkip = FileAttributes.ReparsePoint,
+        };
+        foreach (var file in Directory.EnumerateFiles(source, "*", options))
+        {
+            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: false);
+        }
     }
 }
