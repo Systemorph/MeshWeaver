@@ -1,8 +1,6 @@
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -104,55 +102,5 @@ public class NodeOperationIssuingHubTest(ITestOutputHelper output) : MonolithMes
         capture.Records.Should().BeEmpty(
             "work issued while holding the router must never make the router an end of any delivery; "
             + $"got: [{string.Join("; ", capture.Records.Select(r => r.ToString()))}]");
-    }
-
-    /// <summary>Captures the <c>ROUTER_TRAFFIC</c> ERROR records the detector logs.</summary>
-    private sealed record RouterTrafficRecord(string MessageType, string Role, string Sender, string Target);
-
-    private sealed class RouterTrafficCapture : ILoggerProvider
-    {
-        private readonly ConcurrentQueue<RouterTrafficRecord> records = new();
-
-        internal RouterTrafficRecord[] Records => records.ToArray();
-
-        public ILogger CreateLogger(string categoryName) => new CapturingLogger(records);
-
-        public void Dispose() { }
-
-        private sealed class CapturingLogger(ConcurrentQueue<RouterTrafficRecord> sink) : ILogger
-        {
-            private sealed class NullScope : IDisposable
-            {
-                internal static readonly NullScope Instance = new();
-                public void Dispose() { }
-            }
-
-            public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
-
-            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Error;
-
-            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-                Func<TState, Exception?, string> formatter)
-            {
-                if (logLevel < LogLevel.Error || state is not IReadOnlyList<KeyValuePair<string, object?>> values)
-                    return;
-                if (!formatter(state, exception).StartsWith("ROUTER_TRAFFIC:", StringComparison.Ordinal))
-                    return;
-
-                sink.Enqueue(new RouterTrafficRecord(
-                    Value(values, "MessageType"),
-                    Value(values, "Role"),
-                    Value(values, "Sender"),
-                    Value(values, "Target")));
-            }
-
-            private static string Value(IReadOnlyList<KeyValuePair<string, object?>> values, string key)
-            {
-                foreach (var pair in values)
-                    if (pair.Key == key)
-                        return pair.Value?.ToString() ?? "";
-                return "";
-            }
-        }
     }
 }
