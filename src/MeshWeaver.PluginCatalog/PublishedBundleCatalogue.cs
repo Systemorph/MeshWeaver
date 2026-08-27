@@ -159,6 +159,15 @@ public static class PublishedBundleCatalogue
     /// directory, and the one that said "ready" would be the optimistic one — which is precisely
     /// the direction a gate must never be wrong in.</para>
     /// </summary>
+    /// <summary>
+    /// The bundle names one source's SEALED publication lists, or null when the publication is
+    /// torn (no sentinel, or a listed bundle absent). This is THE rule for "what may be served
+    /// from this directory" — the registry's prebuilt route reads through it so a consumer can
+    /// never be handed a torn set the boot seeder itself would refuse.
+    /// </summary>
+    public static IReadOnlyList<string>? SealedBundlesOf(string sourceDirectory, ILogger? logger = null)
+        => CompleteBundlesOf(sourceDirectory, logger);
+
     private static IReadOnlyList<string>? CompleteBundlesOf(string sourceDirectory, ILogger? logger)
     {
         var sentinel = Path.Combine(
