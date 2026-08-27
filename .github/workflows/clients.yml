@@ -30,7 +30,7 @@ name: Clients
 #     Locales.cs
 #   src/MeshWeaver.Blazor/BlazorViewRegistry.cs         → clients/react/src/render/parity.test.ts
 #                                                         (control/skin vocabulary is DERIVED from it)
-#   src/MeshWeaver.Hosting.Grpc/Protos/**               → the canonical mesh.proto the python,
+#   src/MeshWeaver.Mesh.Contract/Protos/**               → the canonical mesh.proto the python,
 #                                                         grpc-web and typescript clients generate from
 #   src/MeshWeaver.Mesh.Contract/CreateNodeRequest.cs   → clients/grpc-web/src/wireContract.test.ts
 #   src/MeshWeaver.Mesh.Contract/MeshNode.cs              (the C# records the SDKs' wire.ts field
@@ -65,7 +65,7 @@ on:
       - "src/MeshWeaver.Messaging.Hub/Localization/**"
       - "src/MeshWeaver.Messaging.Contract/Localization/Locales.cs"
       - "src/MeshWeaver.Blazor.Views/ViewsExtensions.cs"
-      - "src/MeshWeaver.Hosting.Grpc/Protos/**"
+      - "src/MeshWeaver.Mesh.Contract/Protos/**"
       - "src/MeshWeaver.Mesh.Contract/CreateNodeRequest.cs"
       - "src/MeshWeaver.Mesh.Contract/MeshNode.cs"
       - "src/MeshWeaver.Mesh.Contract/MeshNodeReference.cs"
@@ -82,7 +82,7 @@ on:
       - "src/MeshWeaver.Messaging.Hub/Localization/**"
       - "src/MeshWeaver.Messaging.Contract/Localization/Locales.cs"
       - "src/MeshWeaver.Blazor.Views/ViewsExtensions.cs"
-      - "src/MeshWeaver.Hosting.Grpc/Protos/**"
+      - "src/MeshWeaver.Mesh.Contract/Protos/**"
       - "src/MeshWeaver.Mesh.Contract/CreateNodeRequest.cs"
       - "src/MeshWeaver.Mesh.Contract/MeshNode.cs"
       - "src/MeshWeaver.Mesh.Contract/MeshNodeReference.cs"
