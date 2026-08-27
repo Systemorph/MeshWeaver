@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{3c8f2b1a-9d4e-4f7b-8a2c-5e6d7f8a9b0c}</ProjectGuid>
+    <!-- Same namespace as MeshWeaver.Hosting.Orleans.TestBase on purpose: these are the AI-flavoured
+         halves of the SAME machinery (the base, the shared fixture, the fake chat clients, the test
+         seeds), split into their own assembly so that the base can become AI-free and this half can
+         travel to MeshWeaver.Plugins together with the AI engine and its test suites (#2276). No
+         test file changes a using for the split. -->
+    <RootNamespace>MeshWeaver.Hosting.Orleans.Test</RootNamespace>
+    <Description>The AI-flavoured Orleans test machinery: OrleansTestBase (AI-typed client + AddAI mesh), the shared cluster fixture with the swappable chat-client factory, fake chat clients, and the default agent/thread test seeds. Builds on MeshWeaver.Hosting.Orleans.TestBase; travels with MeshWeaver.AI.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.TestingHost" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" />
+    <PackageReference Include="xunit.v3.extensibility.core" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Hosting.Orleans.TestBase\MeshWeaver.Hosting.Orleans.TestBase.csproj" />
+    <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Compiler\MeshWeaver.Compiler.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.PostgreSql.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Grpc.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Threading.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Social.Test" />
+  </ItemGroup>
+</Project>
