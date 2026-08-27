@@ -58,11 +58,9 @@
          left: Hosting.Grpc, whose UseMeshWeaverGrpcWebWhenInstalled is middleware-order-coupled and
          cannot ride the endpoint hook.
          Speech is no longer among them — the coupling WAS "ISpeechTranscriber lives in the module",
-         and splitting the interface into MeshWeaver.Speech.Contract removed it; it is on the
-         closure lane below.
-         Social is relocating to MeshWeaver.SocialMedia (the modularization program's task 63, a
-         program-plan task rather than a GitHub issue) and already ships from the closure lane here;
-         see src/MeshWeaver.Social/README.md. -->
+         and splitting the interface into MeshWeaver.Speech.Contract removed it; it left for the
+         registry. Social completed its relocation to MeshWeaver.SocialMedia: the registry serves
+         its bundle and the hosts declare it Modules:Required — no row here any more. -->
 
 
     <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2). -->
@@ -135,7 +133,6 @@
          project AFTER importing this file (Remove by %(Filename) + Include). Storage stays
          IMAGE-shipped there for the same reason it was here — a Store-installed module needs
          storage to already work. -->
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
   </ItemGroup>
 
   <!-- 🚨 THE CALLER'S INVENTORY, NOT THIS FILE'S. The closure-lane worker targets below run as an
@@ -387,7 +384,7 @@
          The loser's atomic temp-file move found the destination already present:
 
              error : The file '.../src/MeshWeaver.AI/obj/project.assets.json' already exists.
-                     [.../MeshWeaver.Social.csproj]
+                     [.../MeshWeaver.Hosting.Cosmos.csproj]
              MSB4181: The "MSBuild" task returned false but did not log an error.  (x2)
 
          and `Build solution (once)` failed for a PR whose diff was one markdown file. MSBuild
