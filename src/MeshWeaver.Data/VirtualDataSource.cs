@@ -112,7 +112,29 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
                                 return (ChangeItem<EntityStore>?)
                                     new ChangeItem<EntityStore>(newStore, Id.ToString()!, stream.StreamId, ChangeType.Full, stream.Hub.Version, []);
                             }, _ => { });
-                    })
+                    },
+                    // 🚨 THE ERROR ARM IS NOT OPTIONAL — omitting it is a PROCESS KILLER, not a
+                    // missing log line. A virtual type's provider is arbitrary composed content
+                    // (a mesh read, a query hop, a CombineLatest over other streams), so it CAN
+                    // fault; and Rx's default onError handler for a one-argument Subscribe is
+                    // Stubs.Throw, which RETHROWS the fault on whatever thread carried it. That
+                    // thread is almost never one with a catch: in Systemorph/MeshWeaver#2468 the
+                    // provider's `hub.GetMeshNode(...)` timed out, so the OnError originated in a
+                    // CancellationTokenSource callback on a TimerQueue thread — the rethrow became
+                    // an UNHANDLED exception, the host aborted (core dumped), and the Doc content
+                    // gate reported "failed before it produced a verdict — no check was judged".
+                    // A gate that dies before judging is worse than a gate that fails.
+                    //
+                    // Reported, never swallowed: the fault is real and this collection is now
+                    // frozen at its last emission. The data source's own initialization observes
+                    // the SAME faulted Replay(1) (VirtualTypeSource.StreamUpdates), so a fault
+                    // during init still fails the hub's startup through the normal path — this arm
+                    // exists so a fault can never take the process with it.
+                    error => Logger.LogError(error,
+                        "Virtual data source {DataSource}: the provider for collection "
+                        + "'{Collection}' faulted. That collection is frozen at its last emission "
+                        + "and will receive no further updates on hub {Address}",
+                        Id, typeSource.CollectionName, Workspace.Hub.Address))
             );
         }
 

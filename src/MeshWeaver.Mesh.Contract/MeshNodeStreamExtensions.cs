@@ -2145,8 +2145,10 @@ public static class MeshNodeStreamExtensions
     /// <list type="bullet">
     ///   <item><see cref="NodeReadStatus.Present"/> — a node came back.</item>
     ///   <item><see cref="NodeReadStatus.Absent"/> — routing said
-    ///     <see cref="ErrorType.NotFound"/>, the owner answered with no data, or a read validator
-    ///     hid it (a hidden node is invisible by contract).</item>
+    ///     <see cref="ErrorType.NotFound"/>, the owner answered with no data, a read validator
+    ///     hid it (a hidden node is invisible by contract), or the reader is a TRANSIENT NODE
+    ///     PROBE being asked for its OWN address, which by contract is never a mesh node — that
+    ///     one is answered without a round-trip at all (see the guard in the body).</item>
     ///   <item><see cref="NodeReadStatus.DeleteInProgress"/> — the owner answered with its delete
     ///     tombstone (<c>GetDataResponse.Absence</c>).</item>
     ///   <item><see cref="NodeReadStatus.Unavailable"/> — the delivery failed for any other
@@ -2180,6 +2182,51 @@ public static class MeshNodeStreamExtensions
             // "DeliveryFailure … (sender: Plugins/_DefaultInstallLedger)"). Same seam MeshService
             // uses for CRUD; a non-router caller gets itself back, unchanged.
             var issuingHub = hub.NodeOperationIssuingHub();
+
+            // ♻️ A TRANSIENT NODE PROBE HAS NO MESH NODE — so reading its OWN address is a CYCLE,
+            // and the only way it ever ended was by spending the entire budget.
+            //
+            // A probe hub (`$model-probe/{guid}`, `$schema-probe/{guid}`) exists to have a
+            // NodeType's INSTANCE configuration applied to it so its type registry / schema can be
+            // snapshotted, and is disposed in the same breath. AsTransientNodeProbe states the
+            // contract outright: "with no own-node subscription and no persistence sampler it has
+            // no node identity". But that instance configuration is content written for a REAL
+            // per-node hub, where the hub's address IS its mesh path — so deriving a path from
+            // `Hub.Address` and reading it is an ordinary, correct thing for a loader to do. On the
+            // probe that same derivation collapses onto the probe's own synthetic address.
+            //
+            // The read is then posted to the probe itself, where it parks behind the
+            // DataContextInit / MeshNodeInit gates — and it is the probe's OWN data-context
+            // initialization that issued it, so the gates cannot open until the read completes and
+            // the read cannot complete until the gates open. Systemorph/MeshWeaver#2468: every such
+            // read burned its full 10 s and then errored from the CTS timer thread.
+            //
+            // Absent is the TRUTHFUL answer, not a shortcut: there is no node at this address and
+            // there never will be. Answering immediately is the same reasoning as "a gate that can
+            // never open must answer immediately rather than sit on a timeout" — and it is scoped
+            // to the probe's own address, so a probe reading any REAL path is untouched.
+            if (issuingHub.Configuration.Get<TransientNodeProbe>() is not null
+                && string.Equals(path, issuingHub.Address.ToString(), StringComparison.Ordinal))
+            {
+                try
+                {
+                    issuingHub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode")
+                        ?.LogDebug(
+                            "GetMeshNode('{Path}') on a transient node probe reads the probe's OWN "
+                            + "address — a probe has no mesh node, so this is answered Absent "
+                            + "immediately rather than parked behind the probe's own init gates.",
+                            path);
+                }
+                catch
+                {
+                    // Logging must never mask the verdict it is reporting.
+                }
+                observer.OnNext(NodeReadOutcome.Absent);
+                observer.OnCompleted();
+                return Disposable.Empty;
+            }
+
             var budget = timeout ?? TimeSpan.FromSeconds(10);
             var started = Stopwatch.StartNew();
             var cts = new CancellationTokenSource(budget);
