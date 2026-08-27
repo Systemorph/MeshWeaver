@@ -44,18 +44,89 @@ public class ModuleActivationBootTest
             .Should().Equal("Acme.Widgets", "Acme.Reports");
     }
 
+    /// <summary>
+    /// 🚨 #2548 INVERTED this. A usable store entry now OVERRIDES a same-named baseline entry
+    /// instead of being deduped away by it — case-insensitively, and taking the baseline's SLOT so
+    /// load order is unchanged.
+    ///
+    /// <para>Before: the baseline won, and the registry-landed copy the operator had installed was
+    /// unreachable. That is what left the two Blazor view packs served from nowhere once they left
+    /// the image, so a fresh mesh rendered every control as escaped JSON while booting healthy.</para>
+    ///
+    /// <para>The module is still loaded exactly ONCE — the override substitutes, it does not
+    /// append, which is the half a "registry wins" change most easily gets wrong.</para>
+    /// </summary>
     [Fact]
-    public void PersistedDuplicateOfBaseline_IsDeduplicatedByName_CaseInsensitive()
+    public void UsablePersistedEntry_OverridesTheSameNamedBaseline_CaseInsensitive()
     {
         var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
             ["MeshWeaver.OgCard.dll"],
             List(Store("meshweaver.ogcard"), Store("Acme.Widgets"), Store("ACME.WIDGETS")),
             AcceptAll, AllDllsExist);
 
-        // A store install of an already-baseline module (any casing) must not double-load it.
-        effective.Select(m => m.Entry).Should().Equal("MeshWeaver.OgCard.dll", "Acme.Widgets.dll");
-        effective[0].Landed.Should().BeNull("the BASELINE entry won the dedupe, so it stays baseline "
-            + "— resolving it through the shadowed sidecar entry's folder would be a different file");
+        effective.Select(m => m.Entry).Should().Equal("meshweaver.ogcard.dll", "Acme.Widgets.dll");
+        effective[0].Landed.Should().NotBeNull(
+            "the store entry now wins, so the module resolves through its LANDED generation — the "
+            + "whole point of #2548; a null here means the baseline shadowed it again");
+        effective[0].Landed!.Name.Should().Be("meshweaver.ogcard");
+        effective.Should().HaveCount(2, "an override SUBSTITUTES into the baseline's slot; it must "
+            + "never append a second entry for the same module");
+    }
+
+    /// <summary>
+    /// 🚨 The half that makes the override safe, and the one worth breaking the build over: an
+    /// UNUSABLE store entry must NOT remove the baseline. Otherwise a rejected upgrade — a landed
+    /// DLL that never arrived, a platform gate that refuses it — turns into a MISSING module, which
+    /// is strictly worse than running the older copy.
+    /// </summary>
+    [Fact]
+    public void UnusablePersistedEntry_LeavesTheBaselineLoading_AndSaysWhy()
+    {
+        var skips = new List<(string Module, string Reason)>();
+
+        var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+            ["MeshWeaver.OgCard.dll"],
+            List(Store("MeshWeaver.OgCard")),
+            AcceptAll,
+            _ => false,                       // its landed DLL is not there
+            (m, r) => skips.Add((m, r)));
+
+        effective.Select(m => m.Entry).Should().Equal("MeshWeaver.OgCard.dll");
+        effective[0].Landed.Should().BeNull("the baseline is the FLOOR — an unusable store entry "
+            + "must fall back to it, never delete it");
+        skips.Should().ContainSingle().Which.Module.Should().Be("MeshWeaver.OgCard");
+    }
+
+    /// <summary>
+    /// A DISABLED store entry is not an override either — disabling a module must return it to the
+    /// baseline, not remove it. Distinct from the unusable case above: disabling is a deliberate
+    /// operator action and is not reported as a skip.
+    /// </summary>
+    [Fact]
+    public void DisabledPersistedEntry_DoesNotOverrideTheBaseline()
+    {
+        var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+            ["MeshWeaver.OgCard.dll"],
+            List(Store("MeshWeaver.OgCard", enabled: false)),
+            AcceptAll, AllDllsExist);
+
+        effective.Select(m => m.Entry).Should().Equal("MeshWeaver.OgCard.dll");
+        effective[0].Landed.Should().BeNull();
+    }
+
+    /// <summary>
+    /// With nothing overriding, the emitted list must be exactly what it was before #2548 — same
+    /// entries, same ORDER. The override substitutes in place precisely so that this holds.
+    /// </summary>
+    [Fact]
+    public void WithNoOverride_TheBaselineOrderIsUnchanged()
+    {
+        var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+            ["A.dll", "B.dll", "C.dll"],
+            List(Store("D.Widgets")),
+            AcceptAll, AllDllsExist);
+
+        effective.Select(m => m.Entry).Should().Equal("A.dll", "B.dll", "C.dll", "D.Widgets.dll");
     }
 
     [Fact]

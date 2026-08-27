@@ -504,20 +504,22 @@ public static class ModuleActivationBoot
         var effective = ImmutableList.CreateBuilder<EffectiveModule>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var entry in baselineEntries ?? [])
-        {
-            if (string.IsNullOrWhiteSpace(entry))
-                continue;
-            effective.Add(new EffectiveModule(entry, Landed: null));
-            seen.Add(Path.GetFileNameWithoutExtension(entry));
-        }
-
+        // ── Pass 1: which enabled persisted entries are USABLE ──────────────────────────────────
+        // A usable one OVERRIDES a same-named baseline entry (#2548); an unusable one must not,
+        // because removing the baseline would turn a rejected upgrade into a missing module — a
+        // strictly worse outcome than running the older copy.
+        //
+        // 🚨 The gates now run for an entry that shadows a baseline name, which they did not before:
+        // the old code deduped such an entry away BEFORE reaching them, so a store-installed module
+        // that could not load was silently indistinguishable from one that was never installed.
+        // Reporting it is the point — the operator needs to know the registry copy was refused.
+        var overrides = new Dictionary<string, ModuleActivationEntry>(StringComparer.OrdinalIgnoreCase);
         foreach (var module in persisted?.Entries ?? [])
         {
             if (!module.Enabled || string.IsNullOrWhiteSpace(module.Name))
                 continue;
-            if (!seen.Add(module.Name))
-                continue; // already activated (baseline or an earlier entry) — dedupe by name
+            if (overrides.ContainsKey(module.Name))
+                continue; // first ENABLED entry of a name wins, as it always has
 
             if (platformGate(module.MinMeshVersion) is { } reason)
             {
@@ -533,6 +535,35 @@ public static class ModuleActivationBoot
                     + "does NOT satisfy a store-installed entry) — re-install the module");
                 continue;
             }
+
+            overrides[module.Name] = module;
+        }
+
+        // ── Pass 2: the baseline, in its own order, with a usable override substituted IN PLACE ──
+        // Order is preserved deliberately: when nothing overrides, the emitted list is byte-for-byte
+        // what it was before this change, so the only behaviour that moves is the one #2548 is about.
+        foreach (var entry in baselineEntries ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(entry))
+                continue;
+            var name = Path.GetFileNameWithoutExtension(entry);
+            if (!seen.Add(name))
+                continue; // a baseline that repeats a name is still deduped
+
+            effective.Add(overrides.TryGetValue(name, out var winner)
+                ? new EffectiveModule(winner.Name + ".dll", winner)
+                : new EffectiveModule(entry, Landed: null));
+        }
+
+        // ── Pass 3: usable persisted entries with no baseline counterpart, in persisted order ────
+        foreach (var module in persisted?.Entries ?? [])
+        {
+            if (!module.Enabled || string.IsNullOrWhiteSpace(module.Name))
+                continue;
+            if (!overrides.TryGetValue(module.Name, out var winner) || !ReferenceEquals(winner, module))
+                continue; // not the winning entry for this name, or not usable at all
+            if (!seen.Add(module.Name))
+                continue; // already emitted in pass 2, substituted into the baseline's slot
 
             effective.Add(new EffectiveModule(module.Name + ".dll", module));
         }

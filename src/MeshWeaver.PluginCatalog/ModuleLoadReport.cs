@@ -136,11 +136,19 @@ public static class ModuleLoadReport
               + "Modules:Assemblies — decides which generation loads, and it still names the older "
               + "one. Re-install the module so activation records the newer generation."
             // The baseline lane: ResolveModulePath's landed probe looks in the fixed
-            // modules/<Name>/ folder, which generation landing never writes, so the image copy wins
-            // — and the sidecar entry that WOULD have named the generation was deduped away by name.
-            : "A baseline Modules:Assemblies entry resolves to the image copy and dedupes the store "
-              + "entry away by name; delist it from Modules:Assemblies to let the landed generation "
-              + "win.";
+            // modules/<Name>/ folder, which generation landing never writes, so the image copy wins.
+            // Before #2548 the sidecar entry that WOULD have named the generation was also deduped
+            // away by name; it no longer is, so reaching this branch means no usable store entry
+            // exists — which changes the advice completely.
+            // 🚨 NOT "delist it". Since #2548 a USABLE store entry overrides a same-named baseline,
+            // so a baseline entry that is still winning means there is no usable store entry to
+            // take over — and delisting would remove the only copy that loads rather than promoting
+            // a newer one. The baseline is the floor, and the floor is what you keep.
+            : "A baseline Modules:Assemblies entry is loading the image copy because no usable "
+              + "store-installed entry claims this name — an enabled entry whose landed DLL exists "
+              + "would override it. Re-install the module so activation records a landed generation "
+              + "this instance can load; do NOT delist the baseline, which is the fallback that "
+              + "keeps the module loading at all.";
 
     /// <summary>
     /// The newest copy of <paramref name="name"/> under <c>{moduleRoot}/modules/</c> that is neither
