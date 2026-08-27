@@ -19,15 +19,44 @@ namespace MeshWeaver.Mesh.Threading;
 /// ran (or unwound after cancellation) within its quiesce budget.</param>
 public sealed record TeardownReport(int LeakedIoLeaves, bool AsyncDisposeClean)
 {
+    /// <summary>
+    /// The exception the hub's <c>DisposalCompleted</c> reported instead of a completion, or
+    /// <c>null</c> when disposal finished normally.
+    ///
+    /// <para>🚨 This used to be DISCARDED. The wait was
+    /// <c>DisposalCompleted.Catch(_ =&gt; Observable.Return(Unit.Default))</c>, which turns a
+    /// faulted disposal into an indistinguishable success — issue #2488 lists it as one of the
+    /// swallow-and-continue sites. It is now OBSERVED and carried here, and logged at Error by the
+    /// orchestrator. It deliberately does NOT (yet) affect <see cref="Clean"/>: whether a faulted
+    /// disposal should FAIL a test class or a host shutdown is an escalation decision of its own,
+    /// separate from the observation defect this record's population fixes.</para>
+    /// </summary>
+    public Exception? DisposalFault { get; init; }
+
+    /// <summary>
+    /// Whether the pre-dispose activity quiesce reached idle within its budget. <c>false</c> means
+    /// a run was still writing when teardown proceeded — previously indistinguishable from idle,
+    /// because the timeout was folded into a successful completion (#2488, site 2).
+    /// </summary>
+    public bool ActivitiesQuiesced { get; init; } = true;
+
     /// <summary>True iff nothing survived teardown — the scope may be disposed and node ALCs
     /// unloaded with no thread still executing their code.</summary>
     public bool Clean => LeakedIoLeaves == 0 && AsyncDisposeClean;
 
     /// <summary>One-line summary for logs and failure messages.</summary>
-    public override string ToString() => Clean
-        ? "teardown clean — all pooled I/O joined, async dispose queue drained"
-        : $"teardown DIRTY — {LeakedIoLeaves} pooled I/O leaf(s) still running, "
-          + $"async dispose queue {(AsyncDisposeClean ? "drained" : "still running")}";
+    public override string ToString()
+    {
+        var notes = string.Empty;
+        if (!ActivitiesQuiesced)
+            notes += "; activities did NOT quiesce within budget";
+        if (DisposalFault is not null)
+            notes += $"; disposal FAULTED: {DisposalFault.GetType().Name}: {DisposalFault.Message}";
+        return (Clean
+            ? "teardown clean — all pooled I/O joined, async dispose queue drained"
+            : $"teardown DIRTY — {LeakedIoLeaves} pooled I/O leaf(s) still running, "
+              + $"async dispose queue {(AsyncDisposeClean ? "drained" : "still running")}") + notes;
+    }
 }
 
 /// <summary>

@@ -1613,36 +1613,77 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     }
 
     /// <summary>
-    /// Awaits <see cref="IMessageHub.DisposalCompleted"/> with periodic progress snapshots.
+    /// Waits for <see cref="IMessageHub.DisposalCompleted"/> with periodic progress snapshots.
     /// Every <see cref="DisposeProgressInterval"/>, dumps
     /// <see cref="IMessageHub.GetDisposalDiagnostics"/> to <see cref="MeshWeaver.Fixture.TestBase.FileOutput"/>
     /// so a hang shows up as a stream of snapshots converging on the offending hub
     /// — instead of one big snapshot at the timeout.
+    ///
+    /// <para>🚨 <b>Both halves are SUBSCRIPTIONS now (#2301, #2488 site 3).</b> This used to bridge
+    /// the reactive signal to a Task with <c>Catch(…).FirstOrDefaultAsync().ToTask()</c> and then
+    /// POLL that Task in a <c>while (!disposal.IsCompleted)</c> loop — the canonical
+    /// "wait for disposal" every test in the suite runs, so it shaped what teardown failures look
+    /// like everywhere.</para>
+    ///
+    /// <para>The first defect was DEADLOCK, not the discarded fault. Rx completes a
+    /// <c>ToTask()</c> <c>TaskCompletionSource</c> from inside the pipeline WITHOUT
+    /// <c>RunContinuationsAsynchronously</c>, so <c>DisposeAsync</c> resumed INLINE on the thread
+    /// that signalled disposal — the mesh hub's own — and then ran the rest of teardown there,
+    /// including <c>ioPools.DrainAll()</c>, a SYNCHRONOUS JOIN of every pooled I/O leaf. The
+    /// second was that the <c>Catch</c> discarded a disposal fault outright, and the Task could
+    /// observe nothing once it settled. The progress ticker is now an <c>Observable.Interval</c>
+    /// that stops on the signal's own terminal, and the wait is one <c>Subscribe</c> whose task
+    /// completes asynchronously, with an error arm.</para>
     /// </summary>
     private async Task WaitWithProgressAsync(string testName, Stopwatch sw, CancellationToken ct)
     {
-        // Bridge the reactive completion to a Task once, at this test-teardown edge. Catch folds
-        // a disposal fault into completion (teardown only waits for "done", not why).
-        var disposal = Mesh.DisposalCompleted
-            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-            .FirstOrDefaultAsync()
-            .ToTask();
-        while (!disposal.IsCompleted)
+        var disposal = Mesh.DisposalCompleted;
+
+        // Progress ticker: stops on the signal's terminal, whatever it is. Materialize() so a
+        // FAULTED disposal ends the ticker as data rather than pushing an error into a
+        // subscription that has no arm for it.
+        using var progress = Observable.Interval(DisposeProgressInterval)
+            .TakeUntil(disposal.Materialize())
+            .Subscribe(
+                _ =>
+                {
+                    FileOutput.WriteLine(
+                        $"[DISPOSE] {testName}: still waiting after {sw.ElapsedMilliseconds}ms — snapshot:");
+                    FileOutput.WriteLine(SafeGetDiagnostics());
+                },
+                ex => FileOutput.WriteLine(
+                    $"[DISPOSE] {testName}: progress ticker faulted: {ex.GetType().Name}: {ex.Message}"));
+
+        try
         {
-            using var progressCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            progressCts.CancelAfter(DisposeProgressInterval);
-            try
-            {
-                await disposal.WaitAsync(progressCts.Token);
-                return; // disposal completed
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                // Progress tick fired before disposal completed — log a snapshot and loop.
-                FileOutput.WriteLine(
-                    $"[DISPOSE] {testName}: still waiting after {sw.ElapsedMilliseconds}ms — snapshot:");
-                FileOutput.WriteLine(SafeGetDiagnostics());
-            }
+            // ConfigureAwait(false): belt and braces on top of ObserveCompletion's
+            // RunContinuationsAsynchronously. `await` captures TaskScheduler.Current when there is
+            // no SynchronizationContext, so a teardown entered from a hub scheduler would
+            // otherwise route the rest of DisposeAsync — including the synchronous
+            // ioPools.DrainAll() join — back onto it. (Copilot review, #2527.)
+            await disposal.ObserveCompletion(
+                ex => FileOutput.WriteLine(
+                    $"[DISPOSE] {testName}: disposal faulted AFTER the wait settled — reported, "
+                    + $"not orphaned: {ex.GetType().Name}: {ex.Message}"),
+                ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // The hang path — unchanged. DisposeAsync turns this into a loud TimeoutException
+            // carrying the hub diagnostics.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A disposal FAULT arriving as the answer. Teardown still waits for "done", not "why"
+            // — but the fault is now REPORTED into the per-test output and the phase trace instead
+            // of being discarded by a .Catch nobody could see. (Whether it should also FAIL the
+            // class is an escalation decision of its own; see TeardownReport.DisposalFault.)
+            FileOutput.WriteLine(
+                $"[DISPOSE] {testName}: disposal FAULTED after {sw.ElapsedMilliseconds}ms: "
+                + $"{ex.GetType().Name}: {ex.Message}");
+            TestPhaseTrace(testName, "DISPOSE_FAULTED", sw.ElapsedMilliseconds,
+                $"{ex.GetType().Name}: {ex.Message}");
         }
     }
 

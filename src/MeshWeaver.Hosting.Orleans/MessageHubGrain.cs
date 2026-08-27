@@ -95,6 +95,16 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     private IDisposable? _activationSubscription;
 
     /// <summary>
+    /// The activation's own "I am completely gone" signal, handed to hub code as
+    /// <see cref="GrainDeactivationCompleted"/> so anything that has to wait for THIS activation to
+    /// die can <c>Subscribe</c> to it instead of sampling the silo catalog on an interval.
+    /// <see cref="AsyncSubject{T}"/> is the exact shape wanted: it fires once, at the end, and
+    /// replays that terminal to every later subscriber — a waiter that attaches after the
+    /// deactivation already finished is answered immediately rather than parking forever.
+    /// </summary>
+    private readonly AsyncSubject<Unit> _deactivationCompleted = new();
+
+    /// <summary>
     /// Set at the START of <see cref="OnDeactivateAsync"/>. Grain-lifetime calls arriving
     /// after this point (see <see cref="TryDeactivateOnIdle"/> / <see cref="TryDelayDeactivation"/>)
     /// are graceful no-ops: reactive continuations — an activation-source emission racing
@@ -185,6 +195,38 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         var address = meshHub.GetAddress(streamId);
         var addressPath = address.ToString();
         var grainScheduler = TaskScheduler.Current;
+
+        // Arm the deactivation-completed signal FIRST, before anything can request deactivation.
+        // GrainContext.Deactivated is Orleans' own completion source for this activation: in
+        // 10.2.2 ActivationData.FinishDeactivating sets it on its LAST line — after
+        // OnDeactivateAsync, after the lifecycle OnStop, after GrainLocator.Unregister, after
+        // UnregisterMessageTarget() has removed the activation from the silo catalog and after
+        // DisposeAsync() has put it in State=Invalid. So "this signal fired" means exactly
+        // "the activation is gone", which is what the catalog poll in OrleansGrainTeardownStragglerTest
+        // was approximating on a 100 ms interval against a 30 s Timeout (#2301).
+        //
+        // The error arm is not decoration: that completion source is only ever
+        // TrySetResult today, but a bridge whose fault has nowhere to go is the defect this whole
+        // change removes, so it gets one on principle and the subject carries the fault to
+        // whoever is waiting.
+        // 🚨 The subscription is deliberately NOT stored and NOT disposed. It must outlive
+        // OnDeactivateAsync — the signal it carries fires strictly AFTER that callback returns —
+        // so a field to dispose would only be an invitation to kill the signal on the way out.
+        // Nothing leaks: Orleans' completion source roots the continuation and dies with the
+        // activation, and the subscription releases itself on that terminal.
+        //
+        // This is the ONE bridge between Orleans' Task-shaped runtime signal and the mesh's
+        // reactive world, and it runs in the sanctioned DIRECTION: a Task SOURCE becomes an
+        // observable once, with an error arm, so every mesh-side waiter can Subscribe. (The
+        // forbidden direction is the other one — an observable bridged to a Task with .ToTask(),
+        // which settles once and can no longer observe anything; issue #2301.)
+        _ = GrainContext.Deactivated.ToObservable().Subscribe(
+            _ =>
+            {
+                _deactivationCompleted.OnNext(Unit.Default);
+                _deactivationCompleted.OnCompleted();
+            },
+            ex => _deactivationCompleted.OnError(ex));
 
         // Keep-alive timer — independent of node resolution, no-op until the hub
         // starts processing long-running work.
@@ -510,6 +552,11 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     .WithTaskScheduler(grainScheduler)
                     .Set(new GrainKeepAliveCallback(() => TryDelayDeactivation(TimeSpan.FromMinutes(10))))
                     .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation))
+                    // The completion counterpart to the three callbacks around it: they are what a
+                    // straggler DOES to this activation, this is what the activation TELLS anyone
+                    // waiting for it to be gone. Subscribing to it is the alternative to polling
+                    // the silo catalog — see GrainDeactivationCompleted and #2301/#2488.
+                    .Set(new GrainDeactivationCompleted(_deactivationCompleted.AsObservable()))
                     // #147 escape hatch: the hub's action block runs on THIS grain's
                     // ActivationTaskScheduler (WithTaskScheduler above), so when a stuck round
                     // wedges that scheduler, any rescue that is itself a hub message can never be
