@@ -32,7 +32,7 @@ namespace MeshWeaver.Query.Test;
 ///
 /// <para><b>What it IS.</b> The terminal write shipped a BASE it had itself already superseded.
 /// <c>MeshNodeStreamCache</c> funnels every write to a path through one per-path serial queue, and
-/// that queue advances on a write's LOCAL emit — never on the owner's echo. The next write then read
+/// that queue advanced on a write's LOCAL emit — never on the owner's echo. The next write then read
 /// <c>mirror.Take(1)</c>: the node as it stood BEFORE its predecessor's patch. The owner
 /// three-way-merges that against live state it has already moved past, sees the string changed on
 /// both sides with overlapping edits, and refuses the leaf — keeping exactly the value the
@@ -40,6 +40,16 @@ namespace MeshWeaver.Query.Test;
 /// <c>CompletedAt</c>) land, so ONE write gets two verdicts and the ack is <c>Success</c>. The two
 /// writes were never concurrent: same mirror, strictly ordered by the queue. The conflict is
 /// manufactured.</para>
+///
+/// <para><b>Half of it came back the next day (#2346).</b> The hand-forward this file pins is
+/// published only on the owner's ACK, and the queue slot was released by the caller's terminal —
+/// which, for a busy owner, is <c>UpdateRemote</c>'s optimistic emit at ~2 s, arriving before any
+/// ack. So the successor got no hand-forward at all on precisely the loaded runs that produce this
+/// defect, and <c>OrleansAutoExecuteTest</c> failed with this exact state on a tree containing this
+/// fix. The slot is now released by the hand-off itself and a LATE ack publishes like an early one;
+/// <c>QueuedWriteAdvancesOnHandoffTest</c> (Hosting.Monolith.Test) is that half's deterministic pin,
+/// and it needs a MULTI-FIELD successor — with a single field every leaf is refused, the owner's
+/// nothing-landed backstop NACKs <c>Conflict</c>, and the re-enqueue hides the defect.</para>
 ///
 /// <para>Generalised, the same mechanism froze a streaming cell's text at the first chunk that
 /// landed for as long as the echo lagged the write rate; the placeholder is simply the first chunk
