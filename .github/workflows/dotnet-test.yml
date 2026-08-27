@@ -996,9 +996,12 @@ jobs:
             # not be invisible to every trx reader. It has no bin dir, so the result goes beside
             # the csproj where the artifact glob (test/**/*.trx) still picks it up.
             mkdir -p "$(dirname "$csproj")/TestResults"
-            python3 .github/scripts/record-host-crash.py \
+            if ! python3 .github/scripts/record-host-crash.py \
               "$(dirname "$csproj")/TestResults/$name.trx" "$name" 97 \
-              "MISSING_BIN: this shard's artifact did not contain the project, so it never ran. Build/test shard-assign mismatch."
+              "MISSING_BIN: this shard's artifact did not contain the project, so it never ran. Build/test shard-assign mismatch."; then
+              echo "::error::$name: could not record MISSING_BIN into a trx — this project stays invisible to every trx reader."
+              echo "[CI] $name exit=95 CRASH_RECORD_FAILED (MISSING_BIN could not be written into a trx — read the marker above, not the trx)" >> test/test-results.log
+            fi
             continue
           fi
           if [ ! -f "$dir/$name.dll" ] || [ ! -f "$dir/xunit.v3.core.dll" ]; then
@@ -1029,9 +1032,12 @@ jobs:
             if [ "${#allclasses[@]}" -eq 0 ]; then
               echo "::error::$label: could not enumerate test classes — refusing to run a partial shard silently."
               echo "[CI] $name exit=96 NO_CLASSES (class enumeration failed for a split project)" >> test/test-results.log
-              python3 .github/scripts/record-host-crash.py \
+              if ! python3 .github/scripts/record-host-crash.py \
                 "$dir/TestResults/$name.part$part.trx" "$label" 96 \
-                "NO_CLASSES: class enumeration failed for a split project, so this part ran nothing."
+                "NO_CLASSES: class enumeration failed for a split project, so this part ran nothing."; then
+                echo "::error::$label: could not record NO_CLASSES into a trx — this part stays invisible to every trx reader."
+                echo "[CI] $name exit=95 CRASH_RECORD_FAILED (NO_CLASSES could not be written into a trx — read the marker above, not the trx)" >> test/test-results.log
+              fi
               continue
             fi
             for ((ci=part-1; ci<${#allclasses[@]}; ci+=parts)); do

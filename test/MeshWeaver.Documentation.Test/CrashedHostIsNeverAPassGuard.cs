@@ -224,18 +224,28 @@ public class CrashedHostIsNeverAPassGuard
         var masked = Regex.Matches(classifier, @"MASKED").Count;
         Assert.True(masked >= 2, $"expected both MASKED sub-branches to survive; found {masked}");
 
-        // 🚨 No skip-trapdoor on the recorder call. An `if: <secret is set>` / `continue-on-error`
-        // on a gate's own input is this repo's standing lesson (AGENTS.md → "A gate NEVER tests
-        // its own inputs"); the equivalent here would be swallowing the recorder's failure so the
-        // trx quietly keeps saying "passed".
-        var invocation = Regex.Match(body,
-            @"if ! python3 \.github/scripts/record-host-crash\.py [^\n]*\n(?<body>(?:.*\n)*?)\s*fi\n");
-        Assert.True(invocation.Success,
-            $"{Workflow} no longer invokes {Recorder} with its failure handled. The recorder is the "
-            + "only thing that puts a crash into the evidence every reporter reads; a call whose "
-            + "failure is discarded is the same silence with an extra step.");
-        Assert.Contains("::error::", invocation.Groups["body"].Value);
-        Assert.Contains("CRASH_RECORD_FAILED", invocation.Groups["body"].Value);
+        // 🚨 No skip-trapdoor on ANY recorder call — every one of them, not just the main branch.
+        // A gate that swallows its own input's failure is this repo's standing lesson (AGENTS.md →
+        // "A gate NEVER tests its own inputs"); here the equivalent is discarding the recorder's
+        // exit code so the trx quietly keeps saying "passed". Two of the three call sites shipped
+        // in the first revision of this change doing exactly that, which is why the assertion
+        // counts invocations rather than finding one.
+        var invocations = Regex.Matches(body,
+            @"(?<guarded>if ! )?python3 \.github/scripts/record-host-crash\.py[^\n]*\n(?<body>(?:.*\n)*?)\s*fi\n");
+
+        Assert.True(invocations.Count >= 3,
+            $"{Workflow} should invoke {Recorder} on every path that produces no verdict — the "
+            + $"classifier's death branches, MISSING_BIN and NO_CLASSES. Found {invocations.Count}.");
+
+        foreach (Match invocation in invocations)
+        {
+            Assert.True(invocation.Groups["guarded"].Success,
+                "A recorder call whose exit code is discarded is the same silence with an extra "
+                + "step: the trx keeps reporting whatever the host streamed. Wrap it in "
+                + "`if ! python3 …; then … fi`.");
+            Assert.Contains("::error::", invocation.Groups["body"].Value);
+            Assert.Contains("CRASH_RECORD_FAILED", invocation.Groups["body"].Value);
+        }
     }
 
     private static string NewTempDir()
