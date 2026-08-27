@@ -28,6 +28,13 @@ public class NonfileRouteConstraint : IRouteConstraint
     {
         "_framework", "_content", "_blazor", "favicon.ico",
         "auth", "dev",
+        // 🚨 "api" — every mapped API endpoint outranks the catch-all anyway; this entry is for the
+        // UNMAPPED ones. Without it an unknown /api/… path (a typo, or an endpoint the running build
+        // does not have yet) is served the app shell with 200, and every API client reads that as
+        // success: the plugin gate's upstream-seed fetch took memex's HTML for a sealed-but-empty
+        // publication index (2026-08-27, MeshWeaver.SocialMedia#84) because the registry was one
+        // build behind #2487. An API miss must be a 404 a machine can act on, never a web page.
+        "api",
         "signin-microsoft", "signin-google", "signin-linkedin", "signin-apple"
     };
 

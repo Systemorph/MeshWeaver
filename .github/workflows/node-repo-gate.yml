@@ -356,6 +356,17 @@ jobs:
                 401|403) echo "::error::the registry refused registry-key for '$src' ($code) — the instance needs a whole-source grant '$src/*'."; exit 1 ;;
                 *) echo "::error::registry answered $code for $base — refusing."; exit 1 ;;
               esac
+              # 🚨 200 is NOT proof of an index. The portal answers 200 + HTML (the app shell's
+              # catch-all route) for ANY unknown path, /api/… included — so a registry that does not
+              # serve /prebuilt yet answers this request with a web page. Measured 2026-08-27 on
+              # SocialMedia#84 against a memex one build behind MeshWeaver#2487: jq's parse error
+              # was swallowed, fetched stayed 0, and the step died as "sealed but empty" — the wrong
+              # condition, pointing at the wrong fix. Only a JSON object with a `bundles` array is
+              # a publication index; anything else is a registry that cannot serve this lane yet.
+              if ! jq -e '.bundles | type == "array"' "$SEED_DIR/.index.json" >/dev/null 2>&1; then
+                echo "::error::$base answered 200 but not a publication index (starts: $(head -c 60 "$SEED_DIR/.index.json" | tr -d '\n\r')…). The registry does not serve /api/plugins/bundles/prebuilt — it runs a build without MeshWeaver#2487. Refusing to guess; retry once the registry has rolled."
+                exit 1
+              fi
               for name in $(jq -r '.bundles[]' "$SEED_DIR/.index.json"); do
                 curl -sSf -H "Authorization: Bearer $REGISTRY_KEY" -o "$SEED_DIR/$name" "$base/$name" || { echo "::error::could not fetch $name"; exit 1; }
                 fetched=$((fetched+1))
@@ -487,9 +498,26 @@ jobs:
           else
             SEED_MOUNT=()
           fi
-          docker run --rm --init -v "$REPO_MOUNT:/repo" "${SEED_MOUNT[@]}" "${DUMP_ARGS[@]}" \
+          # ── BUILD ONCE, TEST WHAT WAS BUILT (Doc/Architecture/PluginBuildContract, step 3 → 4).
+          # The gate used to compile in-mesh and DISCARD the result; publish-bake then compiled the
+          # identical source again on merge. Now: `compile` (mesh-free, the producer) writes this
+          # repo's OWN bundles to /bake; the gate stands its mesh up on THOSE bytes (`--seed`), so
+          # what is tested is what would ship; and the bake is uploaded as `bake-<sha>` so the
+          # merge's publish-bake can REUSE it (bake-run-id) instead of compiling a third time.
+          # The upstream seed (if any) is a SEPARATE mount: consumed, never re-emitted.
+          OWN_BAKE="${RUNNER_TEMP:-/tmp}/own-bake"; mkdir -p "$OWN_BAKE"; chmod 777 "$OWN_BAKE"
+          docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/bake" "${SEED_MOUNT[@]}" "${DUMP_ARGS[@]}" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" compile /repo \
+            "${ALLOW_ARGS[@]}" "${SEED_ARGS[@]}" \
+            --output /bake --source-sha "$GITHUB_SHA"
+          [ -s "$OWN_BAKE/framework-mvid.txt" ] || { echo "::error::compile ran but wrote no bake identity — the bake stage regressed (or the image predates the compile verb; pin ≥ 77bc5f1)"; exit 1; }
+          # Gate on the bake: own bundles AND the upstream seed together in one seed directory.
+          if [ -n "${SEED_DIR:-}" ]; then cp "$SEED_DIR"/*.zip "$OWN_BAKE"/ 2>/dev/null || true; fi
+          docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/seed:ro" "${DUMP_ARGS[@]}" \
             --entrypoint /app/mw-plugin-test "$IMAGE" /repo \
-            "${ALLOW_ARGS[@]}" "${SEED_ARGS[@]}"
+            "${ALLOW_ARGS[@]}" --seed /seed
+          echo "OWN_BAKE=$OWN_BAKE" >> "$GITHUB_ENV"
+          echo "bake identity: $(cat "$OWN_BAKE/framework-mvid.txt") — $(ls "$OWN_BAKE"/*.zip | wc -l | tr -d ' ') bundle(s), gated on their own bytes"
       # 🚨 The dump is written by the CONTAINER, which runs as root, so the file lands owned by
       # root with a restrictive mode — a core dump can contain anything that was in memory, so the
       # runtime writes it 0600 on purpose. `chmod 0777` on the mount DIRECTORY (above) lets the
@@ -504,6 +532,16 @@ jobs:
       # (exit 139) it actually is.
       #
       # `if: always()` because the only runs with a dump are the ones where the gate FAILED.
+      # The bake this gate produced — publish-bake reuses it on merge (bake-run-id) so the same
+      # source is never compiled twice. Short retention: it is an intermediate, not a publication.
+      - name: Upload this run's bake for publish-bake to reuse
+        if: always() && env.OWN_BAKE != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: bake-${{ github.sha }}
+          path: ${{ env.OWN_BAKE }}
+          retention-days: 3
+          if-no-files-found: error
       - name: Make core dumps readable by the uploader
         if: always() && inputs.capture-coredumps
         shell: bash

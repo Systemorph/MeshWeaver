@@ -110,6 +110,24 @@ The consequence is a working rule, not just a curiosity:
 > running squarely inside a "45 seconds of complete silence" window whose silo log contained two
 > lines, neither of them the `LogInformation` calls that had just executed.
 
+### One half of this is now repaired: a FAULT survives, an Information line still does not (#2495)
+
+`XUnitLogger.Log` writes a record carrying an exception at `Warning` or worse to
+[TestTraceLog](/Doc/Architecture/WritingTests) **before** it consults the output helper, exactly as
+`XUnitFileLogger` already did. So a silo-side exception now reaches the one file CI keeps even on a
+grain-scheduler thread with an empty `AsyncLocal`. It was not doing this, and the asymmetry was
+expensive: the two loggers split the process by *service provider*, not by importance —
+`XUnitFileLogger` serves the `TestBase` container, `XUnitLogger` serves everything built by a HOST,
+which in an Orleans test is the silo, the client, and every mesh hub and grain inside them. Measured
+on CI run 33062668925: the Orleans host ran 208 tests over 272 s and wrote **4** lines to that file,
+against 819 / 606 / 1789 from its three Monolith-derived shard-mates. With the fault sink wired, the
+same suite writes **129**.
+
+The rule above is unchanged for everything else. A silo-side `LogInformation`, `LogDebug`, or a
+`LogWarning` with no exception still reaches nothing when the helper is absent — so a gap in a silo
+log still carries no information. What you may now read as evidence is the *presence* of a fault
+record, not the absence of anything.
+
 Reading that silence as "the request never reached the grain" is what sent a previous session down
 the wrong path entirely; a message trace showed routing, activation, subscribe, ack and the render
 round-trip all completing in ~260 ms.
