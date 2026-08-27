@@ -5,6 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Diagnostics;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -48,7 +49,11 @@ public static class StaticRepoSyncExtensions
             // enumeration snapshot can be taken while this import is still landing content, and
             // every type it misses is left to compile on a user's first click. See
             // StaticRepoImportSettled.
-            services.AddSingleton<StaticRepoImportSettled>();
+            // TryAdd: the AI module registers this same signal for its provider-credential seed
+            // (AiMeshModuleAttribute), because a module may not depend on a service its host
+            // happens to have wired. Both sides TryAdd so there is exactly ONE instance whichever
+            // runs first — two would mean the importer marks a signal nobody is waiting on.
+            services.TryAddSingleton<StaticRepoImportSettled>();
 
             // The provider-credential seed rides the AI module for the same reason — it is the
             // DB-synced path of a ModelProvider node, which is AI's own business.
