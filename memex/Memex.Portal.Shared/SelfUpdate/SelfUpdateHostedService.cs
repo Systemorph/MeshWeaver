@@ -201,11 +201,12 @@ public class SelfUpdateHostedService : IHostedService
         Observable
             .Defer(() => NewBuildEventsAcross(_hub
                 .GetQuery($"SelfUpdate.BuildTrigger:{_hub.Address}",
-                    // 🚨 PATH-SCOPED (BuildCompletion.WatchQuery). Build records are SATELLITES
-                    // under Admin/_Build, and satellites are excluded from an unscoped query — the
-                    // bare `nodeType:BuildCompletion` this used to pass returned EMPTY however many
+                    // 🚨 PATH-SCOPED (BuildCompletion.WatchQuery). Build records live in the ADMIN
+                    // partition, which an UNSCOPED query does not reach — the bare
+                    // `nodeType:BuildCompletion` this used to pass returned EMPTY however many
                     // records existed and however often they were written, so this watch never
-                    // ticked and the install silently stopped self-updating.
+                    // ticked and the install silently stopped self-updating. (Not a satellite rule:
+                    // GitHubSyncConfig satellites in ordinary partitions ARE returned unscoped.)
                     BuildCompletion.WatchQuery)))
             .Throttle(_options.EventCoalesceWindow)
             .Select(_ => -2L)
