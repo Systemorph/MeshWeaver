@@ -128,10 +128,15 @@ opposite fixes:
 | Enabled, complete, but the resolved sender reports `DeliversMail == false` (the module is not on this install) | The **container** | Land the `MeshWeaver.Mail.MicrosoftGraph` module |
 
 On either, `OutboundEmailSender` and `InvitationEmailSender` **do not start at all**, so queued mail
-stays visibly `New` — recoverable the moment the configuration is completed, with no data repair —
-and every other caller gets a loud failure instead of `true`. Mail stamped `Sent` that was never
-sent is indistinguishable from mail that really was sent, which is why refusing is the safer
-direction (#2023).
+stays visibly `New` and every other caller gets a loud failure instead of `true`.
+
+🚨 **Recovery needs a restart, and the refusal says so.** The `Email` section is bound **once at host
+start** (`Configuration.GetSection(...).Get<EmailOptions>()` into a singleton — not `IOptionsMonitor`),
+and both watchers are `IHostedService`s that start with it, so neither re-reads configuration at
+runtime. Completing the section therefore takes effect on the next portal start / rollout — at which
+point the queued `New` mail goes out by itself, with no data repair and nothing to re-queue by hand.
+That is the whole reason refusing beats succeeding quietly: mail stamped `Sent` that was never sent
+is indistinguishable from mail that really was sent, and no restart recovers it (#2023).
 
 🚨 **The order the two questions are asked in is load-bearing** (#2510). The guard runs inside
 `IHostedService.StartAsync`, where a throw aborts the **host**, not a feature. It therefore asks the
