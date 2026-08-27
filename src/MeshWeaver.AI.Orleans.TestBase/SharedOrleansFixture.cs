@@ -209,11 +209,15 @@ public class SharedOrleansFixture : IAsyncLifetime
             using var disposalBudget = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try
             {
+                // ConfigureAwait(false) on top of ObserveCompletion's
+                // RunContinuationsAsynchronously: `await` captures TaskScheduler.Current absent a
+                // SynchronizationContext, so cleanup entered from a hub scheduler would otherwise
+                // carry the rest of itself back onto one. (Copilot review, #2527.)
                 await reg.Hub.DisposalCompleted.ObserveCompletion(
                     ex => logger?.LogError(ex,
                         "Client hub {Address}: disposal faulted AFTER cleanup stopped waiting on it "
                         + "— reported rather than orphaned.", reg.Hub.Address),
-                    disposalBudget.Token);
+                    disposalBudget.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

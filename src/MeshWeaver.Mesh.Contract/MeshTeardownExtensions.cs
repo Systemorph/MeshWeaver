@@ -92,7 +92,7 @@ public static class MeshTeardownExtensions
                         "Mesh {Address}: the activity quiesce signal faulted AFTER teardown stopped "
                         + "waiting on it. Reported rather than orphaned; investigate the activity that "
                         + "faulted on its way to idle.", mesh.Address),
-                    quiesceBudget.Token);
+                    quiesceBudget.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -106,8 +106,12 @@ public static class MeshTeardownExtensions
 
         mesh.Dispose();
 
+        // Hand the PRE-DISPOSE logger down: DrainAsync runs after mesh.Dispose(), where resolving
+        // one is exactly the "never resolve DI once disposal has begun" mistake this method's own
+        // header warns about. (Copilot review, #2527.)
         return await DrainAsync(
-            mesh, ioPools, asyncDisposeQueue, timeout, teardownSignal, activitiesQuiesced);
+            mesh, ioPools, asyncDisposeQueue, timeout, teardownSignal, activitiesQuiesced, logger)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -145,7 +149,11 @@ public static class MeshTeardownExtensions
     public static Task<TeardownReport> WaitForDisposalAndIoDrainAsync(
         this IMessageHub mesh, IoPoolRegistry? ioPools, AsyncDisposeQueue? asyncDisposeQueue,
         TimeSpan timeout, MeshTeardownSignal? teardownSignal = null) =>
-        DrainAsync(mesh, ioPools, asyncDisposeQueue, timeout, teardownSignal, activitiesQuiesced: true);
+        DrainAsync(mesh, ioPools, asyncDisposeQueue, timeout, teardownSignal, activitiesQuiesced: true,
+            // No pre-dispose capture to inherit: this overload is entered AFTER the caller drove
+            // Dispose() itself, so TeardownLogger's defensive resolve is the best available and a
+            // dead scope degrades to "no logger" rather than throwing out of teardown.
+            logger: TeardownLogger(mesh));
 
     // 🚨 The public signature above is UNCHANGED on purpose. Threading the quiesce outcome through
     // as an extra optional parameter would have been source-compatible and BINARY-BREAKING — a
@@ -154,10 +162,9 @@ public static class MeshTeardownExtensions
     // "A source build cannot see a BINARY break").
     private static async Task<TeardownReport> DrainAsync(
         IMessageHub mesh, IoPoolRegistry? ioPools, AsyncDisposeQueue? asyncDisposeQueue,
-        TimeSpan timeout, MeshTeardownSignal? teardownSignal, bool activitiesQuiesced)
+        TimeSpan timeout, MeshTeardownSignal? teardownSignal, bool activitiesQuiesced,
+        ILogger? logger)
     {
-        var logger = TeardownLogger(mesh);
-
         // (1) Action blocks + message round-trips.
         //
         // 🚨 SUBSCRIBED, never bridged with `.ToTask()` — and the FIRST reason is deadlock, not
@@ -187,7 +194,7 @@ public static class MeshTeardownExtensions
                         + "Reported rather than orphaned — an unobserved fault here is the "
                         + "UnobservedTaskException that poisons the next test class (#2301).",
                         mesh.Address),
-                    disposalBudget.Token);
+                    disposalBudget.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (disposalBudget.IsCancellationRequested)
             {
@@ -219,7 +226,7 @@ public static class MeshTeardownExtensions
         // (3) After all the sync stuff is disposed (and everyone has enqueued their
         //     async cleanup), quiesce the async dispose queue before the scope closes.
         var asyncDisposeClean = asyncDisposeQueue is null
-            || await asyncDisposeQueue.DrainAsync(timeout);
+            || await asyncDisposeQueue.DrainAsync(timeout).ConfigureAwait(false);
 
         // (4) The terminal signal — the very end of teardown, all phases accounted. Fired AFTER
         //     the drains so a subscriber that proceeds on it (scope disposal, ALC unload, next
@@ -240,6 +247,20 @@ public static class MeshTeardownExtensions
     /// down. It is what makes a late fault REPORTED rather than swallowed: the observation arm has
     /// to land somewhere, and "somewhere" cannot be a service resolved after disposal began.
     /// </summary>
-    private static ILogger? TeardownLogger(IMessageHub mesh) =>
-        mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Mesh.Teardown");
+    private static ILogger? TeardownLogger(IMessageHub mesh)
+    {
+        try
+        {
+            return mesh.ServiceProvider.GetService<ILoggerFactory>()?
+                .CreateLogger("MeshWeaver.Mesh.Teardown");
+        }
+        catch (ObjectDisposedException)
+        {
+            // The scope is already gone (the public WaitForDisposalAndIoDrainAsync is entered
+            // AFTER the caller's own Dispose). Teardown must never fail on the act of preparing to
+            // REPORT something — degrade to no logger. TeardownAsync avoids this entirely by
+            // capturing before Dispose and handing the capture down.
+            return null;
+        }
+    }
 }
