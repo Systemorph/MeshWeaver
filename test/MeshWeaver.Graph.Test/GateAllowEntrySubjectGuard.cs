@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -46,13 +47,16 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class GateAllowEntrySubjectGuard
 {
-    /// <summary>Checks the gate applies to one NodeType.</summary>
-    private static readonly IReadOnlySet<string> TypeLevelChecks =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "compile", "render", "tests" };
+    /// <summary>
+    /// Checks the gate applies to one NodeType. Immutable and write-once — the collections policy's
+    /// sanctioned <c>static readonly</c>: a reserved-word set, never written at runtime.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> TypeLevelChecks =
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "compile", "render", "tests");
 
-    /// <summary>Checks the gate applies to one package as a whole.</summary>
-    private static readonly IReadOnlySet<string> PackageLevelChecks =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "install", "idempotence" };
+    /// <summary>Checks the gate applies to one package as a whole. Same shape, same reason.</summary>
+    private static readonly ImmutableHashSet<string> PackageLevelChecks =
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "install", "idempotence");
 
     /// <summary>The <c>for name in A B C; do</c> line that names every package the samples gate stages.</summary>
     private static readonly Regex StagedPackagesPattern =
@@ -65,7 +69,7 @@ public class GateAllowEntrySubjectGuard
     /// prefix there is empty).
     /// </summary>
     private readonly record struct Lane(
-        string AllowFile, string TreeRoot, string StagedPrefix, IReadOnlySet<string> StagedPackages);
+        string AllowFile, string TreeRoot, string StagedPrefix, ImmutableHashSet<string> StagedPackages);
 
     /// <summary>
     /// 🚨 THE INVARIANT. Fails on the tree as it stood before the fix, naming all six retired
@@ -209,7 +213,7 @@ public class GateAllowEntrySubjectGuard
             ".github/doc-gate.allow",
             "src/MeshWeaver.Documentation/Data",
             "Doc/",
-            new HashSet<string>(StringComparer.Ordinal) { "Doc" });
+            ImmutableHashSet.Create(StringComparer.Ordinal, "Doc"));
     }
 
     /// <summary>
@@ -217,17 +221,17 @@ public class GateAllowEntrySubjectGuard
     /// cannot drift. A scope under a package the script does not stage is dead in the same way a
     /// deleted node is: nothing ever judges it.
     /// </summary>
-    private static IReadOnlySet<string> StagedSamplesPackages(string root)
+    private static ImmutableHashSet<string> StagedSamplesPackages(string root)
     {
         var script = Path.Combine(root, ".github", "scripts", "stage-samples-gate.sh");
         if (!File.Exists(script))
-            return new HashSet<string>(StringComparer.Ordinal);
+            return ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
         var match = StagedPackagesPattern.Match(File.ReadAllText(script));
         return match.Success
-            ? new HashSet<string>(
-                match.Groups["names"].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries),
-                StringComparer.Ordinal)
-            : new HashSet<string>(StringComparer.Ordinal);
+            ? ImmutableHashSet.Create(
+                StringComparer.Ordinal,
+                match.Groups["names"].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            : ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
     }
 
     /// <summary>
