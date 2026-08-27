@@ -48,7 +48,11 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     private async Task DeleteTestNode(string path)
     {
-        var response = await Mesh.Observe(new DeleteNodeRequest(path), o => o.WithTarget(Mesh.Address)).Should().Emit();
+        // Node CRUD is issued off the ROUTER and aimed at the mesh's dedicated node-operation hub —
+        // the production seam (MeshService.IssuingHub / NodeOperationTarget) pinned by
+        // NodeOperationOriginTest. Posting from `Mesh` targeted at `Mesh.Address` made the router
+        // both ends of the delivery, which is what ROUTER_TRAFFIC reports (#2423).
+        var response = await ObserveNodeOperation(new DeleteNodeRequest(path)).Should().Emit();
         response.Message.Error.Should().BeNullOrEmpty();
     }
 

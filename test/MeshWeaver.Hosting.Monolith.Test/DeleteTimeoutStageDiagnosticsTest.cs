@@ -85,7 +85,7 @@ public class DeleteTimeoutStageDiagnosticsTest(ITestOutputHelper output) : Monol
         await NodeFactory.CreateNode(new MeshNode($"child{SilentSuffix}", space)
         { Name = "Silent", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
 
-        var response = (await Mesh
+        var response = (await RequestHub
             .Observe(new DeleteNodeRequest(space) { Recursive = true, ConfirmWarnings = true },
                 o => o.WithTarget(new Address(space)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -132,7 +132,7 @@ public class DeleteTimeoutStageDiagnosticsTest(ITestOutputHelper output) : Monol
         await NodeFactory.CreateNode(new MeshNode($"child{CommitStallSuffix}", space)
         { Name = "Stalled", NodeType = "Markdown" }).Should().Within(30.Seconds()).Emit();
 
-        var response = (await Mesh
+        var response = (await RequestHub
             .Observe(new DeleteNodeRequest(space) { Recursive = true, ConfirmWarnings = true },
                 o => o.WithTarget(new Address(space)))
             .Should().Within(60.Seconds()).Emit()).Message;

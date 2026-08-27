@@ -54,7 +54,7 @@ public class WorkspaceUpdateMeshNodePropagationTest(ITestOutputHelper output) : 
         // 2. Activate the per-node hub by sending it any inbound message — Orleans
         //    grain activation is lazy. Monolith hubs activate eagerly via routing
         //    so this is a no-op there but keeps the test portable.
-        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+        await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
             .Should().Emit();
 
         // 3. Reach into the per-node hub's own workspace.
