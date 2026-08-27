@@ -298,6 +298,10 @@ GITHUB_TOKEN=… mw-combo-verify combo.json meshweaver.azurecr.io/memex-portal-a
     --source plugins=https://github.com/Systemorph/MeshWeaver.Plugins
 # exit 0 = GREEN. Anything else: the summary names every failing module and every caveat,
 # and the work root is kept for inspection.
+#
+# 🚨 The run is pinned to --platform, default linux/amd64 — what the fleet runs. Do NOT drop it
+# to "use the local architecture": see the note below.  Verifying arm64 instead:
+#     … --platform linux/arm64
 # 3. Land the verdict where the instance's admins look: combo-verdict.json is a
 #    ComboVerification — merge it into Admin/UpdatePolicy → content.comboVerifications
 #    (upsert by candidateTag), e.g. via the meshweaver MCP: get → merge → patch.
@@ -306,6 +310,26 @@ GITHUB_TOKEN=… mw-combo-verify combo.json meshweaver.azurecr.io/memex-portal-a
 The verify job itself holds no portal credential — reading the combo (step 1) and landing the
 verdict (step 3) are the operator's/CD's authenticated touches on the instance; the verification
 in between needs only docker, the candidate image, and read access to the module repos.
+
+🚨 **A verdict is about ONE architecture, and it has to say which.** A candidate tag is a
+multi-arch manifest list, and the amd64 and arm64 variants carry genuinely different bytes — they
+resolve different framework build identities, which is why the CD bake is a matrix with one lane
+per architecture rather than one job with two `--platform` flags. Docker reports the SAME manifest
+list digest for both, so a run that lets docker pick the host's architecture produces a Green
+naming a digest that covers bytes it never executed. On an operator's arm64 laptop that is a false
+pass about the amd64 the fleet actually serves, and nothing in the output distinguishes it from a
+real one. `mw-combo-verify` therefore pins `--platform` (default `linux/amd64`) on every docker
+call and records it on the verdict as `verifiedPlatform`; a host that cannot run the requested
+platform yields **NotVerifiable**, never a Green about the wrong one. (Measured 2026-08-27 on
+`mw-plugin-test:main`: list digest `sha256:4a63eda…`, amd64 `sha256:ab6efc31…`, arm64
+`sha256:e353c397…` — #2274.)
+
+**Run it where the fleet's architecture is NATIVE.** The same combo against the same tag, on an
+arm64 host, went `Green` unpinned and `NotVerifiable` once pinned to `linux/amd64` — the emulated
+amd64 tester died with exit 139 before it could write a report. That is the gate working: an
+architecture this host cannot execute is a question it could not answer, not a pass. So produce
+fleet verdicts on an amd64 runner (CI, or an amd64 ops box); use `--platform linux/arm64` only to
+make a deliberate statement ABOUT arm64.
 
 **Known boundary:** the sweep covers dynamic NodeTypes only. A break in a non-NodeType surface — a
 standalone script, a layout area — is not swept and this gate will not catch it.

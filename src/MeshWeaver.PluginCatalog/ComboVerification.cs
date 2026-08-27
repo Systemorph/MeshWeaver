@@ -95,8 +95,24 @@ public sealed record ComboVerification
     public string? ImageRef { get; init; }
 
     /// <summary>The image digest the verification actually ran against. A tag can be re-pushed;
-    /// the digest is the identity of what was verified.</summary>
+    /// the digest is the identity of what was verified.
+    ///
+    /// <para>🚨 For a MULTI-ARCH image this is the manifest LIST digest, which names every
+    /// architecture — while one gate run executes exactly ONE of them. Read it together with
+    /// <see cref="VerifiedPlatform"/>; on its own it claims more than the run tested.</para></summary>
     public string? ImageDigest { get; init; }
+
+    /// <summary>
+    /// The docker platform (<c>linux/amd64</c>, <c>linux/arm64</c>) the gate actually executed —
+    /// null only for a verdict produced without ever running the gate.
+    ///
+    /// <para>🚨 THE VERDICT IS ABOUT THIS ARCHITECTURE AND NO OTHER. The amd64 and arm64 variants
+    /// of one image carry genuinely different bytes (they resolve different framework build
+    /// identities — see the bake lane in <c>main-cd.yml</c>), so a Green resolved on one says
+    /// nothing about the other. Recorded because <see cref="ImageDigest"/> alone cannot express
+    /// it: docker reports the manifest LIST digest for both.</para>
+    /// </summary>
+    public string? VerifiedPlatform { get; init; }
 
     /// <summary>When the verification ran (UTC).</summary>
     public DateTimeOffset VerifiedAt { get; init; }
@@ -142,8 +158,14 @@ public sealed record CandidateGateRun
     /// (<see cref="Error"/> says why).</summary>
     public int? ExitCode { get; init; }
 
-    /// <summary>The image digest the run resolved (repo digest, else the local image id).</summary>
+    /// <summary>The image digest the run resolved (repo digest, else the local image id). For a
+    /// multi-arch reference this is the manifest LIST digest — <see cref="Platform"/> is what says
+    /// which architecture inside it actually ran.</summary>
     public string? ImageDigest { get; init; }
+
+    /// <summary>The docker platform the run was pinned to (<c>linux/amd64</c>). Null when the
+    /// container never ran.</summary>
+    public string? Platform { get; init; }
 
     /// <summary>The structured report the tester wrote (<see cref="GateRunReport.FileName"/>),
     /// when it did. Null when the run produced none — an older tester without <c>--report</c>, or
