@@ -69,49 +69,85 @@ public class ModuleLoadReportTest : IDisposable
     }
 
     /// <summary>
-    /// 🚨 THE deliverable. The exact prod topology: a baseline <c>Modules:Assemblies</c> entry, an
-    /// older image copy, and a NEWER landed generation carrying different bytes. The image copy
-    /// still wins (that resolution is unchanged and deliberate) — but the report now NAMES it and
-    /// says out loud that a newer, different copy was passed over.
+    /// 🚨 #2548 CHANGED WHO WINS HERE, and this test now pins the new answer. The topology is the
+    /// prod one: a baseline <c>Modules:Assemblies</c> entry, an older image copy, and a NEWER
+    /// landed generation carrying different bytes.
+    ///
+    /// <para>Before: the baseline claimed the name, the sidecar entry was deduped away, and the
+    /// image copy loaded — the report's whole job was to say out loud that a newer copy had been
+    /// passed over. Now the usable store entry OVERRIDES the baseline, so the landed generation is
+    /// what loads and there is nothing shadowed to report.</para>
+    ///
+    /// <para>The report itself is unchanged and still needed: it fires whenever a baseline entry is
+    /// genuinely the one loading — which, after #2548, means no usable store entry exists (covered
+    /// by <see cref="A_baseline_that_wins_because_no_usable_store_entry_exists_is_still_reported"/>).</para>
     /// </summary>
     [Fact]
-    public void A_newer_landed_generation_that_loses_to_the_image_copy_is_reported_as_stale()
+    public void A_usable_landed_generation_now_WINS_over_the_image_copy()
     {
         var image = PlacePack(imageRoot, PackName, OldBytes, new DateTime(2026, 8, 25, 10, 35, 0, DateTimeKind.Utc));
         var landed = PlacePack(storeRoot, $"{PackName}@12d2c7c2", NewBytes, new DateTime(2026, 8, 25, 13, 53, 0, DateTimeKind.Utc));
 
-        // The baseline claims the name, so the sidecar entry for the SAME module is deduped away —
-        // silently, by design (ModuleActivationBootTest.PersistedDuplicateOfBaseline_…). That is
-        // exactly how the landed generation stops being consulted.
         var resolved = ResolveAsBootDoes(
             [PackName + ".dll"],
             new ModuleActivationList
             {
                 Entries = [new ModuleActivationEntry { Name = PackName, Directory = $"{PackName}@12d2c7c2" }],
             });
-        // The store's landed probe looks in modules/<name>/, which a generation landing never
-        // writes, so resolution falls through to the image copy. Pin it — if this ever changes, the
-        // report below is describing a different world.
-        resolved.Should().ContainSingle();
-        resolved[0].Path.Should().NotBe(landed);
 
-        // The report describes the path the loader was handed — here, forced to the image copy the
-        // prod pod actually mapped.
+        resolved.Should().ContainSingle();
+        resolved[0].Path.Should().Be(landed,
+            "#2548: a usable store entry overrides the same-named baseline, so the LANDED "
+            + "generation is what the loader is handed — not the older image copy it used to fall "
+            + "through to");
+        resolved[0].Module.Landed.Should().NotBeNull(
+            "the winning entry must carry its landed pointer, or resolution has no generation to "
+            + "aim at and the override is cosmetic");
+
+        // Nothing was passed over, so there is nothing to warn about.
+        var lines = ModuleLoadReport.Describe(storeRoot, [(resolved[0].Module, resolved[0].Path)]);
+        var line = lines.Should().ContainSingle().Subject;
+        line.Name.Should().Be(PackName);
+        line.Source.Should().Be(ModuleActivationSources.Store);
+        line.Path.Should().Be(landed);
+        line.Shadowed.Should().BeNull(
+            "the newer copy is the one loading now; reporting it as shadowed would name a problem "
+            + "that no longer exists");
+
+        Render(lines).Warnings.Should().BeEmpty();
+        image.Should().NotBe(landed, "the fixture must actually have two distinct copies, or this "
+            + "test would pass without discriminating anything");
+    }
+
+    /// <summary>
+    /// The report's remaining job after #2548, and the case its remediation text now describes: a
+    /// baseline entry that is loading because NO usable store entry claims the name, while a newer
+    /// generation sits on disk. The warning still has to fire — and it must no longer tell the
+    /// operator to delist the baseline, which is now the only copy that loads.
+    /// </summary>
+    [Fact]
+    public void A_baseline_that_wins_because_no_usable_store_entry_exists_is_still_reported()
+    {
+        var image = PlacePack(imageRoot, PackName, OldBytes, new DateTime(2026, 8, 25, 10, 35, 0, DateTimeKind.Utc));
+        var landed = PlacePack(storeRoot, $"{PackName}@12d2c7c2", NewBytes, new DateTime(2026, 8, 25, 13, 53, 0, DateTimeKind.Utc));
+
+        // No sidecar entry at all — nothing can override, so the baseline legitimately wins.
+        var resolved = ResolveAsBootDoes([PackName + ".dll"], new ModuleActivationList());
         var lines = ModuleLoadReport.Describe(storeRoot, [(resolved[0].Module, image)]);
 
         var line = lines.Should().ContainSingle().Subject;
-        line.Name.Should().Be(PackName);
         line.Source.Should().Be(ModuleActivationSources.AppSettings);
-        line.Path.Should().Be(image);
-        line.Mvid.Should().NotBeNull("the line must carry the identity of the bytes, not just a path");
-        line.Shadowed.Should().NotBeNull(
-            "a newer, different copy in the module store is #2223 — nothing said so, and the fix "
-            + "shipped end-to-end without ever running");
+        line.Shadowed.Should().NotBeNull("a newer, different copy is sitting unused — #2223");
         line.Shadowed!.Path.Should().Be(landed);
-        line.Shadowed.Mvid.Should().NotBe(line.Mvid);
 
-        var warnings = Render(lines).Warnings;
-        warnings.Should().ContainSingle().Which.Should().Contain(PackName).And.Contain(landed);
+        var warning = Render(lines).Warnings.Should().ContainSingle().Subject;
+        warning.Should().Contain(PackName).And.Contain(landed);
+        warning.Should().NotContain("delist it from Modules:Assemblies",
+            "since #2548 that instruction would remove the only copy that loads rather than promote "
+            + "the newer one — a warning that names the wrong fix is worse than one that names none");
+        warning.Should().Contain("do NOT delist the baseline",
+            "the replacement must say so explicitly: an operator who read the old advice, or who "
+            + "reasons the old way, needs the instruction contradicted, not merely absent");
     }
 
     /// <summary>
@@ -248,11 +284,18 @@ public class ModuleLoadReportTest : IDisposable
         storeWarning.Should().NotContain("delist it from Modules:Assemblies",
             "a store-installed module has no Modules:Assemblies line to delist");
 
-        // …and the BASELINE lane still gets the remediation that is right for it.
+        // …and the BASELINE lane still gets a DIFFERENT remediation — but no longer the old one.
+        // 🚨 Until #2548 this said "delist it from Modules:Assemblies to let the landed generation
+        // win", which was true only while a baseline entry shadowed the store entry by name. Now a
+        // usable store entry overrides the baseline, so reaching this branch means no usable store
+        // entry exists — and delisting would remove the only copy that loads.
         var baselineLines = ModuleLoadReport.Describe(
             storeRoot, [(new EffectiveModule(PackName + ".dll", null), older)]);
         var baselineWarning = Render(baselineLines).Warnings.Should().ContainSingle().Subject;
-        baselineWarning.Should().Contain("delist it from Modules:Assemblies");
+        baselineWarning.Should().NotContain("delist it from Modules:Assemblies",
+            "that instruction removes the fallback instead of promoting the newer copy (#2548)");
+        baselineWarning.Should().Contain("do NOT delist the baseline");
+        baselineWarning.Should().Contain("Re-install the module");
         baselineWarning.Should().NotContain("activation.json");
     }
 
