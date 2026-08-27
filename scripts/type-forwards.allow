@@ -18,3 +18,10 @@
 #
 # Example:
 #   MeshWeaver.Foo:MeshWeaver.Foo.Widget  #1234 — added and moved inside one unreleased wave
+# #2501 — the Orleans TEST machinery split (Hosting.Orleans.TestBase → AI-free base +
+# MeshWeaver.AI.Orleans.TestBase). No shipped module can hold these TypeRefs: the assembly first
+# shipped 2026-08-27 (#2479, hours before this move), is not part of any module bundle or bake
+# surface, and its only consumers are TEST projects that compile from source against
+# $(MeshWeaverRoot) (core, MeshWeaver.Plugins, MeshWeaver.SocialMedia — the latter pinned
+# pre-split). A forwarder is impossible here: the base would have to reference the AI assembly,
+# which references the base (the documented reference-cycle case).
