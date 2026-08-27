@@ -42,6 +42,21 @@ public sealed record GateOptions
     public TimeSpan RenderTimeout { get; init; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
+    /// Budget for one package fetch or install pass (each of the two installs — the gate proper
+    /// and the idempotence re-install — gets its own). These phases were the LAST unbounded waits
+    /// in the gate: compile, render and Tests are all time-bounded with a named verdict, but an
+    /// install whose node write is stored and never announced (the Systemorph/MeshWeaver#817
+    /// class — the row lands, no hub wakes, the observable never emits) threw nothing, so the
+    /// stage-labelling <c>Catch</c> never fired and the whole gate went SILENT mid-package — a
+    /// bake that runs for hours producing no further output, killed only by the CI runner. A
+    /// timeout is an ANSWER here, not a cure: the run fails loudly, named
+    /// <c>[install] TimeoutException</c> by the stage marker, instead of hanging unlabelled.
+    /// Generous by default — installs write nodes but never wait on compiles (that budget is
+    /// <see cref="CompileTimeout"/>, per type, in its own stage).
+    /// </summary>
+    public TimeSpan InstallTimeout { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// When set, the gate PERSISTS what it compiled: one prebuilt-assembly bundle per package
     /// (every NodeType that reached <see cref="CompilationStatus.Ok"/>) is written into this
     /// directory, keyed to the run's framework MVID — the artifact half of issue #1660 WS1 (the
@@ -200,7 +215,12 @@ public static class PluginGateRunner
         // never taken. Packages run strictly sequentially (Concat in RunPackages), so a captured
         // stage marker is exact.
         var stage = "fetch";
+        // Every phase below is TIME-BOUNDED. The Catch at the bottom names the stage that THREW —
+        // but a wait that never completes throws nothing, and fetch/install were the last phases
+        // without a bound: a stored-but-never-announced node write (#817) left the gate silent
+        // mid-package for hours. The Timeout turns that silence into `[<stage>] TimeoutException`.
         return source.FetchPackageFiles(package, "HEAD")
+            .Timeout(options.InstallTimeout)
             .SelectMany(files =>
             {
                 stage = "install";
@@ -219,6 +239,7 @@ public static class PluginGateRunner
                 return PackageInstaller
                     .Install(harness.Mesh, package, files, snapshot.CommitSha,
                         authorizingUserId: GateMesh.AuthorizingUserId)
+                    .Timeout(options.InstallTimeout)
                     .SelectMany(install =>
                     {
                         stage = "checks";
@@ -236,6 +257,9 @@ public static class PluginGateRunner
                             .SelectMany(typeResults => PackageInstaller
                                 .Install(harness.Mesh, package, files, snapshot.CommitSha,
                                     authorizingUserId: GateMesh.AuthorizingUserId)
+                                // Same bound as the first install; its own Catch below already
+                                // folds a TimeoutException into IdempotenceError by name.
+                                .Timeout(options.InstallTimeout)
                                 .Select(second => new PackageResult(package.Id)
                                 {
                                     Upstream = upstream,
