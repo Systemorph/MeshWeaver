@@ -189,6 +189,18 @@ public static class MemexConfiguration
             // read from somewhere else is simply invisible, and on a deployment whose /app is
             // read-only the writer cannot use AppContext.BaseDirectory at all.
             var moduleRoot = ModuleRoot.Resolve(configuration);
+
+            // The instance manifest (#2550) — read BEFORE anything else needs it, on the same
+            // writable root the module activation sidecar lives on, and for the same reason it is
+            // a file: at this point there is no storage provider, hub or connection string, and
+            // WHICH STORAGE TO USE is precisely what it answers.
+            //
+            // A corrupt manifest resolves to InstanceManifest.Unreadable rather than null: it
+            // EXISTS, so the instance is not treated as never-configured, and it answers nothing,
+            // so it cannot leave setup. Offering a fresh setup over a database that already holds
+            // data is the failure that distinction prevents.
+            var setupManifest = InstanceManifest.Read(moduleRoot,
+                msg => Console.Error.WriteLine($"[InstanceSetup] {msg}"));
             // Generations GC — delete only what NO activation entry references and nothing holds
             // open (skip-on-locked). Landing never deletes anything on a shared volume; this is
             // the one reclaim point. See ModuleLandingService.CollectGarbage.
@@ -309,13 +321,73 @@ public static class MemexConfiguration
                         + $"{ex.Message}) — the flag stays set; activation itself is unaffected.");
                 }
 
-            // Read graph storage config
+            // Read graph storage config — from this host's configuration, or from the INSTANCE
+            // MANIFEST an earlier setup wrote (#2550).
+            //
+            // 🚨 Configuration WINS. The manifest answers what configuration has not already said;
+            // it never overrides a host that stated its own storage. Every deployment that exists
+            // today is appsettings-configured and has no manifest, and this path must leave all of
+            // them byte-identical — an additive mechanism that changed a configured instance's
+            // storage would be a data-loss bug, not a feature.
             var graphStorageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
+            // 🚨 COMPLETE, and with a real backend named (Copilot review). A manifest that exists
+            // is not a manifest that ANSWERS: the wizard's own starting point is
+            // State=AwaitingStorage with a pre-filled type, and an Unreadable one answers nothing
+            // at all. Treating either as configured storage would boot past setup and fail later,
+            // deeper, on an unknown backend or a missing connection string — a worse failure than
+            // the setup surface, and further from its cause.
+            if (graphStorageConfig is null
+                && setupManifest is { State: InstanceSetupState.Complete } complete
+                && complete.HasStorage
+                && complete.Storage is { } chosen)
+            {
+                graphStorageConfig = new GraphStorageConfig
+                {
+                    Type = chosen.Type,
+                    BasePath = chosen.BasePath,
+                    ConnectionString = chosen.ConnectionString,
+                };
+                Console.WriteLine(
+                    $"[InstanceSetup] storage '{chosen.Type}' comes from the instance manifest at "
+                    + $"{InstanceManifest.PathFor(moduleRoot)} (set up "
+                    + $"{setupManifest.SetUpAt?.ToString("u") ?? "at an unrecorded time"}"
+                    + $"{(setupManifest.SetUpBy is { } who ? $" by {who}" : "")}).");
+            }
+
             if (graphStorageConfig == null)
             {
-                throw new InvalidOperationException(
-                    "Graph:Storage configuration is required. " +
-                    "Configure it in appsettings.json with Type and BasePath/ConnectionString.");
+                // 🚨 NOT a throw any more (#2550). An image with no storage configured is an
+                // instance AWAITING SETUP, and the whole point of the setup wizard is that such an
+                // image comes up far enough to ask which database to use. Throwing here is what
+                // made "install the empty image, then configure it" impossible: the process died
+                // before anything could serve, so there was nowhere to ask the question.
+                //
+                // The caller decides what to do with this state; it is reported, never guessed at.
+                // A SETUP mesh serves the wizard and nothing else — it must never quietly invent a
+                // storage backend, because a wrong guess writes real data somewhere nobody chose
+                // (an ephemeral container path, silently lost on the next roll — issue #435's
+                // shape).
+                // Say WHICH of the three states this is — "no manifest" would be a lie for an
+                // unreadable or half-answered one, and setup/boot diagnostics are exactly where a
+                // misleading message costs the most (Copilot review).
+                var manifestState = setupManifest switch
+                {
+                    null => "no instance manifest exists there",
+                    { State: InstanceSetupState.Unreadable } =>
+                        "the instance manifest there could NOT BE READ (see the error above) — "
+                        + "repair or delete it to re-run setup",
+                    { State: var state } =>
+                        $"the instance manifest there is INCOMPLETE (state {state}"
+                        + $"{(setupManifest.HasStorage ? "" : ", no storage chosen")}) — finish the "
+                        + "setup wizard",
+                };
+                Console.Error.WriteLine(
+                    "[InstanceSetup] No Graph:Storage configuration, and "
+                    + $"{manifestState} ({InstanceManifest.PathFor(moduleRoot)}). This instance is "
+                    + "AWAITING SETUP. Configure Graph:Storage in appsettings, or complete the "
+                    + "setup wizard, which writes the manifest and restarts into a configured mesh.");
+                builder.MarkAwaitingSetup();
+                return builder;
             }
 
             // Resolve relative BasePath to absolute
