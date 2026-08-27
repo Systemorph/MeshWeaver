@@ -356,6 +356,17 @@ jobs:
                 401|403) echo "::error::the registry refused registry-key for '$src' ($code) — the instance needs a whole-source grant '$src/*'."; exit 1 ;;
                 *) echo "::error::registry answered $code for $base — refusing."; exit 1 ;;
               esac
+              # 🚨 200 is NOT proof of an index. The portal answers 200 + HTML (the app shell's
+              # catch-all route) for ANY unknown path, /api/… included — so a registry that does not
+              # serve /prebuilt yet answers this request with a web page. Measured 2026-08-27 on
+              # SocialMedia#84 against a memex one build behind MeshWeaver#2487: jq's parse error
+              # was swallowed, fetched stayed 0, and the step died as "sealed but empty" — the wrong
+              # condition, pointing at the wrong fix. Only a JSON object with a `bundles` array is
+              # a publication index; anything else is a registry that cannot serve this lane yet.
+              if ! jq -e '.bundles | type == "array"' "$SEED_DIR/.index.json" >/dev/null 2>&1; then
+                echo "::error::$base answered 200 but not a publication index (starts: $(head -c 60 "$SEED_DIR/.index.json" | tr -d '\n\r')…). The registry does not serve /api/plugins/bundles/prebuilt — it runs a build without MeshWeaver#2487. Refusing to guess; retry once the registry has rolled."
+                exit 1
+              fi
               for name in $(jq -r '.bundles[]' "$SEED_DIR/.index.json"); do
                 curl -sSf -H "Authorization: Bearer $REGISTRY_KEY" -o "$SEED_DIR/$name" "$base/$name" || { echo "::error::could not fetch $name"; exit 1; }
                 fetched=$((fetched+1))
