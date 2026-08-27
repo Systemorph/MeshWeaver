@@ -66,6 +66,13 @@ public static class AIExtensions
                         // is what let MeshWeaver.Hosting drop its ProjectReference to this
                         // assembly, so the platform builds and runs with no AI at all.
                         .AddSingleton<IFileFormatParser, AgentFileParser>()
+                        // The SKILL file format travels with AI for the same reason, and needs the
+                        // same priority: without it an `.md` carrying `nodeType: Skill` reaches the
+                        // catch-all Markdown parser, which types the node Skill but fills it with
+                        // MarkdownContent — so `ContentAs<SkillDefinition>` yields no Instructions
+                        // and the skill reads EMPTY (#1984). That is harder to notice than the
+                        // original bug it replaced, because the node no longer looks wrong.
+                        .AddSingleton<IFileFormatParser, SkillFileParser>()
                         // Writes the live Agent + Skill partitions back to the repo's content/ai
                         // section — the inverse of the built-in providers that READ it. Dev-time
                         // (source checkout) only, and AI content by definition, so it rides AI

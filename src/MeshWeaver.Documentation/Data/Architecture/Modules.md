@@ -185,6 +185,28 @@ all. `scripts/check-type-forwards.py` (wired into the *Public surface (binary co
 beside #2298's `check-record-signatures.py`) is what refuses the next one; its allow file is a
 statement that no shipped module can hold the TypeRef, not a way to make it quiet.
 
+**It had already happened again before the gate existed.** Replaying that gate across
+`v3.0.0-rc7 → main` found **17** unguarded moves; #2370 fixed four, and #2398 fixed six more that
+#2276 made when it moved the credential-protection and MCP-back-connection contracts into
+`MeshWeaver.Mesh.Contract` — `IProviderKeyProtector`, `ProviderKeyProtector`, `IMasterKeyProvider`,
+`ConfigMasterKeyProvider`, `IMcpBackConnection`, `McpConnectionInfo`. Three of those have a proven
+module consumer in the plugins repo today. So when reading a file under `src/MeshWeaver.Mesh.Contract`
+that declares `namespace MeshWeaver.AI` (or `MeshWeaver.AI.Connect`) — and the one under
+`src/MeshWeaver.Mesh.Operations` that does the same — that mismatch is **the contract, not a
+leftover**. A forwarder cannot rename, so tidying the namespace to match its assembly re-breaks
+every module built before the move. `MovedTypeBinaryContractTest` pins each name at runtime.
+
+🚨 **A forwarder is not always available, and that is a decision rather than a workaround.** The
+forwarder must live in the assembly being LEFT, so that assembly has to reference the type's new
+home — impossible when the move runs *against* the existing reference direction. Two of #2276's
+moves are exactly that (`MeshWeaver.GitSync → MeshWeaver.AI` and `MeshWeaver.Hosting →
+MeshWeaver.AI`; `MeshWeaver.AI` references both, so neither can reference it back). When a move has
+that shape there are only two honest options — **move the type back**, or accept the break and do
+the **atomic** republish: rebuild and republish every affected bundle, then roll the image, so no
+deployment is ever running an old bundle against a new platform. Inventing a shim to dodge the cycle
+is the one thing that must not happen: it mints a SECOND type identity and reintroduces the `as`/`is`
+trap-door that reads as a silent null.
+
 ### 🚨 An ACTIVATED entry with no bytes — the boot-GC race (#2303)
 
 The "Missing DLL" skip above is the SYMPTOM; #2303 traced one concrete way an entry ends up

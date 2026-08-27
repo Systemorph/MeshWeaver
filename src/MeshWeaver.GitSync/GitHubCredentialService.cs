@@ -1,3 +1,4 @@
+using MeshWeaver.AI;   // IProviderKeyProtector & co keep their ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using MeshWeaver.Data;
@@ -141,11 +142,13 @@ public sealed class GitHubCredentialService(IMeshService meshService, IMessageHu
     private GitHubCredential? ExtractCredential(MeshNode? node)
         => node.ContentAs<GitHubCredential>(hub.JsonSerializerOptions, logger);
 
-    private string? Protect(string? plaintext)
-    {
-        var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
-        return protector is null ? plaintext : protector.Protect(plaintext);
-    }
+    // 🚨 No fallback on the WRITE side. `protector is null ? plaintext : …` stored a live GitHub
+    // PAT / refresh token verbatim whenever the protector was missing, and Protect itself used to
+    // do the same whenever no master key was configured. Both are now refusals: a credential this
+    // service cannot encrypt is a credential it does not store. Saving one is an explicit user
+    // action, so the exception reaches the caller with the setting to configure.
+    private string? Protect(string? plaintext) =>
+        hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>().Protect(plaintext);
 
     private string? Unprotect(string? stored)
     {

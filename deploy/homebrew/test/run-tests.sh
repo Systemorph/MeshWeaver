@@ -35,6 +35,7 @@ bad() { printf '  FAIL  %s\n' "$1"; printf '        %s\n' "${2:-}"; fail=$((fail
 #   FAKE_HTTP_ROOT  / FAKE_HTTP_LOGIN — the status code curl reports per path
 #   FAKE_MODULES                      — the lines the in-pod probe prints
 #   FAKE_EXEC_FAILS                   — kubectl exec exits non-zero (unreadable pod)
+#   FAKE_CURL_FAILS                   — curl cannot connect at all (no port-forward bound)
 # ---------------------------------------------------------------------------
 STUBS="$(mktemp -d)"
 trap 'rm -rf "$STUBS"' EXIT
@@ -45,9 +46,16 @@ exit 0
 EOF
 
 # curl is called as: curl [--cacert X] -sS -o /dev/null -w '%{http_code}' --max-time 15 <url>
+# 🚨 The FAKE_CURL_FAILS arm emulates the one curl behaviour that matters here and that a
+# stub which only ever exits 0 can never reach: on a CONNECTION failure curl still WRITES its
+# %{http_code} — the literal '000' — and THEN exits non-zero. probe_http's `|| printf '000'`
+# therefore APPENDED a second '000', and the resulting '000000' matched no arm of the caller's
+# case statement. That is how "nothing is listening on :8443" got reported as a serving-portal
+# fault with the INGRESS as its remedy. The old stub is why this suite never saw it.
 cat > "$STUBS/curl" <<'EOF'
 #!/usr/bin/env bash
 url="${!#}"
+if [ -n "${FAKE_CURL_FAILS:-}" ]; then printf '000'; exit 7; fi
 case "$url" in
   */login) printf '%s' "${FAKE_HTTP_LOGIN:-200}" ;;
   *)       printf '%s' "${FAKE_HTTP_ROOT:-200}" ;;
@@ -112,6 +120,37 @@ reports "no answer at all is reported" "did NOT answer" \
 
 reports "a deleted login page is caught" "NOT ROUTED" \
   FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=404 FAKE_MODULES="$BOTH_PRESENT"
+
+# 🚨 The single most common red state a developer meets, and the one §14 misnamed. `up` and
+# `update` both restart the launchd port-forward and go STRAIGHT into the verification, so the
+# probes routinely arrive before :8443 is bound. Real curl writes '000' and exits non-zero, the
+# fallback appended a second '000', and '000000' fell through every arm of the case statement to
+# the generic "that is not a serving portal" — which names the INGRESS. The developer is then sent
+# to `memex-local logs` to read a healthy pod, for a socket that is missing on their own Mac.
+reports "a connection failure is 'no answer', not a serving-portal fault" "did NOT answer" \
+  FAKE_CURL_FAILS=1 FAKE_MODULES="$BOTH_PRESENT"
+
+run_verify FAKE_CURL_FAILS=1 FAKE_MODULES="$BOTH_PRESENT"
+case "$OUT" in
+  *000000*) bad "a connection failure reports ONE status, not a doubled one" \
+              "reported HTTP 000000 — probe_http concatenated curl's own '000' with its fallback: $OUT" ;;
+  *) ok "a connection failure reports ONE status, not a doubled one" ;;
+esac
+case "$OUT" in
+  *port-forward*) ok "a connection failure names the port-forward as the remedy" ;;
+  *) bad "a connection failure names the port-forward as the remedy" \
+       "nothing is listening on the host; sending the developer at the ingress wastes the session: $OUT" ;;
+esac
+
+# 🚨 Check 2 must not diagnose the sign-in ROUTE when nothing answered at all — it cannot know
+# anything about /login through a transport that is not there, and "Remedy: memex-local logs"
+# sends the developer to a healthy pod for a second time in the same output. One cause must
+# produce one diagnosis; the transport is check 1's to name and check 2 defers to it.
+case "$OUT" in
+  *"/login answered HTTP 000"*) bad "a connection failure does not also indict /login" \
+       "check 2 judged the sign-in route through a transport that never connected: $OUT" ;;
+  *) ok "a connection failure does not also indict /login" ;;
+esac
 
 reports "a missing view pack is caught" "MeshWeaver.Blazor.Views" \
   FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=200 \
@@ -222,6 +261,38 @@ for c in cmd_up cmd_update; do
     *) bad "${c} runs the usability verification" "no verify_usable call in ${c}()" ;;
   esac
 done
+
+echo "── a gate's own INPUT must be reachable (static — needs a live pod) ──"
+
+# 🚨 §14 decides the boot reconcile has SETTLED by grepping the pod log for
+# `[DefaultInstall] reconciled`. That call is LogInformation on a MeshWeaver.PluginCatalog.*
+# category, and the portal image's appsettings.json caps the whole `MeshWeaver` prefix at Warning
+# — so the line never reaches stdout on ANY install. The wait could therefore never settle early:
+# it burned its full --wait budget (600 s on `update`) and then reported "the boot reconcile has
+# not reported completion", which is a statement about the LOGGING CONFIG, not about the install.
+# apply_logging set only Logging__LogLevel__Default, and a Default override does not lift a more
+# specific prefix. Same defect class as the unreadable pod above: the check could not read its own
+# input. Asserted statically — proving it dynamically needs a running portal.
+body="$(awk -v f='^apply_logging\\(\\)' '$0 ~ f { on=1 } on { print } on && /^}$/ { exit }' "$CLI")"
+case "$body" in
+  *Logging__LogLevel__MeshWeaver.PluginCatalog=Information*)
+    ok "apply_logging lifts the category the DefaultInstall probe greps" ;;
+  *) bad "apply_logging lifts the category the DefaultInstall probe greps" \
+       "appsettings caps 'MeshWeaver' at Warning, so [DefaultInstall] reconciled is suppressed and the wait can never settle: ${body}" ;;
+esac
+
+# 🚨 `launchctl bootstrap` returns when launchd has ACCEPTED the job, not when the kubectl
+# port-forward inside it has bound the socket. Both cmd_up and cmd_update go straight from
+# install_launchd into verify_usable, so the verification routinely probes a socket that does not
+# exist yet and reports a portal that is in fact fine. Waiting on the port is waiting on the
+# actual precondition — and any HTTP status at all, 503 included, proves the socket is bound and
+# is check 1's business to judge, so the wait cannot mask a genuinely broken portal.
+body="$(awk -v f='^install_launchd\\(\\)' '$0 ~ f { on=1 } on { print } on && /^}$/ { exit }' "$CLI")"
+case "$body" in
+  *wait_port_forward*) ok "install_launchd waits for the socket to actually bind" ;;
+  *) bad "install_launchd waits for the socket to actually bind" \
+       "it returns as soon as launchd accepts the job, and every caller verifies immediately after: ${body}" ;;
+esac
 
 echo "── the CLI still knows every command it documents ────────────────"
 

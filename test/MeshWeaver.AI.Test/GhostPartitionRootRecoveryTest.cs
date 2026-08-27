@@ -6,7 +6,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
-using MeshWeaver.AI;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -16,8 +15,10 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.PluginCatalog;   // moved out of MeshWeaver.PluginCatalog.Test (#2276):
+                                  // the parent namespace no longer resolves implicitly.
 
-namespace MeshWeaver.PluginCatalog.Test;
+namespace MeshWeaver.AI.Test;
 
 /// <summary>
 /// GHOST-ROOT RECOVERY (#902, origin #638). A top-level partition root that exists to the

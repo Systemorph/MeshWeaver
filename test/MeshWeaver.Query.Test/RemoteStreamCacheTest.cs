@@ -90,4 +90,69 @@ public class RemoteStreamCacheTest(ITestOutputHelper output) : MonolithMeshTestB
         // Clean up.
         fresh.Dispose();
     }
+
+    /// <summary>
+    /// 🚨 A TERMINALLY FAULTED mirror is as dead as a disposed one, and must never be served again
+    /// — Systemorph/MeshWeaver#2387.
+    ///
+    /// <para><b>The defect.</b> A remote mirror's store is a <c>ReplaySubject</c>, so once it takes
+    /// an <c>OnError</c> the Rx grammar makes that permanent: it can never emit again, and every
+    /// LATER subscriber replays the same error the instant it subscribes. Nothing disposes it —
+    /// <c>CreateExternalClient</c>'s terminal arm faults the stream and tears down only its
+    /// keep-alive, leaving the object "errored but undisposed" — and the cache judged liveness on
+    /// disposal alone, so it kept handing the corpse back for the whole process lifetime.</para>
+    ///
+    /// <para><b>What that cost in production.</b> Three replicas booted together; a per-node hub
+    /// for one package was busy past the mirror's request budget, so that ONE
+    /// <c>SubscribeRequest</c> timed out and poisoned the path. Every later write to it failed in
+    /// <b>0.07 ms</b> while reporting <c>"no initial state arrived … within 30s"</c> — including
+    /// the default installer's own <c>falling back to full install</c> repair, which re-entered
+    /// the same dead mirror and could not possibly succeed. Each pod came up missing exactly one
+    /// baseline package, and only a restart cleared it.</para>
+    ///
+    /// <para>The assertion is two-sided: the identity check names the defect, and the replay
+    /// checks name the HARM — the corpse really is poisonous, and the replacement really does
+    /// start clean.</para>
+    /// </summary>
+    [Fact]
+    public async Task GetRemoteStream_AfterTerminalFault_ReturnsFreshInstance()
+    {
+        var path = $"{TargetNamespace}/gamma";
+
+        await NodeFactory.CreateNode(MakeNode("gamma", "Gamma")).Should().Emit();
+
+        var workspace = (MeshWeaver.Data.Workspace)Mesh.GetWorkspace();
+
+        var faulted = workspace.GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
+            new Address(path), new MeshNodeReference());
+
+        // Exactly the terminal a real boot produces: the owning per-node hub did not answer this
+        // mirror's SubscribeRequest inside the request budget, so CreateExternalClient's error arm
+        // calls reduced.OnError(TimeoutException) and disposes the keep-alive.
+        faulted.OnError(new TimeoutException(
+            $"No response received for request SubscribeRequest → target {path}."));
+
+        Exception? replayed = null;
+        faulted.Subscribe(_ => { }, ex => replayed = ex).Dispose();
+        replayed.Should().BeOfType<TimeoutException>(
+            "the store is a ReplaySubject: a terminal error is replayed to every later subscriber "
+            + "INSTANTLY — which is why serving this instance from the cache converts one slow "
+            + "owner round-trip into a permanent failure of the path");
+
+        var fresh = workspace.GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
+            new Address(path), new MeshNodeReference());
+
+        ReferenceEquals(fresh, faulted).Should().BeFalse(
+            "a faulted stream can never emit again, so the cache must evict it and build a new "
+            + "mirror — otherwise one transient owner timeout is terminal for the process");
+
+        Exception? onFresh = null;
+        fresh.Subscribe(_ => { }, ex => onFresh = ex).Dispose();
+        onFresh.Should().BeNull(
+            "the replacement must start clean; a fresh mirror that already carries the old "
+            + "terminal is the same defect one instance later");
+
+        // Clean up.
+        fresh.Dispose();
+    }
 }

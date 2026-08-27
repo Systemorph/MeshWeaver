@@ -120,7 +120,7 @@ public class CrossPartitionKeysetPagingTests(PostgreSqlFixture fixture, ITestOut
         await foreach (var node in cross
                            .QueryAcrossSchemasAsync(
                                parser.Parse(query), _options, Schemas, "mesh_nodes",
-                               userId: null, activityUserId: null, ct)
+                               userId: null, activityUserId: null, excludedNodeTypes: null, ct)
                            .WithCancellation(ct))
             rows.Add(node.Path);
         return rows;

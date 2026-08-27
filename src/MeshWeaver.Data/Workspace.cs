@@ -205,6 +205,19 @@ public class Workspace : IWorkspace
         while (true)
         {
             var stream = GetRemoteStreamUnchecked<TReduced, TReference>(owner, reference);
+            // 🚨 Probe BEFORE the lease, and do NOT retry a stream that was already dead when it
+            // arrived. GetRemoteStreamUnchecked returns either a stream that was usable when it
+            // resolved it, or one it just built that is already dead (its own spin guard — a
+            // construction-time fault is reproducible, so re-resolving only mints another corpse,
+            // and repeating that here is the same unbounded spin one level up). Such a stream is
+            // out of the cache and already closed, so there is nothing to declare a hold on
+            // either: a lease could only pin a corpse in the bookkeeping. Hand it back with an
+            // empty lease and let the caller's subscribe collect the terminal.
+            if (!StreamLiveness.IsUsable(stream))
+                return (stream, System.Reactive.Disposables.Disposable.Empty);
+
+            // Live at resolve time: take the hold, then re-check. Only a reclaim landing in that
+            // window makes this disagree, and only that race is worth another turn.
             var lease = LeaseRemoteStream(stream);
             if (StreamLiveness.IsUsable(stream))
                 return (stream, lease);
@@ -573,7 +586,8 @@ public class Workspace : IWorkspace
 
             // Check if the cached stream is still alive — the ONE shared predicate, so this cache
             // cannot drift from the other two (StreamLiveness explains why it is not just a
-            // RunLevel probe, and why the stream's source chain counts too).
+            // RunLevel probe, why the stream's source chain counts too, and why a TERMINALLY
+            // FAULTED store is as dead as a disposed one).
             if (StreamLiveness.IsUsable(stream))
                 return (ISynchronizationStream<TReduced>)stream;
 
@@ -582,6 +596,58 @@ public class Workspace : IWorkspace
             // entry: only the original Lazy is removed.
             ((ICollection<KeyValuePair<(Address Owner, WorkspaceReference Reference, string Identity), Lazy<ISynchronizationStream>>>)_remoteStreamCache)
                 .Remove(new KeyValuePair<(Address Owner, WorkspaceReference Reference, string Identity), Lazy<ISynchronizationStream>>(key, lazy));
+
+            // 🚨 A mirror that FAULTED is undisposed, so removing it from the cache is not enough:
+            // it still owns a client `sync/` hub (and an owner-side twin) whose stale-callback
+            // scanner roots it in the TimerQueue forever — the #1324 leak, and nothing else will
+            // ever close it. Unlike the change-feed eviction, which parks a HEALTHY stream because
+            // a reader may still be attached, a faulted store can never notify anyone again (Rx
+            // grammar), so there is nobody left to keep it alive for. Faulted ONLY: a stream that
+            // is unusable because its hub is winding down is already inside that cascade — see
+            // StreamLiveness.HasFaulted for why closing that one from here would be wrong.
+            if (StreamLiveness.HasFaulted(stream))
+                DiscardFaultedRemoteStream(stream);
+
+            // 🚨 A stream WE JUST BUILT that is already dead is not a stale cache entry — the
+            // failure is reproducible at construction (a same-process owner NACKing our
+            // SubscribeRequest inline, an absent owner answering NotFound synchronously), so
+            // re-resolving is the create → fault → create spin, each turn minting a
+            // SynchronizationStream and its `sync/{id}` sub-hub. Hand this one back instead: its
+            // store already holds the terminal, so the caller gets the real error on subscribe
+            // and the NEXT call — this entry now being out of the cache — starts clean. Same
+            // reasoning, same shape, as GetStream's local-reduce guard below.
+            if (freshlyCreated)
+                return (ISynchronizationStream<TReduced>)stream;
+        }
+    }
+
+    /// <summary>
+    /// Closes a remote stream this workspace has just dropped from
+    /// <see cref="_remoteStreamCache"/> because its store took a terminal error. Parks it so the
+    /// lease bookkeeping owns its disposal, and disposes it at once when no holder is declared.
+    /// </summary>
+    /// <param name="stream">The faulted stream that was removed from the cache.</param>
+    private void DiscardFaultedRemoteStream(ISynchronizationStream stream)
+    {
+        _evictedRemoteStreams[stream] = 0;
+        if (_remoteStreamLeases.ContainsKey(stream))
+        {
+            // A declared holder is still mid-write against it; the last lease release reclaims.
+            ReclaimIfUnheld(stream);
+            return;
+        }
+        if (!_evictedRemoteStreams.TryRemove(stream, out _))
+            return;     // another edge (eviction, a lease release, Dispose) already took it
+        try
+        {
+            stream.Dispose();
+            _logger.LogDebug(
+                "Workspace {WorkspaceId} disposed faulted remote stream for {Owner}.", Id, stream.Owner);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex,
+                "Workspace {WorkspaceId} error disposing faulted remote stream for {Owner}", Id, stream.Owner);
         }
     }
 

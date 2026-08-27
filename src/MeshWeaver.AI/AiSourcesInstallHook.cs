@@ -129,11 +129,15 @@ public sealed class AiSourcesInstallHook(IMessageHub hub) : IPartitionInstallHoo
                 };
                 // Scoped around the WRITE, never ambient across the pipeline's scheduler hops —
                 // an ambient impersonation does not survive those (PackageInstaller says the same).
-                return Observable
-                    .Using(
-                        () => accessService?.ImpersonateAsSystem()
-                              ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
-                        _ => meshService.CreateOrUpdateNode(target with { Content = merged }))
+                // 🚨 RunAsSystem, never `Observable.Using(access.ImpersonateAsSystem, …)`
+                // (#1444/#1790): `Using` disposes the scope wherever the write terminates (the
+                // owning partition hub's response thread) while the SUBSCRIBING thread — an
+                // onboarding/install hook running as the new user — keeps `system-security`
+                // latched. RunAsSystem opens and closes inside one Subscribe; the write is still
+                // ISSUED as System, which is what the post stamps.
+                return accessService
+                    .RunAsSystem(
+                        () => meshService.CreateOrUpdateNode(target with { Content = merged }))
                     .Do(_ => logger?.LogInformation(
                         "Registered {Partition} agent + skill sources for {User}", partition, user))
                     .Select(_ => Unit.Default);

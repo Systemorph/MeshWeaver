@@ -140,18 +140,30 @@ public static class ModelProviderLayoutAreas
     private static void SaveKey(UiActionContext ctx, string providerPath, string newKey)
     {
         var hub = ctx.Host.Hub;
-        var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
-        var stored = protector is null ? newKey : protector.Protect(newKey);
 
-        ctx.Host.Workspace.GetMeshNodeStream(providerPath)
-            .Update(current =>
-                current.Content is ModelProviderConfiguration cfg
-                    ? current with { Content = cfg with { ApiKey = stored } }
-                    : current)
+        // 🚨 Protect INSIDE the chain, via Defer. Protect REFUSES (throws) when the deployment has
+        // no master key configured — it no longer degrades to a plaintext passthrough, which is
+        // what used to put a raw key into node content. Computing `stored` before the chain would
+        // let that refusal escape from a Subscribe's OnNext with nowhere to go; deferred, it
+        // becomes an OnError on the same subscription the write already reports through, so the
+        // key is not stored AND the reason is logged. GetRequiredService, not GetService: the
+        // protector is registered unconditionally by AddGraph, so a null one is a broken host, not
+        // a licence to store the key in the clear.
+        Observable.Defer(() => Observable.Return(
+                hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>().Protect(newKey)))
+            .SelectMany(stored => ctx.Host.Workspace.GetMeshNodeStream(providerPath)
+                .Update(current =>
+                    // ContentAs, not `is`: an `is ModelProviderConfiguration` returns the node
+                    // UNCHANGED whenever the content arrived as a degraded JsonElement — a save
+                    // that silently does nothing, on the one control whose entire job is to store
+                    // the key. ContentAs recovers that shape.
+                    current.ContentAs<ModelProviderConfiguration>(hub.JsonSerializerOptions) is { } cfg
+                        ? current with { Content = cfg with { ApiKey = stored } }
+                        : current))
             .Subscribe(
                 updated => hub.Post(new SaveMeshNodeRequest(updated), o => o.WithTarget(new Address(providerPath))),
                 ex => hub.ServiceProvider.GetService<ILoggerFactory>()
                     ?.CreateLogger("MeshWeaver.AI.ModelProviderLayoutAreas")
-                    ?.LogWarning(ex, "Saving provider key failed for {Path}", providerPath));
+                    ?.LogError(ex, "Saving provider key failed for {Path} — the key was NOT stored", providerPath));
     }
 }

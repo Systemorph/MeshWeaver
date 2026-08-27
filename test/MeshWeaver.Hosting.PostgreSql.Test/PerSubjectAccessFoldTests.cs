@@ -165,13 +165,15 @@ public class PerSubjectAccessFoldTests
         var query = new QueryParser().Parse("nodeType:Document is:main");
 
         var entitled = await provider
-            .QueryAcrossSchemasAsync(query, _options, [Schema], "mesh_nodes", Entitled, activityUserId: null, ct)
+            .QueryAcrossSchemasAsync(query, _options, [Schema], "mesh_nodes", Entitled,
+                activityUserId: null, excludedNodeTypes: null, ct)
             .Collect(ct).Should().Within(30.Seconds()).Emit();
         entitled.Select(n => n.Path).Should().Contain(GatedChildPath,
             "the entitled user's root allow must expose the Public-gated child in the fan-out");
 
         var visitor = await provider
-            .QueryAcrossSchemasAsync(query, _options, [Schema], "mesh_nodes", PublicOnly, activityUserId: null, ct)
+            .QueryAcrossSchemasAsync(query, _options, [Schema], "mesh_nodes", PublicOnly,
+                activityUserId: null, excludedNodeTypes: null, ct)
             .Collect(ct).Should().Within(30.Seconds()).Emit();
         var visitorPaths = visitor.Select(n => n.Path).ToList();
         visitorPaths.Should().Contain(Root, "the Public root cover keeps the public surface visible");

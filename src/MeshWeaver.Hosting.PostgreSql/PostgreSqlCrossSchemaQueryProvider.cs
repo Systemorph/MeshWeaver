@@ -434,7 +434,8 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         string tableName,
         string? userId = null,
         CancellationToken ct = default)
-        => QueryAcrossSchemasAsync(query, options, schemas, tableName, userId, activityUserId: null, ct);
+        => QueryAcrossSchemasAsync(query, options, schemas, tableName, userId,
+            activityUserId: null, excludedNodeTypes: null, ct);
 
     /// <summary>
     /// UNION-ALL fan-out across <paramref name="schemas"/> with optional
@@ -455,6 +456,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         string tableName,
         string? userId,
         string? activityUserId,
+        IReadOnlyCollection<string>? excludedNodeTypes,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         if (schemas.Count == 0)
@@ -496,7 +498,7 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         var generator = new PostgreSqlSqlGenerator();
         var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(
             query, schemas, userId, tableName, activityUserId, contentSchemas, activityUserSchema,
-            accessControlledSchemas);
+            accessControlledSchemas, excludedNodeTypes);
 
         _logger?.LogInformation(
             "[CrossSchema] Satellite query: table={Table}, schemas={Count}, contentSchemas={ContentCount}, userId={User}, source={Source}",

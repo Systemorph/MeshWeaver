@@ -789,14 +789,18 @@ internal class MeshNodeCompilationService(
                 // so it never pre-empts a healthy set but is never lost either.
                 .Where(s => !s.IsEstablished || s.Sources.Count > 0));
 
-        return Observable
-            // Observable.Using INSIDE DelaySubscription, never around it: the resource factory
-            // then runs on the delayed subscribe — the very tick that calls mesh.Query and reads
-            // the ambient identity — instead of on the composing thread whose AsyncLocal the hop
-            // discards. Same ordering as GetSourceCollection.
-            .Using(
-                () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                _ => probe)
+        return accessService
+            // The scope INSIDE DelaySubscription, never around it: it is then entered on the
+            // delayed subscribe — the very tick that calls mesh.Query and reads the ambient
+            // identity — instead of on the composing thread whose AsyncLocal the hop discards.
+            // Same ordering as GetSourceCollection.
+            //
+            // 🚨 RunAsSystem, never `Observable.Using(access.ImpersonateAsSystem, …)` (#1444/#1790).
+            // Both enter the scope at Subscribe, which is the property this ordering needs; only
+            // `Using` also defers the DISPOSE to whichever thread the probe terminates on, leaving
+            // the subscriber latched as System. RunAsSystem keeps the entry and closes the exit.
+            .RunAsSystem(
+                () => probe)
             // A fault ESCAPING the per-leg catches (the whole CombineLatest, not one query) is
             // still unestablishment — the probe found out nothing.
             .Catch((Exception ex) => Observable.Return(SourceSnapshot.Unavailable(

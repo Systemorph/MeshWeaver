@@ -214,6 +214,12 @@ public static class LayoutExtensions
                 typeof(KpiItem),
                 typeof(TowerBand),
                 typeof(ComparisonPair),
+                // A slide show's pre-rendered frames ride inside SlideShowControl.Frames — plain
+                // records, so the IUiControl sweep above misses them. Unregistered, the receiving
+                // hub would adopt SlideFrame under an auto short-name as a side effect of the read,
+                // and a hub that did not would hand the view untyped JsonElements: a deck that
+                // renders no slides at all.
+                typeof(SlideFrame),
                 // Icon lives in MeshWeaver.Domain, so the IUiControl/Skin reflection sweep above
                 // cannot see it — yet it rides inside control state on almost every control
                 // (IconStart/IconEnd, NavItem, MenuItem, ProgressMessage). Unregistered, it

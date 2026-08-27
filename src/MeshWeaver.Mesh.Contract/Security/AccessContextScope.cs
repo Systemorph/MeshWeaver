@@ -16,6 +16,22 @@ namespace MeshWeaver.Mesh.Security;
 /// pattern (no restore — leaks). Each call returns a scoped disposable that
 /// restores the previous AsyncLocal value on Dispose.</para>
 ///
+/// <para>🚨 <b>NEVER as an <c>Observable.Using</c> resource factory.</b>
+/// <c>Observable.Using(() =&gt; AccessContextScope.AsSystem(access), _ =&gt; work)</c>
+/// is the identity-latch defect (#1444/#1790) — these factories are
+/// <c>ImpersonateAsSystem</c> / <c>SwitchAccessContext</c> under another name,
+/// so wearing this helper's name changes nothing about the shape. Rx runs the
+/// factory on the SUBSCRIBING thread and disposes it when the inner observable
+/// TERMINATES — for a cross-hub read or write, the owning hub's response thread
+/// — so the subscriber is left running as the impersonated identity with
+/// nothing to restore it. Use
+/// <c>ImpersonationScopeExtensions.RunAsSystem/RunAsHub/RunAs</c>, which owns
+/// both ends inside one <c>Subscribe</c>; where the capture is genuinely
+/// SYNCHRONOUS, a plain <c>using</c> around the call and its
+/// <c>Subscribe</c> is equally correct — that is what these factories are for.
+/// <c>ImpersonationScopeSiteRatchetGuard</c> fails a new site of either
+/// spelling.</para>
+///
 /// <para><b>Operation classes — choose the right factory:</b></para>
 /// <list type="bullet">
 ///   <item><see cref="FromNode"/> — for operations that should run under the

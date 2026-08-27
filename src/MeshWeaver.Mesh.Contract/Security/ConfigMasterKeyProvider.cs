@@ -3,7 +3,15 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Mesh.Security;
+// 🚨 The NAMESPACE is part of the binary contract, and it does NOT follow the assembly.
+// This type used to live in MeshWeaver.AI; a module compiled before it moved holds a TypeRef to
+// `MeshWeaver.AI.ConfigMasterKeyProvider` scoped to the `MeshWeaver.AI` AssemblyRef. The
+// [assembly: TypeForwardedTo] in src/MeshWeaver.AI/TypeForwards.cs redirects that TypeRef here —
+// but ONLY while the full type NAME is unchanged, because a forwarder CANNOT rename. So
+// `namespace MeshWeaver.AI;` inside MeshWeaver.Mesh.Contract is DELIBERATE AND PERMANENT.
+// Tidying it to `MeshWeaver.Mesh.Security` is the #2370 outage all over again (#2398);
+// MovedTypeBinaryContractTest and scripts/check-type-forwards.py both refuse it.
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Default <see cref="IMasterKeyProvider"/> — reads a base64 master key from
@@ -14,8 +22,9 @@ namespace MeshWeaver.Mesh.Security;
 ///
 /// <para>Any input length is accepted: the configured value is hashed with
 /// SHA-256 to derive the 32-byte AES key, so a passphrase or a base64 of 32
-/// random bytes both work. When the key is absent/blank, returns <c>null</c> so
-/// <see cref="ProviderKeyProtector"/> falls back to plaintext passthrough.</para>
+/// random bytes both work. When the key is absent/blank, returns <c>null</c> — and
+/// <see cref="ProviderKeyProtector.Protect"/> then REFUSES to write rather than falling back to
+/// plaintext, so an unconfigured deployment stores no new secrets at all.</para>
 ///
 /// <para>⚠ Rotating the configured value makes previously-stored ciphertext
 /// undecryptable (different derived key) — re-save / rotate affected provider
@@ -40,9 +49,15 @@ public sealed class ConfigMasterKeyProvider : IMasterKeyProvider
         var configured = services.GetService<IConfiguration>()?[ConfigKey];
         if (string.IsNullOrWhiteSpace(configured))
         {
-            logger?.LogInformation(
-                "No {ConfigKey} configured — provider-key encryption is DISABLED (keys stored as plaintext). " +
-                "Set a base64 master key via env/secret to enable encryption at rest.", ConfigKey);
+            // 🚨 Error, not Information. This is not "a feature is off" — it is "this deployment
+            // cannot store a credential at all", and every attempt to store one will now be
+            // refused. The line that used to sit here said "keys stored as plaintext" at
+            // Information, which is precisely how the plaintext leak went unnoticed.
+            logger?.LogError(
+                "No {ConfigKey} configured — this deployment CANNOT store credentials: every attempt "
+                + "to encrypt one at rest is refused, rather than silently persisting it in plaintext. "
+                + "Set a base64 master key via env 'Ai__KeyProtection__MasterKey' or a deploy secret.",
+                ConfigKey);
             return;
         }
 
