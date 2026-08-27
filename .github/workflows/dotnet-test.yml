@@ -992,6 +992,16 @@ jobs:
           if [ ! -d "$(dirname "$csproj")/bin" ]; then
             echo "::error::$name: bin tree absent — this shard's artifact did not contain it (build/test shard-assign mismatch)."
             echo "[CI] $name exit=97 MISSING_BIN (artifact did not contain this project)" >> test/test-results.log
+            # Same reason as the crash recorder below: a project that produced NO verdict must
+            # not be invisible to every trx reader. It has no bin dir, so the result goes beside
+            # the csproj where the artifact glob (test/**/*.trx) still picks it up.
+            mkdir -p "$(dirname "$csproj")/TestResults"
+            if ! python3 .github/scripts/record-host-crash.py \
+              "$(dirname "$csproj")/TestResults/$name.trx" "$name" 97 \
+              "MISSING_BIN: this shard's artifact did not contain the project, so it never ran. Build/test shard-assign mismatch."; then
+              echo "::error::$name: could not record MISSING_BIN into a trx — this project stays invisible to every trx reader."
+              echo "[CI] $name exit=95 CRASH_RECORD_FAILED (MISSING_BIN could not be written into a trx — read the marker above, not the trx)" >> test/test-results.log
+            fi
             continue
           fi
           if [ ! -f "$dir/$name.dll" ] || [ ! -f "$dir/xunit.v3.core.dll" ]; then
@@ -1022,6 +1032,12 @@ jobs:
             if [ "${#allclasses[@]}" -eq 0 ]; then
               echo "::error::$label: could not enumerate test classes — refusing to run a partial shard silently."
               echo "[CI] $name exit=96 NO_CLASSES (class enumeration failed for a split project)" >> test/test-results.log
+              if ! python3 .github/scripts/record-host-crash.py \
+                "$dir/TestResults/$name.part$part.trx" "$label" 96 \
+                "NO_CLASSES: class enumeration failed for a split project, so this part ran nothing."; then
+                echo "::error::$label: could not record NO_CLASSES into a trx — this part stays invisible to every trx reader."
+                echo "[CI] $name exit=95 CRASH_RECORD_FAILED (NO_CLASSES could not be written into a trx — read the marker above, not the trx)" >> test/test-results.log
+              fi
               continue
             fi
             for ((ci=part-1; ci<${#allclasses[@]}; ci+=parts)); do
@@ -1065,24 +1081,52 @@ jobs:
           if [ -f "$trxfile" ]; then
             trxfails=$(grep -oE '<UnitTestResult[^>]*outcome="Failed"' "$trxfile" | wc -l | tr -d ' ')
           fi
+          # `crash` is set for every outcome in which the host did NOT complete. It is the
+          # single switch that decides whether the crash gets written INTO the trx below —
+          # deliberately one variable rather than a call per branch, so a new exit code added
+          # to this case cannot be given a marker without also being given a trx result.
+          crash=""
           case "$rc" in
             0)
               marker="[CI] $name exit=0" ;;
             124|137)
-              marker="[CI] $label exit=$rc TIMEOUT (8m wall-clock cap hit — likely fixture/init hang)" ;;
-            132) marker="[CI] $label exit=$rc SIGNAL SIGILL (host died on a signal, not an assertion)" ;;
-            134) marker="[CI] $label exit=$rc SIGNAL SIGABRT (host died on a signal, not an assertion)" ;;
-            135) marker="[CI] $label exit=$rc SIGNAL SIGBUS (host died on a signal, not an assertion)" ;;
-            139) marker="[CI] $label exit=$rc SIGNAL SIGSEGV (host died on a signal, not an assertion)" ;;
+              marker="[CI] $label exit=$rc TIMEOUT (8m wall-clock cap hit — likely fixture/init hang)"
+              crash="TIMEOUT: killed at the 8m wall-clock cap — a fixture/init hang, not a test failure. The last TEST_START without a matching TEST_END in collected-logs/_meshweaver-test-trace.log names the test it was stuck in." ;;
+            132) marker="[CI] $label exit=$rc SIGNAL SIGILL (host died on a signal, not an assertion)"
+              crash="SIGNAL SIGILL: the host died on a signal, not an assertion." ;;
+            134) marker="[CI] $label exit=$rc SIGNAL SIGABRT (host died on a signal, not an assertion)"
+              crash="SIGNAL SIGABRT: the host died on a signal, not an assertion (FailFast / abort)." ;;
+            135) marker="[CI] $label exit=$rc SIGNAL SIGBUS (host died on a signal, not an assertion)"
+              crash="SIGNAL SIGBUS: the host died on a signal, not an assertion." ;;
+            139) marker="[CI] $label exit=$rc SIGNAL SIGSEGV (host died on a signal, not an assertion)"
+              crash="SIGNAL SIGSEGV: the host died on a signal, not an assertion — see #613 (use-after-unload of a collectible ALC). A mini dump is in collected-logs/." ;;
             *)
               if [ "$rc" = "$trxfails" ]; then
                 marker="[CI] $name exit=$rc TESTFAIL ($trxfails failing test(s) recorded in trx — xunit v3 exits with the failure count; the host completed normally)"
               elif [ ! -f "$trxfile" ]; then
                 marker="[CI] $label exit=$rc MASKED (no trx written — the host died before recording any result)"
+                crash="MASKED: exit=$rc with no trx — the host died before recording any result."
               else
                 marker="[CI] $label exit=$rc MASKED (trx records $trxfails failing test(s), which does not explain exit=$rc — host crashed after streaming results)"
+                crash="MASKED: exit=$rc, but the trx records only $trxfails failing test(s) — that does not explain the exit code, so the host crashed AFTER streaming results."
               fi ;;
           esac
+          # ── The crash becomes a FAILED RESULT in the trx ────────────────────
+          # 🚨 Not a seventh place that re-checks the exit marker — the point is that pass/fail
+          # evidence and liveness evidence stop being two channels. Every reporter downstream
+          # (the trx gate, this shard's summary, the per-shard and consolidated GitHub checks)
+          # reads the trx and ONLY the trx; a host that streamed three green results and then
+          # took a SIGSEGV therefore had all four of them announce "3 passed" over a dead
+          # process. That is what MeshWeaver.Content.Test's exit=139 did (#2495). Writing the
+          # crash into the file they all parse is what makes a pass over a crash unstateable,
+          # including by a reporter added later that nobody remembers to teach.
+          if [ -n "$crash" ]; then
+            mkdir -p "$(dirname "$trxfile")"
+            if ! python3 .github/scripts/record-host-crash.py "$trxfile" "$name" "$rc" "$crash"; then
+              echo "::error::$label: could not record the host crash into $trxfile — the trx still reports only what the host streamed."
+              echo "[CI] $name exit=95 CRASH_RECORD_FAILED (the crash could not be written into the trx — read the marker above, not the trx)" >> test/test-results.log
+            fi
+          fi
           echo "$marker elapsed=${elapsed}s"
           echo "$marker elapsed=${elapsed}s" >> test/test-results.log
           echo "::endgroup::"
@@ -1225,7 +1269,7 @@ jobs:
           fi
         done
         if [ "$any" = "0" ]; then
-          echo "_No failed tests in trx for shard ${{ matrix.shard }} (a crashed/killed host fails via the exit-marker gate below)._" >> "$GITHUB_STEP_SUMMARY"
+          echo "_No failed tests in trx for shard ${{ matrix.shard }}. A crashed/killed host is NOT covered by this silence: since #2495 it is written INTO the trx as a \`<project>.HOST_CRASHED\` failure by .github/scripts/record-host-crash.py, so it would be listed above; the exit-marker gate below is the second, independent check._" >> "$GITHUB_STEP_SUMMARY"
         else
           # 🚨 GATE (TRX-based, reporter-independent): fail the shard on any test
           # failure recorded in the trx. The Publish step below is a best-effort
@@ -1685,7 +1729,7 @@ jobs:
           exit 1
         fi
         if [ "$any" = "0" ]; then
-          echo "_No failed tests in ${trx_count} trx file(s) (a crashed/killed host fails via the exit-marker gate below)._" >> "$GITHUB_STEP_SUMMARY"
+          echo "_No failed tests in ${trx_count} trx file(s). A crashed/killed host is NOT covered by this silence: since #2495 it is written INTO the trx as a \`<project>.HOST_CRASHED\` failure, so it would be listed above; the exit-marker gate below is the second, independent check._" >> "$GITHUB_STEP_SUMMARY"
           echo "No failed tests found in trx across all shards (${trx_count} result files)."
         else
           # 🚨 GATE (TRX-based, reporter-independent): the consolidated run pass/fail
