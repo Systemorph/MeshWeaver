@@ -306,6 +306,20 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.Hosting.Grpc.dll` | The mesh gRPC transport: `meshweaver.v1.Mesh` + gRPC-web, `py`/`node` foreign participants AND the React GUI's browser data plane | `Grpc` (`TrustedPort`) |
 | `MeshWeaver.Hosting.Cosmos.dll` | Cosmos DB storage backend (keyed adapter factory + native query) | selected by `Graph:Storage:Type` = `Cosmos` |
 | `MeshWeaver.Hosting.Snowflake.dll` | Snowflake storage backend (persistence, change feed, cross-schema query, access projection) | selected by `Graph:Storage:Type` = `Snowflake` |
+| `MeshWeaver.AI.dll` | The AI ENGINE — the agent runtime (threads, rounds, delegation, tool calling, harnesses, token accounting) **and** the catalogs that administer it (Agents, Skills, Providers, Models, Tiers) | `Features:StaticRepoSync:Partitions`, `Features:Ai:Clis:*`, `Skills:Directory`, `ClaudeConnect` |
+
+🚨 **The AI engine is registry-served, so it is listed under `Modules:Required` and NEVER under
+`Modules:Assemblies`** — see *Deciding* below for why those two lists are mutually exclusive for one
+name. Its Store entry is `preInstalled`, so a first-party deployment lands it unattended, and
+`Required` is what turns an absence into a degraded readiness report rather than a silently
+model-less portal (no chat, no models, and `Provider/*` empty — the catalog is engine-projected).
+
+🚨 **`Memex.LocalMesh` is the exception that shows the rule.** The headless sidecar has no plugin
+catalog — no registry client, no auto-install — so a `Modules:Required` entry there would name a
+module nothing can ever land, and every chat send would be refused *"NodeType 'Thread' is not
+registered"*. It keeps the engine in its own app closure instead; with no install path, there is
+nothing for a registry module to collide with. **A host without a catalog cannot consume the
+registry lane at all** — check that before flipping any module on a new host.
 
 🚨 **`MeshWeaver.Hosting.Grpc` is DEFAULT-ON in every deployment.** Its endpoint is not just the
 foreign-participant (`py/*`, `node/*`) transport — the React GUI connects over the very same
@@ -514,6 +528,78 @@ operator's own surfaces already sanctioned, and gating it would ship a package w
 never arrives. The wiring is `IModuleUpdatePolicy` (`MeshWeaver.PluginCatalog`), implemented by
 the memex portals over the policy node; a host that registers no implementation gets the default
 (allowed).
+
+## Deciding: what can be a module, and where its source may live
+
+Two properties decide a module's shape, and they are **independent** — they move in separate
+changes, and confusing them is what makes a carve-out look blocked when it is not, or land when it
+should not have.
+
+| | question | answer decided by |
+|---|---|---|
+| **Delivery** | do the bits arrive in the IMAGE or from the REGISTRY? | whether the deployment can boot without it |
+| **Source** | does the code live in the PLATFORM repo or a NODE repo? | whether the platform's bake host must compile against it |
+
+### Delivery — image closure vs registry bundle
+
+Registry delivery is the default for anything a deployment can start without. The exceptions are
+structural, not preferences:
+
+- **Storage backends** must be image-shipped: a store-installed module needs storage to already
+  work, so the thing that provides storage cannot itself arrive through it.
+- **Auth schemes and anything with middleware-ORDER significance** must be image-shipped: the
+  pipeline is composed at boot, before any install has run.
+- **The loader itself** and the persistence contracts it reads.
+
+Everything else can be registry-served, and the switch between the two lanes is one line per host:
+a module in the image closure is listed under `Modules:Assemblies`; a module from the registry is
+listed under `Modules:Required` and installed by its Store entry (`preInstalled` for the ones a
+first-party deployment must not be without).
+
+🚨 **The two lists are mutually exclusive for one name, and the exclusion is enforced, not advisory.**
+`ComputeEffectiveModuleEntries` takes the baseline first and dedupes the persisted entry away by
+name, so a leftover `Modules:Assemblies` line SHADOWS a landed store module — the deployment binds
+an app-closure copy that a later image may not even ship. On the install side the landing service
+answers **409** while any host still carries the same-named DLL in its closure. So flipping a module
+from image to registry means dropping the `ProjectReference` and the baseline entry in the same
+change set that publishes the Store entry.
+
+### Source — platform repo vs node repo
+
+A module's source may live in a node repo only when **nothing the platform's own bake host must
+compile depends on it**.
+
+The bake host (`tools/MeshWeaver.PluginTester`) compiles the platform's gated content — the sample
+trees `.github/scripts/stage-samples-gate.sh` stages — and it builds what it needs **from the
+platform checkout**. It can therefore land a module the way a portal does, from a tester-local
+`MeshModuleClosure` row, only for as long as that module's source is still in the platform tree.
+
+This gives the ordering rule for any carve-out:
+
+> A module's **delivery flip** — out of the image, out of the canonical content surface — can happen
+> while its source is still in the platform repo. Its **source move** cannot, until the bake host
+> consumes a node-repo-BUILT bundle instead of building from source.
+
+Two live examples of each side of that line: the AI engine has flipped delivery (registry-served,
+`Modules:Required`) while `src/MeshWeaver.AI` remains in the platform repo, because the gate still
+builds it there. `MeshWeaver.Maps` cannot move its source at all yet, because gated sample content
+(`Cornerstone/Pricing`) uses `MapControl`/`MapMarker` and the gate has no other way to obtain the
+assembly.
+
+### The canonical content surface follows delivery, not source
+
+`FrameworkBuildIdentity.ContentSurfaceAssemblies` is the set in-mesh content may compile against,
+and it is *defined* as the bake host's transitive `MeshWeaver.*` closure. When a module leaves the
+image it leaves that set too — and three things must move together, or hosts fork their identity:
+
+1. the name comes out of `ContentSurfaceAssemblies` **and** out of the bake host's reference closure
+   (the equality between the two is asserted by `FrameworkBuildIdentityTest.CanonicalList_MatchesTheTesterClosure`,
+   which recomputes the closure from the csproj graph — never satisfy it by editing the list alone);
+2. the bake host gains the tester-local `MeshModuleClosure` row so content that references the
+   module still compiles (`CompileReferences.ComposeWithModules` puts installed modules into the
+   reference set);
+3. anything that arrived **transitively** through the removed reference and is still content surface
+   gets re-anchored directly — dropping one reference drops everything it pulled in.
 
 ## Modules and the in-mesh compiler
 
