@@ -29,6 +29,45 @@ namespace MeshWeaver.PluginTester;
 /// </summary>
 public static class BakeOutput
 {
+    /// <summary>
+    /// The package's own NODE DEFINITION files, as the bundle's content entries — every file under
+    /// the package's source folder, path relative to that folder, bytes streamed from the snapshot.
+    ///
+    /// <para>🚨 <b>This is what turns an assemblies-only bundle into an installable upstream, and
+    /// until now the bake never emitted it.</b> <c>BundleReader.Manifest.Content</c> has said all
+    /// along that "a consumer that means to USE this package as an upstream needs these: the bytes
+    /// only stamp nodes that already exist, so without the definitions there is nothing to stamp".
+    /// The writer accepted them; both bake call sites passed nothing. So every published bundle
+    /// was assemblies-only, which is exactly why <c>node-repo-publish-bake</c>'s <c>stage-repo</c>
+    /// input carries the note "staging cannot be dropped until a published artifact carries the
+    /// upstream's NODE DEFINITIONS and not just its compiled assemblies" — and why every plugin
+    /// repo still stages its dependencies as SOURCE and recompiles them. Measured 2026-08-27:
+    /// core passes <c>--seed</c> in 9 places, every plugin repo in 0.</para>
+    ///
+    /// <para>The whole tree ships — nodes, source and assets — because the consumer installs the
+    /// package, and an install needs the package. <c>SourceIncluded</c> is declared <c>true</c> for
+    /// the same reason; it is a declaration rather than an inference (see its remarks) and this
+    /// producer withholds nothing. Binary files ride as bytes; the writer refuses any path that is
+    /// not package-relative, so a snapshot path that escapes the folder is a producer error
+    /// surfaced here, not a bundle that a consumer must refuse.</para>
+    /// </summary>
+    /// <param name="snapshot">The repo tree the bake ran over.</param>
+    /// <param name="package">The package whose tree to collect.</param>
+    /// <returns>Content entries, ordinal by relative path — empty when the snapshot holds no files
+    /// under the package (the caller then writes an assemblies-only bundle exactly as before).</returns>
+    public static IReadOnlyList<BundleWriter.ContentEntry> NodeDefinitionsOf(
+        RepoSnapshot snapshot, PackageManifest? package, string packageId)
+    {
+        var prefix = (package?.SourceFolder ?? packageId) + "/";
+        return snapshot.Files
+            .Where(f => f.Path.StartsWith(prefix, StringComparison.Ordinal) && f.Path.Length > prefix.Length)
+            .OrderBy(f => f.Path, StringComparer.Ordinal)
+            .Select(f => new BundleWriter.ContentEntry(
+                f.Path[prefix.Length..],
+                () => new MemoryStream(f.Bytes, writable: false)))
+            .ToList();
+    }
+
     /// <summary>Bound on reading one compiled type's record back — the compile has already settled,
     /// so this is a replay off the shared stream handle, not a wait for work.</summary>
     private static readonly TimeSpan ReadBudget = TimeSpan.FromSeconds(30);
@@ -81,6 +120,7 @@ public static class BakeOutput
                     {
                         Directory.CreateDirectory(outputDirectory);
                         var bundlePath = Path.Combine(outputDirectory, SafeFileName(package.Id) + ".zip");
+                        var content = NodeDefinitionsOf(snapshot, manifest, package.Id);
                         using (var file = File.Create(bundlePath))
                             BundleWriter.Write(
                                 file,
@@ -88,9 +128,11 @@ public static class BakeOutput
                                 manifest?.ReleasedVersion ?? manifest?.ModuleVersion ?? manifest?.Version,
                                 frameworkMvid,
                                 entries.ToList(),
-                                sourceSha);
+                                sourceSha,
+                                content,
+                                sourceIncluded: true);
                         options.Output.WriteLine(
-                            $"bake: {package.Id} → {entries.Count} assembly(ies) → {bundlePath}");
+                            $"bake: {package.Id} → {entries.Count} assembly(ies) + {content.Count} node file(s) → {bundlePath}");
                         return entries.Count;
                     }));
             }))
