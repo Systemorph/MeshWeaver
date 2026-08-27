@@ -69,7 +69,7 @@ public class SpaceCreateAtomicityTest(ITestOutputHelper output) : MonolithMeshTe
                 State = MeshNodeState.Active,
             })
             { CreatedBy = Creator },
-            o => o.WithTarget(Mesh.Address)
+            o => o.WithTarget(RequestHub.NodeOperationTarget())
                 .WithAccessContext(new AccessContext { ObjectId = Creator, Name = Creator }));
 
     [Fact(Timeout = 60_000)]

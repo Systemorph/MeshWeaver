@@ -412,8 +412,10 @@ public class InstanceComboReaderTest(ITestOutputHelper output) : MonolithMeshTes
             },
         };
 
-        await AsSystem(() => Mesh.Observe<CreateOrUpdateNodeResponse>(
-                new CreateOrUpdateNodeRequest(node)))
+        // Off-router: issued from a client and aimed at the mesh's dedicated node-operation hub.
+        // A target-less post on `Mesh` defaults to the ROUTER itself, so it made the router both
+        // ends of the delivery AND ran the upsert on its action block (#2423).
+        await AsSystem(() => ObserveNodeOperation(new CreateOrUpdateNodeRequest(node)))
             .FirstAsync().Timeout(60.Seconds()).ToTask();
     }
 

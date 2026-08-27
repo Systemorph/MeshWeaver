@@ -170,7 +170,7 @@ public class CodeCellLayoutTest(ITestOutputHelper output) : MonolithMeshTestBase
                 && HasArea(s, CodeLayoutAreas.CellArea)))!;
         var cellArea = FindArea(root, CodeLayoutAreas.CellArea);
 
-        var exec = (await Mesh.Observe(
+        var exec = (await RequestHub.Observe(
                 new ExecuteScriptRequest(),
                 o => o.WithTarget(new Address(codePath)))
             .Should().Within(60.Seconds()).Emit()).Message;

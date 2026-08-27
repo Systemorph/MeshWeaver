@@ -53,6 +53,9 @@ public class StreamRouteSelfParentTerminationTest(ITestOutputHelper output) : Hu
             + "makes RouteStreamMessage's walk non-terminating");
 
         // Warm up: prove the drain is live (and initialization has completed) before the poison.
+        // 🚨 Both Pings address the ROUTER on purpose — do NOT move them to a client hub (#2423).
+        // What is under test is the mesh hub's OWN drain staying responsive, so the mesh hub has to
+        // be the target; the ROUTER_TRAFFIC line this emits reports exactly what the test intends.
         (await Mesh.Observe(new Ping(), o => o.WithTarget(Mesh.Address))
             .Should().Within(15.Seconds()).Emit())
             .Message.Should().BeOfType<Pong>();

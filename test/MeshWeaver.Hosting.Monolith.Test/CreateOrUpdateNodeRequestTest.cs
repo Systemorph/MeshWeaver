@@ -46,8 +46,7 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
             State = MeshNodeState.Active,
         };
 
-        var resp = await Mesh
-            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(sourceNode))
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(sourceNode))
             .Select(d => d.Message)
             .Should().Emit();
 
@@ -98,8 +97,7 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
             State = MeshNodeState.Active,
         };
 
-        var resp = await Mesh
-            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(sourceNode))
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(sourceNode))
             .Select(d => d.Message)
             .Should().Emit();
 
@@ -147,8 +145,7 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
         var originalCreatedDate = before!.CreatedDate;
         var originalCreatedBy = before.CreatedBy;
 
-        var resp = await Mesh
-            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(
                 new MeshNode(path.Split('/').Last(), TestPartition)
                 {
                     Name = "Renamed",
@@ -194,8 +191,7 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var before = await ReadStable(storage, path);
 
-        var resp = await Mesh
-            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(Node()))
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(Node()))
             .Select(d => d.Message)
             .Should().Emit();
 
@@ -231,8 +227,7 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var before = await ReadStable(storage, path);
 
-        var resp = await Mesh
-            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(
                 new MeshNode(path.Split('/').Last(), TestPartition)
                 {
                     Name = "After",
@@ -296,8 +291,7 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
         }).Should().Emit();
 
         // The upsert: authored change + a stale verdict the writer happened to be holding.
-        var resp = await Mesh
-            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(
                 new MeshNode(id, TestPartition)
                 {
                     Name = "Widget",

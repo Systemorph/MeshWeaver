@@ -73,7 +73,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
 
         // Dispatch via ExecuteScriptRequest; capture the ActivityLog path from the
         // response. That path points at the activity node the Code hub just created.
-        var exec = (await Mesh.Observe(
+        var exec = (await RequestHub.Observe(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(path)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -134,7 +134,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
 
         var gatePath = await ProgressGate.Seed(mesh, ScriptsPartition);
 
-        var exec = (await Mesh.Observe(
+        var exec = (await RequestHub.Observe(
             new ExecuteScriptRequest { Inputs = ProgressGate.Inputs(gatePath) },
             o => o.WithTarget(new Address(path)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -201,7 +201,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
             }
         }).Should().Within(30.Seconds()).Emit();
 
-        var exec = (await Mesh.Observe(
+        var exec = (await RequestHub.Observe(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(path)))
             .Should().Within(60.Seconds()).Emit()).Message;

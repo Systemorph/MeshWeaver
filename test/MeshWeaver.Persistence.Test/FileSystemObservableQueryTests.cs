@@ -401,7 +401,11 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         receivedChanges[0].Items.Should().HaveCount(1);
 
         var movedPath = NodePath("Project1Moved");
-        await Mesh.Observe(new MoveNodeRequest(proj1, movedPath), o => o).Should().Emit();
+        // Target the mesh's dedicated node-operation hub explicitly. A target-less post from `Mesh`
+        // addressed the ROUTER itself (it defaults to the posting hub), making it both ends of the
+        // delivery — the shape ROUTER_TRAFFIC reports (#2423) — and executed the move on the
+        // router's action block. NodeOperationTarget is the seam production uses.
+        await ObserveNodeOperation(new MoveNodeRequest(proj1, movedPath)).Should().Emit();
         await WaitForChanges(receivedChanges, 2);
 
         receivedChanges.Count.Should().BeGreaterThanOrEqualTo(2);

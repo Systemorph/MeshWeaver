@@ -150,7 +150,7 @@ public class PartitionRootBootstrapTest(ITestOutputHelper output) : MonolithMesh
         };
         var resp = await AwaitResponseAsync(
             new CreateNodeRequest(node) { CreatedBy = WellKnownUsers.System },
-            o => o.WithTarget(Mesh.Address).WithAccessContext(sys));
+            o => o.WithTarget(RequestHub.NodeOperationTarget()).WithAccessContext(sys));
         resp.Message.Success.Should().BeTrue(resp.Message.Error ?? "create should succeed");
 
         // The Space root is still materialized (a missing root would break routing).
