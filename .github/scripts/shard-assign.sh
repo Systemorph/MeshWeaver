@@ -123,7 +123,6 @@ WEIGHTS=$(cat <<'EOF'
 2 MeshWeaver.Kernel.Test
 2 MeshWeaver.Search.Test
 2 MeshWeaver.Markdown.Collaboration.Test
-2 MeshWeaver.Social.Test
 2 MeshWeaver.PluginImage.Test
 2 MeshWeaver.Portal.E2E.Test
 2 MeshWeaver.Reactive.Assertions.Test

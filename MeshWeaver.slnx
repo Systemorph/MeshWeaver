@@ -72,7 +72,6 @@
     <Project Path="src/MeshWeaver.Reflection/MeshWeaver.Reflection.csproj" />
     <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
-    <Project Path="src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <Project Path="src/MeshWeaver.Speech.Contract/MeshWeaver.Speech.Contract.csproj" />
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
   </Folder>
@@ -124,7 +123,6 @@
     <Project Path="test/MeshWeaver.Reactive.Assertions.Test/MeshWeaver.Reactive.Assertions.Test.csproj" />
     <Project Path="test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" />
     <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
-    <Project Path="test/MeshWeaver.Social.Test/MeshWeaver.Social.Test.csproj" />
     <Project Path="test/Memex.Portal.Shared.Test/Memex.Portal.Shared.Test.csproj" />
   </Folder>
   <Folder Name="/tools/">
