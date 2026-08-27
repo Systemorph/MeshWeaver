@@ -13,6 +13,7 @@ using MeshWeaver.PluginCatalog;
 //     [--allow-moving] [--allow-incomplete]
 //     [--source <name>=<url>]… [--default-source <url>]
 //     [--fetch-timeout <seconds>] [--gate-timeout <seconds>] [--token-env <VAR>]
+//     [--platform <os/arch>]
 //
 // Step 3 of the Candidate Release Protocol's instance gate — the whole combo check as ONE ops/CI
 // job: read the instance's combo (the file InstanceComboReader emits — step 1), materialise every
@@ -24,6 +25,12 @@ using MeshWeaver.PluginCatalog;
 //     RED           at least one module fails; every failing module is named — exit 1.
 //     NOTVERIFIABLE the question could not be answered (moving refs, a fetch failure, no
 //                   structured report) — exit 1, with the caveats naming every reason.
+//
+// 🚨 The run is PINNED to --platform (default linux/amd64, what the fleet runs). A candidate tag
+// is a multi-arch manifest list whose variants carry different bytes and different framework build
+// identities, and docker reports ONE list digest for both — so an unpinned run on an arm64 host
+// produces a Green about arm64 that is indistinguishable from a Green about the amd64 the fleet
+// actually serves. The verdict records the platform it ran (verifiedPlatform).
 //
 // The verdict is written as combo-verdict.json — a ComboVerification, ready to be landed on the
 // instance's Admin/UpdatePolicy (content.comboVerifications) where the admin Updates tab renders
@@ -41,6 +48,7 @@ var allowMoving = false;
 var allowIncomplete = false;
 string? defaultSource = null;
 var tokenEnv = "GITHUB_TOKEN";
+var platform = DockerImageGate.FleetPlatform;
 var fetchTimeout = TimeSpan.FromMinutes(2);
 var gateTimeout = TimeSpan.FromMinutes(45);
 var sources = ImmutableDictionary<string, string>.Empty
@@ -82,6 +90,9 @@ for (var i = 0; i < args.Length; i++)
         case "--token-env" when i + 1 < args.Length:
             tokenEnv = args[++i];
             break;
+        case "--platform" when i + 1 < args.Length:
+            platform = args[++i];
+            break;
         case "--fetch-timeout" when i + 1 < args.Length:
             fetchTimeout = TimeSpan.FromSeconds(
                 double.Parse(args[++i], CultureInfo.InvariantCulture));
@@ -93,7 +104,7 @@ for (var i = 0; i < args.Length; i++)
         // A value-taking option as the LAST argument would otherwise fall through to the default
         // case as "Unknown argument" — a misleading message for a missing value.
         case "--work-root" or "--verdict" or "--tag" or "--source" or "--default-source"
-            or "--token-env" or "--fetch-timeout" or "--gate-timeout":
+            or "--token-env" or "--fetch-timeout" or "--gate-timeout" or "--platform":
             Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
             return 2;
         case "--help" or "-h":
@@ -101,7 +112,8 @@ for (var i = 0; i < args.Length; i++)
                 "usage: mw-combo-verify <combo.json> <candidate-image> [--work-root <dir>] "
                 + "[--verdict <file>] [--tag <candidate-tag>] [--allow-moving] "
                 + "[--allow-incomplete] [--source <name>=<url>]... [--default-source <url>] "
-                + "[--fetch-timeout <s>] [--gate-timeout <s>] [--token-env <VAR>]");
+                + "[--fetch-timeout <s>] [--gate-timeout <s>] [--token-env <VAR>] "
+                + $"[--platform <os/arch>, default {DockerImageGate.FleetPlatform}]");
             return 0;
         default:
             if (args[i].StartsWith('-') || imageRef is not null)
@@ -153,7 +165,7 @@ verdictPath ??= "combo-verdict.json";
 
 Console.WriteLine(
     $"mw-combo-verify: {combo.Modules.Count} module(s) read at {combo.ReadAt:O} "
-    + $"× candidate '{imageRef}' → '{Path.GetFullPath(workRoot)}'");
+    + $"× candidate '{imageRef}' ({platform}) → '{Path.GetFullPath(workRoot)}'");
 
 // The same fetch machinery GitSync + mw-combo-assemble run on: one shallow pack per (repo, ref)
 // over the git protocol. An empty token = anonymous access to public repos.
@@ -175,7 +187,7 @@ var assembler = new InstanceComboAssembler(
         Output = Console.Out,
     });
 
-var gate = new DockerImageGate(pools, gateTimeout, Console.Out);
+var gate = new DockerImageGate(pools, gateTimeout, Console.Out, platform);
 var verifier = new InstanceComboVerifier(assembler, gate.Run);
 
 var run = await verifier.Verify(combo, imageRef, workRoot, candidateTag).FirstAsync().ToTask();

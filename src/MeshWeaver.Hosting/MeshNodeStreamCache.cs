@@ -437,7 +437,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // deadlock, where the import's own progress log could not be written into the partition it
         // was repairing. Captured synchronously at ENQUEUE (the caller's thread, scope live) and
         // re-established around the dispatch below.
-        AccessContext? Caller = null);
+        AccessContext? Caller = null,
+        // 🚨 Conflict-retry counter. A Conflict NACK from the owner means "re-read and re-apply";
+        // this queue re-invokes Update on the CURRENT mirror on every attempt, so a bounded
+        // re-enqueue IS that prescription. See the failure handler in BuildUpdateQueueObservable.
+        int Attempt = 0);
 
     /// <summary>Cached effective-permission probe with expiry.</summary>
     private sealed record AccessEntry(Permission Permissions, DateTimeOffset ValidUntil);
@@ -1646,6 +1650,20 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         return accessService?.Context ?? accessService?.CircuitContext;
     }
 
+    // Conflict-NACK retry policy: how many times a field-merge Update is re-enqueued after the
+
+    // owner refused it on a stale base, and how long to wait so the mirror can catch the
+
+    // intervening write. Measured 2026-08-27 on memex: two pods stamping compile status on the
+
+    // SAME NodeType node ('Store/Plugin') conflicted, the surfaced NACK wedged type preparation,
+
+    // and every course cover rendered the "build did not settle" fallback (#2463's class).
+
+    internal const int MaxConflictRetries = 2;
+
+    internal static readonly TimeSpan ConflictRetryDelay = TimeSpan.FromMilliseconds(400);
+
     private long _updateSeq;
 
     /// <summary>
@@ -1891,6 +1909,40 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         if (IsMissingNodeFailure(ex))
                             RecordNegative(path, ex);
                         entry.Touch();
+                        // 🚨 A Conflict NACK is the owner PRESCRIBING the remedy: "re-read and
+                        // re-apply". This queue re-invokes the caller's mutation on the CURRENT
+                        // mirror on every attempt, so a bounded, delayed re-enqueue IS that remedy —
+                        // the delay lets the mirror catch the intervening write that staled the
+                        // base. Only field-merge Updates retry; the caller's Result stays untouched
+                        // until the retried attempt settles (same ReplaySubject rides along).
+                        if (ShouldRetryConflict(ex, req.FullNode is not null, req.Attempt, MaxConflictRetries)
+                            && System.Threading.Volatile.Read(ref _disposed) == 0)
+                        {
+                            var retry = req with { Attempt = req.Attempt + 1, EnteredAt = DateTimeOffset.UtcNow };
+                            logger.LogInformation(
+                                "[UpdateQueue] CONFLICT path={Path} seq={Seq} — re-reading and re-applying (attempt {Attempt}/{Max})",
+                                path, req.Seq, retry.Attempt, MaxConflictRetries);
+                            SettleHandoff();
+                            Settle();
+                            Observable.Timer(ConflictRetryDelay).Subscribe(_ =>
+                            {
+                                try
+                                {
+                                    if (System.Threading.Volatile.Read(ref _disposed) != 0)
+                                        req.Result.OnError(ex);
+                                    else
+                                        GetOrCreateUpdateQueue(path).OnNext(retry);
+                                }
+                                catch (Exception requeueEx)
+                                {
+                                    logger.LogWarning(requeueEx,
+                                        "[UpdateQueue] conflict retry could not re-enqueue path={Path} seq={Seq} — surfacing the original conflict",
+                                        path, req.Seq);
+                                    req.Result.OnError(ex);
+                                }
+                            });
+                            return;
+                        }
                         req.Result.OnError(ex);
                         // Nothing landed, so there is no base to hand forward and nothing to wait
                         // for: the successor must re-read the mirror, and must do it NOW.
@@ -2014,6 +2066,18 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             static n => n, result, path, seq, DateTimeOffset.UtcNow, node, CaptureCaller()));
         return result;
     }
+
+
+    /// <summary>
+    /// TRUE when a failed queued write should be re-enqueued instead of surfaced: the owner
+    /// answered with a Conflict NACK ("re-read and re-apply"), the request is a field-merge
+    /// Update (an Overwrite carries no base — its conflicts mean something else), and the
+    /// bounded retry budget is not exhausted. Pure, so the policy is pinned by a unit test.
+    /// </summary>
+    internal static bool ShouldRetryConflict(Exception ex, bool isOverwrite, int attempt, int maxRetries) =>
+        ex is MeshNodeStreamException { Error.Code: MeshNodeErrorCode.Conflict }
+        && !isOverwrite
+        && attempt < maxRetries;
 
     private static MeshNode ConvertContentJsonElementToTyped(
         MeshNode node, JsonSerializerOptions options, ILogger logger,
