@@ -186,16 +186,6 @@ on:
         required: false
         type: string
         default: ''
-      bake-run-id:
-        description: >-
-          The workflow run whose `bake-<sha>` artifact (uploaded by node-repo-gate) this publish
-          should REUSE instead of compiling. Set it to the gate run of the commit being published
-          and the source is compiled exactly once: in the gate, on the PR. Empty = compile here
-          (today's behaviour). The artifact's framework-mvid.txt must equal the identity this
-          publish targets, or the reuse is refused and the job fails — never a silent recompile.
-        required: false
-        type: string
-        default: ''
       pre-bake-script:
         description: >-
           Optional shell run in the caller checkout after staging, before the bake — e.g. a
@@ -537,14 +527,6 @@ jobs:
           token: ${{ steps.stage-token.outputs.token }}
           path: cross-repo-stage
           sparse-checkout: ${{ inputs.stage-modules }}
-      - name: Reuse the gate's bake (bake-run-id)
-        if: inputs.bake-run-id != ''
-        uses: actions/download-artifact@v7
-        with:
-          name: bake-${{ github.sha }}
-          run-id: ${{ inputs.bake-run-id }}
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/bake
       - name: Set up Node for the pre-bake hook
         if: inputs.node-version != ''
         uses: actions/setup-node@v7
@@ -623,18 +605,10 @@ jobs:
           # and main-cd.yml's publish-bake) and held the pair in bake-then-gate.sh so they could
           # not drift — this reusable lane was the one caller left on the old shape, so every node
           # repo (Plugins, Education, Reinsurance, SocialMedia) still baked through a mesh.
-          if [ -n "${{ inputs.bake-run-id }}" ] && [ -s "$BAKE/framework-mvid.txt" ]; then
-            # Reused from the gate (downloaded above). Refuse a bake addressed to another identity:
-            # publishing it would seal bundles no portal on this identity could adopt.
-            got=$(tr -d '[:space:]' < "$BAKE/framework-mvid.txt")
-            [ "$got" = "${{ steps.identity.outputs.identity }}" ] || { echo "::error::reused bake is for identity $got, this publish targets ${{ steps.identity.outputs.identity }} — refusing to publish a bake no portal here can adopt"; exit 1; }
-            echo "reusing the gate's bake (run ${{ inputs.bake-run-id }}) — source compiled ONCE, on the PR"
-          else
-            docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
-              --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" compile /repo \
-              "${ALLOW_ARGS[@]}" \
-              --output /bake --source-sha "$GITHUB_SHA"
-          fi
+          docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
+            --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" compile /repo \
+            "${ALLOW_ARGS[@]}" \
+            --output /bake --source-sha "$GITHUB_SHA"
 
           # ══ 2. THE GATE — a mesh, CONSUMING the bake above ═════════════════════════════════
           # Strictly stronger than the fused form as a gate: fused, the mesh rendered and ran
