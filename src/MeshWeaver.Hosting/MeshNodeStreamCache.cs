@@ -1732,12 +1732,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// <summary>
     /// Builds the per-path Concat pipeline that processes <see cref="UpdateRequest"/>s
     /// serially. Each request applies its patch through the local <c>Handle</c>
-    /// (LOCAL_EMIT) and completes immediately — it does NOT wait for the patch's echo
-    /// from the owner. The former 3-second echo wait DEADLOCKED when the echo could never
-    /// arrive (a write to a freshly-created node defers on the owner's [Initialize]
-    /// gate; or the writing hub's own action block is the one that would deliver the
-    /// echo) and otherwise serialised 3s per update. Per-stage timing logs:
-    /// ENQUEUE → START → LOCAL_EMIT → COMPLETE; missing LOCAL_EMIT = Handle.Update hung.
+    /// (LOCAL_EMIT) and the CALLER's terminal is delivered there and then — it does NOT wait
+    /// for the patch's echo from the owner. The former 3-second echo wait DEADLOCKED when the
+    /// echo could never arrive (a write to a freshly-created node defers on the owner's
+    /// [Initialize] gate; or the writing hub's own action block is the one that would deliver
+    /// the echo) and otherwise serialised 3s per update. Per-stage timing logs:
+    /// ENQUEUE → START → LOCAL_EMIT → COMPLETE; missing LOCAL_EMIT = Handle.Update hung, and
+    /// ADVANCE_WITHOUT_HANDOFF = the slot was released on the bound rather than on a verdict.
     ///
     /// <para>🚨 This used to add: "the owning node hub's single-threaded action block already
     /// serialises patches, so the next queued Update sees post-patch state via the local Handle."
@@ -1749,6 +1750,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// DELIVERED rather than asserted: the predecessor's locally-computed node is handed to the
     /// successor via <see cref="_pendingSelfWrites"/>, and <c>MeshNodeStreamHandle.PatchBaseSource</c>
     /// prefers it only while the mirror carries nothing newer.</para>
+    ///
+    /// <para>🚨 …and the SLOT is released by that hand-off, not by LOCAL_EMIT (#2346). For a busy
+    /// owner LOCAL_EMIT is <c>UpdateRemote</c>'s optimistic snapshot, which says nothing about the
+    /// node's state, so releasing on it re-opened the very hole the hand-off closes — on exactly the
+    /// loaded runs where it matters. The caller still gets its terminal at LOCAL_EMIT; only the next
+    /// QUEUED write waits.</para>
     /// </summary>
     private IObservable<MeshNode> BuildUpdateQueueObservable(string path, Subject<UpdateRequest> subject) =>
         subject
@@ -1780,19 +1787,59 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // next write: if this one produces no local emit, the write after it reads the mirror.
                 _pendingSelfWrites.TryRemove(path, out var pendingSelfWrite);
 
+                // 🚨 THE QUEUE'S ADVANCE SIGNAL — issue #2346, and the residual half of #2305 / #2291.
+                //
+                // The queue exists so each write diffs against the state its predecessor produced.
+                // That only holds if the successor starts after the predecessor's outcome is KNOWN,
+                // and until now it did not: the slot was released by the caller's terminal, which for
+                // a busy owner is UpdateRemote's OPTIMISTIC emit at UpdateResponseWaitBound (~2s) —
+                // a signal that carries no information about the node's state at all. So on exactly
+                // the runs where the owner is slow (a loaded CI runner; a grain still activating) the
+                // hand-off below never happened, the successor fell back to `mirror.Take(1)` — the
+                // node as it stood BEFORE its predecessor's patch — and the owner refused the
+                // conflicting leaves of a write that nothing was concurrent with. #2305's fix closed
+                // the fast path and left this one open, which is why the symptom it names came back
+                // on a tree that already contained it.
+                //
+                // The slot is now released by the HAND-OFF: the owner's ack (early or late) publishing
+                // the successor's base, a no-op, or a terminal error — never the optimistic emit. The
+                // CALLER's terminal is untouched and still prompt (req.Result below is fed exactly as
+                // before), so nothing regresses for the GUI; only the next QUEUED write waits, and it
+                // waits for the one fact it cannot proceed correctly without.
+                var handoff = new AsyncSubject<System.Reactive.Unit>();
+                var handoffSettled = 0;
+                void SettleHandoff()
+                {
+                    if (System.Threading.Interlocked.Exchange(ref handoffSettled, 1) != 0) return;
+                    handoff.OnNext(System.Reactive.Unit.Default);
+                    handoff.OnCompleted();
+                }
+
                 // FullNode set ⇒ overwrite (ChangeType.Full wholesale replace); else field-merge.
-                var update = req.FullNode is not null
+                var isOverwrite = req.FullNode is not null;
+                var update = isOverwrite
                     // An Overwrite asserts the whole node, so it needs no base and leaves none: the
-                    // write after it re-reads the mirror, as it must.
-                    ? entry.Handle.Overwrite(req.FullNode)
+                    // write after it re-reads the mirror, as it must. It publishes no hand-off either,
+                    // so its slot is released by its own terminal (below) — an overwrite must never
+                    // sit out the QueueAdvanceBound waiting for a signal that cannot come.
+                    ? entry.Handle.Overwrite(req.FullNode!)
                     // 🚨 The successor's base is published by the write path itself, not read off the
                     // emission below: the emission has been re-typed for callers, and re-serialising a
                     // re-typed node need not reproduce the JSON the diff was built from. The callback
-                    // fires only on the owner's ACK (or a no-op) — a rejected, timed-out or retried
-                    // write publishes nothing, so the entry stays removed and the next write reads the
+                    // fires only on the owner's ACK (or a no-op) — a rejected or retried write
+                    // publishes nothing, so the entry stays removed and the next write reads the
                     // mirror, exactly as it did before this change.
                     : entry.Handle.UpdateQueued(
-                        req.Update, pendingSelfWrite, local => _pendingSelfWrites[path] = local);
+                        req.Update, pendingSelfWrite,
+                        local =>
+                        {
+                            // null ⇒ the verdict is in but there is no base to hand forward (a
+                            // re-enqueued attempt, a late terminal NACK). Release the slot; the
+                            // successor re-reads the mirror, which is correct for those cases.
+                            if (local is not null)
+                                _pendingSelfWrites[path] = local;
+                            SettleHandoff();
+                        });
 
                 // 🚨 Deliver the write's terminal to the caller's result on a subscription
                 // whose lifetime is INDEPENDENT of the queue slot. entry.Handle.Update is
@@ -1807,6 +1854,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // it never accumulates.
                 var inflight = new System.Reactive.Disposables.SingleAssignmentDisposable();
                 _inflightWrites[inflight] = 0;
+                var sawLocalEmit = false;
                 void Settle()
                 {
                     _inflightWrites.TryRemove(inflight, out _);
@@ -1825,7 +1873,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         // pinned it at write START; touching again on each terminal keeps
                         // an in-flight write's upstream out of the idle sweep's reach.
                         entry.Touch();
+                        sawLocalEmit = true;
                         req.Result.OnNext(node);
+                        // An Overwrite leaves no base, so its terminal IS its hand-off — see above.
+                        if (isOverwrite) SettleHandoff();
                     },
                     ex =>
                     {
@@ -1841,6 +1892,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             RecordNegative(path, ex);
                         entry.Touch();
                         req.Result.OnError(ex);
+                        // Nothing landed, so there is no base to hand forward and nothing to wait
+                        // for: the successor must re-read the mirror, and must do it NOW.
+                        SettleHandoff();
                         Settle();
                     },
                     () =>
@@ -1850,22 +1904,37 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
                         entry.Touch();
                         req.Result.OnCompleted();
+                        // Backstop for a write that completed without ever emitting: there is no
+                        // verdict coming, so releasing the slot on the QueueAdvanceBound would be a
+                        // pure stall. A completion that FOLLOWS a local emit is deliberately NOT a
+                        // hand-off — that emission is the optimistic one, which is the whole defect.
+                        if (!sawLocalEmit) SettleHandoff();
                         Settle();
                     });
 
-                // 🚨 Advance the per-path queue on the FIRST signal OR QueueAdvanceBound.
-                // UpdateRemote now bounds its owner-response wait (~2s) and falls back to an
-                // optimistic emit, so req.Result fires promptly (on the ack, a fail-fast
-                // error, or the bound) — the queue advances without the old 30s stall. The
-                // QueueAdvanceBound stays as a backstop for a write whose post itself stalls.
-                // Observe req.Result (already fed above) instead of opening a SECOND
-                // subscription to the cold update (which would post the patch twice). Complete
-                // without emitting so Concat moves to the next queued write.
-                return req.Result
+                // 🚨 Advance the per-path queue on the HAND-OFF, or on QueueAdvanceBound.
+                // NOT on req.Result: for a busy owner that first signal is UpdateRemote's OPTIMISTIC
+                // emit, which says nothing about the node's state, and releasing the slot on it is
+                // what let the successor diff against a base its predecessor had already superseded
+                // (#2346 / the residual of #2305 — see the hand-off comment above). The caller's
+                // terminal stays exactly as prompt as before; only the next queued write waits.
+                // QueueAdvanceBound remains the backstop for an owner that never answers at all:
+                // there the successor genuinely cannot know, and falling back to the mirror is the
+                // old behaviour — no worse, and loud.
+                return handoff
                     .Materialize()
                     .Select(_ => System.Reactive.Unit.Default)
                     .Take(1)
-                    .Timeout(QueueAdvanceBound, Observable.Return(System.Reactive.Unit.Default))
+                    .Timeout(QueueAdvanceBound, Observable.Defer(() =>
+                    {
+                        logger.LogWarning(
+                            "[UpdateQueue] ADVANCE_WITHOUT_HANDOFF path={Path} seq={Seq} bound={BoundMs}ms — the "
+                            + "owner never acknowledged this write inside the bound, so the next queued write "
+                            + "diffs against the mirror, which may not yet carry this one. Overlapping leaves "
+                            + "can be refused at the owner (see MergeGuard).",
+                            path, req.Seq, QueueAdvanceBound.TotalMilliseconds);
+                        return Observable.Return(System.Reactive.Unit.Default);
+                    }))
                     .Take(1)
                     .SelectMany(_ => Observable.Empty<MeshNode>());
             }))
