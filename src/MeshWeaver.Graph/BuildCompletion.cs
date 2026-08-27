@@ -40,6 +40,38 @@ public record BuildCompletion
     /// <summary>The path segment build records are anchored under, inside the Admin partition.</summary>
     public const string SatelliteSegment = "_Build";
 
+    /// <summary>The namespace every build record lives in: <c>Admin/_Build</c>.</summary>
+    public const string Namespace = "Admin/" + SatelliteSegment;
+
+    /// <summary>
+    /// The query a consumer must use to WATCH every repository's build record.
+    ///
+    /// <para>🚨 It is PATH-SCOPED, and that is load-bearing rather than tidy: <b>the ADMIN
+    /// PARTITION is not reachable from an unscoped query</b>, so a bare
+    /// <c>nodeType:BuildCompletion</c> returns EMPTY however many records exist and however often
+    /// they are written.</para>
+    ///
+    /// <para>Measured on memex-cloud 2026-08-27, as the same viewer (a global admin), and note the
+    /// discriminator is the PARTITION rather than anything about satellites:</para>
+    /// <list type="bullet">
+    ///   <item><c>nodeType:BuildCompletion</c> → 0, while <c>Admin/_Build/Systemorph.MeshWeaver</c>
+    ///     sat at version 1746, rewritten minutes earlier.</item>
+    ///   <item><c>nodeType:UpdatePolicy</c> → 0, while <c>Admin/UpdatePolicy</c> reads fine.</item>
+    ///   <item><c>nodeType:Store/Coupon</c> → 0, while <c>Admin/Coupons/*</c> lists three.</item>
+    ///   <item>…yet <c>nodeType:GitHubSyncConfig</c> → 5, and those ARE satellites
+    ///     (<c>{Space}/_GitSync</c>) — they simply live in ordinary content partitions.</item>
+    /// </list>
+    ///
+    /// <para>The self-updater watching the unscoped form therefore never ticked, and the install sat
+    /// three published images behind with nothing reporting a fault.</para>
+    ///
+    /// <para>A watcher interested in ONE repository should not use this at all: take the node's own
+    /// stream (<c>GetMeshNodeStream(PathFor(owner, repo))</c>), which is authoritative and live —
+    /// the pattern <c>PluginUpdateWatcher</c> already follows. This exists for the consumer that
+    /// genuinely needs the SET.</para>
+    /// </summary>
+    public const string WatchQuery = $"path:{Namespace} scope:children nodeType:{NodeType}";
+
     /// <summary>
     /// The canonical node path for one repository's build record:
     /// <c>Admin/_Build/{owner}.{repo}</c>.
