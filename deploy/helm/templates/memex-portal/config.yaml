@@ -349,8 +349,14 @@ data:
   FrameworkBroadcast__Subscribers__2: "{{ .Values.config.memex_portal.FrameworkBroadcast__Subscribers__2 | default "" }}"
   FrameworkBroadcast__Subscribers__3: "{{ .Values.config.memex_portal.FrameworkBroadcast__Subscribers__3 | default "" }}"
   # The MODULES a deployment refuses to run without (MeshBuilderModuleActivation.RequiredKey).
-  # The image ships a baseline list in appsettings; a deployment OVERRIDES an entry by name here,
-  # and blanks one it cannot satisfy.
+  # The image ships a baseline list in appsettings; a deployment OVERRIDES an entry here and
+  # blanks one it cannot satisfy.
+  #
+  # 🚨 It overrides BY INDEX, and it never APPENDS. Configuration merges an array element per
+  # key, so Modules__Required__5 REPLACES whatever the image baseline holds at index 5 — it does
+  # not add a sixth requirement. The baseline is 7 entries today (0..6: Radzen, Analysis,
+  # EntityViews, GoogleMaps, Speech, Social, AI), so an overlay ADDING a module must start at the
+  # first index PAST it, and an overlay that restates the baseline must restate all of it.
   #
   # 🚨 Un-templated, an override is silently dropped and the health check wins anyway — the #1925
   # defect, third occurrence. Not cosmetic here: `required_modules` reports Unhealthy, /health
@@ -363,6 +369,20 @@ data:
   # key explicitly, and EveryConfigKeySetInAValuesFile_IsBoundInTheConfigMap enforces exactly that
   # by looking for the key. A range renders correctly and is invisible to the guard — which is how
   # the first draft of this block passed helm and failed the test, correctly.
+  #
+  # 🚨 THE CEILING IS 9 — the block renders 0..9 and NOTHING ABOVE. A ceiling is not an oversight
+  # here, it is the price of the literal-key contract above: a bounded list is what the guard can
+  # check, and an unbounded `range` is what it cannot. So the ceiling has to be stated where it is
+  # raised, because twice now an overlay declared the first index past it and the key reached no
+  # container at all — Memex#128/#131 (MeshWeaver.Mcp, /mcp answering 404 with Mcp__BaseUrl
+  # configured beside it) and Memex#129. Why 9 and not 7: the baseline consumes 0..6, so a ceiling
+  # of 7 leaves exactly ONE appendable slot; ten slots leave three. RAISING IT is one hasKey block
+  # per index and nothing else — do that rather than reusing a baseline index.
+  #
+  # Two guards in test/MeshWeaver.Documentation.Test/PlatformBakeLaneGuard.cs hold this shape:
+  # ModulesRequired_IsRenderedAsAContiguousRangeFromZero (a gap silently truncates nothing and
+  # drops exactly the missing index) and NoValuesFile_DeclaresAModulesRequiredIndexAboveTheCeiling
+  # (whose failure message names the ceiling, so the next person is told the number).
   #
   # Each index is emitted only when a deployment sets it, so an install that overrides nothing
   # keeps the image's own list rather than blanking entry 0.
@@ -381,10 +401,6 @@ data:
   {{- if hasKey .Values.config.memex_portal "Modules__Required__4" }}
   Modules__Required__4: "{{ .Values.config.memex_portal.Modules__Required__4 }}"
   {{- end }}
-  {{- /* Indices 5-7: headroom so the NEXT required module does not silently vanish. The list
-     stopped at 4 while the overlays grew to 5 (MeshWeaver.AI, the engine guard after the
-     2026-08-27 outage) — the config-key coverage gate caught the overlay key reaching NO
-     container, the 5th recurrence of the named-key omission (#1925/#1778/#1780/#2203). */}}
   {{- if hasKey .Values.config.memex_portal "Modules__Required__5" }}
   Modules__Required__5: "{{ .Values.config.memex_portal.Modules__Required__5 }}"
   {{- end }}
@@ -393,6 +409,12 @@ data:
   {{- end }}
   {{- if hasKey .Values.config.memex_portal "Modules__Required__7" }}
   Modules__Required__7: "{{ .Values.config.memex_portal.Modules__Required__7 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__8" }}
+  Modules__Required__8: "{{ .Values.config.memex_portal.Modules__Required__8 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__9" }}
+  Modules__Required__9: "{{ .Values.config.memex_portal.Modules__Required__9 }}"
   {{- end }}
   # Convergence policy (MeshWeaver#2192): when a NodeType publishes a usable build, instances
   # self-recycle onto it instead of waiting behind the "Recycle" banner. Off = the image default
