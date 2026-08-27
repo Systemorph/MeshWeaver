@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -421,19 +422,7 @@ public class PlatformBakeLaneGuard
         var configMap = File.ReadAllText(Path.Combine(
             root, "deploy", "helm", "templates", "memex-portal", "config.yaml"));
 
-        // EVERY tracked file that becomes a values overlay — not only the three the chart is
-        // rendered with directly. values.deploy.example.yaml is copied to the overlay
-        // deploy/aks/scripts/deploy.sh passes, and values.local.yaml to the one memex-local
-        // generates for a new install; both carry config.memex_portal mappings, so an untemplated
-        // key added to either reaches no container in exactly the same way (Copilot review, #2104).
-        var missing = new[]
-            {
-                Path.Combine(root, "deploy", "helm", "values.yaml"),
-                Path.Combine(root, "deploy", "aks", "values.aks.yaml"),
-                Path.Combine(root, "deploy", "aks", "scripts", "values.deploy.example.yaml"),
-                Path.Combine(root, "deploy", "homebrew", "share", "values.local.defaults.yaml"),
-                Path.Combine(root, "deploy", "homebrew", "share", "values.local.yaml"),
-            }
+        var missing = ValuesFiles(root)
             .Where(File.Exists)
             .SelectMany(f => PortalConfigKeysOf(File.ReadAllLines(f))
                 .Select(key => (file: Path.GetFileName(f), key)))
@@ -451,6 +440,157 @@ public class PlatformBakeLaneGuard
             + ". Template each one — and give a TYPED key a real default, because '' is not a "
             + "valid TimeSpan/int and crashes the portal at startup rather than reading as unset.");
     }
+
+    /// <summary>
+    /// EVERY tracked file that becomes a values overlay — not only the three the chart is rendered
+    /// with directly. <c>values.deploy.example.yaml</c> is copied to the overlay
+    /// <c>deploy/aks/scripts/deploy.sh</c> passes, and <c>values.local.yaml</c> to the one
+    /// memex-local generates for a new install; both carry <c>config.memex_portal</c> mappings, so
+    /// an untemplated key added to either reaches no container in exactly the same way (Copilot
+    /// review, #2104).
+    /// </summary>
+    private static string[] ValuesFiles(string root) =>
+    [
+        Path.Combine(root, "deploy", "helm", "values.yaml"),
+        Path.Combine(root, "deploy", "aks", "values.aks.yaml"),
+        Path.Combine(root, "deploy", "aks", "scripts", "values.deploy.example.yaml"),
+        Path.Combine(root, "deploy", "homebrew", "share", "values.local.defaults.yaml"),
+        Path.Combine(root, "deploy", "homebrew", "share", "values.local.yaml"),
+    ];
+
+    /// <summary>The key family whose rendered range this pair of guards holds.</summary>
+    private const string RequiredModulePrefix = "Modules__Required__";
+
+    /// <summary>
+    /// 🚨 The <c>Modules__Required__N</c> block must render a CONTIGUOUS range from 0, because a
+    /// gap is invisible in exactly the way the whole key family already proved it can be.
+    ///
+    /// <para>The block is written index by index on purpose — a Helm <c>range</c> renders
+    /// correctly and is invisible to <see cref="EveryConfigKeySetInAValuesFile_IsBoundInTheConfigMap"/>,
+    /// which looks for the literal key. That contract is what makes the list checkable, and it is
+    /// also what gives it a CEILING: a hand-written list stops somewhere. Both failure modes of a
+    /// hand-written list are silent at deploy time, so both are asserted here:</para>
+    /// <list type="number">
+    ///   <item><b>A gap.</b> Delete the index-3 block and an overlay's
+    ///     <c>Modules__Required__3</c> reaches no container while 4 and 5 still do — the
+    ///     deployment then requires a DIFFERENT set than the one it declared, with helm
+    ///     reporting success.</item>
+    ///   <item><b>The ceiling drifting out of the comment.</b> The comment states the rendered
+    ///     range so the next person adding a module reads the number instead of counting blocks;
+    ///     this asserts the sentence still matches the template.</item>
+    /// </list>
+    ///
+    /// <para>Both came from Memex#131: the block stopped at 4 while memex-cloud declared index 5
+    /// (<c>MeshWeaver.Mcp.dll</c>), so <c>/mcp</c> went on answering 404 with <c>Mcp__BaseUrl</c>
+    /// configured a few lines below it — the fifth recurrence of the named-key omission class
+    /// (#1925/#1778/#1780/#2203/#2104).</para>
+    /// </summary>
+    [Fact]
+    public void ModulesRequired_IsRenderedAsAContiguousRangeFromZero()
+    {
+        var configMap = ReadPortalConfigMap();
+        var rendered = RenderedRequiredModuleIndices(configMap);
+
+        Assert.True(rendered.Length > 0,
+            $"deploy/helm/templates/memex-portal/config.yaml renders NO {RequiredModulePrefix}N "
+            + "key at all. The overlays override the image's required-module list by index "
+            + "through this block; with it gone every override reaches no container and the "
+            + "image's own list silently wins (Memex#131).");
+
+        Assert.True(rendered[0] == 0,
+            $"the {RequiredModulePrefix}N block starts at index {rendered[0]}, not 0. "
+            + "Configuration binds the array by index, so a list that does not start at 0 cannot "
+            + "override the image's first entry.");
+
+        var ceiling = rendered[^1];
+        var gaps = Enumerable.Range(0, ceiling + 1).Except(rendered).ToArray();
+        Assert.True(gaps.Length == 0,
+            $"the {RequiredModulePrefix}N block renders "
+            + string.Join(", ", rendered)
+            + $" — index {string.Join(", ", gaps)} missing. A gap is silent: an overlay that sets "
+            + "the missing index reaches NO container while its neighbours do, so the deployment "
+            + "requires a different module set than the one it declares and helm still reports "
+            + "success. Render every index from 0 to the ceiling.");
+
+        // The comment must still name the range it renders. This is the only thing standing
+        // between "the ceiling is written down where the next person reads it" and a sentence
+        // that quietly describes the previous ceiling — which is how Memex#128 came to declare
+        // index 5 against a comment that said the chart renders 0..4.
+        Assert.True(configMap.Contains($"renders 0..{ceiling}", StringComparison.Ordinal),
+            $"the {RequiredModulePrefix}N block renders 0..{ceiling}, but no comment in "
+            + "deploy/helm/templates/memex-portal/config.yaml says so. The ceiling is only useful "
+            + "written down: the overlay that hits it lives in another repository, and its author "
+            + "sees this file, not this test. Say `renders 0..N` in the block's comment.");
+    }
+
+    /// <summary>
+    /// 🚨 No values file may declare a <c>Modules__Required__N</c> ABOVE the rendered ceiling —
+    /// and the failure says what the ceiling is.
+    ///
+    /// <para><see cref="EveryConfigKeySetInAValuesFile_IsBoundInTheConfigMap"/> already fails on
+    /// such a key, but it fails as one of a generic list of "template each one", which is the
+    /// wrong instruction for this family: the fix is not a new key somewhere, it is one more
+    /// <c>hasKey</c> block on an ordered list whose ceiling the author has to know. Memex#131 is
+    /// the whole argument — the person adding index 5 could see the key was refused but not what
+    /// the limit was, and the chart is in a different repository from the overlay.</para>
+    /// </summary>
+    [Fact]
+    public void NoValuesFile_DeclaresAModulesRequiredIndexAboveTheCeiling()
+    {
+        var root = FindRepoRoot();
+        var configMap = ReadPortalConfigMap();
+        var rendered = RenderedRequiredModuleIndices(configMap);
+        var ceiling = rendered.Length == 0 ? -1 : rendered[^1];
+
+        var over = ValuesFiles(root)
+            .Where(File.Exists)
+            .SelectMany(f => PortalConfigKeysOf(File.ReadAllLines(f))
+                .Where(k => k.StartsWith(RequiredModulePrefix, StringComparison.Ordinal))
+                .Select(k => (file: Path.GetFileName(f), key: k, index: IndexOfKey(k))))
+            .Where(x => x.index > ceiling)
+            .Distinct()
+            .ToList();
+
+        Assert.True(over.Count == 0,
+            "These values entries declare a required-module index the chart does not render, so "
+            + "they reach NO container and the module is not required at all — silently, with "
+            + "helm reporting success: "
+            + string.Join(", ", over.Select(x => $"{x.key} (set in {x.file})"))
+            + $". deploy/helm/templates/memex-portal/config.yaml renders {RequiredModulePrefix}"
+            + $"0..{ceiling} — RAISE THE CEILING by adding one more `hasKey` block per index (a "
+            + "Helm range would render correctly and be invisible to the key-literal guards), and "
+            + "update the comment that states the rendered range.");
+    }
+
+    private static string ReadPortalConfigMap() =>
+        File.ReadAllText(Path.Combine(
+            FindRepoRoot(), "deploy", "helm", "templates", "memex-portal", "config.yaml"));
+
+    /// <summary>
+    /// The <c>Modules__Required__N</c> indices the configmap actually BINDS, ascending. Candidates
+    /// come from executable template text only and each is confirmed through
+    /// <see cref="IsWiredInConfigMap"/>, so a key named in a Helm comment — this file has nine
+    /// such blocks, and the one above this very family names indices in prose — can never count as
+    /// rendered.
+    /// </summary>
+    private static int[] RenderedRequiredModuleIndices(string configMap) =>
+        Regex.Matches(
+                ExecutableTemplateOf(configMap),
+                $@"^\s{{2}}{Regex.Escape(RequiredModulePrefix)}(\d+):\s",
+                RegexOptions.Multiline)
+            .Select(m => int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture))
+            .Where(i => IsWiredInConfigMap(configMap, $"{RequiredModulePrefix}{i}"))
+            .Distinct()
+            .Order()
+            .ToArray();
+
+    /// <summary>The numeric suffix of a <c>Modules__Required__N</c> key; -1 when it is not one.
+    /// </summary>
+    private static int IndexOfKey(string key) =>
+        int.TryParse(key[RequiredModulePrefix.Length..], NumberStyles.None,
+            CultureInfo.InvariantCulture, out var index)
+            ? index
+            : -1;
 
     /// <summary>
     /// The keys under <c>config.memex_portal</c> of a values file — section-scoped, so the
