@@ -6,7 +6,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pkg_root="$(dirname "$here")"                 # clients/python
 repo_root="$(cd "$pkg_root/../.." && pwd)"    # repo root
-proto_dir="$repo_root/src/MeshWeaver.Hosting.Grpc/Protos"
+proto_dir="$repo_root/src/MeshWeaver.Mesh.Contract/Protos"
 out_dir="$pkg_root/meshweaver/_generated"
 
 mkdir -p "$out_dir"

@@ -145,6 +145,9 @@ public class RouterTrafficDetectorTest : HubTestBase
     {
         GetHost();
 
+        // 🚨 Posted on `Mesh` DELIBERATELY — do NOT migrate this to a client hub (#2423). PRODUCING
+        // the shape is the point: this is the only place that proves the "sender" role still fires,
+        // so a future narrowing of RouterTrafficRule cannot switch the detector off unnoticed.
         var response = await Mesh
             .Observe<Pong>(new MeshSentRequest(), o => o.WithTarget(CreateHostAddress()))
             .FirstAsync()

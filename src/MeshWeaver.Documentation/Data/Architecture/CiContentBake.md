@@ -23,9 +23,15 @@ This page describes workstream 1, step 1 — the pieces that exist and how they 
 
 CI already compiles the image's shipped content as a *verdict*: the `doc-gate` job runs
 `mw-plugin-test` over `src/MeshWeaver.Documentation/Data` (staged as the `Doc` package) and over the
-`samples/Graph/Data` trees, and the `plugin-gate` job runs the same tester over the vital modules of
-the MeshWeaver.Plugins checkout (synced at build time; the checked-out commit is recorded as each
-bundle's `sourceSha`).
+`samples/Graph/Data` trees. That is the platform's OWN content, and it is the only content the
+platform bakes.
+
+🚨 **The platform never syncs or bakes plugin source.** Until 2026-08-27 core CD checked out
+`MeshWeaver.Plugins`, Roslyn-compiled every module, and published the result as the `plugins`
+source — the same shelf Plugins' own `publish-bake` writes. Two producers, one shelf, and a full
+compile of source the platform does not own on every platform push. Removed: Plugins bakes
+Plugins and publishes it; the platform's portals *install* it. See
+[The Plugin Build Contract](/Doc/Architecture/PluginBuildContract) → "Three rules that follow".
 
 Each of those lanes runs the bake and the gate as **two steps** (`.github/scripts/bake-then-gate.sh`
 — the same split `main-cd` makes, described below): `compile <stage> --output <dir>` produces the
@@ -57,9 +63,9 @@ N may legitimately EXCEED M: `N` counts adoption events and the gate installs ev
 
 🚨 **What the gates' bake is FOR: proving the bake stage still works, on the PR that breaks it.** It
 is *not* the delivery lane. A gate job's bundles are keyed to that job's own binaries, and no
-shipped image ever contains those (see "The identity rule" below), so `doc-gate` uploads nothing;
-`plugin-gate` still uploads `baked-plugins-<mvid>` for in-run diagnosis. What the portals adopt is
-baked **inside the shipped image** — see "The delivery" below.
+shipped image ever contains those (see "The identity rule" below), so `doc-gate` uploads nothing.
+What the portals adopt is baked **inside the shipped image** for the platform's content, and
+**published by each plugin repo's own `publish-bake`** for plugins — see "The delivery" below.
 
 ## BAKE is a build step; GATE is a mesh run that CONSUMES one
 

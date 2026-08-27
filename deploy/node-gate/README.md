@@ -16,7 +16,7 @@ first). Full SDK + worker: `clients/typescript`. Trust model: `GrpcOptions.Trust
 ## Build
 
 The image compiles the TypeScript SDK (`clients/typescript`) and packs the **one canonical** proto
-(`src/MeshWeaver.Hosting.Grpc/Protos/mesh.proto`), so build from the **repo root**:
+(`src/MeshWeaver.Mesh.Contract/Protos/mesh.proto`), so build from the **repo root**:
 
 ```bash
 docker build -f deploy/node-gate/Dockerfile -t <registry>/meshweaver/node-gate:<tag> .

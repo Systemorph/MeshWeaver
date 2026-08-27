@@ -361,7 +361,7 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         // compile (~15-20s), so the wait window must cover the compile — the
         // default 10s .Emit() budget is too short. The original awaited under the
         // [Fact(Timeout = 60000)] envelope; await restore that budget explicitly.
-        await Mesh.Observe(new CreateReleaseRequest(),
+        await RequestHub.Observe(new CreateReleaseRequest(),
                 o => o.WithTarget(new Address(typePath)))
             .Should().Within(60.Seconds()).Emit();
 

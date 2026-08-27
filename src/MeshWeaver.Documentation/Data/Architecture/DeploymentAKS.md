@@ -30,7 +30,7 @@ dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.D
 
 # Migration — this is what creates the schema, the partition_access table, AND the
 # public.top_level_index materialized view. A schema/index change ships in THIS image:
-dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj -c Release \
+dotnet publish <MeshWeaver.Plugins>/src/Memex.Database.Migration/Memex.Database.Migration.csproj -c Release -p:MeshWeaverRoot=<this checkout> \
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
 ```

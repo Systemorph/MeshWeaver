@@ -76,11 +76,21 @@ public class TestClusterSizingGuard(ITestOutputHelper output)
             throw new InvalidOperationException(
                 "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
 
-        var project = Path.Combine(dir.FullName, "test", "MeshWeaver.Hosting.Orleans.Test");
-        if (!Directory.Exists(project))
-            throw new InvalidOperationException("Could not locate this project's sources at " + project);
+        // Both homes of cluster-building code: this project's tests AND the machinery that moved to
+        // src/MeshWeaver.Hosting.Orleans.TestBase (OrleansTestCluster and friends) so that suites in
+        // other repositories can build on it. A guard follows its subject — scanning only this
+        // directory would have let the builder itself drop the sizing without a red test.
+        var homes = new[]
+        {
+            Path.Combine(dir.FullName, "test", "MeshWeaver.Hosting.Orleans.Test"),
+            Path.Combine(dir.FullName, "src", "MeshWeaver.Hosting.Orleans.TestBase"),
+        };
+        foreach (var home in homes)
+            if (!Directory.Exists(home))
+                throw new InvalidOperationException("Could not locate the sources at " + home);
 
-        return Directory.EnumerateFiles(project, "*.cs", SearchOption.AllDirectories)
+        return homes
+            .SelectMany(home => Directory.EnumerateFiles(home, "*.cs", SearchOption.AllDirectories))
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
                         && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
             .ToArray();
