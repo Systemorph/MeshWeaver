@@ -266,10 +266,22 @@ so never relax it. Three consequences that trip people up, all SILENT:
      `types: [completed]`, and cancelled counts as completed) — it just finds no success to act on.
 
    Before the fix, main's five consecutive runs from 20:28–20:38 on 2026-08-26 were all `cancelled`,
-   each by the next merge. **So do NOT re-introduce cancellation on main to save runner minutes** —
-   the cost is one run per merge and it buys both the compile of what shipped and the ability to ship
-   it. Batching *publication* is still right and `CD_BATCH_WINDOW_MINUTES` still does it; what is not
+   each by the next merge. **So do NOT re-introduce cancellation on main to save runner minutes.**
+   Batching *publication* is still right and `CD_BATCH_WINDOW_MINUTES` still does it; what is not
    right is batching by destroying the evidence.
+
+   🚨 **But know exactly what this bought, because it is less than it looks.** `cancel-in-progress:
+   false` protects the run that is ALREADY RUNNING. It does not protect runs that are QUEUED behind
+   it: a concurrency group holds one in-progress plus one pending, and each new push supersedes the
+   pending one. Measured 2026-08-27 — five pushes to main inside **fourteen seconds** (`05:59:22`–
+   `05:59:36`): the first ran to completion, the other four were `cancelled` with
+   `run_started_at == created_at`, i.e. they never executed a step.
+
+   So a burst still leaves intermediate commits uncompiled, and **every landed commit being tested
+   is NOT what this achieves** — what it achieves is that a burst can no longer leave *nothing*
+   completed, which is what silenced CD entirely. The full fix is a merge queue (#2412), which tests
+   the prospective combination before it lands; this repo is still missing the `merge_group:` trigger
+   that MeshWeaver.Plugins already has.
 
    🚨 **The wait is owed to a merge that must ship ON ITS OWN** (a CD fix, a hotfix someone is
    verifying): merge it, then wait for **that merge commit's** Build-and-Test to COMPLETE — and
