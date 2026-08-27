@@ -143,9 +143,13 @@ public static class PrivacyStatementNode
             Content = new MarkdownContent { Content = DefaultStatement },
         };
 
-        return Observable.Using(
-            () => AccessContextScope.AsSystem(accessService),
-            _ => workspace
+        // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790):
+        // `AsSystem(x)` IS `x.ImpersonateAsSystem()`. `Using` opens the AsyncLocal on the
+        // SUBSCRIBING thread — here the settings tab's render/circuit — and disposes it wherever the
+        // create terminates, leaving that thread running as `system-security`. RunAsSystem seals
+        // both ends inside one Subscribe; the read-then-create below is unchanged.
+        return accessService.RunAsSystem(
+            () => workspace
                 .GetQuery($"{NodeId}|{NodePath}", $"path:{NodePath} nodeType:Markdown")
                 .Take(1)
                 // A never-emitting query (backend routing/subscription failure) must not hang the
@@ -178,9 +182,14 @@ public static class PrivacyStatementNode
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var workspace = hub.GetWorkspace();
-        return Observable.Using(
-                () => AccessContextScope.AsSystem(accessService),
-                _ => workspace
+        // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790).
+        // This is the sharpest instance of the defect in the tree: the subscriber is the ANONYMOUS
+        // /privacy request. `Using` would leave `system-security` latched on that ASP.NET request
+        // thread after the read — an unauthenticated flow continuing with Permission.All, with no
+        // audit trail. RunAsSystem opens and closes the scope inside the one Subscribe, so the
+        // System read still happens and the request thread is handed back exactly what it had.
+        return accessService.RunAsSystem(
+                () => workspace
                     .GetQuery($"{NodeId}|{NodePath}", $"path:{NodePath} nodeType:Markdown")
                     .Take(1)
                     // A never-emitting query must not hang the anonymous page — trip to OnError so

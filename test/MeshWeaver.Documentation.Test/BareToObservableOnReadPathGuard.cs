@@ -52,6 +52,22 @@ public class BareToObservableOnReadPathGuard
     ];
 
     /// <summary>
+    /// Individual read-path files that sit inside a project whose OTHER files legitimately use the
+    /// parameterless overload (a <c>Task.ToObservable()</c> bridge, or a deferred write fan-out
+    /// where scheduling is a free choice). Naming the file rather than widening
+    /// <see cref="ScannedRoots"/> keeps the ratchet at zero without inventing exemptions inside it.
+    ///
+    /// <para><c>SyncedQueryDataSourceExtensions</c> is the per-user RLS filter every synced-query
+    /// emission passes through — #2087, the residual of #2377 that the storage-root sweep could not
+    /// see. It re-emits a snapshot on the DELIVERY thread of an upstream emission, which is exactly
+    /// the "already inside somebody's trampoline" frame the mechanism below strands on.</para>
+    /// </summary>
+    private static readonly string[] ScannedFiles =
+    [
+        "src/MeshWeaver.Graph/SyncedQueryDataSourceExtensions.cs",
+    ];
+
+    /// <summary>
     /// The parameterless call only. <c>ToObservable(someScheduler)</c> is an explicit, reviewed
     /// choice and is left alone.
     /// </summary>
@@ -73,7 +89,17 @@ public class BareToObservableOnReadPathGuard
                 $"Scanned root '{scanned}' does not exist — this guard would scan nothing and pass. "
                 + "Update ScannedRoots to match the tree; never delete the root to make it green.");
 
-        var files = SourceScan.SourceFiles(root, ScannedRoots).ToList();
+        // Same reason, per FILE: a moved or renamed file would silently drop out of the scan and
+        // leave a green tick over a call site nobody is checking any more.
+        foreach (var scanned in ScannedFiles)
+            Assert.True(File.Exists(Path.Combine(root, scanned)),
+                $"Scanned file '{scanned}' does not exist — this guard would stop checking it and "
+                + "still pass. Point ScannedFiles at where the file moved to; never delete the "
+                + "entry to make it green.");
+
+        var files = SourceScan.SourceFiles(root, ScannedRoots)
+            .Concat(ScannedFiles.Select(f => Path.Combine(root, f)))
+            .ToList();
         Assert.True(files.Count > 20,
             $"Only {files.Count} files were scanned across the read path — too few to be the real "
             + "tree, so a pass here would mean nothing.");

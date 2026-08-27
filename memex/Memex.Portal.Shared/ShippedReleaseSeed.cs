@@ -212,9 +212,14 @@ public static class ShippedReleaseSeed
             Content = new MarkdownContent { Content = body },
         };
 
-        return Observable.Using(
-            () => AccessContextScope.AsSystem(accessService),
-            _ => workspace
+        // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790):
+        // `AsSystem(x)` IS `x.ImpersonateAsSystem()`, so the helper hides the shape rather than
+        // changing it. `Using` opens the AsyncLocal on the SUBSCRIBING thread — a startup hosted
+        // service's — and disposes it on whichever thread the create/update terminates, latching
+        // System onto the subscriber. RunAsSystem seals both ends inside one Subscribe; the whole
+        // read-then-write below stays inside the work factory, so it still runs as System.
+        return accessService.RunAsSystem(
+            () => workspace
                 .GetQuery($"{PlatformVersionId}|{PlatformVersionNodePath}",
                     $"path:{PlatformVersionNodePath} nodeType:Markdown")
                 .Take(1)
@@ -284,9 +289,9 @@ public static class ShippedReleaseSeed
         logger?.LogInformation(
             "[PlatformStartup] recording boot activity at {Path} (version {Version}, {Count} release(s)).",
             node.Path, version, triggered.Count);
-        return Observable.Using(
-            () => AccessContextScope.AsSystem(accessService),
-            _ => meshService.CreateNode(node).Select(_ => Unit.Default));
+        // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see above (#1790).
+        return accessService.RunAsSystem(
+            () => meshService.CreateNode(node).Select(_ => Unit.Default));
     }
 
     /// <summary>True if the exception (or any inner) reports an "already exists" outcome — the idempotent-create success signal.</summary>
@@ -313,9 +318,11 @@ public static class ShippedReleaseSeed
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var workspace = hub.GetWorkspace();
 
-        return Observable.Using(
-            () => AccessContextScope.AsSystem(accessService),
-            _ => partitions
+        // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see
+        // SeedPlatformVersionNode above (#1790). Every partition's work is composed inside the work
+        // factory, so it still runs under ONE System scope; only the boundary is sealed.
+        return accessService.RunAsSystem(
+            () => partitions
                 .ToObservable()
                 .SelectMany(partition => SeedPartition(meshService, workspace, partition, logger)));
     }

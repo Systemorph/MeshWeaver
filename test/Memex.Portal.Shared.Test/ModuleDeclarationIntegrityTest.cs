@@ -73,6 +73,7 @@ public class ModuleDeclarationIntegrityTest
 
             var closure = ProjectReferenceClosure(project);
             var lane = ModuleLaneAssemblies(root, project);
+            var laneIsLoadBearing = false;
 
             foreach (var entry in assemblies.Concat(required).Distinct(StringComparer.OrdinalIgnoreCase))
             {
@@ -81,9 +82,15 @@ public class ModuleDeclarationIntegrityTest
                     : entry;
 
                 var producedHere = FindProject(root, name) is not null;
-                var reachable = closure.Contains(name, StringComparer.OrdinalIgnoreCase)
-                    || lane.Contains(name, StringComparer.OrdinalIgnoreCase);
+                var inClosure = closure.Contains(name, StringComparer.OrdinalIgnoreCase);
+                var inLane = lane.Contains(name, StringComparer.OrdinalIgnoreCase);
+                var reachable = inClosure || inLane;
                 var isRequired = required.Contains(entry, StringComparer.OrdinalIgnoreCase);
+
+                // The lane is the ONLY thing shipping this entry, which makes the host's import of
+                // the lane load-bearing — asserted after this loop.
+                if (producedHere && inLane && !inClosure && !isRequired)
+                    laneIsLoadBearing = true;
 
                 if (isRequired || (producedHere && reachable))
                     continue;
@@ -102,12 +109,34 @@ public class ModuleDeclarationIntegrityTest
                       + "rollout, feature gone. Move it to Modules:Required (the required-modules health "
                       + "check then reports Unhealthy and readiness holds the rollout), or delist it.");
             }
+
+            // 🚨 Declaring a module on the closure lane ships NOTHING unless the host imports the
+            // lane worker: PublishMeshModules and LayoutMeshModuleClosuresAfterBuild hang off THAT
+            // import, so without it modules/ is never created and every lane-only entry is skipped
+            // at load — silently, on a green build. Memex.LocalMesh sat in exactly that state: the
+            // import lived in the two portal hosts and left with them for MeshWeaver.Plugins
+            // (83356b3d5), so the AI engine had to be wired as a ProjectReference riding the app
+            // closure instead (8dd8eeecf). Inventory membership is not shipping.
+            if (laneIsLoadBearing && !ImportsModuleLane(project))
+                problems.Add($"{projectPath}: modules are declared on the CLOSURE lane for this host, "
+                    + "but the project does not import memex/MeshModulesPublish.targets — so the lane "
+                    + "never runs, modules/ is never laid out, and every lane-only entry above is "
+                    + "SKIPPED at load on a green build. Add the Import element (path relative to "
+                    + "the host) alongside the MeshModulesClosureSubset that names them.");
         }
 
         Assert.True(problems.Count == 0,
             "Module declarations that nothing backs — each would ship a green rollout missing the "
             + "feature it names:\n  - " + string.Join("\n  - ", problems));
     }
+
+    /// <summary>
+    /// Whether the host imports the module-lane worker. Without it the lane's targets are not in
+    /// this project's build at all, and the entire modules/ layout silently does not happen.
+    /// </summary>
+    private static bool ImportsModuleLane(string projectPath) =>
+        System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(projectPath),
+            @"<Import\s+Project=""[^""]*MeshModulesPublish\.targets");
 
     /// <summary>
     /// Assembly names reachable from <paramref name="projectPath"/> through ProjectReference, i.e.

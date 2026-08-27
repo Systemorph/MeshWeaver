@@ -11,6 +11,12 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.PluginCatalog.Test" />
+    <!-- The install/composition tests that exercise serveFromPartition moved to
+         MeshWeaver.AI.Test (#2276) — that capability exists only on AI's node types. They are
+         WHITE-BOX tests of this catalog (RunDefaultInstall, Parse, ExcludedBy are internal), so
+         the grant follows them. Grants are by assembly SIMPLE NAME, so this keeps working when
+         MeshWeaver.AI.Test travels to MeshWeaver.Plugins. -->
+    <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
   </ItemGroup>
 
   <ItemGroup>

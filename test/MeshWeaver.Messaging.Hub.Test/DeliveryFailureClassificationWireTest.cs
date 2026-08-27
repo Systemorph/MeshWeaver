@@ -79,6 +79,128 @@ public class DeliveryFailureClassificationWireTest(ITestOutputHelper output) : H
     }
 
     /// <summary>
+    /// 🚨 The verdict a FAILING SITE recorded on the DELIVERY must survive the wire too.
+    ///
+    /// <para><c>Failed(message, ErrorType)</c> exists so the classification is decided where the
+    /// condition is known and CARRIED, "never reconstructed downstream by pattern-matching the
+    /// message text". It is carried in <c>Properties["FailureErrorType"]</c>, an
+    /// <c>IReadOnlyDictionary&lt;string, object&gt;</c> — and every consumer reads it back through
+    /// <c>GetFailureErrorType</c>, whose test is <c>value is ErrorType</c>.</para>
+    ///
+    /// <para>That is the trap-door AGENTS.md names: an <c>object</c> that crossed a hub boundary is
+    /// no longer the CLR type it was written as. The dictionary converter writes each value by its
+    /// runtime type, so an <see cref="ErrorType"/> goes out as the JSON STRING the enum converter
+    /// produces and comes back — via <c>ObjectPolymorphicConverter</c>, which materialises a JSON
+    /// string as <see cref="string"/> — as a string. The type test then fails and every consumer
+    /// silently reads the FALLBACK instead of the verdict.</para>
+    ///
+    /// <para>Concretely: the disposal race is classified <see cref="ErrorType.ShuttingDown"/> at the
+    /// hub (#2350) and read back as the fallback by the router — which is why a delivery that raced
+    /// a hub's disposal kept reaching the sender as terminal even after every producing site had
+    /// been fixed to classify it (#2346).</para>
+    /// </summary>
+    [Theory]
+    [InlineData(ErrorType.ShuttingDown)]
+    [InlineData(ErrorType.Unavailable)]
+    [InlineData(ErrorType.NotFound)]
+    [InlineData(ErrorType.CompilationFailed)]
+    public void ADeliveryCarriedVerdict_SurvivesTheWire(ErrorType errorType)
+    {
+        var options = GetHost().JsonSerializerOptions;
+        var delivery = ADelivery().Failed("Hub is shutting down", errorType);
+
+        var json = JsonSerializer.Serialize(delivery, delivery.GetType(), options);
+        Output.WriteLine(json);
+        var round = JsonSerializer.Deserialize<IMessageDelivery>(json, options)!;
+
+        round.GetFailureErrorType(ErrorType.Unknown).Should().Be(errorType,
+            "the verdict is what the router acts on; falling back silently turns a transient "
+            + "race into a terminal answer. Serialized as: {0}", json);
+    }
+
+    /// <summary>
+    /// 🚨 The reader runs on the error-REPORTING path, so it must never THROW — the one place a
+    /// throw is worst, because it replaces a failure that was about to be described with a
+    /// different, undescribed one. A junk or out-of-range value is "no verdict was reached", which
+    /// is precisely what the caller's fallback is for.
+    /// </summary>
+    [Theory]
+    [InlineData(long.MaxValue)]      // out of int range — Convert.ToInt32 would throw here
+    [InlineData(long.MinValue)]
+    [InlineData(9999)]               // in range, but no such member
+    public void AnOutOfRangeOrUndefinedVerdict_FallsBackInsteadOfThrowing(long recorded)
+    {
+        var delivery = ADelivery().Failed("boom")
+            .WithProperty(IMessageDelivery.FailureErrorTypeProperty, recorded);
+
+        delivery.GetFailureErrorType(ErrorType.Unavailable).Should().Be(ErrorType.Unavailable,
+            "an unreadable verdict is an absence of one, never an exception on the path whose whole "
+            + "job is to report a failure");
+    }
+
+    /// <summary>
+    /// A verdict written as text that names no member is equally not a verdict — <c>Enum.TryParse</c>
+    /// would also accept a NUMERIC string and mint an undefined member from it.
+    /// </summary>
+    [Theory]
+    [InlineData("NotAnErrorType")]
+    [InlineData("9999")]
+    [InlineData("")]
+    public void AnUnparseableVerdict_FallsBack(string recorded)
+    {
+        var delivery = ADelivery().Failed("boom")
+            .WithProperty(IMessageDelivery.FailureErrorTypeProperty, recorded);
+
+        delivery.GetFailureErrorType(ErrorType.Unavailable).Should().Be(ErrorType.Unavailable);
+    }
+
+    /// <summary>
+    /// The failure TEXT degrades exactly like the verdict does — options without
+    /// <c>ObjectPolymorphicConverter</c> leave it an untyped <see cref="JsonElement"/>. At a routing
+    /// site that costs twice: the sender loses its diagnostic, AND the classification fallback loses
+    /// the phrase it matches on, so a transient teardown silently reads terminal again.
+    /// </summary>
+    [Fact]
+    public void TheFailureText_IsReadableEvenWhenItArrivedAsUntypedJson()
+    {
+        using var doc = JsonDocument.Parse("\"Hub is shutting down\"");
+        var delivery = ADelivery().Failed("placeholder")
+            .WithProperty("Error", doc.RootElement.Clone());
+
+        delivery.GetFailureMessage().Should().Be("Hub is shutting down");
+    }
+
+    /// <summary>
+    /// And a value under that key which is NOT text is not a message: null, so the caller describes
+    /// the failure itself rather than printing a type name at a user.
+    /// </summary>
+    [Fact]
+    public void ANonTextValueUnderTheErrorKey_IsNotAMessage()
+    {
+        ADelivery().Failed("placeholder").WithProperty("Error", 42)
+            .GetFailureMessage().Should().BeNull();
+    }
+
+    /// <summary>
+    /// The answer-once flag rides the same dictionary, and it is what stops one request being
+    /// answered twice with contradictory verdicts. Key PRESENCE is the contract, so it must not
+    /// depend on the value's CLR type surviving either.
+    /// </summary>
+    [Fact]
+    public void TheAnswerOnceFlag_SurvivesTheWire()
+    {
+        var options = GetHost().JsonSerializerOptions;
+        var delivery = ADelivery().FailedAndNacked("Hub is shutting down");
+
+        var json = JsonSerializer.Serialize(delivery, delivery.GetType(), options);
+        var round = JsonSerializer.Deserialize<IMessageDelivery>(json, options)!;
+
+        round.SenderWasNacked.Should().BeTrue(
+            "the owning hub already answered the sender; a second NACK makes the classification "
+            + "a coin toss. Serialized as: {0}", json);
+    }
+
+    /// <summary>
     /// 🚨 ONE request, ONE failure response.
     ///
     /// <para>A caller's <c>Observe(...)</c> resolves on the FIRST DeliveryFailure it sees, so two
