@@ -431,10 +431,14 @@ internal class RoutingGrain(
         IObservable<Unit> TerminalCallFailure(Exception ex)
         {
             RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_FAULT addr={addressPath} id={delivery.Id} ex={ex.Message}");
+            // 🚨 CLASSIFY — this line read ErrorType.Failed unconditionally. See
+            // ClassifyDeliveryException: a silo leaving mid-roll and a directory mid-handoff are
+            // TRANSIENT, and telling the sender otherwise tears down mirrors that would have resumed.
+            var errorType = ClassifyDeliveryException(ex);
             logger.LogError(ex,
-                "[ROUTE] Directed delivery to pod hub {Address} failed — surfacing DeliveryFailure to sender {Sender}",
-                addressPath, delivery.Sender);
-            PostFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", ErrorType.Failed);
+                "[ROUTE] Directed delivery to pod hub {Address} failed — surfacing {ErrorType} DeliveryFailure to sender {Sender}",
+                addressPath, errorType, delivery.Sender);
+            PostFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", errorType);
             return Observable.Return(Unit.Default);
         }
     }
@@ -780,13 +784,36 @@ internal class RoutingGrain(
                 RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_POD_HUB_OK id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
                 return Unit.Default;
             })
-            .Catch<Unit, Exception>(ex => IsPodHubNotHere(ex)
-                ? Observable.Defer(() =>
-                {
-                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_POD_HUB_NOT_HERE id={delivery.Id} sender={delivery.Sender}");
-                    return PublishFailureOverStream();
-                })
-                : LogUndeliverableNack(ex)));
+            // 🚨 EVERY failure of the directed NACK falls back to the stream — not only
+            // PodHubNotHere. There is no NACK for a NACK, so this leg's alternative to trying the
+            // second transport is SILENCE, which is the whole of issue #1742. The two are genuinely
+            // independent failure surfaces: the directed call needs the SENDER's pod-hub activation
+            // to be addressable, while the publish needs only the sender's stream subscription — so
+            // a directory mid-handoff (#2357), a connection blip to the owning pod, or a placement
+            // that could not be made all leave the stream perfectly able to carry the answer. And
+            // the fallback is not a return to silence: it probes for a subscriber first and says so
+            // at Error when there is none (PublishFailureOverStream / RefuseNoSubscriber), so the
+            // outcome is either delivered or LOUD. LogUndeliverableNack is now reached only when
+            // BOTH transports have failed, which is the only state in which "the sender will never
+            // hear about this" is actually true.
+            //
+            // This does NOT weaken the answer-once contract (see AnswerPolicy). That rule exists so
+            // one request cannot get two DIFFERENT verdicts and have Observe resolve on whichever
+            // lands first. Here both transports carry the SAME DeliveryFailure, matched on the same
+            // RequestId, so a duplicate that arrives after a directed call which secretly succeeded
+            // is an exact repeat of an answer the caller has already resolved on — inert, not a
+            // coin toss.
+            .Catch<Unit, Exception>(ex => Observable.Defer(() =>
+            {
+                RoutingGrainTrace.Write(IsPodHubNotHere(ex)
+                    ? $"RoutingGrain.RouteMessage FAILURE_POD_HUB_NOT_HERE id={delivery.Id} sender={delivery.Sender}"
+                    : $"RoutingGrain.RouteMessage FAILURE_POD_HUB_FAULT id={delivery.Id} sender={delivery.Sender} ex={ex.Message}");
+                return PublishFailureOverStream()
+                    .Catch<Unit, Exception>(streamEx => LogUndeliverableNack(
+                        new AggregateException(
+                            "Neither the directed pod-hub call nor the stream publish could carry the NACK.",
+                            ex, streamEx)));
+            })));
         return;
 
         // The NACK is fire-and-forget by nature — there is no NACK for a NACK — so the one thing a
@@ -838,8 +865,9 @@ internal class RoutingGrain(
             RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_FAIL id={delivery.Id} ex={ex.Message}");
             logger.LogError(ex,
                 "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender}: "
-                + "the directed call to its pod-hub activation failed. The sender will wait out its own "
-                + "request budget — the original failure was: {FailureMessage}",
+                + "BOTH transports failed — the directed call to its pod-hub activation AND the stream "
+                + "publish. The sender will wait out its own request budget — the original failure "
+                + "was: {FailureMessage}",
                 errorType, delivery.Id, delivery.Sender, failureMessage);
             return Observable.Return(Unit.Default);
         }
@@ -1062,10 +1090,13 @@ internal class RoutingGrain(
                     // message and the GUI resubscribe loop stops spinning on Orleans noise.
                     var activationError = resolveActivationError?.Invoke(grainKey);
                     var detail = string.IsNullOrEmpty(activationError) ? ex.Message : activationError;
+                    // 🚨 CLASSIFY — this line read ErrorType.Failed unconditionally, which is the same
+                    // defect #2346/#2451 removed from the result arm above and left standing here.
+                    var errorType = ClassifyDeliveryException(ex);
                     logger.LogWarning(ex,
-                        "[ROUTE] Grain {GrainKey} delivery failed after transient retries (or a non-transient fault) → NACK sender: {Detail}",
-                        grainKey, detail);
-                    postFailureToSender($"Delivery to '{addressPath}' failed: {detail}", ErrorType.Failed);
+                        "[ROUTE] Grain {GrainKey} delivery failed after transient retries (or a non-transient fault) → NACK sender as {ErrorType}: {Detail}",
+                        grainKey, errorType, detail);
+                    postFailureToSender($"Delivery to '{addressPath}' failed: {detail}", errorType);
                 });
     }
 
@@ -1121,5 +1152,61 @@ internal class RoutingGrain(
     internal static bool IsTransientFailure(Exception ex) =>
         ex is TimeoutException
             or global::Orleans.Runtime.OrleansMessageRejectionException
+        // 🚨 THE BARE OrleansException THE TYPE TEST ABOVE CANNOT SEE — issue #1742 / #2357. Orleans
+        // rejects an un-addressable call with the DIRECTORY's exception attached, and the caller-side
+        // resolution is `rejection?.Exception ?? new OrleansMessageRejectionException(…)` — the
+        // carried one wins — so a grain call made while the directory is mid-handoff arrives here as
+        // a bare Orleans.Runtime.OrleansException whose own text ends "Retry later.". Nothing matched
+        // it, so it was never retried and became a TERMINAL DeliveryFailure for the sender. Full
+        // reasoning (and why this is a message match, and what pins it) on IsDirectoryUnstable.
+        || OrleansRoutingService.IsDirectoryUnstable(ex)
         || (ex.InnerException != null && IsTransientFailure(ex.InnerException));
+
+    /// <summary>
+    /// How a routing failure that arrived as an EXCEPTION should be classified for the sender.
+    ///
+    /// <para>🚨 Both exception arms in this file used to hard-code <see cref="ErrorType.Failed"/> —
+    /// TERMINAL, unconditionally — which is the same defect #2346/#2451 removed from the neighbouring
+    /// <c>result.State == Failed</c> arm and left standing here. It matters for exactly the reason
+    /// that fix records: the consumers with their own recovery machinery
+    /// (<c>SynchronizationStream</c>'s resubscribe latch, <c>MeshNodeStreamCache</c>'s transient-owner
+    /// rule) RIDE OUT <see cref="ErrorType.ShuttingDown"/> and TEAR DOWN on
+    /// <see cref="ErrorType.Failed"/>. So a rolling deploy — a silo leaving, the grain directory
+    /// mid-handoff, the connection to a departing pod dropping — permanently tore down live mirrors
+    /// that would have resumed seconds later, and the user-visible shape of that is a reply that
+    /// never arrives.</para>
+    ///
+    /// <para>🚨 <b>Deliberately NARROWER than <see cref="IsTransientFailure"/>, and the difference
+    /// is load-bearing.</b> That predicate answers "is another attempt worth making <i>right
+    /// now</i>", which is safe to say generously — it is bounded by a retry budget. This one answers
+    /// "should the SENDER keep its recovery machinery armed", which is unbounded on the other side:
+    /// a consumer told <see cref="ErrorType.ShuttingDown"/> resubscribes. So a bare
+    /// <see cref="TimeoutException"/> — a target that did not answer across the WHOLE retry budget,
+    /// i.e. plausibly wedged rather than restarting — must stay terminal, or the answer becomes a
+    /// resubscribe storm against a hub that never comes back (the 2026-06-08 production shape).
+    /// Only the two conditions that ARE a lifecycle transition by construction qualify: the grain
+    /// directory mid-handoff, and the host going away.</para>
+    ///
+    /// <para>Anything this does not recognise stays terminal, so a genuine defect is still reported
+    /// as one.</para>
+    /// </summary>
+    /// <param name="ex">The exception the delivery attempt faulted with.</param>
+    /// <returns>The <see cref="ErrorType"/> the sender's NACK should carry.</returns>
+    internal static ErrorType ClassifyDeliveryException(Exception ex) =>
+        OrleansRoutingService.IsDirectoryUnstable(ex) || IsShutdownShaped(ex)
+            ? ErrorType.ShuttingDown
+            : ErrorType.Failed;
+
+    /// <summary>
+    /// The silo hosting the target is going away — an expected lifecycle event during every roll,
+    /// never a defect. Kept beside <see cref="IsTransientFailure"/> because the two answer different
+    /// questions: that one decides whether to try AGAIN, this one decides what to TELL the sender
+    /// once trying again has run out.
+    /// </summary>
+    /// <param name="ex">The exception the delivery attempt faulted with.</param>
+    /// <returns><c>true</c> when the failure is a silo/host shutdown.</returns>
+    internal static bool IsShutdownShaped(Exception ex) =>
+        ex is global::Orleans.Runtime.SiloUnavailableException
+            or global::Orleans.Runtime.OrleansLifecycleCanceledException
+        || (ex.InnerException != null && IsShutdownShaped(ex.InnerException));
 }
