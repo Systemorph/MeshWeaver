@@ -404,10 +404,11 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 if (result.State == MessageDeliveryState.Failed)
                 {
                     // Preserve the RoutingGrain's message so the GUI's
-                    // IsExpectedUserActionFailure classifier can match it.
-                    var failureMessage = result.Properties.TryGetValue("Error", out var errObj) && errObj is string errStr
-                        ? errStr
-                        : $"Delivery failed to {address}";
+                    // IsExpectedUserActionFailure classifier can match it. GetFailureMessage, not a
+                    // raw `is string` test: a delivery that crossed a hub boundary can carry the text
+                    // as an untyped JsonElement, and dropping it would also drop the phrase the
+                    // classification fallback below matches on.
+                    var failureMessage = result.GetFailureMessage() ?? $"Delivery failed to {address}";
                     // 🚨 NOT every Failed result is terminal, and assuming so cost this project the
                     // shard-0 Orleans flake cluster. This comment used to read "Grain returned a
                     // non-transient failure (e.g. node doesn't exist)" and SendDeliveryFailure
@@ -430,10 +431,26 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                     // all already treat "is shutting down" as retry-worthy, and NackThroughParent's
                     // own comment calls the wording CONTRACT. This makes the fourth layer agree with
                     // the other three rather than contradict them.
-                    var failureErrorType = ClassifyRoutedFailure(failureMessage);
+                    //
+                    // 🚨 The CARRIED verdict comes first, the text rule is only the FALLBACK — the
+                    // two must not diverge from the silo-side twin in RoutingGrain, because "a fix
+                    // landed on one site and missed the other" is precisely how #2346 outlived both
+                    // of its earlier fixes. A site that recorded a verdict (MessageService's intake
+                    // gate, MessageHubGrain's activation/disposal arms) knows more than any matcher
+                    // can recover from prose: "Hub disposed before delivery for …" is ShuttingDown
+                    // and contains no phrase a text rule could catch.
+                    var failureErrorType = result.GetFailureErrorType(ClassifyRoutedFailure(failureMessage));
                     logger.LogWarning("Orleans: delivery FAILED for {MessageType} to {Address}: {FailureMessage} (as {ErrorType})",
                         msgType, address, failureMessage, failureErrorType);
-                    SendDeliveryFailure(delivery, failureMessage, failureErrorType);
+
+                    // 🚨 ANSWER ONCE — the same contract MessageService.ReportRoutingFailure and
+                    // the silo-side RoutingGrain apply. FailedAndNacked DECLARES that the failing
+                    // site posted its own DeliveryFailure; answering again gives ONE request TWO
+                    // answers, and Observe resolves on whichever lands first.
+                    if (result.SenderWasNacked)
+                        OrleansRouteTrace.Write($"OrleansRoutingService.Deliver DISPATCH_FAILED_ALREADY_NACKED addr={address} id={delivery.Id}");
+                    else
+                        SendDeliveryFailure(delivery, failureMessage, failureErrorType);
                 }
                 else
                 {
