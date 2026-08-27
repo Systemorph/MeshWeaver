@@ -1,5 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\..\tools\MeshWeaver.PluginTester\MeshWeaver.PluginTester.csproj" />
+    <!-- The combo gate's production seam (DockerImageGate) lives in the sibling tool and had NO
+         test and NO caller of any kind (#2274) — its docker argv is pinned by
+         DockerImageGateArgsTest here rather than in a new project, next to
+         GateRunReportContractTest which already owns the other half of the same wire contract.
+         🚨 This does NOT touch tools/MeshWeaver.PluginTester's own reference closure, which IS the
+         framework build identity — this is the TEST project. -->
+    <ProjectReference Include="..\..\tools\MeshWeaver.ComboVerifier\MeshWeaver.ComboVerifier.csproj" />
   </ItemGroup>
 </Project>

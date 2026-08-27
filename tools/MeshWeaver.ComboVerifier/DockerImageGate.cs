@@ -17,17 +17,39 @@ namespace MeshWeaver.ComboVerifier;
 /// the mount (<see cref="GateRunReport.FileName"/>); the image's non-root user needs write access
 /// there, so the work root is made world-writable before the run.</para>
 ///
-/// <para>Expected failures — docker absent, pull denied, the run exceeding its budget — come back
-/// as <see cref="CandidateGateRun.Error"/>, never as a fault: the verifier folds them into a
-/// NotVerifiable verdict. Each docker invocation is a blocking <see cref="Process"/> leaf on the
+/// <para>🚨 EVERY docker call is PINNED to <see cref="Platform"/>, and that is not tidiness. A
+/// candidate reference is a multi-arch manifest list whose amd64 and arm64 variants carry
+/// genuinely different bytes (they resolve different framework build identities — see the bake
+/// lane in <c>main-cd.yml</c>), while docker reports the same manifest LIST digest for both. Left
+/// unpinned, docker silently picks the HOST's architecture: an operator running the gate on an
+/// arm64 laptop gets a Green naming a digest that covers the amd64 bytes the fleet actually runs
+/// and that the run never touched — a FALSE PASS that no output distinguishes from a real one.
+/// The platform is therefore explicit here and recorded on the verdict
+/// (<see cref="ComboVerification.VerifiedPlatform"/>).</para>
+///
+/// <para>Expected failures — docker absent, pull denied, the run exceeding its budget, a host that
+/// cannot emulate the requested platform — come back as <see cref="CandidateGateRun.Error"/>,
+/// never as a fault: the verifier folds them into a NotVerifiable verdict. That is the right way
+/// to fail: an un-runnable platform reads as "we could not find out", never as "all clear".</para>
+///
+/// <para>Each docker invocation is a blocking <see cref="Process"/> leaf on the
 /// <see cref="IoPoolNames.Process"/> pool, the sanctioned boundary for sync-blocking work; the
 /// public surface is <see cref="IObservable{T}"/>.</para>
 /// </summary>
-public sealed class DockerImageGate(IoPoolRegistry pools, TimeSpan runBudget, TextWriter output)
+public sealed class DockerImageGate(
+    IoPoolRegistry pools, TimeSpan runBudget, TextWriter output, string platform)
 {
     /// <summary>How many trailing characters of the combined docker output the run keeps for
     /// diagnostics.</summary>
     private const int LogTailLength = 8 * 1024;
+
+    /// <summary>The platform every install in the fleet runs. AKS node pools are x86_64 (the CD
+    /// bake's arm64 leg is opt-in behind <c>BAKE_ARM64</c>), so a verdict that does not say
+    /// otherwise must be about THIS.</summary>
+    public const string FleetPlatform = "linux/amd64";
+
+    /// <summary>The docker platform this gate pins every call to.</summary>
+    public string Platform { get; } = platform;
 
     private IIoPool Pool => pools.Get(IoPoolNames.Process);
 
@@ -52,45 +74,55 @@ public sealed class DockerImageGate(IoPoolRegistry pools, TimeSpan runBudget, Te
                 | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
                 | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
 
-        // Ensure the image is present (docker run would pull too, but a separate pull keeps its
-        // output out of the gate log and makes an auth failure a SPEAKING error).
-        var present = Docker(["image", "inspect", "--format", "present", imageRef], ct,
+        // Ensure the image is present FOR THE REQUESTED PLATFORM (docker run would pull too, but a
+        // separate pull keeps its output out of the gate log and makes an auth failure a SPEAKING
+        // error).
+        //
+        // 🚨 The presence question is per-PLATFORM, not per-reference. `docker image inspect`
+        // answers about whichever variant the local store holds, so asking "is it present?" would
+        // report the arm64 copy an earlier run pulled and SKIP the pull of the amd64 bytes we are
+        // about to be asked to run. Asking for the architecture instead makes the check answer the
+        // question the run actually depends on.
+        var present = Docker(
+            ["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", imageRef], ct,
             TimeSpan.FromMinutes(1));
-        if (present.ExitCode != 0)
+        var localPlatform = present.ExitCode == 0 ? present.Output.Trim() : null;
+        if (!string.Equals(localPlatform, Platform, StringComparison.OrdinalIgnoreCase))
         {
-            output.WriteLine($"pulling {imageRef} …");
-            var pull = Docker(["pull", imageRef], ct, runBudget);
+            output.WriteLine(localPlatform is null
+                ? $"pulling {imageRef} ({Platform}) …"
+                : $"pulling {imageRef} ({Platform}) — the local copy is {localPlatform} …");
+            var pull = Docker(PullArgs(imageRef, Platform), ct, runBudget);
             if (pull.TimedOut)
                 return new CandidateGateRun
                 {
-                    Error = $"docker pull '{imageRef}' exceeded the {runBudget} budget.",
+                    Platform = Platform,
+                    Error = $"docker pull '{imageRef}' ({Platform}) exceeded the {runBudget} budget.",
                     LogTail = Tail(pull.Output),
                 };
+            // 🚨 A pull that fails is NOT recoverable by running whatever happens to be local: that
+            // is precisely how a run for one architecture gets served another. Report it.
             if (pull.ExitCode != 0)
                 return new CandidateGateRun
                 {
-                    Error = $"docker pull '{imageRef}' failed (exit {pull.ExitCode}).",
+                    Platform = Platform,
+                    Error = $"docker pull '{imageRef}' for {Platform} failed (exit "
+                            + $"{pull.ExitCode}) — the candidate's {Platform} bytes are not "
+                            + "available here, so nothing about them was verified.",
                     LogTail = Tail(pull.Output),
                 };
         }
 
         var digest = ResolveDigest(imageRef, ct);
 
-        output.WriteLine($"running mw-plugin-test inside {imageRef} over '{fullRoot}' …");
-        var run = Docker(
-            [
-                "run", "--rm",
-                "-v", $"{fullRoot}:/work",
-                "--entrypoint", "/app/mw-plugin-test",
-                imageRef,
-                "/work",
-                "--report", $"/work/{GateRunReport.FileName}",
-            ],
-            ct, runBudget);
+        output.WriteLine(
+            $"running mw-plugin-test inside {imageRef} ({Platform}) over '{fullRoot}' …");
+        var run = Docker(RunArgs(imageRef, fullRoot, Platform), ct, runBudget);
         if (run.TimedOut)
             return new CandidateGateRun
             {
                 ImageDigest = digest,
+                Platform = Platform,
                 Error = $"the gate run exceeded its {runBudget} budget and was killed — "
                         + "something inside the candidate did not complete.",
                 LogTail = Tail(run.Output),
@@ -100,10 +132,44 @@ public sealed class DockerImageGate(IoPoolRegistry pools, TimeSpan runBudget, Te
         {
             ExitCode = run.ExitCode,
             ImageDigest = digest,
+            Platform = Platform,
             Report = ReadReport(reportFile),
             LogTail = Tail(run.Output),
         };
     }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  The docker command line — pure, so the contract is pinned by a test
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>The <c>docker pull</c> argv, pinned to <paramref name="platform"/>.</summary>
+    internal static string[] PullArgs(string imageRef, string platform) =>
+        ["pull", "--platform", platform, imageRef];
+
+    /// <summary>
+    /// The <c>docker run</c> argv — the same contract as the plugins repo's <c>test-repos</c> job
+    /// and <c>main-cd.yml</c>'s bake: <c>--rm --init --platform … -v root:/work --entrypoint
+    /// /app/mw-plugin-test IMAGE /work --report /work/…</c>.
+    ///
+    /// <para>🚨 ORDER IS THE CONTRACT, not a style choice. Everything before
+    /// <paramref name="imageRef"/> is docker's; everything after it is the TESTER's. Move
+    /// <c>--platform</c> (or any flag) past the image and docker stops seeing it — the tester
+    /// receives it as an unknown argument instead, and the run is no longer pinned to anything.
+    /// Pinned by <c>DockerImageGateArgsTest</c>.</para>
+    /// </summary>
+    internal static string[] RunArgs(string imageRef, string fullRoot, string platform) =>
+    [
+        "run", "--rm",
+        // --init reaps the tester's children; every other invocation of this image in the repo
+        // passes it, and a gate that runs the image differently from CI is not measuring CI.
+        "--init",
+        "--platform", platform,
+        "-v", $"{fullRoot}:/work",
+        "--entrypoint", "/app/mw-plugin-test",
+        imageRef,
+        "/work",
+        "--report", $"/work/{GateRunReport.FileName}",
+    ];
 
     /// <summary>The repo digest the ref resolves to (the identity of what was verified), else the
     /// local image id (a locally built candidate has no repo digest), else null.</summary>
