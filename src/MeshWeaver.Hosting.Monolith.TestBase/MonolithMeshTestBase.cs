@@ -1656,11 +1656,16 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
         try
         {
+            // ConfigureAwait(false): belt and braces on top of ObserveCompletion's
+            // RunContinuationsAsynchronously. `await` captures TaskScheduler.Current when there is
+            // no SynchronizationContext, so a teardown entered from a hub scheduler would
+            // otherwise route the rest of DisposeAsync — including the synchronous
+            // ioPools.DrainAll() join — back onto it. (Copilot review, #2527.)
             await disposal.ObserveCompletion(
                 ex => FileOutput.WriteLine(
                     $"[DISPOSE] {testName}: disposal faulted AFTER the wait settled — reported, "
                     + $"not orphaned: {ex.GetType().Name}: {ex.Message}"),
-                ct);
+                ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
