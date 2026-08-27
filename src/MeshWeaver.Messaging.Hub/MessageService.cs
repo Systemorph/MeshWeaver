@@ -146,8 +146,6 @@ public class MessageService : IMessageService
     private readonly ConcurrentDictionary<string, Predicate<IMessageDelivery>> gates;
     private readonly Lock gateStateLock = new();
 
-    private readonly TaskCompletionSource<bool> startupCompletionSource = new();
-
     //private volatile int pendingStartupMessages;
     private JsonSerializerOptions? loggingSerializerOptions;
 
@@ -2009,19 +2007,6 @@ public class MessageService : IMessageService
         // intake; any in-flight turn finishes on its own. Same rationale that always
         // skipped executionBlock.Completion.
         logger.LogDebug("[DISPOSE-TRACE] {address}: Skipping deliveryAction.Completion wait (inline-execution turn)", Address);
-
-        // Complete the startup task if it's still pending
-        try
-        {
-            if (!startupCompletionSource.Task.IsCompleted)
-            {
-                startupCompletionSource.TrySetCanceled();
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Error completing startup tasks during disposal in {Address}", Address);
-        }
 
         // Tear down the storm breaker's instance state (counters + trips subject).
         try { stormBreaker.Dispose(); }

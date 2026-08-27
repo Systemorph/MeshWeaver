@@ -101,15 +101,50 @@ local dev and tests never send mail.
 > inbound (inbox subscription + read) needs **`Mail.ReadWrite`**. Both are tenant-admin-consented
 > application permissions on the mailbox's app registration.
 
-Registration (in the portal's `MemexConfiguration.ConfigureMemexServices`):
+Registration is split between the host and the module, and the pairing is deliberately
+**order-independent**: the host registers its no-op with `TryAddSingleton` and the
+`MeshWeaver.Mail.MicrosoftGraph` module registers the Graph sender with a plain `AddSingleton`.
+Whichever runs first, the last registration of a service type wins and `TryAdd` declines when one
+already exists — so module listed ⇒ the Graph sender; module absent ⇒ the no-op keeps the two
+`GetRequiredService<IEmailSender>()` call sites resolvable instead of throwing at startup.
 
 ```csharp
 var email = builder.Configuration.GetSection(EmailOptions.SectionName).Get<EmailOptions>() ?? new();
 services.AddSingleton(email);
-services.AddSingleton<IEmailSender>(email.Enabled
-    ? sp => new GraphEmailSender(...)      // Microsoft Graph /sendMail
-    : sp => new NoOpEmailSender(...));
+services.TryAddSingleton<IEmailSender, NoOpEmailSender>();   // host fallback
+// …and, when the module is listed under Modules:Assemblies:
+services.AddSingleton<IEmailSender, GraphEmailSender>();     // MeshWeaver.Mail.MicrosoftGraph
 ```
+
+### 🚨 Refused configurations
+
+`Email:Enabled=true` on an install that cannot actually deliver is **refused**, never quietly
+succeeded. There are two such configurations and they are diagnosed separately, because they need
+opposite fixes:
+
+| Configuration | Verdict reached from | What the operator is told |
+|---|---|---|
+| Enabled, but the credential keys the selected flow needs are unset (`EmailOptions.MissingCredentialKeys()`) | **Configuration** — inert data | The exact keys to set, e.g. `Email:TenantId` |
+| Enabled, complete, but the resolved sender reports `DeliversMail == false` (the module is not on this install) | The **container** | Land the `MeshWeaver.Mail.MicrosoftGraph` module |
+
+On either, `OutboundEmailSender` and `InvitationEmailSender` **do not start at all**, so queued mail
+stays visibly `New` and every other caller gets a loud failure instead of `true`.
+
+🚨 **Recovery needs a restart, and the refusal says so.** The `Email` section is bound **once at host
+start** (`Configuration.GetSection(...).Get<EmailOptions>()` into a singleton — not `IOptionsMonitor`),
+and both watchers are `IHostedService`s that start with it, so neither re-reads configuration at
+runtime. Completing the section therefore takes effect on the next portal start / rollout — at which
+point the queued `New` mail goes out by itself, with no data repair and nothing to re-queue by hand.
+That is the whole reason refusing beats succeeding quietly: mail stamped `Sent` that was never sent
+is indistinguishable from mail that really was sent, and no restart recovers it (#2023).
+
+🚨 **The order the two questions are asked in is load-bearing** (#2510). The guard runs inside
+`IHostedService.StartAsync`, where a throw aborts the **host**, not a feature. It therefore asks the
+configuration *first*, from data that cannot throw, and only a completely-configured install goes on
+to resolve the sender. Asking the container first meant activating the Graph sender there — and it
+built an Azure `ClientSecretCredential` in its constructor, which validates the tenant id eagerly —
+so an unset `Email:TenantId` produced `Hosting failed to start` and a pod that never became ready.
+A half-configured optional integration must never be able to do that.
 
 ---
 
@@ -117,7 +152,9 @@ services.AddSingleton<IEmailSender>(email.Enabled
 
 `GraphEmailSender` calls Graph
 `/users/{mailbox}/sendMail` using the `Mail.Send` **application** permission, bridging the async Graph
-call to the reactive surface via `Observable.FromAsync`. Credentials come from `EmailOptions`:
+call to the reactive surface through a bounded `IIoPool` (`_http.Run(...)`) — **never**
+`Observable.FromAsync`, which is forbidden outside `IoPool` (see
+[Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling)). Credentials come from `EmailOptions`:
 `DefaultAzureCredential` (managed identity) in production, or a `ClientSecretCredential` for self-host.
 
 The one-time Azure setup — a dedicated app registration, **admin-consented `Mail.Send`** (plus
