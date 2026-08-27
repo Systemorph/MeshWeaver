@@ -2190,6 +2190,30 @@ public static class MeshExtensions
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
         var meshHub = ResolveMeshHub(hub);
+        // 🚨 THE HUB THIS DELETE'S TWO FAN-OUTS ARE ISSUED ON — never the router (issue #2477).
+        // A recursive delete posts one request PER DESCENDANT twice over: the pre-flight
+        // ValidateDeleteRequest and, after it, the bottom-up DeleteNodeRequest. Issued from
+        // `meshHub` those go out stamped `Sender = mesh/{id}` and every answer is addressed
+        // straight back at `mesh/{id}` — both ends of both exchanges are the ROUTER, which is
+        // exactly what ROUTER_TRAFFIC reports (two ERROR lines per recursive delete, plus a third
+        // whenever a leaf refuses) and, worse, parks the whole cascade's continuations on the
+        // router's single-threaded action block. It scales with the SUBTREE SIZE, on a path a user
+        // triggers by deleting a Space — the prod 2026-06-11 starvation shape.
+        //
+        // 🚨 IDENTITY IS UNCHANGED, and that is the load-bearing fact here: both fan-outs stamp
+        // their AccessContext EXPLICITLY (`WithAccessContext` — the pre-flight carries the
+        // CALLER's, the commit the System context decided above), so the leaf's
+        // [RequiresPermission(Delete)] gate reads `delivery.AccessContext.ObjectId` and never the
+        // sender address. The post pipeline's own fallback chain is hub-independent too: the
+        // AccessService is the mesh-wide singleton this hosted hub's provider chains to, neither
+        // hub carries a standing identity, and both are PostingIdentity.User — so even the
+        // `callerAccessContext is null` branch resolves to the same identity as before. Same
+        // argument MeshService.IssuingHub documents for the delete this cascade re-enters from.
+        //
+        // `meshHub` deliberately stays the router below: per-node hubs are HOSTED by it, so the
+        // commit's hub-disposal lookup must ask it, and the reply to our own caller keeps posting
+        // from it (a response the router sends is routing's own duty — see RouterTrafficRule).
+        var issuingHub = meshHub.NodeOperationIssuingHub();
         // "Delete wins" tombstone — populated SYNCHRONOUSLY here so it is in place before this
         // delete's response returns, i.e. before any later hub activation can resurrect the row.
         // (Null on meshes without Graph — the resurrect race is Graph's per-node-hub save path.)
@@ -2440,7 +2464,7 @@ public static class MeshExtensions
                                         //     subtree partially destroyed when the user expected an
                                         //     all-or-nothing failure.
                                         var preValidate = capturedRequest.Recursive
-                                            ? PreValidateDescendantsObs(meshHub, path, collected.ToDelete, request.AccessContext, budget, logger)
+                                            ? PreValidateDescendantsObs(issuingHub, path, collected.ToDelete, request.AccessContext, budget, logger)
                                             : Observable.Return<(string Path, string Error, NodeDeletionRejectionReason Reason)?>(null);
 
                                         return preValidate.SelectMany(failure =>
@@ -2521,7 +2545,7 @@ public static class MeshExtensions
                                         };
 
                                         return DeleteSubtreeUntilDrained(
-                                                meshHub, storage, path, collected.ToDelete,
+                                                meshHub, issuingHub, storage, path, collected.ToDelete,
                                                 capturedRequest, executionContext,
                                                 recentlyDeleted, logger, collectedMessages,
                                                 deletedProgress)
@@ -2877,6 +2901,7 @@ public static class MeshExtensions
     /// </summary>
     private static IObservable<IReadOnlyList<string>> DeleteSubtreeUntilDrained(
         IMessageHub meshHub,
+        IMessageHub issuingHub,
         IStorageAdapter storage,
         string rootPath,
         ImmutableHashSet<string> plannedPaths,
@@ -2887,12 +2912,13 @@ public static class MeshExtensions
         ImmutableList<LogMessage>.Builder collectedMessages,
         ImmutableList<string>.Builder deletedProgress)
         => RunDeletePass(
-            meshHub, storage, rootPath, plannedPaths, baseRequest, callerAccessContext,
+            meshHub, issuingHub, storage, rootPath, plannedPaths, baseRequest, callerAccessContext,
             recentlyDeleted, logger, collectedMessages, deletedProgress,
             pass: 1, deletedSoFar: ImmutableList<string>.Empty);
 
     private static IObservable<IReadOnlyList<string>> RunDeletePass(
         IMessageHub meshHub,
+        IMessageHub issuingHub,
         IStorageAdapter storage,
         string rootPath,
         ImmutableHashSet<string> toDelete,
@@ -2918,7 +2944,7 @@ public static class MeshExtensions
         recentlyDeleted?.MarkDeleted(rootPath);
 
         return FanOutDeleteSubtree(
-                meshHub, storage, rootPath, toDelete, baseRequest, callerAccessContext,
+                meshHub, issuingHub, storage, rootPath, toDelete, baseRequest, callerAccessContext,
                 logger, collectedMessages, deletedProgress, rootAlreadyDeleted: pass > 1)
             .Catch<IReadOnlyList<string>, Exception>(ex =>
             {
@@ -2963,7 +2989,7 @@ public static class MeshExtensions
                             pass + 1, rootPath, survivorSet.Count);
 
                         return RunDeletePass(
-                            meshHub, storage, rootPath, survivorSet, baseRequest,
+                            meshHub, issuingHub, storage, rootPath, survivorSet, baseRequest,
                             callerAccessContext, recentlyDeleted, logger, collectedMessages,
                             deletedProgress, pass + 1, acc);
                     });
@@ -2991,9 +3017,18 @@ public static class MeshExtensions
     /// Collected per-leaf activity messages are accumulated into
     /// <paramref name="collectedMessages"/> for the top-level activity log.
     /// </para>
+    /// <para>
+    /// <b>Two hubs, two duties (issue #2477).</b> <paramref name="meshHub"/> is the ROUTER and is
+    /// used only for what only it can answer — resolving mesh-wide services and DISPOSING the
+    /// per-node hub at a deleted path, which is hosted by it. <paramref name="issuingHub"/> is
+    /// <see cref="NodeOperationIssuingHub"/>, and it is what POSTS the per-leaf
+    /// <see cref="DeleteNodeRequest"/>s and observes their answers, so neither end of the cascade's
+    /// request/response traffic is the router.
+    /// </para>
     /// </summary>
     private static IObservable<IReadOnlyList<string>> FanOutDeleteSubtree(
         IMessageHub meshHub,
+        IMessageHub issuingHub,
         IStorageAdapter storage,
         string rootPath,
         ImmutableHashSet<string> descendantPaths,
@@ -3091,7 +3126,14 @@ public static class MeshExtensions
                 // stamp, the owner's [RequiresPermission(Delete)] denies on
                 // whatever hub-self identity is ambient (`sync/<id>`).
                 logger.LogDebug("[DeleteNode] post leaf delete {Path}", path);
-                return meshHub.Observe(
+                // 🚨 ISSUED OFF THE ROUTER (issue #2477) — `issuingHub`, never `meshHub`. One post
+                // per leaf, each awaiting its own answer: from the router this stamped every leaf
+                // request `Sender = mesh/{id}` and addressed every DeleteNodeResponse straight back
+                // at it, so the router was both ends of the entire cascade and its action block ran
+                // the continuations. Identity is untouched — the AccessContext is stamped
+                // explicitly below (the System context the commit decided), and the leaf's
+                // [RequiresPermission(Delete)] gate reads that, never the sender address.
+                return issuingHub.Observe(
                         // CascadeRootPath rides to the leaf's handler so per-leaf validators
                         // exempt space-teardown invariants (last-admin) exactly like the
                         // pre-flight ValidateDeleteRequest(p, rootPath) already does.
@@ -3135,9 +3177,17 @@ public static class MeshExtensions
     /// legible permission denial, never a partially deleted subtree. The commit
     /// that follows a fully-granted pre-flight then runs under the system
     /// identity, immune to the cascade deleting its own <c>_Access</c> grants.</para>
+    ///
+    /// <para>🚨 <paramref name="issuingHub"/> is the OFF-ROUTER issuing hub
+    /// (<see cref="NodeOperationIssuingHub"/>), never the root mesh hub: this fan-out posts one
+    /// request per descendant and awaits every answer, so issuing it on the router made the router
+    /// both ends of the whole exchange — the <c>ROUTER_TRAFFIC</c> report, and the cascade's
+    /// continuations running on the routing action block (issue #2477). The permission verdict is
+    /// unaffected because the delivery's <c>AccessContext</c> is stamped explicitly below; the
+    /// leaf's gate reads that, never the sender address.</para>
     /// </summary>
     private static IObservable<(string Path, string Error, NodeDeletionRejectionReason Reason)?> PreValidateDescendantsObs(
-        IMessageHub meshHub,
+        IMessageHub issuingHub,
         string rootPath,
         ImmutableHashSet<string> allPaths,
         AccessContext? callerAccessContext,
@@ -3160,7 +3210,7 @@ public static class MeshExtensions
             descendants.Select(p => new KeyValuePair<string, byte>(p, 0)),
             StringComparer.OrdinalIgnoreCase);
 
-        var perPath = descendants.Select(p => meshHub
+        var perPath = descendants.Select(p => issuingHub
             // 🚨 Stamp the caller's AccessContext on every ValidateDeleteRequest.
             // This post fires from a SelectMany continuation on the workspace's
             // emission scheduler where AsyncLocal AccessContext is unreliable —
