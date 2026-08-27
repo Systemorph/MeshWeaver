@@ -84,7 +84,6 @@ workspace.GetMeshNodeStream(path)
 
 In a layout area (hub-reachable): **no `async`/`await`/`Task<T>`/`Observable.FromAsync`.** Compose with `.Select`/`.SelectMany`/`.Where`/`.CombineLatest` and `.Subscribe`. Click actions return `Task.CompletedTask` (never `async ctx =>`). Async/IO leaves go through `IIoPool`. See [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) · [Observables](/Doc/GUI/Observables).
 
-The same controls language renders in a native client too — same `GetMeshNodeStream` / `Update`, marshalling UI updates with `MainThread.BeginInvokeOnMainThread`: [Data Binding in a MAUI Client](/Doc/GUI/DataBindingMaui).
 
 # 6. Mesh links in markdown content
 

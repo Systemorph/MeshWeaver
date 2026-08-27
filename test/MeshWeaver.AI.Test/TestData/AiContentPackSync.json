@@ -158,9 +158,10 @@
     },
     {
       "file": "Skill/layout-area.md",
-      "core": "8429e63e167028c4d11ac8d441a9a32a4e1466c9bab8e7dcb0e9838f92d916b2",
+      "core": "aa1d75d5c1bad31d61116bf93347f292bf2745ee5dc58428af4b8a07eed6c90d",
       "pack": null,
-      "state": "PackAbsent"
+      "state": "PackAbsent",
+      "note": "MAUI residue sweep: dropped the retired client's data-binding paragraph; master pack absent, nothing to carry over"
     },
     {
       "file": "Skill/logon-action.md",
@@ -171,12 +172,6 @@
     {
       "file": "Skill/markdown.md",
       "core": "3d67acbdd76441a2c1ed00ba16436b0065dc42ff6576574a0837f07daf88e4a5",
-      "pack": null,
-      "state": "PackAbsent"
-    },
-    {
-      "file": "Skill/maui.md",
-      "core": "efe405ee0a85674daa6a117f37a61dcde4b1c901e58d1f1200810bfd345d9f99",
       "pack": null,
       "state": "PackAbsent"
     },
@@ -242,9 +237,10 @@
     },
     {
       "file": "Skill/ui-extensibility.md",
-      "core": "3e4174807ed58abbd22546ae0e494f906adc5d6ff6eb8a8e14b12352505ecbd1",
+      "core": "845eb2a1a309d3dc474d5bacfc2b04b62e84593d667e16e429a6f09b28eb55ac",
       "pack": null,
-      "state": "PackAbsent"
+      "state": "PackAbsent",
+      "note": "MAUI residue sweep: dropped the optional MauiViewRegistry step; master pack absent, nothing to carry over"
     }
   ]
 }
