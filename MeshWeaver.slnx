@@ -80,8 +80,6 @@
     <File Path="test/Directory.Build.props" />
     <File Path="test/Directory.Packages.props" />
     <Project Path="src/MeshWeaver.Hosting.Monolith.TestBase/MeshWeaver.Hosting.Monolith.TestBase.csproj" />
-    <Project Path="test/MeshWeaver.AI.Test/MeshWeaver.AI.Test.csproj" />
-    <Project Path="test/MeshWeaver.AI.Test.FakeCli/MeshWeaver.AI.Test.FakeCli.csproj" />
     <Project Path="test/MeshWeaver.Content.Test/MeshWeaver.Content.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Test/MeshWeaver.ContentCollections.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Indexing.Test/MeshWeaver.ContentCollections.Indexing.Test.csproj" />
@@ -114,7 +112,6 @@
     <Project Path="test/MeshWeaver.FutuRe.Test/MeshWeaver.FutuRe.Test.csproj" />
     <Project Path="test/MeshWeaver.AccessControl.Test/MeshWeaver.AccessControl.Test.csproj" />
     <Project Path="test/MeshWeaver.Acme.Test/MeshWeaver.Acme.Test.csproj" />
-    <Project Path="test/MeshWeaver.Threading.Test/MeshWeaver.Threading.Test.csproj" />
     <Project Path="test/MeshWeaver.Todo.Test/MeshWeaver.Todo.Test.csproj" />
     <Project Path="test/MeshWeaver.PathResolution.Test/MeshWeaver.PathResolution.Test.csproj" />
     <Project Path="test/MeshWeaver.Persistence.Test/MeshWeaver.Persistence.Test.csproj" />
