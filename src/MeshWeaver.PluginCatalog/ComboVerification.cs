@@ -103,8 +103,11 @@ public sealed record ComboVerification
     public string? ImageDigest { get; init; }
 
     /// <summary>
-    /// The docker platform (<c>linux/amd64</c>, <c>linux/arm64</c>) the gate actually executed —
-    /// null only for a verdict produced without ever running the gate.
+    /// The docker platform (<c>linux/amd64</c>, <c>linux/arm64</c>) this verdict is ABOUT: for a
+    /// <see cref="ComboVerdictKind.Green"/> or <see cref="ComboVerdictKind.Red"/> the architecture
+    /// the gate executed, and for a <see cref="ComboVerdictKind.NotVerifiable"/> the one it was
+    /// asking for when it could not get an answer. Null when no gate run reached docker at all —
+    /// the combo never assembled, or the orchestration faulted.
     ///
     /// <para>🚨 THE VERDICT IS ABOUT THIS ARCHITECTURE AND NO OTHER. The amd64 and arm64 variants
     /// of one image carry genuinely different bytes (they resolve different framework build
@@ -163,8 +166,16 @@ public sealed record CandidateGateRun
     /// which architecture inside it actually ran.</summary>
     public string? ImageDigest { get; init; }
 
-    /// <summary>The docker platform the run was pinned to (<c>linux/amd64</c>). Null when the
-    /// container never ran.</summary>
+    /// <summary>
+    /// The docker platform every call of this run was PINNED to (<c>linux/amd64</c>) — the
+    /// platform ATTEMPTED, not a claim that a container started. It is set on the failure paths
+    /// too (a pull denied, a pull that timed out), and deliberately: "could not pull the amd64
+    /// bytes" is only legible if the run says which platform it was asking for.
+    ///
+    /// <para>Null only when the run never reached the docker seam at all — the gate orchestration
+    /// itself faulted (<see cref="InstanceComboVerifier"/> folds that into its own
+    /// <see cref="Error"/>), or a test handed in a fake that set none.</para>
+    /// </summary>
     public string? Platform { get; init; }
 
     /// <summary>The structured report the tester wrote (<see cref="GateRunReport.FileName"/>),
