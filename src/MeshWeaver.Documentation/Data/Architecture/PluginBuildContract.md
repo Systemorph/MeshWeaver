@@ -187,64 +187,78 @@ the same way any other plugin arrives. Not staged as source. Not recompiled.
 
 ---
 
-## The build principal — the credential lives in the mesh, not in a cloud tenant
+## The build principal — an identity the mesh TRUSTS, with no secret to keep
 
-Step 2 needs a credential: something has to prove *this build may fetch that publication*. Today
-that proof lives in the wrong place, and the first attempt to wire `upstream-seed` showed exactly
-how: the publications sit on Azure Files, the only thing that can read them is an Azure OIDC
-identity, and that identity's federated credentials are maintained in the Entra tenant — four of
-them, all scoped to `ref:refs/heads/main`, none for `pull_request`, so the gate cannot fetch on the
-one event it exists for. Nothing in the mesh knows those credentials exist, which repos hold one,
-or who authorised them. That is the shape of the plaintext-provider-key incident: a security fact
-with no record a reader can point at.
+Step 2 needs a credential: something has to prove *this build may fetch that publication*. The
+first attempt to wire `upstream-seed` showed where that proof lives today and why it is the wrong
+place: the publications sit on Azure Files, only an Azure OIDC identity can read them, and that
+identity's federated credentials are maintained in the Entra tenant — four of them, all scoped to
+`ref:refs/heads/main`, none for `pull_request`, so the gate cannot fetch on the one event it exists
+for. Nothing in the mesh knows those credentials exist, which repos hold one, or who authorised
+them. That is the shape of the plaintext-provider-key incident: a security fact with no record a
+reader can point at.
 
-**The concept: a BUILD PRINCIPAL.** GitHub has one — the identity a workflow runs as, with its own
-token and its own permissions. MeshWeaver gets the same thing, as a mesh-native identity:
+**The concept: a BUILD PRINCIPAL — GitHub's build identity, recognised by the mesh directly.**
+Every GitHub Actions run already carries a passkey for services: a short-lived OIDC JWT from
+`token.actions.githubusercontent.com`, signed by GitHub, with `repository`, `ref`, `event_name`
+and `job_workflow_ref` as claims. Azure's federated credential is nothing more than *Azure
+verifying that JWT against a rule*. The mesh can verify it itself — and then the build principal is
+a **trust rule on a node**, not a stored secret. Nothing is minted, rotated, pasted into a repo's
+secrets, or leaked.
 
-- **It is a key lane.** The registry already has four — `mwr_` registration, `mwi_` instance,
-  `mwa_` sync-access, `mw_` API — each minted once, stored only as a SHA-256, resolved fail-closed by
-  `InstanceRegistryAuthenticator` (a read failure is a 401, never an allow), indexed by a 12-char
-  hash prefix under `MeshWeaverInstance/_Index/`. A build principal is the fifth lane: `mwb_`.
-- **It is the identity that runs the build queue.** The module-pack lane *already* POSTs to
-  `/api/plugins/bundles` with a registry-issued Bearer token (`PLUGIN_REGISTRY_PUBLISH_TOKEN`), held
-  in the repo's GitHub secrets. That token IS a build principal in all but name; today it has one
-  permission (publish) and no record naming it. The build principal is that token, given a node,
-  a scope, and a second permission.
-- **Its scopes are the two halves of step 2 and step 3:** `publish:<source>` (what this repo may
-  bake INTO the registry) and `fetch:<source>` (what it may install FROM it). A satellite's
-  principal holds `publish:socialmedia` + `fetch:plugins`; it can never publish as Plugins or fetch
-  something it does not depend on.
-- **It is issued by a control node, never by hand** — `Store/BuildPrincipal`, the shape every
-  admin action here already takes (`Store/Provision`, `Store/Enrollment`): a global admin writes
-  `requestedAction: Issue` with the repo and scopes, the watcher mints the raw key ONCE into the
-  node's response, stores only the hash, and the admin pastes the raw key into the repo's secrets.
-  `Revoke` is the same node. The node is the record: which repo, which scopes, who issued it, when
-  it was last presented.
+**It is one more branch of a fork that already exists.** The registry's
+`InstanceRegistryAuthenticator.AuthenticateToken` already verifies *signed* tokens — the `mwa_`
+sync-access JWTs, checked against `SyncTokenSigningKeyService` with key rotation, refusing when it
+cannot verify ("a registry that cannot verify a signature must refuse the token, never accept it
+unverified"). A GitHub OIDC token is the same operation with a different key source: GitHub's
+published JWKS instead of the mesh's own keys. The portal already references
+`Microsoft.Identity.Web`, so the JWKS fetch and signature check are library calls, not new
+dependencies.
 
-**The mechanism: the registry SERVES publications.** The gate should never touch Azure. The portal
-already mounts `/data/prebuilt-bundles`, and the bundle route already has a GET side
-(`FetchIndex`, `ModuleFetchCommand`). Add
-`GET /api/plugins/bundles/prebuilt/<framework-identity>/<source>/` — the sealed publication, under
-the same authenticator, requiring `fetch:<source>` — and `upstream-seed` becomes a `curl` with the
-principal's Bearer token. No OIDC, no federated credential, no per-event subject to forget, and the
-same token that already publishes.
+**The rule lives on `Store/BuildPrincipal`** — a control node in the shape every admin action here
+already takes (`Store/Provision`, `Store/Enrollment`). It records what a stored secret never could:
 
-Why this is the right boundary, and not merely a convenience:
+| field | meaning |
+|---|---|
+| `repository` | `Systemorph/MeshWeaver.SocialMedia` — the `repository` claim it must match |
+| `events` | which `event_name`s may act — `push` on `main` may *publish*; `pull_request` may only *fetch* |
+| `scopes` | `publish:socialmedia`, `fetch:plugins` — what this repo may bake INTO the registry and install FROM it |
+| `issuedBy` / `issuedAt` / `lastSeen` | the audit trail |
 
-| | Azure OIDC credential | Build principal |
+A global admin `create`s it; `requestedAction: Revoke` ends it. `search nodeType:Store/BuildPrincipal`
+lists every repo the mesh trusts and exactly what each may do. There is no key to lose because
+there is no key.
+
+**The security tie is the scope split.** The identity that publishes a source is the identity that
+may fetch what it depends on, and it can do neither outside its scopes: SocialMedia's principal
+holds `publish:socialmedia` + `fetch:plugins`, so it can never publish *as* Plugins and never fetch
+a source it does not declare in `requires`. Both facts are on one node the mesh owns — not split
+between a GitHub secret and an Entra credential that no query can join.
+
+**The mechanism: the registry SERVES publications, so the gate never touches Azure.** The portal
+already mounts `/data/prebuilt-bundles`, and the bundle route already has a GET side (`FetchIndex`,
+`ModuleFetchCommand`). Add `GET /api/plugins/bundles/prebuilt/<framework-identity>/<source>/` under
+the same authenticator, requiring `fetch:<source>` on the presenting principal. `upstream-seed` then
+presents its run's OIDC token — `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, available to any job with
+`id-token: write` — and receives the sealed publication. PR or push is a claim the rule reads, not
+a credential someone had to remember to create.
+
+| | Azure OIDC federated credential | Build principal |
 |---|---|---|
-| where the grant is recorded | Entra tenant | a mesh node an audit query can list |
+| what is stored | a subject rule, in Entra | a subject rule, on a mesh node |
 | who can see which repos may fetch | whoever has tenant access | `search nodeType:Store/BuildPrincipal` |
-| revocation | portal + `az` | `requestedAction: Revoke` |
-| PR vs main | a credential per event subject, per format | one token, the event is irrelevant |
-| tied to the build queue | no — a storage reader, not a build identity | yes — the SAME token that publishes |
+| PR vs main | one credential per event subject, per subject *format* | one node; `event_name` is a claim it reads |
+| secret in the repo | none (already) | none |
+| tied to the build queue | no — a storage reader | yes — the same identity that publishes, scoped |
+| verified by | Azure | the mesh, the way it already verifies `mwa_` tokens |
 
-The last row is the security tie the concept exists for: the identity that may *fetch* a
-publication is the identity that may *publish* one, scoped per source, and both facts live on one
-node the mesh owns.
+The two are the same idea; the difference is **where the rule lives and who can read it**. A rule the
+mesh owns is a rule the mesh can audit, list, and revoke as a node — and it cannot silently drift
+into the state the first `upstream-seed` run found, where every credential covered the wrong event.
 
-**Until this lands** the Azure route in `upstream-seed` works on `main` and fails on PRs; the
-credential gap is recorded on the PRs that hit it, and it is a maintainer decision either way.
+**Until this lands** the Azure route in `upstream-seed` works on `main` and fails on PRs
+(`AADSTS700213`); that is recorded on the PRs that hit it. Provisioning a `pull_request` credential
+in Entra would make it work — and would be one more rule in the wrong place.
 
 ---
 
