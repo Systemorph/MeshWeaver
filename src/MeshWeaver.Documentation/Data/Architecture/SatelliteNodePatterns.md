@@ -92,7 +92,9 @@ private static IMessageDelivery HandleRequest(IMessageHub hub, ...)
 
 > 🚨 `meshService.CreateNodeAsync(...)` still exists as a **back-compat `Task` shim** over the observable
 > (`MeshServiceExtensions`). It is not the pattern — a `Task` on the hub path is the deadlock. Use
-> `meshService.CreateNode(node)` and `Subscribe`.
+> `meshService.CreateNode(node)` and `Subscribe`. It survives only because 58 in-mesh call sites in
+> `MeshWeaver.Reinsurance` still name it and would stop compiling at runtime; see
+> [AsynchronousCalls](../AsynchronousCalls) → "The absolute rules", rule 2, for the exit plan.
 
 ### Allowed Patterns
 
