@@ -13,3 +13,7 @@ of those slots. A sixth entry was accepted everywhere it was written and then re
 at all — which is how one portal's MCP endpoint kept answering 404 while its configuration said it
 was switched on. There is room for ten now, and an entry past that limit fails the build with the
 limit named, rather than disappearing quietly.
+
+The same list had a quieter way to go wrong: because entries are numbered, a new one written over
+an existing number replaced that module's requirement instead of adding to it, and nothing said so.
+A portal now reports at startup exactly which requirement was replaced and what to do about it.
