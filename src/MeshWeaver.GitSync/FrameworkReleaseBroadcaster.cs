@@ -3,7 +3,9 @@ using System.Net.Http.Headers;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -40,6 +42,7 @@ public sealed class FrameworkReleaseBroadcaster
     private readonly IoPoolRegistry ioPools;
     private readonly GitHubAppOptions appOptions;
     private readonly FrameworkBroadcastOptions options;
+    private readonly IConfiguration? configuration;
     private readonly HttpClient http;
     private readonly ILogger? logger;
 
@@ -47,7 +50,11 @@ public sealed class FrameworkReleaseBroadcaster
     /// <param name="tokens">Mints the GitHub App installation token the dispatches authenticate with.</param>
     /// <param name="ioPools">Registry the HTTP I/O pool is resolved from, so every POST runs off the hub.</param>
     /// <param name="appOptions">The App options — reused only for <see cref="GitHubAppOptions.ApiBaseUrl"/> (GHES parity).</param>
-    /// <param name="options">The bound <see cref="FrameworkBroadcastOptions"/> (the config-seam subscriber list + event type).</param>
+    /// <param name="options">The bound <see cref="FrameworkBroadcastOptions"/> (the subscriber list + event type).</param>
+    /// <param name="configuration">The instance configuration — read ONLY to tell a mesh that is not
+    /// the control instance (an empty subscriber list is correct there) from the control instance
+    /// with nobody registered (an empty list there means the wave silently never runs). Optional;
+    /// absent, an empty list is reported as the former.</param>
     /// <param name="logger">Optional logger.</param>
     /// <param name="httpClient">Optional <see cref="HttpClient"/> to reuse; a default one is created when null.</param>
     public FrameworkReleaseBroadcaster(
@@ -55,6 +62,7 @@ public sealed class FrameworkReleaseBroadcaster
         IoPoolRegistry ioPools,
         IOptions<GitHubAppOptions> appOptions,
         IOptions<FrameworkBroadcastOptions> options,
+        IConfiguration? configuration = null,
         ILogger<FrameworkReleaseBroadcaster>? logger = null,
         HttpClient? httpClient = null)
     {
@@ -62,6 +70,7 @@ public sealed class FrameworkReleaseBroadcaster
         this.ioPools = ioPools;
         this.appOptions = appOptions.Value;
         this.options = options.Value;
+        this.configuration = configuration;
         this.logger = logger;
         http = httpClient ?? new HttpClient();
         if (!http.DefaultRequestHeaders.UserAgent.Any())
@@ -107,9 +116,31 @@ public sealed class FrameworkReleaseBroadcaster
         }
         if (repos.Length == 0)
         {
-            logger?.LogInformation(
-                "Framework-release broadcast: no subscribers configured — nothing to dispatch "
-                + "(satellites rebake on their own schedule).");
+            // 🚨 #2235 — THE STATE THAT LOOKED LIKE SUCCESS FOR THREE DAYS. "Nobody to dispatch
+            // to" has two causes that are IDENTICAL in the outcome (0 dispatched, 0 failed), and
+            // telling them apart is the whole defect: on a mesh that does not receive
+            // platform-build deliveries an empty list is the correct, permanent state; on the
+            // CONTROL instance it is a misconfiguration whose only symptom is a wave that never
+            // runs — the release event verifies, the broadcast "succeeds" with zero dispatches,
+            // and nothing anywhere is red. This is the one place in the chain that can see both
+            // facts (the subscriber list AND whether this instance accepts release events), so
+            // it is the one place that can say WHICH happened. The level difference is the
+            // point, not verbosity tuning: it fires once per release, never in a loop.
+            if (AcceptsPlatformBuildDeliveries())
+                logger?.LogWarning(
+                    "Framework-release broadcast: this instance ACCEPTS platform-build deliveries "
+                    + "({Target} is allowlisted in {TargetsKey}) but has NO subscribers, so the "
+                    + "release wave dispatches to nobody and every node repo falls back to its "
+                    + "schedule poll. Set {SubscribersKey}0..N (one owner/name per slot) on this "
+                    + "deployment.",
+                    FrameworkBroadcastOptions.PlatformBuildsTarget,
+                    WebhookInbox.TargetsConfigSection,
+                    FrameworkBroadcastOptions.SubscribersEnvKeyPrefix);
+            else
+                logger?.LogInformation(
+                    "Framework-release broadcast: no subscribers configured and this instance does "
+                    + "not receive platform-build deliveries — nothing to dispatch (satellites "
+                    + "rebake on their own schedule).");
             return Observable.Return(new BroadcastOutcome([]));
         }
 
@@ -137,6 +168,18 @@ public sealed class FrameworkReleaseBroadcaster
                     [.. repos.Select(r => new RepoDispatch(r, false, $"token: {ex.Message}"))]));
             });
     }
+
+    /// <summary>
+    /// Whether THIS instance is the control instance — i.e. its webhook inbox allowlist accepts
+    /// <see cref="FrameworkBroadcastOptions.PlatformBuildsTarget"/>, which is what makes it the
+    /// mesh that receives release events and therefore the one that must have subscribers.
+    /// </summary>
+    private bool AcceptsPlatformBuildDeliveries() =>
+        configuration?.GetSection(WebhookInbox.TargetsConfigSection).GetChildren()
+            .Any(c => string.Equals(
+                WebhookInbox.NormalizeTarget(c.Value),
+                FrameworkBroadcastOptions.PlatformBuildsTarget,
+                StringComparison.OrdinalIgnoreCase)) == true;
 
     // One repo's dispatch, already isolated: a non-2xx status OR a thrown exception both become a
     // RepoDispatch(ok:false), so Concat never short-circuits on the first failure. Invoke, not
