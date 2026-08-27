@@ -75,7 +75,7 @@ public class StaleBuildBannerTest(ITestOutputHelper output) : MonolithMeshTestBa
         };
         await MeshService.CreateNode(typeNode).Should().Within(60.Seconds()).Emit();
 
-        var compiled = await Mesh.Observe(
+        var compiled = await RequestHub.Observe(
                 (IRequest<GetCompilationPathResponse>)new GetCompilationPathRequest(),
                 o => o.WithTarget(new Address(nodeTypePath)))
             .Select(d => d.Message)

@@ -23,7 +23,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Protobuf Include="Protos/mesh.proto" GrpcServices="Both" />
+    <!-- The contract lives in MeshWeaver.Mesh.Contract (one proto, no copies); this project only
+         compiles the server + client stubs from it. -->
+    <Protobuf Include="../MeshWeaver.Mesh.Contract/Protos/mesh.proto" Link="Protos/mesh.proto" GrpcServices="Both" />
   </ItemGroup>
 
   <ItemGroup>

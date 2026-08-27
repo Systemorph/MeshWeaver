@@ -130,7 +130,7 @@ public class FrameworkStaleInstanceRenderTest(ITestOutputHelper output) : Monoli
                     : $"[compile-diag +{diagSw.ElapsedMilliseconds}ms] Content is {n?.Content?.GetType().Name ?? "null"} "
                       + "(NOT NodeTypeDefinition — untyped JsonElement?)"));
 
-        await Mesh.Observe(new GetCompilationPathRequest(), o => o.WithTarget(new Address(nodeTypePath)))
+        await RequestHub.Observe(new GetCompilationPathRequest(), o => o.WithTarget(new Address(nodeTypePath)))
             .Should().Within(90.Seconds()).Emit();
         await workspace.GetMeshNodeStream(nodeTypePath)
             .Should().Within(60.Seconds())

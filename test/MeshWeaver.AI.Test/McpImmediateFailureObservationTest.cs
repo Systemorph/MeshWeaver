@@ -60,7 +60,7 @@ public class McpImmediateFailureObservationTest(ITestOutputHelper output) : Mono
         // Observe(request, options) posts EAGERLY and registers the response subject
         // BEFORE the post. Hold the returned observable WITHOUT subscribing.
         var deletedAddress = new Address($"{TestPartition}/{doomedId}");
-        var pending = Mesh.Observe(
+        var pending = RequestHub.Observe(
             new MoveNodeRequest($"{TestPartition}/{doomedId}", $"{TestPartition}/dest-{Guid.NewGuid():N}"),
             o => o.WithTarget(deletedAddress));
 
@@ -70,8 +70,8 @@ public class McpImmediateFailureObservationTest(ITestOutputHelper output) : Mono
         // this is the interleaving in which the old Post-then-Observe(delivery)
         // shape had already dropped it.
         var fenceAddress = new Address($"{TestPartition}/{fenceId}");
-        await Mesh.Observe(new PingRequest(), o => o.WithTarget(fenceAddress)).Should().Emit();
-        await Mesh.Observe(new PingRequest(), o => o.WithTarget(fenceAddress)).Should().Emit();
+        await RequestHub.Observe(new PingRequest(), o => o.WithTarget(fenceAddress)).Should().Emit();
+        await RequestHub.Observe(new PingRequest(), o => o.WithTarget(fenceAddress)).Should().Emit();
 
         // LATE subscribe: the buffered terminal event must still be delivered —
         // as a response (Move handler answering Success=false) or as an error

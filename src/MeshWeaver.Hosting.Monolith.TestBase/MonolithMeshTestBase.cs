@@ -974,9 +974,19 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
     /// <summary>
     /// Test-only Task wrapper around <see cref="MessageHubExtensions.Observe{TResponse}"/>:
-    /// posts <paramref name="request"/> via <paramref name="hub"/> (defaults to <see cref="Mesh"/>)
-    /// and awaits the typed response, propagating <see cref="DeliveryFailureException"/> /
-    /// <see cref="TimeoutException"/> as the awaited Task's exception.
+    /// posts <paramref name="request"/> via <paramref name="hub"/> (defaults to
+    /// <see cref="RequestHub"/>, NOT <see cref="Mesh"/> — see that property for why the router must
+    /// not be an end of the delivery) and awaits the typed response, propagating
+    /// <see cref="DeliveryFailureException"/> / <see cref="TimeoutException"/> as the awaited Task's
+    /// exception.
+    /// <para>
+    /// 🚨 The default hub is a CLIENT, so a TARGET-LESS request is delivered to that client, which
+    /// has no handlers. Node CRUD must therefore name its target —
+    /// <c>o =&gt; o.WithTarget(RequestHub.NodeOperationTarget())</c>, or use
+    /// <see cref="ObserveNodeOperation{TResponse}"/>. Before #2423 the default was <see cref="Mesh"/>
+    /// and a target-less request silently EXECUTED on the router's action block, which is the
+    /// starvation shape the <c>ROUTER_TRAFFIC</c> detector exists to surface.
+    /// </para>
     /// <para>
     /// Use ONLY in test code — production hub handlers / click actions / services MUST stay
     /// on the observable form (<c>hub.Observe(request).Subscribe(...)</c>). The Task return
@@ -1009,7 +1019,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     {
         try
         {
-            return await (hub ?? Mesh).Observe(request, options)
+            return await (hub ?? RequestHub).Observe(request, options)
                 .FirstAsync()
                 .ToTask(ct ?? TestContext.Current.CancellationToken);
         }
@@ -1145,8 +1155,93 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         return client;
     }
 
+    private IMessageHub? _requestHub;
+    private readonly object _requestHubLock = new();
+
+    /// <summary>
+    /// 🚨 The DEFAULT request origin for a test that addresses a NODE — use this, never
+    /// <see cref="Mesh"/>. One lazily-created <see cref="GetClient"/> client hub per test method,
+    /// disposed with the rest at teardown.
+    ///
+    /// <para><see cref="Mesh"/> resolves the ROOT <c>mesh/{id}</c> hub — the mesh's ROUTER.
+    /// <c>Mesh.Observe(request, o =&gt; o.WithTarget(new Address(nodePath)))</c> therefore makes the
+    /// router an END of the delivery in BOTH directions: the request goes out stamped
+    /// <c>Sender = mesh/{id}</c> and its response is addressed straight back at <c>mesh/{id}</c>.
+    /// That is exactly what the <c>ROUTER_TRAFFIC</c> detector reports
+    /// (<c>RouterTrafficRule.RoleOf</c>), and because the detector fires once per
+    /// role+message-type it costs every affected test class two <c>[Error]</c> lines — errors that
+    /// everyone learns to ignore, which is how a real router-starvation report gets missed (#2423).
+    /// It is also the wrong SHAPE: no production caller drives the mesh from the router. Requests
+    /// come from an MCP session hub, the Blazor portal hub, a layout-area hub, a per-node hub — a
+    /// hub whose traffic the router merely FORWARDS. This client hub is the test-side equivalent,
+    /// and the router is then only a hop, which the detector deliberately does not report.</para>
+    ///
+    /// <para>Two shapes do NOT use this property directly. A test whose subject IS the router —
+    /// the mesh hub's own drain, or its callback bookkeeping — keeps using <see cref="Mesh"/>, and
+    /// says so at the site. Node CRUD uses <see cref="ObserveNodeOperation{TResponse}"/>: it needs
+    /// an explicit target as well as a non-router origin, because a target-less delivery is handled
+    /// by the POSTING hub and this one is a client with no handlers.</para>
+    ///
+    /// <para>Sibling of the private <c>ReadHub</c>, which makes the same argument for single-node
+    /// reads. A test that needs a client with extra wiring (<c>AddData()</c>, a layout client, a
+    /// second isolated identity) still calls <see cref="GetClient"/> directly — this property is
+    /// the default, not the only option; classes that need it wired differently override
+    /// <see cref="ConfigureClient"/>.</para>
+    /// </summary>
+    protected IMessageHub RequestHub
+    {
+        get
+        {
+            lock (_requestHubLock)
+                return _requestHub ??= GetClient();
+        }
+    }
+
+    /// <summary>
+    /// Issues a NODE-CRUD request (<c>CreateNodeRequest</c>, <c>CreateNodesRequest</c>,
+    /// <c>CreateOrUpdateNodeRequest</c>, <c>DeleteNodeRequest</c>, <c>MoveNodeRequest</c>,
+    /// <c>CopyNodeRequest</c>) exactly as production does: posted from a client hub and ADDRESSED at
+    /// <see cref="MeshExtensions.NodeOperationTarget"/> — the mesh's dedicated
+    /// <c>portal/nodeops-{meshId}</c> execution hub.
+    ///
+    /// <para>🚨 Node CRUD is the one shape where "not the router" is not enough. A test used to
+    /// either aim it at <c>Mesh.Address</c> or leave it TARGET-LESS, and a target-less delivery is
+    /// handled by the POSTING hub — both of which ran the write on the router's single-threaded
+    /// action block. A burst there starves the routing the mesh hub exists to do (prod 2026-06-11:
+    /// "11× CreateOrUpdateNodeRequest + 3× CreateNodeRequest@mesh/&lt;self&gt; stale &gt;60s while
+    /// real user SubscribeRequests starved"). <c>MeshService</c> stopped doing that; this helper is
+    /// how a test that posts the raw request stops too. Both ends of the resulting delivery are the
+    /// nodeops hub, so nothing about it touches the router — the shape
+    /// <c>NodeOperationOriginTest</c> pins by reading <c>RouterTrafficRule.RoleOf</c> over a real
+    /// delivery.</para>
+    ///
+    /// <para>Cold: the underlying <c>Observe</c> posts on CALL, so the request is issued when this
+    /// method runs, and the returned observable replays the response to any later subscriber.</para>
+    /// </summary>
+    /// <typeparam name="TResponse">The response type declared by <paramref name="request"/>.</typeparam>
+    /// <param name="request">The node-operation request.</param>
+    /// <param name="options">
+    /// Optional further delivery configuration (an explicit <c>AccessContext</c>, properties). It is
+    /// applied AFTER the target, so a caller that genuinely needs a different target can still
+    /// override it.
+    /// </param>
+    /// <returns>The response delivery observable.</returns>
+    protected IObservable<IMessageDelivery<TResponse>> ObserveNodeOperation<TResponse>(
+        IRequest<TResponse> request,
+        Func<PostOptions, PostOptions>? options = null)
+    {
+        var hub = RequestHub;
+        var target = hub.NodeOperationTarget();
+        return hub.Observe(request, o =>
+        {
+            o = o.WithTarget(target);
+            return options is null ? o : options(o);
+        });
+    }
+
     private void DisposeTestClients(string testName, Stopwatch sw)
     {
+        lock (_requestHubLock) _requestHub = null;
         IMessageHub[] snapshot;
         lock (_clientsCreated)
         {

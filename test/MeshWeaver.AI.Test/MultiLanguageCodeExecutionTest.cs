@@ -82,7 +82,7 @@ public class MultiLanguageCodeExecutionTest(ITestOutputHelper output) : Monolith
             }
         }).Should().Within(30.Seconds()).Emit();
 
-        var exec = (await Mesh.Observe(new ExecuteScriptRequest(), o => o.WithTarget(new Address($"{Partition}/{id}")))
+        var exec = (await RequestHub.Observe(new ExecuteScriptRequest(), o => o.WithTarget(new Address($"{Partition}/{id}")))
             .Should().Within(60.Seconds()).Emit()).Message;
         exec.Success.Should().BeTrue(exec.Error ?? "exec failed");
 
@@ -116,7 +116,7 @@ public class MultiLanguageCodeExecutionTest(ITestOutputHelper output) : Monolith
             }
         }).Should().Within(30.Seconds()).Emit();
 
-        var exec = (await Mesh.Observe(new ExecuteScriptRequest(), o => o.WithTarget(new Address($"{Partition}/{id}")))
+        var exec = (await RequestHub.Observe(new ExecuteScriptRequest(), o => o.WithTarget(new Address($"{Partition}/{id}")))
             .Should().Within(60.Seconds()).Emit()).Message;
         // The run STARTS (the ActivityLog is created); the no-worker failure surfaces on that log,
         // exactly like an in-process C# script error does.
@@ -185,7 +185,7 @@ public class MultiLanguageCodeExecutionTest(ITestOutputHelper output) : Monolith
             Content = new CodeConfiguration { Language = language, IsExecutable = true, Code = "run" }
         }).Should().Within(30.Seconds()).Emit();
 
-        var exec = (await Mesh.Observe(new ExecuteScriptRequest(), o => o.WithTarget(new Address($"{Partition}/{id}")))
+        var exec = (await RequestHub.Observe(new ExecuteScriptRequest(), o => o.WithTarget(new Address($"{Partition}/{id}")))
             .Should().Within(60.Seconds()).Emit()).Message;
         exec.Success.Should().BeTrue(exec.Error ?? "exec failed");
 

@@ -55,7 +55,7 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
         // deadlock symptom. With the fix the routing service returns a
         // NotFound DeliveryFailure within milliseconds, which the framework
         // surfaces as DeliveryFailureException on the observable.
-        Func<Task> act = async () => await Mesh.Observe<GetPermissionResponse>(
+        Func<Task> act = async () => await RequestHub.Observe<GetPermissionResponse>(
                 new GetPermissionRequest(),
                 o => o.WithTarget(new Address(missingPath)))
             .FirstAsync().ToTask();
@@ -84,7 +84,7 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
         var deepMissingPath =
             $"{TestPartition}/_Thread/{Guid.NewGuid():N}/{Guid.NewGuid():N}/{Guid.NewGuid():N}/{Guid.NewGuid():N}";
 
-        Func<Task> act = async () => await Mesh.Observe<GetPermissionResponse>(
+        Func<Task> act = async () => await RequestHub.Observe<GetPermissionResponse>(
                 new GetPermissionRequest(),
                 o => o.WithTarget(new Address(deepMissingPath)))
             .FirstAsync().ToTask();
@@ -107,7 +107,7 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
         // quickly, NOT throw DeliveryFailure.
         var existingPath = TestPartition;
 
-        var delivery = await Mesh.Observe<GetPermissionResponse>(
+        var delivery = await RequestHub.Observe<GetPermissionResponse>(
                 new GetPermissionRequest(),
                 o => o.WithTarget(new Address(existingPath)))
             .Should().Within(20.Seconds()).Emit();

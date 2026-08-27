@@ -251,10 +251,12 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         var child = new MeshNode("HierChild", $"{TestPartition}/HierParent") { Name = "Child", NodeType = "Markdown" };
         await NodeFactory.CreateNode(child).Should().Emit();
 
-        // DeleteNodeRequest handler lives on the mesh hub — target Mesh.Address, not the partition hub.
-        var deleteResponse = await Mesh.Observe(
-                new DeleteNodeRequest($"{TestPartition}/HierParent"),
-                o => o.WithTarget(Mesh.Address))
+        // The DeleteNodeRequest handler lives on the mesh's node-operation EXECUTION hub, not on the
+        // partition hub — and not on the ROUTER either: NodeOperationTarget resolves the dedicated
+        // portal/nodeops-{meshId} hub, so neither end of the delivery is mesh/{id} (#2423). Issue it
+        // from a client, exactly as NodeOperationOriginTest pins the production shape.
+        var deleteResponse = await ObserveNodeOperation(
+                new DeleteNodeRequest($"{TestPartition}/HierParent"))
             .Should().Emit();
 
         deleteResponse.Message.Success.Should().BeFalse();
