@@ -112,7 +112,7 @@ public class ViewerRoutedScriptRunTest(ITestOutputHelper output) : MonolithMeshT
         SignInAsOrdinaryUser();
         try
         {
-            var dispatch = (await Mesh
+            var dispatch = (await RequestHub
                 .Observe<ExecuteScriptResponse>(
                     new ExecuteScriptRequest(), o => o.WithTarget(new Address(ScriptPath)))
                 .Should().Within(60.Seconds()).Emit()).Message;
@@ -151,7 +151,7 @@ public class ViewerRoutedScriptRunTest(ITestOutputHelper output) : MonolithMeshT
         SignInAsOrdinaryUser();
         try
         {
-            var dispatch = (await Mesh
+            var dispatch = (await RequestHub
                 .Observe<ExecuteScriptResponse>(
                     new ExecuteScriptRequest(), o => o.WithTarget(new Address(ScriptPath)))
                 .Should().Within(60.Seconds()).Emit()).Message;

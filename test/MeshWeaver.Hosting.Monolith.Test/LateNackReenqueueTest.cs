@@ -45,7 +45,7 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
                 new MeshNode("late-nack-node", TestPartition) { Name = "initial", NodeType = "Markdown" })
             .Should().Emit();
 
-        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+        await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
             .Should().Emit();
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
@@ -88,7 +88,7 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
 
             // Fence: the patch handler has provably run on the owner (registered the
             // disposal NACK) before the dispose below.
-            await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+            await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
                 .Should().Within(10.Seconds()).Emit();
 
             // Dispose the owner AFTER the optimistic emit — its OwnerDisposing NACK

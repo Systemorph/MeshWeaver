@@ -70,14 +70,14 @@ public class PatchDataRequestTest : MonolithMeshTestBase
         // Post the PatchDataRequest with only { name: "Patched" } — the hub handler
         // applies this as a merge patch on its own MeshNode workspace stream.
         var patchJson = JsonSerializer.Serialize(new { name = "Patched" });
-        var patchResp = (await Mesh.Observe(
+        var patchResp = (await RequestHub.Observe(
             new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson)),
             o => o.WithTarget(new Address(path)))
             .Should().Emit()).Message;
         patchResp.Success.Should().BeTrue(patchResp.Error ?? "no error provided");
 
         // Round-trip: GetDataRequest on MeshNodeReference must see the merged state.
-        var getResponse = await Mesh.Observe(
+        var getResponse = await RequestHub.Observe(
             new GetDataRequest(new MeshNodeReference()),
             o => o.WithTarget(new Address(path)))
             .Should().Emit();
@@ -112,7 +112,7 @@ public class PatchDataRequestTest : MonolithMeshTestBase
         var path = $"ACME/{id}";
 
         // Intervening write (no base ⇒ applies last-write-wins): uppercase word 1, Quantity 1 → 5.
-        (await Mesh.Observe(
+        (await RequestHub.Observe(
             new PatchDataRequest(new MeshNodeReference(),
                 new RawJson("""{"name":"HELLO world","content":{"quantity":5}}""")),
             o => o.WithTarget(new Address(path))).Should().Emit())
@@ -120,7 +120,7 @@ public class PatchDataRequestTest : MonolithMeshTestBase
 
         // Reordered/stale patch: computed against the ORIGINAL base ("hello world", quantity 1).
         // It uppercases word 2 and tries to set Quantity 9.
-        (await Mesh.Observe(
+        (await RequestHub.Observe(
             new PatchDataRequest(new MeshNodeReference(),
                 new RawJson("""{"name":"hello WORLD","content":{"quantity":9}}"""))
             {
@@ -129,7 +129,7 @@ public class PatchDataRequestTest : MonolithMeshTestBase
             o => o.WithTarget(new Address(path))).Should().Emit())
             .Message.Success.Should().BeTrue();
 
-        var node = (await Mesh.Observe(new GetDataRequest(new MeshNodeReference()),
+        var node = (await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()),
             o => o.WithTarget(new Address(path))).Should().Emit()).Message.Data as MeshNode;
         node.Should().NotBeNull();
         node!.Name.Should().Be("HELLO WORLD",

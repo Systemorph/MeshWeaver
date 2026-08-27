@@ -151,11 +151,11 @@ public class CancellationIsNotAFaultTest(ITestOutputHelper output) : MonolithMes
             Name = "Doomed", NodeType = "Markdown", Content = "victim",
         };
         var created = await AwaitResponseAsync<CreateNodeResponse>(
-            new CreateNodeRequest(node), o => o.WithTarget(Mesh.Address));
+            new CreateNodeRequest(node), o => o.WithTarget(RequestHub.NodeOperationTarget()));
         created.Message.Success.Should().BeTrue("the fixture needs a node to delete");
 
         var deleted = await AwaitResponseAsync<DeleteNodeResponse>(
-            new DeleteNodeRequest(node.Path), o => o.WithTarget(Mesh.Address));
+            new DeleteNodeRequest(node.Path), o => o.WithTarget(RequestHub.NodeOperationTarget()));
 
         deleted.Message.Success.Should().BeFalse("the delete did not happen");
         deleted.Message.Error.Should().Contain("cancelled",
@@ -206,7 +206,7 @@ public class CancellationIsNotAFaultTest(ITestOutputHelper output) : MonolithMes
             Name = id, NodeType = "Markdown", Content = "fixture",
         };
         var response = await AwaitResponseAsync<CreateNodeResponse>(
-            new CreateNodeRequest(node), o => o.WithTarget(Mesh.Address));
+            new CreateNodeRequest(node), o => o.WithTarget(RequestHub.NodeOperationTarget()));
         return response.Message;
     }
 

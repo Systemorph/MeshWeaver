@@ -55,7 +55,7 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
 
         // The observable must ERROR (routing fails fast). Materialize folds the
         // OnError into a value so we assert it reactively — no await, no ThrowAsync.
-        var notification = await Mesh.Observe(new CreateCommentRequest
+        var notification = await RequestHub.Observe(new CreateCommentRequest
                 {
                     DocumentId = "NonExistent/Document/definitely-not-here",
                     SelectedText = "foo",
