@@ -546,8 +546,68 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             or HttpRequestException
             or TimeoutException
             or global::Orleans.Runtime.OrleansMessageRejectionException
+            || IsDirectoryUnstable(ex)
             || (ex.InnerException != null && IsTransientFailure(ex.InnerException));
     }
+
+    /// <summary>
+    /// Orleans could not ADDRESS the call because its own grain directory is mid-handoff — a silo is
+    /// joining or leaving and the directory partition that owns the target's entry has not settled.
+    /// Every rolling deploy produces this window, and it is over in seconds.
+    ///
+    /// <para>🚨 <b>Why this needs its own predicate at all, and why the type test above cannot see
+    /// it — issue #1742 / #2357.</b> Orleans' <c>MessageCenter.OnAddressingFailure</c> rejects the
+    /// message with <c>RejectionTypes.Unrecoverable</c> AND the causing exception attached, and the
+    /// caller-side <c>CallbackData.HandleRejectionResponse</c> resolves that as
+    /// <c>rejection?.Exception ?? new OrleansMessageRejectionException(…)</c> — <b>the carried
+    /// exception WINS</b>. So the caller does not receive the
+    /// <see cref="global::Orleans.Runtime.OrleansMessageRejectionException"/> the line above matches;
+    /// it receives the BARE <c>Orleans.Runtime.OrleansException</c>
+    /// <c>LocalGrainDirectory.LookupAsync</c> threw. Nothing in the classifier matched it, so the
+    /// delivery was never retried and was reported to the sender as TERMINAL — for a condition
+    /// Orleans' own message ends with the words "Retry later.".</para>
+    ///
+    /// <para><b>This is not a retry bolted onto a failure.</b> The retry-with-fresh-resolve already
+    /// exists (<c>RoutingGrain.DeliverToGrainObservable</c>, <see cref="DispatchObservable"/>) and is
+    /// already applied to exactly this class of condition; the defect was that the classifier
+    /// gating it could not read this input, which is the same inert-classifier shape as #2451's
+    /// <c>GetFailureErrorType</c>. Recognising the condition is what makes the existing machinery
+    /// reachable — nothing new spins.</para>
+    ///
+    /// <para>🚨 <b>Matched on the message, deliberately, and PINNED by a test.</b> Orleans gives this
+    /// condition no type of its own — it is a bare <c>OrleansException</c>, whose other uses
+    /// (extension not installed, a limit exceeded) are genuinely terminal, so widening the type test
+    /// would make real defects retry six times. Text classification is this codebase's established
+    /// contract for precisely this decision — see <see cref="ClassifyRoutedFailure"/>, which lists
+    /// the four layers that already do it. <c>OrleansDirectoryInstabilityClassificationTest</c> pins
+    /// both phrases against the shipped Orleans build: <b>if that test fails after an Orleans
+    /// upgrade, this classifier has gone INERT — repair the phrase, never delete the test.</b></para>
+    /// </summary>
+    /// <param name="ex">The exception a grain call faulted with.</param>
+    /// <returns><c>true</c> when the grain directory said "ask again once membership settles".</returns>
+    internal static bool IsDirectoryUnstable(Exception ex) =>
+        (ex is global::Orleans.Runtime.OrleansException
+         && (ex.Message.Contains(DirectoryRetryLaterMarker, StringComparison.OrdinalIgnoreCase)
+             || ex.Message.Contains(DirectoryHopLimitMarker, StringComparison.OrdinalIgnoreCase)))
+        // Walks its own inner chain rather than relying on a caller's: this is consulted BOTH from
+        // IsTransientFailure (which walks) and from RoutingGrain.ClassifyDeliveryException (which
+        // does not, and which is handed an AggregateException by PostFailure's two-transport arm).
+        || (ex is AggregateException aggregate
+            ? aggregate.InnerExceptions.Any(IsDirectoryUnstable)
+            : ex.InnerException is not null && IsDirectoryUnstable(ex.InnerException));
+
+    /// <summary>
+    /// Orleans' own instruction, from <c>"Current directory at {silo} is not stable to perform the
+    /// lookup for grainId {id} (it maps to {silo}, which is not a valid silo). Retry later."</c>
+    /// </summary>
+    internal const string DirectoryRetryLaterMarker = "Retry later";
+
+    /// <summary>
+    /// The directory-handoff variant, from <c>"Silo {silo} is not owner of {grainId}, cannot forward
+    /// LookUpAsync to owner {silo} because hop limit is reached"</c> — the shape prod logged during
+    /// two rolling deploys (issue #2357).
+    /// </summary>
+    internal const string DirectoryHopLimitMarker = "hop limit is reached";
 
     /// <summary>
     /// How the SENDER should read a delivery the grain returned <see cref="MessageDeliveryState.Failed"/>:

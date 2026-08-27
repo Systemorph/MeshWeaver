@@ -129,6 +129,56 @@ That last row is the one that matters most and the one a producer-side check can
 *reply* cannot be delivered, the party that needs to know is the original requester — and it is
 precisely the party that is unreachable. Making the reply land is the only answer.
 
+## 🚨 What the swap traded — read this before calling #1742 closed
+
+The table above is about the *stream's* residuals, and it is accurate. It is also only half the
+ledger, because **the directed call is not free of a shared dependency — it moved onto a different
+one.** Orleans' own grain directory is the address→silo map (that is the whole trick, and why this
+design needed no directory of ours). The grain directory is *also* the component that is unstable
+while cluster membership changes — i.e. during a rolling deploy, which is the exact window every
+production symptom in #1729 / #1742 was measured in. Same window, new dependency:
+
+```
+Orleans cannot address the call
+  → MessageCenter.OnAddressingFailure
+  → RejectMessage(msg, RejectionTypes.Unrecoverable, ex)     ← the DIRECTORY's exception, attached
+  → caller: CallbackData.HandleRejectionResponse
+        exception = rejection?.Exception ?? new OrleansMessageRejectionException(…)
+                    ^^^^^^^^^^^^^^^^^^^^ the carried one WINS
+  → RoutingGrain sees a BARE Orleans.Runtime.OrleansException
+        "…is not stable to perform the lookup … Retry later."
+        "…cannot forward LookUpAsync to owner … because hop limit is reached"
+```
+
+`RoutingGrain.IsTransientFailure` matched `TimeoutException` and
+`OrleansMessageRejectionException` — neither of which this is. So for a condition whose own message
+ends in *"Retry later."*:
+
+1. the delivery was **never retried**, although the retry-with-fresh-resolve primitive it needed was
+   already sitting one line away and already applied to exactly this class of condition;
+2. both exception arms then NACK'd the sender with a **hard-coded terminal `ErrorType.Failed`** — the
+   same defect #2346 / #2451 removed from the neighbouring `result.State == Failed` arm and left
+   standing on these two. That verdict is what costs a *subscription* rather than a message:
+   `SynchronizationStream`'s resubscribe latch and `MeshNodeStreamCache.IsTransientOwnerFailure` ride
+   out `ShuttingDown` and **tear down** on `Failed`;
+3. and when `PostFailure`'s own directed NACK hit the same unstable directory it took
+   `LogUndeliverableNack` — the stream fallback was reached only for `PodHubNotHereException` — so
+   the sender was told **nothing at all**. That is #1742's headline symptom, reproduced on the
+   transport that replaced it.
+
+Production evidence: **#2357**, 16 occurrences across two rolling deploys, naming
+`IPodHubGrain.Deliver` and `IMessageHubGrain.DeliverMessage` among the dropped targets.
+
+**The cure is classification, not a new mechanism** (`OrleansRoutingService.IsDirectoryUnstable`,
+`RoutingGrain.ClassifyDeliveryException`, and `PostFailure` falling back to the stream on ANY failed
+directed NACK rather than only on `PodHubNotHere`). Nothing new spins: the retry existed and was
+unreachable, which is the same inert-classifier shape as #2451.
+
+> 🚨 **This is also why the "durable stream provider" decision does NOT close #1742.** A durable
+> provider improves the *fallback* — residual A below, plus hubs owned by an Orleans client process.
+> It cannot touch the primary reply path, because the directed call never goes near the stream
+> provider. Size that decision on #2320 / #2322 (both stream-leg tickets), not on this issue.
+
 ## Related
 
 - [Orleans Stream Pub-Sub Durability](/Doc/Architecture/OrleansStreamPubSubDurability) — the defect,
