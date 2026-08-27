@@ -2,7 +2,6 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
-using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -589,16 +588,58 @@ public static class PluginGateRunner
                     () => meshHub ?? throw new InvalidOperationException(
                         "the gate mesh was asked for prebuilt assemblies before it finished booting"),
                     seed);
+            // 🚨 The AI engine is a MODULE (#2276), and the gate activates it the way a portal
+            // does: the csproj's closure lane laid modules/MeshWeaver.AI/ beside this binary, and
+            // this in-memory configuration is the gate's Modules:Assemblies. The engine matters
+            // here because plugin packages ship Agent and Skill nodes — without the AI node types
+            // those installs are refused "not registered". Features:StaticRepoSync:Partitions
+            // names ONE AI partition; the module's served-as-a-unit rule
+            // (AiMeshModuleAttribute.ServeFromPartitions) unions in the rest, so this cannot go
+            // stale when the engine gains a partition. The DB-served shape is load-bearing, not a
+            // preference: a statically-served AI partition refuses Agent/Skill package installs
+            // (StaticShadowedReason — the 2026-08-11 30s-hang-per-package incident).
+            var gateModules = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Modules:Assemblies:0"] = "MeshWeaver.AI.dll",
+                    // The .dll suffix is the convention every host uses AND load-bearing: the
+                    // resolver derives the folder with GetFileNameWithoutExtension, so a bare
+                    // "MeshWeaver.AI" would probe modules/MeshWeaver/ and read as absent.
+                    ["Modules:Required:0"] = "MeshWeaver.AI.dll",
+                    ["Features:StaticRepoSync:Partitions:0"] = "Agent",
+                })
+                .Build();
+            // 🚨 A gate never tests its own inputs (AGENTS.md): a missing engine module fails RED
+            // here, never a booted mesh without the AI node types that then refuses every install
+            // for a reason naming the wrong cause.
+            var missingModules = MeshBuilderModuleActivation.MissingRequired(
+                gateModules, MeshBuilder.ResolveModulePath, File.Exists);
+            if (missingModules.Length > 0)
+                throw new InvalidOperationException(
+                    "the gate's required module(s) did not resolve beside the binary: "
+                    + string.Join(", ", missingModules)
+                    + ". The MeshModulesPublish closure lane in MeshWeaver.PluginTester.csproj "
+                    + "lays modules/MeshWeaver.AI/ into the build and publish output — a run "
+                    + "whose layout is missing cannot gate.");
             var builder = new MeshBuilder(c => c.Invoke(services), AddressExtensions.CreateMeshAddress())
                 .UseMonolithMesh()
                 .AddInMemoryPersistence()
                 .AddRowLevelSecurity()
                 .AddGraph()
                 .AddSpaceType()
-                // The AI node types (Agent / Skill / Model / …) — plugin packages ship Agent
-                // and Skill nodes (LinkedIn, Feedback, ExplainerVideo), and a portal always
-                // registers these; without them those installs are refused "not registered".
-                .AddAI(MeshWeaver.AI.AiContentSources.ContentPartitions)
+                // The gate runs NO boot static-repo import (its content arrives through package
+                // installs), so the import-settled signal is registered PRE-SETTLED — the
+                // documented "nothing to import" state. The AI module's provider-credential seed
+                // resolves it, and anything sequencing on it proceeds immediately instead of
+                // waiting for an import that will never run here.
+                .ConfigureServices(s =>
+                {
+                    var settled = new StaticRepoImportSettled();
+                    settled.MarkSettled();
+                    return s.AddSingleton(settled);
+                })
+                .InstallConfiguredModules(gateModules,
+                    msg => output.WriteLine($"[gate modules] {msg}"))
                 .AddPluginCatalog()
                 .AddMeshNodes(RootAdminAccess())
                 // Per-run isolated assembly store + compilation cache (AddInMemoryPersistence
