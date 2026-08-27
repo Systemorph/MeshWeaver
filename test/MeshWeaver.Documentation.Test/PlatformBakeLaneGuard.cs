@@ -39,6 +39,58 @@ public class PlatformBakeLaneGuard
     private const string Workflow = ".github/workflows/main-cd.yml";
     private const string JobName = "publish-bake";
 
+    /// <summary>
+    /// <b>A bake-only reconcile must still know WHICH release it is making available.</b>
+    ///
+    /// <para><c>portal-image</c> mints the version per run and is SKIPPED on a bake-only run, so
+    /// its output is empty there. The first reconcile that ever fired (2026-08-27, run
+    /// 33063843072 — the cron was starved until #2491) published the bake and then died in the
+    /// availability assert on an empty argument, having also written no release marker: the one
+    /// thing a reconcile exists to heal was the one thing it could not do. The version is not
+    /// recomputable (it carries the original run's number) but it IS recorded — promote's Phase C
+    /// tags the promoted image with it — so a single <c>release</c> step resolves it (this run's
+    /// output, else the promoted image's tag set) and EVERY consumer reads that step.</para>
+    ///
+    /// <para>Pinned structurally: inside the job, the raw <c>needs.portal-image.outputs.version</c>
+    /// may appear exactly once — as the input of the step whose <c>id</c> is <c>release</c> — and
+    /// the publish and the assert must read <c>steps.release.outputs.version</c>. A second raw
+    /// consumer is the regression: correct on every push, empty on every reconcile.</para>
+    /// </summary>
+    [Fact]
+    public void PlatformBake_ResolvesTheReleaseVersionOnce_AndEveryConsumerReadsIt()
+    {
+        var job = ExecutableLinesOf(ReadJobBlock());
+        var lines = job.Split('\n');
+
+        var rawRefs = lines.Where(l => l.Contains("needs.portal-image.outputs.version", StringComparison.Ordinal)).ToList();
+        Assert.True(rawRefs.Count == 1,
+            $"'{JobName}' in {Workflow} must read needs.portal-image.outputs.version in exactly ONE place — the "
+            + "`release` step that resolves the version for the whole job (this run's, else the promoted image's "
+            + $"tag). Found {rawRefs.Count}: on a bake-only reconcile that output is EMPTY, so any other consumer "
+            + "publishes under no version and the availability assert dies on `${1:?usage}`.");
+
+        var releaseStep = Array.FindIndex(lines, l => l.Trim() == "id: release");
+        Assert.True(releaseStep >= 0, $"'{JobName}' must carry a step with `id: release` that resolves the release version.");
+        var rawAt = Array.FindIndex(lines, l => l.Contains("needs.portal-image.outputs.version", StringComparison.Ordinal));
+        Assert.True(Math.Abs(rawAt - releaseStep) <= 6,
+            "the single needs.portal-image.outputs.version read must be the `release` step's own input "
+            + $"(line {rawAt} vs `id: release` at line {releaseStep}).");
+
+        var release = lines.Skip(releaseStep).TakeWhile((l, i) => i == 0 || !l.TrimStart().StartsWith("- name:", StringComparison.Ordinal));
+        var releaseText = string.Join('\n', release);
+        Assert.True(releaseText.Contains("az acr manifest list-metadata", StringComparison.Ordinal)
+                    && releaseText.Contains("memex-portal-ai", StringComparison.Ordinal),
+            "on a bake-only run the `release` step must recover the version from the PROMOTED image's tags "
+            + "(az acr manifest list-metadata … memex-portal-ai) — the record promote's Phase C wrote and "
+            + "SelfUpdateHostedService rolls from — never recompute or invent one.");
+        Assert.True(releaseText.Contains("exit 1", StringComparison.Ordinal),
+            "a sha with no version tag was never armed as a release; the step must STOP (exit 1), not fall back.");
+
+        var consumers = lines.Count(l => l.Contains("RELEASE_VERSION: ${{ steps.release.outputs.version }}", StringComparison.Ordinal));
+        Assert.True(consumers >= 2,
+            $"both the publish step and the availability assert must read steps.release.outputs.version (found {consumers}).");
+    }
+
     [Fact]
     public void PlatformBake_RunsInsideTheShippedImage()
     {
