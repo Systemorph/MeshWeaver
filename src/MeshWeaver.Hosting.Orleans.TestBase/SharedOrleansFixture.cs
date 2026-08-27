@@ -242,14 +242,6 @@ public class SharedOrleansFixture : IAsyncLifetime
 }
 
 /// <summary>
-/// xUnit collection that shares a single Orleans TestCluster.
-/// All test classes annotated with [Collection(nameof(OrleansClusterCollection))]
-/// share the same cluster instance.
-/// </summary>
-[CollectionDefinition(nameof(OrleansClusterCollection))]
-public class OrleansClusterCollection : ICollectionFixture<SharedOrleansFixture>;
-
-/// <summary>
 /// Swappable IChatClientFactory that delegates to an inner factory.
 /// Tests swap the inner factory to control agent behavior.
 /// Thread-safe via volatile reference.
