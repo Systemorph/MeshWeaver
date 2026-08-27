@@ -7,7 +7,9 @@ name: Node repo publish-bake (reusable)
 # chances for silent drift. This workflow runs the canonical script from THIS repo (checked out
 # by ref), so the sentinel contract has exactly one home next to the C# constant it mirrors.
 #
-# What it does: run the caller repo's full content through mw-plugin-test with `--bake-output`
+# What it does: run the caller repo's full content through mw-plugin-test as the #2064 SPLIT —
+# `compile … --output` (the compiler produces the bake; no mesh) then `… --seed` (a mesh consumes
+# and gates the produced bytes). Never the fused `--bake-output`, which makes the MESH the producer
 # (the run IS a full gate — import + compile + render + Tests areas), then publish the resulting
 # bundles to every portal storage target under
 # `<base>/prebuilt-bundles/<framework-identity>/<bake-source>/`. A portal whose own framework
@@ -533,7 +535,7 @@ jobs:
       - name: Pre-bake hook
         if: inputs.pre-bake-script != ''
         run: ${{ inputs.pre-bake-script }}
-      - name: Bake (import + compile + render + tests, --bake-output)
+      - name: Bake (compiler --output), then gate a mesh against it (--seed)
         # scope=none means the decision above VERIFIED that this exact content is already sealed
         # for this framework identity at every target — a positive finding, logged with both
         # shas, not an input-shaped skip. Everything downstream is skipped with it.
@@ -594,10 +596,28 @@ jobs:
           # tester cannot be killed by the SIGABRT its own runtime raises on a crash — the kernel
           # discards the signal (SIGNAL_UNKILLABLE) and the process spins at 100% CPU instead of
           # exiting. Under tini it is PID 2 and a crash exits 134 at once.
+          # ══ 1. THE BAKE — compiler-driven, NO MESH ANYWHERE IN IT (#2064) ══════════════════
+          # 🚨 This used to be ONE fused run: `… /repo --bake-output /bake`, which stood up an
+          # in-process mesh and let the MESH compile every NodeType. Producing an assembly is a
+          # BUILD step; the mesh's job is to CONSUME a bake, not to be the thing that makes one.
+          # The fused shape also activates hubs to produce bytes nothing has adopted yet, which is
+          # where it crashes. #2064 split the platform's own two lanes (dotnet-test.yml's PR lane
+          # and main-cd.yml's publish-bake) and held the pair in bake-then-gate.sh so they could
+          # not drift — this reusable lane was the one caller left on the old shape, so every node
+          # repo (Plugins, Education, Reinsurance, SocialMedia) still baked through a mesh.
+          docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
+            --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" compile /repo \
+            "${ALLOW_ARGS[@]}" \
+            --output /bake --source-sha "$GITHUB_SHA"
+
+          # ══ 2. THE GATE — a mesh, CONSUMING the bake above ═════════════════════════════════
+          # Strictly stronger than the fused form as a gate: fused, the mesh rendered and ran
+          # `Tests` against a PRIVATE recompile — bytes nothing ever ships. Seeded, it exercises
+          # the very assemblies this lane is about to publish, which are the ones a portal adopts.
           docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
             --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" /repo \
             "${ALLOW_ARGS[@]}" \
-            --bake-output /bake --source-sha "$GITHUB_SHA"
+            --seed /bake
           # Postcondition, not a hope: a green tester that wrote no identity is a bake-stage
           # regression (or an image predating --bake-output support).
           if [ ! -s "$BAKE/framework-mvid.txt" ]; then
