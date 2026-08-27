@@ -69,7 +69,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         var (codePath, mesh) = await SeedExecutableCode(FireworksScript);
 
         // Fire ExecuteScriptRequest. Response carries the activity path.
-        var execMessage = (await Mesh.Observe(
+        var execMessage = (await RequestHub.Observe(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(codePath)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -151,7 +151,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         var (codePath, mesh) = await SeedExecutableCode(GatedFireworksScript);
         var gatePath = await ProgressGate.Seed(mesh, UserHome);
 
-        var execMessage = (await Mesh.Observe(
+        var execMessage = (await RequestHub.Observe(
             new ExecuteScriptRequest { Inputs = ProgressGate.Inputs(gatePath) },
             o => o.WithTarget(new Address(codePath)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -243,7 +243,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             "should not get here"
         """);
 
-        var execMessage = (await Mesh.Observe(
+        var execMessage = (await RequestHub.Observe(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(codePath)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -297,7 +297,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     public async Task DefaultActivityParent_IsPartitionRoot()
     {
         var (codePath, _) = await SeedExecutableCode("\"hi\"");
-        var respMessage = (await Mesh.Observe(
+        var respMessage = (await RequestHub.Observe(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(codePath)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -334,7 +334,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             }
         }).Should().Within(30.Seconds()).Emit();
 
-        var respMessage = (await Mesh.Observe(
+        var respMessage = (await RequestHub.Observe(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(path)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -354,7 +354,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     public async Task CodeNode_StampsLastExecutionFields()
     {
         var (codePath, _) = await SeedExecutableCode("\"x\"");
-        var respMessage = (await Mesh.Observe(
+        var respMessage = (await RequestHub.Observe(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(codePath)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -397,7 +397,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             $"erf(1) = {SpecialFunctions.Erf(1.0):F6}"
         """);
 
-        var execMessage = (await Mesh.Observe(
+        var execMessage = (await RequestHub.Observe(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(codePath)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -461,7 +461,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             $"icon-id:{icon.Id}"
         """);
 
-        var execMessage = (await Mesh.Observe(
+        var execMessage = (await RequestHub.Observe(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(codePath)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -500,7 +500,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         var (codePath, _) = await SeedExecutableCode(
             "Log.LogInformation(\"first run\");\n1");
 
-        var firstMessage = (await Mesh.Observe(
+        var firstMessage = (await RequestHub.Observe(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(codePath)))
             .Should().Within(60.Seconds()).Emit()).Message;
@@ -510,7 +510,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         // Wait for first run to complete so the test isn't racing the second submit.
         await WaitForCompletion(firstActivity);
 
-        var secondMessage = (await Mesh.Observe(
+        var secondMessage = (await RequestHub.Observe(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(codePath)))
             .Should().Within(60.Seconds()).Emit()).Message;

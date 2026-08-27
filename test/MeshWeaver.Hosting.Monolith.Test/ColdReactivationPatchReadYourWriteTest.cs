@@ -39,7 +39,7 @@ public class ColdReactivationPatchReadYourWriteTest(ITestOutputHelper output) : 
             .Should().Emit();
 
         // Warm the per-node hub and wait until the CREATE is durable.
-        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+        await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
             .Should().Emit();
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)

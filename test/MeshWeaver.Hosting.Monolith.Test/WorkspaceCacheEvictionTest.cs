@@ -170,16 +170,16 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         // (1) OLD shape — register the response subject AFTER posting, with a deliberate preemption
         //     between Post and Observe. The warm owner replies during the delay; the hub has no
         //     subject for that requestId yet, so it drops the reply. Observing afterwards never emits.
-        var droppedDelivery = Mesh.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr));
+        var droppedDelivery = RequestHub.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr));
         droppedDelivery.Should().NotBeNull();
         await Task.Delay(300); // force the warm round-trip to complete before we register the subject
-        await Mesh.Observe(droppedDelivery!).Select(d => (object?)d.Message)
+        await RequestHub.Observe(droppedDelivery!).Select(d => (object?)d.Message)
             .Should().NotEmit(within: 2.Seconds());
 
         // (2) FIX shape — Observe<TResponse> registers the subject BEFORE posting, so the same
         //     preemption is harmless: the reply is buffered in the AsyncSubject and replayed to the
         //     late subscriber.
-        var safe = Mesh.Observe<GetDataResponse>(
+        var safe = RequestHub.Observe<GetDataResponse>(
             new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr));
         await Task.Delay(300); // same preemption — but the subject was registered before the post
         await safe.Select(d => d.Message.Data as MeshNode)

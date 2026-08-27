@@ -433,9 +433,23 @@ promote ✅                            WebhookInbox: Hosting/PlatformBuilds
 
 - **No credential in the release path.** The platform holds no write access to any satellite and no
   PAT; it signs one POST. The fan-out uses the App memex already has.
-- **No list in this repo.** The subscriber set lives in memex's own Hosting fleet registry. The
-  vestigial `BAKE_SUBSCRIBER_REPOS` repo variable was **deleted on 2026-08-25** — a leftover that
-  looks like the live subscriber list is worse than none.
+- **No list in this repo.** The subscriber set is the control instance's own configuration —
+  `FrameworkBroadcast:Subscribers`, rendered as `FrameworkBroadcast__Subscribers__0..N` by
+  `deploy/helm/templates/memex-portal/config.yaml`. The vestigial `BAKE_SUBSCRIBER_REPOS` repo
+  variable was **deleted on 2026-08-25** — a leftover that looks like the live subscriber list is
+  worse than none.
+
+🚨 **This paragraph used to say the set "lives in memex's own Hosting fleet registry", and that
+sentence is why the wave stayed silent after the notify job was fixed.** No such registry was ever
+built — no subscriber node type under `Hosting/`, no code in any repo reading one — while the seam
+that *does* exist was rendered by **no chart in either repo**, so no deployment could set it. Every
+broadcast therefore ran against an empty subscriber set: `0 dispatched, 0 failed`, logged at
+`Information` as the correct state of a mesh that is not the control instance. A key the code reads
+and no chart renders is a **silent deletion** (`SelfUpdate__PollInterval` #1778,
+`SelfUpdate__MinRollInterval` #1925 — here the key was simply never wired), and naming a mechanism
+that does not exist is what stops the next reader from looking at the one that does.
+`ReleaseDeliveryChainGuard` (`test/MeshWeaver.Documentation.Test`) now fails RED for any joint of
+this chain whose configuration key no chart renders.
 
 🚨 **The notify job is a GATE, not a reporter (#2235).** It was written reporter-class — "losing one
 notification costs one delayed rebake wave" — with an input-shaped `if [ -z "$SECRET" ] … exit 0`

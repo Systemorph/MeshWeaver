@@ -295,7 +295,7 @@ Clone it beside this repo, or set MEMEX_PLUGINS_REPO to an existing checkout."
   dotnet publish "$portal_repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" \
     -c Release -t:PublishContainer -p:ContainerRepository=memex-portal-ai-local \
     -p:ContainerBaseImage="$PORTAL_BASE_REF" \
-    -p:ContainerRuntimeIdentifier=linux-arm64 \
+    -p:ContainerRuntimeIdentifier=linux-arm64 -p:MeshWeaverRoot="$repo" \
     -maxcpucount:"${MEMEX_BUILD_CPUS:-6}"   # WEDGE FIX: cap parallelism so ONE build can't saturate the host
   # Fail LOUD if the publish lost the co-hosted CLIs (e.g. the ContainerBaseImage didn't layer in
   # because the local registry was empty). A CLI-less portal silently ships a broken Claude Code /
@@ -309,9 +309,12 @@ Clone it beside this repo, or set MEMEX_PLUGINS_REPO to an existing checkout."
   ok "Portal image verified: claude + node CLIs are baked in"
   step "Building migration image (§3 Option B)"
   # ARM64 PIN — same reason as the portal publish above (Migration.csproj is also multi-RID).
-  dotnet publish "$repo/memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" \
+  # The migration worker moved to MeshWeaver.Plugins with the hosts (the platform carve-out); it
+  # compiles against THIS checkout through $(MeshWeaverRoot), passed explicitly so a worktree named
+  # anything still resolves the platform it sits beside.
+  dotnet publish "$portal_repo/src/Memex.Database.Migration/Memex.Database.Migration.csproj" \
     -c Release -t:PublishContainer -p:ContainerRepository=memex-migration-local \
-    -p:ContainerRuntimeIdentifier=linux-arm64 \
+    -p:ContainerRuntimeIdentifier=linux-arm64 -p:MeshWeaverRoot="$repo" \
     -maxcpucount:"${MEMEX_BUILD_CPUS:-6}"   # WEDGE FIX: cap parallelism (see portal publish above)
   docker tag memex-migration-local:latest "$MIGRATION_IMAGE"
   ok "Images tagged $PORTAL_IMAGE / $MIGRATION_IMAGE (visible to k3s via IfNotPresent)"

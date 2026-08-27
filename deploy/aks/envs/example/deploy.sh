@@ -34,7 +34,7 @@ kubectl -n "$NS" scale statefulset memex-postgres-statefulset --replicas=0 || tr
 # restored prod database is safe AND is what you want: phase 1 (schema init) is idempotent and
 # always runs, and phase 2 (versioned repairs) is gated on admin.mesh_nodes.db_version, so a DB
 # restored at the current version fast-forwards without repeating anything. See
-# memex/aspire/Memex.Database.Migration/Program.cs.
+# src/Memex.Database.Migration/Program.cs in MeshWeaver.Plugins (the migration worker moved there with the hosts).
 
 kubectl -n "$NS" set image deployment/memex-portal-deployment memex-portal="$ACR/memex-portal-ai:$IMAGE_TAG"
 

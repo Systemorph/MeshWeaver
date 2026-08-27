@@ -129,7 +129,13 @@ permissions:
 # pushing a multi-image set must never be killed, or the set is left incomplete, which is the
 # very state the reconciler exists to repair.
 concurrency:
-  group: main-cd-${{ github.ref }}
+  # 🚨 The RECONCILE (schedule) has its own lane. It is the delivery path — dotnet-test.yml says
+  # so where it justifies cancel-in-progress on main — and on 2026-08-27 it was STARVED by the
+  # push path: six all-skipped workflow_run runs fired on ONE sha inside 20 minutes, each holding
+  # this group's single pending slot, and the cron did not fire at 07:23 or 08:23 at all (#2490).
+  # Earlier a scheduled run that DID start was evicted with zero jobs by the one-pending-slot
+  # rule. A no-op that holds the slot is the defect; keying the reconcile separately removes it.
+  group: main-cd-${{ github.event_name == 'schedule' && 'reconcile' || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -838,6 +844,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
+      - name: Check out MeshWeaver.Plugins (holds the migration worker)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+          path: plugins-repo
+          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+          fetch-depth: 1
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
@@ -852,7 +866,8 @@ jobs:
         id: vars
         run: |
           set -euo pipefail
-          VERSION=$(dotnet msbuild memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj \
+          VERSION=$(dotnet msbuild plugins-repo/src/Memex.Database.Migration/Memex.Database.Migration.csproj \
+            -p:MeshWeaverRoot=${{ github.workspace }} \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
@@ -870,9 +885,10 @@ jobs:
       # <RuntimeIdentifiers> lives in Memex.Database.Migration.csproj (project-local, same reason as above).
       - name: Build + push migration (staging tag)
         run: >
-          dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj
+          dotnet publish plugins-repo/src/Memex.Database.Migration/Memex.Database.Migration.csproj
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
+          -p:MeshWeaverRoot=${{ github.workspace }}
           -p:CIRun=true
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
@@ -1176,14 +1192,6 @@ jobs:
       # one shipping (#1814's class), and its version is the version THIS run computed (#695's
       # class — see the publish step). Same repo as portal-image's checkout; PlatformBakeLaneGuard
       # asserts it is the only foreign repository in this file.
-      - name: Check out MeshWeaver.Plugins (every plugin is baked in this run)
-        uses: actions/checkout@v7
-        with:
-          repository: Systemorph/MeshWeaver.Plugins
-          ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
-          path: plugins-repo
-          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
-          fetch-depth: 1
       - name: "Preflight: the publish targets must be provisioned"
         run: |
           set -euo pipefail
@@ -1453,85 +1461,6 @@ jobs:
             echo "### 🔑 Bake address verified"
             echo "- \`$BAKED\` — resolved by BOTH the bake host and the promoted \`memex-portal-ai\` image (linux/amd64)"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: "BAKE every plugin against the SAME image (compiler-driven, no mesh)"
-        env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.image_tag }}
-        run: |
-          set -euo pipefail
-          PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
-          [ -f "$PLUGINS/plugin-gate.allow" ] || { echo "::error::plugins-repo/plugin-gate.allow is missing — the known-debt ratchet the plugin bake is configured against. Refusing to bake without it."; exit 1; }
-          PLUGINS_SHA="$(git -C "$PLUGINS" rev-parse HEAD)"
-          BAKE_PLUGINS="$RUNNER_TEMP/bake-plugins"
-          rm -rf "$BAKE_PLUGINS"; mkdir -p "$BAKE_PLUGINS"; chmod 777 "$BAKE_PLUGINS"
-          echo "── baking /plugins (every module) against $IMAGE at plugins $PLUGINS_SHA"
-          docker run --rm --init --pull never --platform ${{ matrix.docker_platform }} -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS:/bake" \
-            --entrypoint /app/mw-plugin-test "$IMAGE" compile /plugins \
-            --output /bake --allow /plugins/plugin-gate.allow --source-sha "$PLUGINS_SHA"
-          # Postconditions, not hopes — same as the platform bake above.
-          if [ ! -s "$BAKE_PLUGINS/framework-mvid.txt" ]; then
-            echo "::error::the plugin bake ran green but wrote no identity — the bake stage regressed."; exit 1
-          fi
-          if ! ls "$BAKE_PLUGINS"/*.zip >/dev/null 2>&1; then
-            echo "::error::the plugin bake ran green but produced no bundles — nothing could be published."; exit 1
-          fi
-          echo "BAKE_PLUGINS_DIR=$BAKE_PLUGINS" >> "$GITHUB_ENV"
-          echo "PLUGINS_SHA=$PLUGINS_SHA" >> "$GITHUB_ENV"
-          echo "plugin bake identity: $(cat "$BAKE_PLUGINS/framework-mvid.txt")"
-          ls "$BAKE_PLUGINS"/*.zip | wc -l | xargs echo "plugin bundles:"
-      - name: "GATE the plugin bake: render + execute Tests areas on the BAKED bytes"
-        env:
-          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.image_tag }}
-        run: |
-          set -euo pipefail
-          PLUGINS="$GITHUB_WORKSPACE/plugins-repo"
-          echo "── gating /plugins against $IMAGE, consuming the bake in /bake"
-          docker run --rm --init --pull never --platform ${{ matrix.docker_platform }} -v "$PLUGINS:/plugins" -v "$BAKE_PLUGINS_DIR:/bake" \
-            --entrypoint /app/mw-plugin-test "$IMAGE" /plugins \
-            --allow /plugins/plugin-gate.allow --seed /bake
-      # 🚨 The whole point of building plugins HERE: their identity must be the platform's, by
-      # construction. Assert it rather than trust it — a divergence means the two bakes did not run
-      # against the same image, and publishing both would ship bundles no portal can adopt together.
-      - name: "Assert the plugin bake's identity equals the platform bake's"
-        run: |
-          set -euo pipefail
-          PLATFORM="$(tr -d '[:space:]' < "$BAKE_DIR/framework-mvid.txt")"
-          PLUGINS="$(tr -d '[:space:]' < "$BAKE_PLUGINS_DIR/framework-mvid.txt")"
-          if [ "$PLATFORM" != "$PLUGINS" ]; then
-            echo "::error::plugin bake identity ($PLUGINS) differs from the platform bake identity ($PLATFORM) in the SAME run — they did not build against the same image. Refusing to publish either."
-            exit 1
-          fi
-          echo "identities agree: $PLATFORM"
-      # 🚨 RELEASE_VERSION is REQUIRED here and is the version THIS run computed. It is not read
-      # from any manifest.lock: a bundle's version must be minted by the run that produced its
-      # bytes (Plugins#695 — a version that moves on a lock file while the bytes come from
-      # elsewhere is how an already-fixed defect kept shipping, #2356).
-      # 🚨 NOT on the reconcile path. RELEASE_VERSION is `3.0.0-ci.<build>` — it embeds the RUN
-      # NUMBER, so a reconcile would mint a DIFFERENT version from the one the promoted image
-      # carries, and publish bytes under a version no run produced. That is precisely the failure
-      # the guard below refuses (Plugins#695: a bundle's version must be minted by the run that
-      # produced its bytes). The platform CONTENT bake above has no such coupling — its key is the
-      # framework identity, which the promoted image resolves identically however many times it is
-      # asked — so the reconcile re-asserts that and stops there.
-      # 🚨 RE-AUTHENTICATE IMMEDIATELY BEFORE PUBLISHING — the job outruns its own credential.
-      # The OIDC assertion is minted by the `Azure login` step at the TOP of this job and is valid
-      # for ~5 minutes. Everything between here and there is the bake: it compiles every shipped
-      # NodeType twice over (Doc + samples) inside the container, which takes longer than that. So
-      # the publish below reached Azure with an assertion that had already expired:
-      #
-      #   ERROR: AADSTS700024: Client assertion is not within its valid time range.
-      #     Current time: 2026-08-27T00:20:39Z, expiry time of assertion: 2026-08-27T00:14:34Z
-      #
-      # Measured on CD run 33024861072: promote had succeeded, the image pulled on attempt 1, the
-      # bake compiled — and the run still published nothing, six minutes past the credential.
-      #
-      # 🚨 This failure was LATENT, not new: the login has always been taken at job start, and the
-      # bake has always been the long part. It surfaces now because #2452 makes this job run in
-      # situations where it previously did not, so the window is exercised far more often.
-      #
-      # A fresh login here costs seconds and removes the coupling between bake duration and
-      # credential lifetime entirely. It is NOT `continue-on-error`: if the identity cannot be
-      # obtained, publishing must fail loudly rather than skip — a bake that produced bundles and
-      # published none is the exact state the bake lane exists to prevent.
       - name: "Azure login (OIDC) — refreshed for the publish"
         uses: azure/login@v3
         with:
@@ -1539,23 +1468,6 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: "Publish the plugin bundles to every portal target (same identity, same version)"
-        if: needs.gate.outputs.bake_only != 'true'
-        env:
-          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
-          BAKE_ARCHITECTURE: ${{ matrix.arch }}
-          RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
-        run: |
-          set -euo pipefail
-          [ -n "$RELEASE_VERSION" ] || { echo "::error::no release version from portal-image — refusing to publish plugin bundles under an unknown version (Plugins#695)."; exit 1; }
-          .github/scripts/publish-bake-bundles.sh "$BAKE_PLUGINS_DIR" "plugins" \
-            "$PLUGINS_SHA" "$RELEASE_VERSION"
-          {
-            echo "### 🧩 Plugin bundles published (built in this run)"
-            echo "- identity: \`$(cat "$BAKE_PLUGINS_DIR/framework-mvid.txt")\` (equal to the platform bake's, asserted)"
-            echo "- version: \`$RELEASE_VERSION\` (this run's, not manifest.lock)"
-            echo "- plugins commit: \`$PLUGINS_SHA\`"
-          } >> "$GITHUB_STEP_SUMMARY"
       - name: "Publish bundles to every portal target"
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
@@ -1631,14 +1543,23 @@ jobs:
   #     satellite and no PAT. memex does the fan-out with the GitHub App it ALREADY holds for
   #     GitSync (`FrameworkReleaseBroadcaster`, `src/MeshWeaver.GitSync`); the release only signs a
   #     POST to memex, exactly like every other `notify-*` job here.
-  #   • no hand-maintained list here — the subscriber set lives in the Hosting fleet registry ON
-  #     memex ("register a new repo in Hosting"), the graph memex already owns; nothing is named in
-  #     this file.
+  #   • no hand-maintained list HERE — the subscriber set is the control instance's own
+  #     configuration (`FrameworkBroadcast:Subscribers`, rendered as
+  #     `FrameworkBroadcast__Subscribers__0..N` by deploy/helm/templates/memex-portal/config.yaml);
+  #     nothing is named in this file.
+  # 🚨 THIS BLOCK USED TO SAY the set "lives in the Hosting fleet registry ON memex", and that
+  # sentence cost #2235 three days: no such registry was ever built — there is no subscriber node
+  # type under Hosting/ and no code in any repo reads one — while the seam that DOES exist
+  # (FrameworkBroadcast:Subscribers) was rendered by no chart in either repo, so no deploy could
+  # set it. Every broadcast therefore dispatched to an empty set and logged it as the normal state
+  # of a non-control mesh. Do not re-describe a registry here until one ships with a reader; a
+  # mechanism named in prose and absent from the code is what stops the next reader looking.
   # 🚨 `BAKE_SUBSCRIBER_REPOS` IS GONE — deleted as a repo variable on 2026-08-25, not merely
   # unused. It survived the 2026-08-23 redesign holding one stale repo name, and a leftover
   # variable that LOOKS like the live subscriber list is worse than none: the next person to debug
   # a missing rebake reads it, believes the fan-out targets exactly that repo, and stops looking.
-  # If you need to know who is subscribed, ask the Hosting registry on the control instance.
+  # If you need to know who is subscribed, read `FrameworkBroadcast__Subscribers__0..N` on the
+  # control instance's deployment — that is the only source there is.
   # Pull stays the fallback: each repo's `schedule` run still reads the registry
   # (`Resolve the bake target` in each ci.yml) and bakes for the identity it finds, so a lost
   # dispatch costs at most one delayed rebake wave and a repo that stops baking still shows up as an

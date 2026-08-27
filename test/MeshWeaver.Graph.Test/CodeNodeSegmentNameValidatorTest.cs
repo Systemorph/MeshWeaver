@@ -179,8 +179,8 @@ public class CodeNodeSegmentNameValidatorRegistrationTest(ITestOutputHelper outp
             Content = new CodeConfiguration { Code = "public static class Spine { }" }
         }).Should().Within(30.Seconds()).Emit();
 
-        var delivery = await Mesh
-            .Observe<MoveNodeResponse>(new MoveNodeRequest(sourcePath, $"{ns}/Model/Source"), o => o)
+        var delivery = await ObserveNodeOperation(
+                new MoveNodeRequest(sourcePath, $"{ns}/Model/Source"))
             .Should().Within(30.Seconds()).Emit();
 
         delivery.Message.Success.Should().BeFalse(

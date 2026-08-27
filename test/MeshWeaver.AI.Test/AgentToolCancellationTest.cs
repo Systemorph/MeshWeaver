@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -61,11 +62,23 @@ public class AgentToolCancellationTest(ITestOutputHelper output) : MonolithMeshT
     private sealed class ParkingVersionQuery : IVersionQuery
     {
         private int disposals;
+        private int subscriptions;
         /// <summary>How many times a subscription to this store has been disposed.</summary>
         public int Disposals => Volatile.Read(ref disposals);
 
+        /// <summary>
+        /// How many times this store has been SUBSCRIBED — i.e. how many calls have actually
+        /// reached the park. The disposal assertions depend on a call having got this far, and
+        /// nothing else in the pipeline tells you that it did; see
+        /// <see cref="AssertParkedThenCancellable"/>.
+        /// </summary>
+        public int Subscriptions => Volatile.Read(ref subscriptions);
+
         private IObservable<T> Park<T>() => Observable.Create<T>(_ =>
-            Disposable.Create(() => Interlocked.Increment(ref disposals)));
+        {
+            Interlocked.Increment(ref subscriptions);
+            return Disposable.Create(() => Interlocked.Increment(ref disposals));
+        });
 
         public IObservable<MeshNodeVersion> GetVersions(string path) => Park<MeshNodeVersion>();
         public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options) => Park<MeshNode?>();
@@ -103,10 +116,33 @@ public class AgentToolCancellationTest(ITestOutputHelper output) : MonolithMeshT
     /// cancel fails the first check, and the bounded wait's own giving-up is a
     /// <see cref="TimeoutException"/>, which is NOT an <see cref="OperationCanceledException"/>.
     /// </summary>
-    private static async Task AssertParkedThenCancellable(Task call, CancellationTokenSource round, string because)
+    private static async Task AssertParkedThenCancellable(
+        Task call, CancellationTokenSource round, string because, int storeSubscriptionsBefore)
     {
         var ct = TestContext.Current.CancellationToken;
 
+        // 🚨 Wait for the call to actually REACH the park, on the store's own signal (#2346).
+        //
+        // Every one of these tools runs `GateOnRead(path).SelectMany(canRead => versionQuery…)` —
+        // a permission read against the mesh that must COMPLETE before the parking store is
+        // subscribed at all. This used to proceed on a fixed 500 ms sleep, which establishes only
+        // that the call has not answered — and a call still inside `GateOnRead` has not answered
+        // either. Cancel there and the store was never subscribed, so there is nothing to dispose
+        // and `Disposals` never moves: `Expected 1 to be greater than 1`, in 0.7 s, on a loaded
+        // runner and never locally. The sleep was standing in for a condition it could not see.
+        //
+        // Waiting on the store's subscription count makes the precondition the assertion depends on
+        // an observed fact. Reactive poll because the source is a counter, not an observable — the
+        // shape WritingTests.md sanctions for exactly that case.
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Where(_ => VersionStore.Subscriptions > storeSubscriptionsBefore)
+            .FirstAsync()
+            .Timeout(30.Seconds())
+            .ToTask(ct);
+
+        // Now the negative check means what it says: the call is parked IN THE STORE and the store
+        // never answers, so nothing may settle it. (A sleep is correct here — this is the sanctioned
+        // "confirm nothing happened" case, where there is no positive signal to wait for.)
         var settledEarly = await Task.WhenAny(call, Task.Delay(500, ct));
         settledEarly.Should().NotBeSameAs(call,
             "the source never answers — the tool call must not resolve before the round is cancelled");
@@ -128,7 +164,9 @@ public class AgentToolCancellationTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 60_000)]
     public async Task GetVersions_ParkedOnAStalledStore_UnwindsWhenTheRoundIsCancelled()
     {
+        var ct = TestContext.Current.CancellationToken;
         var before = VersionStore.Disposals;
+        var subscribedBefore = VersionStore.Subscriptions;
         var plugin = new VersionPlugin(Mesh);
         var tool = (AIFunction)plugin.CreateTools()[0];
         using var round = new CancellationTokenSource();
@@ -137,7 +175,29 @@ public class AgentToolCancellationTest(ITestOutputHelper output) : MonolithMeshT
 
         await AssertParkedThenCancellable(call, round,
             "a round parked in get_versions holds an Ai-pool gate permit that IoPool.Drain() cannot "
-            + "re-acquire, so teardown proceeds over live code");
+            + "re-acquire, so teardown proceeds over live code", subscribedBefore);
+
+        // 🚨 WAIT for the disposal; do not read the counter and hope (#2346).
+        //
+        // The disposal is ASYNCHRONOUS by construction and no ordering trick in the bridge can make
+        // it otherwise: every one of these tools ends its pipeline with
+        // `.SubscribeOn(TaskPoolScheduler.Default)`, and Rx's SubscribeOn runs the sequence's
+        // *unsubscription* logic on that scheduler as well as its subscription. So the bridge's
+        // `pending.Dispose()` returns as soon as the unsubscribe is SCHEDULED, and the inner
+        // subscription to the parking store is torn down on a pool thread some time after the
+        // caller's task has already thrown.
+        //
+        // Reading `Disposals` the instant the task threw therefore asserted a synchronicity the
+        // code does not provide: locally the pool thread always won, on a loaded runner it did not,
+        // and the failure — "Expected 1 to be greater than 1" in 0.7 s — reads as a flake on
+        // whatever branch happens to be in CI. The contract is "cancelling disposes the read", and
+        // the way to observe an asynchronous fact is to wait for it, bounded, so a genuine
+        // regression (a disposal that never comes) still fails loudly rather than hanging.
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Where(_ => VersionStore.Disposals > before)
+            .FirstAsync()
+            .Timeout(20.Seconds())
+            .ToTask(ct);
 
         VersionStore.Disposals.Should().BeGreaterThan(before,
             "cancelling must dispose the version read — otherwise the storage work runs on unobserved");
@@ -150,13 +210,14 @@ public class AgentToolCancellationTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 60_000)]
     public async Task GetVersion_ParkedOnAStalledStore_UnwindsWhenTheRoundIsCancelled()
     {
+        var subscribedBefore = VersionStore.Subscriptions;
         var plugin = new VersionPlugin(Mesh);
         var tool = (AIFunction)plugin.CreateTools()[1];
         using var round = new CancellationTokenSource();
 
         var call = tool.InvokeAsync(Args(("path", "TestPartition/some-doc"), ("version", 3L)), round.Token).AsTask();
 
-        await AssertParkedThenCancellable(call, round, "get_version must observe the round's token");
+        await AssertParkedThenCancellable(call, round, "get_version must observe the round's token", subscribedBefore);
     }
 
     /// <summary>
@@ -166,13 +227,14 @@ public class AgentToolCancellationTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 60_000)]
     public async Task RestoreVersion_ParkedOnAStalledStore_UnwindsWhenTheRoundIsCancelled()
     {
+        var subscribedBefore = VersionStore.Subscriptions;
         var plugin = new VersionPlugin(Mesh);
         var tool = (AIFunction)plugin.CreateTools()[2];
         using var round = new CancellationTokenSource();
 
         var call = tool.InvokeAsync(Args(("path", "TestPartition/some-doc"), ("version", 3L)), round.Token).AsTask();
 
-        await AssertParkedThenCancellable(call, round, "restore_version must observe the round's token");
+        await AssertParkedThenCancellable(call, round, "restore_version must observe the round's token", subscribedBefore);
     }
 
     /// <summary>
@@ -181,6 +243,7 @@ public class AgentToolCancellationTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 60_000)]
     public async Task RestoreFromPointInTime_ParkedOnAStalledStore_UnwindsWhenTheRoundIsCancelled()
     {
+        var subscribedBefore = VersionStore.Subscriptions;
         var plugin = new VersionPlugin(Mesh);
         var tool = (AIFunction)plugin.CreateTools()[3];
         using var round = new CancellationTokenSource();
@@ -188,7 +251,7 @@ public class AgentToolCancellationTest(ITestOutputHelper output) : MonolithMeshT
         var call = tool.InvokeAsync(
             Args(("path", "TestPartition/some-doc"), ("timestamp", "2026-03-25T14:30:00Z")), round.Token).AsTask();
 
-        await AssertParkedThenCancellable(call, round, "restore_from_point_in_time must observe the round's token");
+        await AssertParkedThenCancellable(call, round, "restore_from_point_in_time must observe the round's token", subscribedBefore);
     }
 
     /// <summary>

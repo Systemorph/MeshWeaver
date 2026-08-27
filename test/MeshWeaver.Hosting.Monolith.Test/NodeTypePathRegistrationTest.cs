@@ -95,7 +95,7 @@ public class NodeTypePathRegistrationTest(ITestOutputHelper output) : MonolithMe
 
         // Activate the per-node hub — this is what applies the NodeType's HubConfiguration, and
         // therefore what runs WithContentType with the stamped path in scope.
-        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+        await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
             .Should().Emit();
 
         // 🚨 THE ASSERTION: the NodeType PATH is a key in the mesh-wide registry. This is what was
@@ -191,7 +191,7 @@ public class NodeTypePathRegistrationTest(ITestOutputHelper output) : MonolithMe
 
         // Activate the definition node's own hub — this applies NodeTypeNodeType's configuration
         // and therefore runs its WithContentType<NodeTypeDefinition>().
-        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(definitionPath)))
+        await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(definitionPath)))
             .Should().Emit();
 
         // THE ASSERTION: the definition's own path is the key its INSTANCES read. Nothing the
