@@ -20,6 +20,29 @@ public record MeshHostApplicationBuilder : MeshBuilder
     public MeshHostApplicationBuilder(IHostApplicationBuilder Host, Address address) : base(x => x.Invoke(Host.Services), address)
     {
         this.Host = Host;
+        // 🚨 The deployment's configuration reaches the builder HERE — at construction, before any
+        // caller can install a module — because a module attribute's contribution runs inside
+        // MeshBuilder.InstallAssemblies and reads MeshBuilder.Configuration to decide what to
+        // BUILD (see MeshBuilder.Configuration). A host that binds a mesh to an
+        // IHostApplicationBuilder always HAS the configuration; making each composition root
+        // remember to hand it over is what failed.
+        //
+        // MeshBuilderModuleActivation.InstallConfiguredModules also hands it over, and that was
+        // believed to be enough. It is not: it covers only the hosts that install modules through
+        // THAT helper. The portal composes its own module union (baseline + activation sidecar +
+        // platform floor) and calls InstallAssemblies directly, so it never reached the hand-off —
+        // and from 16497893b, when the AI engine became an attribute-carried module reading this
+        // very property, every deployed portal answered "no configuration" and therefore
+        // "Features:StaticRepoSync:Partitions is absent". The AI partitions (Agent, Skill, Harness,
+        // Model, Provider) then fell back to in-memory serving, so each in-memory type-definition
+        // node was served as the RUNTIME node at its own top-level path and SHADOWED the durable
+        // package root there: /Agent and /Skill served the built-in NodeType instead of the
+        // authored Store/Plugin node (#2517), and the static-repo import never registered at all,
+        // so the Provider partition never materialized (#2507).
+        //
+        // Configuration is a live ConfigurationManager on this interface, so sources added after
+        // this ctor are still visible to whatever reads it later.
+        this.WithConfiguration(Host.Configuration);
         Host.ConfigureContainer(new MessageHubServiceProviderFactory(BuildHub));
         this.RegisterMeshQueryCoreOnMeshHub();
         // Drain the mesh root hub (action blocks + IoPool + AsyncDisposeQueue) during host shutdown,

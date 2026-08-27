@@ -5,6 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 [assembly: MeshWeaver.AI.AiMeshModule]
 
@@ -33,12 +34,44 @@ public sealed class AiMeshModuleAttribute : MeshNodeProviderAttribute
     /// <inheritdoc />
     public override IEnumerable<Func<MeshBuilder, MeshBuilder>> BuilderConfigurations =>
     [
-        builder => builder
+        builder => ReportIfUnconfigured(builder)
             .AddAI(ServeFromPartitions(builder.Configuration))
             // The AI menu's navigation entries, seeded as platform-static UiContribution nodes.
             .AddAiMenuContributions()
             .ConfigureServices(services => AddAiComposition(services, builder.Configuration))
     ];
+
+    /// <summary>
+    /// Says so — on stderr, which is the pod log — when this module is installed onto a builder that
+    /// carries no configuration.
+    ///
+    /// <para>🚨 The fallback below (no configuration ⇒ in-memory serving) is a FAIL-CLOSED default
+    /// whose wrong answer is invisible: the portal boots, the AI menu appears, agents answer, and
+    /// the only symptom is that every AI partition's in-memory type-definition node quietly wins its
+    /// own top-level path — so <c>/Agent</c> and <c>/Skill</c> serve the built-in NodeType instead of
+    /// the authored Store package (#2517) and the static-repo import never runs (#2507). Nobody
+    /// files a bug against something that looks like it works. This line is the difference between
+    /// "the deployment chose in-memory" and "nobody ever told this module anything", which are the
+    /// two readings of a null and are not the same event.</para>
+    ///
+    /// <para>Pre-DI by construction — a module attribute contributes inside
+    /// <c>MeshBuilder.InstallAssemblies</c>, before any logging pipeline exists — so stderr is the
+    /// channel, matching <c>MeshBuilderModuleActivation</c>'s own boot diagnostics.</para>
+    /// </summary>
+    private static MeshBuilder ReportIfUnconfigured(MeshBuilder builder)
+    {
+        if (builder.Configuration is null)
+            Console.Error.WriteLine(
+                "[ModuleActivation] MeshWeaver.AI installed onto a builder with NO configuration: "
+                + "Features:StaticRepoSync:Partitions cannot be read, so every AI partition (Agent, "
+                + "Skill, Harness, Model, Provider) is served IN-MEMORY and the static-repo import is "
+                + "not registered. On a deployment that stores AI content in the database this is "
+                + "wrong and silent — the in-memory type-definition node shadows the durable row at "
+                + "the same top-level path. A host binding a mesh to an IHostApplicationBuilder gets "
+                + "this for free; a bespoke host must call MeshBuilder.WithConfiguration(...) BEFORE "
+                + "InstallAssemblies.");
+        return builder;
+    }
 
     /// <summary>
     /// The partitions Postgres serves, from <c>Features:StaticRepoSync:Partitions</c>.
@@ -141,7 +174,19 @@ public sealed class AiMeshModuleAttribute : MeshNodeProviderAttribute
             // BuiltInLanguageModelProvider re-projects configuration into the served node on every
             // read, so there is nothing to converge and nothing to persist.
             if (serve.Contains(ModelProviderNodeType.RootNamespace))
+            {
+                // 🚨 Register the seed's OWN dependency. StaticRepoImportSettled is the one-shot
+                // boot signal the seed sequences on; the portal's AddStaticRepoSync also registers
+                // it, and until now the module simply ASSUMED that — so this hosted service could
+                // only be constructed on a host that separately wired the portal's static-repo
+                // sync. On any other host it throws at GetServices<IHostedService>() and takes boot
+                // with it, which is not a fault the module may hand to its host. TryAdd on BOTH
+                // sides means exactly one instance whichever registers first — it must stay one,
+                // because a second instance is a signal the importer never marks and a seed that
+                // waits for it forever.
+                services.TryAddSingleton<Graph.StaticRepoImportSettled>();
                 services.AddSingleton<Microsoft.Extensions.Hosting.IHostedService, ProviderCredentialSeedHostedService>();
+            }
         }
 
         return services;
