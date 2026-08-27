@@ -44,8 +44,11 @@ public sealed class NoOpEmailSender(EmailOptions options, ILogger<NoOpEmailSende
     {
         if (options.Enabled)
         {
-            var explanation = EmailDeliveryGuard.Explain(
-                "This send is REFUSED rather than reported as delivered.");
+            // ExplainRefusal, not Explain: this install may have the module and be missing only a
+            // credential key (#2510). Naming the module in that case sends the operator to fix
+            // something that is not broken.
+            var explanation = EmailDeliveryGuard.ExplainRefusal(
+                options, "This send is REFUSED rather than reported as delivered.");
             logger?.LogError(
                 "Refusing to send to {To} (subject: {Subject}, attachments: {Attachments}). {Explanation}",
                 toAddress, subject, attachments.Count, explanation);
