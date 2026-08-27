@@ -1,6 +1,9 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reflection;
 using System.Runtime.Loader;
 using MeshWeaver.Compiler;
@@ -372,9 +375,43 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         private int _released;
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _released, 1) == 0)
-                Interlocked.Decrement(ref ctx._pins);
+            if (Interlocked.Exchange(ref _released, 1) == 0
+                && Interlocked.Decrement(ref ctx._pins) == 0)
+                // The LAST scan out announces the drain. This is what makes waiting for it a
+                // SUBSCRIPTION rather than a spin loop against a deadline (#2488): the unload
+                // runs because the scans finished, never because a clock expired.
+                ctx.AnnounceDrained();
         }
+    }
+
+    /// <summary>
+    /// Completes once no assembly SCAN is in flight — the positive signal <see cref="Dispose"/>
+    /// unloads on.
+    ///
+    /// <para>🚨 Waiting for disposal is a subscription, never a race (#2488). This replaced a
+    /// <c>SpinWait</c> against a 5 s deadline whose own comment conceded it then "unloads anyway":
+    /// the single case where we KNEW a scanner was still live was also the case where we pulled
+    /// its assembly out from under it — <c>TypeLoadException '…format is invalid'</c> mid
+    /// <c>GetTypes</c>, the #613 use-after-unload family. With a signal there is no branch to get
+    /// wrong: pins reach zero and the context unloads, or they do not and the context is simply
+    /// RETAINED. Retaining memory beats corrupting an assembly a hub is executing, and a drain
+    /// that never completes is a leak to fix — not a budget to spend.</para>
+    ///
+    /// <para><see cref="AsyncSubject{T}"/>: it replays completion to late subscribers, so a
+    /// subscriber arriving after the last pin released still runs immediately — the ordering
+    /// hazard a bare <c>Subject</c> would leave.</para>
+    /// </summary>
+    private readonly AsyncSubject<Unit> _drained = new();
+
+    /// <summary>Signals <see cref="_drained"/> once. Idempotent — the last pin release and the
+    /// already-quiet path both call it, and an <see cref="AsyncSubject{T}"/> that has completed
+    /// ignores further notifications.</summary>
+    private void AnnounceDrained()
+    {
+        if (_drained.IsCompleted)
+            return;
+        _drained.OnNext(Unit.Default);
+        _drained.OnCompleted();
     }
 
     // LIFETIME leases (distinct from the millisecond scan _pins above): one per live hub whose
@@ -655,60 +692,80 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         }
 
         // Drain in-flight assembly SCANS before tearing down the LoaderAllocator. _unloading is set
-        // above, so Pin() now rejects NEW scans; wait (time-bounded) for the ones already running to
-        // release. Unloading mid-GetTypes/attribute-resolution corrupts the assembly the scanner is
-        // holding (TypeLoadException '…format is invalid'), the race that flakes the concurrent
-        // Orleans dynamic-compilation tests and risks the same under a live-mesh recompile. A scan
-        // is milliseconds; the 5 s ceiling can never deadlock teardown — after it we unload anyway
-        // (last-resort, matching the prior always-unload behaviour).
-        var drainDeadline = Environment.TickCount64 + 5_000;
-        var spin = new SpinWait();
-        while (Volatile.Read(ref _pins) > 0 && Environment.TickCount64 < drainDeadline)
-            spin.SpinOnce();
+        // above, so Pin() rejects NEW scans; the ones already running announce through _drained as
+        // the last of them releases. Unloading mid-GetTypes/attribute-resolution corrupts the
+        // assembly the scanner is holding (TypeLoadException '…format is invalid'), the race that
+        // flakes the concurrent Orleans dynamic-compilation tests and risks the same under a
+        // live-mesh recompile.
+        //
+        // 🚨 A SUBSCRIPTION, never a timed race (#2488). This method returns immediately; the
+        // unload belongs to the drain signal. If a scan never finishes, the context is RETAINED —
+        // memory we can find and fix, rather than an assembly pulled out from under running code.
+        if (Volatile.Read(ref _pins) == 0)
+            AnnounceDrained();   // already quiet: complete now, so the subscribe below runs inline
 
-        // The drain is over: from here a load really is unsafe, so close the door for good. Plain
-        // field writes, deliberately NOT under _loadLock — a scanner that overran the 5 s ceiling
-        // still holds that lock inside LoadNodeAssembly, and taking it here would block teardown
-        // behind the very scan the ceiling exists to stop waiting for.
+        _drained
+            .Take(1)
+            .Catch<Unit, Exception>(ex =>
+            {
+                _logger?.LogError(ex,
+                    "Drain signal for AssemblyLoadContext {ContextName} faulted — KEEPING its load "
+                    + "context rather than unloading an assembly a scan may still be reading",
+                    Name);
+                return Observable.Empty<Unit>();
+            })
+            .Subscribe(_ => CompleteUnload());
+    }
+
+    /// <summary>
+    /// The second half of <see cref="Dispose"/>, run ONLY on the drain signal (#2488): close the
+    /// door for good, unload, and run the opt-in post-unload GC probe. Never called on a timer —
+    /// reaching here means every in-flight scan released.
+    /// </summary>
+    private void CompleteUnload()
+    {
+        // From here a load really is unsafe. Plain field writes, deliberately NOT under _loadLock:
+        // nothing else may take that lock on this path, and the drain has already proven no scan
+        // is holding it.
         _disposed = true;
         _loadedAssembly = null;
 
-        // Initiate unload outside the lock - the context will be collected when all references are released
+        // Initiate unload outside the lock — the context is collected once all references release.
         Unload();
 
-        // Diagnostic probe (opt-in, off by default): drive a collection right after the unload so a
-        // use-after-unload dangling native pointer trips at THIS unload — naming the culprit node
-        // and yielding a corruption-time dump — instead of a delayed SIGSEGV with no precursor. Used
-        // by the alc-unload-probe workflow to pin the reflection/serialization cache that retains
-        // an accessor into a collectible node assembly (the exit=139 crash).
-        if (UnloadGcProbe)
-        {
-            // Write to Console DIRECTLY, not via _logger: this runs INSIDE ServiceProvider.Dispose()
-            // where the ILogger (XUnitFileLogger.GetMinLogLevel) resolves from the already-disposed
-            // container and throws ObjectDisposedException BEFORE writing — so the probe never named
-            // the culprit. Console is the only sink alive during teardown.
-            Console.Error.WriteLine($"ALC_UNLOAD_PROBE forcing GC after unloading {Name}");
+            // Diagnostic probe (opt-in, off by default): drive a collection right after the unload so a
+            // use-after-unload dangling native pointer trips at THIS unload — naming the culprit node
+            // and yielding a corruption-time dump — instead of a delayed SIGSEGV with no precursor. Used
+            // by the alc-unload-probe workflow to pin the reflection/serialization cache that retains
+            // an accessor into a collectible node assembly (the exit=139 crash).
+            if (UnloadGcProbe)
+            {
+                // Write to Console DIRECTLY, not via _logger: this runs INSIDE ServiceProvider.Dispose()
+                // where the ILogger (XUnitFileLogger.GetMinLogLevel) resolves from the already-disposed
+                // container and throws ObjectDisposedException BEFORE writing — so the probe never named
+                // the culprit. Console is the only sink alive during teardown.
+                Console.Error.WriteLine($"ALC_UNLOAD_PROBE forcing GC after unloading {Name}");
 
-            // 🚨 BACKGROUND leg first. A parameterless GC.Collect() is blocking:true — it runs the
-            // non-concurrent gen2 path (mark_phase / plan_phase) and never enters background_sweep,
-            // so the probe originally exercised only a path on which no crash has ever been observed.
-            // Every FutuRe exit=139 dump so far faults on the CONCURRENT collector
-            // (bgc_thread_function → gc1 → background_sweep), so the probe has to start one.
-            //
-            // NB this probe is aimed at the use-after-unload hypothesis (a dangling pointer into a
-            // freed collectible LoaderAllocator). The 2026-08-06 dump does NOT support that
-            // hypothesis: the swept object's MethodTable pointer was exactly 0, and a freed-metadata
-            // pointer is non-null-but-unmapped, not zero. Keep the probe honest about what it can
-            // prove — see Doc/Architecture/DebuggingNativeCrashes.
-            GC.Collect(2, GCCollectionMode.Forced, blocking: false);
+                // 🚨 BACKGROUND leg first. A parameterless GC.Collect() is blocking:true — it runs the
+                // non-concurrent gen2 path (mark_phase / plan_phase) and never enters background_sweep,
+                // so the probe originally exercised only a path on which no crash has ever been observed.
+                // Every FutuRe exit=139 dump so far faults on the CONCURRENT collector
+                // (bgc_thread_function → gc1 → background_sweep), so the probe has to start one.
+                //
+                // NB this probe is aimed at the use-after-unload hypothesis (a dangling pointer into a
+                // freed collectible LoaderAllocator). The 2026-08-06 dump does NOT support that
+                // hypothesis: the swept object's MethodTable pointer was exactly 0, and a freed-metadata
+                // pointer is non-null-but-unmapped, not zero. Keep the probe honest about what it can
+                // prove — see Doc/Architecture/DebuggingNativeCrashes.
+                GC.Collect(2, GCCollectionMode.Forced, blocking: false);
 
-            // Then the blocking pair, unchanged: it forces finalizers to run so a dead collectible
-            // LoaderAllocator is actually destroyed (rather than merely detected) before the next
-            // unload, which is what makes a dangling pointer fault deterministically.
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-        }
+                // Then the blocking pair, unchanged: it forces finalizers to run so a dead collectible
+                // LoaderAllocator is actually destroyed (rather than merely detected) before the next
+                // unload, which is what makes a dangling pointer fault deterministically.
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            }
     }
 }
 
