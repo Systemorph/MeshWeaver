@@ -1847,6 +1847,10 @@ jobs:
           GREEN: ${{ needs.gate.outputs.green }}
           CONCLUSION: ${{ needs.gate.outputs.conclusion }}
           SHA: ${{ needs.gate.outputs.sha }}
+          # This step resolves main's tip through the API to tell "superseded" from "stuck".
+          # Without a token `gh api` fails, and an unresolved tip must never be reported as
+          # though tip-ness had been established — see the third branch below.
+          GH_TOKEN: ${{ github.token }}
           SHORT: ${{ needs.gate.outputs.short_sha }}
           GATE_RESULT: ${{ needs.gate.result }}
           UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
@@ -1920,7 +1924,15 @@ jobs:
           if [ "$REASON" = "push" ] && [ "$PUBLISH" != "true" ] && [ "$GREEN" != "true" ] \
              && [ "${CONCLUSION#*/}" = "cancelled" ]; then
             TIP=$(gh api "repos/${{ github.repository }}/commits/main" --jq '.sha' 2>/dev/null || echo "")
-            if [ -n "$TIP" ] && [ "$TIP" != "$SHA" ]; then
+            if [ -z "$TIP" ]; then
+              # \U0001f6a8 Say what is true, not what is convenient. Tip-ness was NOT established, so
+              # claiming it (either way) would be the same sin this step exists to correct: a
+              # message that sounds measured and is not. Fail CLOSED — an unresolved tip on a
+              # cancelled check might be the stuck case, and that one must stay loud.
+              echo "::error::main \`$SHORT\`'s required check was CANCELLED and this run could not resolve main's tip to tell 'superseded' from 'stuck' (the API call failed). Treating it as stuck, because that is the outcome that must not be missed. Check whether a newer commit has landed; if one has, this alarm is spurious and the API failure is the bug to chase."
+              exit 1
+            fi
+            if [ "$TIP" != "$SHA" ]; then
               echo "⏭ superseded — \`$SHORT\`'s required check was CANCELLED (not red) and main has moved on to \`${TIP:0:7}\`. Publishing only the tip of a burst is correct; that run delivers this commit too."
               echo "### ⏭ NO PUBLISH for \`$SHORT\` — superseded by \`${TIP:0:7}\` (its check was cancelled, not red)" >> "$GITHUB_STEP_SUMMARY"
               exit 0
