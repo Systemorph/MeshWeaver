@@ -506,9 +506,15 @@ jobs:
           # merge's publish-bake can REUSE it (bake-run-id) instead of compiling a third time.
           # The upstream seed (if any) is a SEPARATE mount: consumed, never re-emitted.
           OWN_BAKE="${RUNNER_TEMP:-/tmp}/own-bake"; mkdir -p "$OWN_BAKE"; chmod 777 "$OWN_BAKE"
-          docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/bake" "${SEED_MOUNT[@]}" "${DUMP_ARGS[@]}" \
+          # 🚨 The seed rides the GATE call only. `compile` is the mesh-free bake of THIS repo's
+          # own types and its parser deliberately takes no --seed ("Unknown argument '--seed'",
+          # exit 2 — measured 2026-08-27 on the first run that ever got past the registry auth,
+          # Reinsurance run 33091175986; the flag on the compile line had never been exercised).
+          # The gate below stands the mesh up on the repo's own bundles PLUS the upstream seed —
+          # that is where consuming a bake means something.
+          docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/bake" "${DUMP_ARGS[@]}" \
             --entrypoint /app/mw-plugin-test "$IMAGE" compile /repo \
-            "${ALLOW_ARGS[@]}" "${SEED_ARGS[@]}" \
+            "${ALLOW_ARGS[@]}" \
             --output /bake --source-sha "$GITHUB_SHA"
           [ -s "$OWN_BAKE/framework-mvid.txt" ] || { echo "::error::compile ran but wrote no bake identity — the bake stage regressed (or the image predates the compile verb; pin ≥ 77bc5f1)"; exit 1; }
           # Gate on the bake: own bundles AND the upstream seed together in one seed directory.
