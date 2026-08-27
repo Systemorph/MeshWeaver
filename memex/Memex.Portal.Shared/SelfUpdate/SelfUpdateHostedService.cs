@@ -201,7 +201,12 @@ public class SelfUpdateHostedService : IHostedService
         Observable
             .Defer(() => NewBuildEventsAcross(_hub
                 .GetQuery($"SelfUpdate.BuildTrigger:{_hub.Address}",
-                    $"nodeType:{BuildCompletion.NodeType}")))
+                    // 🚨 PATH-SCOPED (BuildCompletion.WatchQuery). Build records are SATELLITES
+                    // under Admin/_Build, and satellites are excluded from an unscoped query — the
+                    // bare `nodeType:BuildCompletion` this used to pass returned EMPTY however many
+                    // records existed and however often they were written, so this watch never
+                    // ticked and the install silently stopped self-updating.
+                    BuildCompletion.WatchQuery)))
             .Throttle(_options.EventCoalesceWindow)
             .Select(_ => -2L)
             .RetryWhen(ResubscribeAfterRetryInterval("build-completion watch"));
