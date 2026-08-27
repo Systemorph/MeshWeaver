@@ -19,12 +19,20 @@ namespace MeshWeaver.Hosting.Persistence;
 /// <see cref="MeshNode.NextVersion"/>, which is <c>current.Version + 1</c>, and an unchanged
 /// node is re-persisted at the version it already carries — so a correctly-produced write is
 /// ALWAYS &gt;= the version already stored. A write that
-/// regresses is therefore never a legitimate newer state — it is a stale snapshot that some
-/// component adopted as live (a cache-seeded reactivation, a lagging change-feed echo, a
-/// debounce buffer that outlived its state) about to overwrite acked, durable data. Before
+/// regresses is therefore never a legitimate NEWER state: it was produced against an older
+/// durable state than the row now holds, and letting it land overwrites acked data. Before
 /// this guard the store took it silently: the observed production shape was
 /// <c>Version=12 / ApiKey=sk-v6</c> → <c>Version=2 / ApiKey=sk-v0</c>, six acknowledged
 /// writes destroyed while the write reported success.</para>
+///
+/// <para>🚨 That says the write is OLD — it does not say WHY, and the two causes want different
+/// investigations (#2403). One is a stale snapshot some component adopted as live (a cache-seeded
+/// reactivation, a lagging change-feed echo, a debounce buffer that outlived its state). The other
+/// is a second, entirely legitimate writer that simply reached the path first, so the loser's write
+/// was measured against a row it had never seen — the shape behind #2403, where a cross-partition
+/// skill MIRROR created a path an installer was about to write. Asserting the stale-snapshot cause
+/// in the warning sent that investigation hunting for a bug in the losing writer, where there was
+/// none. <see cref="MeshNode.MainNode"/> is what separates the two on sight.</para>
 ///
 /// <para><b>Two-stage, so it costs nothing on the happy path.</b> A per-path in-process
 /// high-water mark (fed by every write AND every read this process performs — no extra I/O)
@@ -199,20 +207,36 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
         // category say which SHAPE of node it is. All cheap scalars — no content is serialized
         // here (a NodeType's content can be a collectible-ALC type, which reflecting over during
         // teardown is its own crash class).
+        // 🚨 MainNode is the field that NAMES the writer, and it is the one this line used to
+        // withhold (#2403). The losing write is not always a stale own-node snapshot: it is just as
+        // often a SECOND, legitimate writer that got to the path first — and a cross-partition
+        // writer records where its row came from in MainNode. The worked case: the plugins gate's
+        // intermittent `Skill/presentation` + `Skill/slide` failure was `Store/Publishing`'s
+        // pre-installed-skill MIRROR (in-mesh source in MeshWeaver.Plugins — invisible to
+        // `dotnet build` and to any `grep --include='*.cs'` over this repo) creating
+        // `Skill/{id}` from `Publish/Skill/{id}`. Its rows carry
+        // `mainNode='Publish/Skill/presentation'`: one line, writer identified. Without it, three
+        // full local gate reproductions and two sessions of static analysis could not name it — the
+        // durable row's own content had to be matched byte-for-byte against every candidate file
+        // instead. LastModifiedBy does not close that gap (a system-impersonated writer stamps
+        // `system-security`, which every framework writer shares).
         logger?.LogWarning(
             "[MonotonicWriteGuard] CONFLICT on {Path}: a write at Version={IncomingVersion} lost the race against "
             + "the durable Version={StoredVersion}. MeshNode.Version is the owner's monotonic persistence clock "
-            + "(MeshNode.NextVersion floors every mint at current+1), so the losing write is a STALE snapshot, not a "
-            + "newer state. Resolved by merging into the durable row: merged={MergedMembers}; "
+            + "(MeshNode.NextVersion floors every mint at current+1), so this write was PRODUCED AGAINST AN OLDER "
+            + "durable state than the row now holds — either a stale snapshot some component adopted as live, or a "
+            + "second writer that reached this path first. Resolved by merging into the durable row: merged={MergedMembers}; "
             + "latest-wins (stale values DROPPED)={OverwrittenMembers}. The durable row: nodeType={StoredNodeType} "
-            + "name='{StoredName}' category='{StoredCategory}' lastModifiedBy='{StoredLastModifiedBy}' "
-            + "lastModified={StoredLastModified:O}. Find the writer that adopted a stale "
-            + "own-node snapshot; do not relax this guard.",
+            + "name='{StoredName}' category='{StoredCategory}' mainNode='{StoredMainNode}' "
+            + "lastModifiedBy='{StoredLastModifiedBy}' lastModified={StoredLastModified:O}. Find the writer — a "
+            + "mainNode pointing OUTSIDE this path's own partition names a cross-partition mirror; otherwise look "
+            + "for a writer that adopted a stale own-node snapshot. Do not relax this guard.",
             path, stale.Version, latest.Version,
             Describe(resolution.MergedMembers), Describe(resolution.OverwrittenMembers),
-            latest.NodeType, latest.Name, latest.Category, latest.LastModifiedBy, latest.LastModified);
+            latest.NodeType, latest.Name, latest.Category, latest.MainNode,
+            latest.LastModifiedBy, latest.LastModified);
 
-        RecordConflictActivity(path, stale.Version, latest.Version, resolution, options);
+        RecordConflictActivity(path, stale.Version, latest, resolution, options);
 
         if (resolution.IsLatestUnchanged)
             return Observable.Return<MeshNode?>(latest);   // nothing salvageable — the durable row already IS the answer
@@ -248,18 +272,27 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
     /// <c>_Activity</c> namespace, so a conflict on a trace can never write a trace about a trace.</para>
     /// </summary>
     private void RecordConflictActivity(
-        string path, long staleVersion, long latestVersion,
+        string path, long staleVersion, MeshNode latest,
         MeshNodeConflictResolution resolution, JsonSerializerOptions options)
     {
         if (string.IsNullOrEmpty(path)
             || path.Contains("/_Activity/", StringComparison.OrdinalIgnoreCase))
             return;
 
+        var latestVersion = latest.Version;
         var messages = ImmutableList<LogMessage>.Empty
             .Add(new LogMessage(
                 $"A write at Version={staleVersion} lost the race against the durable Version={latestVersion} "
                 + $"on '{path}' and was merged into it.",
                 LogLevel.Information));
+        // The durable row's PROVENANCE — the same identification the warning above carries, kept on
+        // the durable trace because a portal's logs are gone long before someone opens this node
+        // (#2403). A MainNode outside this path's own partition names a cross-partition mirror.
+        messages = messages.Add(new LogMessage(
+            $"The durable row: nodeType='{latest.NodeType}' name='{latest.Name}' "
+            + $"category='{latest.Category}' mainNode='{latest.MainNode}' "
+            + $"lastModifiedBy='{latest.LastModifiedBy}'.",
+            LogLevel.Information));
         messages = resolution.OverwrittenMembers.Aggregate(messages, (acc, member) => acc.Add(
             new LogMessage(
                 $"'{member}' was not auto-resolvable — the newer value was kept and the losing write's value dropped.",
