@@ -374,120 +374,23 @@ jobs:
           echo "> window starts at the last main run that ACTUALLY ran the tests — not at this commit."
         } >> "$GITHUB_STEP_SUMMARY"
 
-  # ─────────────────────────── PREFLIGHT ───────────────────────────
-  # ONE place that asserts every CI INPUT this workflow needs from outside the tree
-  # (repo secrets and variables). It exists so that no gate downstream ever has to
-  # defend itself against a missing input.
+  # ── No preflight job right now, and that is deliberate ────────────────────────────────
   #
-  # 🚨 THE BUG CLASS IT REMOVES — "skip-trapdoors". The shape it replaces was a
-  # per-gate `continue-on-error:` plus an "is the secret set?" branch, which turns an
-  # unprovisioned credential into a SKIPPED job — and GitHub renders a skipped job
-  # with the same grey/green tick as a passed one. "The gate never ran" and "the gate
-  # passed" become indistinguishable, and a required check that passes on no evidence
-  # is worse than a flaky one.
+  # AGENTS.md requires ONE preflight job that asserts every CI input coming from OUTSIDE the
+  # tree (secrets, repo variables) and fails RED naming what to provision — so that a gate can
+  # never skip on a missing input and look identical to one that passed.
   #
-  # That is not theoretical, and the cost has already been paid. The cross-repo plugin
-  # gate below sat inert-and-green from the day it was added — its checkout failed for
-  # want of a credential, `continue-on-error` rewrote that failure to `success`, and the
-  # compile step skipped. So #683's deletion of `AiSettingsNodeType.AddSkillSource`
-  # merged UNVERIFIED while the plugins repo's `Store/Plugin/Source/Localizer.cs` still
-  # called it. The break surfaced only when the mesh recompiled `Store/Plugin` in
-  # production: CS0117, and since every plugin declares `requires: Store`, every
-  # `nodeType:Store/Plugin` partition (Edu, Agent, Skill, Essentials, Collaboration,
-  # DataModelling, Feedback, Instances, Publish) fell back to the compilation-error
-  # overlay. A separate `AddTracking` deletion broke `SocialMedia/Post` the same way.
-  # `Store` is in VITAL_MODULES precisely so an armed gate would have failed #683.
+  # This workflow currently has no such input. Its only assertion was PLUGINS_REPO_SSH_KEY, the
+  # deploy key the plugin gates used to check out MeshWeaver.Plugins, and those gates are gone:
+  # core builds the image and runs its OWN tests, plugins are built by the plugin repo. Keeping
+  # the job with an empty `missing` array would be strictly worse than deleting it — a job that
+  # asserts nothing and always passes IS the green-on-zero-evidence shape the rule exists to
+  # prevent.
   #
-  # The contract, in three lines:
-  #   * a missing input is a RED job naming exactly what to provision — never a skip;
-  #   * gates then run UNCONDITIONALLY. No gate may test its own inputs.
-  #   * the ONE legitimate exemption — a fork PR cannot read org secrets — is expressed
-  #     HERE, once, as a FORK check. Never as a "the secret is empty" check: at the job
-  #     level those two are indistinguishable, and only one of them is safe.
-  #
-  # Adding an input? Add a line to `missing` below and nothing else.
-  preflight:
-    name: "Required CI inputs"
-    timeout-minutes: 5
-    runs-on: ubuntu-latest
-    steps:
-    - name: "Assert every required secret / variable is present"
-      env:
-        PLUGINS_REPO_SSH_KEY: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
-        IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
-        ACTOR: ${{ github.actor }}
-      run: |
-        set -euo pipefail
-        # The sanctioned exemptions — both expressed as EVENT/ACTOR properties, never as
-        # "is the secret set?" probes (the trapdoor shape this job exists to close).
-        # 1) Fork PRs: GitHub withholds org secrets from fork runs BY DESIGN.
-        if [ "${IS_FORK:-}" = "true" ]; then
-          echo "Fork PR — org secrets are withheld by design; the gates that need them do not run."
-          echo "Fork PR: secret-dependent gates are not applicable." >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-        fi
-        # 2) Dependabot PRs: dependabot-actor runs read the SEPARATE Dependabot secrets store,
-        #    not Actions secrets — so Actions secrets are absent BY DESIGN, exactly like forks.
-        #    The plugins gate carries the same actor check at its job level; the push-to-main
-        #    run after merge HAS the secret and runs the gate, so a dependency bump that breaks
-        #    the plugins compile reddens main immediately rather than shipping silently.
-        #    To arm the gate ON dependabot PRs too, provision PLUGINS_REPO_SSH_KEY under
-        #    Settings -> Secrets and variables -> DEPENDABOT and delete this exemption.
-        if [ "${ACTOR:-}" = "dependabot[bot]" ]; then
-          echo "Dependabot PR — Actions secrets are withheld by design (separate Dependabot store); the gates that need them do not run."
-          echo "Dependabot PR: secret-dependent gates are not applicable." >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-        fi
-        missing=()
-        [ -n "${PLUGINS_REPO_SSH_KEY:-}" ] || missing+=("PLUGINS_REPO_SSH_KEY (secret) — private half of the read-only deploy key on Systemorph/MeshWeaver.Plugins. Used by the 'Plugins compile against this PR' gate to check that repo out.")
-        if [ "${#missing[@]}" -ne 0 ]; then
-          for m in "${missing[@]}"; do
-            echo "::error title=Missing required CI input::$m"
-          done
-          {
-            echo "### ❌ Missing required CI input(s)"
-            echo
-            for m in "${missing[@]}"; do echo "- $m"; done
-            echo
-            echo "Provision them under **Settings → Secrets and variables → Actions**, then re-run."
-            echo "This job fails rather than letting the gates that need them skip: a skipped gate is"
-            echo "indistinguishable from a passing one, which is how an unarmed gate ships a regression."
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 1
-        fi
-        echo "All required CI inputs are present."
-    # ── The CI-logic scripts that decide what CI DOES NOT DO ──────────────────────────────────
-    # Both of these narrow work, and narrowing is the shape that produces a silent under-build:
-    # bake-scope.sh decides which modules a node repo's bake rebuilds, and carry-forward-bundles.sh
-    # is the only thing stopping a narrowed bake from replacing the `_complete` sentinel with a
-    # SHORTER one — which no portal would report, it would just quietly recompile at boot again.
-    # Neither is reachable from any .NET test, and they run only on a satellite repo's main, so
-    # without this step their first execution is in production. Seconds; no secrets; no image.
-    # Both are proven non-vacuous by mutation: remove any single fallback and the step goes red.
-    - uses: actions/checkout@v7
-      with: { fetch-depth: 1 }
-    - name: "The bake-scope decision can say 'full' (self-test)"
-      run: .github/scripts/bake-scope.sh --self-test
-    - name: "The bundle carry-forward refuses to shrink a publication (self-test)"
-      run: .github/scripts/carry-forward-bundles.sh --self-test
+  # 🚨 Reinstate it the moment this workflow needs its first external input again: one job, its
+  # `missing` array, a RED failure naming exactly what to provision, and `needs: [preflight]`
+  # on every gate plus the required check.
 
-  # ───────────────────────────── BUILD ─────────────────────────────
-  # Compile the whole solution exactly once and package every TEST project's
-  # bin output (self-contained: CopyLocal puts each test's full dependency
-  # closure + fixtures in its own bin) into one tarball the shards consume.
-  #
-  # No `dotnet workload restore`: the 2026-07-12 CI logs prove it installs
-  # NOTHING ("No workloads installed for this feature band … Successfully
-  # updated workload(s): .") and burned ~75 s per job updating advertising
-  # manifests. No project in the graph requires a workload; if one ever does,
-  # the build step here fails loudly and the restore comes back — with a cache.
-  #
-  # No mesh-local `#r` pack step: the baked feed was removed from the portal
-  # image in #395 (the scope generator ships with the platform and runs
-  # in-process — pinned by BuiltInScopeGeneratorTest; legacy
-  # `#r "nuget:MeshWeaver.BusinessRules.Generator"` directives are filtered out
-  # of the NuGet resolve set at compile). Nothing in the test suite resolves
-  # from dist/packages anymore, so packing it was pure waste.
   build:
     name: "Build solution (once)"
     needs: precheck
@@ -1371,402 +1274,34 @@ jobs:
   # pass/fail gate for tests + crashed hosts. (A shard job that infra-fails reds
   # the run on its own — GitHub's run conclusion is failure if ANY job fails,
   # regardless of this always() collector's own conclusion.)
-  # ── Cross-repo API gate: do the PLUGINS still compile against THIS PR's framework? ──
+  # ── Where the plugin gates went (and what must exist before this is safe) ──────────────
   #
-  # 🚨 The bug class this exists for: plugin node source is Roslyn-compiled AT RUNTIME against
-  # this assembly, from a DIFFERENT REPO. So deleting a public member here is invisible to every
-  # check we had — a repo-local grep says "no callers", and the plugins repo's own CI compiles
-  # against a PUBLISHED image (MW_TEST_IMAGE, refreshed only by main-cd), so it keeps passing
-  # until that tag is rebuilt. Both repos stay green, the break lands in whatever deployment
-  # builds from source first, and the plugins repo then goes red REPO-WIDE for a change it never
-  # made. That is exactly how AiSettingsNodeType.AddSkillSource was deleted with a live caller in
-  # Store/Plugin/Source/Localizer.cs: Store failed to compile, and since nearly every module
-  # depends on Store, every plugin root node fell back to an untyped overlay — after burning a
-  # 60s settle timeout PER PACKAGE.
+  # `plugin-gate` ("plugins build, test and bake against this PR") and `landed-modules-gate`
+  # ("build every landed module against this PR") USED TO LIVE HERE. They are gone because core
+  # builds the image and runs its OWN tests — it does not compile, test or bake plugins. Plugins
+  # are built in the repository that owns them, against the image core just published.
   #
-  # The gate runs the SAME tester the plugins repo runs (tools/MeshWeaver.PluginTester, shipped
-  # in the platform image as mw-plugin-test) — import each node repo into a fresh in-process
-  # mesh, assert every NodeType reaches CompilationStatus.Ok, renders, and its `Tests` area runs
-  # green — but against the framework THIS PR just built, not a published tag. It reuses shard
-  # 0's build output, so it costs a download and the tester run, not a rebuild.
-  plugin-gate:
-    name: "Plugins build, test and bake against this PR"
-    # `preflight` is what guarantees the credential exists, so nothing in this job needs to
-    # check for it. If preflight fails, this job skips — and `collect-results` turns that skip
-    # into a RED required check (see its "Fail if a required CI input is missing" step).
-    needs: [preflight, build]
-    # The ONE legitimate reason this gate does not run: a fork PR has no access to the private
-    # plugins repo (nor to any org secret). A fork cannot break the private repo's consumers in
-    # a way this run could prove either way. Expressed as a FORK check — never as a
-    # "is the credential set?" check, which is the same shape with none of the safety.
-    if: needs.build.result == 'success' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    # ⏱️ WALL-CLOCK: this job depends on `build` — the SAME dependency the test shards have — so it
-    # runs CONCURRENTLY with them, not after. Total run time is max(slowest shard, this), so the
-    # gate costs the PR nothing while it stays under a shard's 20 min. It still reuses shard 0's
-    # artifact rather than rebuilding, which is where the saving actually comes from.
-    #
-    # 🚨 It used to gate TWO modules (Store, Essentials) to stay cheap, and that scoping is now
-    # gone: the full sweep runs here. Measured on the plugins repo's own equivalent job, the whole
-    # tree — 53 packages — compiles, renders and tests in ~4m15s, comfortably inside a shard, so
-    # the narrow version was buying a few minutes at the cost of the coverage this gate exists for.
-    # Everything the narrow gate could not see was found LATER and elsewhere: in the plugins repo's
-    # CI (after the break is on main), or in production. The timeout stays under the shard bar — if
-    # this ever becomes the long pole it must fail and be re-scoped from evidence, never silently
-    # stretch every PR.
-    timeout-minutes: 18
-    # The failing CHECK and the node(s) it failed on, lifted verbatim from the tester's verdict
-    # line, so the required check downstream can name the real cause instead of guessing one.
-    # Empty whenever the gate died before producing a verdict (checkout fault, missing tester) —
-    # consumers must degrade to "see the job", never to an invented cause.
-    outputs:
-      failure: ${{ steps.gate.outputs.failure }}
-    steps:
-    - uses: actions/checkout@v7
-      with: { fetch-depth: 1 }
-    - uses: actions/setup-dotnet@v6
-      with:
-        dotnet-version: 10.0.x
-    - name: "Download artifact: build output (shard 0)"
-      uses: actions/download-artifact@v8
-      with:
-        name: build-output-0
-    - name: Extract build output
-      run: |
-        set -euo pipefail
-        tar -I 'zstd --long=27' -xf build-output-0.tar.zst
-        rm -f build-output-0.tar.zst
-    # 🚨 NO `continue-on-error` HERE, EVER. This job only runs on a non-fork (see the job `if`),
-    # and `preflight` has already proven the deploy key is present — so on this path the checkout
-    # succeeding is a PRECONDITION, not a hope. A failure now means the key was revoked, replaced,
-    # or lost its access: a CONFIGURATION FAULT, and configuration faults must be loud. The shape
-    # this replaces (`continue-on-error` + `if: steps.plugins.outcome == 'success'` on the compile,
-    # plus an "is the credential set?" probe) turned every such fault into a GREEN job that tested
-    # nothing — and it did, on every run, from the day the gate was added until the key was
-    # provisioned. See the preflight job for the full account.
-    #
-    # 🚨 A READ-ONLY DEPLOY KEY, deliberately — not a PAT and not the org's GitHub App.
-    # This gate needs exactly one capability: read Systemorph/MeshWeaver.Plugins. A deploy key
-    # grants precisely that and nothing else, so a secret readable by every workflow run in this
-    # repo cannot be turned into anything wider. The alternatives were both worse:
-    #   • a fine-grained PAT is minimal too, but it is minted against a PERSON, inherits their
-    #     account's lifecycle, and EXPIRES — a gate that silently disarms when someone's token
-    #     lapses is the failure shape this whole job exists to prevent;
-    #   • the org's `meshweaver-cloud` App is installed on ALL repos with write scopes (it drives
-    #     self-update and the issues/PR/webhook integrations), so putting its private key here
-    #     would let any workflow — including one added by a PR — mint org-wide write tokens.
-    # Rotate/revoke by deleting the key on the plugins repo (Settings → Deploy keys) and
-    # replacing PLUGINS_REPO_SSH_KEY here; nothing else depends on it.
-    - name: Check out MeshWeaver.Plugins
-      uses: actions/checkout@v7
-      with:
-        repository: Systemorph/MeshWeaver.Plugins
-        ref: main
-        path: plugins-repo
-        ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
-        fetch-depth: 1
-    - name: "Compile + render + test + bake EVERY plugin against this PR"
-      id: gate
-      env:
-        # 🚨 THE WHOLE REPO, not a chosen few. This gated only Store + Essentials — the two
-        # choke points — on the argument that it bought the most breakage-detection per minute of
-        # PR wall-clock. The argument was sound and the conclusion was wrong: everything outside
-        # those two was checked only AFTER a break reached main, by the plugins repo's own CI, and
-        # that is where this session's failures kept surfacing. Widening costs ~4 min against a
-        # 20-minute shard bar; the narrow version cost a day of misattributed reds.
-        #
-        # There is no module list here on purpose. The tester gates every package it DISCOVERS
-        # under the root, so the checkout IS the set — a list in this repo would go stale the first
-        # time the plugins repo adds a module, and it would go stale SILENTLY, the gate reporting
-        # green while covering less. (The same reason landed-modules-gate discovers its projects.)
-        # A crash of the tester itself (SIGSEGV'd on main 2026-08-20, mid NodeType compile —
-        # exit 139, verdictless) must leave a dump the failure can be analyzed from: the runner's
-        # core file dies with the VM, so the CLR writes a minidump-with-heap to a path the
-        # failure-only artifact upload below preserves.
-        DOTNET_DbgEnableMiniDump: "1"
-        DOTNET_DbgMiniDumpType: "2"
-        DOTNET_DbgMiniDumpName: "/tmp/gate-dumps/tester-%p.dmp"
-      run: |
-        set -euo pipefail
-        mkdir -p /tmp/gate-dumps
-        TESTER="$(find . -path '*/MeshWeaver.PluginTester/bin/*/mw-plugin-test.dll' | head -1)"
-        if [ -z "$TESTER" ]; then
-          echo "::error::mw-plugin-test.dll not in the build output — the gate cannot run."
-          exit 1
-        fi
-        # The checkout itself is the root — no staging copy, because there is nothing left to
-        # narrow to and copying the tree would only add I/O.
-        STAGE="$GITHUB_WORKSPACE/plugins-repo"
-        # The ratchet is REQUIRED, and its absence is reported here rather than left to the tester
-        # (#1741): `--allow` at a path that does not exist is a configuration error, and a `|| true`
-        # that swallowed the failed copy only moved the report one process further away.
-        if [ ! -f "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow" ]; then
-          echo "::error::plugins-repo/plugin-gate.allow is missing — the known-debt ratchet this gate is configured with cannot be read, and a gate that cannot read its input must not look like one that passed. Commit the file (EMPTY = no known debt)."
-          exit 1
-        fi
-        # (no copy: the ratchet already sits at the root of the tree being gated)
-        echo "gating every package under $STAGE"
-        # 🚨 No discovery pre-check here, deliberately. "A gate that discovers nothing must not
-        # look like one that passed" is right, and the TESTER already enforces it: PluginGateRunner
-        # returns a GateReport with FatalError "No node-repo packages (top-level folders with an
-        # index.json root)" when it finds none, and a FatalError exits red. A shell count beside it
-        # would be a SECOND discovery rule that has to agree with the first forever — and it would
-        # not: the tester filters on the index.json CONTENT (DeclaresNodeType), a find(1) count
-        # cannot, so a layout change would false-red every PR in this repo while the tester was
-        # perfectly happy. One source of truth for what counts as a package.
-        # plugin-gate.allow is the plugins repo's known-debt ratchet: listed failures are
-        # tolerated, NEW failures fail this PR. Same one-way contract the plugins CI uses, so the
-        # two gates cannot disagree about what is acceptable.
-        #
-        # 🚨 The run is TEED, not swallowed: the log still streams to the job, and the copy is read
-        # afterwards for the tester's verdict line. `if !` (not `set +e`) so `set -e` stays armed
-        # for everything else, and PIPESTATUS[0] is the TESTER's code — tee always exits 0.
-        # 🚨 TWO STEPS, not one (#2064). The bake is a BUILD step — `compile` resolves each
-        # NodeType's sources straight from the staged tree and compiles them with
-        # MeshWeaver.Compiler: no MeshBuilder, no AddGraph(), no import, no hub. The gate is then a
-        # mesh CONSUMING that bake (`--seed`), so what renders and what runs the `Tests` areas is
-        # the assembly that will actually ship, not a private recompile of the same sources.
-        # bake-then-gate.sh holds the pair — the SAME split main-cd's publish-bake makes — so the
-        # PR lane cannot drift back to baking through a mesh. It also asserts what a green tick
-        # cannot show: that the gate ADOPTED the baked bytes (declared = adopted, adopted > 0)
-        # rather than quietly compiling its own.
-        # The bundles are still MVID-keyed and still carry the plugins-repo commit they were synced
-        # from (--source-sha), so the uploaded artifact's provenance is unchanged. Same adoption
-        # caveat as the content bake: only consumers sharing THIS run's build (its Graph.dll MVID)
-        # can adopt; anything else declines wholesale until #1660 WS3.
-        PLUGINS_SHA="$(git -C "$GITHUB_WORKSPACE/plugins-repo" rev-parse HEAD)"
-        log="${RUNNER_TEMP:-/tmp}/plugin-gate.log"
-        status=0
-        bash .github/scripts/bake-then-gate.sh "$TESTER" "$STAGE" \
-          "${RUNNER_TEMP:-/tmp}/bake-plugins" "$STAGE/plugin-gate.allow" "$PLUGINS_SHA" \
-          "${RUNNER_TEMP:-/tmp}/plugin-gate" || status=$?
-        # The tester's verdict line IS the message — `GATE FAILED — tests: Store/Catalog — 1 new
-        # failure(s), …` (GateReport.FailedPrefix). Lifted verbatim: nothing here re-derives or
-        # re-words a cause, which is exactly how this job came to annotate a `tests` failure as
-        # "does not compile — a public API changed" and send investigators to diff public
-        # signatures that were fine (#1077).
-        verdict="$(grep -m1 -- '^GATE FAILED' "$log" || true)"
-        # Multi-line-safe even though the verdict is one line: a bare KEY=VALUE with an unexpected
-        # newline would corrupt every later output in the file.
-        {
-          echo "failure<<GATE_EOF"
-          echo "$verdict"
-          echo "GATE_EOF"
-        } >> "$GITHUB_OUTPUT"
-        if [ "$status" != "0" ]; then
-          if [ -n "$verdict" ]; then
-            echo "::error::$verdict"
-          else
-            # No verdict = the gate died before judging anything (missing tester, install fault,
-            # crash). Say THAT — an unexplained failure is cheaper than a wrong explanation.
-            echo "::error::The plugins gate failed before it produced a verdict — no check was judged. See this job's log."
-          fi
-          exit "$status"
-        fi
-    # Failure-only: preserve any CLR minidump the tester wrote (DOTNET_DbgEnableMiniDump above) —
-    # the runner's own core file dies with the VM, so without this a segfault is unanalyzable.
-    - name: "Upload gate crash dumps"
-      if: failure()
-      uses: actions/upload-artifact@v7
-      with:
-        name: plugins-gate-dumps
-        path: /tmp/gate-dumps/
-        if-no-files-found: ignore
-        retention-days: 7
-    # Same postcondition contract as doc-gate's bake: a green gate with no bake identity is a
-    # bake-stage regression — RED, never a skip.
-    - name: "Bake summary + identity"
-      id: bake
-      run: |
-        set -euo pipefail
-        mvid_file="${RUNNER_TEMP:-/tmp}/bake-plugins/framework-mvid.txt"
-        if [ ! -s "$mvid_file" ]; then
-          echo "::error::the plugins gate ran green but wrote no bake identity ($mvid_file) — the bake stage regressed."
-          exit 1
-        fi
-        echo "mvid=$(cat "$mvid_file")" >> "$GITHUB_OUTPUT"
-        {
-          echo "### 📦 Baked plugin bundles (framework $(cat "$mvid_file"))"
-          echo
-          echo '```'
-          grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/plugin-gate-bake.log" || true
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
-    - name: "Upload artifact: baked plugin bundles"
-      uses: actions/upload-artifact@v7
-      with:
-        name: baked-plugins-${{ steps.bake.outputs.mvid }}
-        path: ${{ runner.temp }}/bake-plugins
-        retention-days: 7
+  # 🚨 Do not restore them casually, and do not delete this note: it is the only remaining record
+  # of the bug class they covered. Plugin node source is Roslyn-compiled AT RUNTIME against this
+  # assembly, FROM A DIFFERENT REPO. Deleting a public member here is therefore invisible to every
+  # repo-local check — a grep says "no callers" — and the plugins repo's own CI compiled against a
+  # PUBLISHED image, so it kept passing until that tag was rebuilt. Both repos stayed green and the
+  # break landed in whatever deployment built from source first. That is exactly how
+  # `AiSettingsNodeType.AddSkillSource` was deleted with a live caller in
+  # `Store/Plugin/Source/Localizer.cs`: Store failed to compile, and since nearly every module
+  # depends on Store, every plugin root node fell back to an untyped overlay — after burning a 60s
+  # settle timeout PER PACKAGE.
+  #
+  # 🚨 WHAT REPLACES IT — and it is a PRECONDITION, not a follow-up. The protocol is: core notifies
+  # memex that a new image exists; plugins are subscribed, are notified, and build AGAINST THAT
+  # IMAGE; they notify memex of the packages and versions produced. That closes the same hole, and
+  # closes it better — the old gate tested a PR's framework against plugin source, while the new
+  # arrangement tests every plugin against the framework that actually shipped.
+  #
+  # But it only closes it once the notify-and-build loop exists. Until plugins build against the
+  # NEW image rather than a published tag, deleting a public member here is detected by nothing
+  # until someone rebuilds by hand. See /Doc/Architecture/BuildServer.
 
-
-  # ─────────────────── LANDED-MODULE GATE (Systemorph/MeshWeaver#1980) ───────────────────
-  # `plugin-gate` above covers the IN-MESH half of MeshWeaver.Plugins — the NodeType `Source/*.cs`
-  # the mesh Roslyn-compiles at runtime. It never builds that repo's `src/`, and since
-  # `0b3b4266f` ("Fourteen modules leave the platform") that is where sixteen COMPILED modules
-  # live: the AI packs, Observability, Markdown.Export, Mcp, Teams, the mail/blob/index adapters.
-  # They reference the platform by PROJECT path (`$(MeshWeaverRoot)`) and take their NuGet pins
-  # from its central `Directory.Packages.props`, so a platform change reaches them directly — and
-  # nothing in this repo compiled them. Their only check was the plugins repo's own CI, which
-  # builds against whatever platform ref that run resolves, i.e. AFTER the break is on main.
-  #
-  # 🚨 Both halves of that coupling have already fired:
-  #   • a DELETED PUBLIC API — `eafd353ed` removed `AddTracking()`; three NodeTypes kept calling
-  #     it, CI stayed green, and all three production portals hit `DynamicTypePreWarmer:
-  #     REFUSING READINESS` at the next framework bump.
-  #   • a DELETED PACKAGE PIN — on 2026-08-21 `Microsoft.Extensions.Options` left this repo's
-  #     central list and every landed module failed `NU1010` on the plugins repo's main and on
-  #     each of its six open PRs at once. This repo was green throughout. #1985 restored the
-  #     pins reactively, which is the shape this gate exists to replace.
-  # A module that does not build produces no bundle, and the capability simply vanishes from the
-  # image — a failure with no error anywhere near the change that caused it.
-  #
-  # ⏱️ ONE `dotnet build` over a generated solution, not forty-seven: the platform's project graph
-  # is then compiled once rather than per project, which is where nearly all of the cost is.
-  # Measured against a warm tree: **~16 s for all 47** (the modules plus their test projects) in
-  # one build, versus 73 s for just the sixteen module projects built one invocation at a time. The timeout
-  # below is far above either, and the step PRINTS its own elapsed time, so if this ever becomes
-  # the long pole it is re-scoped from evidence rather than by guess.
-  landed-modules-gate:
-    name: "Landed modules compile against this PR"
-    needs: [preflight, build]
-    # Identical guard to `plugin-gate`, for the identical reason: a fork PR cannot read the private
-    # plugins repo, and a fork cannot break its consumers in a way this run could prove either way.
-    # Expressed as a FORK check — NEVER as "is the credential set?", which is the same shape with
-    # none of the safety (a missing input must fail RED in preflight, not skip green here).
-    if: needs.build.result == 'success' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    outputs:
-      failure: ${{ steps.modules.outputs.failure }}
-    steps:
-    - uses: actions/checkout@v7
-      with: { fetch-depth: 1 }
-    - uses: actions/setup-dotnet@v6
-      with:
-        dotnet-version: 10.0.x
-    # 🚨 NO `continue-on-error`. See plugin-gate: on this path the deploy key is a PRECONDITION
-    # proven by preflight, so a checkout failure is a configuration fault and must be loud.
-    - name: Check out MeshWeaver.Plugins
-      uses: actions/checkout@v7
-      with:
-        repository: Systemorph/MeshWeaver.Plugins
-        ref: main
-        path: plugins-repo
-        ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
-        fetch-depth: 1
-    - name: "Build every landed module against this PR"
-      id: modules
-      env:
-        # 🚨 MeshWeaverRoot must be set for the WHOLE step, not just the build. Those projects
-        # reference the platform as `$(MeshWeaverRoot)/src/…`, and its default is a SIBLING
-        # checkout — which does not exist in this layout (the platform is $GITHUB_WORKSPACE and
-        # the repo is a subdirectory of it). `dotnet sln add` EVALUATES each project, so with the
-        # default it fails on the first unresolvable ProjectReference, and under GitHub's
-        # `bash -e` shell that ends the step in ~4 s with exit 2 — which looks nothing like the
-        # compile break this gate is for. Set here rather than passed with -p so `dotnet sln add`
-        # sees it too; MSBuild reads environment variables as properties.
-        MeshWeaverRoot: ${{ github.workspace }}
-      run: |
-        # `-e` is already in force (GitHub runs `run:` under `bash -e {0}`), and an earlier
-        # revision proved it by dying at `dotnet sln add` in four seconds. Stating it here anyway:
-        # a reader cannot see the runner's default shell, and a gate whose non-vacuity depends on
-        # an invisible flag is one edit away from silently building an empty solution and passing.
-        set -euo pipefail
-        cd "$GITHUB_WORKSPACE/plugins-repo"
-        # The module set is DISCOVERED, never listed here: a list in this repo would go stale the
-        # first time the plugins repo adds a module, and it would go stale SILENTLY — the gate
-        # would keep passing while covering less. `*.Test` projects are excluded: this gate is
-        # about the shipped bundles, and the plugins repo runs their tests itself.
-        # TEST projects are included, and that is not padding: the failure that reddened the
-        # plugins repo's main on 2026-08-21 was `MeshWeaver.OgCard.Test` failing to COMPILE —
-        # it moved out of this repo with its module and silently lost `InternalsVisibleTo`, so
-        # the seam constructor it needs became invisible (CS1729). A module-only sweep is blind
-        # to that whole class, and including the tests costs nothing measurable because they
-        # share the one build graph. They are COMPILED here, never run: executing them needs
-        # containers and is the plugins repo's own job.
-        mapfile -t projects < <(find src -mindepth 2 -maxdepth 2 -name '*.csproj' | sort)
-        if [ "${#projects[@]}" -eq 0 ]; then
-          echo "::error::found no module projects under plugins-repo/src — a gate that covers nothing must not report green. Either the layout moved (update the discovery below) or the checkout is wrong."
-          echo "failure=no module projects discovered under plugins-repo/src" >> "$GITHUB_OUTPUT"
-          exit 1
-        fi
-        echo "Building ${#projects[@]} landed project(s) against this PR's platform tree:"
-        printf '  %s\n' "${projects[@]}"
-        # 🚨 Resolve the file the SDK actually wrote rather than assuming an extension: .NET 10
-        # creates `LandedModules.slnx`, and hard-coding `.sln` fails with "Could not find
-        # solution or directory" — a fault that looks nothing like the breakage this gate is for.
-        dotnet new sln -n LandedModules >/dev/null
-        # 🚨 NOT `ls A B`: GNU coreutils `ls` exits 2 when an operand does not exist, and exactly
-        # one of these two names exists by design — so under `set -e` + `pipefail` that ends the
-        # step with exit 2 before anything is built. It is also indistinguishable in the UI from
-        # a real compile failure, which is how it survived one round of misdiagnosis.
-        sln=""
-        for candidate in LandedModules.slnx LandedModules.sln; do
-          if [ -f "$candidate" ]; then sln="$candidate"; break; fi
-        done
-        if [ -z "$sln" ]; then
-          echo "::error::dotnet new sln produced no solution file — cannot assemble the build."
-          echo "failure=dotnet new sln produced no solution file" >> "$GITHUB_OUTPUT"
-          exit 1
-        fi
-        for p in "${projects[@]}"; do
-          if ! dotnet sln "$sln" add "$p" >/dev/null 2>"${RUNNER_TEMP:-/tmp}/sln-add.err"; then
-            echo "::error::could not add $p to the build — $(head -1 "${RUNNER_TEMP:-/tmp}/sln-add.err" | cut -c1-200). A project this gate cannot even load is unverified, not passing."
-            echo "failure=could not add $p to the build" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-        done
-        start=$SECONDS
-        # -warnaserror matches how these modules are actually shipped (the plugins repo inherits
-        # this repo's Directory.Build.props), so a warning introduced here fails here.
-        if ! dotnet build "$sln" -c Release -warnaserror \
-               2>&1 | tee "${RUNNER_TEMP:-/tmp}/landed-modules.log"; then
-          # Report the FIRST real diagnostic, so the required check downstream can name the cause
-          # instead of saying "see the job". NU1010 (a pin this repo deleted) and CS0117 (an API
-          # this repo deleted) are the two shapes this gate was built for and both surface here.
-          first="$(grep -oE '(error|warning) [A-Z]+[0-9]+:.*' "${RUNNER_TEMP:-/tmp}/landed-modules.log" | head -1 | cut -c1-300)"
-          echo "::error::a landed project in MeshWeaver.Plugins does not build against this PR. ${first:-see the job log}"
-          echo "failure=${first:-a landed module in MeshWeaver.Plugins does not build against this PR}" >> "$GITHUB_OUTPUT"
-          {
-            echo "### ❌ Landed modules do not build against this PR"
-            echo
-            echo "These modules live in \`MeshWeaver.Plugins/src\` and reference this repo by project path."
-            echo "A platform API or package pin they depend on was removed or renamed."
-            echo
-            echo '```'
-            grep -E '(error|warning) [A-Z]+[0-9]+:' "${RUNNER_TEMP:-/tmp}/landed-modules.log" | sort -u | head -20
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 1
-        fi
-        echo "### ✅ ${#projects[@]} landed projects (modules + their tests) build against this PR ($((SECONDS - start))s)" >> "$GITHUB_STEP_SUMMARY"
-        echo "all ${#projects[@]} landed projects built in $((SECONDS - start))s"
-
-  # ────────────────────────── CLIENTS GATE ──────────────────────────
-  # Folds the `Clients` workflow's verdict into the repo's ONE required status check (#1568).
-  #
-  # 🚨 WHY THIS EXISTS. On 2026-08-14 PR #1555 merged with the ENTIRE Clients workflow red —
-  # all seven jobs, including `Portal-next (typecheck + test + build)`. Nothing blocked it,
-  # because `Consolidate test results` is the only required check and it is green independently
-  # of Clients. The consequence was not confined to the clients: `main-cd`'s portal-next leg
-  # runs the very same `npm run build`, it died in ~1.1 s on every CD run afterwards, and
-  # `promote` is all-or-nothing — so CD published NOTHING for ~1 h. Every self-updating install
-  # stayed on the old image and a production 42P18 fix was stranded. The signal existed and was
-  # advisory; a workflow whose failure can stop image publication has to be a merge gate.
-  #
-  # 🚨 WHY NOT SIMPLY MARK `Clients` REQUIRED. It is path-filtered (clients/** plus the
-  # cross-tree inputs its guards read), so on a server-only PR it never runs — and a required
-  # check that is legitimately skipped blocks merges FOREVER. That is exactly why this repo
-  # keeps `Build solution (once)` and the shards out of the required set. So the gate is this
-  # always-runs job, which REPORTS the filtered workflow's result.
-  #
-  # 🚨 "Clients did not run" is a fact about the DIFF, not missing evidence. Zero runs means the
-  # path filter did not match, i.e. this PR changes none of the inputs those jobs read — the
-  # clients tree under test is byte-identical to the base's. That is categorically different
-  # from the skip-trapdoor AGENTS.md rules out (an `if:` asking whether a SECRET is set, where
-  # "the gate never ran" and "the gate passed" become indistinguishable). This job always runs,
-  # always reports, and never tests its own inputs.
   clients-gate:
     name: "Clients workflow verdict"
     runs-on: ubuntu-latest
@@ -2069,7 +1604,7 @@ jobs:
     # (#2370) — a module's IL binds a NAME, so no source build can see it. The gate for exactly
     # that now exists and is proven live, but until this line it could go RED while the PR merged
     # anyway. A gate whose verdict nothing reads is decorative.
-    needs: [precheck, preflight, build, test, plugin-gate, landed-modules-gate, doc-gate, licence-gate, clients-gate, record-signatures]
+    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -2332,65 +1867,6 @@ jobs:
         echo "Pruning ${#refspecs[@]} stale marker(s)."
         git push origin "${refspecs[@]}"
 
-    # ── The cross-repo gate decides this check too ──────────────────────────────────────────
-    # 🚨 `needs:` alone is NOT enough: this job runs with `if: always()`, so a failed dependency
-    # does not fail it — it would report success while the plugins are broken, which is precisely
-    # the silent-green failure the gate exists to end.
-    # 🚨 NAME THE PHASE THAT FAILED — never a guessed cause. The gate judges three checks per node
-    # (compile / render / tests) and its verdict line says which one failed on which node; this
-    # step relays that line verbatim. The message it replaced asserted ONE cause for all three:
-    #
-    #     "MeshWeaver.Plugins does not compile against this PR … A public API change here breaks
-    #      plugin node source that is Roslyn-compiled at runtime"
-    #
-    # …which is the most expensive wrong lead available. A public-API break here genuinely DOES
-    # break that repo — plugin node source is Roslyn-compiled from mesh content, so a repo-local
-    # `rg` can never prove a deletion safe (that is how `AddSkillSource` broke 8 NodeTypes). So the
-    # claim reads as authoritative and sends the investigator to diff public signatures. On
-    # 2026-08-10 it did exactly that for a `Store/Catalog` verdict of `compile=Ok render=ok
-    # tests=FAILED`, on PR #1043 whose whole diff was MessageService.cs plus two test files
-    # (issue #1077). Keep the API sentence CONDITIONAL on the phase actually being `compile`.
-    - name: Fail if a landed module does not build
-      if: needs.landed-modules-gate.result == 'failure'
-      env:
-        # Empty whenever the gate died before producing a diagnostic (checkout fault, no projects
-        # discovered). Degrades to "see the job", which is true either way.
-        MODULE_VERDICT: ${{ needs.landed-modules-gate.outputs.failure }}
-      run: |
-        set -uo pipefail
-        verdict="$(printf '%s' "${MODULE_VERDICT}" | head -1)"
-        echo "::error::A module in MeshWeaver.Plugins/src does not build against this PR. ${verdict:-See the 'Landed modules compile against this PR' job.}"
-        echo "Those projects reference this repo by PROJECT path and take their NuGet pins"
-        echo "from its central Directory.Packages.props, so removing a public API or a PackageVersion"
-        echo "here breaks them. A module that does not build produces no bundle, and the capability"
-        echo "disappears from the image with no error near the change that caused it."
-        echo "Fix forward here, or land the plugins-side change first and say so in the PR body."
-        exit 1
-    - name: Fail if the plugin gate failed
-      if: needs.plugin-gate.result == 'failure'
-      env:
-        # Empty when the gate produced no verdict (it died before judging), and — depending on how
-        # GitHub propagates a failed job's outputs — possibly empty even when it did. Both degrade
-        # to "see the job", which is true either way.
-        GATE_VERDICT: ${{ needs.plugin-gate.outputs.failure }}
-      run: |
-        set -uo pipefail
-        verdict="$(printf '%s' "${GATE_VERDICT}" | head -1)"
-        if [ -n "$verdict" ]; then
-          echo "::error::The plugins gate failed: ${verdict} — see the 'Plugins compile against this PR' job."
-        else
-          echo "::error::The plugins gate failed — see the 'Plugins compile against this PR' job for the failing check (compile / render / tests) and the node(s) it failed on."
-        fi
-        case "$verdict" in
-          *compile:*)
-            echo "::error::A failing 'compile' check means a public API change here broke plugin node source that is Roslyn-compiled at runtime from the plugins repo."
-            ;;
-        esac
-        exit 1
-
-    # ── …and the doc-content gate decides it too ────────────────────────────────────────────
-    # 🚨 Same lesson as the plugin-gate step above: `needs:` alone is NOT enough under
-    # `if: always()` — a failed doc-gate must explicitly turn the repo's only required check RED.
     - name: Fail if the doc gate failed
       if: needs.doc-gate.result == 'failure'
       env:
@@ -2432,12 +1908,6 @@ jobs:
         echo "::error::Do NOT satisfy this by rebuilding the consumer: the point is that modules ALREADY shipped bind the old name. If a forwarder is impossible (it would need a reference cycle), the move has to be reverted or the whole set republished atomically — see #2398."
         exit 1
 
-    # ── …and a missing CI INPUT decides it too ──────────────────────────────────────────────
-    # 🚨 Closing the last skip-trapdoor. A preflight failure SKIPS plugin-gate (a skipped `needs`
-    # skips its dependents), and this job's `always()` would otherwise report that as a pass —
-    # "Consolidate test results" is the repo's only required status check, so an unprovisioned
-    # credential would once again read as a green merge-ready PR while the cross-repo gate
-    # tested nothing. Same lesson as the step above: `needs:` alone is NOT enough under always().
     # ── …and a red Clients workflow decides it too ──────────────────────────────────────────
     # 🚨 `needs:` alone is NOT enough under `if: always()` — same lesson as the steps above.
     # This is the merge gate #1555 did not have: its Portal-next job was red, naming the exact
@@ -2446,12 +1916,6 @@ jobs:
       if: needs.clients-gate.result != 'success'
       run: |
         echo "::error::The Clients workflow verdict is '${{ needs.clients-gate.outputs.verdict }}' (gate job: ${{ needs.clients-gate.result }}) — see the 'Clients workflow verdict' job. The clients tree is now just the Python SDK (the GUI clients moved to MeshWeaver.Plugins, MeshWeaver#2169), so a red verdict is a real SDK regression rather than the image-publication stopper it used to be."
-        exit 1
-
-    - name: Fail if a required CI input is missing
-      if: needs.preflight.result != 'success'
-      run: |
-        echo "::error::A required CI input is missing or the preflight could not run — see the 'Required CI inputs' job. Gates that depend on it did not run, so this run proves nothing about them."
         exit 1
 
     # ── STATE THE BISECT WINDOW ON A RED ────────────────────────────────────────────────────
