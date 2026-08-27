@@ -42,7 +42,13 @@ name: Clients
 # 🚨 `ciTrigger.test.ts` — the guard that kept this list honest by failing when a client test
 # grew a cross-tree read the trigger did not cover — went with the move. Until an equivalent exists
 # for the surviving clients, this list is maintained BY HAND and will rot again. If you add a
-# cross-tree read to `clients/python` or `clients/voice-gateway`, add its path here yourself.
+# cross-tree read to `clients/python`, add its path here yourself.
+#
+# 🚨 `clients/voice-gateway` HAS NO JOB HERE — this workflow runs `python-sdk` and nothing
+# else, so a voice-gateway change triggers a run that does not test it. Adding a path for it would
+# make that worse, not better: the run would go green having verified nothing about the thing that
+# changed, which is precisely the "fires reliably, checks nothing" state this comment block exists
+# to record. If voice-gateway needs CI, it needs a JOB first, and its inputs listed second.
 #
 # The original rationale, still correct and still the reason the protos path is listed:
 # filtering on "clients/**" alone made every cross-tree guard blind to the side that actually
