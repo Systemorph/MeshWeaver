@@ -16,9 +16,9 @@ namespace MeshWeaver.Graph.Test;
 /// subscriber retries once; and the SSRF guard refuses non-http(s) schemes and literal
 /// loopback / private / link-local hosts without issuing any request.
 /// </summary>
-public sealed class OpenGraphPreviewServiceTest : IDisposable
+public sealed class OpenGraphPreviewServiceTest : IAsyncLifetime
 {
-    private readonly TestOgServer server = new();
+    private TestOgServer server = null!;
     private readonly IoPoolRegistry pools = new();
     private readonly HttpClient http = new();
 
@@ -161,9 +161,13 @@ public sealed class OpenGraphPreviewServiceTest : IDisposable
     public void IsFetchable_AllowsPublicTargets(string url) =>
         Assert.True(CreateService(allowLoopback: false).IsFetchable(url));
 
-    public void Dispose()
+    public async ValueTask InitializeAsync() => server = await TestOgServer.StartAsync();
+
+    // Async teardown because the Kestrel-backed TestOgServer stops asynchronously (#2436); a
+    // blocking bridge here is what BlockingBridgeInTestRatchetGuard exists to prevent.
+    public async ValueTask DisposeAsync()
     {
-        server.Dispose();
+        await server.DisposeAsync();
         pools.Dispose();
         http.Dispose();
     }
