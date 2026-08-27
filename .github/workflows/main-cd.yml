@@ -316,6 +316,11 @@ jobs:
       # cannot forget, because there is no second place to state it.
       image_tag: ${{ steps.decide.outputs.bake_only == 'true' && steps.target.outputs.short_sha || steps.target.outputs.staging_tag }}
       green: ${{ steps.required.outputs.green }}
+      # The required check's raw `status/conclusion`. `green` collapses everything that is not
+      # `completed/success` into one false, which made a SUPERSEDED run (`completed/cancelled`)
+      # indistinguishable from a run that settled RED — and the delivery verdict below told people
+      # to "re-run the failed Build-and-Test jobs" for commits where nothing had failed.
+      conclusion: ${{ steps.required.outputs.conclusion }}
       # The architectures publish-bake runs a lane for — see that job's matrix.
       bake_arches: ${{ steps.arches.outputs.json }}
     steps:
@@ -1840,6 +1845,8 @@ jobs:
           PUBLISH: ${{ needs.gate.outputs.publish }}
           COMPLETE: ${{ needs.gate.outputs.complete }}
           GREEN: ${{ needs.gate.outputs.green }}
+          CONCLUSION: ${{ needs.gate.outputs.conclusion }}
+          SHA: ${{ needs.gate.outputs.sha }}
           SHORT: ${{ needs.gate.outputs.short_sha }}
           GATE_RESULT: ${{ needs.gate.result }}
           UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
@@ -1893,6 +1900,35 @@ jobs:
           # main is an incident for a continuously-delivered product; this run must be RED so
           # alert-on-failure files it. (A rerun that goes green fires a fresh workflow_run,
           # which publishes and supersedes this alarm — nothing to un-stick by hand.)
+          # 🚨 CANCELLED IS NOT RED, and the difference decides whether this is an incident.
+          # The paragraph above reasons "CD enters via workflow_run, so GREEN != true is a suite
+          # that has SETTLED red — never one still running". That is true of a suite that RAN. It
+          # is false for a run that was SUPERSEDED: a burst of merges leaves the queued runs
+          # `cancelled` (measured 2026-08-27: five pushes in fourteen seconds, four cancelled with
+          # run_started_at == created_at — they never executed a step). Their required check reads
+          # `completed/cancelled`, which is not `success`, so GREEN is false and this guard fired
+          # "settled RED … re-run the failed Build-and-Test jobs" for commits where nothing failed
+          # and there is nothing to re-run.
+          #
+          # Not publishing an intermediate commit of a burst is CORRECT — the tip publishes and its
+          # image contains them all, which is what CD_BATCH_WINDOW_MINUTES already wants. Alarming
+          # on it trains everyone to ignore this job, and this job is the one that must be believed.
+          #
+          # But silence is only safe while something NEWER is coming. If the cancelled commit IS
+          # main's tip, nothing will publish it and delivery really is stuck — that is the #2412
+          # hole and it must stay loud. So the discriminator is tip-ness, not colour.
+          if [ "$REASON" = "push" ] && [ "$PUBLISH" != "true" ] && [ "$GREEN" != "true" ] \
+             && [ "${CONCLUSION#*/}" = "cancelled" ]; then
+            TIP=$(gh api "repos/${{ github.repository }}/commits/main" --jq '.sha' 2>/dev/null || echo "")
+            if [ -n "$TIP" ] && [ "$TIP" != "$SHA" ]; then
+              echo "⏭ superseded — \`$SHORT\`'s required check was CANCELLED (not red) and main has moved on to \`${TIP:0:7}\`. Publishing only the tip of a burst is correct; that run delivers this commit too."
+              echo "### ⏭ NO PUBLISH for \`$SHORT\` — superseded by \`${TIP:0:7}\` (its check was cancelled, not red)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::error::main \`$SHORT\` is the TIP and its required check was CANCELLED, so nothing tested it and nothing will publish it — no newer commit is coming to supersede it. Push an empty commit or re-run Build-and-Test on this SHA; a completed run re-enters CD by itself."
+            exit 1
+          fi
+
           if [ "$REASON" = "push" ] && [ "$PUBLISH" != "true" ] && [ "$GREEN" != "true" ]; then
             echo "::error::the required check on main \`$SHORT\` settled RED, so this CD run built nothing — delivery is OFF until main is green again. Re-run the failed Build-and-Test jobs (a green rerun re-enters CD by itself); if the failure is real, fixing main IS the release path."
             exit 1
