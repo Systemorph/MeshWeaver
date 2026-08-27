@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -55,9 +56,28 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
         => base.ConfigureMesh(builder)
             .ConfigureServices(services => services.AddSingleton<ILoggerProvider>(recorder));
 
+    public record ProbeSelfRead(string Id, string Verdict);
+
     /// <summary>The instance configuration a NodeType would apply to its instances.</summary>
     private static MessageHubConfiguration InstanceConfig(MessageHubConfiguration config)
         => config.AddMeshDataSource(source => source.WithContentType<ProbeOrder>());
+
+    /// <summary>
+    /// The same instance configuration plus what real NodeType content routinely does: derive a
+    /// mesh path from the hub's OWN address and read it. On a real per-node hub the address IS the
+    /// node's path, so this is correct code; on the probe it collapses onto the synthetic
+    /// <c>$model-probe/{guid}</c>. See the test below for why that used to cost 10 s and a process.
+    /// </summary>
+    private static MessageHubConfiguration SelfReadingInstanceConfig(MessageHubConfiguration config)
+        => config
+            .AddMeshDataSource(source => source.WithContentType<ProbeOrder>())
+            .AddData(data => data
+                .WithVirtualDataSource("SelfRead", vds =>
+                    vds.WithVirtualType<ProbeSelfRead>(workspace =>
+                        workspace.Hub
+                            .GetMeshNode(workspace.Hub.Address.ToString(), TimeSpan.FromSeconds(10))
+                            .Select(node => (IEnumerable<ProbeSelfRead>)
+                                [new ProbeSelfRead("1", node?.Path ?? "absent")]))));
 
     [Fact(Timeout = 60000)]
     public async Task ProbeInstanceModel_SnapshotsContentTypeAndSchema()
@@ -140,6 +160,40 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
             "a probe hub carries no per-node control plane, so disposing it faults nothing");
         underProbe.Count.Should().BeLessThanOrEqualTo(5,
             "the probe needs its data context, not a sync/ sub-hub per NodeType watcher");
+    }
+
+    /// <summary>
+    /// A probe hub has NO MESH NODE — so a read of its own address must be answered immediately,
+    /// not parked behind the probe's own initialization gates (Systemorph/MeshWeaver#2468).
+    ///
+    /// <para>The read is issued by the probe's own data-context initialization and posted to the
+    /// probe itself, where it defers behind <c>DataContextInit</c> / <c>MeshNodeInit</c> — the very
+    /// gates that initialization opens. A cycle: the read could only ever end by spending its whole
+    /// budget. In CI that budget elapsed on a <c>CancellationTokenSource</c> timer thread, which is
+    /// how a <b>content</b> loader's mesh read ended up aborting the Doc content gate's process.</para>
+    ///
+    /// <para>The bar is elapsed time, deliberately: the assertion has to fail if the read parks,
+    /// and 8 s is under the read's own 10 s budget while leaving a loaded runner room for the
+    /// probe's ordinary cost (~1 s locally).</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ProbeInstanceModel_OwnAddressRead_IsAnsweredWithoutBurningTheBudget()
+    {
+        var started = Stopwatch.StartNew();
+        var model = await NodeTypeDataModelAreas
+            .ProbeInstanceModel(Mesh, SelfReadingInstanceConfig)
+            .Should().Within(40.Seconds()).Emit();
+        started.Stop();
+
+        Output.WriteLine($"probe with a self-reading provider completed in {started.Elapsed}");
+
+        model.Should().NotBeNull(
+            "content that reads its own address must not stop the probe from snapshotting");
+        model!.ContentTypeName.Should().Be(nameof(ProbeOrder));
+
+        started.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(8),
+            "a read of the probe's own address is answered Absent immediately — parking it behind "
+            + "the probe's own init gates is a cycle that can only end by burning the full budget");
     }
 
     private bool ProbeStillLive(string address)

@@ -315,6 +315,27 @@ pendingFlush.Disposable = Observable.Timer(TimeSpan.FromMilliseconds(100))
 
 Holding it in a field is **not** the same as owning it — the field has to be disposed by the owner's teardown, on every path. Full treatment, with both leak shapes, the measured truth table of which primitives actually root, and why there is deliberately no analyzer: [Subscription Ownership](/Doc/Architecture/SubscriptionOwnership).
 
+### 🚨 …and a subscription on a path that can FAULT needs an error arm — omitting it kills the process
+
+`Subscribe(onNext)` is not "subscribe and ignore errors". Rx's default `onError` for the one-argument overload is `Stubs.Throw`, which **rethrows the fault on whatever thread carried it** — and that thread is chosen by whatever produced the error, not by you. A timeout raises `OnError` from a `CancellationTokenSource` callback on a **`TimerQueue` thread**, where there is no `catch` anywhere above the frame. The result is an unhandled exception and an aborted process, not a logged error.
+
+```csharp
+// ❌ No error arm. A provider timeout here ends the PROCESS on a timer thread.
+typeSource.GetStreamUpdates().Subscribe(instances => Apply(instances));
+
+// ✅ Reported, on the thread the fault arrived on, and the process survives.
+typeSource.GetStreamUpdates().Subscribe(
+    instances => Apply(instances),
+    error => Logger.LogError(error, "…{Collection} faulted; it is frozen at its last emission", name));
+```
+
+Two corollaries worth stating separately:
+
+- **A `try`/`catch` around the `Subscribe` CALL catches nothing.** The fault travels through the stream and arrives later, on another thread; the `try` block has long since exited. Fault handling is fluent — an error arm, or `.Catch(...)` — never `try`.
+- **An error arm is not a swallow.** It must SAY what stopped working. Where another subscriber already owns the verdict (a data source's initialization observing the same `Replay(1)`, which fails the hub's startup), the arm's job is to report and let that path decide — its existence is what stops a fault from taking the host with it.
+
+This is the defect behind [#2468](https://github.com/Systemorph/MeshWeaver/issues/2468): a virtual data source's live-update subscription had no error arm, so a content loader's `GetMeshNode` timeout aborted the CI content gate — which then reported *"failed before it produced a verdict — no check was judged"*. A gate that dies before judging is worse than a gate that fails.
+
 ---
 
 ## 🚨 `MeshNode.Content` is always typed at the `GetMeshNodeStream` boundary

@@ -19,6 +19,17 @@ namespace MeshWeaver.Data;
 ///
 /// <para>Streams are still created LAZILY when a request actually needs one — the guard removes
 /// only the eager start nobody consumes.</para>
+///
+/// <para>🚨 <b>A probe hub HAS NO MESH NODE, and the read path enforces that.</b> The instance
+/// configuration a probe applies is content written for a REAL per-node hub, where the hub's
+/// address IS its mesh path — so a loader deriving a path from <c>Hub.Address</c> and reading it is
+/// ordinary, correct code that collapses onto the probe's own synthetic address here. Posted to the
+/// probe, such a read parks behind the <c>DataContextInit</c> / <c>MeshNodeInit</c> gates that the
+/// probe's own data-context initialization opens — a CYCLE whose only exit was the read's full
+/// budget, ending on a <c>CancellationTokenSource</c> timer thread (Systemorph/MeshWeaver#2468).
+/// <c>MeshNodeStreamExtensions.GetMeshNodeOutcome</c> therefore answers a probe's read of its OWN
+/// address <c>Absent</c> immediately — the truthful answer, since there is no node there and never
+/// will be. Reads of any REAL path from a probe are untouched.</para>
 /// </summary>
 /// <param name="StartDataSources">Whether the probe still STARTS its data sources on the init
 /// turn. Default TRUE — the pre-existing behaviour, which probes that snapshot actual data (the
