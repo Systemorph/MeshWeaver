@@ -65,7 +65,14 @@ public class DisposalWaitBridgeTest
     public async Task ObserveCompletion_NeverResumesItsCallerOnTheSignallingThread()
     {
         var signal = new Subject<Unit>();
-        var wait = signal.ObserveCompletion(_ => { });
+        // 🚨 RECORD, never assert, inside a late-fault reporter. ObserveCompletion deliberately
+        // guards the reporter (a logger whose provider died with the scope throws), so an
+        // Assert.Fail here would be caught and routed to Trace — the test would pass while a late
+        // fault went unnoticed. Capture it and assert on the TEST thread instead. (Copilot review,
+        // #2538 — and it is the same "a verification step that cannot fail is not a verification
+        // step" trap AGENTS.md names.)
+        Exception? lateFault = null;
+        var wait = signal.ObserveCompletion(ex => lateFault = ex);
 
         var signallingThread = Environment.CurrentManagedThreadId;
         var insideOnNext = new Flag();
@@ -86,6 +93,8 @@ public class DisposalWaitBridgeTest
             "RunContinuationsAsynchronously is what keeps the waiter off the hub/grain scheduler " +
             "that signalled — resuming there is how #2301 held the very scheduler it was then " +
             "waiting on");
+        lateFault.Should().BeNull("no fault is produced in this test — if one appeared, the " +
+            "measurement above was of something else");
     }
 
     /// <summary>
@@ -224,10 +233,14 @@ public class DisposalWaitBridgeTest
         signal.OnNext(Unit.Default);
         signal.OnCompleted();
 
-        var wait = signal.ObserveCompletion(_ => Assert.Fail("no fault is possible here"));
+        // Record, never assert, inside the reporter — ObserveCompletion guards it, so an
+        // Assert.Fail there would be swallowed and this test would pass regardless.
+        Exception? lateFault = null;
+        var wait = signal.ObserveCompletion(ex => lateFault = ex);
 
         await wait;
         wait.IsCompletedSuccessfully.Should().BeTrue();
+        lateFault.Should().BeNull("an already-completed AsyncSubject cannot fault afterwards");
     }
 
     /// <summary>
