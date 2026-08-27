@@ -262,6 +262,35 @@ in Entra would make it work — and would be one more rule in the wrong place.
 
 ---
 
+## Three rules that follow, stated so they cannot be re-derived wrongly
+
+**1. The platform never bakes a plugin.** Core's CD builds the platform and bakes the platform's
+OWN shipped content (`meshweaver-content`). It does not check out `MeshWeaver.Plugins` to compile
+it, and it does not publish a `plugins` source. Until 2026-08-27 it did both — `main-cd.yml` synced
+a Plugins checkout, Roslyn-compiled every module, and published the result to the same
+`prebuilt-bundles/<identity>/plugins/` shelf that Plugins' own `publish-bake` writes. Two
+producers, one shelf, whichever sealed last winning; and a full compile of source the platform
+does not own, on every platform push. Plugins bakes Plugins. (The two checkouts that remain in
+core CD fetch the portal HOST and migration WORKER projects, which live in that repo since #2293
+— source the image is built FROM, not a plugin being baked.)
+
+**2. Nothing syncs plugin source to bake it.** "Sync the source and compile it" is the pattern
+every violation shares: core's `plugin-gate`, the satellites' `stage-repo`, Education's fused
+checkout. The consumer of a plugin receives a **publication** — bundles carrying node definitions
+and compiled assemblies, sealed under a framework identity — and installs it. If a lane needs a
+plugin and reaches for `git clone` of its repo, that lane is wrong.
+
+**3. A source install is git on disk, never rows in a database.** When a mesh installs a plugin
+from source (a local dev loop, an e2e mesh, a GitSynced space), the package source is a git
+checkout the mesh READS — `GitPackageSource(git, repoPath)`, `git ls-tree` / `git show` at a ref —
+so the repo stays the only source of truth and a re-sync rewrites the space from it. An importer
+that copies plugin nodes into the store as durable rows creates a second copy that the repo no
+longer owns: the live edit that "sticks" until the next sync silently reverts it, the
+`MonotonicWriteGuard` refusals when a committed `version` collides with the store's clock. The
+mesh reads the tree; it does not ingest it.
+
+---
+
 ## The contract, restated as checks
 
 For any plugin repo, these are answerable and should be answered:
