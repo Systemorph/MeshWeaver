@@ -1,5 +1,8 @@
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI.Plugins;
 
@@ -35,8 +38,11 @@ namespace MeshWeaver.AI.Plugins;
 ///
 /// <para><b>And cancellation is a fourth.</b> The token is registered before the source is
 /// subscribed, and firing it DISPOSES the subscription and only then cancels the task — in that
-/// order — so the work the tool started has provably stopped before anyone can act on the call
-/// having ended. See <c>Settle</c> for why the order is the invariant.</para>
+/// order — so the work the tool started is provably torn DOWN, not merely abandoned, before anyone
+/// can act on the call having ended. See <c>Settle</c> for why the order is the invariant — and for
+/// its limit: where the pipeline hops a scheduler, Rx runs the unsubscribe on that scheduler too, so
+/// the teardown is REQUESTED synchronously and completes shortly after. Joining it at teardown is
+/// the pool's job, not the bridge's, which is what <see cref="Pooled{T}"/> is for.</para>
 /// </summary>
 public static class ToolTask
 {
@@ -95,11 +101,24 @@ public static class ToolTask
         // leaf is torn down, teardown proceeds over live code. "The work stopped" must therefore be
         // established, not hoped for, before anyone can act on "the call ended".
         //
-        // Disposing first is what makes it established rather than raced: Rx disposal here is
-        // synchronous, so by the time TrySet* runs, the source's own teardown has already run.
+        // Disposing first is what makes it established rather than raced WHERE Rx disposal is
+        // synchronous: by the time TrySet* runs, the source's own teardown has already run.
         // Idempotence covers the rest — CompositeDisposable.Dispose and TrySet* are both safe to
         // race, so a losing terminal simply disposes an already-disposed bag and sets nothing.
         // Pinned by ToolTaskSettlementTest.Cancelling_StopsTheWork_BeforeTheCallerCanObserveIt.
+        //
+        // 🚨 AND THE LIMIT OF THAT GUARANTEE, stated so nobody reads more into it than it gives.
+        // Rx disposal is synchronous only for a chain that is entirely synchronous to dispose. Put
+        // a scheduler in it — `.SubscribeOn(...)`, which several tools need so the subscribe leaves
+        // the caller's scheduler — and Rx runs the UNSUBSCRIBE on that scheduler too, so
+        // `pending.Dispose()` returns once the unsubscribe is SCHEDULED and the source is torn down
+        // some time later, possibly after the caller's task has already thrown. Ordering still buys
+        // the caller-visible half (nobody observes the end before teardown was *requested*), but the
+        // bridge alone cannot promise the work has STOPPED. What promises that is the pool:
+        // <see cref="Pooled{T}"/> puts the subscribe on the mesh-scoped, DRAINABLE AgentStore pool,
+        // so `IoPool.Drain()` — the join teardown performs before unloading collectible ALCs — sees
+        // and waits for the leaf a bare `.SubscribeOn(TaskPoolScheduler.Default)` hides from it.
+        // AgentToolCancellationTest waits for the disposal rather than reading it, for this reason.
         void Settle(Func<bool> set)
         {
             pending.Dispose();
@@ -123,5 +142,45 @@ public static class ToolTask
                 error => Settle(() => tcs.TrySetResult(onError(error)))));
 
         return tcs.Task;
+    }
+
+    /// <summary>
+    /// Runs a tool pipeline's SUBSCRIBE through the mesh-scoped, drainable
+    /// <see cref="IoPoolNames.AgentStore"/> pool — the sanctioned replacement for a bare
+    /// <c>.SubscribeOn(TaskPoolScheduler.Default)</c>.
+    ///
+    /// <para><b>What the bare hop got right and what it got wrong.</b> Right: the subscribe must
+    /// not run on the caller's scheduler — a tool invoked from the agent loop would otherwise open
+    /// providers, read nodes and create hubs on whatever scheduler happens to be current (an
+    /// Orleans grain in prod), and the continuation of everything downstream posts back through it.
+    /// Wrong: <c>TaskPoolScheduler.Default</c> is the raw ThreadPool, which <c>IoPool.Drain()</c>
+    /// cannot see. Drain cancels the pool token and re-acquires every permit precisely so that no
+    /// pooled work is still running when the service scope is disposed and collectible NodeType
+    /// <c>AssemblyLoadContext</c>s are unloaded — and work on an untracked ThreadPool thread is
+    /// counted by nothing, waited for by nobody, and unloaded out from under.
+    /// <see cref="IIoPool.SubscribeThroughPool{T}"/> keeps the hop and makes it countable.</para>
+    ///
+    /// <para>🚨 <b>AgentStore, deliberately not Ai.</b> The call already runs inside a round holding
+    /// an <see cref="IoPoolNames.Ai"/> permit; re-entering the same bounded pool from inside a
+    /// permit it already holds is the nested-gate deadlock — at the cap, every holder waits for a
+    /// slot only a holder can release. For the same reason, do NOT wrap a pipeline that itself
+    /// reaches the mesh through <c>MeshStoreAccess</c>: that is already on this pool, and stacking
+    /// them re-creates the nesting one level down.</para>
+    ///
+    /// <para>Falls back to <see cref="IoPool.Unbounded"/> when no registry is wired, whose
+    /// <c>SubscribeThroughPool</c> IS <c>.SubscribeOn(TaskPoolScheduler.Default)</c> — so a mesh
+    /// without pools behaves exactly as before.</para>
+    /// </summary>
+    /// <typeparam name="T">Element type of the pipeline.</typeparam>
+    /// <param name="hub">Hub supplying the mesh-scoped <see cref="IoPoolRegistry"/>.</param>
+    /// <param name="source">The tool pipeline whose subscribe should leave the caller's scheduler.</param>
+    /// <returns>The same sequence, subscribed through the pool.</returns>
+    public static IObservable<T> Pooled<T>(IMessageHub hub, IObservable<T> source)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        ArgumentNullException.ThrowIfNull(source);
+        var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.AgentStore)
+                   ?? IoPool.Unbounded;
+        return pool.SubscribeThroughPool(source);
     }
 }

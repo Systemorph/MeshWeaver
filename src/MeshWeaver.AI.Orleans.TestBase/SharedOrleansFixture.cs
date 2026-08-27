@@ -189,20 +189,64 @@ public class SharedOrleansFixture : IAsyncLifetime
             catch { /* tearing-down — swallow so other cleanups still run */ }
         }
 
+        // Captured while the hub's scope is still alive — a late fault has to land SOMEWHERE, and
+        // "somewhere" cannot be a service resolved after disposal began (the same rule
+        // MeshTeardownExtensions states for every teardown service).
+        var logger = SafeLogger(reg.Hub);
+
         try { reg.Hub.Dispose(); }
         catch { /* same */ }
         if (reg.Hub.IsDisposing)
         {
-            // Bridge reactive completion → Task at this teardown edge; swallow faults/timeout.
+            // 🚨 SUBSCRIBE; bound the WAIT with a token, never a Timeout spliced into the signal
+            // (#2301/#2488). The old shape — `Catch(…).FirstOrDefaultAsync().ToTask().WaitAsync(10s)`
+            // inside a bare `catch { }` — resumed this cleanup INLINE on the client hub's own
+            // disposal thread (Rx completes a ToTask() TCS without RunContinuationsAsynchronously),
+            // and then discarded three different outcomes as one silence: a disposal fault, a fault
+            // arriving after the bridge settled, and the budget expiring. Cleanup still proceeds on
+            // all three (a test fixture must not hang on a client hub), but it no longer rides a hub
+            // thread to get there, and each outcome is now SAID.
+            using var disposalBudget = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try
             {
-                await reg.Hub.DisposalCompleted
-                    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-                    .FirstOrDefaultAsync()
-                    .ToTask()
-                    .WaitAsync(TimeSpan.FromSeconds(10));
+                // ConfigureAwait(false) on top of ObserveCompletion's
+                // RunContinuationsAsynchronously: `await` captures TaskScheduler.Current absent a
+                // SynchronizationContext, so cleanup entered from a hub scheduler would otherwise
+                // carry the rest of itself back onto one. (Copilot review, #2527.)
+                await reg.Hub.DisposalCompleted.ObserveCompletion(
+                    ex => logger?.LogError(ex,
+                        "Client hub {Address}: disposal faulted AFTER cleanup stopped waiting on it "
+                        + "— reported rather than orphaned.", reg.Hub.Address),
+                    disposalBudget.Token).ConfigureAwait(false);
             }
-            catch { /* timeout / already-faulted — don't block teardown */ }
+            catch (OperationCanceledException)
+            {
+                logger?.LogError(
+                    "Client hub {Address}: disposal did not complete within 10s during test cleanup. "
+                    + "Something on its action block is not finishing.", reg.Hub.Address);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex, "Client hub {Address}: disposal FAULTED during test cleanup.",
+                    reg.Hub.Address);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A logger from a hub whose scope may be mid-teardown — resolved defensively so cleanup can
+    /// never fail on the act of preparing to REPORT something.
+    /// </summary>
+    private static ILogger? SafeLogger(IMessageHub hub)
+    {
+        try
+        {
+            return hub.ServiceProvider.GetService<ILoggerFactory>()?
+                .CreateLogger("MeshWeaver.Hosting.Orleans.Test.Cleanup");
+        }
+        catch
+        {
+            return null;
         }
     }
 

@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using MeshWeaver.AI.Stores;
 using MeshWeaver.Messaging;
@@ -68,7 +67,16 @@ public sealed class AgentFilesPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
     ];
 
     // Boundary adapters. AIFunctionFactory requires Task<string>; the bodies are reactive and each
-    // ends in exactly one FirstAsync().ToTask() — the store's own API is IObservable throughout.
+    // ends in the ONE shared bridge, ToolTask.Bridge — the store's own API is IObservable throughout.
+    //
+    // 🚨 These used to end in `.Catch(...).FirstAsync().ToTask(ct)`. The token was observed and the
+    // fault was handled fluently, so the two loud terminals were covered — but the THIRD one was
+    // not. A source that completes WITHOUT emitting reaches FirstAsync, which signals
+    // InvalidOperationException("Sequence contains no elements") — past the .Catch, which sits
+    // upstream of it — so the model got a stack trace where it needed an answer. And that terminal
+    // is reachable here, not theoretical: MeshNodeStreamCache completes its per-path subjects on
+    // eviction and on dispose, which is exactly what a thread whose hub is going away does.
+    // ToolTask.Bridge makes the empty completion an ANSWER, and keeps the other three.
 
     private Task<string> ReadFile(
         [Description("Path of the file within your working area, e.g. 'notes.md' or 'research/findings.md'.")]
@@ -76,12 +84,12 @@ public sealed class AgentFilesPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         CancellationToken cancellationToken) =>
         Store is not { } store
             ? Task.FromResult(NoThread)
-            : store.Read(path)
-                .Take(1)
-                .Select(content => content ?? $"No file at '{path}'.")
-                .Catch<string, Exception>(ex => Observable.Return($"Could not read '{path}': {ex.Message}"))
-                .FirstAsync()
-                .ToTask(cancellationToken);
+            : ToolTask.Bridge(
+                store.Read(path).Select(content => content ?? $"No file at '{path}'."),
+                cancellationToken,
+                answer => answer,
+                ex => $"Could not read '{path}': {ex.Message}",
+                () => $"No file at '{path}'.");
 
     private Task<string> WriteFile(
         [Description("Path of the file within your working area, e.g. 'notes.md' or 'research/findings.md'.")]
@@ -91,11 +99,13 @@ public sealed class AgentFilesPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         CancellationToken cancellationToken) =>
         Store is not { } store
             ? Task.FromResult(NoThread)
-            : store.Write(path, content)
-                .Select(node => $"Saved '{path}' ({content.Length} characters) at {node.Path}.")
-                .Catch<string, Exception>(ex => Observable.Return($"Could not save '{path}': {ex.Message}"))
-                .FirstAsync()
-                .ToTask(cancellationToken);
+            : ToolTask.Bridge(
+                store.Write(path, content)
+                    .Select(node => $"Saved '{path}' ({content.Length} characters) at {node.Path}."),
+                cancellationToken,
+                answer => answer,
+                ex => $"Could not save '{path}': {ex.Message}",
+                () => $"Could not save '{path}': the write produced no result.");
 
     private Task<string> ListFiles(
         [Description("Folder within your working area to list. Empty string lists the top level.")]
@@ -103,12 +113,12 @@ public sealed class AgentFilesPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         CancellationToken cancellationToken) =>
         Store is not { } store
             ? Task.FromResult(NoThread)
-            : store.ListChildren(directory ?? "")
-                .Take(1)
-                .Select(FormatListing)
-                .Catch<string, Exception>(ex => Observable.Return($"Could not list '{directory}': {ex.Message}"))
-                .FirstAsync()
-                .ToTask(cancellationToken);
+            : ToolTask.Bridge(
+                store.ListChildren(directory ?? "").Select(FormatListing),
+                cancellationToken,
+                answer => answer,
+                ex => $"Could not list '{directory}': {ex.Message}",
+                () => "(empty)");
 
     private Task<string> SearchFiles(
         [Description("Folder within your working area to search. Empty string searches from the top level.")]
@@ -122,12 +132,13 @@ public sealed class AgentFilesPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         CancellationToken cancellationToken) =>
         Store is not { } store
             ? Task.FromResult(NoThread)
-            : store.Search(directory ?? "", pattern, string.IsNullOrWhiteSpace(glob) ? null : glob, recursive)
-                .Take(1)
-                .Select(FormatMatches)
-                .Catch<string, Exception>(ex => Observable.Return($"Could not search '{directory}': {ex.Message}"))
-                .FirstAsync()
-                .ToTask(cancellationToken);
+            : ToolTask.Bridge(
+                store.Search(directory ?? "", pattern, string.IsNullOrWhiteSpace(glob) ? null : glob, recursive)
+                    .Select(FormatMatches),
+                cancellationToken,
+                answer => answer,
+                ex => $"Could not search '{directory}': {ex.Message}",
+                () => "No matches.");
 
     private Task<string> DeleteFile(
         [Description("Path of the file within your working area to delete.")]
@@ -135,11 +146,12 @@ public sealed class AgentFilesPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         CancellationToken cancellationToken) =>
         Store is not { } store
             ? Task.FromResult(NoThread)
-            : store.Delete(path)
-                .Select(deleted => deleted ? $"Deleted '{path}'." : $"No file at '{path}'.")
-                .Catch<string, Exception>(ex => Observable.Return($"Could not delete '{path}': {ex.Message}"))
-                .FirstAsync()
-                .ToTask(cancellationToken);
+            : ToolTask.Bridge(
+                store.Delete(path).Select(deleted => deleted ? $"Deleted '{path}'." : $"No file at '{path}'."),
+                cancellationToken,
+                answer => answer,
+                ex => $"Could not delete '{path}': {ex.Message}",
+                () => $"No file at '{path}'.");
 
     private const string NoThread =
         "No working area is available — this conversation has no thread yet. Try again after the "

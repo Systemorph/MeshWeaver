@@ -77,6 +77,18 @@ public static class MeshBuilderModuleActivation
                 + "registry has not landed yet is reported degraded and named (it is not something "
                 + "a held rollout could deliver).");
 
+        // The SILENT half of the same key: a requirement that did not go missing but was
+        // OVERWRITTEN. Nothing above can see it — the entry is not absent, it was never asked for.
+        foreach (var shadowed in ShadowedRequired(configuration))
+            report($"REQUIRED module '{shadowed}' was silently REPLACED at its index and is no "
+                + $"longer required by this deployment. {RequiredKey} is an ARRAY and an override "
+                + "binds BY INDEX: setting one entry does not append to the list, it replaces "
+                + $"whatever the image declared at that position. Nothing else reports this — the "
+                + "module is simply not required any more, so it is never missing, the deploy "
+                + "succeeds and the health check stays green with the guard gone. Move the new "
+                + "entry to the first index PAST the image's own list, or restate the entry you "
+                + "replaced at a free index.");
+
         // Hand the configuration to the builder BEFORE anything is installed: an attribute's
         // BuilderConfigurations runs inside InstallAssemblies, so a module asking "what did this
         // deployment configure?" must find the answer already there. We hold it either way — not
@@ -101,6 +113,73 @@ public static class MeshBuilderModuleActivation
             .Where(entry => !string.IsNullOrWhiteSpace(entry))
             .Where(entry => !exists(resolve(entry!)))
             .Select(entry => entry!)];
+    }
+
+    /// <summary>
+    /// The required modules an override SILENTLY REPLACED — declared by one configuration source
+    /// and overwritten at the same index by a later one, with the replaced module named nowhere
+    /// else in the effective list.
+    ///
+    /// <para>🚨 <b>Why this is not the same question as <see cref="MissingRequired"/>, and why
+    /// nothing else can ask it.</b> <c>Modules:Required</c> is an ARRAY, so an override binds BY
+    /// INDEX: <c>Modules__Required__5</c> replaces whatever the image's own list holds at index 5 —
+    /// it does not append a sixth requirement. The failure that follows is invisible from every
+    /// direction. The replaced module is not MISSING (nobody asked for it any more), so
+    /// <see cref="MissingRequired"/> and the readiness contract both have nothing to say; the
+    /// override is not un-rendered, so the chart's coverage gate passes; the deploy succeeds and
+    /// <c>/health</c> stays green having quietly stopped guarding a module. Measured on Memex#131:
+    /// an overlay added <c>MeshWeaver.Mcp.dll</c> at index 5 to require the MCP endpoint, and index
+    /// 5 of the image's list is <c>MeshWeaver.Social.dll</c>.</para>
+    ///
+    /// <para>The two halves are only ever visible TOGETHER in the running process — the image's
+    /// baseline ships in one repository and the overlay lives in another — which is why this is a
+    /// boot-time check and not a chart guard. Provider ORDER is the whole mechanism: a value a
+    /// provider supplies that is not the effective one has been shadowed by a later provider, so no
+    /// provider-type sniffing is needed and any layering (files, env, command line) is covered.</para>
+    ///
+    /// <para>Two shapes are deliberately NOT reported, because both are how the key is meant to be
+    /// used: <b>blanking</b> an entry the deployment cannot satisfy (the effective value is empty —
+    /// an explicit "not required here", and the whole remedy the 2026-08-23 rollouts had), and
+    /// <b>reordering</b>, where the replaced module still appears at some other index and no
+    /// requirement was lost.</para>
+    /// </summary>
+    /// <param name="configuration">The host configuration. A non-root <see cref="IConfiguration"/>
+    /// carries no provider list and yields an empty result — the check simply does not apply.</param>
+    public static string[] ShadowedRequired(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        if (configuration is not IConfigurationRoot root)
+            return [];
+
+        var effective = root.GetSection(RequiredKey).GetChildren()
+            .ToDictionary(child => child.Key, child => child.Value, StringComparer.Ordinal);
+        var stillRequired = effective.Values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var shadowed = new List<string>();
+        foreach (var (index, winner) in effective)
+        {
+            // A BLANK winner is an explicit "this deployment cannot satisfy it" — the sanctioned
+            // way to drop a requirement, and never a mistake to report.
+            if (string.IsNullOrWhiteSpace(winner))
+                continue;
+
+            foreach (var provider in root.Providers)
+            {
+                if (!provider.TryGet($"{RequiredKey}:{index}", out var supplied)
+                    || string.IsNullOrWhiteSpace(supplied)
+                    || string.Equals(supplied, winner, StringComparison.OrdinalIgnoreCase)
+                    // Reordered, not lost: the module is still required, at another index.
+                    || stillRequired.Contains(supplied))
+                    continue;
+
+                shadowed.Add(supplied);
+            }
+        }
+
+        return [.. shadowed.Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 
     /// <summary>

@@ -84,6 +84,15 @@ public record SubThreadInfo(
 public static class DelegationTool
 {
     /// <summary>
+    /// Moves a delegation's SUBSCRIBE off the caller's scheduler, through the mesh-scoped
+    /// <c>AgentStore</c> I/O pool when a hub is available so <c>IoPool.Drain()</c> can see and join
+    /// it, and through the bare ThreadPool otherwise (the legacy, workspace-less path, which is
+    /// exactly what it had before).
+    /// </summary>
+    private static IObservable<T> HopOffCallerScheduler<T>(IObservable<T> source, IMessageHub? hub) =>
+        hub is null ? source.SubscribeOn(TaskPoolScheduler.Default) : ToolTask.Pooled(hub, source);
+
+    /// <summary>
     /// Creates the suite of delegation tools: <c>delegate_to_agent</c>, plus
     /// <c>list_sub_threads</c> and <c>send_to_sub_thread</c> when the parent
     /// passes the needed accessor delegates.
@@ -211,9 +220,24 @@ public static class DelegationTool
 
             // Settle ONCE and release what the wait was holding. Every resolution path goes through
             // here — a bare tcs.TrySet* would resolve the caller and leave the subscriptions live.
+            //
+            // 🚨 DISPOSE FIRST, THEN SETTLE — the same invariant, and for the same reason, as
+            // ToolTask.Settle. This read `if (set()) pending.Dispose();`, i.e. the caller was told
+            // the delegation had ended and the subscriptions were released afterwards. Those are not
+            // interchangeable: `tcs` is created RunContinuationsAsynchronously, so TrySet* completes
+            // the task and schedules the parent round's continuation on the pool, which then runs
+            // CONCURRENTLY with the rest of this callback. On the cancellation path the round could
+            // therefore observe the cancel — release its IoPoolNames.Ai permit, let IoPool.Drain()
+            // through, let teardown dispose the service scope and unload collectible node ALCs —
+            // while this call still held a live subscription to the sub-thread's node stream.
+            // Disposing first makes "the work stopped" established before "the call ended" is
+            // observable. Dispose and TrySet* are both idempotent, so a losing terminal disposes an
+            // already-disposed bag and sets nothing; the lambdas keep returning bool because the
+            // chunk-aggregate path logs only when its TrySetResult actually won.
             void Settle(Func<bool> set)
             {
-                if (set()) pending.Dispose();
+                pending.Dispose();
+                set();
             }
 
             // 🚨 THE ROUND'S CANCELLATION MUST REACH THIS TASK. Nothing else can end the wait
@@ -336,16 +360,28 @@ public static class DelegationTool
             // above which reads Thread.Summary). No await foreach, no Task.Run, no
             // Observable.Create wrapper.
             //
-            // SubscribeOn(TaskPoolScheduler.Default): the parent agent loop's
-            // continuation (Orleans grain scheduler in prod, single-threaded pump in
-            // the DelegationDeadlockTest) MUST NOT host the sub-thread drain. The
-            // typical executeAsync impl is Observable.Create<async> over an
-            // IAsyncEnumerable, which captures the Subscribe-time SynchronizationContext
-            // for every MoveNextAsync — if that's the grain scheduler, every sub-thread
-            // continuation posts back through it and wedges the grain. Hop the Subscribe
-            // to ThreadPool so the entire drain runs free of the caller's context.
-            pending.Add(executeAsync(agentName, task, context, cancellationToken)
-            .SubscribeOn(TaskPoolScheduler.Default)
+            // The parent agent loop's continuation (Orleans grain scheduler in prod,
+            // single-threaded pump in the DelegationDeadlockTest) MUST NOT host the
+            // sub-thread drain. The typical executeAsync impl is Observable.Create<async>
+            // over an IAsyncEnumerable, which captures the Subscribe-time
+            // SynchronizationContext for every MoveNextAsync — if that's the grain
+            // scheduler, every sub-thread continuation posts back through it and wedges
+            // the grain. So the Subscribe hops off the caller's context.
+            //
+            // 🚨 It hops through ToolTask.Pooled — the mesh-scoped AgentStore pool — and no
+            // longer through a bare `.SubscribeOn(TaskPoolScheduler.Default)`. Both leave the
+            // caller's scheduler, which is all the paragraph above ever asked for; only one of
+            // them is visible to IoPool.Drain(). A sub-thread drain running on the raw ThreadPool
+            // is counted by nothing and waited for by nobody, so teardown disposes the service
+            // scope and unloads collectible node ALCs while it is still executing — the
+            // use-after-unload precondition Drain exists to rule out, and the reason
+            // IIoPool.SubscribeThroughPool documents itself as "the tracked, drainable
+            // replacement for a bare .SubscribeOn(TaskPoolScheduler.Default), which the drain
+            // cannot reach". AgentStore, never Ai: this call already sits inside a round holding
+            // an Ai permit. With no workspace (the legacy path) there is no hub to resolve the
+            // registry from, so that path keeps the untracked hop — which is what it had.
+            pending.Add(HopOffCallerScheduler(
+                    executeAsync(agentName, task, context, cancellationToken), workspace?.Hub)
             .Subscribe(
                 chunk => sb.Append(chunk),
                 ex =>
