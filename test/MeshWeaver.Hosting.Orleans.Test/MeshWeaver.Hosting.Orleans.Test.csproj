@@ -22,7 +22,6 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Orleans.TestBase\MeshWeaver.Hosting.Orleans.TestBase.csproj" />
-        <ProjectReference Include="..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
@@ -33,7 +32,6 @@
              relocated to MeshWeaver.SocialMedia (src/MeshWeaver.Social/README.md), and a test
              reference moves with the test, unlike the ships-the-bits Memex.Portal.Shared
              reference that actually blocks the flip. Move this test when the module goes. -->
-        <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Grpc\MeshWeaver.Hosting.Grpc.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
     </ItemGroup>

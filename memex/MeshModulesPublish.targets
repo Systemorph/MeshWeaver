@@ -63,7 +63,6 @@
          Social is relocating to MeshWeaver.SocialMedia (the modularization program's task 63, a
          program-plan task rather than a GitHub issue) and already ships from the closure lane here;
          see src/MeshWeaver.Social/README.md. -->
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Grpc/MeshWeaver.Hosting.Grpc.csproj" />
 
 
     <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2). -->
@@ -130,9 +129,13 @@
          still drops everything the app closure already provides (BlazorMonaco, FluentUI, the base
          pack). Dev note: the MONOLITH keeps Debug ships-the-bits references to these two (see its
          csproj) — a dev tree without them renders every control as escaped HTML. -->
+    <!-- MeshWeaver.Hosting.Grpc (thin lane) and the storage backends MeshWeaver.Hosting.Cosmos /
+         .Snowflake (closure lane) are NOT rows here any more: their projects moved to
+         MeshWeaver.Plugins with the portal hosts, and each host there adds its own row over the local
+         project AFTER importing this file (Remove by %(Filename) + Include). Storage stays
+         IMAGE-shipped there for the same reason it was here — a Store-installed module needs
+         storage to already work. -->
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Snowflake/MeshWeaver.Hosting.Snowflake.csproj" />
   </ItemGroup>
 
   <!--

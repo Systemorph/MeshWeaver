@@ -28,7 +28,7 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 # The canonical proto is loaded at runtime by @grpc/proto-loader (connection.ts reads MESHWEAVER_PROTO).
-COPY src/MeshWeaver.Hosting.Grpc/Protos/mesh.proto /app/mesh.proto
+COPY src/MeshWeaver.Mesh.Contract/Protos/mesh.proto /app/mesh.proto
 # Numeric uid (not the name) so Kubernetes' runAsNonRoot check can verify non-root.
 USER 10001
 

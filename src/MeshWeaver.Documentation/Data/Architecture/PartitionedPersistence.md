@@ -447,8 +447,8 @@ Each registration method calls `AddPartitionedCoreAndWrapperServices()` (idempot
 | `src/MeshWeaver.Hosting/Persistence/PartitionConfigurationExtensions.cs` | Fluent `MeshBuilder.Add*Partition` extensions |
 | `src/MeshWeaver.Hosting/Persistence/PersistenceExtensions.cs` | DI helpers (`AddPartitionedCoreAndWrapperServices`) |
 | `src/MeshWeaver.Hosting/Persistence/Query/StorageAdapterMeshQueryProvider.cs` | Pedestrian exact-path query provider |
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionStorageProvider.cs` | PostgreSQL provider (schema provisioning promise-cache) |
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPathRoutingAdapter.cs` | PostgreSQL path → schema/table routing |
-| `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlExtensions.cs` | PostgreSQL DI helpers |
-| `src/MeshWeaver.Hosting.Cosmos/CosmosPartitionStorageProvider.cs` | Cosmos DB provider |
-| `src/MeshWeaver.Hosting.Cosmos/PersistenceExtensions.cs` | Cosmos DB DI helpers |
+| `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionStorageProvider.cs` | PostgreSQL provider (schema provisioning promise-cache) |
+| `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPathRoutingAdapter.cs` | PostgreSQL path → schema/table routing |
+| `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlExtensions.cs` | PostgreSQL DI helpers |
+| `MeshWeaver.Plugins/src/MeshWeaver.Hosting.Cosmos/CosmosPartitionStorageProvider.cs` | Cosmos DB provider |
+| `MeshWeaver.Plugins/src/MeshWeaver.Hosting.Cosmos/PersistenceExtensions.cs` | Cosmos DB DI helpers |
