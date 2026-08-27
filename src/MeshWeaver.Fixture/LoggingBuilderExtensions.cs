@@ -178,6 +178,25 @@ public class XUnitLogger(
     {
         if (formatter == null)
             throw new ArgumentNullException(nameof(formatter));
+
+        // Only a Warning-or-worse record CARRYING AN EXCEPTION can reach the fault sink, and that
+        // is a small minority of what a silo logs. Everything else keeps the ORIGINAL fast path —
+        // one null check and out — because this logger sits on the hot path of an Orleans silo
+        // logging at Information, where the helper is null on every grain-scheduler thread.
+        //
+        // Hoisting IsEnabled above that null check (the first shape of this change) made every
+        // such record walk the filter rules for nothing. Measured on MeshWeaver.Hosting.Orleans.Test
+        // on an otherwise-quiet machine: 67.1 s without the fault sink, 72.2 s with it hoisted
+        // (72.167 / 72.264 — reproducible). Attributing all 5 s to the hoist would overstate the
+        // evidence, since the sink's own ~125 records are in that delta too; what is certain is
+        // that the hoist buys nothing, so it is not worth paying for either way.
+        var isFaultCandidate = exception is not null && logLevel >= LogLevel.Warning;
+
+        var outputHelper = testOutputHelperAccessor.OutputHelper
+            ?? XUnitFileOutputRegistry.GetAnyActiveOutputHelper();
+        if (outputHelper is null && !isFaultCandidate)
+            return;
+
         if (!IsEnabled(logLevel))
             return;
 
@@ -202,15 +221,13 @@ public class XUnitLogger(
         // Records are rate-bounded by FaultRecordBudget and announce their own suppression, so a
         // storming silo cannot fill the runner's disk silently.
         string? message = null;
-        if (exception is not null && logLevel >= LogLevel.Warning)
+        if (isFaultCandidate)
         {
             message = formatter(state, exception);
-            TestTraceLog.AppendFault(categoryName, logLevel, message, exception);
+            TestTraceLog.AppendFault(categoryName, logLevel, message, exception!);
         }
 
-        var outputHelper = testOutputHelperAccessor.OutputHelper
-            ?? XUnitFileOutputRegistry.GetAnyActiveOutputHelper();
-        if (outputHelper == null)
+        if (outputHelper is null)
             return;
 
         message ??= formatter(state, exception);
