@@ -265,6 +265,17 @@ public static class MemexConfiguration
                 Console.WriteLine,
                 Console.Error.WriteLine);
 
+            // 🚨 #2507 — HAND THE CONFIGURATION TO THE BUILDER BEFORE ANYTHING INSTALLS. A module
+            // attribute's BuilderConfigurations run inside InstallAssemblies and read
+            // builder.Configuration for the deployment's answers; this method had every answer in
+            // its `configuration` parameter and never passed it on, so every module folding on a
+            // PORTAL saw null — AiMeshModuleAttribute.ServeFromPartitions(null) put the whole AI
+            // catalog on the in-memory path and skipped the AI content sources on both prods,
+            // while the deployed config plainly listed the partitions. InstallConfiguredModules
+            // (the tester/LocalMesh path) already hands it over, which is exactly why the defect
+            // was portal-specific. Unconditional: modules are not the only readers, and a null
+            // Configuration must mean "the deployment supplied nothing", never "the host forgot".
+            builder.WithConfiguration(configuration);
             if (resolvedModules.Length > 0)
                 builder.InstallAssemblies(resolvedModules);
             // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
