@@ -5,10 +5,12 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Orleans;
 using Orleans.TestingHost;
 using Xunit;
 
@@ -97,6 +99,118 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
                 + "IS core#694 layer 2 (the memex 35/60 static-content failure at 2 replicas)");
             node!.Path.Should().Be(path);
         }
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE INPUT THIS CLASS LOST — issue #1742.</b> The fact above no longer posts from
+    /// <c>mesh/{id}</c> at all (<c>2c796d297</c> moved <c>GetMeshNode</c> onto
+    /// <c>portal/nodeops-…</c>), so the class named for the root-mesh-hub reply leg stopped
+    /// exercising it — the gate silently stopped testing its own input, and #1729 is what that cost.
+    /// This restores it in the smallest possible shape.
+    ///
+    /// <para><c>PingRequest</c> is answered by EVERY hub (<c>MessageHub.HandlePingRequest</c>) and
+    /// its answer is a separate post targeted back at the SENDER — so a ping issued on
+    /// <c>mesh/{id}</c> against a per-node hub grain is precisely the exchange this issue is named
+    /// for, with nothing else in the way. Issuing from BOTH silos' root hubs makes the repro
+    /// deterministic without knowing the placement: the node's grain hashes onto exactly ONE silo,
+    /// so one of the two legs is guaranteed to be the cross-silo reply.</para>
+    ///
+    /// <para>Deliberately a REQUEST/RESPONSE round trip and not a forward delivery: the forward leg
+    /// is an Orleans grain call that is retried and NACK'd, while the reply leg is the one that had
+    /// no delivery guarantee and no failure signal. That asymmetry IS the bug this issue reports.</para>
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task RootMeshHubRequest_ReceivesItsReply_FromBothSilos()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(100));
+        var ct = deadline.Token;
+        var cluster = _fixture.Cluster;
+        cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "one of the two legs has to CROSS silos");
+
+        var hubA = SiloMeshHub(cluster, 0);
+        var hubB = SiloMeshHub(cluster, 1);
+
+        var ns = $"rootping-{Guid.NewGuid():N}";
+        var path = $"{ns}/Doc";
+        var create = await hubA
+            .Observe(new CreateNodeRequest(new MeshNode("Doc", ns)
+            {
+                NodeType = "Markdown",
+                Name = "Doc",
+                State = MeshNodeState.Active,
+            }), o => o.WithTarget(hubA.Address))
+            .FirstAsync().ToTask(ct);
+        create.Message.Success.Should().BeTrue(create.Message.Error ?? "");
+
+        foreach (var (hub, label) in new[] { (hubA, "silo A"), (hubB, "silo B") })
+        {
+            var pong = await hub.Observe(new PingRequest(), o => o.WithTarget((Address)path))
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(40))
+                .ToTask(ct);
+
+            pong.Message.Should().NotBeNull(
+                $"the ping issued on {label}'s ROOT MESH HUB must receive its PingResponse. When "
+                + "this is the non-owning silo the reply crosses silos back to mesh/{id}, which is "
+                + "the exchange issue #1742 is named for — a hang here is that defect, live");
+        }
+    }
+
+    /// <summary>
+    /// 🚨 <b>WHICH TRANSPORT the reply above actually took — and this is the fact that decides
+    /// whether #1742 is fixed or merely quiet.</b>
+    ///
+    /// <para>Cross-silo delivery to a pod-process hub has two transports. The directed
+    /// <c>IPodHubGrain</c> call either LANDS or ANSWERS; the Orleans memory-stream publish is
+    /// fire-and-forget over a NON-DURABLE queue whose grain dies with its silo, so it can succeed and
+    /// discard. The router silently prefers the first and falls back to the second, which means the
+    /// round trip above passes either way — and would go on passing if the root hub's claim quietly
+    /// stopped landing.</para>
+    ///
+    /// <para>That is not hypothetical for THIS address specifically. Every other stream-routed hub
+    /// claims itself from application code, but <c>mesh/{id}</c> is registered by
+    /// <c>RootMeshHubReplyStreamService</c> — an <c>IHostedService</c> running at host start — and
+    /// <c>OrleansRoutingService.AttachPodHub</c> is best-effort with a bounded (~3 s) claim retry,
+    /// while the stream subscription it sits beside is ordered on a 120 s
+    /// <c>OrleansStreamingReadiness</c> gate. A claim that failed to land degrades SILENTLY to the
+    /// stream — i.e. straight back onto the transport this issue is about — and nothing else would
+    /// notice.</para>
+    ///
+    /// <para>So this asks the transport directly, from the silo that does NOT host the address:
+    /// <c>PodHubNotHereException</c> means no process claims it and every cross-silo reply to it is
+    /// riding the memory stream.</para>
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task RootMeshHub_IsClaimedForItsProcess_SoItsRepliesTakeTheDirectedTransport()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var ct = deadline.Token;
+        var cluster = _fixture.Cluster;
+        cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2,
+            "asking from the OWNING silo would be answered by its own local route and prove nothing");
+
+        var rootA = SiloMeshHub(cluster, 0).Address;
+
+        // Silo B's grain factory, so the call is genuinely cross-silo. A PingRequest is inert on
+        // arrival — every hub answers it — so this probes the transport without leaving state behind.
+        var grains = ((InProcessSiloHandle)cluster.Silos[1]).SiloHost.Services
+            .GetRequiredService<IGrainFactory>();
+
+        var probe = new MessageDelivery<PingRequest>(
+            new PingRequest(),
+            new PostOptions(rootA).WithTarget(rootA),
+            System.Text.Json.JsonSerializerOptions.Default);
+
+        var delivered = await grains.GetGrain<IPodHubGrain>(rootA.ToString())
+            .Deliver(probe)
+            .WaitAsync(TimeSpan.FromSeconds(30), ct);
+
+        delivered.State.Should().Be(MessageDeliveryState.Forwarded,
+            $"the root mesh hub {rootA} must be claimed for its own process, so that a cross-silo "
+            + "reply to it is a directed grain call with an outcome rather than a publish onto a "
+            + "non-durable memory stream that succeeds whether or not anybody is listening. A "
+            + "PodHubNotHereException here means the claim never landed and this hub is back on the "
+            + "transport issue #1742 reports — silently");
     }
 
 }

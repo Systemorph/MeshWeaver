@@ -167,6 +167,15 @@ manufactured by every deploy. Two residual silent-loss windows remain:
 2. **A genuinely absent subscriber.** A hub whose subscription attach failed, or which is torn down
    between publish and pull, still absorbs the message without a `DeliveryFailure`.
 
+> 🚨 **Both of those residuals now live on a FALLBACK path, and that changes who should pay for
+> them.** Since the transport swap ([Pod-Hub Delivery](/Doc/Architecture/PodHubDeliveryRollPlan))
+> the primary route to a pod-process hub is a directed grain call; the stream carries only the roll
+> window and hubs owned by an Orleans *client* process, which cannot host a grain. So making the
+> stream durable no longer buys the #1742 headline — it buys #2320 and #2322, which are stream-leg
+> tickets. The primary path traded the stream's fragility for the **grain directory's**, and that is
+> a different (classification) fix, written up in the roll plan's "What the swap traded" section.
+> Size the pre-release-package decision on the stream tickets alone.
+
 Plus one deployment-shaped residual: **the `AzureTables` / Azure Container Apps route still runs a
 memory PubSubStore**, and it is a multi-silo shape. Anyone taking that route to production must pass
 a durable `configurePubSubStore` (Azure Table or Blob grain storage under the name `PubSubStore`)
