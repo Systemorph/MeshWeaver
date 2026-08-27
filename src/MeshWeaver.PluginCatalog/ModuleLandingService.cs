@@ -60,7 +60,7 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para><b>…except boot-time GC against a CONCURRENT landing (#2303).</b> A landing's two writes
 /// (move the bytes, then <see cref="ModuleActivationSidecar.WriteEntry"/>) are not atomic across
-/// replicas, so another replica's <see cref="CollectGarbage"/> can observe the new generation
+/// replicas, so another replica's <see cref="CollectGarbage(string, Microsoft.Extensions.Logging.ILogger?, TimeSpan?, DateTime?)"/> can observe the new generation
 /// directory before the entry that claims it exists and delete it as "unreferenced" — leaving a
 /// real activation entry pointing at nothing a moment later. See
 /// <see cref="DefaultGarbageMinAge"/> for the race and the grace-period fix.</para>
@@ -79,7 +79,7 @@ public sealed class ModuleLandingService : IDisposable
 
     /// <summary>
     /// How long an UNREFERENCED directory under <c>modules/</c> must sit before
-    /// <see cref="CollectGarbage"/> treats it as truly orphaned rather than the first half of a
+    /// <see cref="CollectGarbage(string, Microsoft.Extensions.Logging.ILogger?, TimeSpan?, DateTime?)"/> treats it as truly orphaned rather than the first half of a
     /// landing this replica has not seen the SECOND half of yet — the race behind #2303.
     ///
     /// <para>🚨 <b>The race.</b> A landing is two writes on the shared <c>/data</c> volume,
@@ -113,12 +113,32 @@ public sealed class ModuleLandingService : IDisposable
     /// <summary>
     /// Boot-time garbage collection over <c>modules/</c>: deletes generation directories
     /// (<c>&lt;name&gt;@&lt;id&gt;</c>) no activation entry references, leftover
-    /// <c>.staging-*</c>, and the retired <c>.pending-*</c> folders of the abandoned deferred-swap
-    /// scheme — but only once they are older than <paramref name="minAge"/>
-    /// (<see cref="DefaultGarbageMinAge"/>): see that constant for why an UNREFERENCED directory is
-    /// not proof of an orphan (#2303). Skip-on-locked: a directory some still-running pod holds
-    /// open simply survives to the next boot. Never touches legacy <c>&lt;name&gt;/</c> folders —
-    /// entries without a generation still resolve there.
+    /// <c>.staging-*</c>, <c>.trash-*</c> from an earlier pass's interrupted delete, and the
+    /// retired <c>.pending-*</c> folders of the abandoned deferred-swap scheme — but (except for
+    /// <c>.trash-*</c>, which is unreferenced by construction) only once they are older than
+    /// <paramref name="minAge"/> (<see cref="DefaultGarbageMinAge"/>): see that constant for why an
+    /// UNREFERENCED directory is not proof of an orphan (#2303). Never touches legacy
+    /// <c>&lt;name&gt;/</c> folders — entries without a generation still resolve there.
+    ///
+    /// <para>🚨 <b>Fail-closed on an unreliable reference set (#2509).</b> The reference set comes
+    /// from <see cref="ModuleActivationSidecar.Read"/>, which — correctly, for BOOT (#2189) — skips
+    /// a per-module entry file it cannot read and keeps the rest. For GC that per-module resilience
+    /// inverts into a hazard: a transient SMB read fault on ONE entry file makes that module's
+    /// ACTIVE generation indistinguishable from an orphan, and a pass that trusted the incomplete
+    /// set deleted the very bytes the entry references — the dangling activation entries #2509
+    /// measured on both prods. So any read fault skips every generation delete this pass
+    /// (transient <c>.staging-/.pending-/.trash-</c> folders still collect — nothing references
+    /// those by design); a later boot re-reads and sweeps then. Unreadable is never unreferenced.</para>
+    ///
+    /// <para>🚨 <b>Removal is atomic per directory (#2509).</b> A generation is first renamed to a
+    /// <c>.trash-*</c> sibling — one atomic rename, after which it no longer exists as far as
+    /// resolution (<see cref="ModuleDirectoryFor"/>) is concerned — and only then recursively
+    /// deleted. The old delete-in-place could fail PARTWAY (one locked file on SMB aborts the
+    /// recursion) and its skip-on-locked catch then preserved a HALF-GUTTED generation: entry DLL
+    /// present, lazily-loaded dependency DLLs gone — the <c>Could not load file or assembly
+    /// 'OpenAI'</c> shape of the 2026-08-27 outage. With rename-first, a refused rename (held open
+    /// on SMB) leaves the directory fully intact, and an interrupted delete leaves only a
+    /// <c>.trash-*</c> folder a later pass finishes. There is no half-deleted state either way.</para>
     /// </summary>
     /// <param name="baseDirectory">The deployment root whose <c>modules/</c> folder is swept.</param>
     /// <param name="logger">Diagnostics — every removal and every age-deferred skip is logged.</param>
@@ -127,36 +147,69 @@ public sealed class ModuleLandingService : IDisposable
     /// <param name="nowUtc">The reference "now" the age check compares against. Defaults to
     /// <see cref="DateTime.UtcNow"/>; a test seam so the race and its fix are provable without a
     /// real sleep.</param>
-    /// <returns>How many directories were removed.</returns>
+    /// <returns>How many directories were removed — where "removed" means gone from the
+    /// <c>modules/</c> namespace (a rename into <c>.trash-*</c> counts even when the final delete
+    /// is finished by a later pass).</returns>
     public static int CollectGarbage(
         string baseDirectory, ILogger? logger = null, TimeSpan? minAge = null, DateTime? nowUtc = null)
+        => CollectGarbage(baseDirectory, logger, minAge, nowUtc, deleteDirectory: null);
+
+    /// <summary>The implementation behind <see cref="CollectGarbage(string, ILogger?, TimeSpan?,
+    /// DateTime?)"/> with the delete operation as a seam, so the interrupted-delete path — the one
+    /// that used to leave a half-gutted generation — is provable in a test without a real SMB lock.</summary>
+    internal static int CollectGarbage(
+        string baseDirectory, ILogger? logger, TimeSpan? minAge, DateTime? nowUtc,
+        Action<string>? deleteDirectory)
     {
         var modulesRoot = Path.Combine(baseDirectory, "modules");
         if (!Directory.Exists(modulesRoot))
             return 0;
+        var delete = deleteDirectory ?? (dir => Directory.Delete(dir, recursive: true));
+        var readFaults = 0;
         var activation = ModuleActivationSidecar.Read(baseDirectory,
-            msg => logger?.LogError("{Message}", msg));
+            msg =>
+            {
+                readFaults++;
+                logger?.LogError("{Message}", msg);
+            });
         var referenced = activation.Entries
             .Where(e => !string.IsNullOrWhiteSpace(e.Directory))
             .Select(e => e.Directory!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // 🚨 #2509: with any entry file unreadable, `referenced` is INCOMPLETE — an ACTIVE
+        // generation would read as an orphan. Generation deletes are skipped wholesale this pass.
+        var referencesReliable = readFaults == 0;
+        var reportedUnreliable = false;
         var cutoff = (nowUtc ?? DateTime.UtcNow) - (minAge ?? DefaultGarbageMinAge);
         var removed = 0;
         foreach (var dir in Directory.EnumerateDirectories(modulesRoot))
         {
             var leaf = Path.GetFileName(dir);
-            var collectable =
-                leaf.StartsWith(".staging-", StringComparison.OrdinalIgnoreCase)
-                || leaf.StartsWith(".pending-", StringComparison.OrdinalIgnoreCase)
-                || (leaf.Contains('@') && !referenced.Contains(leaf));
-            if (!collectable)
+            var isTrash = leaf.StartsWith(".trash-", StringComparison.OrdinalIgnoreCase);
+            var isTransient = isTrash
+                || leaf.StartsWith(".staging-", StringComparison.OrdinalIgnoreCase)
+                || leaf.StartsWith(".pending-", StringComparison.OrdinalIgnoreCase);
+            var isOrphanGeneration = !isTransient && leaf.Contains('@') && !referenced.Contains(leaf);
+            if (!isTransient && !isOrphanGeneration)
                 continue;
+            if (isOrphanGeneration && !referencesReliable)
+            {
+                if (!reportedUnreliable)
+                    logger?.LogWarning(
+                        "Modules GC: {Faults} activation entry file(s) could not be read, so the "
+                        + "reference set is incomplete — SKIPPING every generation delete this pass "
+                        + "(unreadable is never unreferenced, #2509). A later boot re-reads and "
+                        + "sweeps.", readFaults);
+                reportedUnreliable = true;
+                continue;
+            }
             // 🚨 #2303: an unreferenced directory younger than the grace window may simply be a
             // landing this replica has not seen the ACTIVATION ENTRY for yet — see
             // DefaultGarbageMinAge. Left for a later pass, which re-reads the sidecar and either
             // finds the entry now present (survives, correctly) or is still unreferenced and past
-            // the window (a genuine orphan, collected then).
-            if (Directory.GetLastWriteTimeUtc(dir) > cutoff)
+            // the window (a genuine orphan, collected then). `.trash-*` is exempt: it exists only
+            // as the second half of a removal this or an earlier pass already committed.
+            if (!isTrash && Directory.GetLastWriteTimeUtc(dir) > cutoff)
             {
                 logger?.LogDebug(
                     "Modules GC: {Dir} is unreferenced but younger than the {MinAge} grace period "
@@ -164,16 +217,43 @@ public sealed class ModuleLandingService : IDisposable
                     leaf, minAge ?? DefaultGarbageMinAge);
                 continue;
             }
+            var target = dir;
+            if (isOrphanGeneration)
+            {
+                // Atomic removal (#2509): one rename takes the generation out of the modules/
+                // namespace; a refusal (held open on SMB) leaves it FULLY intact for the next boot.
+                var trash = Path.Combine(modulesRoot,
+                    $".trash-{leaf}-{Guid.NewGuid():N}"[..(".trash-".Length + leaf.Length + 9)]);
+                try
+                {
+                    Directory.Move(dir, trash);
+                    removed++;
+                    logger?.LogInformation("Modules GC: removed {Dir}", leaf);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    // Held open by a still-running pod — intact, the next boot collects it.
+                    logger?.LogDebug("Modules GC: {Dir} is in use, skipped ({Reason})", leaf, e.Message);
+                    continue;
+                }
+                target = trash;
+            }
             try
             {
-                Directory.Delete(dir, recursive: true);
-                removed++;
-                logger?.LogInformation("Modules GC: removed {Dir}", leaf);
+                delete(target);
+                if (!isOrphanGeneration)
+                {
+                    removed++;
+                    logger?.LogInformation("Modules GC: removed {Dir}", leaf);
+                }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                // Held open by a still-running pod — the next boot collects it.
-                logger?.LogDebug("Modules GC: {Dir} is in use, skipped ({Reason})", leaf, e.Message);
+                // An interrupted delete of a .trash-*/staging folder is harmless — nothing resolves
+                // or loads it — and a later pass finishes the job.
+                logger?.LogDebug(
+                    "Modules GC: delete of {Target} did not finish ({Reason}) — a later pass "
+                    + "collects the remainder.", Path.GetFileName(target), e.Message);
             }
         }
         return removed;

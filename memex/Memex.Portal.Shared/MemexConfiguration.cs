@@ -235,9 +235,20 @@ public static class MemexConfiguration
                 // and a baseline entry keeps ResolveModulePath's probes. The provenance comes from
                 // the union itself rather than being re-derived here; the gate and the resolver
                 // each deciding for themselves where a module's bytes live is exactly #1949.
+                //
+                // 🚨 #2509: a store-landed generation is then PINNED — copied to process-local
+                // storage and loaded from there. The shared modules/ tree has reference-set
+                // lifetime: an auto-update that lands a newer generation makes THIS pod's loaded
+                // one unreferenced, and a sibling pod's boot GC reclaims it while this process
+                // still lazily loads dependency DLLs from it (first chat after that was
+                // FileNotFoundException 'OpenAI' — the 2026-08-27 outage). Baseline entries stay
+                // un-pinned: they resolve into the image's own immutable closure.
                 .Select(module => (
                     Module: module,
-                    Path: ModuleActivationBoot.ResolveLoadPath(moduleRoot, module)))
+                    Path: module.Landed is not null
+                        ? ModuleGenerationPin.PinnedLoadPath(moduleRoot, module.Landed,
+                            onWarn: msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"))
+                        : ModuleActivationBoot.ResolveLoadPath(moduleRoot, module)))
                 .Where(candidate =>
                 {
                     if (File.Exists(candidate.Path))

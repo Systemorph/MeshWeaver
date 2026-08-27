@@ -240,6 +240,40 @@ reclamation, it does not disable it. The two writes of a real landing are back-t
 between them, so the actual exposure the window has to cover is low-single-digit seconds even over
 a slow network volume; five minutes is generous headroom on top of that.
 
+### 🚨 GC vs a RUNNING process — three more holes, closed after the 2026-08-27 outage (#2509)
+
+The grace window protects a landing IN FLIGHT; #2509 measured three ways GC still broke modules
+that had landed long ago, on both prods at once:
+
+1. **Unreadable is never unreferenced.** The reference set GC deletes against comes from
+   `ModuleActivationSidecar.Read`, which — correctly, for boot (#2189) — skips a per-module entry
+   file it cannot read and keeps the rest. For GC that per-module resilience inverts into a hazard:
+   one transient SMB read fault makes that module's ACTIVE generation indistinguishable from an
+   orphan, and the pass deletes the very bytes its entry references — a dangling activation entry
+   with nothing naming why. `CollectGarbage` is now fail-closed: any entry-file read fault skips
+   EVERY generation delete that pass (transient `.staging-`/`.pending-`/`.trash-` folders still
+   collect — nothing references those by design), and a later boot re-reads and sweeps.
+
+2. **Removal is atomic per directory.** Deleting a generation in place could fail PARTWAY — one
+   locked file aborts the recursion — and the skip-on-locked catch then preserved a HALF-GUTTED
+   generation: entry DLL present, lazily-loaded dependency DLLs gone. A generation is now first
+   renamed to a `.trash-*` sibling (one atomic rename, after which resolution can no longer see
+   it) and only then recursively deleted; a refused rename leaves the directory fully intact, an
+   interrupted delete leaves only a `.trash-*` folder a later pass finishes. There is no
+   half-deleted state either way.
+
+3. **A running process loads from PROCESS-LOCAL storage** (`ModuleGenerationPin`). The shared
+   `modules/` tree has reference-set lifetime, but a process needs its loaded generation for its
+   own lifetime: dependency DLLs load LAZILY, and Roslyn content compiles
+   (`CompileReferences.ComposeWithModules`) re-read module files by path hours after boot. An
+   auto-update that lands a newer generation makes the one THIS pod loaded unreferenced, and a
+   sibling pod's boot GC then reclaims it — correctly, by the sidecar's lights — so the pod's
+   first lazy load afterwards was `FileNotFoundException: Could not load file or assembly
+   'OpenAI'`. Boot now copies each store-landed generation into a per-process folder under the OS
+   temp path and loads from there; the shared tree stays a transport that GC may reclaim freely.
+   The pin is protection, not a gate: a boot that cannot copy warns loudly and falls back to the
+   shared path.
+
 Why a sidecar file and not a mesh node: the list is consumed before any storage provider, hub, or
 connection string exists, and it must move with the DLLs it describes — the landing service writes
 both in one operation onto the same volume, so they cannot drift apart.
