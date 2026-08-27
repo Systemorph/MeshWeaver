@@ -375,11 +375,23 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         private int _released;
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _released, 1) == 0
-                && Interlocked.Decrement(ref ctx._pins) == 0)
-                // The LAST scan out announces the drain. This is what makes waiting for it a
-                // SUBSCRIPTION rather than a spin loop against a deadline (#2488): the unload
-                // runs because the scans finished, never because a clock expired.
+            if (Interlocked.Exchange(ref _released, 1) != 0
+                || Interlocked.Decrement(ref ctx._pins) != 0)
+                return;
+
+            // The LAST scan out announces the drain — but ONLY once Dispose has started. This is
+            // what makes waiting for it a SUBSCRIPTION rather than a spin loop against a deadline
+            // (#2488): the unload runs because the scans finished, never because a clock expired.
+            //
+            // 🚨 The _unloading guard is load-bearing, not a tidiness check (Copilot review).
+            // Pins hit zero all the time during NORMAL operation, and AsyncSubject completion is
+            // PERMANENT: announcing then would complete the signal while the context is perfectly
+            // healthy, and a Dispose arriving later — with a NEW scan pinned — would subscribe to
+            // an already-completed subject, replay instantly, and unload with _pins > 0. That is
+            // precisely the use-after-unload this change exists to remove, reintroduced through
+            // the fix itself. Once _unloading is set, Pin() refuses new scans, so the count can
+            // only shrink and zero really is the drain.
+            if (ctx._unloading)
                 ctx.AnnounceDrained();
         }
     }

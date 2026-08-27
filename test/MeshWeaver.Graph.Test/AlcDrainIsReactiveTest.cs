@@ -1,4 +1,3 @@
-using System.Reflection;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
 
@@ -18,10 +17,9 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class AlcDrainIsReactiveTest
 {
-    private static bool IsUnloaded(NodeAssemblyLoadContext context) =>
-        (bool)typeof(NodeAssemblyLoadContext)
-            .GetField("_disposed", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(context)!;
+    // The type's own public surface — no reflection, so a field rename cannot quietly turn this
+    // suite green against a broken implementation (Copilot review).
+    private static bool IsUnloaded(NodeAssemblyLoadContext context) => context.IsDisposed;
 
     [Fact]
     public void Dispose_WithNoScanInFlight_UnloadsImmediately()
@@ -54,6 +52,32 @@ public class AlcDrainIsReactiveTest
 
         Assert.True(IsUnloaded(context),
             "the last pin release announces the drain, and the subscription unloads on it");
+    }
+
+    [Fact]
+    public void AnEarlierScanReachingZero_DoesNotPreArmTheUnload()
+    {
+        // 🚨 THE REGRESSION THIS SUITE ALMOST MISSED (Copilot review on #2549). Pins hit zero all
+        // the time during normal operation, and AsyncSubject completion is PERMANENT — so
+        // announcing the drain on every zero would complete the signal while the context is
+        // healthy, and a Dispose arriving later with a NEW scan pinned would subscribe to an
+        // already-completed subject, replay instantly, and unload with _pins > 0. That is the very
+        // use-after-unload this change removes, reintroduced through the fix itself.
+        var context = new NodeAssemblyLoadContext("MeshWeaver.Test.Rearmed", dllPath: null);
+
+        // A perfectly ordinary scan, completing long before anyone disposes anything.
+        context.Pin().Dispose();
+
+        // A second scan is running when disposal begins.
+        var live = context.Pin();
+        context.Dispose();
+
+        Assert.False(IsUnloaded(context),
+            "the earlier scan's release must NOT have pre-armed the unload — this context still "
+            + "has a live scan reading its assembly");
+
+        live.Dispose();
+        Assert.True(IsUnloaded(context), "and it unloads when THAT scan finishes, not before");
     }
 
     [Fact]
