@@ -32,6 +32,46 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class ConfigurationHandOverTest
 {
+    [Theory]
+    [InlineData(InstanceSetupState.AwaitingStorage)]
+    [InlineData(InstanceSetupState.AwaitingModules)]
+    [InlineData(InstanceSetupState.Unreadable)]
+    public void AnIncompleteManifest_LeavesTheInstanceAwaitingSetup_NeverPosesAsConfiguredStorage(
+        InstanceSetupState state)
+    {
+        // 🚨 Copilot review on #2552. A manifest that EXISTS is not a manifest that ANSWERS: the
+        // wizard's own starting point (InstanceSetupDefaults) is AwaitingStorage with a type
+        // already pre-filled, and an Unreadable one answers nothing at all. Accepting either as
+        // configured storage boots past setup and fails later and deeper — on an unknown backend
+        // or a missing connection string — which is both a worse failure and further from its
+        // cause than simply serving the setup surface.
+        var root = Directory.CreateTempSubdirectory("mw-2552-").FullName;
+        try
+        {
+            new InstanceManifest
+            {
+                State = state,
+                Storage = new InstanceStorageSelection { Type = "PostgreSql" },
+            }.Write(root);
+
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Modules:Root"] = root })
+                .Build();
+            var builder = new MeshBuilder(configure => configure(new ServiceCollection()),
+                new Address("mesh", "test"));
+
+            builder.ConfigureMemexMesh(configuration);
+
+            Assert.True(builder.IsAwaitingSetup,
+                $"a manifest in state {state} does not answer the storage question, so the "
+                + "instance must stay in setup rather than boot on it");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* OS problem, not a failure */ }
+        }
+    }
+
     [Fact]
     public void ConfigureMemexMesh_HandsTheHostConfigurationToTheBuilder_BeforeModulesFold()
     {
