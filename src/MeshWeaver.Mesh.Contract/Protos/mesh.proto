@@ -1,8 +1,3 @@
-// 🚨 TRANSITION COPY — the canonical file is src/MeshWeaver.Mesh.Contract/Protos/mesh.proto.
-// This path is kept, byte-identical below this header, only until the JS clients in
-// MeshWeaver.Plugins (clients/grpc-web/scripts/gen.mjs, clients/typescript/src/connection.ts)
-// resolve the new path; it is deleted together with this project when MeshWeaver.Hosting.Grpc
-// moves to MeshWeaver.Plugins. Edit the canonical file, never this one.
 syntax = "proto3";
 
 option csharp_namespace = "MeshWeaver.Hosting.Grpc.Protocol";

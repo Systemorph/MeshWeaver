@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///    time but has historically been confused with persistence.
 /// 2. The seeds never end up persisted by one test and read by the next:
 ///    persistence is in-memory and shared across tests in
-///    <see cref="OrleansClusterCollection"/>; static providers always win the
+///    <c>OrleansClusterCollection</c>; static providers always win the
 ///    fallback path so tests cannot mutate the seed contract by accident.
 ///
 /// Every <see cref="MeshNode"/> returned here satisfies the bare-node

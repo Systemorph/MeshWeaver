@@ -27,7 +27,7 @@ using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// Generic base for Orleans tests that own their own <see cref="TestCluster"/>.
+/// Generic base for Orleans tests that own their own <c>TestCluster</c>.
 /// Inherit <see cref="TestSiloConfigurator"/> for the canonical silo wiring and
 /// override <c>RegisterChatClientFactory</c> / <c>ConfigureMesh</c> only for
 /// per-test specifics.
@@ -36,7 +36,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <list type="bullet">
 ///   <item>TestCluster lifecycle (Initialize/Dispose).</item>
 ///   <item><see cref="GetClient"/> — creates a participating client mesh hub
-///   with the standard mesh-node handler chain (<see cref="GraphConfigurationExtensions.AddMeshDataSource"/>
+///   with the standard mesh-node handler chain (<c>GraphConfigurationExtensions.AddMeshDataSource</c>
 ///   + <see cref="LayoutExtensions.AddLayoutClient"/> + <see cref="AIExtensions.AddAITypes"/>).</item>
 ///   <item>Per-call <see cref="AccessContext"/> seeding so the client posts under
 ///   the test user's identity (default <c>TestUser</c>).</item>
@@ -83,7 +83,7 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
     protected static Address CreateClientAddress(string? id = null) => new("client", id ?? Guid.NewGuid().ToString("N")[..12]);
 
     /// <summary>
-    /// Initial silo count for the <see cref="TestCluster"/>. Default 1 — tests that
+    /// Initial silo count for the <c>TestCluster</c>. Default 1 — tests that
     /// need cross-silo behaviour (assembly-store sharing, cache propagation across
     /// grain placements) override to <c>2</c>.
     /// </summary>
@@ -141,7 +141,7 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
     /// <summary>
     /// Canonical client config — registers the AI message types the test posts,
     /// adds the standard mesh-node data plumbing
-    /// (<see cref="GraphConfigurationExtensions.AddMeshDataSource"/> gives the
+    /// (<c>GraphConfigurationExtensions.AddMeshDataSource</c> gives the
     /// client a <see cref="MeshNodeReference"/> reducer + <see cref="Data.GetDataRequest"/>
     /// handler + workspace stream protocol), and the layout client. Override to
     /// add more — chain through the base call.
@@ -188,7 +188,7 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : OrleansTestBas
 /// Mirrors the silo's mesh-builder chain (<see cref="OrleansTestMeshExtensions.ConfigurePortalMesh"/>)
 /// on the Orleans client so the client-side mesh catalog has the same NodeType
 /// registrations (Graph, AI, Kernel). Without this, <c>CreateNodeRequest</c>
-/// posted to the client mesh address fails with "NodeType '<X>' is not
+/// posted to the client mesh address fails with "NodeType '&lt;X&gt;' is not
 /// registered" because the local catalog is empty.
 /// </summary>
 public class TestClientConfigurator : IHostConfigurator
@@ -210,7 +210,7 @@ public class TestClientConfigurator : IHostConfigurator
 /// fake <see cref="IChatClientFactory"/>. The base wires:
 ///
 /// <list type="bullet">
-///   <item><see cref="PersistenceExtensions.AddPartitionedInMemoryPersistence(MeshBuilder)"/>
+///   <item><c>PersistenceExtensions.AddPartitionedInMemoryPersistence(MeshBuilder)</c>
 ///   so <see cref="IPartitionStorageProvider"/> rules (e.g.
 ///   <see cref="EmbeddedResourcePartitionStorageProvider"/> registered by
 ///   <see cref="DocumentationExtensions.AddDocumentation"/>) actually serve reads.
@@ -220,13 +220,13 @@ public class TestClientConfigurator : IHostConfigurator
 ///   and <c>Kernel</c> NodeType registrations.</item>
 ///   <item><see cref="DocumentationExtensions.AddDocumentation"/>: registers the
 ///   <c>Doc</c> embedded-resource partition.</item>
-///   <item><see cref="SecurityHostingExtensions.AddRowLevelSecurity"/>:
+///   <item><c>SecurityHostingExtensions.AddRowLevelSecurity</c>:
 ///   ScopeRolesService + SecurityService. Combined with the <c>TestUser</c>
 ///   admin seeds below, every test starts with a logged-in admin user.</item>
 ///   <item>TestUser admin seeds: <c>User/TestUser</c> + <c>User/_Access/TestUser_Access</c>
 ///   so the default identity has Admin role.</item>
-///   <item><see cref="MeshHubBuilderExtensions.ConfigureDefaultNodeHub"/> with
-///   <see cref="LayoutExtensions.AddDefaultLayoutAreas"/>.</item>
+///   <item><c>MeshHubBuilderExtensions.ConfigureDefaultNodeHub</c> with
+///   <c>LayoutExtensions.AddDefaultLayoutAreas</c>.</item>
 ///   <item>Per-process Guid-suffixed <see cref="IAssemblyStore"/> root (Acme/FutuRe
 ///   isolation pattern).</item>
 ///   <item>Silo-side framework logging through <see cref="ITestOutputHelper"/> so

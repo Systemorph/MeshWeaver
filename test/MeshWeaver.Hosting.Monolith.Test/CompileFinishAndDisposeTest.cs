@@ -84,7 +84,7 @@ public class CompileFinishAndDisposeTest(ITestOutputHelper output) : MonolithMes
                 }))
                 .Aggregate(Observable.Return<MeshNode?>(null), (chain, next) =>
                     chain.SelectMany(_ => next.Select(n => (MeshNode?)n))))
-            .SelectMany(_ => Mesh.Observe(
+            .SelectMany(_ => RequestHub.Observe(
                     new GetCompilationPathRequest(),
                     o => o.WithTarget(new Address(nodeTypePath))))
             .Select(d => d.Message);

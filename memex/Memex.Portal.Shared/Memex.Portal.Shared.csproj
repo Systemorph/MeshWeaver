@@ -61,8 +61,12 @@
          MeshWeaver.Blazor.Portal.dll the internals it always had. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.SignalR\MeshWeaver.Hosting.SignalR.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Grpc\MeshWeaver.Hosting.Grpc.csproj" />
+    <!-- MeshWeaver.Hosting.PostgreSql, .Hosting.Grpc, .Hosting.SignalR and MeshWeaver.InstanceSync
+         are deliberately NOT referenced (the storage/transport/sync carve-out): no code in this
+         assembly names their types — the Postgres and gRPC references were ships-the-bits only, and
+         the InstanceSync + SignalR mesh registrations (plus the /connect/instance endpoints) moved
+         to the portal composition in MeshWeaver.Plugins, where the hosts live. The projects
+         themselves follow into that repo; a deployment composes them from there. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <!-- SpeechEndpoints resolves ISpeechTranscriber OPTIONALLY (503 when absent), so the portal needs
          the CONTRACT only — the Whisper client arrives as a module. -->
@@ -82,7 +86,6 @@
          ships via the modules/<Name>/ closure layout in MeshModulesPublish.targets and activates
          via Modules:Assemblies -> NotificationChannelsModuleAttribute (the triage watcher
          self-skips unless Email:Enabled). -->
-    <ProjectReference Include="..\..\src\MeshWeaver.InstanceSync\MeshWeaver.InstanceSync.csproj" />
     <!-- Content → vector index (core tech): chunk/embed/store on a separate Postgres vector DB,
          per-file Document nodes, chunk-search autocomplete. Inert unless ConnectionStrings:contentindex
          + embeddings are configured (so the monolith compiles it but never activates it). -->
@@ -93,7 +96,6 @@
          and activates via Modules:Assemblies -> PostgresContentIndexingModuleAttribute (which
          self-gates enabledWhen the mesh database connection resolves). -->
 
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
     <!-- AI Services -->
     <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />

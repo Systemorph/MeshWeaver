@@ -74,7 +74,7 @@ public class PythonCodeNodeGateDeliveryTest(ITestOutputHelper output) : Monolith
 
         // 3) Run it. HandleExecuteScript sees the gate as CONNECTED (presence), so it does NOT fail
         //    fast — it posts the SubmitCodeRequest to py/python-kernel, which the gate must receive.
-        var exec = await Mesh.Observe<ExecuteScriptResponse>(
+        var exec = await RequestHub.Observe<ExecuteScriptResponse>(
                 new ExecuteScriptRequest(), o => o.WithTarget(new Address($"{Partition}/{id}")))
             .Take(1).ToTask(ct);
         Assert.True(exec.Message.Success, exec.Message.Error ?? "the run should start");

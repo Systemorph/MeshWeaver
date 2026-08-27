@@ -52,7 +52,7 @@ public class TypedContentUpdateTest(ITestOutputHelper output) : MonolithMeshTest
         }).Should().Emit();
 
         // Per-node hubs activate lazily — any inbound message brings the hub up.
-        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+        await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
             .Should().Emit();
 
         var nodeHub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);

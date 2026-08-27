@@ -1631,14 +1631,23 @@ jobs:
   #     satellite and no PAT. memex does the fan-out with the GitHub App it ALREADY holds for
   #     GitSync (`FrameworkReleaseBroadcaster`, `src/MeshWeaver.GitSync`); the release only signs a
   #     POST to memex, exactly like every other `notify-*` job here.
-  #   • no hand-maintained list here — the subscriber set lives in the Hosting fleet registry ON
-  #     memex ("register a new repo in Hosting"), the graph memex already owns; nothing is named in
-  #     this file.
+  #   • no hand-maintained list HERE — the subscriber set is the control instance's own
+  #     configuration (`FrameworkBroadcast:Subscribers`, rendered as
+  #     `FrameworkBroadcast__Subscribers__0..N` by deploy/helm/templates/memex-portal/config.yaml);
+  #     nothing is named in this file.
+  # 🚨 THIS BLOCK USED TO SAY the set "lives in the Hosting fleet registry ON memex", and that
+  # sentence cost #2235 three days: no such registry was ever built — there is no subscriber node
+  # type under Hosting/ and no code in any repo reads one — while the seam that DOES exist
+  # (FrameworkBroadcast:Subscribers) was rendered by no chart in either repo, so no deploy could
+  # set it. Every broadcast therefore dispatched to an empty set and logged it as the normal state
+  # of a non-control mesh. Do not re-describe a registry here until one ships with a reader; a
+  # mechanism named in prose and absent from the code is what stops the next reader looking.
   # 🚨 `BAKE_SUBSCRIBER_REPOS` IS GONE — deleted as a repo variable on 2026-08-25, not merely
   # unused. It survived the 2026-08-23 redesign holding one stale repo name, and a leftover
   # variable that LOOKS like the live subscriber list is worse than none: the next person to debug
   # a missing rebake reads it, believes the fan-out targets exactly that repo, and stops looking.
-  # If you need to know who is subscribed, ask the Hosting registry on the control instance.
+  # If you need to know who is subscribed, read `FrameworkBroadcast__Subscribers__0..N` on the
+  # control instance's deployment — that is the only source there is.
   # Pull stays the fallback: each repo's `schedule` run still reads the registry
   # (`Resolve the bake target` in each ci.yml) and bakes for the identity it finds, so a lost
   # dispatch costs at most one delayed rebake wave and a repo that stops baking still shows up as an
