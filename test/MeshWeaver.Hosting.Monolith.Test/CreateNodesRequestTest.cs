@@ -117,8 +117,7 @@ public class CreateNodesRequestTest(ITestOutputHelper output)
         var satellitePath = $"{stem}/_Activity/act-1";
         var plainPath = $"{stem}-plain";
 
-        var response = await Mesh
-            .Observe<CreateNodesResponse>(new CreateNodesRequest(ImmutableList.Create(
+        var response = await ObserveNodeOperation(new CreateNodesRequest(ImmutableList.Create(
                 Node(plainPath, "# plain"),
                 Node(satellitePath, "# satellite"))))
             .Select(d => d.Message)
@@ -146,8 +145,7 @@ public class CreateNodesRequestTest(ITestOutputHelper output)
         var validPath = $"{stem}-valid";
         var bogus = Node($"{stem}-bogus", "# bogus") with { NodeType = $"NoSuchType{Guid.NewGuid():N}" };
 
-        var response = await Mesh
-            .Observe<CreateNodesResponse>(new CreateNodesRequest(ImmutableList.Create(
+        var response = await ObserveNodeOperation(new CreateNodesRequest(ImmutableList.Create(
                 Node(validPath, "# valid"), bogus)))
             .Select(d => d.Message)
             .Should().Emit();
@@ -171,8 +169,7 @@ public class CreateNodesRequestTest(ITestOutputHelper output)
     {
         var path = $"{TestPartition}/bulk-dup-{Guid.NewGuid():N}";
 
-        var response = await Mesh
-            .Observe<CreateNodesResponse>(new CreateNodesRequest(ImmutableList.Create(
+        var response = await ObserveNodeOperation(new CreateNodesRequest(ImmutableList.Create(
                 Node(path, "# first"), Node(path, "# second"))))
             .Select(d => d.Message)
             .Should().Emit();
@@ -192,8 +189,7 @@ public class CreateNodesRequestTest(ITestOutputHelper output)
     {
         var path = $"{TestPartition}/bulk-null-{Guid.NewGuid():N}";
 
-        var response = await Mesh
-            .Observe<CreateNodesResponse>(new CreateNodesRequest(ImmutableList.Create(
+        var response = await ObserveNodeOperation(new CreateNodesRequest(ImmutableList.Create(
                 Node(path, "# fine"), null!)))
             .Select(d => d.Message)
             .Should().Emit();
