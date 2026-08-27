@@ -15,6 +15,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- DockerImageGateArgsTest pins the docker argv this tool builds — the gate's only production
+         seam, which had no test and no caller of any kind (#2274). The argv is internal because it
+         is a contract, not an API: the test asserts it rather than re-implementing it. -->
+    <InternalsVisibleTo Include="MeshWeaver.PluginTester.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
   </ItemGroup>
