@@ -76,7 +76,19 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <!-- 🚨 MeshWeaver.AI is deliberately NOT a ProjectReference (#2276): the engine left the
+         content surface and ships as a registry MODULE, so the gate — like a portal — lands it
+         under modules/MeshWeaver.AI/ (the closure lane below) and activates it through
+         Modules:Assemblies (PluginGateRunner builds the in-memory configuration). A compiled
+         reference here would put MeshWeaver.AI back into the framework identity for every bake
+         host, and an image shipping AI.dll in its app closure 409s the registry module. -->
+    <!-- These four used to arrive TRANSITIVELY through MeshWeaver.AI and are still part of the
+         content surface (in-mesh source compiles against them), so the closure keeps them
+         directly now that the engine reference is gone. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Operations\MeshWeaver.Mesh.Operations.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Markdown.Collaboration\MeshWeaver.Markdown.Collaboration.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing.Graph\MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
@@ -86,5 +98,18 @@
          Northwind/Product) can compile at runtime. Without them the gate flags content the real
          host compiles fine — the gate must judge against the surface content actually gets. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
+  </ItemGroup>
+
+  <!-- ═════════ The AI engine rides the MODULE lane, exactly as a portal ships it ═════════
+       The closure lane lays modules/MeshWeaver.AI/ (entry DLL + its private NuGet closure) into
+       $(OutDir) after Build and into the publish dir after Publish — the same worker every host
+       uses, so the gate loads the very layout a portal loads. The row is TESTER-LOCAL: written
+       AFTER the import, replacing the shared inventory, so nothing here adds MeshWeaver.AI to any
+       portal image's closure (a closure module and a registry module of the same name are
+       mutually exclusive — the landing service answers 409). -->
+  <Import Project="..\..\memex\MeshModulesPublish.targets" />
+  <ItemGroup>
+    <MeshModuleClosure Remove="@(MeshModuleClosure)" />
+    <MeshModuleClosure Include="$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '..', '..', 'src', 'MeshWeaver.AI', 'MeshWeaver.AI.csproj'))" />
   </ItemGroup>
 </Project>

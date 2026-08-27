@@ -114,7 +114,11 @@ public static class FrameworkBuildIdentity
     /// </summary>
     public static readonly ImmutableArray<string> ContentSurfaceAssemblies =
     [
-        "MeshWeaver.AI",
+        // MeshWeaver.AI left the content surface with #2276: the engine is a MODULE now, landed
+        // from the registry and composed into content compiles per-mesh via
+        // CompileReferences.ComposeWithModules — never part of the framework identity. Content
+        // referencing AI types compiles wherever the AI module is installed (the bake host lands
+        // it too), and an image shipping AI.dll in its app closure would 409 the registry module.
         "MeshWeaver.Application.Styles",
         "MeshWeaver.Compiler",
         "MeshWeaver.ContentCollections",
