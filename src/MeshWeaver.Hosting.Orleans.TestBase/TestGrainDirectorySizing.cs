@@ -69,7 +69,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// takes the normal path inherits it without doing anything; it is registered BEFORE the caller's own
 /// configurators, so a test that needs a different size can still set one. Ten classes build their own
 /// <c>TestClusterBuilder</c> instead and opt in on the line after they create it —
-/// <see cref="TestClusterSizingGuard"/> is what keeps that from being something anyone has to
+/// <c>TestClusterSizingGuard</c> is what keeps that from being something anyone has to
 /// remember.</para>
 /// </summary>
 public class TestGrainDirectorySizing : ISiloConfigurator

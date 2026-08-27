@@ -644,7 +644,7 @@ public static class MemexConfiguration
                         // browser edit would be reverted by the next helm upgrade.
                         .AddCompositionAdminSettingsTab()
                         // Instance Sync lives in the "Synchronizations" NODE-menu item (not a
-                        // settings tab) — wired via AddInstanceSyncTypes on the mesh builder.
+                        // settings tab) — composed by the portal composition in MeshWeaver.Plugins (ConfigureMemexPortal → AddInstanceSyncTypes).
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
                         .AddWorkingTreeTab()
                         // Git history tab — read-only git browser (commit log + changes + diffs) over the same working tree.
