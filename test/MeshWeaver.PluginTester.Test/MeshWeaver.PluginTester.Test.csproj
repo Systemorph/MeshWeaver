@@ -9,4 +9,14 @@
          framework build identity — this is the TEST project. -->
     <ProjectReference Include="..\..\tools\MeshWeaver.ComboVerifier\MeshWeaver.ComboVerifier.csproj" />
   </ItemGroup>
+
+  <!-- The gate boots in-process here, and the gate requires the AI engine MODULE beside the
+       binary (#2276) — modules/ is laid by the closure lane, not copied by a ProjectReference, so
+       this TEST bin needs its own lane run with the same tester-local single row. Same pattern as
+       the old StorageModuleLayoutTest: reuse the real worker, never a hand-copied publish. -->
+  <Import Project="..\..\memex\MeshModulesPublish.targets" />
+  <ItemGroup>
+    <MeshModuleClosure Remove="@(MeshModuleClosure)" />
+    <MeshModuleClosure Include="$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '..', '..', 'src', 'MeshWeaver.AI', 'MeshWeaver.AI.csproj'))" />
+  </ItemGroup>
 </Project>
