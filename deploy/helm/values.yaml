@@ -382,6 +382,14 @@ ingress:
     # (ERR_CONNECTION_CLOSED) — the "page renders a random subset / stops prematurely" bug. The
     # stream must flush frame-by-frame, so response buffering MUST be off.
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # 🚨 MODULE BUNDLES ARE POSTED THROUGH THIS INGRESS. /api/plugins/bundles/{package} is the
+    # registry's acquisition half (ModulePublish → ModuleLandingService.ShelveModule), and a real
+    # bundle is tens of MB — DefaultViews is ~19 MB with its 254 static assets. nginx's DEFAULT
+    # body limit is 1 MB, so without this the route answers 413 before the request ever reaches
+    # the portal, and no module can ever be published to a chart-deployed registry. The MCP
+    # ingress has carried this for its own uploads since it was written; the portal ingress —
+    # which is the one serving /api — did not, so the two disagreed about how big a POST may be.
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
 # ---- Next.js React portal (experimental frontend — FEATURE-FLAGGED) --------
 # When enabled, a Next.js streaming-SSR build of the React GUI (clients/portal-next)
 # runs as its OWN Deployment beside memex-portal, and the portal ingress gains a
