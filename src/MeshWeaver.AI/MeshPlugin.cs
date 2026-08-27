@@ -294,9 +294,15 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             _processPool.InvokeBlocking(ct => RunTestsCore(repoRoot, projectPath, filter, args, ct)),
             cancellationToken,
             answer => answer,
-            ex => $"{{\"status\":\"Error\",\"message\":\"{ex.Message}\"}}",
-            () => "{\"status\":\"Error\",\"message\":\"The test runner produced no result.\"}");
+            // Serialized, not interpolated: an exception message is arbitrary text and a single
+            // quote or backslash in it would emit invalid JSON to a tool whose contract is a JSON
+            // object. (The hand-written literals above are constant or a repo-relative path.)
+            ex => RunTestsError(ex.Message),
+            () => RunTestsError("The test runner produced no result."));
     }
+
+    private static string RunTestsError(string message) =>
+        System.Text.Json.JsonSerializer.Serialize(new { status = "Error", message });
 
     private static string RunTestsCore(
         string repoRoot, string projectPath, string? filter,
