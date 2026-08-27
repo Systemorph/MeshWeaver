@@ -15,5 +15,6 @@ the incomplete credential, so an optional integration took the entire site down.
 
 The check now reads the configuration directly, which cannot fail. A portal with mail half-configured
 starts and serves normally; mail alone is switched off, with an error naming the exact keys still to set.
-Anything already queued stays visibly unsent and goes out by itself once the configuration is completed —
-it is never marked as delivered when it was not.
+Anything already queued stays visibly unsent, and goes out by itself once the keys are set and the portal
+restarts — mail settings are read at startup, so completing them takes effect on the next roll. Nothing
+is ever marked as delivered when it was not.

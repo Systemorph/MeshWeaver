@@ -22,8 +22,11 @@ namespace Memex.Portal.Shared.Email;
 /// were spent hunting inboxes, junk folders and message traces because <c>Sent</c> was trusted.</para>
 ///
 /// <para><b>Why refusing beats succeeding quietly.</b> Mail that stays <c>New</c> is recoverable:
-/// complete the configuration and it goes out, with no data repair. Mail stamped <c>Sent</c> that
-/// was never sent is unrecoverable, because nothing distinguishes it from mail that WAS sent. So
+/// complete the configuration, restart the portal, and it goes out — with no data repair and
+/// nothing to re-queue by hand. (The restart is required, not incidental: the <c>Email</c> section
+/// is bound once at host start and these watchers start with it, so neither re-reads it at
+/// runtime.) Mail stamped <c>Sent</c> that was never sent is unrecoverable, because nothing
+/// distinguishes it from mail that WAS sent. So
 /// the watchers do not start at all on a refused configuration, and the no-op sender fails loudly
 /// for every other caller instead of returning <c>true</c>.</para>
 ///
@@ -70,9 +73,10 @@ internal static class EmailDeliveryGuard
     internal static string Explain(string what)
         => $"Email:Enabled=true but the resolved {nameof(IEmailSender)} does NOT deliver mail — this "
            + $"install has no mail sender. {what} Land the {SenderModule} module on this deployment "
-           + "(Modules:Assemblies / the plugin bundle) to restore delivery. Refusing rather than "
-           + "reporting success: mail left queued is recoverable once the module lands, mail stamped "
-           + "Sent that was never sent is not.";
+           + "(Modules:Assemblies / the plugin bundle) and RESTART the portal to restore delivery — "
+           + "the Email section is read once at host start and the mail watchers start with it. "
+           + "Refusing rather than reporting success: mail left queued is recoverable on that "
+           + "restart, mail stamped Sent that was never sent is not.";
 
     /// <summary>
     /// The one wording for the INCOMPLETE-configuration refusal. Deliberately does not blame the
@@ -87,9 +91,10 @@ internal static class EmailDeliveryGuard
         => $"Email:Enabled=true but the Email section is INCOMPLETE — {string.Join(", ", missingKeys)} "
            + $"{(missingKeys.Length == 1 ? "is" : "are")} not set, so no {nameof(IEmailSender)} on this "
            + $"install can authenticate. {what} Set {string.Join(", ", missingKeys)}, or set "
-           + "Email:UseManagedIdentity=true and grant the managed identity the Mail.Send app role, to "
-           + "restore delivery. Refusing rather than reporting success: mail left queued is recoverable "
-           + "once the section is completed, mail stamped Sent that was never sent is not.";
+           + "Email:UseManagedIdentity=true and grant the managed identity the Mail.Send app role, "
+           + "then RESTART the portal to restore delivery — the Email section is read once at host "
+           + "start and the mail watchers start with it. Refusing rather than reporting success: mail "
+           + "left queued is recoverable on that restart, mail stamped Sent that was never sent is not.";
 
     /// <summary>
     /// The refusal wording that fits THIS install — incomplete configuration when that is the
