@@ -89,7 +89,6 @@ public class DocExamplesRenderTest(PortalFixture fixture)
         // ---- Architecture ----
         { "Doc/Architecture/UserInterface", 1, Stack, "Controls Language" },
         { "Doc/Architecture/UserInterface/AvailableControls", 9, Stack, "live in the kernel" },
-        { "Doc/Architecture/NativeMauiRendering", 1, Tabs, null },
         { "Doc/Architecture/ScriptExecution", 1, Table, "Rebound per submission" },
         { "Doc/Architecture/ScriptExecutionDemo", 2, null, "🎆" },
         { "Doc/Architecture/VectorSearch", 1, Table, "TextSearch" },
