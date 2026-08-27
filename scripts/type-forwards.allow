@@ -25,12 +25,3 @@
 # $(MeshWeaverRoot) (core, MeshWeaver.Plugins, MeshWeaver.SocialMedia — the latter pinned
 # pre-split). A forwarder is impossible here: the base would have to reference the AI assembly,
 # which references the base (the documented reference-cycle case).
-MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.OrleansSharedTestBase  #2501 — test machinery, no module binds it
-MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.OrleansTestBase  #2501 — test machinery, no module binds it
-MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.OrleansTestMeshExtensions  #2501 — test machinery, no module binds it
-MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.OrleansTestMeshNodeAttribute  #2501 — test machinery, no module binds it
-MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.OrleansTestSeedProvider  #2501 — test machinery, no module binds it
-MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.SharedOrleansFixture  #2501 — test machinery, no module binds it
-MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.SharedSiloConfigurator  #2501 — test machinery, no module binds it
-MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.TestClientConfigurator  #2501 — test machinery, no module binds it
-MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.TestSiloConfigurator  #2501 — test machinery, no module binds it
