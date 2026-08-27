@@ -1,9 +1,7 @@
-using System.Reactive;
-using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh;
 
@@ -57,6 +55,7 @@ public static class MeshTeardownExtensions
         var asyncDisposeQueue = mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
         var activities = mesh.ServiceProvider.GetService<ActivityTracker>();
         var teardownSignal = mesh.ServiceProvider.GetService<MeshTeardownSignal>();
+        var logger = TeardownLogger(mesh);
 
         // (0) QUIESCE ACTIVITIES FIRST — before anything is disposed.
         //
@@ -70,14 +69,45 @@ public static class MeshTeardownExtensions
         // status. It must run BEFORE Dispose because those Append/Finish writes go back through
         // hubs that are still alive. Bounded, so a run that never settles surfaces as a timeout
         // rather than hanging teardown forever.
+        //
+        // 🚨 SUBSCRIBED, not bridged, and BOUNDED BY A TOKEN rather than by a Timeout spliced into
+        // the signal (#2301/#2488). The old shape was
+        // `WhenIdle.Timeout(timeout).Catch(_ => Observable.Return(Unit.Default)).ToTask()`, which
+        // is wrong three ways. (1) DEADLOCK: Rx completes a ToTask() TCS inline, so this method
+        // resumed on whichever hub thread signalled idle — and the very next statement is
+        // `mesh.Dispose()`, driven from that same thread. (2) The Catch folds "the budget expired
+        // with a run still writing" into a value indistinguishable from "idle". (3) Once the Task
+        // settles it can observe nothing, so a fault arriving afterwards has nowhere to go.
+        // ObserveCompletion completes with RunContinuationsAsynchronously (no hub thread carries
+        // us onward), cancelling the WAIT leaves the observation attached (a late fault is still
+        // reported), and the expiry is DATA now (ActivitiesQuiesced on the report), not a silence.
+        var activitiesQuiesced = true;
         if (activities is not null)
-            await activities.WhenIdle.Timeout(timeout)
-                .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-                .ToTask();
+        {
+            using var quiesceBudget = new CancellationTokenSource(timeout);
+            try
+            {
+                await activities.WhenIdle.ObserveCompletion(
+                    ex => logger?.LogError(ex,
+                        "Mesh {Address}: the activity quiesce signal faulted AFTER teardown stopped "
+                        + "waiting on it. Reported rather than orphaned; investigate the activity that "
+                        + "faulted on its way to idle.", mesh.Address),
+                    quiesceBudget.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                activitiesQuiesced = false;
+                logger?.LogError(
+                    "Mesh {Address}: activities did not reach idle within {Timeout} — teardown is "
+                    + "proceeding over a run that is still writing. Find the activity that will not "
+                    + "settle; do not widen the budget.", mesh.Address, timeout);
+            }
+        }
 
         mesh.Dispose();
 
-        return await mesh.WaitForDisposalAndIoDrainAsync(ioPools, asyncDisposeQueue, timeout, teardownSignal);
+        return await DrainAsync(
+            mesh, ioPools, asyncDisposeQueue, timeout, teardownSignal, activitiesQuiesced);
     }
 
     /// <summary>
@@ -106,16 +136,77 @@ public static class MeshTeardownExtensions
     /// surface a dirty report (fail the test class, error-log the shutdown) — proceeding
     /// silently over live work is the use-after-unload SIGSEGV.
     /// </returns>
-    public static async Task<TeardownReport> WaitForDisposalAndIoDrainAsync(
+    /// <param name="mesh">The mesh root hub whose disposal is being awaited.</param>
+    /// <param name="ioPools">The <see cref="IoPoolRegistry"/> captured BEFORE disposal began.</param>
+    /// <param name="asyncDisposeQueue">The <see cref="AsyncDisposeQueue"/> captured BEFORE disposal began.</param>
+    /// <param name="timeout">Budget for each wait; an expiry surfaces as a
+    /// <see cref="TimeoutException"/> (phase 1) or on the report, never as silence.</param>
+    /// <param name="teardownSignal">Fired with the returned report, when supplied.</param>
+    public static Task<TeardownReport> WaitForDisposalAndIoDrainAsync(
         this IMessageHub mesh, IoPoolRegistry? ioPools, AsyncDisposeQueue? asyncDisposeQueue,
-        TimeSpan timeout, MeshTeardownSignal? teardownSignal = null)
+        TimeSpan timeout, MeshTeardownSignal? teardownSignal = null) =>
+        DrainAsync(mesh, ioPools, asyncDisposeQueue, timeout, teardownSignal, activitiesQuiesced: true);
+
+    // 🚨 The public signature above is UNCHANGED on purpose. Threading the quiesce outcome through
+    // as an extra optional parameter would have been source-compatible and BINARY-BREAKING — a
+    // module compiled against the five-parameter method binds that exact signature and would fail
+    // with MissingMethodException, which no source build in this repo can see (memory:
+    // "A source build cannot see a BINARY break").
+    private static async Task<TeardownReport> DrainAsync(
+        IMessageHub mesh, IoPoolRegistry? ioPools, AsyncDisposeQueue? asyncDisposeQueue,
+        TimeSpan timeout, MeshTeardownSignal? teardownSignal, bool activitiesQuiesced)
     {
+        var logger = TeardownLogger(mesh);
+
         // (1) Action blocks + message round-trips.
-        await mesh.DisposalCompleted
-            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-            .FirstOrDefaultAsync()
-            .ToTask()
-            .WaitAsync(timeout);
+        //
+        // 🚨 SUBSCRIBED, never bridged with `.ToTask()` — and the FIRST reason is deadlock, not
+        // fault observation. The previous shape was
+        // `Catch(_ => Return(Unit)).FirstOrDefaultAsync().ToTask().WaitAsync(timeout)`, and Rx
+        // completes a ToTask() TCS from inside the pipeline WITHOUT
+        // RunContinuationsAsynchronously — so this method resumed INLINE on the thread that
+        // signalled disposal, i.e. the mesh hub's own disposal thread. Everything below then ran
+        // there, including `ioPools.DrainAll()`, which is a SYNCHRONOUS JOIN of every pooled I/O
+        // leaf: the hub's own thread, parked, waiting for work that may need the hub. That is the
+        // /async skill's Rule 1 in the teardown path. ObserveCompletion completes with
+        // RunContinuationsAsynchronously, so phases (2)–(4) below can never run on a hub thread.
+        //
+        // The second reason is the one #2488 lists: the `Catch` turned a FAULTED disposal into an
+        // indistinguishable success, and once the Task settled nothing was left to observe a fault
+        // arriving afterwards. Now the fault is the answer when it comes first (recorded on the
+        // report and logged), and is still REPORTED when it comes late, because the subscription
+        // outlives the wait.
+        Exception? disposalFault = null;
+        using (var disposalBudget = new CancellationTokenSource(timeout))
+        {
+            try
+            {
+                await mesh.DisposalCompleted.ObserveCompletion(
+                    ex => logger?.LogError(ex,
+                        "Mesh {Address}: disposal faulted AFTER teardown stopped waiting on it. "
+                        + "Reported rather than orphaned — an unobserved fault here is the "
+                        + "UnobservedTaskException that poisons the next test class (#2301).",
+                        mesh.Address),
+                    disposalBudget.Token);
+            }
+            catch (OperationCanceledException) when (disposalBudget.IsCancellationRequested)
+            {
+                // Preserve the shape callers already branch on: HubTestBase and MonolithMeshTestBase
+                // both treat a TimeoutException here as HANG DETECTED and dump hub diagnostics.
+                throw new TimeoutException(
+                    $"Mesh {mesh.Address}: disposal did not complete within {timeout}. "
+                    + "Something on the action block is not finishing — find it; do not widen the budget.");
+            }
+            catch (Exception ex)
+            {
+                // A disposal FAULT, which the old .Catch silently rendered as success. Carried on
+                // the report and logged; see TeardownReport.DisposalFault for why it does not (yet)
+                // flip Clean.
+                disposalFault = ex;
+                logger?.LogError(ex, "Mesh {Address}: disposal FAULTED — teardown continues, but the "
+                    + "fault is now on the teardown report instead of being discarded.", mesh.Address);
+            }
+        }
 
         // (2) Offloaded ThreadPool I/O — the half DisposalCompleted does not cover. CANCEL + JOIN
         //     synchronously: a live change-feed leaf never completes on its own, so the old
@@ -134,8 +225,21 @@ public static class MeshTeardownExtensions
         //     the drains so a subscriber that proceeds on it (scope disposal, ALC unload, next
         //     test's mesh) never runs concurrently with surviving teardown work — and the report
         //     tells it when that guarantee could NOT be kept.
-        var report = new TeardownReport(leakedIoLeaves, asyncDisposeClean);
+        var report = new TeardownReport(leakedIoLeaves, asyncDisposeClean)
+        {
+            DisposalFault = disposalFault,
+            ActivitiesQuiesced = activitiesQuiesced
+        };
         teardownSignal?.SignalCompleted(report);
         return report;
     }
+
+    /// <summary>
+    /// The logger teardown reports through — resolved WHILE THE SCOPE IS STILL ALIVE, exactly like
+    /// every other teardown service here, and null-tolerant so a mesh without logging still tears
+    /// down. It is what makes a late fault REPORTED rather than swallowed: the observation arm has
+    /// to land somewhere, and "somewhere" cannot be a service resolved after disposal began.
+    /// </summary>
+    private static ILogger? TeardownLogger(IMessageHub mesh) =>
+        mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Mesh.Teardown");
 }

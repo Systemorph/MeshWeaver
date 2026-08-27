@@ -1,8 +1,5 @@
 using System;
 using System.Linq;
-using System.Reactive;
-using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -44,6 +41,47 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// GRACEFUL TERMINAL for grain-lifetime calls — "deactivate" is already achieved and
 /// "keep alive" is moot — so the callbacks must log-and-no-op, never throw. Pre-fix this
 /// fails with the exact incident exception.</para>
+///
+/// <para>🚨 <b>HOW IT WAITS IS PART OF WHAT IT TESTS — it was DEADLOCKING (issue #2301, four
+/// recurrences, the fourth on <c>main</c> with a <c>HOST_CRASHED</c> marker).</b> The setup above
+/// used to be reached by BRIDGING every wait to a Task: the request/response reads and
+/// <c>DisposalCompleted</c> through <c>FirstAsync()/FirstOrDefaultAsync().ToTask()</c>, and "the
+/// activation left the catalog" through a 100 ms POLL of
+/// <c>IManagementGrain.GetDetailedGrainStatistics()</c> raced against a 30 s <c>Timeout</c>.</para>
+///
+/// <para>Rx's <c>ToTask()</c> completes its <c>TaskCompletionSource</c> from inside the pipeline
+/// WITHOUT <c>RunContinuationsAsynchronously</c>, so the <c>await</c> resumed this test method
+/// INLINE on whichever thread signalled — and for <c>DisposalCompleted</c> that thread is the hub's
+/// disposal thread, which runs on THE DEACTIVATING GRAIN'S OWN TURN SCHEDULER
+/// (<c>CompleteActivation</c> builds the hub <c>.WithTaskScheduler(grainScheduler)</c>). The rest
+/// of the method then ran there, holding that scheduler for up to 30 s while waiting for that same
+/// grain's activation to leave the catalog — which needs
+/// <c>ActivationData.FinishDeactivating</c> to make progress on the scheduler being held. The
+/// failure was <b>always exactly 30 s</b>, the <c>Timeout</c> budget, never a distribution around
+/// it; a healthy activation leaves the catalog in 0.10 s. That shape is a deadlock, not
+/// contention.</para>
+///
+/// <para>The unobserved fault is the second-order effect that turned it into a crash: when the
+/// <c>Timeout</c> settled the wait, a fresh batch of catalog queries was still in flight against a
+/// silo mid-teardown, and each could fault into nothing, become an <c>UnobservedTaskException</c>,
+/// and be escalated by xUnit v3 into the very Catastrophic failure this docstring describes above.
+/// The test that exists to prove stragglers are handled gracefully was itself producing an
+/// unobservable straggler.</para>
+///
+/// <para><b>Every wait in this method is now
+/// <see cref="ReactiveCompletion.ObserveCompletion{T}"/></b> — a <c>Subscribe</c> whose task
+/// completes with <c>RunContinuationsAsynchronously</c>, so no continuation can land on a hub or
+/// grain scheduler. 🚨 <i>All</i> of them, including the two request/response reads, which the
+/// <c>/async</c> skill would otherwise permit as <c>.ToTask()</c> in a test: with no
+/// <c>SynchronizationContext</c>, <c>await</c> captures <c>TaskScheduler.Current</c>, so a SINGLE
+/// inline resumption earlier in the method routes every LATER await onto that scheduler too.
+/// Fixing only the last wait would leave the trap armed at the first one.</para>
+///
+/// <para>The poll is gone entirely, because the thing it was approximating now exists as a signal:
+/// <see cref="GrainDeactivationCompleted"/>, published by the grain from Orleans' own
+/// <c>IGrainContext.Deactivated</c>. Nothing here races a timeout against the work it is waiting
+/// for; the wall-clock bound belongs to <c>[Fact(Timeout = …)]</c> and the cancellation token,
+/// which is where a bound cannot orphan anything.</para>
 /// </summary>
 public class OrleansGrainTeardownStragglerTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
@@ -58,50 +96,72 @@ public class OrleansGrainTeardownStragglerTest(ITestOutputHelper output) : Orlea
         //    a TestUser/_Thread/... MessageHubGrain).
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", $"Teardown straggler {suffix}", "TestUser");
         var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser")))
-            .FirstAsync().ToTask(ct);
-        createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
+            .ObserveCompletion(ex => Output.WriteLine($"[LATE FAULT] CreateNodeRequest stream faulted after answering: {ex}"), ct);
+        createResp.Should().NotBeNull("the create request must be ANSWERED, not merely completed");
+        createResp!.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
         // 2. Activate the grain by routing a read to it (grain activation → hub build →
         //    CompleteActivation stamps the lifetime callbacks on the hub configuration).
         var getResp = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(threadPath)))
-            .FirstAsync().ToTask(ct);
-        getResp.Message.Data.Should().NotBeNull("the grain must have activated and served its node");
+            .ObserveCompletion(ex => Output.WriteLine($"[LATE FAULT] GetDataRequest stream faulted after answering: {ex}"), ct);
+        getResp.Should().NotBeNull("the read must be ANSWERED, not merely completed");
+        getResp!.Message.Data.Should().NotBeNull("the grain must have activated and served its node");
 
         // 3. Reach the silo-side grain-hosted hub and capture the callbacks the grain
         //    hands out to hub code (heartbeats → KeepAlive, rounds → BeginOperation,
         //    stuck-round watchdog → Invoke). These are exactly what stragglers call.
+        //    Alongside them, the grain's own completion signal — what the activation TELLS
+        //    a waiter, as opposed to what a straggler DOES to it.
         var hub = FindSiloHostedHub(threadPath);
         hub.Should().NotBeNull($"the grain-hosted hub for {threadPath} must exist on the silo");
         var keepAlive = hub!.Configuration.Get<GrainKeepAliveCallback>();
         var longRunning = hub.Configuration.Get<GrainLongRunningOperationCallback>();
         var deactivate = hub.Configuration.Get<GrainDeactivateCallback>();
+        var deactivationCompleted = hub.Configuration.Get<GrainDeactivationCompleted>();
         keepAlive.Should().NotBeNull();
         longRunning.Should().NotBeNull();
         deactivate.Should().NotBeNull();
+        deactivationCompleted.Should().NotBeNull(
+            "a grain-hosted hub must publish its activation's deactivation-completed signal — " +
+            "without it every waiter is back to polling the silo catalog (#2301)");
 
         // 4. Deactivate while ALIVE (legal — the #147 escape hatch) and wait for the
         //    activation to be FULLY gone: first the hub's own disposal completes
-        //    (OnDeactivateAsync), then the activation disappears from the silo catalog,
-        //    which happens only after ActivationData.FinishDeactivating set
-        //    State=Invalid. No sleeps — both waits are on the actual condition.
+        //    (OnDeactivateAsync), then the activation itself reports that it is gone.
+        //
+        //    No sleeps, no polls, no timeouts. Both waits SUBSCRIBE, and their tasks complete
+        //    with RunContinuationsAsynchronously — so this method is NEVER resumed on the
+        //    disposing hub's thread, which is the deactivating grain's own turn scheduler. That
+        //    is the #2301 deadlock: the old .ToTask() bridge resumed here inline on that
+        //    scheduler and then held it for 30 s waiting for the deactivation that needed it.
+        //    The error arm is the second half: a fault arriving after the wait settled is
+        //    REPORTED (into the test output below) instead of orphaned into an unobserved task.
         deactivate!.Invoke();
-        await hub.DisposalCompleted
-            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-            .FirstOrDefaultAsync()
-            .ToTask(ct);
+        await hub.DisposalCompleted.ObserveCompletion(
+            ex => Output.WriteLine($"[LATE FAULT] hub disposal for {threadPath} faulted AFTER it completed: {ex}"),
+            ct);
         Output.WriteLine("Hub disposal completed — waiting for the activation to leave the catalog...");
 
+        await deactivationCompleted!.Deactivated.ObserveCompletion(
+            ex => Output.WriteLine($"[LATE FAULT] deactivation of {threadPath} faulted AFTER it completed: {ex}"),
+            ct);
+        Output.WriteLine("Activation reports itself fully deactivated. Confirming it left the catalog...");
+
+        // The signal's CONTRACT, asserted rather than assumed. Orleans 10.2.2 completes
+        // IGrainContext.Deactivated on the LAST line of ActivationData.FinishDeactivating —
+        // after UnregisterMessageTarget() removed the activation from the silo catalog and after
+        // DisposeAsync() set State=Invalid. This is ONE awaited call that answers a question, not
+        // a loop that waits for an answer to change: the wait already happened, reactively, above.
         var grainId = $"messagehub/{threadPath}";
         var mgmt = Fixture.ClusterClient.GetGrain<IManagementGrain>(0);
-        await Observable.Interval(TimeSpan.FromMilliseconds(100))
-            .StartWith(0L)
-            .SelectMany(_ => mgmt.GetDetailedGrainStatistics().ToObservable())
-            .Where(stats => stats.All(s => !string.Equals(s.GrainId.ToString(), grainId, StringComparison.OrdinalIgnoreCase)))
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(ct);
+        var catalog = await mgmt.GetDetailedGrainStatistics();
+        catalog.Should().NotContain(
+            s => string.Equals(s.GrainId.ToString(), grainId, StringComparison.OrdinalIgnoreCase),
+            "GrainDeactivationCompleted fires from IGrainContext.Deactivated, which Orleans sets " +
+            "AFTER UnregisterMessageTarget() — if this ever fails, that ordering changed and every " +
+            "waiter built on the signal needs re-reading, not a poll bolted back on");
         Output.WriteLine("Activation is gone from the catalog (State=Invalid). Now the stragglers fire.");
 
         // 5. THE RACE, DISTILLED. Pre-fix each of these throws
