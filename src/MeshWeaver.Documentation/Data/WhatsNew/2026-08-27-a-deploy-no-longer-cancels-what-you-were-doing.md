@@ -1,7 +1,7 @@
 ---
 Name: A deploy no longer cancels what you were doing
 Category: Fix
-Description: For a few seconds during every update, the platform briefly cannot tell which server holds which piece of your work. It used to report that momentary confusion as a permanent failure — dropping the request and tearing down the live page behind it — instead of simply asking again a moment later. It now waits for the moving to finish.
+Description: For a few seconds during every update, the platform briefly cannot tell which server holds which piece of your work. It used to report that momentary confusion as a permanent failure — dropping the request and tearing down the live page behind it — instead of simply asking again a moment later. It now waits for the move to finish.
 Icon: Sparkle
 Order: -20260827
 ---

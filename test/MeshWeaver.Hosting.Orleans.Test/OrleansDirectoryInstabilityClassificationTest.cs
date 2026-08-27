@@ -217,8 +217,12 @@ public class OrleansDirectoryInstabilityClassificationTest
         // silently stop looking. The result is reduced to a BOOL before asserting: handing a
         // multi-megabyte subject to a string assertion makes its failure message the whole assembly.
         var literals = Encoding.Unicode.GetString(File.ReadAllBytes(runtimeAssembly));
+        // 🚨 OrdinalIgnoreCase, matching the classifier at OrleansRoutingService.cs:590. With
+        // Ordinal this pin would go RED for a recasing Orleans could make freely and the classifier
+        // would still handle — a false alarm on the one assertion whose entire value is being
+        // believed when it fires.
         var present = literals.Contains(
-            OrleansRoutingService.DirectoryRetryLaterMarker, StringComparison.Ordinal);
+            OrleansRoutingService.DirectoryRetryLaterMarker, StringComparison.OrdinalIgnoreCase);
 
         present.Should().BeTrue(
             $"'{OrleansRoutingService.DirectoryRetryLaterMarker}' is the phrase "
