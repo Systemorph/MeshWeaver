@@ -254,22 +254,30 @@ public static class MeshApiEndpoints
             .FirstAsync().ToTask(ct);
     }
 
-    private static async Task<IResult> HandleMirror(
+    /// <summary>
+    /// <c>POST /api/mesh/mirror</c>. Shaped like <see cref="HandleRenderArea"/>: the body is one
+    /// composed observable and the ONLY bridge to <see cref="Task"/> is the trailing
+    /// <c>.FirstAsync().ToTask(ct)</c> at the ASP.NET edge. It used to <c>await</c> the hub
+    /// round-trip mid-method — the shape that reaches into hub code from an await chain, and the
+    /// one the endpoint's own <c>Task&lt;IResult&gt;</c> signature is not licence for.
+    /// </summary>
+    private static Task<IResult> HandleMirror(
         HttpContext http, IMessageHub rootHub, MirrorRequest body, CancellationToken ct)
     {
         var sessionHub = ResolveSession(http, rootHub);
-        var delivery = await sessionHub.Observe<MirrorResult>(body, o => o.WithTarget(new Address("mesh")))
+        return sessionHub.Observe<MirrorResult>(body, o => o.WithTarget(new Address("mesh")))
             .Catch((Exception _) => Observable.Return((IMessageDelivery<MirrorResult>)null!))
+            .Select(delivery => delivery?.Message ?? new MirrorResult
+            {
+                Status = "Error",
+                Direction = body.Direction,
+                SourcePath = body.SourcePath,
+                TargetPath = body.TargetPath ?? body.SourcePath,
+                Error = "No response from mirror handler — is the mesh hub reachable and AddPersistence configured?",
+            })
+            .Select(result => (IResult)Results.Content(
+                JsonSerializer.Serialize(result, sessionHub.JsonSerializerOptions), "application/json"))
             .FirstAsync().ToTask(ct);
-        var result = delivery?.Message ?? new MirrorResult
-        {
-            Status = "Error",
-            Direction = body.Direction,
-            SourcePath = body.SourcePath,
-            TargetPath = body.TargetPath ?? body.SourcePath,
-            Error = "No response from mirror handler — is the mesh hub reachable and AddPersistence configured?",
-        };
-        return Results.Content(JsonSerializer.Serialize(result, sessionHub.JsonSerializerOptions), "application/json");
     }
 
     private static IResult HandleNavigateTo(HttpContext http, IOptions<McpConfiguration>? mcp, NavigateBody body)
@@ -282,27 +290,48 @@ public static class MeshApiEndpoints
     private static IResult HandleBaseUrl(HttpContext http, IOptions<McpConfiguration>? mcp) =>
         Results.Json(new { url = ResolveBaseUrl(http, mcp) });
 
-    private static async Task<IResult> HandleUpload(HttpContext http, IMessageHub rootHub, CancellationToken ct)
+    /// <summary>
+    /// <c>POST /api/mesh/upload</c>. The multipart read stays <c>async</c> — <c>ReadFormAsync</c> and
+    /// <c>CopyToAsync</c> over the request body are ASP.NET's own IO and belong at this edge — but it
+    /// is quarantined in <see cref="ReadUploadAsync"/>, which never touches the mesh. The MESH call
+    /// is composed, not awaited: the single bridge back to <see cref="Task"/> is the trailing
+    /// <c>.FirstAsync().ToTask(ct)</c>. An <c>await</c> that reaches into hub code is the shape the
+    /// endpoint's <c>Task&lt;IResult&gt;</c> signature is not licence for, however far from a hub
+    /// scheduler this particular request thread happens to be.
+    /// </summary>
+    private static Task<IResult> HandleUpload(HttpContext http, IMessageHub rootHub, CancellationToken ct) =>
+        ReadUploadAsync(http, ct).ToObservable()
+            .SelectMany(upload => upload.Failure is not null
+                ? Observable.Return(upload.Failure)
+                : new MeshOperations(ResolveSession(http, rootHub))
+                    .Upload(upload.Path!, upload.Bytes!)
+                    .Select(result => (IResult)Results.Content(result, "application/json")))
+            .FirstAsync().ToTask(ct);
+
+    /// <summary>
+    /// Reads the multipart body: either a <c>Failure</c> result to ship as-is, or the target path
+    /// and the file's bytes. Pure ASP.NET — no mesh call, so nothing here can park a hub, and
+    /// <c>internal</c> so <c>MeshApiUploadBodyTest</c> can pin each refusal without standing up an
+    /// authenticated pipeline and a mesh just to assert a 400.
+    /// </summary>
+    internal static async Task<(IResult? Failure, string? Path, byte[]? Bytes)> ReadUploadAsync(
+        HttpContext http, CancellationToken ct)
     {
         if (!http.Request.HasFormContentType)
-            return Results.BadRequest(new { error = "Content-Type must be multipart/form-data." });
+            return (Results.BadRequest(new { error = "Content-Type must be multipart/form-data." }), null, null);
 
         var form = await http.Request.ReadFormAsync(ct);
         var path = form["path"].FirstOrDefault();
         var file = form.Files.FirstOrDefault();
         if (string.IsNullOrWhiteSpace(path))
-            return Results.BadRequest(new { error = "Form field 'path' is required." });
+            return (Results.BadRequest(new { error = "Form field 'path' is required." }), null, null);
         if (file is null || file.Length == 0)
-            return Results.BadRequest(new { error = "Form file 'file' is required." });
+            return (Results.BadRequest(new { error = "Form file 'file' is required." }), null, null);
 
         using var ms = new MemoryStream();
         await using (var stream = file.OpenReadStream())
             await stream.CopyToAsync(ms, ct);
-
-        var sessionHub = ResolveSession(http, rootHub);
-        var ops = new MeshOperations(sessionHub);
-        var result = await ops.Upload(path, ms.ToArray()).FirstAsync().ToTask(ct);
-        return Results.Content(result, "application/json");
+        return (null, path, ms.ToArray());
     }
 
     /// <summary>
@@ -338,7 +367,12 @@ public static class MeshApiEndpoints
         return SessionHubResolver.ResolveSessionHub(rootHub, http, "api", logger);
     }
 
-    private static async Task<IResult> RunString(
+    /// <summary>
+    /// The shared body of every string-returning verb on this surface. <c>work</c>'s observable is
+    /// composed, never awaited: the single bridge to <see cref="Task"/> is the trailing
+    /// <c>.FirstAsync().ToTask(ct)</c>, which is the ASP.NET edge itself.
+    /// </summary>
+    private static Task<IResult> RunString(
         HttpContext http,
         IMessageHub rootHub,
         CancellationToken ct,
@@ -346,11 +380,12 @@ public static class MeshApiEndpoints
     {
         var sessionHub = ResolveSession(http, rootHub);
         var ops = new MeshOperations(sessionHub);
-        var result = await work(ops).FirstAsync().ToTask(ct);
         // MeshOperations returns either a JSON document or an "Error: …" sentinel string.
         // Both are safe to ship as application/json — the error string is just a JSON-quoted
         // value the client can branch on (mirrors the MCP-tool contract).
-        return Results.Content(result, "application/json");
+        return work(ops)
+            .Select(result => (IResult)Results.Content(result, "application/json"))
+            .FirstAsync().ToTask(ct);
     }
 
     private static string ResolveBaseUrl(HttpContext http, IOptions<McpConfiguration>? mcp)
