@@ -164,6 +164,10 @@ public sealed class InstanceComboVerifier
             CandidateTag = candidateTag,
             ImageRef = imageRef,
             ImageDigest = gate?.ImageDigest,
+            // 🚨 Carried so a Green can never claim more than it ran. ImageDigest is the manifest
+            // LIST digest for a multi-arch ref — it names both architectures while the gate
+            // executed one — so the platform is the half that makes the verdict honest.
+            VerifiedPlatform = gate?.Platform,
             VerifiedAt = DateTimeOffset.UtcNow,
             ComboReadAt = assembly.ComboReadAt,
             Verdict = verdict,
@@ -369,7 +373,10 @@ public sealed record ComboVerificationRun
         output.WriteLine();
         output.WriteLine($"=== mw-combo-verify: {Verdict.CandidateTag} ===");
         if (Verdict.ImageDigest is not null)
-            output.WriteLine($"image: {Verdict.ImageRef} @ {Verdict.ImageDigest}");
+            output.WriteLine($"image: {Verdict.ImageRef} @ {Verdict.ImageDigest}"
+                             + (Verdict.VerifiedPlatform is null
+                                 ? ""
+                                 : $" [{Verdict.VerifiedPlatform}]"));
         foreach (var module in Verdict.Modules)
         {
             var mark = module.Outcome switch
