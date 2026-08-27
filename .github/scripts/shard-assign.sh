@@ -19,8 +19,9 @@
 # Greedy LPT: heaviest first onto the currently least-loaded shard, ties to the
 # lowest shard id. Explicit and ORDER-INDEPENDENT — the original
 # `counter % SHARD_TOTAL` over a sorted csproj list silently depended on locale
-# byte order (C-locale sorts MeshWeaver.AI.Anthropic BEFORE MeshWeaver.Acme.Test,
-# 'I' 0x49 < 'c' 0x63), which stacked AI + Orleans — two of the three
+# byte order (C-locale sorted the then-resident MeshWeaver.AI.Test BEFORE
+# MeshWeaver.Acme.Test, 'I' 0x49 < 'c' 0x63 — that suite has since moved to
+# MeshWeaver.Plugins, #2276), which stacked AI + Orleans — two of the three
 # ALC-heaviest projects — onto shard 0 and made it the ~19-minute long pole of
 # every run.
 #
