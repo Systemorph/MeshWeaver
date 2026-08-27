@@ -1473,11 +1473,53 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # ---- Which RELEASE does this bake belong to? ------------------------------------------
+      # `portal-image` mints the version (3.0.0-rc8.ci.<run#>) — a per-RUN string — and on a
+      # bake-only reconcile that job is SKIPPED, so its output is empty. The first reconcile that
+      # ever fired (2026-08-27, run 33063843072 — the cron was starved until #2491 gave it its
+      # own concurrency lane) published the bake fine and then died in the assert below on
+      # `${1:?usage}`: the empty version reached the script as no argument at all. Worse, the
+      # publish step before it had quietly written NO release marker, so the one thing a reconcile
+      # exists to heal — "release X may be rolled to" — was the one thing it could not do.
+      #
+      # The version is not recomputable (it carries the ORIGINAL run's number), but it is RECORDED:
+      # promote's Phase C arms the release as `memex-portal-ai:<version>` on the same digest that
+      # Phase A tagged `<short-sha>` — the very tags SelfUpdateHostedService rolls from. So a
+      # reconcile reads the version back off the promoted image. No version tag on that digest
+      # means the release was never armed, and a bake cannot make available what was never
+      # promoted: that is a loud stop, never a fallback to "identity only" or an invented version.
+      - name: "Resolve the release version this bake belongs to (bake-only: read it off the promoted image)"
+        id: release
+        env:
+          RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
+          BAKE_ONLY: ${{ needs.gate.outputs.bake_only }}
+          SHORT_SHA: ${{ needs.gate.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$RELEASE_VERSION" ]; then
+            echo "release version $RELEASE_VERSION (minted by portal-image in this run)"
+            echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$BAKE_ONLY" != "true" ]; then
+            echo "::error::portal-image produced no version and this is not a bake-only run — refusing to publish under an unknown release."
+            exit 1
+          fi
+          tags=$(az acr manifest list-metadata --registry meshweaver --name memex-portal-ai \
+                   --query "[?contains(tags, '${SHORT_SHA}')].tags[]" -o tsv 2>/dev/null || true)
+          version=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+' <<<"$tags" | grep -vx "$SHORT_SHA" | head -1 || true)
+          if [ -z "$version" ]; then
+            echo "::error::memex-portal-ai:${SHORT_SHA} carries no version tag (tags on that digest: $(tr '\n' ' ' <<<"$tags")) — promote's Phase C never armed a release for this sha, so there is no release to make available. Fix promote; do not publish a marker for an invented version."
+            exit 1
+          fi
+          echo "release version $version (recovered from memex-portal-ai:${SHORT_SHA}'s tag set — bake-only reconcile)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: "Publish bundles to every portal target"
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
           BAKE_ARCHITECTURE: ${{ matrix.arch }}
-          RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
           # The third argument is the CONTENT identity (the commit this bake was taken from).
@@ -1514,7 +1556,7 @@ jobs:
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
           BAKE_ARCHITECTURE: ${{ matrix.arch }}
-          RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: .github/scripts/check-release-availability.sh "$RELEASE_VERSION" meshweaver-content
 
   # ────────────────── NOTIFY DEPENDENT REPOS (repository_dispatch) ──────────────────
