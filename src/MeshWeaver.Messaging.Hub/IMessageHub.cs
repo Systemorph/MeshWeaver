@@ -268,8 +268,52 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// SYNCHRONOUSLY (only the mesh-level IO pools drain async), so disposal completion is
     /// OBSERVED, never awaited on a hub thread. There is no <see cref="Task"/> on the disposal
     /// surface. A subscriber that attaches after disposal has already finished still receives
-    /// the completion immediately. At a genuine async edge (test teardown, grain deactivation)
-    /// bridge once with <c>DisposalCompleted.FirstOrDefaultAsync()</c> / <c>.ToTask()</c>.
+    /// the completion immediately.
+    ///
+    /// <para><b>Waiting for it means one thing: <c>Subscribe(onNext, onError)</c>.</b> The
+    /// continuation lives in the subscription. No poll, no <c>SpinWait</c>, no
+    /// <c>.Wait()</c>/<c>.Result</c>, no <c>Timeout</c> raced against the disposal, and no
+    /// <c>Task</c> gate. <c>MessageHubGrain.OnDeactivateAsync</c> is the reference shape: it
+    /// subscribes, handles the fault arm FLUENTLY with <c>.Catch</c> (a fault travels the stream
+    /// later and on another thread, so a <c>try</c>/<c>catch</c> wrapped around the
+    /// <c>Subscribe</c> CALL cannot see it), and does its follow-on work in the callback.</para>
+    ///
+    /// <para>🚨 <b>Do NOT bridge with <c>FirstOrDefaultAsync()</c> / <c>.ToTask()</c>. This
+    /// documentation used to prescribe exactly that "at a genuine async edge (test teardown, grain
+    /// deactivation)", and it was wrong in the place it mattered most</b> — those two edges are
+    /// where issue #2301 crashed four times, and every attempted fix aimed at the timeout because
+    /// this sentence said the bridge was correct.</para>
+    ///
+    /// <para><b>The reason is DEADLOCK, not a lost exception.</b> A hub's disposal completes when
+    /// its single-threaded action block finishes draining; a grain's deactivation completes when
+    /// its turn scheduler is free. Wait on one of those from that same scheduler and the thing you
+    /// are waiting for can never happen. The trap is that you do not have to write a block to get
+    /// one: Rx's <c>ToTask()</c> completes its <c>TaskCompletionSource</c> from inside the pipeline
+    /// WITHOUT <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/>, so the awaiter
+    /// resumes INLINE on the signalling thread — and everything after that <c>await</c> then runs
+    /// on the hub's disposal thread or the grain's turn. It is sticky: with no
+    /// <see cref="System.Threading.SynchronizationContext"/>, <c>await</c> captures
+    /// <see cref="TaskScheduler"/>.<see cref="TaskScheduler.Current"/>, so ONE inline resumption
+    /// routes every later await in that method onto the same scheduler. #2301 failed at exactly
+    /// 30 s — its <c>Timeout</c> budget — every time, while a healthy activation leaves the catalog
+    /// in 0.10 s; a number that is always the budget rather than a distribution around it is the
+    /// signature of a deadlock, not of contention.</para>
+    ///
+    /// <para>The unobserved fault is the SECOND-ORDER effect, and it is what turns the deadlock
+    /// into a crash: when the timeout finally settles the Task, a fault still travelling the
+    /// observable has NO OBSERVER, becomes an unobserved exception, surfaces on the finalizer as
+    /// <see cref="TaskScheduler.UnobservedTaskException"/>, and xUnit v3 escalates that to a
+    /// Catastrophic failure that poisons the NEXT test class (#2301's <c>HOST_CRASHED</c> marker).
+    /// <c>Subscribe(onNext, onError)</c> neither blocks nor loses the fault; <c>.ToTask()</c> does
+    /// both.</para>
+    ///
+    /// <para>Where an API genuinely demands a <see cref="Task"/> — an <c>ILifecycleObserver.OnStop</c>,
+    /// an <c>IHostedService</c>, an <c>async Task</c> test method — the bridge is
+    /// <c>ReactiveCompletion.ObserveCompletion</c>, which subscribes, completes its task with
+    /// <c>RunContinuationsAsynchronously</c> (so the caller is never resumed on the signalling
+    /// scheduler) and keeps its error arm attached after the task settles. Put that bridge at the
+    /// OUTERMOST edge — return the Task, never wrap it around a wait whose completion needs the
+    /// thread being held. See the <c>/async</c> skill (Rule 1a) and issues #2301, #2488.</para>
     /// </summary>
     IObservable<Unit> DisposalCompleted { get; }
     /// <summary>The hub's type registry, mapping message type names to CLR types for (de)serialization and routing.</summary>
