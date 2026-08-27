@@ -381,6 +381,19 @@ data:
   {{- if hasKey .Values.config.memex_portal "Modules__Required__4" }}
   Modules__Required__4: "{{ .Values.config.memex_portal.Modules__Required__4 }}"
   {{- end }}
+  {{- /* Indices 5-7: headroom so the NEXT required module does not silently vanish. The list
+     stopped at 4 while the overlays grew to 5 (MeshWeaver.AI, the engine guard after the
+     2026-08-27 outage) — the config-key coverage gate caught the overlay key reaching NO
+     container, the 5th recurrence of the named-key omission (#1925/#1778/#1780/#2203). */}}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__5" }}
+  Modules__Required__5: "{{ .Values.config.memex_portal.Modules__Required__5 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__6" }}
+  Modules__Required__6: "{{ .Values.config.memex_portal.Modules__Required__6 }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Modules__Required__7" }}
+  Modules__Required__7: "{{ .Values.config.memex_portal.Modules__Required__7 }}"
+  {{- end }}
   # Convergence policy (MeshWeaver#2192): when a NodeType publishes a usable build, instances
   # self-recycle onto it instead of waiting behind the "Recycle" banner. Off = the image default
   # (banner). A self-updating portal that leaves this off chooses unbounded in-memory assembly
