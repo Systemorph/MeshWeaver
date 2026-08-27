@@ -74,7 +74,7 @@ public static class LocalNodeRepo
 
     // Strict UTF-8 probe (throw-on-invalid decoder) so an arbitrary byte stream — a video, a
     // font — is classified binary rather than lossily decoded. Mirrors OctokitGitHubRepoClient.
-    private static bool TryDecodeUtf8(byte[] bytes, out string text)
+    internal static bool TryDecodeUtf8(byte[] bytes, out string text)
     {
         try
         {
