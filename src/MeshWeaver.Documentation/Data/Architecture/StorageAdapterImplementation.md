@@ -251,6 +251,6 @@ The only boot-time work is `PostgreSqlPartitionSubscriptionHostedService`, which
 - `src/MeshWeaver.Mesh.Contract/Services/IStorageAdapter.cs` — the adapter contract.
 - `src/MeshWeaver.Mesh.Contract/Services/IPartitionStorageProvider.cs` — the provider contract.
 - `src/MeshWeaver.Hosting/Persistence/PersistenceService.cs` — try-then-claim write, fan-out read/delete.
-- `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPathRoutingAdapter.cs` — synchronous first-segment → schema/table routing.
-- `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionStorageProvider.cs` — `EnsurePartitionProvisioned` (pooled promise-cache).
+- `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPathRoutingAdapter.cs` — synchronous first-segment → schema/table routing.
+- `MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/PostgreSqlPartitionStorageProvider.cs` — `EnsurePartitionProvisioned` (pooled promise-cache).
 - `src/MeshWeaver.Mesh.Contract/Threading/` + [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling) — `IIoPool`, the only sanctioned async bridge.

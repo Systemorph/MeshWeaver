@@ -63,7 +63,6 @@
          Social is relocating to MeshWeaver.SocialMedia (the modularization program's task 63, a
          program-plan task rather than a GitHub issue) and already ships from the closure lane here;
          see src/MeshWeaver.Social/README.md. -->
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Grpc/MeshWeaver.Hosting.Grpc.csproj" />
 
 
     <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2). -->
@@ -130,9 +129,35 @@
          still drops everything the app closure already provides (BlazorMonaco, FluentUI, the base
          pack). Dev note: the MONOLITH keeps Debug ships-the-bits references to these two (see its
          csproj) — a dev tree without them renders every control as escaped HTML. -->
+    <!-- MeshWeaver.Hosting.Grpc (thin lane) and the storage backends MeshWeaver.Hosting.Cosmos /
+         .Snowflake (closure lane) are NOT rows here any more: their projects moved to
+         MeshWeaver.Plugins with the portal hosts, and each host there adds its own row over the local
+         project AFTER importing this file (Remove by %(Filename) + Include). Storage stays
+         IMAGE-shipped there for the same reason it was here — a Store-installed module needs
+         storage to already work. -->
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Snowflake/MeshWeaver.Hosting.Snowflake.csproj" />
+  </ItemGroup>
+
+  <!-- 🚨 THE CALLER'S INVENTORY, NOT THIS FILE'S. The closure-lane worker targets below run as an
+       INNER build of this file, which evaluates only the rows written above — a host's own rows
+       (Remove by %(Filename) + Include after the import, the shape MeshWeaver.Plugins' hosts use for
+       Cosmos/Snowflake since the projects moved there, #2485) never reached it. Measured
+       2026-08-27: before the move the lane silently laid out CORE's copy of a backend, not the
+       host's; after it, the subset lane named modules an empty inventory could not find and the
+       Plugins hosts job went red on `names no module in the inventory`. So each caller passes its
+       evaluated @(MeshModuleClosure) as MeshModulesClosureProjects (pipe-joined — the Properties
+       attribute is itself ';'-separated) and, in the inner build, it REPLACES the inventory at
+       evaluation time, so restore and layout both act on what the host declared. A host that
+       imports this file never sets the property, so its own evaluation is untouched. -->
+  <PropertyGroup Condition="'$(MeshModulesClosureProjects)' != ''">
+    <!-- The ';' a property FUNCTION produces are ESCAPED (%3B) and stay escaped through a property
+         hop, so the Include would see one literal spec naming all the paths as ONE project file
+         (measured: MSB3202). [MSBuild]::Unescape turns them back into item separators. -->
+    <_MeshModulesCallerClosureList>$(MeshModulesClosureProjects.Replace('|', ';'))</_MeshModulesCallerClosureList>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(MeshModulesClosureProjects)' != ''">
+    <MeshModuleClosure Remove="@(MeshModuleClosure)" />
+    <MeshModuleClosure Include="$([MSBuild]::Unescape('$(_MeshModulesCallerClosureList)'))" />
   </ItemGroup>
 
   <!--
@@ -251,10 +276,13 @@
          module's own dll in the app root (in a dev bin/ that is routinely a STALE file from the
          pre-flip era, not a re-added reference), and a HOST may turn even that off — see
          MeshModulesGuardPublishAppRoot below. -->
+    <PropertyGroup>
+      <_MeshModulesCallerClosure>@(MeshModuleClosure, '|')</_MeshModulesCallerClosure>
+    </PropertyGroup>
     <MSBuild Projects="$(MSBuildThisFileFullPath)"
              Targets="LayoutMeshModuleClosures"
              BuildInParallel="false"
-             Properties="MeshModulesAppDir=$(_AppPublishDir);Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=$(MeshModulesGuardPublishAppRoot);MeshModulesClosureSubset=$([MSBuild]::Escape('$(MeshModulesClosureSubset)'))" />
+             Properties="MeshModulesClosureProjects=$(_MeshModulesCallerClosure);MeshModulesAppDir=$(_AppPublishDir);Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=$(MeshModulesGuardPublishAppRoot);MeshModulesClosureSubset=$([MSBuild]::Escape('$(MeshModulesClosureSubset)'))" />
 
     <ItemGroup>
       <_ModuleFileKept Include="$(_AppPublishDir)modules/**/*.*" />
@@ -269,10 +297,13 @@
        same folder ResolveModulePath probes first. Thin-lane modules deliberately stay out: their
        DLLs already ride the app output via the ProjectReference. -->
   <Target Name="LayoutMeshModuleClosuresAfterBuild" AfterTargets="Build" Condition="'$(PublishMeshModules)' != 'false'">
+    <PropertyGroup>
+      <_MeshModulesCallerClosure>@(MeshModuleClosure, '|')</_MeshModulesCallerClosure>
+    </PropertyGroup>
     <MSBuild Projects="$(MSBuildThisFileFullPath)"
              Targets="LayoutMeshModuleClosures"
              BuildInParallel="false"
-             Properties="MeshModulesAppDir=$([System.IO.Path]::GetFullPath('$(OutDir)', '$(MSBuildProjectDirectory)'));Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=false;MeshModulesClosureSubset=$([MSBuild]::Escape('$(MeshModulesClosureSubset)'))" />
+             Properties="MeshModulesClosureProjects=$(_MeshModulesCallerClosure);MeshModulesAppDir=$([System.IO.Path]::GetFullPath('$(OutDir)', '$(MSBuildProjectDirectory)'));Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=false;MeshModulesClosureSubset=$([MSBuild]::Escape('$(MeshModulesClosureSubset)'))" />
   </Target>
 
   <!--
@@ -295,7 +326,7 @@
              Targets="Restore"
              BuildInParallel="false"
              Properties="Configuration=$(Configuration)"
-             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
+             RemoveProperties="MeshModulesClosureProjects;MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
     <!-- Says ONCE per build, however many lanes are open — which is the whole assertion this target
          makes, and the cheapest way to notice if a property leak ever forks the configuration again
          (two of these lines in one log means the dedupe is gone and #2127 is live). -->
@@ -383,7 +414,7 @@
              Targets="Build"
              BuildInParallel="false"
              Properties="Configuration=$(Configuration)"
-             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
+             RemoveProperties="MeshModulesClosureProjects;MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
     <!-- SatelliteResourceLanguages=en: without it the closure publish lays out a culture folder
          per Roslyn localization (cs/de/es/… via Kernel.Hub), every one a same-identity duplicate
          of the app's own satellite folders. Suppressing them at the SOURCE beats deleting them
@@ -394,7 +425,7 @@
              Targets="Publish"
              BuildInParallel="false"
              Properties="Configuration=$(Configuration);NoBuild=true;SatelliteResourceLanguages=en;PublishDir=$(_AppDir)modules/%(Filename)/"
-             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
+             RemoveProperties="MeshModulesClosureProjects;MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
 
     <!-- Prune (0): the UNREACHABLE half of the RID tree — everything except runtimes/<rid>/native.
 

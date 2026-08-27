@@ -56,6 +56,8 @@ public class NoStaticCollectionsTest
     private static readonly IReadOnlyDictionary<string, string> Allowed = new Dictionary<string, string>
     {
         // ---- CONST: immutable, write-once constant lookups (allowed) ----
+        // (The PostgreSql backend's five CONST lookups moved to MeshWeaver.Plugins with the project;
+        //  Memex.Hosts.Test.NoStaticCollectionsTest guards them there.)
         // Read-only satellite-table lookups built once from SatelliteTableMapping.Defaults and
         // never written — surfaced when this guard began covering MeshWeaver.AI.Test's own
         // assembly (#2276), not new violations.
@@ -67,11 +69,6 @@ public class NoStaticCollectionsTest
         // project's larger closure into scope for the first time. Each entry below was verified to
         // be a declaration-with-initializer whose only later uses are reads.
         ["MeshWeaver.Hosting.AspNetCore.Portal.NonfileRouteConstraint.ExcludedPrefixes"] = "CONST",
-        ["MeshWeaver.Hosting.PostgreSql.PostgreSqlCrossSchemaQueryProvider.ExcludedSchemas"] = "CONST",
-        ["MeshWeaver.Hosting.PostgreSql.PostgreSqlSqlGenerator.AllowedSqlFunctions"] = "CONST",
-        ["MeshWeaver.Hosting.PostgreSql.PostgreSqlSqlGenerator.NonTextColumns"] = "CONST",
-        ["MeshWeaver.Hosting.PostgreSql.PostgreSqlSqlGenerator.PropertyMap"] = "CONST",
-        ["MeshWeaver.Hosting.PostgreSql.PostgreSqlStorageAdapter.TransientPostgresSqlStates"] = "CONST",
         ["MeshWeaver.AI.AccessContextAIFunction.TimeoutExemptTools"] = "CONST",
         ["MeshWeaver.AI.AgentChatClient.BinaryExtensions"] = "CONST",
         ["MeshWeaver.AI.AgentChatClient.ExtensionToMediaType"] = "CONST",

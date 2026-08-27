@@ -15,7 +15,7 @@ Full architecture: `Doc/Architecture/PythonCodeNodes`. The trust model: `Doc/Dat
 ## Build
 
 The image packs the Python SDK (`clients/python`) and the **one canonical** proto
-(`src/MeshWeaver.Hosting.Grpc/Protos/mesh.proto`), so build from the **repo root**:
+(`src/MeshWeaver.Mesh.Contract/Protos/mesh.proto`), so build from the **repo root**:
 
 ```bash
 docker build -f deploy/python-gate/Dockerfile -t <registry>/meshweaver/python-gate:<tag> .

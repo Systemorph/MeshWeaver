@@ -17,10 +17,10 @@ The split, mirroring the C# side:
 
 ```bash
 pip install -e ".[dev]"
-scripts/gen_proto.sh          # generate gRPC stubs from ../../src/MeshWeaver.Hosting.Grpc/Protos/mesh.proto
+scripts/gen_proto.sh          # generate gRPC stubs from ../../src/MeshWeaver.Mesh.Contract/Protos/mesh.proto
 ```
 
-The proto lives with the C# server — there is **one** contract, no copies.
+The proto lives with the platform contract (`MeshWeaver.Mesh.Contract/Protos/mesh.proto`) — there is **one** contract, no copies; the C# server compiles its stubs from the same file.
 
 ## Use
 

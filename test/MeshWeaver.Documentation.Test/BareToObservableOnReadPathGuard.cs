@@ -45,10 +45,8 @@ public class BareToObservableOnReadPathGuard
     private static readonly string[] ScannedRoots =
     [
         "src/MeshWeaver.Hosting/Persistence",
-        "src/MeshWeaver.Hosting.Sqlite",
-        "src/MeshWeaver.Hosting.PostgreSql",
-        "src/MeshWeaver.Hosting.Cosmos",
-        "src/MeshWeaver.Hosting.Snowflake",
+        // The storage backends (Sqlite, PostgreSql, Cosmos, Snowflake) moved to MeshWeaver.Plugins;
+        // the same guard scans them there (Memex.Hosts.Test.BareToObservableOnReadPathGuard).
     ];
 
     /// <summary>

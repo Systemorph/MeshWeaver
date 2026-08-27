@@ -60,6 +60,18 @@ public enum BakeState
     /// — while the FRAMEWORK identity still matches. 🚨 Checked BEFORE the store's bytes-win rule:
     /// the store key carries the framework tag but NOT the dependency record, so a bytes-hit under
     /// the live framework can be exactly the drifted build this state exists to replace.
+    ///
+    /// <para>🚨 <b>"while the FRAMEWORK identity still matches" is now ENFORCED, not just
+    /// described.</b> It never held: the reserved <c>!toolchain</c> entry hashes the
+    /// <see cref="Compiler.FrameworkBuildIdentity.FullMvidAssemblies"/> closure's implementation MVIDs and
+    /// <see cref="Compiler.FrameworkBuildIdentity.FrameworkVersion"/> folds those same MVIDs, so a framework
+    /// roll moves the record BY CONSTRUCTION. This state therefore reported every ordinary deploy
+    /// as a dependency drift and made <see cref="FrameworkStale"/> unreachable for any
+    /// record-stamped type — measured on memex-cloud 2026-08-27 as 273 of 273 uncovered types
+    /// DependencyStale and zero FrameworkStale, with nothing changed but the image. A mismatch the
+    /// framework identity already accounts for is now classified <see cref="FrameworkStale"/>;
+    /// reaching THIS state means the framework held still and a binding genuinely moved, and the
+    /// entry that moved is named in <see cref="NodeTypeBakeEntry.Detail"/>.</para>
     /// </summary>
     DependencyStale,
 }
@@ -188,11 +200,32 @@ public static class NodeTypeBakeStatus
         string liveFrameworkVersion,
         Func<string, string?>? liveDependencyIdOf = null,
         string? liveToolchainId = null)
+        => ClassifyDetailed(
+            definition, storeHasBytes, liveFrameworkVersion, liveDependencyIdOf, liveToolchainId)
+            .State;
+
+    /// <summary>
+    /// <see cref="Classify"/> plus the dependency record's FIRST mismatch, when one decided the
+    /// verdict.
+    ///
+    /// <para>🚨 The reason exists and was being thrown away. <see cref="Classify"/> asked
+    /// <c>FindMismatch(…) is not null</c> and the caller then printed a fixed sentence — "a bound
+    /// module/toolchain dependency changed" — so the one string that says WHICH dependency moved
+    /// (<c>'name' built against X, live is Y</c>) never reached an operator. Three independent
+    /// investigations across three repos could not tell an ordinary framework roll from a module
+    /// drift because of it. The verdict is unchanged; only the diagnostics are recovered.</para>
+    /// </summary>
+    internal static (BakeState State, string? DependencyMismatch) ClassifyDetailed(
+        NodeTypeDefinition definition,
+        bool storeHasBytes,
+        string liveFrameworkVersion,
+        Func<string, string?>? liveDependencyIdOf = null,
+        string? liveToolchainId = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
         if (definition.CompilationStatus == CompilationStatus.Error)
-            return BakeState.PreviouslyBroken;
+            return (BakeState.PreviouslyBroken, null);
 
         var hasRecordedAssembly =
             !string.IsNullOrEmpty(definition.LatestAssemblyCollection)
@@ -200,7 +233,10 @@ public static class NodeTypeBakeStatus
             && definition.LastCompiledVersion is not null;
 
         if (!hasRecordedAssembly)
-            return BakeState.NeverBuilt;
+            return (BakeState.NeverBuilt, null);
+
+        var frameworkMoved = !string.Equals(
+            definition.CompiledFrameworkVersion, liveFrameworkVersion, StringComparison.Ordinal);
 
         // 🚨 The per-type dependency record (#1707 slice 2) is checked BEFORE the bytes-win rule:
         // the store key carries the framework tag but NOT the record, so a bytes-hit under the
@@ -211,8 +247,29 @@ public static class NodeTypeBakeStatus
         if (definition.CompiledDependencies is { } record
             && liveDependencyIdOf is not null
             && Compiler.CompiledDependencies.FindMismatch(
-                record, liveDependencyIdOf, liveToolchainId ?? "") is not null)
-            return BakeState.DependencyStale;
+                record, liveDependencyIdOf, liveToolchainId ?? "") is { } mismatch)
+            // 🚨 ATTRIBUTE THE MISMATCH TO THE FRAMEWORK WHEN THE FRAMEWORK EXPLAINS IT.
+            // The reserved '!toolchain' entry is a hash over the FullMvidAssemblies closure's
+            // implementation MVIDs, and FrameworkVersion folds those SAME MVIDs (every closure
+            // member is a ContentSurfaceAssemblies member). A framework roll therefore moves
+            // '!toolchain' BY CONSTRUCTION, and every platform ref-asm entry moves with it — so
+            // for any record-stamped type the dependency check fires on every deploy and
+            // DependencyStale swallowed FrameworkStale whole, leaving the ordinary,
+            // documented-as-benign every-deploy state unreachable in practice.
+            //
+            // Measured on memex-cloud 2026-08-27: 273 of 273 uncovered types reported
+            // DependencyStale ("a bound module/toolchain dependency changed") and ZERO reported
+            // FrameworkStale, while the only thing that had actually changed was the image —
+            // the types carried framework sceaefc9…/'!toolchain' mvid:bc0ed79d… against a live
+            // s66ba35f…/mvid:f8a7cc07…. Three separate investigations then hunted a module
+            // drift that did not exist.
+            //
+            // The DECLINE is unchanged (both states are NeedsBake and WasHealthy, and this still
+            // preempts the bytes-win rule below) — only the NAME changes, and only when the
+            // framework identity already accounts for it.
+            return frameworkMoved
+                ? (BakeState.FrameworkStale, mismatch)
+                : (BakeState.DependencyStale, mismatch);
 
         // 🚨 BYTES WIN OVER THE RECORD, in both directions — this is the whole premise.
         //
@@ -223,13 +280,13 @@ public static class NodeTypeBakeStatus
         // Reporting that FrameworkStale would rebuild something already sitting on the volume, which
         // is exactly the wasted work this probe exists to avoid.
         if (storeHasBytes)
-            return BakeState.Baked;
+            return (BakeState.Baked, null);
 
-        if (!string.Equals(definition.CompiledFrameworkVersion, liveFrameworkVersion, StringComparison.Ordinal))
-            return BakeState.FrameworkStale;
+        if (frameworkMoved)
+            return (BakeState.FrameworkStale, null);
 
         // The record claims a live-framework build and the store does not have it.
-        return BakeState.BytesMissing;
+        return (BakeState.BytesMissing, null);
     }
 
     /// <summary>
@@ -306,14 +363,17 @@ public static class NodeTypeBakeStatus
 
             if (!probeable)
                 return Observable.Return(Describe(typePath, definition,
-                    Classify(definition, false, framework, liveDependencyIdOf, liveToolchainId)));
+                    ClassifyDetailed(
+                        definition, false, framework, liveDependencyIdOf, liveToolchainId)));
 
             return store
                 .TryGetAssemblyPath(typePath, definition.LastCompiledVersion!.Value)
                 .Take(1)
                 .Select(path => Describe(
                     typePath, definition,
-                    Classify(definition, !string.IsNullOrEmpty(path), framework, liveDependencyIdOf, liveToolchainId)))
+                    ClassifyDetailed(
+                        definition, !string.IsNullOrEmpty(path), framework,
+                        liveDependencyIdOf, liveToolchainId)))
                 // Fail SAFE, never fail OPEN: an unreadable store must mean "bake it", not "trust
                 // the record and serve bytes that may not exist".
                 .Catch<NodeTypeBakeEntry, Exception>(ex =>
@@ -326,19 +386,33 @@ public static class NodeTypeBakeStatus
                 });
         });
 
-    private static NodeTypeBakeEntry Describe(string typePath, NodeTypeDefinition definition, BakeState state)
-        => new(typePath, state, state switch
+    private static NodeTypeBakeEntry Describe(
+        string typePath,
+        NodeTypeDefinition definition,
+        (BakeState State, string? DependencyMismatch) verdict)
+        => new(typePath, verdict.State, verdict.State switch
         {
             BakeState.Baked => null,
             BakeState.NeverBuilt => "no assembly recorded",
+            // The framework line is the explanation; the record mismatch that came with it is a
+            // CONSEQUENCE of the roll, so it is named as corroboration rather than as a cause.
             BakeState.FrameworkStale =>
-                $"built against framework {Short(definition.CompiledFrameworkVersion)}",
+                $"built against framework {Short(definition.CompiledFrameworkVersion)}"
+                + (verdict.DependencyMismatch is { } corroboration
+                    ? $" (its dependency record moved with it: {corroboration})"
+                    : string.Empty),
             BakeState.BytesMissing =>
                 $"record claims {definition.LatestAssemblyCollection}/{definition.LatestAssemblyPath} "
                 + "but the store has no bytes",
             BakeState.PreviouslyBroken => "last compile settled at Error",
-            BakeState.DependencyStale => "the stamped dependency record no longer validates here "
-                + "(a bound module/toolchain dependency changed)",
+            // 🚨 NAME THE DEPENDENCY. This state now means what it says — the framework did NOT
+            // move and something this build binds did — so the entry that moved is the whole
+            // finding, and printing it is the difference between an actionable line and a sweep.
+            BakeState.DependencyStale =>
+                "the stamped dependency record no longer validates here"
+                + (verdict.DependencyMismatch is { } drift
+                    ? $": {drift}"
+                    : " (a bound module/toolchain dependency changed)"),
             _ => null,
         });
 

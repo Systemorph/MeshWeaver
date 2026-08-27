@@ -34,8 +34,9 @@ namespace MeshWeaver.AI.Plugins;
 /// </list>
 ///
 /// <para><b>And cancellation is a fourth.</b> The token is registered before the source is
-/// subscribed, and firing it both cancels the task and DISPOSES the subscription, so the work the
-/// tool started actually stops rather than running on unobserved.</para>
+/// subscribed, and firing it DISPOSES the subscription and only then cancels the task — in that
+/// order — so the work the tool started has provably stopped before anyone can act on the call
+/// having ended. See <c>Settle</c> for why the order is the invariant.</para>
 /// </summary>
 public static class ToolTask
 {
@@ -78,10 +79,31 @@ public static class ToolTask
         // terminal fires first releases both — a bare TrySet* would settle the caller and leave the
         // subscription live against a hub that may already be tearing down.
         var pending = new CompositeDisposable();
+
+        // 🚨 DISPOSE FIRST, THEN SETTLE — the order is the invariant, not an implementation detail.
+        //
+        // This used to be `if (set()) pending.Dispose();`, i.e. the caller was told the call had
+        // ended and the work was stopped afterwards. Those are not interchangeable. `tcs` is created
+        // RunContinuationsAsynchronously, so TrySet* completes the task and schedules the caller's
+        // continuation on the pool — which then runs CONCURRENTLY with the rest of this callback.
+        // The caller could therefore observe the cancellation while the subscription was still live.
+        //
+        // That is the defect this file's own summary describes, seen from the other side: a tool
+        // call runs as a leaf on the bounded Ai pool, and `IoPool.Drain()` — the join every teardown
+        // performs before disposing the service scope and unloading collectible node ALCs — cancels
+        // the pool token and then re-acquires permits. If cancellation becomes observable BEFORE the
+        // leaf is torn down, teardown proceeds over live code. "The work stopped" must therefore be
+        // established, not hoped for, before anyone can act on "the call ended".
+        //
+        // Disposing first is what makes it established rather than raced: Rx disposal here is
+        // synchronous, so by the time TrySet* runs, the source's own teardown has already run.
+        // Idempotence covers the rest — CompositeDisposable.Dispose and TrySet* are both safe to
+        // race, so a losing terminal simply disposes an already-disposed bag and sets nothing.
+        // Pinned by ToolTaskSettlementTest.Cancelling_StopsTheWork_BeforeTheCallerCanObserveIt.
         void Settle(Func<bool> set)
         {
-            if (set())
-                pending.Dispose();
+            pending.Dispose();
+            set();
         }
 
         // Registered FIRST so an already-cancelled token settles before the source is subscribed;

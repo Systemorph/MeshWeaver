@@ -158,7 +158,7 @@ kubectl rollout restart deploy/memex-portal-deployment -n memex
 Do the same for the migration image if you changed schema/migrations:
 
 ```bash
-dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj -c Release \
+dotnet publish <MeshWeaver.Plugins>/src/Memex.Database.Migration/Memex.Database.Migration.csproj -c Release -p:MeshWeaverRoot=<this checkout> \
   -t:PublishContainer -p:ContainerRepository=memex-migration-local
 docker tag memex-migration-local:latest ghcr.io/systemorph/memex-migration:latest
 ```

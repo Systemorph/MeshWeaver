@@ -186,7 +186,7 @@ clients/
     docs/         react-native.md · nextjs.md · demo.png
   react-native/   meshweaver-mobile — Expo app + RN leaf pack (the MAUI peer) + src/live.ts
   portal/         @meshweaver/portal-example — a web portal built from the renderer
-src/MeshWeaver.Hosting.Grpc/   the gRPC mesh transport (server)
+MeshWeaver.Plugins/src/MeshWeaver.Hosting.Grpc/   the gRPC mesh transport (server)
 src/MeshWeaver.Documentation/Data/Architecture/ForeignLanguageBridge.md   transport deep-dive
 .github/workflows/clients.yml  CI: react (typecheck+test) · client-web (typecheck) · RN (typecheck) · portal (build)
 ```
