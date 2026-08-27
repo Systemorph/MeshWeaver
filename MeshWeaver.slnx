@@ -72,7 +72,6 @@
     <Project Path="src/MeshWeaver.Reflection/MeshWeaver.Reflection.csproj" />
     <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
-    <Project Path="src/MeshWeaver.Speech.Contract/MeshWeaver.Speech.Contract.csproj" />
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
   </Folder>
   <Folder Name="/test/">
@@ -128,7 +127,6 @@
   <Folder Name="/tools/">
     <Project Path="tools/MeshWeaver.ComboAssembler/MeshWeaver.ComboAssembler.csproj" />
     <Project Path="tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj" />
-    <Project Path="tools/MeshWeaver.LogWatcher/MeshWeaver.LogWatcher.csproj" />
     <Project Path="tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj" />
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />
   </Folder>
