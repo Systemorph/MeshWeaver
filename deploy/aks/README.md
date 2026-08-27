@@ -410,7 +410,7 @@ dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.D
   -p:RuntimeIdentifiers="linux-x64;linux-arm64" -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64" \
   -p:ContainerRegistry=<acrName>.azurecr.io -p:ContainerRepository=memex-portal-ai \
   -p:ContainerImageTag=latest -p:ContainerBaseImage=<acrName>.azurecr.io/memex-portal-ai-base:latest
-dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj \
+dotnet publish MeshWeaver.Plugins/src/Memex.Database.Migration/Memex.Database.Migration.csproj \
   -c Release --no-self-contained -t:PublishContainer -p:PublishProfile= \
   -p:RuntimeIdentifiers="linux-x64;linux-arm64" -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64" \
   -p:ContainerRegistry=<acrName>.azurecr.io -p:ContainerRepository=memex-migration -p:ContainerImageTag=latest
