@@ -21,73 +21,50 @@ name: Clients
 # or `npm ci` fails the job (by design — that is the drift guard, not an inconvenience).
 #
 # 🚨 The trigger must list every INPUT these jobs read, not just the tree they live in.
-# Several jobs deliberately reach ACROSS into src/ — the server is the single place a string, a
-# control mapping or a wire contract is authored, and the client copies are checked against it:
 #
-#   src/MeshWeaver.Messaging.Hub/Localization/**        → clients/react/src/i18n/localize.test.ts
-#                                                         (byte-identical catalog drift guard)
-#   src/MeshWeaver.Messaging.Contract/Localization/     → the same test scrapes Locales.Supported
-#     Locales.cs
-#   src/MeshWeaver.Blazor/BlazorViewRegistry.cs         → clients/react/src/render/parity.test.ts
-#                                                         (control/skin vocabulary is DERIVED from it)
-#   src/MeshWeaver.Mesh.Contract/Protos/**               → the canonical mesh.proto the python,
-#                                                         grpc-web and typescript clients generate from
-#   src/MeshWeaver.Mesh.Contract/CreateNodeRequest.cs   → clients/grpc-web/src/wireContract.test.ts
-#   src/MeshWeaver.Mesh.Contract/MeshNode.cs              (the C# records the SDKs' wire.ts field
-#   src/MeshWeaver.Mesh.Contract/MeshNodeReference.cs     names are checked against — a rename here
-#   src/MeshWeaver.Data.Contract/Messages.cs              must turn the client red, because the hub
-#   src/MeshWeaver.Data.Contract/PatchDataRequest.cs      DROPS an unmatched member silently)
-#   memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs   → clients/grpc-web/src/restContract.test.ts
-#   memex/Memex.Portal.Monolith/**                        → clients/portal-next/e2e (the next-only
-#                                                            e2e boots this host as its backend)
-#   (Memex.LocalMesh, the sidecar that must serve every /api/mesh verb too, lives in
-#    MeshWeaver.Plugins now; its route-table guard runs there.)
+# THIS LIST WAS MUCH LONGER, and most of it is now WRONG rather than merely unused. `044a85618`
+# ("The GUI leaves the platform: the view packs and the web clients", 2026-08-25) moved the web
+# clients to MeshWeaver.Plugins. `clients/` holds only `python/` and `voice-gateway/`, one job
+# survives (`python-sdk`), and EVERY test the old inventory named is gone from this repo:
 #
-# Filtering on "clients/**" alone made every one of those guards blind to the side that actually
-# changes: a server-only PR adds a key (or a control, or a proto field), CI stays green because
-# nothing under clients/ moved, and the gap sits LATENT until some unrelated PR happens to touch the
-# client tree and inherits a red it did not cause. That is not hypothetical — it is issue #964:
-# c34bd01e6 and 18b3e2ee3 each added localization keys with ZERO files under clients/, both merged
-# green, and the 5 resulting orphan keys survived on main until this change. Keeping the trigger
-# aligned with the jobs' real inputs puts the cost back on the PR that created it.
+#     clients/react/src/i18n/localize.test.ts        clients/grpc-web/src/wireContract.test.ts
+#     clients/react/src/render/parity.test.ts        clients/grpc-web/src/restContract.test.ts
+#     clients/react/src/ciTrigger.test.ts            clients/portal-next/e2e
 #
-# clients/react/src/ciTrigger.test.ts fails if a client test grows a NEW cross-tree read this list
-# does not cover, so the trigger and the tests' real inputs cannot drift apart again.
+# So the nine cross-tree `src/**` and `memex/**` paths spun this workflow on every server-side edit
+# to a contract whose client-side check had ALREADY LEFT — a trigger that fires reliably and can
+# verify nothing. That reads exactly like coverage from the outside, which is the failure mode the
+# paragraph below was written about, one turn of the wheel later.
+#
+# What remains genuinely cross-tree is the PROTOS: `python-sdk` runs `scripts/gen_proto.sh` and
+# generates from `src/MeshWeaver.Mesh.Contract/Protos/**`, so a proto edit must still trigger it.
+#
+# 🚨 `ciTrigger.test.ts` — the guard that kept this list honest by failing when a client test
+# grew a cross-tree read the trigger did not cover — went with the move. Until an equivalent exists
+# for the surviving clients, this list is maintained BY HAND and will rot again. If you add a
+# cross-tree read to `clients/python` or `clients/voice-gateway`, add its path here yourself.
+#
+# The original rationale, still correct and still the reason the protos path is listed:
+# filtering on "clients/**" alone made every cross-tree guard blind to the side that actually
+# changes — a server-only PR adds a key or a proto field, CI stays green because nothing under
+# clients/ moved, and the gap sits LATENT until an unrelated PR inherits a red it did not cause.
+# That is issue #964: c34bd01e6 and 18b3e2ee3 each added localization keys with ZERO files under
+# clients/, both merged green, and the 5 orphan keys survived on main until it was fixed.
 #
 # The two lists are spelled out rather than shared through a YAML anchor — the Actions workflow
-# parser does not expand anchors/aliases. That same test asserts they stay identical.
+# parser does not expand anchors/aliases.
 on:
   pull_request:
     paths:
       - "clients/**"
       - ".github/workflows/clients.yml"
-      - "src/MeshWeaver.Messaging.Hub/Localization/**"
-      - "src/MeshWeaver.Messaging.Contract/Localization/Locales.cs"
-      - "src/MeshWeaver.Blazor.Views/ViewsExtensions.cs"
       - "src/MeshWeaver.Mesh.Contract/Protos/**"
-      - "src/MeshWeaver.Mesh.Contract/CreateNodeRequest.cs"
-      - "src/MeshWeaver.Mesh.Contract/MeshNode.cs"
-      - "src/MeshWeaver.Mesh.Contract/MeshNodeReference.cs"
-      - "src/MeshWeaver.Data.Contract/Messages.cs"
-      - "src/MeshWeaver.Data.Contract/PatchDataRequest.cs"
-      - "memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs"
-      - "memex/Memex.Portal.Monolith/**"
   push:
     branches: [main]
     paths:
       - "clients/**"
       - ".github/workflows/clients.yml"
-      - "src/MeshWeaver.Messaging.Hub/Localization/**"
-      - "src/MeshWeaver.Messaging.Contract/Localization/Locales.cs"
-      - "src/MeshWeaver.Blazor.Views/ViewsExtensions.cs"
       - "src/MeshWeaver.Mesh.Contract/Protos/**"
-      - "src/MeshWeaver.Mesh.Contract/CreateNodeRequest.cs"
-      - "src/MeshWeaver.Mesh.Contract/MeshNode.cs"
-      - "src/MeshWeaver.Mesh.Contract/MeshNodeReference.cs"
-      - "src/MeshWeaver.Data.Contract/Messages.cs"
-      - "src/MeshWeaver.Data.Contract/PatchDataRequest.cs"
-      - "memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs"
-      - "memex/Memex.Portal.Monolith/**"
 
 jobs:
   python-sdk:
