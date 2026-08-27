@@ -28,11 +28,6 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
-        <!-- TEST-ONLY. Needed by OrleansScheduledPostTest, which exercises the social
-             scheduling chain on the Orleans lane. Test-only by intent: the module is being
-             relocated to MeshWeaver.SocialMedia (src/MeshWeaver.Social/README.md), and a test
-             reference moves with the test, unlike the ships-the-bits Memex.Portal.Shared
-             reference that actually blocks the flip. Move this test when the module goes. -->
         <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
     </ItemGroup>
@@ -43,7 +38,6 @@
       <!-- TestScheduler: RoutingGrainStreamPostBoundTest drives the stream-post timeout
            deterministically (issue #1028) instead of waiting on the wall clock. -->
       <PackageReference Include="Microsoft.Reactive.Testing" />
-      <ProjectReference Include="..\..\src\MeshWeaver.Social\MeshWeaver.Social.csproj" />
   </ItemGroup>
 
 
