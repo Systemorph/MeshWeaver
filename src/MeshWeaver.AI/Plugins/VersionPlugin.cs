@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
-using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -19,11 +18,17 @@ namespace MeshWeaver.AI.Plugins;
 /// <see cref="IVersionQuery"/> to list versions, retrieve snapshots, and restore nodes.
 ///
 /// Every method is await-free: <see cref="IVersionQuery"/> already returns
-/// <c>IObservable</c>, and those reads are moved onto <see cref="TaskPoolScheduler"/>
-/// with <c>.SubscribeOn(TaskPoolScheduler.Default)</c> (NEVER
-/// <c>Observable.FromAsync</c>, which is forbidden outside <c>IoPool</c>) so they never
-/// occupy the hub scheduler, and restores go through <c>IMeshService.UpdateNode</c>
-/// which is already reactive (<c>IObservable&lt;MeshNode&gt;</c>).
+/// <c>IObservable</c>, and those reads leave the caller's scheduler through
+/// <see cref="ToolTask.Pooled{T}"/> (NEVER <c>Observable.FromAsync</c>, which is
+/// forbidden outside <c>IoPool</c>) so they never occupy the hub scheduler, and restores
+/// go through <c>IMeshService.UpdateNode</c> which is already reactive
+/// (<c>IObservable&lt;MeshNode&gt;</c>).
+///
+/// <para>🚨 That hop used to be a bare <c>SubscribeOn(TaskPoolScheduler.Default)</c>, which
+/// took the work off the hub scheduler and put it somewhere <c>IoPool.Drain()</c> cannot
+/// reach: a version read still running on the raw ThreadPool is counted by nothing and
+/// waited for by nobody, so teardown unloads the assemblies it is reading through.
+/// <see cref="ToolTask.Pooled{T}"/> keeps the hop and makes it drainable.</para>
 /// <see cref="ToolTask.Bridge{T}"/> bridges the off-hub completions back to the caller —
 /// every terminal settles (value, error, EMPTY completion) and the round's cancellation token
 /// is observed, so a parked read cannot hold an <c>IoPoolNames.Ai</c> gate permit through
@@ -147,11 +152,10 @@ public class VersionPlugin(IMessageHub hub)
                         v.NodeType
                     })
                     .ToList();
-            })
-            .SubscribeOn(TaskPoolScheduler.Default);
+            });
 
         return ToolTask.Bridge(
-            pipeline,
+            ToolTask.Pooled(hub, pipeline),
             cancellationToken,
             versions => versions.Count == 0
                 ? $"No version history found for '{path}'."
@@ -198,11 +202,10 @@ public class VersionPlugin(IMessageHub hub)
                     return Observable.Return<MeshNode?>(null);
                 }
                 return versionQuery.GetVersion(path, version, hub.JsonSerializerOptions);
-            })
-            .SubscribeOn(TaskPoolScheduler.Default);
+            });
 
         return ToolTask.Bridge(
-            pipeline,
+            ToolTask.Pooled(hub, pipeline),
             cancellationToken,
             node => node == null
                 ? $"Version {version} not found for '{path}'."
@@ -248,7 +251,6 @@ public class VersionPlugin(IMessageHub hub)
                 }
                 return versionQuery.GetVersion(path, version, hub.JsonSerializerOptions);
             })
-            .SubscribeOn(TaskPoolScheduler.Default)
             .SelectMany(historicalNode =>
             {
                 if (historicalNode == null)
@@ -258,7 +260,7 @@ public class VersionPlugin(IMessageHub hub)
             });
 
         return ToolTask.Bridge(
-            pipeline,
+            ToolTask.Pooled(hub, pipeline),
             cancellationToken,
             result => result.restored == null
                 ? $"Version {result.requestedVersion} not found for '{path}'."
@@ -309,7 +311,6 @@ public class VersionPlugin(IMessageHub hub)
                     .Take(1)
                     .DefaultIfEmpty();
             })
-            .SubscribeOn(TaskPoolScheduler.Default)
             .SelectMany(targetVersion =>
             {
                 if (targetVersion == null)
@@ -325,7 +326,7 @@ public class VersionPlugin(IMessageHub hub)
             });
 
         return ToolTask.Bridge(
-            pipeline,
+            ToolTask.Pooled(hub, pipeline),
             cancellationToken,
             result =>
             {

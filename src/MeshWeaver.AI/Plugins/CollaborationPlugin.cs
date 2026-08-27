@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.Markdown.Collaboration;
@@ -14,10 +13,12 @@ namespace MeshWeaver.AI.Plugins;
 /// Agent plugin providing tools for adding comments and suggesting edits on
 /// Markdown documents via the collaborative editing infrastructure.
 ///
-/// Every method is await-free — reads are moved onto the <see cref="TaskPoolScheduler"/>
-/// with <c>.SubscribeOn(TaskPoolScheduler.Default)</c> (NEVER
-/// <c>Observable.FromAsync</c>, which is forbidden outside <c>IoPool</c>) so blocking
-/// enumeration never touches the hub scheduler, and writes go through
+/// Every method is await-free — reads leave the caller's scheduler through
+/// <see cref="ToolTask.Pooled{T}"/> (NEVER <c>Observable.FromAsync</c>, which is forbidden
+/// outside <c>IoPool</c>) so blocking enumeration never touches the hub scheduler AND the
+/// read stays visible to <c>IoPool.Drain()</c> — the bare
+/// <c>SubscribeOn(TaskPoolScheduler.Default)</c> this replaces achieved the first and
+/// silently gave up the second. Writes go through
 /// <c>hub.Observe(...)</c>, with <see cref="ToolTask.Bridge{T}"/> bridging the off-hub
 /// callback thread back to the caller — every terminal settles (value, error, EMPTY
 /// completion) and the round's cancellation token is observed (#1956).
@@ -76,8 +77,7 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         // completed WITHOUT emitting, and `cancellationToken` appeared only in the doc comment — so
         // a parked AddComment held its Ai-pool gate permit through IoPool.Drain and Stop no-opped.
         return ToolTask.Bridge(
-            ops.Get(resolvedInput)
-                .SubscribeOn(TaskPoolScheduler.Default)
+            ToolTask.Pooled(hub, ops.Get(resolvedInput))
                 .Take(1)
                 .SelectMany(docJson => AddCommentContinuation(
                     docJson, resolvedPath, documentPath, selectedText, commentText)),
@@ -171,8 +171,7 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         // path reports for an address that routes nowhere. Same three-terminal bridge as
         // AddComment: value, error, and the EMPTY completion that used to park the round (#1956).
         return ToolTask.Bridge(
-            ops.Get(resolvedInput)
-                .SubscribeOn(TaskPoolScheduler.Default)
+            ToolTask.Pooled(hub, ops.Get(resolvedInput))
                 .Take(1)
                 .SelectMany(docJson => SuggestEditContinuation(
                     docJson, resolvedPath, documentPath, originalText, newText)),

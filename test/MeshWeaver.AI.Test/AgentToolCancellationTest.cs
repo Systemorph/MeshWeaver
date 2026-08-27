@@ -180,12 +180,14 @@ public class AgentToolCancellationTest(ITestOutputHelper output) : MonolithMeshT
         // 🚨 WAIT for the disposal; do not read the counter and hope (#2346).
         //
         // The disposal is ASYNCHRONOUS by construction and no ordering trick in the bridge can make
-        // it otherwise: every one of these tools ends its pipeline with
-        // `.SubscribeOn(TaskPoolScheduler.Default)`, and Rx's SubscribeOn runs the sequence's
-        // *unsubscription* logic on that scheduler as well as its subscription. So the bridge's
+        // it otherwise: every one of these tools runs its pipeline's SUBSCRIBE on a scheduler
+        // (`ToolTask.Pooled` — the mesh-scoped, drainable AgentStore pool, which replaced a bare
+        // `.SubscribeOn(TaskPoolScheduler.Default)` the drain could not reach), and Rx runs a
+        // sequence's *unsubscription* logic on the scheduler it subscribed on. So the bridge's
         // `pending.Dispose()` returns as soon as the unsubscribe is SCHEDULED, and the inner
         // subscription to the parking store is torn down on a pool thread some time after the
-        // caller's task has already thrown.
+        // caller's task has already thrown. What guarantees the work is JOINED before teardown is
+        // therefore the pool, not the bridge — see ToolTask.Pooled.
         //
         // Reading `Disposals` the instant the task threw therefore asserted a synchronicity the
         // code does not provide: locally the pool thread always won, on a loaded runner it did not,
