@@ -111,6 +111,14 @@ on:
         required: false
         type: string
         default: ''
+      registry-url:
+        description: >-
+          The registry that SERVES sealed publications (MeshWeaver#2487), e.g.
+          https://memex.meshweaver.cloud. With registry-key set, upstream-seed fetches over
+          HTTPS with an instance key and never touches Azure — and it works on pull_request.
+        required: false
+        type: string
+        default: ''
       bake-publish-targets:
         description: >-
           Where upstream-seed READS the upstream publication from — the same
@@ -137,6 +145,9 @@ on:
       # The same OIDC identity publish-bake uses, read-only here: the gate FETCHES the caller's
       # upstream publication to seed from. Required only when upstream-seed is set; the preflight
       # below fails RED naming whichever is missing rather than letting the step skip.
+      registry-key:
+        description: An instance key (mwi_…) holding a whole-source grant on each upstream (upstream-seed via registry-url).
+        required: false
       azure-client-id:
         description: Client id of the Azure identity that can read the portals' storage (upstream-seed only).
         required: false
@@ -278,20 +289,26 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.azure-tenant-id }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.azure-subscription-id }}
           TARGETS: ${{ inputs.bake-publish-targets }}
+          REGISTRY_URL: ${{ inputs.registry-url }}
+          REGISTRY_KEY: ${{ secrets.registry-key }}
         run: |
           set -euo pipefail
           missing=()
-          [ -n "${AZURE_CLIENT_ID:-}" ]       || missing+=("azure-client-id (secret)")
-          [ -n "${AZURE_TENANT_ID:-}" ]       || missing+=("azure-tenant-id (secret)")
-          [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] || missing+=("azure-subscription-id (secret)")
-          [ -n "${TARGETS:-}" ]               || missing+=("bake-publish-targets (input) — the storage target to read the upstream publication from")
+          if [ -n "${REGISTRY_URL:-}" ]; then
+            [ -n "${REGISTRY_KEY:-}" ] || missing+=("registry-key (secret) — registry-url is set, so the fetch is over HTTPS with an instance key")
+          else
+            [ -n "${AZURE_CLIENT_ID:-}" ]       || missing+=("azure-client-id (secret)")
+            [ -n "${AZURE_TENANT_ID:-}" ]       || missing+=("azure-tenant-id (secret)")
+            [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] || missing+=("azure-subscription-id (secret)")
+            [ -n "${TARGETS:-}" ]               || missing+=("bake-publish-targets (input) — the storage target to read the upstream publication from")
+          fi
           if [ "${#missing[@]}" -gt 0 ]; then
             for m in "${missing[@]}"; do echo "::error::upstream-seed is set but missing: ${m}"; done
             echo "::error::upstream-seed cannot fetch a publication without these. This job fails RED rather than skipping the seed: a gate that silently compiled its upstream would look exactly like one that installed it."
             exit 1
           fi
       - name: Azure login (OIDC) for the upstream publication
-        if: inputs.upstream-seed != ''
+        if: inputs.upstream-seed != '' && inputs.registry-url == ''
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.azure-client-id }}
@@ -320,10 +337,37 @@ jobs:
           UPSTREAMS: ${{ inputs.upstream-seed }}
           IDENTITY: ${{ steps.seed-identity.outputs.identity }}
           TARGETS: ${{ inputs.bake-publish-targets }}
+          REGISTRY_URL: ${{ inputs.registry-url }}
+          REGISTRY_KEY: ${{ secrets.registry-key }}
         run: |
           set -euo pipefail
           SEED_DIR="${RUNNER_TEMP:-/tmp}/upstream-seed"
           mkdir -p "$SEED_DIR"
+          if [ -n "${REGISTRY_URL:-}" ]; then
+            # The REGISTRY serves the sealed publication (MeshWeaver#2487) — HTTPS + instance key,
+            # no Azure, works on pull_request. Fails RED on 404 (unsealed) or 401/403 (no grant).
+            fetched=0
+            for src in $UPSTREAMS; do
+              base="${REGISTRY_URL%/}/api/plugins/bundles/prebuilt/$IDENTITY/$src"
+              code=$(curl -sS -o "$SEED_DIR/.index.json" -w '%{http_code}' -H "Authorization: Bearer $REGISTRY_KEY" "$base")
+              case "$code" in
+                200) ;;
+                404) echo "::error::upstream '$src' has no SEALED publication on $REGISTRY_URL for identity $IDENTITY. Not compiling it instead."; exit 1 ;;
+                401|403) echo "::error::the registry refused registry-key for '$src' ($code) — the instance needs a whole-source grant '$src/*'."; exit 1 ;;
+                *) echo "::error::registry answered $code for $base — refusing."; exit 1 ;;
+              esac
+              for name in $(jq -r '.bundles[]' "$SEED_DIR/.index.json"); do
+                curl -sSf -H "Authorization: Bearer $REGISTRY_KEY" -o "$SEED_DIR/$name" "$base/$name" || { echo "::error::could not fetch $name"; exit 1; }
+                fetched=$((fetched+1))
+              done
+              rm -f "$SEED_DIR/.index.json"
+              echo "upstream '$src': fetched from $REGISTRY_URL"
+            done
+            printf '%s' "$IDENTITY" > "$SEED_DIR/framework-mvid.txt"
+            [ "$fetched" -gt 0 ] || { echo "::error::sealed but empty — refusing an empty seed"; exit 1; }
+            echo "dir=$SEED_DIR" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # The FIRST target is read — every target holds the same publication (publish-bake
           # writes them all-or-nothing), so one read is the set.
           target=$(printf '%s\n' $TARGETS | head -1)
