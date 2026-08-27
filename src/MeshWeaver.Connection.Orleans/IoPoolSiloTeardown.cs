@@ -93,8 +93,33 @@ public sealed class IoPoolSiloTeardown(
 
     // 🚨 NOT `async`, and nothing here awaits. AGENTS.md: everything is IObservable<T> end-to-end —
     // compose and Subscribe, never await. The single Task exists only because ILifecycleObserver
-    // demands one, and it is produced by ONE .ToTask() at the boundary — the sanctioned shape for a
-    // framework surface whose body stays reactive.
+    // demands one, and it is produced by ONE .ToTask() at the boundary.
+    //
+    // 🚨 THAT Task IS GENUINELY REQUIRED, and it was re-verified rather than inherited from the
+    // IMessageHub.DisposalCompleted documentation that turned out to be wrong (#2301). Orleans'
+    // Orleans.ILifecycleObserver declares `Task OnStop(CancellationToken)`; the silo AWAITS what it
+    // returns, and that await IS the guarantee that the silo does not release over live pool
+    // threads. There is no observable-shaped overload to move to.
+    //
+    // 🚨 THE DEADLOCK QUESTION FIRST — "whose thread am I blocking, and does the signal I am
+    // waiting for need it?" Here: NOBODY'S. This method composes and RETURNS; it never awaits, so
+    // no scheduler is held while registry.Disposed is pending. The bridge sits at the OUTERMOST
+    // edge, which is the whole rule: a .ToTask() that is HANDED to the API demanding it is safe,
+    // a .ToTask() that you then `await` in the middle of your own work is how #2301 parked the
+    // grain scheduler its next wait needed. (/async skill, Rule 1a: subscribe, hand back a Task,
+    // do not await inside the turn.)
+    //
+    // The two secondary properties, both checked:
+    //   • every fault is observed BEFORE the bridge — the .Catch below is inside the composition,
+    //     so nothing can fault past .ToTask() into an unobserved task;
+    //   • IoPoolRegistry.Disposed is an AsyncSubject<int>: it fires ONCE and replays. It cannot
+    //     emit a value and then fault, so there is no "late fault after the interesting value"
+    //     for the settled Task to miss. (Where a signal CAN do that — anything composed, merged,
+    //     or polled — use ReactiveCompletion.ObserveCompletion, which keeps its error arm
+    //     attached after the task settles AND completes with RunContinuationsAsynchronously.)
+    //   • the .Timeout is a REPORTED budget on a join, not a silent race: expiry lands in Report(-1)
+    //     as a LogError naming the consequence. It is the weaker class #2488 lists at 4–5, kept
+    //     because a silo that never releases is worse than one that releases loudly.
     //
     // Orleans awaits the returned Task, which is what holds the silo back until the pools report.
     // That is the whole guarantee, and it costs no thread: nothing is parked here, the completion

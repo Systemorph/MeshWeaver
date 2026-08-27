@@ -250,6 +250,91 @@ var nodePaths = level.NodePaths.ToInlineObservable();
 
 ---
 
+## 🚨 Waiting for a completion signal: `Subscribe`, never `.ToTask()`
+
+Disposal, teardown, a drain report, a grain deactivation — every "wait for X to finish" in the mesh
+is an `IObservable<T>` that fires once and terminates. **Waiting for one means
+`signal.Subscribe(onNext, onError)` and nothing else.** No poll, no `SpinWait`, no
+`.Wait()`/`.Result`, no `Timeout` operator raced against the signal, and no `Task` gate.
+
+### The reason is DEADLOCK, not a lost exception
+
+**These completions are produced BY THE VERY SCHEDULER the waiter is occupying.** A hub's disposal
+finishes when its single-threaded action block drains; a grain's deactivation finishes when its turn
+scheduler is free. Wait on one of those from that same scheduler and the thing you are waiting for
+can never happen — the Task never settles, and the only thing that ever ends the wait is whatever
+timeout was raced against it. This is [Rule 1 of the `/async` skill](/Doc/Architecture/AsynchronousCalls)
+applied to lifecycle signals.
+
+🚨 **You do not have to write the block to get it — Rx hands it to you.** `ToTask()` completes its
+`TaskCompletionSource` from inside the pipeline **without `RunContinuationsAsynchronously`**, so
+`TrySetResult` resumes the awaiter **inline on the signalling thread**. Everything after that
+`await` — the rest of your method — then runs on the hub's disposal thread or the grain's turn
+scheduler. And it is sticky: with no `SynchronizationContext`, `await` captures
+`TaskScheduler.Current`, so **one** inline resumption routes **every later await in that method**
+onto the same scheduler.
+
+That is issue #2301. `OrleansGrainTeardownStragglerTest` resumed inline on the deactivating grain's
+scheduler and then held it, waiting for that grain's activation to leave the silo catalog — which
+needed the scheduler it was holding. It failed at **exactly 30 s**, its `Timeout` budget, every
+time, while a healthy activation leaves the catalog in **0.10 s**. A number that is always the
+budget rather than a distribution around it is the signature of a deadlock, not of contention.
+
+### The lost fault is the second-order effect
+
+When that timeout finally fires it settles the Task, and a fault still travelling the chain has **no
+observer left** — an unobserved exception, surfaced on the finalizer as
+`UnobservedTaskException`, which xUnit v3 escalates into a Catastrophic failure that poisons the
+*next* test class. That is #2301's `HOST_CRASHED` marker: what the deadlock does on its way out.
+
+`IMessageHub.DisposalCompleted`'s own documentation used to recommend the broken bridge (*"at a
+genuine async edge (test teardown, grain deactivation) bridge once with
+`DisposalCompleted.FirstOrDefaultAsync()` / `.ToTask()`"*), which is why four attempted fixes all
+aimed at the timeout. That sentence is gone.
+
+```csharp
+// ❌ WRONG — resumes the caller INLINE on the hub's disposal thread, then holds it; and the
+//    Catch DISCARDS a faulted disposal on top.
+await hub.DisposalCompleted
+    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+    .FirstOrDefaultAsync()
+    .ToTask()
+    .WaitAsync(timeout);                                            // …racing what it waits for
+
+// ✅ RIGHT — the turn returns immediately and the follow-on work belongs to the signal. The error
+//    arm is fluent (.Catch) because a fault arrives LATER and on ANOTHER thread: a try/catch
+//    around the Subscribe CALL cannot see it. This is MessageHubGrain.OnDeactivateAsync.
+hub.DisposalCompleted
+    .Take(1)
+    .Catch<Unit, Exception>(ex => { logger.LogError(ex, "… KEEPING its load context"); return Observable.Empty<Unit>(); })
+    .Subscribe(_ => UnloadContextIfSafe(reason, grainId));
+return Task.CompletedTask;
+```
+
+### Where an API genuinely demands a `Task`
+
+`ILifecycleObserver.OnStop`, `IHostedService`, an `async Task` test method. Bridge with
+`ReactiveCompletion.ObserveCompletion`, which subscribes, completes its task with
+`RunContinuationsAsynchronously` — so the caller is **never** resumed on the signalling scheduler —
+and keeps its error arm attached after the task settles. Two rules go with it:
+
+- **Put the bridge at the OUTERMOST edge.** Return the Task to whoever demanded it; never wrap it
+  around a wait whose completion needs the thread you are holding. `IoPoolSiloTeardown.OnStop` is
+  the reference: it composes and **returns**, blocking nothing.
+- **The bound belongs to the edge, not to the signal.** `[Fact(Timeout = …)]`, a host's shutdown
+  token, a `CancellationToken` — never a `Timeout` operator spliced into the wait, which settles the
+  waiter while the work it bounded is still in flight.
+- **A poll is the same defect wearing a loop.** If you are sampling state on an interval because
+  there is no completion signal to subscribe to, publish the signal. #2301's test polled
+  `IManagementGrain.GetDetailedGrainStatistics()` every 100 ms against a 30 s `Timeout` because
+  nothing exposed "this activation is fully gone"; the fix was `GrainDeactivationCompleted`, which
+  the grain publishes from Orleans' own `IGrainContext.Deactivated`.
+
+Both properties are pinned by `DisposalWaitBridgeTest` (test/MeshWeaver.Messaging.Hub.Test), whose
+control test asserts that `.ToTask()` really does resume inline on the signalling thread.
+
+Related: issue #2488 catalogues the remaining poll / timeout-escape sites.
+
 ## 🚨 Cold observables: Subscribe is mandatory
 
 Every method that performs a write or side effect returns a cold `IObservable<T>` — **the side effect runs on `Subscribe`, not on call.** Forgetting to subscribe means the work silently never happens.
