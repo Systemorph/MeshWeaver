@@ -129,6 +129,41 @@ public class McpRoutingTest
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    /// <summary>
+    /// An UNMAPPED /api/… path must be a 404, never the app shell. Every API client — curl in a CI
+    /// gate, a plugin fetcher, a webhook sender — reads a 200 as success and then parses HTML as
+    /// data. Measured 2026-08-27: the plugin gate's upstream-seed fetch took memex's HTML for a
+    /// sealed-but-empty publication index because the registry was one build behind #2487.
+    /// Mapped API endpoints are untouched (they outrank the catch-all); a partition page still renders.
+    /// </summary>
+    [Fact]
+    public async Task UnknownApiPath_AnswersAnHonest404_NeverTheShell()
+    {
+        await using var app = BuildApp(mapMcpEndpoint: true);
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+
+        foreach (var accept in new[] { "application/json", "text/html,application/xhtml+xml" })
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, "/api/plugins/bundles/prebuilt/s0/plugins");
+            request.Headers.TryAddWithoutValidation("Accept", accept);
+            var response = await client.SendAsync(request);
+            response.StatusCode.Should().Be(HttpStatusCode.NotFound,
+                because: $"an unmapped /api path with Accept '{accept}' must fail loud, not render the shell");
+        }
+
+        // Control: the exclusion is root-anchored on the `api` segment only — a partition named
+        // anything else still reaches the page, and a mesh path merely CONTAINING "api" is untouched.
+        foreach (var path in new[] { "/Apiary", "/Docs/api" })
+        {
+            var browser = new HttpRequestMessage(HttpMethod.Get, path);
+            browser.Headers.TryAddWithoutValidation("Accept", "text/html");
+            var page = await client.SendAsync(browser);
+            page.StatusCode.Should().Be(HttpStatusCode.OK, because: $"{path} is a page, not an API path");
+            (await page.Content.ReadAsStringAsync()).Should().Be("page:" + path.TrimStart('/'));
+        }
+    }
+
     [Fact]
     public async Task ModuleNotLoaded_JsonPostAnswersAnHonest404_NeverTheShell()
     {
