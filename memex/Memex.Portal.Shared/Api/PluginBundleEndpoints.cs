@@ -132,6 +132,7 @@ public static class PluginBundleEndpoints
                     Caller(http),
                     ct));
 
+        MapPrebuilt(group);
         MapPublish(endpoints);
         return endpoints;
     }
@@ -153,6 +154,118 @@ public static class PluginBundleEndpoints
     /// NOT the instance-key group above — a read grant says which packages an instance may PULL,
     /// while publishing writes bytes every consumer will then load.</para>
     /// </summary>
+    // ─────────────────── prebuilt: the registry SERVES sealed publications ───────────────────
+    //
+    // Step 2 of the plugin build contract (Doc/Architecture/PluginBuildContract): a downstream
+    // repo INSTALLS its upstream from the upstream's sealed publication. Until this route existed
+    // the only reader of `prebuilt-bundles/<identity>/<source>/` was an Azure OIDC identity whose
+    // federated credentials live in the Entra tenant — none of them for `pull_request`, so a gate
+    // could not fetch on the one event it exists for (AADSTS700213, measured 2026-08-27). The
+    // portal already mounts the share (PreWarm:PrebuiltBundleRoot); serving it here puts the read
+    // behind the SAME authenticator and grant model as every other bundle route, so who may fetch
+    // which source is a `PluginGrantEntry` on a mesh node — auditable, listable, revocable — and
+    // never a rule in a cloud tenant nobody can query.
+    //
+    // Authority: a whole-source grant (`<source>/*`) on the caller. The identity that PUBLISHES a
+    // source is the one that may fetch what it depends on, scoped per source — a satellite holds
+    // `plugins/*` to fetch, never a grant to publish AS plugins.
+    //
+    // 🚨 Serves ONLY what the `_complete` seal lists (PublishedBundleCatalogue.SealedBundlesOf):
+    // a torn publication — no sentinel, or a listed bundle absent — is refused wholesale, exactly
+    // as the boot seeder refuses it. A consumer must never be handed a set the portal itself
+    // would decline.
+    private const string PrebuiltSegment = "prebuilt";
+
+    private static void MapPrebuilt(RouteGroupBuilder group)
+    {
+        group.MapGet($"/{PrebuiltSegment}/{{identity}}/{{source}}",
+            (HttpContext http, string identity, string source) =>
+                PrebuiltIndex(http, identity, source, Caller(http)));
+        group.MapGet($"/{PrebuiltSegment}/{{identity}}/{{source}}/{{bundle}}",
+            (HttpContext http, string identity, string source, string bundle) =>
+                PrebuiltBundle(http, identity, source, bundle, Caller(http)));
+    }
+
+    /// <summary>The sealed publication's bundle names, or 404 when none is sealed for that
+    /// identity/source, or 403 when the caller holds no whole-source grant on it.</summary>
+    private static IResult PrebuiltIndex(
+        HttpContext http, string identity, string source, AuthenticatedInstance? caller)
+    {
+        if (PrebuiltDecision(http, identity, source, caller) is { } refused)
+            return refused;
+        var directory = PrebuiltDirectory(http, identity, source);
+        var sealed_ = directory is null ? null : PublishedBundleCatalogue.SealedBundlesOf(directory, Log(http));
+        if (sealed_ is null)
+            return Results.Json(
+                new { error = $"no sealed publication for source '{source}' under framework identity '{identity}'" },
+                statusCode: StatusCodes.Status404NotFound);
+        return Results.Json(new { identity, source, bundles = sealed_ });
+    }
+
+    /// <summary>One sealed bundle's bytes. A name the seal does not list is 404 even if the file
+    /// exists — an unsealed file is not part of the publication.</summary>
+    private static IResult PrebuiltBundle(
+        HttpContext http, string identity, string source, string bundle, AuthenticatedInstance? caller)
+    {
+        if (PrebuiltDecision(http, identity, source, caller) is { } refused)
+            return refused;
+        var directory = PrebuiltDirectory(http, identity, source);
+        var sealed_ = directory is null ? null : PublishedBundleCatalogue.SealedBundlesOf(directory, Log(http));
+        if (sealed_ is null || !sealed_.Contains(bundle, StringComparer.OrdinalIgnoreCase))
+            return NoSuchBundle();
+        var path = Path.Combine(directory!, bundle);
+        return Results.File(path, "application/zip", fileDownloadName: bundle);
+    }
+
+    /// <summary>
+    /// The three refusals, in the order that leaks least: no caller (401, the group filter's
+    /// message), a path segment that is not a bare name (400 — `..` or a separator would walk
+    /// the share), a caller without a whole-source grant (403). Records the decision on the
+    /// ledger like every other bundle route, so a refused fetch is as visible as a refused serve.
+    /// </summary>
+    private static IResult? PrebuiltDecision(
+        HttpContext http, string identity, string source, AuthenticatedInstance? caller)
+    {
+        if (caller is null)
+            return Results.Json(new { error = "a registered instance key is required" },
+                statusCode: StatusCodes.Status401Unauthorized);
+        if (!IsBareName(identity) || !IsBareName(source))
+            return Results.Json(new { error = "identity and source must be bare names" },
+                statusCode: StatusCodes.Status400BadRequest);
+        var allowed = caller.Grant.Allows(source, PluginGrantEntry.AllPackages);
+        Ledger(http)?.Record(new EntitlementDecision(
+            $"{PrebuiltSegment}/{source}",
+            allowed ? EntitlementOutcome.Granted : EntitlementOutcome.Denied,
+            EntitlementAnchorKind.Registry,
+            source,
+            true,
+            allowed
+                ? $"whole-source grant '{source}/*' held by {caller.Instance.InstanceId}"
+                : $"{caller.Instance.InstanceId} holds no '{source}/*' grant — a fetch needs the whole source"));
+        return allowed
+            ? null
+            : Results.Json(
+                new { error = $"instance '{caller.Instance.InstanceId}' is not granted source '{source}'" },
+                statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    private static string? PrebuiltDirectory(HttpContext http, string identity, string source)
+    {
+        var root = http.RequestServices.GetService<IConfiguration>()?[PublishedBundleCatalogue.PublishedRootConfigKey];
+        if (string.IsNullOrWhiteSpace(root))
+            return null;
+        var directory = Path.Combine(root, identity, source);
+        return Directory.Exists(directory) ? directory : null;
+    }
+
+    private static bool IsBareName(string segment) =>
+        segment.Length > 0
+        && segment.IndexOfAny(['/', '\\', ':']) < 0
+        && segment != "." && segment != "..";
+
+    private static ILogger? Log(HttpContext http) =>
+        http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger(typeof(PluginBundleEndpoints));
+
     private static void MapPublish(IEndpointRouteBuilder endpoints)
     {
         var config = endpoints.ServiceProvider.GetService<IConfiguration>();
