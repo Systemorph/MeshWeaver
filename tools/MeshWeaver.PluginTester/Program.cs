@@ -8,7 +8,7 @@ using MeshWeaver.PluginTester;
 using MeshWeaver.Compiler;
 // mw-plugin-test <repo-root> [--compile-timeout <seconds>] [--render-timeout <seconds>]
 //                            [--allow <file>] [--report <file>] [--seed <dir>]
-//                            [--bake-output <dir>] [--source-sha <sha>]
+//                            [--bake-output <dir>] [--source-sha <sha>] [--module <dll>]...
 //
 // The MeshWeaver.Plugins PR gate: imports each node-repo package of the checkout into a fresh
 // in-process mesh, waits for every NodeType to compile (Roslyn diagnostics on error), renders
@@ -313,6 +313,7 @@ static async Task<int> RunGate(string[] args)
     string? bakeOutput = null;
     string? sourceSha = null;
     BakeSeed? seed = null;
+    var externalModules = new List<string>();
 
     for (var i = 0; i < args.Length; i++)
     {
@@ -378,10 +379,29 @@ static async Task<int> RunGate(string[] args)
             case "--source-sha" when i + 1 < args.Length:
                 sourceSha = args[++i];
                 break;
+            // 🚨 A module built OUTSIDE this image — the seam that lets a node repo gate content
+            // against a module whose source lives in that repo (the platform image cannot build
+            // it). Repeatable. Refused HERE, before a mesh exists, for the same reason --seed is:
+            // a gate that quietly ran without a module it was told to load would refuse every
+            // install needing that module's node types and blame the CONTENT.
+            case "--module" when i + 1 < args.Length:
+            {
+                var modulePath = Path.GetFullPath(args[++i]);
+                if (!File.Exists(modulePath))
+                {
+                    Console.Error.WriteLine(
+                        $"mw-plugin-test: --module '{modulePath}' does not exist. Pass the module's "
+                        + "ENTRY assembly (…/<Name>/<Name>.dll) and make sure it is mounted into "
+                        + "the container.");
+                    return 2;
+                }
+                externalModules.Add(modulePath);
+                break;
+            }
             // A value-taking option as the LAST argument would otherwise fall through to the default
             // case as "Unknown argument" — a misleading message for a missing value.
             case "--compile-timeout" or "--render-timeout" or "--allow" or "--report"
-                or "--bake-output" or "--seed" or "--source-sha":
+                or "--bake-output" or "--seed" or "--source-sha" or "--module":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
                 return 2;
             // Diagnostic: print the framework build identity this process resolves — the exact value
@@ -402,7 +422,7 @@ static async Task<int> RunGate(string[] args)
                 Console.WriteLine(
                     "usage: mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
                     + "[--allow <file>] [--report <file>] [--seed <dir>] [--bake-output <dir>] "
-                    + "[--source-sha <sha>] [--print-framework-identity]");
+                    + "[--source-sha <sha>] [--module <dll>]... [--print-framework-identity]");
                 return 0;
             default:
                 if (args[i].StartsWith('-') || root is not null)
@@ -423,9 +443,14 @@ static async Task<int> RunGate(string[] args)
         BakeOutputDirectory = bakeOutput,
         SourceSha = sourceSha,
         Seed = seed,
+        ExternalModules = externalModules,
     };
 
     Console.WriteLine($"mw-plugin-test: gating node repos under '{Path.GetFullPath(options.RepoRoot)}'");
+    // Say which external modules are in play, always — a run that silently loaded none is
+    // indistinguishable from one that loaded them, right up until an install is refused.
+    foreach (var module in externalModules)
+        Console.WriteLine($"external module: {module}");
     if (allowApplied)
         Console.WriteLine($"known-debt allowlist: {allowlist.Entries.Count} entr(ies)");
     var report = await PluginGateRunner.Run(options).FirstAsync().ToTask();
