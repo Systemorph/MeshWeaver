@@ -861,19 +861,36 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      # Same $(Version) computation as the portal leg: both jobs run inside ONE
-      # workflow run, so GITHUB_RUN_NUMBER — and therefore the computed
-      # 3.0.0-ci.<n> tag — is identical across the two legs by construction.
-      # 🚨 This one is load-bearing beyond tidiness: the self-updater patches the portal AND the
-      # migration Deployment to the SAME tag (SelfUpdateOptions.MigrationImage), so a portal
-      # version tag without a matching migration version tag is an ImagePullBackOff on rollout.
+      # 🚨 Read the version from a project that stays in THIS repo — the same rule, and the same
+      # project, the portal leg above already follows, and for the same reason. This used to read
+      # `plugins-repo/src/Memex.Database.Migration`, which lives in MeshWeaver.Plugins and does NOT
+      # inherit this repo's root Directory.Build.props. It therefore evaluated to the csproj's own
+      # default and published `memex-migration:1.0.0` on every run, while the portal published
+      # `3.0.0-rc8.ci.<n>` — the two repositories silently stopped sharing a tagging convention.
+      #
+      # 🚨 That is load-bearing beyond tidiness, and it broke production for 6.5 h on 2026-08-27
+      # (#2555). `helm-release.yml` derives the migration tag from the PORTAL image's tag, on the
+      # documented reasoning that a migration must ride the same build as the code it migrates for.
+      # With no matching version tag on memex-migration, every `helm upgrade` minted a Job pinned to
+      # `memex-migration:3.0.0-rc8.ci.<n>` — a tag that had never existed — and the Job sat in
+      # ImagePullBackOff (1699 pull attempts) where nothing was watching. It is invisible while the
+      # schema happens to be current, because DbVersionGate only refuses to serve when db_version is
+      # BELOW Latest; a migration that can never run surfaces only at the deploy that needs it.
+      #
+      # Both jobs run inside ONE workflow run, so GITHUB_RUN_NUMBER — and therefore the computed
+      # 3.0.0-ci.<n> tag — is identical across the legs by construction.
       - name: Compute image version
         id: vars
         run: |
           set -euo pipefail
-          VERSION=$(dotnet msbuild plugins-repo/src/Memex.Database.Migration/Memex.Database.Migration.csproj \
-            -p:MeshWeaverRoot=${{ github.workspace }} \
+          VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+          # Refuse rather than invent — same as the portal leg. An empty version becomes `:` or
+          # `latest` downstream, which is the failure where a tag exists and points at the wrong thing.
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not resolve Version from the platform checkout. Refusing to invent one."
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
       - name: Ensure Azure CLI
