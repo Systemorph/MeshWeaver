@@ -153,13 +153,120 @@ public interface IMessageDelivery
     /// <summary>
     /// The classification recorded by <see cref="Failed(string, ErrorType)"/>, or
     /// <paramref name="fallback"/> when the failing site recorded none.
+    ///
+    /// <para>🚨 <b>The verdict must survive a HUB BOUNDARY, which is the only situation it exists
+    /// for.</b> This read used to be a bare <c>value is ErrorType</c> — the trap-door AGENTS.md
+    /// names: an <see cref="object"/> that crossed a boundary is no longer the CLR type it was
+    /// written as. <c>Properties</c> is serialized by
+    /// <c>ImmutableDictionaryOfStringObjectConverter</c>, which writes each value by its RUNTIME
+    /// type, so an <see cref="ErrorType"/> goes out as the enum NAME and comes back — through
+    /// <c>ObjectPolymorphicConverter</c>, which materialises a JSON string as
+    /// <see cref="string"/> — as a string. The type test then failed and EVERY consumer silently
+    /// read <paramref name="fallback"/> instead of the recorded verdict.</para>
+    ///
+    /// <para>Silently, and with real consequences: a disposal race classified
+    /// <see cref="ErrorType.ShuttingDown"/> at the hub (#2350) reached the router as the fallback,
+    /// so a delivery that raced a hub's disposal kept being reported to the sender as TERMINAL even
+    /// after every producing site had been fixed to classify it (#2346). Reading the serialized
+    /// forms back is what makes "carried, never re-derived from the message text" true rather than
+    /// aspirational.</para>
     /// </summary>
     /// <param name="fallback">The verdict to use when the failing site classified nothing.</param>
     /// <returns>The recorded classification, or <paramref name="fallback"/>.</returns>
     ErrorType GetFailureErrorType(ErrorType fallback) =>
-        Properties.TryGetValue(FailureErrorTypeProperty, out var value) && value is ErrorType errorType
+        Properties.TryGetValue(FailureErrorTypeProperty, out var value) && TryReadErrorType(value, out var errorType)
             ? errorType
             : fallback;
+
+    /// <summary>
+    /// Recovers an <see cref="ErrorType"/> from every shape a JSON round-trip can leave it in: the
+    /// CLR enum (never left this process), the enum NAME (the hub's own options — the enum
+    /// converter writes a string and <c>ObjectPolymorphicConverter</c> reads one back), an integral
+    /// value (options serializing enums numerically), or a raw <c>JsonElement</c> (options
+    /// without <c>ObjectPolymorphicConverter</c>, which leaves every <see cref="object"/> untyped).
+    ///
+    /// <para>An unrecognised or undefined value is NOT a verdict — it yields <c>false</c> so the
+    /// caller's fallback applies, which is the honest answer and never a silently invented one.</para>
+    /// </summary>
+    private static bool TryReadErrorType(object? value, out ErrorType errorType)
+    {
+        switch (value)
+        {
+            case ErrorType typed:
+                errorType = typed;
+                return true;
+            case string name:
+                // Names only: Enum.TryParse also accepts a NUMERIC string and will happily mint an
+                // undefined member from it, so IsDefined is the gate, not decoration.
+                return Enum.TryParse(name, ignoreCase: true, out errorType) && Enum.IsDefined(errorType);
+            case int number:
+                return TryReadErrorTypeNumber(number, out errorType);
+            case long number:
+                return TryReadErrorTypeNumber(number, out errorType);
+            case short number:
+                return TryReadErrorTypeNumber(number, out errorType);
+            case byte number:
+                return TryReadErrorTypeNumber(number, out errorType);
+            case System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.String } json:
+                return TryReadErrorType(json.GetString(), out errorType);
+            case System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.Number } json:
+                return json.TryGetInt64(out var raw)
+                    ? TryReadErrorTypeNumber(raw, out errorType)
+                    : Fail(out errorType);
+            default:
+                return Fail(out errorType);
+        }
+
+        static bool Fail(out ErrorType errorType)
+        {
+            errorType = default;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// An integral value read as an <see cref="ErrorType"/>, range-checked FIRST.
+    ///
+    /// <para>🚨 Deliberately not <c>Convert.ToInt32</c>: that THROWS <see cref="OverflowException"/>
+    /// on an out-of-range value, and this runs on the error-REPORTING path — the one place a throw
+    /// is worst, because it replaces a failure that was about to be described with a different,
+    /// undescribed one. An unreadable value is "no verdict was reached", which is exactly what the
+    /// caller's fallback is for.</para>
+    /// </summary>
+    private static bool TryReadErrorTypeNumber(long value, out ErrorType errorType)
+    {
+        errorType = default;
+        if (value is < int.MinValue or > int.MaxValue)
+            return false;
+        errorType = (ErrorType)(int)value;
+        return Enum.IsDefined(errorType);
+    }
+
+    /// <summary>
+    /// The failure TEXT recorded by <see cref="Failed(string)"/>, or null when this delivery carries
+    /// none — so a caller can tell "no message was recorded" from an empty one and supply its own
+    /// description.
+    ///
+    /// <para>Tolerant of the round-trip for the same reason <see cref="GetFailureErrorType"/> is:
+    /// <c>Properties</c> values come back re-materialised from JSON, and options WITHOUT
+    /// <c>ObjectPolymorphicConverter</c> leave a string as an untyped <c>JsonElement</c>. Reading
+    /// only the CLR <see cref="string"/> silently loses the message — which costs twice over at a
+    /// routing site, because the text is BOTH the sender's diagnostic AND the fallback the
+    /// classification rule matches on when the failing site recorded no verdict.</para>
+    /// </summary>
+    /// <returns>The recorded failure text, or null.</returns>
+    string? GetFailureMessage() =>
+        Properties.TryGetValue(nameof(Error), out var value)
+            ? value switch
+            {
+                string text => text,
+                System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.String } json
+                    => json.GetString(),
+                // Anything else recorded under this key is not a message. Null, so the caller
+                // describes the failure itself rather than printing a type name at a user.
+                _ => null,
+            }
+            : null;
 
     /// <summary>
     /// Returns a copy of this delivery with a single property set.

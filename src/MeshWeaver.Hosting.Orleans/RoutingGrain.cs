@@ -995,14 +995,59 @@ internal class RoutingGrain(
                     RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_OK id={deliveryId} grainKey={grainKey} state={result.State}");
                     if (result.State == MessageDeliveryState.Failed)
                     {
+                        // 🚨 ANSWER ONCE. FailedAndNacked DECLARES that the failing site already posted
+                        // its own DeliveryFailure — which MessageService.NackThroughParent does on every
+                        // targeted hub disposal (recycle, node delete). A second NACK from here gives ONE
+                        // request TWO answers, and Observe resolves on whichever lands first, so the
+                        // caller's verdict becomes a coin toss even once both sites classify correctly.
+                        // Same rule, same signal, as MessageService.ReportRoutingFailure.
+                        if (result.SenderWasNacked)
+                        {
+                            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_FAILED_ALREADY_NACKED id={deliveryId} grainKey={grainKey}");
+                            logger.LogDebug(
+                                "[ROUTE] Grain {GrainKey} returned Failed and had ALREADY answered the sender — not NACKing twice",
+                                grainKey);
+                            return;
+                        }
+
                         // The owning grain resolved but could NOT service the delivery (unmaterializable /
                         // unregistered node type, failed activation, access denial). Surface as a
                         // DeliveryFailure so the caller gets a fast, deterministic OnError instead of parking.
-                        var failMsg = result.Properties.TryGetValue("Error", out var errObj) && errObj is string errStr
-                            ? errStr
-                            : $"Delivery to '{addressPath}' failed at its owning hub.";
-                        logger.LogWarning("[ROUTE] Grain {GrainKey} returned Failed: {Error}", grainKey, failMsg);
-                        postFailureToSender(failMsg, ErrorType.Failed);
+                        // GetFailureMessage, not a raw `is string` test: Properties values come back
+                        // re-materialised from JSON, so the text can arrive as an untyped JsonElement.
+                        // Losing it here costs twice — the sender loses its diagnostic AND the
+                        // classification below loses the phrase its fallback rule matches on.
+                        var failMsg = result.GetFailureMessage()
+                            ?? $"Delivery to '{addressPath}' failed at its owning hub.";
+
+                        // 🚨 CARRY the verdict the owning hub recorded; NEVER re-decide it here. This line
+                        // read `ErrorType.Failed` — terminal, unconditionally — and that is issue #2346.
+                        //
+                        // Three layers below this one classify carefully and every one of those verdicts
+                        // died here: MessageService's intake gate answers a disposal race with
+                        // ShuttingDown (#2350), and MessageHubGrain.DeliverMessage classifies its own two
+                        // arms (Unavailable for an activation fault #1693, ShuttingDown for "hub disposed
+                        // before delivery"). This is the ONLY site that reports them, because
+                        // RouteMessage returns Forwarded unconditionally and delivers on a background
+                        // route — so the client-side classifier in OrleansRoutingService.DispatchObservable
+                        // never sees a Failed result for a grain-routed address and could not run.
+                        //
+                        // That is why OrleansMeshTests.HubWorksAfterDisposal kept failing in ~2.4 s with
+                        // the exact text "Hub is shutting down" raised INSIDE the retry that matches
+                        // ShuttingDown — on branches carrying both earlier fixes.
+                        //
+                        // The FALLBACK is the shared text rule, not the terminal default: a delivery that
+                        // crossed a hub boundary arrives with Properties values re-materialised from JSON,
+                        // so a recorded verdict can legitimately be unreadable here. ClassifyRoutedFailure
+                        // is the same rule AreaErrorClassifier.IsTransientHubFailure and
+                        // MeshNodeStreamCache.IsTransientOwnerFailure already apply, so all four layers
+                        // agree; everything it does not recognise stays terminal, which keeps "No node
+                        // found" authoritative.
+                        var failureErrorType = result.GetFailureErrorType(
+                            OrleansRoutingService.ClassifyRoutedFailure(failMsg));
+                        logger.LogWarning("[ROUTE] Grain {GrainKey} returned Failed: {Error} (as {ErrorType})",
+                            grainKey, failMsg, failureErrorType);
+                        postFailureToSender(failMsg, failureErrorType);
                     }
                 },
                 ex =>
