@@ -233,24 +233,26 @@ public sealed class AssemblyLoadContextLeakTest : IDisposable
     /// while a pin is held and completes once released.
     /// </summary>
     [Fact]
-    public void Pin_MakesDispose_DrainBeforeUnload()
+    public void Pin_DefersTheUnload_UntilTheScanReleases()
     {
         var ctx = _service.GetOrCreateLoadContext("pin_drain_node");
         var pin = ctx.Pin();
 
-        var disposeReturned = new ManualResetEventSlim(false);
-        var disposer = new Thread(() => { ctx.Dispose(); disposeReturned.Set(); }) { IsBackground = true };
-        disposer.Start();
+        // 🚨 Dispose RETURNS IMMEDIATELY now (#2488/#2549) — it hands the unload to the drain
+        // signal instead of blocking on it. This test used to assert the blocking itself, which
+        // was the MECHANISM; the PROPERTY it existed for ("or it unloads the LoaderAllocator
+        // mid-scan") is what is asserted below, and it is now guaranteed rather than merely
+        // likely: the old spin drain gave up after 5 s and unloaded anyway.
+        ctx.Dispose();
 
-        // While the pin is held, Dispose() must still be draining — it must NOT have returned.
-        disposeReturned.Wait(300).Should().BeFalse(
-            "Dispose() must block (drain) while a scan pin is held, or it unloads the LoaderAllocator mid-scan");
+        ctx.IsDisposed.Should().BeFalse(
+            "a scan pin is still held, so the LoaderAllocator must NOT be unloaded — that is the "
+            + "use-after-unload this pin exists to prevent");
 
-        // Release the pin → the drain completes and Dispose() returns.
         pin.Dispose();
-        disposeReturned.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue(
-            "releasing the pin must let Dispose() finish the unload");
-        disposer.Join();
+
+        ctx.IsDisposed.Should().BeTrue(
+            "releasing the last pin IS the drain signal, and the unload runs on it");
     }
 
     /// <summary>Once a context starts unloading, a NEW scan must not be able to pin it — the caller
@@ -286,38 +288,34 @@ public sealed class AssemblyLoadContextLeakTest : IDisposable
     /// load has been attempted, so the interleaving this asserts is the one that always happens.</para>
     /// </summary>
     [Fact]
-    public void PinnedScan_StillLoadsTheAssembly_WhileDisposeIsDraining()
+    public void PinnedScan_StillLoadsTheAssembly_WhileTheUnloadIsDeferred()
     {
         const string nodeName = "pin_load_during_drain";
         var dllPath = EmitTinyAssemblyToDisk(nodeName, "Widget");
         var ctx = _service.GetOrCreateLoadContextForPath(nodeName, dllPath);
 
         // A scan pins the context — exactly what CompileResultFromAssembly does via PinForScan.
-        using var pin = ctx.Pin();
+        // Not a `using`: the release below IS the drain signal, and the assertion after it needs
+        // the unload to have happened.
+        var pin = ctx.Pin();
 
-        // Teardown starts underneath it (a concurrent recompile/eviction/hub disposal) and parks
-        // in the drain, because our pin is outstanding.
-        var disposeReturned = new ManualResetEventSlim(false);
-        var disposer = new Thread(() => { ctx.Dispose(); disposeReturned.Set(); }) { IsBackground = true };
-        disposer.Start();
-        disposeReturned.Wait(300).Should().BeFalse(
-            "Dispose() must be draining — the pin is still held");
+        // Teardown starts underneath it (a concurrent recompile/eviction/hub disposal). Dispose
+        // returns at once and the unload waits on the drain signal (#2488/#2549).
+        ctx.Dispose();
 
-        // THE ASSERTION: the pinned scan can still load. Before the fix this threw
-        // ObjectDisposedException and the caller recorded a permanent CompilationStatus.Error.
+        // THE ASSERTION, unchanged in substance: the pinned scan can still load. Before the
+        // original fix this threw ObjectDisposedException and the caller recorded a permanent
+        // CompilationStatus.Error.
         var assembly = ctx.LoadNodeAssembly();
         assembly.Should().NotBeNull(
-            "a pin held across a concurrent Dispose must keep the assembly loadable: Dispose drains "
-            + "pins BEFORE Unload, so the LoaderAllocator is still alive and refusing the load only "
-            + "manufactures a compile 'failure' that parks the NodeType for good");
+            "a pin held across a concurrent Dispose must keep the assembly loadable: the unload "
+            + "waits for the pins, so the LoaderAllocator is still alive and refusing the load "
+            + "would only manufacture a compile 'failure' that parks the NodeType for good");
         assembly!.GetTypes().Should().NotBeEmpty(
             "the scan the pin exists to protect is GetTypes — it must complete against live metadata");
 
-        // Releasing the pin lets the deferred unload finish, exactly as before.
+        // Releasing the last pin completes the drain, and the deferred unload runs on it.
         pin.Dispose();
-        disposeReturned.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue(
-            "releasing the pin must let Dispose() finish the unload");
-        disposer.Join();
 
         // …and once the drain is over the context IS closed: a later load must not resurrect it.
         Assert.Throws<ObjectDisposedException>(() => ctx.LoadNodeAssembly());
