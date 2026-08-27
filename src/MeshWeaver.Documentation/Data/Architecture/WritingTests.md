@@ -371,6 +371,71 @@ Fix the bug. Re-running a hung test "to see if it was a flake" hides the race �
 
 ---
 
+## Reading a CI Failure — What the Run Actually Carries
+
+A red test on CI hands you three artifacts, and knowing which one answers which question is the
+difference between attributing a failure and arguing about it.
+
+**1. The `.trx`, per project.** The shards run each project's NATIVE xUnit v3 host
+(`dotnet <Name>.dll -trx …`), and that writer puts captured output in
+`<Output><TextMessages><Message>` — **not** in `<StdOut>`, which the vstest writer uses. `<StdOut>`
+is populated only when a test writes to the process console (`MeshWeaver.Portal.E2E.Test` and
+`MeshWeaver.PluginImage.Test` do; nothing else does). Looking for `StdOut` and finding it empty
+therefore says nothing about the project — issue #2495 was filed on exactly that reading.
+
+The trx also carries `startTime` / `endTime` per result, which is how you compute **what else was
+running**. That matters in a project that opts into intra-project parallelism: in
+`MeshWeaver.Hosting.Orleans.Test` each test class boots its own Orleans cluster and
+`maxParallelThreads: 4`, so a failing test can have six other classes — and their silos — live in
+the same process.
+
+**2. `collected-logs/_meshweaver-test-trace.log`, one file per shard.** This is the only test log CI
+keeps, and it is the only evidence that survives a host killed at the wall-clock cap, which writes
+no trx at all. Two kinds of line, both carrying `pid=` because every project in a shard appends to
+this one file:
+
+- **Window markers**, written by `AutoTestLoggingAttribute` for every `TestBase` subclass in every
+  project: `TEST_START <method>` and `TEST_END elapsed=<n>ms <method> outcome=<…>` (plus the
+  exception type and message on a failure). `elapsed` is measured between the two hooks — the trx
+  `duration` is larger because it includes fixture construction.
+- **Fault records** — `[FAULT] [<level>] [<category>]` plus the exception's type and stack, written
+  by both xUnit loggers for any record at `Warning` or worse that carries an exception, whether or
+  not a test output helper is active.
+
+Joining them is the point: `grep pid=<n>` for the window brackets, and every `[FAULT]` timestamp
+between a `TEST_START` and its `TEST_END` belongs to that window. A `TEST_START` with **no**
+matching `TEST_END` names the test a killed host was stuck in. In a parallel project the join
+narrows a fault to the handful of windows open at that instant rather than to one test — say so
+when you use it.
+
+Records are rate-bounded (`FaultRecordBudget`: 100 per 10 s) and every suppressed stretch announces
+itself, so `grep FAULT-BUDGET` answers "is this log complete?".
+
+**3. The `[CI] <name> exit=<n>` markers in `test/test-results.log`.** The host's own exit code,
+classified (`TESTFAIL` / `TIMEOUT` / `SIGNAL` / `MASKED`).
+
+### 🚨 A crashed host is a FAILED test result, not a silence
+
+A host that streams green results and then dies leaves a trx that says "N passed, 0 failed", and
+every reporter that parses it repeats that over a dead process. `MeshWeaver.Content.Test` did this
+with `exit=139`. Pass/fail evidence and liveness evidence were two channels and only the first was
+read.
+
+They are one channel now: for any exit the trx cannot explain, the shard runs
+`.github/scripts/record-host-crash.py`, which writes a `<project>.HOST_CRASHED` failure **into the
+trx** — creating the file when the host wrote none. So the shard summary, the per-shard check and
+the consolidated check all name the crash, and a reporter added later inherits the behaviour
+instead of the blind spot. `CrashedHostIsNeverAPassGuard` runs the real script against both shapes
+and is pinned by its own negative controls.
+
+**Known gap, so you do not read it as evidence:** the window markers come from an attribute applied
+to `TestBase`, so a test class that does not derive from it writes none. In
+`MeshWeaver.Hosting.Orleans.Test` that is 25 classes / 86 of 208 tests (`RoutingGrain*`,
+`OrleansCrossSilo*`, `TwoSiloRecycleConvergenceTest`, …). Their faults still reach the file; only
+the brackets are missing.
+
+---
+
 ## Coverage Expectations
 
 The [/code skill](/Skill/code) sets the bar for NodeTypes and data models: **a test per invariant, per branch, per boundary, per degenerate input** — plus a serialization round-trip. A NodeType with a single happy-path test is demoed, not tested.

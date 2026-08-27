@@ -3232,11 +3232,49 @@ public static class PackageInstaller
     }
 
     /// <summary>
+    /// Bound on the install-time seed, sized to the work it is a bound ON rather than to a wish.
+    ///
+    /// <para>🚨 <b>This used to be a flat 60 s, and that cap did not save time — it duplicated
+    /// work.</b> The seed underneath (<c>ShippedPrebuiltBundles.SeedBundles</c>) is a
+    /// <c>Concat</c> of one write per assembly, each with its own 30 s <c>SeedBudget</c>: strictly
+    /// sequential, so a package with 17 assemblies (Store) is legitimately allowed several minutes
+    /// while the outer cap fired at one. And <c>Timeout</c> abandons the RESULT, never the WORK: the
+    /// seed ran on and reported its coverage afterwards, while the install had already fallen back
+    /// to compiling the very types it was about to deliver. Measured 2026-08-27 (Education e2e,
+    /// shard 1): Store was in Roslyn at 06:38, the "adoption attempt failed" line landed at 06:51,
+    /// and the tally right behind it read 27 assemblies backed. When the cap fires, the system does
+    /// BOTH — the seed and the compile it exists to avoid — which is strictly worse than either.
+    /// That is the same inversion #1317 removed one layer down: a join must not out-run the answers
+    /// it is joining.</para>
+    ///
+    /// <para>The fallback this guards is a Roslyn compile per type, which the release watcher
+    /// allows <c>CompilationCacheOptions.RoslynCompileTimeout</c> (5 min) EACH. A bound on the
+    /// cheaper path must therefore be no tighter than the inner budget summed over the types it
+    /// covers — anything less is a promise to do the expensive thing whenever the cheap one is
+    /// merely busy. Per-assembly, on top of a floor for the enumeration and bundle reads.</para>
+    /// </summary>
+    private static readonly TimeSpan SeedFloor = TimeSpan.FromSeconds(30);
+
+    /// <summary>Per-installed-type share of the install-time seed bound — the inner seed's own
+    /// per-assembly budget, so the outer bound can never expire while the inner work is still
+    /// inside its budget.</summary>
+    private static readonly TimeSpan SeedPerType = TimeSpan.FromSeconds(30);
+
+    /// <summary>The install-time seed bound for <paramref name="typeCount"/> installed types —
+    /// pure, so the sizing rule is pinned by a test with no hub. Never below the floor.</summary>
+    internal static TimeSpan SeedBound(int typeCount)
+        => SeedFloor + SeedPerType * Math.Max(0, typeCount);
+
+    /// <summary>
     /// #1707 slice 3 — adopt-before-compile at INSTALL: give the deployment's prebuilt bundle
     /// sources one bounded chance to supply the just-installed types' assemblies, BEFORE any
     /// release request is issued. An adopted type's request is SATISFIED by the release watcher
     /// (Ok + sources current + usable build ⇒ no Roslyn); anything not adopted compiles exactly as
     /// before. Never faults — every failure degrades to "the installed types compile".
+    ///
+    /// <para>The bound is a STALL detector, sized by <see cref="SeedFloor"/> +
+    /// <see cref="SeedPerType"/> × types — see the remarks on those fields for why a flat cap
+    /// shorter than the fallback it guards was the bug, not a safety.</para>
     /// </summary>
     /// <returns>A cold observable of the number of adopted assemblies; Subscribe to run.</returns>
     private static IObservable<int> SeedPrebuiltAssemblies(
@@ -3245,13 +3283,18 @@ public static class PackageInstaller
         var consumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
         if (consumer is null || nodeTypePaths.Count == 0)
             return Observable.Return(0);
+        var bound = SeedBound(nodeTypePaths.Count);
         return consumer.SeedForTypes(nodeTypePaths)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(60))
+            .Timeout(bound)
             .Catch<int, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
-                    "Install: prebuilt adoption attempt failed — the installed types compile instead");
+                    "Install: prebuilt adoption attempt failed after {Bound} for {Count} type(s) — "
+                    + "the installed types compile instead. This bound is the inner seed's own "
+                    + "per-assembly budget summed, so expiring it means the seed STALLED, not that "
+                    + "it was slow",
+                    bound, nodeTypePaths.Count);
                 return Observable.Return(0);
             })
             .Do(adopted =>

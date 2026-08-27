@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{7a3e1c2d-4b5f-4e6a-9c8d-2f1e0b3a4c5d}</ProjectGuid>
+    <!-- The machinery keeps the namespace it always had: it moved out of the Orleans test project
+         so that test projects in OTHER repositories (MeshWeaver.Plugins holds the storage and
+         transport tests that run over an Orleans cluster) can build on it, and a hundred test files
+         did not have to change a using for that. -->
+    <RootNamespace>MeshWeaver.Hosting.Orleans.Test</RootNamespace>
+    <Description>Test infrastructure for MeshWeaver over an Orleans cluster: OrleansTestBase, the test cluster + backing store, disposal drain, grain-directory sizing. The Orleans counterpart of MeshWeaver.Hosting.Monolith.TestBase.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.TestingHost" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" />
+    <PackageReference Include="xunit.v3.extensibility.core" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The tests that build on this machinery, here and in MeshWeaver.Plugins (the storage and
+         transport suites that run over an Orleans cluster). -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.AI.Orleans.TestBase" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.PostgreSql.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Grpc.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Cosmos.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Snowflake.Test" />
+  </ItemGroup>
+</Project>

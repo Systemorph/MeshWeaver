@@ -96,7 +96,7 @@ PORTAL_MI_CLIENT_ID=$(az identity show -g $RG -n <portal-identity> --query clien
 
 > 🚨 **The connection host is the server FQDN, not a private IP.** The servers moved on 2026-08-24,
 > and a stale private-IP address here would revert that migration. The FQDN is safe with a password:
-> `AzurePostgres.UsesManagedIdentityAuth` (`src/MeshWeaver.Hosting.PostgreSql/AzurePostgres.cs`)
+> `AzurePostgres.UsesManagedIdentityAuth` (`MeshWeaver.Plugins/src/MeshWeaver.Hosting.PostgreSql/AzurePostgres.cs`)
 > takes the Entra-token path only when the host carries the Azure suffix **AND no password is
 > present**, so FQDN + password deliberately takes plain Npgsql with `SslMode=Require` — pinned by
 > `AzurePostgresAuthSelectionTests`.

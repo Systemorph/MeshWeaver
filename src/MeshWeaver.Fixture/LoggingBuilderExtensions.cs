@@ -176,21 +176,68 @@ public class XUnitLogger(
         Func<TState, Exception?, string> formatter
     )
     {
-        var outputHelper = testOutputHelperAccessor.OutputHelper
-            ?? XUnitFileOutputRegistry.GetAnyActiveOutputHelper();
-        if (outputHelper == null)
-            return;
-        if (!IsEnabled(logLevel))
-            return;
         if (formatter == null)
             throw new ArgumentNullException(nameof(formatter));
+
+        // Only a Warning-or-worse record CARRYING AN EXCEPTION can reach the fault sink, and that
+        // is a small minority of what a silo logs. Everything else keeps the ORIGINAL fast path —
+        // one null check and out — because this logger sits on the hot path of an Orleans silo
+        // logging at Information, where the helper is null on every grain-scheduler thread.
+        //
+        // Hoisting IsEnabled above that null check (the first shape of this change) made every
+        // such record walk the filter rules for nothing. Measured on MeshWeaver.Hosting.Orleans.Test
+        // on an otherwise-quiet machine: 67.1 s without the fault sink, 72.2 s with it hoisted
+        // (72.167 / 72.264 — reproducible). Attributing all 5 s to the hoist would overstate the
+        // evidence, since the sink's own ~125 records are in that delta too; what is certain is
+        // that the hoist buys nothing, so it is not worth paying for either way.
+        var isFaultCandidate = exception is not null && logLevel >= LogLevel.Warning;
+
+        var outputHelper = testOutputHelperAccessor.OutputHelper
+            ?? XUnitFileOutputRegistry.GetAnyActiveOutputHelper();
+        if (outputHelper is null && !isFaultCandidate)
+            return;
+
+        if (!IsEnabled(logLevel))
+            return;
+
+        // 🚨 A fault with a stack goes to the ONE file CI keeps, BEFORE the output-helper guard
+        // below — the same ordering, and for the same reason, as XUnitFileLogger.Log.
+        //
+        // This logger did not do it, and the asymmetry was invisible and expensive. The two
+        // loggers split the process by SERVICE PROVIDER, not by importance: XUnitFileLogger
+        // serves the TestBase container, this one serves everything built by a HOST — which in
+        // MeshWeaver.Hosting.Orleans.Test is the silo, the Orleans client, and every mesh hub,
+        // grain and I/O leaf inside them, i.e. essentially the entire system under test. So an
+        // exception logged anywhere in an Orleans silo reached NO artifact CI keeps: not the trx
+        // (the helper is null outside a test method's window — fixture init, teardown, and every
+        // reactive continuation on a background scheduler, which is exactly when a wedge faults),
+        // and not the fault log, because nothing here ever wrote to it.
+        //
+        // Measured on CI run 33062668925, shard 3: the Orleans host ran 208 tests over 272 s and
+        // contributed FOUR lines to the fault log, against 819 / 606 / 1789 from its three
+        // Monolith-derived shard-mates. That is issue #2495's "an Orleans red hands you the
+        // assertion and nothing else", one level below where it was reported.
+        //
+        // Records are rate-bounded by FaultRecordBudget and announce their own suppression, so a
+        // storming silo cannot fill the runner's disk silently.
+        string? message = null;
+        if (isFaultCandidate)
+        {
+            message = formatter(state, exception);
+            TestTraceLog.AppendFault(categoryName, logLevel, message, exception!);
+        }
+
+        if (outputHelper is null)
+            return;
+
+        message ??= formatter(state, exception);
 
         var sb = new StringBuilder();
         sb.Append(GetLogLevelString(logLevel))
             .Append($",{DateTime.UtcNow:hh:mm:ss.fff tt},")
             .Append(categoryName)
             .Append(",")
-            .Append(formatter(state, exception));
+            .Append(message);
 
         if (exception != null)
         {

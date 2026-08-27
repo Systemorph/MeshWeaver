@@ -47,6 +47,37 @@ public static class TestTraceLog
     }
 
     /// <summary>
+    /// Appends ONE phase line in the file's canonical shape:
+    /// <c>HH:mm:ss.fff pid=&lt;n&gt; [TestClass] PHASE [elapsed=&lt;n&gt;ms] [extra]</c>.
+    ///
+    /// <para>The formatter lives here rather than on a test base because there are now two
+    /// callers and they must not drift: <c>MonolithMeshTestBase</c>'s init/dispose phases, and
+    /// <see cref="AutoTestLoggingAttribute"/>'s per-test <c>TEST_START</c>/<c>TEST_END</c> window
+    /// markers, which every test project writes. A reader greps ONE format across all of them.</para>
+    ///
+    /// <para>pid is on every line for the reason the fault records carry it: every test host in a
+    /// CI shard (one process per project) appends to this one file, and a core dump is named
+    /// <c>dotnet-&lt;pid&gt;.dmp</c>, so <c>grep pid=&lt;n&gt;</c> is what ties a dump to a trace.</para>
+    /// </summary>
+    /// <param name="testClass">The test class the phase belongs to.</param>
+    /// <param name="phase">The phase name (<c>TEST_START</c>, <c>DISPOSE_DONE</c>, …).</param>
+    /// <param name="elapsedMs">Optional elapsed milliseconds for the phase.</param>
+    /// <param name="extra">Optional trailing detail (test method, outcome, failure text).</param>
+    public static void AppendPhase(string testClass, string phase, long? elapsedMs = null, string? extra = null)
+    {
+        try
+        {
+            Append($"{DateTime.UtcNow:HH:mm:ss.fff} pid={Environment.ProcessId} [{testClass}] {phase}"
+                + (elapsedMs.HasValue ? $" elapsed={elapsedMs}ms" : "")
+                + (extra is null ? "" : $" {extra}"));
+        }
+        catch
+        {
+            // Tracing must never throw out of the test pipeline.
+        }
+    }
+
+    /// <summary>
     /// Flushes/creates the file so preceding lines reach disk before an
     /// <c>Environment.FailFast</c>.
     /// </summary>

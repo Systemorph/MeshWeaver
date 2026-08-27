@@ -331,6 +331,9 @@ public static class TreeBake
                 continue;
             manifestsById.TryGetValue(packageId, out var manifest);
             var bundlePath = Path.Combine(options.OutputDirectory, SafeFileName(packageId) + ".zip");
+            // Same producer rule as BakeOutput: a bundle ships the package it was compiled from,
+            // or it cannot be installed as an upstream — see BakeOutput.NodeDefinitionsOf.
+            var content = BakeOutput.NodeDefinitionsOf(snapshot, manifest, packageId);
             using (var file = File.Create(bundlePath))
                 BundleWriter.Write(
                     file,
@@ -338,10 +341,12 @@ public static class TreeBake
                     manifest?.ReleasedVersion ?? manifest?.ModuleVersion ?? manifest?.Version,
                     frameworkIdentity,
                     [.. entries.OrderBy(e => e.NodePath, StringComparer.Ordinal)],
-                    sourceSha);
+                    sourceSha,
+                    content,
+                    sourceIncluded: true);
             written.Add(bundlePath);
             options.Output.WriteLine(
-                $"bake: {packageId} → {entries.Count} assembly(ies) → {bundlePath}");
+                $"bake: {packageId} → {entries.Count} assembly(ies) + {content.Count} node file(s) → {bundlePath}");
         }
 
         File.WriteAllText(

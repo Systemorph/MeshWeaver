@@ -13,7 +13,7 @@
 FROM python:3.12-slim AS build
 WORKDIR /w
 COPY clients/python /w/clients/python
-COPY src/MeshWeaver.Hosting.Grpc/Protos/mesh.proto /w/src/MeshWeaver.Hosting.Grpc/Protos/mesh.proto
+COPY src/MeshWeaver.Mesh.Contract/Protos/mesh.proto /w/src/MeshWeaver.Mesh.Contract/Protos/mesh.proto
 RUN pip install --no-cache-dir "grpcio-tools>=1.68" \
     && PYTHON=python bash /w/clients/python/scripts/gen_proto.sh \
     && pip wheel --no-cache-dir --wheel-dir /wheels /w/clients/python
