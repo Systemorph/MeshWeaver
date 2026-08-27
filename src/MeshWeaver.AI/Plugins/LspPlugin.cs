@@ -1,7 +1,6 @@
 using MeshWeaver.Mesh;
 using System.ComponentModel;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services.LanguageServer;
@@ -55,13 +54,14 @@ Returns `{ok: true, diagnostics: []}` when the substituted source compiles clean
     public Task<string> LspCheckNode(
         [Description("Path to the NodeType (e.g., @ACME/Story).")] string nodeTypePath,
         [Description("Path of the Source Code node being edited (e.g., @ACME/Story/Source/StoryTypes.cs). If not in the current source set, the proposed code is added as a new file.")] string sourcePath,
-        [Description("The proposed full source text for that file.")] string proposedCode)
-        => WithContext(() => languageService!.CheckSpeculative(
-                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodeTypePath)),
-                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, sourcePath)),
-                proposedCode ?? string.Empty))
-            .Select(diagnostics => FormatDiagnosticsJson(diagnostics))
-            .FirstAsync().ToTask();
+        [Description("The proposed full source text for that file.")] string proposedCode,
+        CancellationToken cancellationToken = default)
+        => Tool("LspCheckNode", nodeTypePath, cancellationToken,
+            () => WithContext(() => languageService!.CheckSpeculative(
+                    MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodeTypePath)),
+                    MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, sourcePath)),
+                    proposedCode ?? string.Empty))
+                .Select(diagnostics => FormatDiagnosticsJson(diagnostics)));
 
     /// <summary>
     /// Agent tool: enumerates every Roslyn diagnostic (errors, warnings, info) from the NodeType's
@@ -73,12 +73,13 @@ Returns `{ok: true, diagnostics: []}` when the substituted source compiles clean
 
 Returns `{ok: true|false, diagnostics: [...]}` — same shape as `LspCheckNode`. Empty `diagnostics` plus `ok:true` means clean.")]
     public Task<string> LspDiagnosticsForNode(
-        [Description("Path to the NodeType (e.g., @ACME/Story).")] string nodeTypePath)
+        [Description("Path to the NodeType (e.g., @ACME/Story).")] string nodeTypePath,
+        CancellationToken cancellationToken = default)
     {
         var resolved = MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodeTypePath));
-        return WithContext(() => languageService!.GetDiagnostics(resolved))
-            .Select(outcome => FormatDiagnosticsJson(outcome, resolved))
-            .FirstAsync().ToTask();
+        return Tool("LspDiagnosticsForNode", nodeTypePath, cancellationToken,
+            () => WithContext(() => languageService!.GetDiagnostics(resolved))
+                .Select(outcome => FormatDiagnosticsJson(outcome, resolved)));
     }
 
     /// <summary>
@@ -97,15 +98,16 @@ Returns `{markdown: ""..."" }` when a symbol resolves at the position, or `{}` w
         [Description("Path to the NodeType (e.g., @ACME/Story).")] string nodeTypePath,
         [Description("Path of the Source Code node (e.g., @ACME/Story/Source/StoryTypes.cs).")] string sourcePath,
         [Description("0-based line number.")] int line,
-        [Description("0-based character offset within the line.")] int character)
-        => WithContext(() => languageService!.GetHover(
-                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodeTypePath)),
-                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, sourcePath)),
-                new SourcePosition(line, character)))
-            .Select(hover => JsonSerializer.Serialize(
-                hover is null ? new { } : (object)new { markdown = hover.ContentMarkdown },
-                hub.JsonSerializerOptions))
-            .FirstAsync().ToTask();
+        [Description("0-based character offset within the line.")] int character,
+        CancellationToken cancellationToken = default)
+        => Tool("LspHoverForNode", nodeTypePath, cancellationToken,
+            () => WithContext(() => languageService!.GetHover(
+                    MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodeTypePath)),
+                    MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, sourcePath)),
+                    new SourcePosition(line, character)))
+                .Select(hover => JsonSerializer.Serialize(
+                    hover is null ? new { } : (object)new { markdown = hover.ContentMarkdown },
+                    hub.JsonSerializerOptions)));
 
     /// <summary>
     /// Agent tool: Roslyn code completions at a position in a Source Code file, returning up to
@@ -125,26 +127,66 @@ Returns `{items: [{label, kind, insertText, detail?, sortText?}, ...]}`. `kind` 
         [Description("Path of the Source Code node (e.g., @ACME/Story/Source/StoryTypes.cs).")] string sourcePath,
         [Description("0-based line number.")] int line,
         [Description("0-based character offset within the line.")] int character,
-        [Description("Maximum number of completions to return. Default 20.")] int max = 20)
-        => WithContext(() => languageService!.GetCompletions(
-                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodeTypePath)),
-                MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, sourcePath)),
-                new SourcePosition(line, character),
-                max))
-            .Select(items => JsonSerializer.Serialize(
-                new
-                {
-                    items = items.Select(i => new
+        [Description("Maximum number of completions to return. Default 20.")] int max = 20,
+        CancellationToken cancellationToken = default)
+        => Tool("LspCompletionsForNode", nodeTypePath, cancellationToken,
+            () => WithContext(() => languageService!.GetCompletions(
+                    MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, nodeTypePath)),
+                    MeshOperations.ResolvePath(AgentChatPaths.ResolveContextPath(chat, sourcePath)),
+                    new SourcePosition(line, character),
+                    max))
+                .Select(items => JsonSerializer.Serialize(
+                    new
                     {
-                        label = i.Label,
-                        kind = i.Kind.ToString(),
-                        insertText = i.InsertText,
-                        detail = i.Detail,
-                        sortText = i.SortText,
-                    }).ToArray()
-                },
-                hub.JsonSerializerOptions))
-            .FirstAsync().ToTask();
+                        items = items.Select(i => new
+                        {
+                            label = i.Label,
+                            kind = i.Kind.ToString(),
+                            insertText = i.InsertText,
+                            detail = i.Detail,
+                            sortText = i.SortText,
+                        }).ToArray()
+                    },
+                    hub.JsonSerializerOptions)));
+
+    /// <summary>
+    /// The boundary adapter every LSP tool goes through — <see cref="ToolTask.Bridge{T}"/>, the same
+    /// bridge <see cref="MeshPlugin"/> and the version/skill/collaboration tools use.
+    ///
+    /// <para>🚨 These four were <c>.FirstAsync().ToTask()</c> with no
+    /// <see cref="CancellationToken"/> parameter at all, so nothing could end the wait — and a
+    /// Roslyn compilation over a NodeType's whole source set is one of the longest things an agent
+    /// tool does. A round parked here holds an <c>IoPoolNames.Ai</c> gate permit that
+    /// <c>IoPool.Drain()</c> cannot re-acquire, so teardown proceeds over live code while the
+    /// compilation is still running — and the running compilation is exactly what holds the
+    /// collectible <c>AssemblyLoadContext</c> that teardown is about to unload. Same #1956 defect
+    /// class as the version tools.</para>
+    ///
+    /// <para>A fault or an empty completion answers <c>{ok:false, status:"Unavailable", error}</c>
+    /// for ALL FOUR tools, including hover and completions whose success shape is
+    /// <c>{markdown}</c>/<c>{items}</c>. That is deliberate: <c>Unavailable</c> is the
+    /// <c>NodeDiagnosticsStatus</c> for "the owning hub did not answer", and an explicit failure
+    /// marker is the honest answer. Returning the SUCCESS shape empty — <c>{}</c> for a hover,
+    /// <c>{items:[]}</c> for completions — would say "no symbol here" / "no completions here", which
+    /// is a different fact and a false one, and is the #1592 mistake (<c>ok:true</c> for a check
+    /// that never happened) wearing a different hat.</para>
+    /// </summary>
+    /// <param name="operation">Tool name, for the failure answers.</param>
+    /// <param name="nodeTypePath">The NodeType the call was about, for the failure answers.</param>
+    /// <param name="cancellationToken">The round's token, bound by <c>AIFunctionFactory</c>.</param>
+    /// <param name="work">The reactive operation, already producing the tool's JSON answer.</param>
+    private Task<string> Tool(
+        string operation, string nodeTypePath, CancellationToken cancellationToken, Func<IObservable<string>> work)
+        => ToolTask.Bridge(
+            Observable.Defer(work),
+            cancellationToken,
+            answer => answer,
+            ex => JsonSerializer.Serialize(
+                new { ok = false, status = "Unavailable", error = $"{operation} on '{nodeTypePath}' failed — {ex.Message}", diagnostics = Array.Empty<object>() },
+                hub.JsonSerializerOptions),
+            () => JsonSerializer.Serialize(
+                new { ok = false, status = "Unavailable", error = $"{operation} on '{nodeTypePath}' produced no answer.", diagnostics = Array.Empty<object>() },
+                hub.JsonSerializerOptions));
 
     /// <summary>
     /// AccessContext re-seed on Subscribe — mirrors <see cref="MeshPlugin.WithContext{T}"/>.

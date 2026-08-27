@@ -1,8 +1,8 @@
 using MeshWeaver.Mesh;
 using System.ComponentModel;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.AI.Navigation;
+using MeshWeaver.AI.Plugins;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
@@ -39,8 +39,9 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     /// <returns>A task with the node JSON or a descriptive error string.</returns>
     [Description("Retrieves a node or content from the mesh by path. Paths are relative to current context; use @/ prefix for absolute paths. Supports Unified Path prefixes: content/, data/, schema/, model/, collection/, area/.")]
     public Task<string> Get(
-        [Description("Path to data. Relative: @content/file.docx, @MyChild/*. Absolute: @/OrgA/Doc, @/OrgA/content/file.docx. For spaces: \"@content/My File.docx\"")] string path)
-        => WithContext(() => ops.Get(ResolveContextPath(path))).FirstAsync().ToTask();
+        [Description("Path to data. Relative: @content/file.docx, @MyChild/*. Absolute: @/OrgA/Doc, @/OrgA/content/file.docx. For spaces: \"@content/My File.docx\"")] string path,
+        CancellationToken cancellationToken = default)
+        => Tool("get", path, cancellationToken, () => ops.Get(ResolveContextPath(path)));
 
     /// <summary>MCP/agent tool: searches the mesh with GitHub-style query syntax, scoping to an optional base path.</summary>
     /// <param name="query">The query string (e.g. <c>nodeType:Agent</c>).</param>
@@ -51,24 +52,28 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     public Task<string> Search(
         [Description("Query string (e.g., 'nodeType:Agent', 'path:ACME scope:descendants', 'name:*sales*')")] string query,
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null,
-        [Description("Maximum number of results to return. Default 50, max 200.")] int limit = 50)
-        => WithContext(() => ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null, limit)).FirstAsync().ToTask();
+        [Description("Maximum number of results to return. Default 50, max 200.")] int limit = 50,
+        CancellationToken cancellationToken = default)
+        => Tool("search", query, cancellationToken,
+            () => ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null, limit));
 
     /// <summary>MCP/agent tool: creates a new node in the mesh from a JSON MeshNode.</summary>
     /// <param name="node">The JSON MeshNode (requires id, name, nodeType, namespace).</param>
     /// <returns>A task with <c>"Created: {path}"</c> or a descriptive error string.</returns>
     [Description("Creates a new node in the mesh. ALWAYS set the 'name' property to a human-readable display name.")]
     public Task<string> Create(
-        [Description("JSON MeshNode with required: id, name, nodeType, namespace. Example: {\"id\":\"my-page\",\"namespace\":\"MyOrg\",\"name\":\"My Page\",\"nodeType\":\"Markdown\"}")] string node)
-        => WithContext(() => ops.Create(node)).FirstAsync().ToTask();
+        [Description("JSON MeshNode with required: id, name, nodeType, namespace. Example: {\"id\":\"my-page\",\"namespace\":\"MyOrg\",\"name\":\"My Page\",\"nodeType\":\"Markdown\"}")] string node,
+        CancellationToken cancellationToken = default)
+        => Tool("create", "the supplied node", cancellationToken, () => ops.Create(node));
 
     /// <summary>MCP/agent tool: full-replacement update of existing nodes from a JSON array of complete MeshNodes.</summary>
     /// <param name="nodes">A JSON array of complete MeshNode objects fetched via Get and modified.</param>
     /// <returns>A task with a per-node result/error summary.</returns>
     [Description("Full replacement update of existing nodes. ALWAYS Get the node first, modify the returned object, then send it back here unchanged-except-for-edits. The 'content' field MUST be present and non-null — null content is rejected and the response will include the expected schema. Prefer Patch for small changes.")]
     public Task<string> Update(
-        [Description("JSON array of complete MeshNode objects fetched via Get and then modified")] string nodes)
-        => WithContext(() => ops.Update(nodes)).FirstAsync().ToTask();
+        [Description("JSON array of complete MeshNode objects fetched via Get and then modified")] string nodes,
+        CancellationToken cancellationToken = default)
+        => Tool("update", "the supplied nodes", cancellationToken, () => ops.Update(nodes));
 
     /// <summary>MCP/agent tool: partial update of a single node — only the supplied fields change, with <c>content</c> deep-merged (RFC 7396).</summary>
     /// <param name="path">The path of the node to patch (resolved against context).</param>
@@ -77,8 +82,9 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. 'content' deep-merges (RFC 7396): nested keys you send are updated, omitted keys are kept, a null member deletes that one key — so you can change a single content field without resending the rest. Setting the whole 'content' to null is rejected (with the schema). Prefer this over Update for small edits like icon/name/category.")]
     public Task<string> Patch(
         [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
-        [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}, {\"content\":{\"logo\":\"https://…\"}} (deep-merges into existing content). Never set 'content' to null.")] string fields)
-        => WithContext(() => ops.Patch(ResolveContextPath(path), fields)).FirstAsync().ToTask();
+        [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}, {\"content\":{\"logo\":\"https://…\"}} (deep-merges into existing content). Never set 'content' to null.")] string fields,
+        CancellationToken cancellationToken = default)
+        => Tool("patch", path, cancellationToken, () => ops.Patch(ResolveContextPath(path), fields));
 
     /// <summary>MCP/agent tool: anchored text edit on a node's Markdown body or Code source — replaces an exact snippet.</summary>
     /// <param name="path">The path of the node to edit (resolved against context).</param>
@@ -91,32 +97,37 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Path to the node (e.g., @User/rbuergi/my-doc or @ACME/Story/Source/Story.cs)")] string path,
         [Description("The exact text to replace — copy it verbatim from Get, including whitespace and line breaks. Must match exactly once (or set replaceAll).")] string oldText,
         [Description("The replacement text.")] string newText,
-        [Description("Replace every occurrence instead of requiring a unique match. Default: false.")] bool replaceAll = false)
-        => WithContext(() => ops.EditContent(ResolveContextPath(path), oldText, newText, replaceAll)).FirstAsync().ToTask();
+        [Description("Replace every occurrence instead of requiring a unique match. Default: false.")] bool replaceAll = false,
+        CancellationToken cancellationToken = default)
+        => Tool("edit_content", path, cancellationToken,
+            () => ops.EditContent(ResolveContextPath(path), oldText, newText, replaceAll));
 
     /// <summary>MCP/agent tool: deletes nodes (and their descendants) from the mesh by path.</summary>
     /// <param name="paths">A JSON array of path strings to delete.</param>
     /// <returns>A task with the deletion result or a descriptive error string.</returns>
     [Description("Deletes nodes from the mesh by path. Recursive: deleting a parent removes all descendants — pass the subtree root, no need to enumerate children. This operation can be BLOCKED by permissions: the current identity often holds no Delete on shared or system-synced spaces, and a refusal is not an error to retry. The result then names the refused path with its Delete page link (/{path}/Delete) — present that URL to the user so they review and confirm the deletion under their OWN identity in the GUI. A whole SET of nodes can be offered the same way via /{anchorPath}/Delete?q=<url-encoded mesh query> (multiple queries newline-separated inside the one encoded parameter).")]
     public Task<string> Delete(
-        [Description("JSON array of path strings to delete")] string paths)
-        => WithContext(() => ops.Delete(paths)).FirstAsync().ToTask();
+        [Description("JSON array of path strings to delete")] string paths,
+        CancellationToken cancellationToken = default)
+        => Tool("delete", paths, cancellationToken, () => ops.Delete(paths));
 
     /// <summary>MCP/agent tool: returns compilation diagnostics (Ok/Error/Unknown) for a NodeType or an instance of one.</summary>
     /// <param name="path">The path of a NodeType, or of any instance of one.</param>
     /// <returns>A task with the diagnostics JSON (status and any error message).</returns>
     [Description("Returns compilation diagnostics for a NodeType or an instance of one. Status is 'Ok' when the type compiled cleanly, 'Error' with a detailed message when it failed, or 'Unknown' when no compile has happened yet. Use this after creating/updating a NodeType to verify it actually compiles — a NodeType that doesn't compile is not 'done'.")]
     public Task<string> GetDiagnostics(
-        [Description("Path to a NodeType (e.g., @Systemorph/SocialMedia/Profile) or to any instance of one")] string path)
-        => WithContext(() => ops.GetDiagnostics(ResolveContextPath(path))).FirstAsync().ToTask();
+        [Description("Path to a NodeType (e.g., @Systemorph/SocialMedia/Profile) or to any instance of one")] string path,
+        CancellationToken cancellationToken = default)
+        => Tool("get_diagnostics", path, cancellationToken, () => ops.GetDiagnostics(ResolveContextPath(path)));
 
     /// <summary>MCP/agent tool: disposes the hub at a path so it re-initialises fresh on next access — used after fixing a broken NodeType or a stuck grain.</summary>
     /// <param name="path">The path whose hub should be recycled (NodeType path for the whole type, or an instance path).</param>
     /// <returns>A task with <c>{status:'Recycled', path}</c> or a descriptive error string.</returns>
     [Description("Recycles the hub at the given path by posting DisposeRequest. Forces a fresh hub initialization on the next access — use this after fixing a broken NodeType, after editing the `sources` list, or whenever a grain is stuck. Returns {status:'Recycled', path}. Wait ~100ms before the next access so the grain teardown completes.")]
     public Task<string> Recycle(
-        [Description("Path to the node (e.g., @Systemorph/SocialMedia/Profile). Use the NodeType path to recycle the whole type; use an instance path to recycle just that instance's hub.")] string path)
-        => WithContext(() => ops.Recycle(ResolveContextPath(path))).FirstAsync().ToTask();
+        [Description("Path to the node (e.g., @Systemorph/SocialMedia/Profile). Use the NodeType path to recycle the whole type; use an instance path to recycle just that instance's hub.")] string path,
+        CancellationToken cancellationToken = default)
+        => Tool("recycle", path, cancellationToken, () => ops.Recycle(ResolveContextPath(path)));
 
     /// <summary>MCP/agent tool: moves a node and its descendants to a new path.</summary>
     /// <param name="sourcePath">The current full path of the node.</param>
@@ -125,8 +136,10 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     [Description("Moves a node and its descendants to a new path. Equivalent to the Move menu item. Requires Delete on the source namespace and Create on the target. Source and target are full paths (namespace + id), e.g. 'OrgA/Child' -> 'OrgB/Child'.")]
     public Task<string> Move(
         [Description("Current path of the node (e.g., @OrgA/Child)")] string sourcePath,
-        [Description("New path for the node (e.g., @OrgB/Child)")] string targetPath)
-        => WithContext(() => ops.Move(ResolveContextPath(sourcePath), ResolveContextPath(targetPath))).FirstAsync().ToTask();
+        [Description("New path for the node (e.g., @OrgB/Child)")] string targetPath,
+        CancellationToken cancellationToken = default)
+        => Tool("move", sourcePath, cancellationToken,
+            () => ops.Move(ResolveContextPath(sourcePath), ResolveContextPath(targetPath)));
 
     /// <summary>MCP/agent tool: copies a node and all its descendants under a target namespace, preserving source ids.</summary>
     /// <param name="sourcePath">The current path of the node to copy.</param>
@@ -137,14 +150,16 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     public Task<string> Copy(
         [Description("Current path of the node to copy (e.g., @OrgA/Child)")] string sourcePath,
         [Description("Target namespace to copy under (e.g., @OrgB)")] string targetNamespace,
-        [Description("Overwrite existing nodes at the target. Default: false (skip if any target path already exists).")] bool force = false)
-        => WithContext(() => ops.Copy(ResolveContextPath(sourcePath), ResolveContextPath(targetNamespace), force)).FirstAsync().ToTask();
+        [Description("Overwrite existing nodes at the target. Default: false (skip if any target path already exists).")] bool force = false,
+        CancellationToken cancellationToken = default)
+        => Tool("copy", sourcePath, cancellationToken,
+            () => ops.Copy(ResolveContextPath(sourcePath), ResolveContextPath(targetNamespace), force));
 
     // MCP adapter helper: re-seeds the user's AccessContext on Subscribe, then runs the
     // observable. AsyncLocal doesn't flow reliably through the AI framework's streaming +
     // tool invocation pipeline, so each plugin entry point must explicitly re-seed before
-    // hitting hub-backed ops. Defer ensures the seed runs on Subscribe (same call as ToTask),
-    // keeping each public method a strict one-line MCP adapter per AsynchronousCalls.md.
+    // hitting hub-backed ops. Defer ensures the seed runs on Subscribe (which ToolTask.Bridge
+    // performs), keeping each public method a strict one-line MCP adapter per AsynchronousCalls.md.
     //
     // CAPTURE THE EFFECTIVE IDENTITY SYNCHRONOUSLY, on the calling thread, where it is reliable:
     // the agent's execution context wins; else the request-scoped Context an active delivery set;
@@ -153,6 +168,41 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     // ambient AsyncLocal can be lost past a thread hop for one operation, so its hub-post stamps an
     // empty AccessContext → "Access denied". Capturing once, here, and re-seeding the request-scoped
     // Context on Subscribe makes every operation carry the caller's identity regardless of flow.
+    /// <summary>
+    /// The ONE boundary adapter every mesh tool goes through: re-seed the caller's identity, then
+    /// hand the reactive operation to <see cref="ToolTask.Bridge{T}"/>.
+    ///
+    /// <para>🚨 <b>Why not <c>.FirstAsync().ToTask()</c>, which is what all thirteen of these used
+    /// to be.</b> That bridge takes no <see cref="CancellationToken"/>, and none of these tools
+    /// declared one — so the returned <c>Task</c> could not be cancelled by anything. The whole
+    /// round runs as a leaf on the bounded <c>IoPoolNames.Ai</c> pool and holds one gate permit for
+    /// its entire duration; <c>IoPool.Drain()</c> — the join every teardown performs before
+    /// disposing the service scope and unloading collectible node ALCs — cancels the pool token and
+    /// re-acquires every permit. A round parked in <c>get</c> or <c>search</c> against a hub that
+    /// never answers therefore held its permit through the full drain budget and teardown proceeded
+    /// over live code, and the Stop button did nothing. This is the #1956 defect class, fixed for
+    /// <c>VersionPlugin</c>/<c>SkillTool</c>/<c>PlanStorageTool</c>/<c>CollaborationPlugin</c> and
+    /// left standing here; <see cref="ToolTask.Bridge{T}"/> is the shared cure.</para>
+    ///
+    /// <para>It also supplies the two terminals the old bridge got wrong: an EMPTY completion
+    /// (which <c>FirstAsync</c> turned into an <c>InvalidOperationException</c> about a sequence
+    /// containing no elements — a stack trace where the model needed an answer) and a fault, both
+    /// formatted as the <c>"Error: …"</c> string the rest of this surface already speaks. Callers
+    /// like <c>AgentChatClient.LoadToolDocumentationAsync</c> already branch on that prefix.</para>
+    /// </summary>
+    /// <param name="operation">Tool name, for the failure answers.</param>
+    /// <param name="subject">What the call was about (a path or query), for the failure answers.</param>
+    /// <param name="cancellationToken">The round's token, bound by <c>AIFunctionFactory</c>.</param>
+    /// <param name="work">The reactive operation. Runs under the caller's re-seeded identity.</param>
+    private Task<string> Tool(
+        string operation, string subject, CancellationToken cancellationToken, Func<IObservable<string>> work)
+        => ToolTask.Bridge(
+            WithContext(work),
+            cancellationToken,
+            answer => answer,
+            ex => $"Error: {operation} on '{subject}' failed — {ex.Message}",
+            () => $"Error: {operation} on '{subject}' produced no answer.");
+
     private IObservable<T> WithContext<T>(Func<IObservable<T>> work)
     {
         var captured = chat.ExecutionContext?.UserAccessContext
@@ -176,13 +226,13 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     /// <returns>A task with an honest confirmation of where it navigated, or that nothing matched.</returns>
     [Description("Takes the user to a node, doc, or page in the UI. Resilient (resolves the best match even when the path is imperfect) and honest (NEVER claims to open a place that doesn't exist — if nothing matches it says so and lists the closest candidates). Pass a path (@/Doc/AI/ModelProviderSettings) or plain words describing where to go (\"model settings\").")]
     public Task<string> NavigateTo(
-        [Description("A path (@/Doc/AI/ModelProviderSettings), or what the user is looking for in words.")] string path)
+        [Description("A path (@/Doc/AI/ModelProviderSettings), or what the user is looking for in words.")] string path,
+        CancellationToken cancellationToken = default)
     {
         logger.LogInformation("NavigateTo called with path={Path}", path);
-        return WithContext(() =>
-            new NavigationResolver(hub).Resolve(path, chat.Context?.Context)
-                .Select(resolution => NavigateToResult(path, resolution)))
-            .FirstAsync().ToTask();
+        return Tool("navigate_to", path, cancellationToken,
+            () => new NavigationResolver(hub).Resolve(path, chat.Context?.Context)
+                .Select(resolution => NavigateToResult(path, resolution)));
     }
 
     // Renders the resolved target inline and returns an honest result string. A page ROUTE can't render as
@@ -213,7 +263,8 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     [Description("Runs xUnit tests via `dotnet test` on the given test project path (repo-relative, e.g. 'test/MeshWeaver.Acme.Test'). Optional filter uses the xunit `--filter` syntax: 'FullyQualifiedName~TodoViewsTest' to narrow by class, or '...Test.MethodName' for a single method. Returns the condensed test runner output (stdout + pass/fail summary). Dev-only — intended for the Monolith portal, not production.")]
     public Task<string> RunTests(
         [Description("Repo-relative path to the test project or its directory (e.g. 'test/MeshWeaver.Acme.Test')")] string projectPath,
-        [Description("Optional xunit filter expression (e.g. 'FullyQualifiedName~TodoViewsTest')")] string? filter = null)
+        [Description("Optional xunit filter expression (e.g. 'FullyQualifiedName~TodoViewsTest')")] string? filter = null,
+        CancellationToken cancellationToken = default)
     {
         logger.LogInformation("RunTests called project={Project} filter={Filter}", projectPath, filter ?? "<none>");
 
@@ -236,14 +287,22 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 
         // Route the thread-holding `dotnet test` wait onto the bounded Process pool
         // (off the hub/grain scheduler). InvokeBlocking dispatches on the pool's
-        // LimitedConcurrencyLevelTaskScheduler; the .ToTask() at the MCP/AI-tool
-        // boundary is the only Task bridge (the AIFunctionFactory surface requires
-        // a Task<string>). Behavior is identical to the previous inline await.
-        return _processPool
-            .InvokeBlocking(ct => RunTestsCore(repoRoot, projectPath, filter, args, ct))
-            .FirstAsync()
-            .ToTask();
+        // LimitedConcurrencyLevelTaskScheduler; ToolTask.Bridge is the only Task
+        // bridge (the AIFunctionFactory surface requires a Task<string>), and it is
+        // what makes a five-minute test run observe the round's cancellation.
+        return ToolTask.Bridge(
+            _processPool.InvokeBlocking(ct => RunTestsCore(repoRoot, projectPath, filter, args, ct)),
+            cancellationToken,
+            answer => answer,
+            // Serialized, not interpolated: an exception message is arbitrary text and a single
+            // quote or backslash in it would emit invalid JSON to a tool whose contract is a JSON
+            // object. (The hand-written literals above are constant or a repo-relative path.)
+            ex => RunTestsError(ex.Message),
+            () => RunTestsError("The test runner produced no result."));
     }
+
+    private static string RunTestsError(string message) =>
+        System.Text.Json.JsonSerializer.Serialize(new { status = "Error", message });
 
     private static string RunTestsCore(
         string repoRoot, string projectPath, string? filter,

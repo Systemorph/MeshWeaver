@@ -2066,62 +2066,6 @@ public class AgentChatClient : IAgentChat
     }
 
     /// <summary>
-    /// Creates ChatClientAgent instances for all loaded configurations.
-    /// </summary>
-    [Obsolete("Use CreateAgentsSync — CreateAgentsAsync deadlocks in Orleans")]
-    private async Task CreateAgentsAsync()
-    {
-        if (chatClientFactories.Count == 0)
-        {
-            logger.LogWarning("[AgentChatClient] No IChatClientFactory available, cannot create agents");
-            return;
-        }
-
-        if (agentsInitialized)
-            return;
-
-        // Select the appropriate factory based on the requested model
-        var factory = GetFactoryForModel(currentModelName);
-        if (factory == null)
-        {
-            logger.LogWarning("[AgentChatClient] No factory can serve model: {ModelName}", currentModelName);
-            throw new ArgumentException($"No factory can serve model: {currentModelName}");
-        }
-
-        isPersistentFactory = factory.IsPersistent;
-        logger.LogDebug("[AgentChatClient] Using factory {FactoryName} for model {ModelName} (persistent={IsPersistent})",
-            factory.Name, currentModelName ?? "default", isPersistentFactory);
-
-        var configs = loadedAgents.Select(a => a.AgentConfiguration).ToImmutableList();
-        var createdAgents = ImmutableDictionary<string, ChatClientAgent>.Empty;
-
-        // Order agents: non-delegating first, delegating second, default last
-        var orderedConfigs = OrderAgentsForCreation(configs);
-
-        // First pass: Create all agents in order
-        foreach (var agentConfig in orderedConfigs)
-        {
-            var agent = await factory.CreateAgentAsync(
-                agentConfig, this, createdAgents, configs, currentModelName);
-            createdAgents = createdAgents.SetItem(agentConfig.Id, agent);
-            agents = agents.SetItem(agentConfig.Id, agent);
-        }
-
-        // Second pass: Update agents with cyclic dependencies
-        var cyclicAgents = FindCyclicDelegations(configs);
-        foreach (var agentConfig in cyclicAgents)
-        {
-            var updatedAgent = await factory.CreateAgentAsync(
-                agentConfig, this, createdAgents, configs, currentModelName);
-            createdAgents = createdAgents.SetItem(agentConfig.Id, updatedAgent);
-            agents = agents.SetItem(agentConfig.Id, updatedAgent);
-        }
-
-        agentsInitialized = true;
-        logger.LogDebug("[AgentChatClient] Created {Count} agents", agents.Count);
-    }
-
-    /// <summary>
     /// Resolves <see cref="currentModelName"/> to a model that can actually serve this round. Two
     /// cases land here, and they are NOT the same thing:
     ///
