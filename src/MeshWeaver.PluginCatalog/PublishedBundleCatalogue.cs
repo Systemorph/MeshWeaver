@@ -43,6 +43,11 @@ public static class PublishedBundleCatalogue
     /// </summary>
     public const string ReleaseMarkerDirectoryName = "_releases";
 
+    /// <summary>The configuration key naming the published bundle root — forwarded from
+    /// <see cref="ShippedPrebuiltBundles.PublishedRootConfigKey"/> so a consumer in the portal
+    /// layer can address the same directory without referencing the hosting assembly.</summary>
+    public const string PublishedRootConfigKey = ShippedPrebuiltBundles.PublishedRootConfigKey;
+
     /// <summary>
     /// Reads the catalogue for one target release. Synchronous and total — every failure becomes a
     /// <see cref="ReleaseArtifacts.Unreadable"/> observation rather than an exception, because the
