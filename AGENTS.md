@@ -159,6 +159,15 @@ When CI fails, **DO NOT run entire test projects** — iterate one test at a tim
 3. `dotnet test <project> --filter "FullyQualifiedName~<TestName>" --no-build`
 4. **No skipping** — CI-only failures catch real timing/state bugs
 
+🚨 **Read the run's evidence before reasoning about it.** The shard artifact carries three things and
+they answer different questions: the per-project `.trx` (output lives in `<Output><TextMessages>`,
+**not** `<StdOut>` — the native xUnit v3 writer does not use `StdOut`, so finding it empty says
+nothing); `collected-logs/_meshweaver-test-trace.log`, the ONLY log that survives a host killed at
+the wall-clock cap, carrying `TEST_START`/`TEST_END` window markers and `[FAULT]` records with
+stacks, joinable by `pid=` and timestamp; and the classified `[CI] <name> exit=<n>` markers. A host
+that CRASHED is written into the trx as a `<project>.HOST_CRASHED` failure, so no summary can report
+a pass over a dead process. Full map: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md) → "Reading a CI Failure".
+
 Full guidance: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md) · [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) · [TestStateIsolation.md](src/MeshWeaver.Documentation/Data/Architecture/TestStateIsolation.md)
 
 ## GitHub PR Operations
