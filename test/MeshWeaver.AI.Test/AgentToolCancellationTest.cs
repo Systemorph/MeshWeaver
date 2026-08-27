@@ -164,6 +164,7 @@ public class AgentToolCancellationTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 60_000)]
     public async Task GetVersions_ParkedOnAStalledStore_UnwindsWhenTheRoundIsCancelled()
     {
+        var ct = TestContext.Current.CancellationToken;
         var before = VersionStore.Disposals;
         var subscribedBefore = VersionStore.Subscriptions;
         var plugin = new VersionPlugin(Mesh);
@@ -175,6 +176,28 @@ public class AgentToolCancellationTest(ITestOutputHelper output) : MonolithMeshT
         await AssertParkedThenCancellable(call, round,
             "a round parked in get_versions holds an Ai-pool gate permit that IoPool.Drain() cannot "
             + "re-acquire, so teardown proceeds over live code", subscribedBefore);
+
+        // 🚨 WAIT for the disposal; do not read the counter and hope (#2346).
+        //
+        // The disposal is ASYNCHRONOUS by construction and no ordering trick in the bridge can make
+        // it otherwise: every one of these tools ends its pipeline with
+        // `.SubscribeOn(TaskPoolScheduler.Default)`, and Rx's SubscribeOn runs the sequence's
+        // *unsubscription* logic on that scheduler as well as its subscription. So the bridge's
+        // `pending.Dispose()` returns as soon as the unsubscribe is SCHEDULED, and the inner
+        // subscription to the parking store is torn down on a pool thread some time after the
+        // caller's task has already thrown.
+        //
+        // Reading `Disposals` the instant the task threw therefore asserted a synchronicity the
+        // code does not provide: locally the pool thread always won, on a loaded runner it did not,
+        // and the failure — "Expected 1 to be greater than 1" in 0.7 s — reads as a flake on
+        // whatever branch happens to be in CI. The contract is "cancelling disposes the read", and
+        // the way to observe an asynchronous fact is to wait for it, bounded, so a genuine
+        // regression (a disposal that never comes) still fails loudly rather than hanging.
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Where(_ => VersionStore.Disposals > before)
+            .FirstAsync()
+            .Timeout(20.Seconds())
+            .ToTask(ct);
 
         VersionStore.Disposals.Should().BeGreaterThan(before,
             "cancelling must dispose the version read — otherwise the storage work runs on unobserved");
