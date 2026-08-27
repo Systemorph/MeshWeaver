@@ -65,7 +65,9 @@ public class DisposalWaitBridgeTest
     public async Task ObserveCompletion_NeverResumesItsCallerOnTheSignallingThread()
     {
         var signal = new Subject<Unit>();
-        var wait = signal.ObserveCompletion(_ => { });
+        // Never an empty reporter — ObserveCompletion's own contract forbids it, and a test that
+        // ignored a fault here would be measuring the wrong thing.
+        var wait = signal.ObserveCompletion(ex => Assert.Fail($"unexpected late fault: {ex}"));
 
         var signallingThread = Environment.CurrentManagedThreadId;
         var insideOnNext = new Flag();
