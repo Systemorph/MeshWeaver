@@ -46,7 +46,7 @@ public class DisposalPendingSaveFlushTest(ITestOutputHelper output) : MonolithMe
 
         // Activate the per-node hub (lazy) and grab its workspace — same shape as
         // WorkspaceUpdateMeshNodePropagationTest.
-        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+        await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
             .Should().Emit();
         var nodeHub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
         nodeHub.Should().NotBeNull("the per-node hub must be activated by the GetDataRequest above");

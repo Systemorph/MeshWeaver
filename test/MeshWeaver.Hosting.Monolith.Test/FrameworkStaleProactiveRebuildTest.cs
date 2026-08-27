@@ -175,7 +175,7 @@ public class FrameworkStaleProactiveRebuildTest(ITestOutputHelper output) : Mono
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
         }).Should().Emit();
 
-        await Mesh.Observe(new GetCompilationPathRequest(), o => o.WithTarget(new Address(nodeTypePath)))
+        await RequestHub.Observe(new GetCompilationPathRequest(), o => o.WithTarget(new Address(nodeTypePath)))
             .Should().Within(90.Seconds()).Emit();
         var okNode = await Mesh.GetWorkspace().GetMeshNodeStream(nodeTypePath)
             .Should().Within(60.Seconds())

@@ -45,7 +45,7 @@ public class OwnerDisposalNackTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // Warm the per-node hub and wait until the CREATE is durable, so the owner's
         // data-source streams are fully initialized before the gate goes in.
-        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+        await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
             .Should().Emit();
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
@@ -84,11 +84,11 @@ public class OwnerDisposalNackTest(ITestOutputHelper output) : MonolithMeshTestB
                 ?? nameof(MeshNode.Name);
             var patchJson = new System.Text.Json.Nodes.JsonObject { [nameKey] = "never-applied" }
                 .ToJsonString(Mesh.JsonSerializerOptions);
-            var respTask = Mesh.Observe(
+            var respTask = RequestHub.Observe(
                     new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson)),
                     o => o.WithTarget(new Address(path)))
                 .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
-            await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
+            await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
                 .Should().Within(10.Seconds()).Emit();
 
             nodeHub!.Dispose();

@@ -1,0 +1,41 @@
+# RouterRequestOriginSites.allow — the router-as-request-origin ratchet (#2423).
+#
+# Each line is a test file that still issues a request/response exchange FROM the root mesh hub:
+#
+#     Mesh.Observe(request, o => o.WithTarget(...))     Mesh.Observe<TResponse>(...)
+#
+# `Mesh` resolves the ROOT mesh/{id} hub — the mesh's ROUTER. A request posted there leaves stamped
+# `Sender = mesh/{id}` and its response is addressed straight back at `mesh/{id}`, so
+# RouterTrafficRule.RoleOf reports BOTH ends and the class logs two [Error] lines. Errors that
+# everyone learns to ignore are how a real router-starvation report gets missed.
+#
+# The fix at a site is MonolithMeshTestBase.RequestHub — one client hub per test method — and, for
+# node CRUD, MonolithMeshTestBase.ObserveNodeOperation, which additionally aims the request at
+# NodeOperationTarget(): the production seam MeshService uses and NodeOperationOriginTest pins.
+#
+# THE FOUR ENTRIES BELOW ARE NOT DEBT. In each of them the ROUTER IS THE SUBJECT of the test, so
+# the ROUTER_TRAFFIC line it emits reports exactly what the test intends. Each site carries a 🚨
+# comment saying so. Do not "fix" them; do not add a fifth line to make a new site pass.
+#
+# Format: relative/path.cs<TAB>count   ('#' starts a comment)
+
+# The detector's own test. TheMeshHubAsSender_IsStillReported PRODUCES the shape on purpose and
+# asserts ROUTER_TRAFFIC fires with role "sender" — migrating it would delete the coverage that
+# stops a future narrowing of RouterTrafficRule from silently switching the detector off.
+test/MeshWeaver.Messaging.Hub.Test/RouterTrafficDetectorTest.cs	1
+
+# The mesh hub's OWN drain is what is asserted: a poison StreamMessage is posted to the mesh, and
+# the Pings before and after must be answered BY the mesh hub. Retargeting them at a client hub
+# would stop testing the thing that wedged (RouteStreamMessage's non-terminating parent walk).
+test/MeshWeaver.Data.Test/StreamRouteSelfParentTerminationTest.cs	2
+
+# The leak being pinned is literally `CreateNodeRequest@mesh/<self>` (#981): a self-targeted create
+# on the ROUTER whose reply the router's own HandleCallbacks drops for want of a registered subject.
+# Change either end and the test no longer reproduces the shape it exists to pin.
+test/MeshWeaver.Hosting.Monolith.Test/UpsertInnerCreateObservationTest.cs	2
+
+# The interleaving under test is an ORDERING on the router's action block: a stalling handler owns
+# it, the probe must land in that queue, and only then may Dispose()'s ShutdownRequest queue behind
+# it. From a client hub the enqueue becomes a routed hop, so Dispose() could beat the probe in and
+# the reject would come from a different branch — a flake, not a stricter test.
+test/MeshWeaver.Hosting.Monolith.Test/ShutdownRoutingRejectClassificationTest.cs	1

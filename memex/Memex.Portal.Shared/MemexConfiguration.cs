@@ -7,21 +7,17 @@ using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.Hosting.AspNetCore.Portal;
-using MeshWeaver.Hosting.Grpc;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Documentation;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.PluginCatalog;
-using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Hosting.Security;
-using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
@@ -407,9 +403,10 @@ public static class MemexConfiguration
                 // Register GitHub-sync content types (GitHubCredential / GitHubSyncConfig)
                 // on the mesh + per-node hubs so their config nodes (de)serialize.
                 .AddGitHubSyncTypes()
-                // Register the instance-sync content type ({space}/_Sync/{sourceId} config
-                // nodes) on the mesh + per-node hubs so they (de)serialize.
-                .AddInstanceSyncTypes()
+                // The instance-sync content type ({space}/_Sync/{sourceId}) and the SignalR
+                // mesh-transport services are registered by the portal composition in
+                // MeshWeaver.Plugins (ConfigureMemexPortal) — host business, composed where the
+                // hosts live.
                 // Register the OAuthCode NodeType + AuthorizationCode content type so the
                 // MCP OAuth server (OAuthCodeStore) can persist pending authorization codes
                 // as Admin/OAuthCode/{hashPrefix} mesh nodes — the replica-safe store every
@@ -647,7 +644,7 @@ public static class MemexConfiguration
                         // browser edit would be reverted by the next helm upgrade.
                         .AddCompositionAdminSettingsTab()
                         // Instance Sync lives in the "Synchronizations" NODE-menu item (not a
-                        // settings tab) — wired via AddInstanceSyncTypes on the mesh builder.
+                        // settings tab) — composed by the portal composition in MeshWeaver.Plugins (ConfigureMemexPortal → AddInstanceSyncTypes).
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
                         .AddWorkingTreeTab()
                         // Git history tab — read-only git browser (commit log + changes + diffs) over the same working tree.
@@ -656,8 +653,6 @@ public static class MemexConfiguration
                     // (PostgresContentIndexingModuleAttribute's default-node-hub hook) — it
                     // appears exactly when the deployment lists the pipeline.
                 })
-                // SignalR mesh transport — external participants (native clients) join over a WebSocket.
-                .AddSignalRHub()
                 // MemexClient node type — per-installation client config under {user}/Client/{id}.
                 .AddMemexClientType()
                 // Platform self-update: the Admin/UpdatePolicy node + the poller that watches ACR and

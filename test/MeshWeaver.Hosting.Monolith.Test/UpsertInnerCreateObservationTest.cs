@@ -70,6 +70,11 @@ public class UpsertInnerCreateObservationTest(ITestOutputHelper output) : Monoli
     public async Task SelfTargetedCreate_OnTheMeshHub_DropsItsReply_WhenTheSubjectIsRegisteredAfterPost()
     {
         // ARM 1 — the #981 shape: post first, register the callback afterwards.
+        // 🚨 Everything in this test posts on `Mesh` targeted at `Mesh.Address` DELIBERATELY — do
+        // NOT move it to RequestHub (#2423). The leak being pinned is literally
+        // `CreateNodeRequest@mesh/<self>`: a self-targeted create on the ROUTER, whose reply the
+        // router's own HandleCallbacks drops. Change either end and the test stops reproducing the
+        // shape it exists to pin, so the ROUTER_TRAFFIC line it emits is the subject, not noise.
         var doomedId = $"upsert-race-doomed-{Guid.NewGuid():N}";
         var doomedPath = $"{TestPartition}/{doomedId}";
         var doomed = Mesh.Post(
@@ -121,8 +126,7 @@ public class UpsertInnerCreateObservationTest(ITestOutputHelper output) : Monoli
         var id = $"upsert-answers-{Guid.NewGuid():N}";
         var node = new MeshNode(id, TestPartition) { Name = id, NodeType = "Markdown" };
 
-        var response = await Mesh
-            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+        var response = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(node))
             .Should().Within(30.Seconds()).Emit(
                 "the upsert's inner CreateNodeRequest must never lose its reply");
 

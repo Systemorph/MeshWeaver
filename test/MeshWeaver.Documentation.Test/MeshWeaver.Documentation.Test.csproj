@@ -11,6 +11,11 @@
          READ it (the _complete sentinel, the _releases marker directory), so the guard has to see
          the reader's own constants rather than restate them. -->
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
+    <!-- ReleaseDeliveryChainGuard pins the release-broadcast chain's CONFIGURATION KEYS against the
+         constants that read them (FrameworkBroadcastOptions.SubscribersEnvKeyPrefix), for the same
+         reason as above: a guard that restates a key instead of referencing it goes green through
+         the rename it exists to catch. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
   </ItemGroup>
 
 </Project>

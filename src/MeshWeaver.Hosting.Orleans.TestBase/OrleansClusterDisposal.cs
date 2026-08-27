@@ -8,7 +8,7 @@ using Orleans.TestingHost;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// Drains Orleans <see cref="TestCluster"/> disposals on the <see cref="IIoPool"/> instead of
+/// Drains Orleans <c>TestCluster</c> disposals on the <see cref="IIoPool"/> instead of
 /// awaiting them inline at per-class teardown.
 ///
 /// <para><b>Why.</b> Awaiting <c>Cluster.DisposeAsync()</c> on the xUnit teardown thread
@@ -129,7 +129,7 @@ internal static class OrleansClusterDisposal
     ///
     /// <para>🚨 The registry is handed an <see cref="AsyncSubject{T}"/> — a signal that references
     /// NOTHING — and the entry is removed the instant the drain settles, so the only thing holding
-    /// the <see cref="TestCluster"/> graph is the live subscription, which Rx releases on
+    /// the <c>TestCluster</c> graph is the live subscription, which Rx releases on
     /// termination. A cluster therefore becomes collectable the moment its own disposal finishes,
     /// which is what "dispose in the background" was always supposed to mean. Storing the drain
     /// (as a connected <c>Replay</c>) instead rooted every silo for the life of the process — see
