@@ -52,6 +52,28 @@ public record MeshBuilder
     public IConfiguration? Configuration { get; private set; }
 
     /// <summary>
+    /// Whether this instance has NO storage yet and is awaiting the setup wizard (#2550).
+    ///
+    /// <para>🚨 A host that reads this true must serve the SETUP surface and nothing else. It must
+    /// not invent a storage backend to get going: a guessed backend writes real data somewhere
+    /// nobody chose — typically the container's ephemeral working directory, which reads back fine
+    /// for minutes and is gone at the next roll (issue #435's shape). Awaiting setup is a state to
+    /// SERVE, not a gap to paper over.</para>
+    ///
+    /// <para>False for every deployment configured through appsettings, which is all of them until
+    /// an operator installs an empty image on purpose.</para>
+    /// </summary>
+    public bool IsAwaitingSetup { get; private set; }
+
+    /// <summary>Records that this instance has no storage configured and no completed setup
+    /// manifest. One-way: nothing clears it, because the cure is a restart with an answer.</summary>
+    public MeshBuilder MarkAwaitingSetup()
+    {
+        IsAwaitingSetup = true;
+        return this;
+    }
+
+    /// <summary>
     /// Supplies the deployment configuration that <see cref="Configuration"/> exposes to
     /// attribute-carried module contributions. Called for you by
     /// <c>MeshBuilderModuleActivation.InstallConfiguredModules</c>, which already holds it;
