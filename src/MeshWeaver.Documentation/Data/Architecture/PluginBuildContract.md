@@ -162,12 +162,24 @@ Step 2 says *served by MeshWeaver*, and that is the half still missing.
   (`memex.meshweaver.cloud`). That works.
 - **NodeType assemblies** — the Roslyn output of in-mesh `Source/` — are a *different artifact*, baked
   to the portals' storage as `prebuilt-bundles/<identity>/<source>/*.zip`, sealed with `_complete`.
-- **No plugin repo fetches either one.** Core #805 removed the Settings ▸ Plugin Catalog tab and with
-  it the only consumer of the HTTP registry wire format, leaving `GitPackageSource` (a local git
-  tree) as the surviving credential-free surface.
+- **No plugin repo fetches either one.** The consumer code exists — `RegistryPackageSource` and
+  `PluginBundleClient` in `MeshWeaver.PluginCatalog` speak `/api/plugins/bundles` — but nothing in
+  a plugin repo's CI calls it: the gates read `GitPackageSource`, a local git tree, and the e2e
+  meshes fuse checkouts into one. (An earlier draft of this page attributed the gap to core #805
+  removing the catalog UI; #805 is about space write access, and the consumer was never removed.
+  The gap is that it is not *wired*, which is a smaller and more fixable claim.)
 
-So today the artifacts exist, the identities match, and there is no path by which a plugin repo's
-step 2 can *fetch* rather than *rebuild*.
+So today the artifacts exist, the identities match, the consumer exists, and no plugin repo's step
+2 is wired to *fetch* rather than *rebuild*.
+
+🚨 **And the gate cannot fetch on a pull request until a credential exists for it.** The OIDC
+identity that reads the portals' storage (`github-actions-bake`) holds one federated credential
+per satellite, every one scoped to `ref:refs/heads/main` — correct for publish-bake, which runs on
+main. A gate on a PR presents the subject `repo:Systemorph@<org>/<Repo>@<id>:pull_request`, and
+Entra answers `AADSTS700213: No matching federated identity record`. Measured 2026-08-27 on the
+first PR to wire `upstream-seed`. The fix is a credential per repo for the `pull_request` subject
+(both subject formats, as the existing `main` pair) — a system change that belongs to a
+maintainer, not to a workflow edit.
 
 **The target:** a plugin's build is published to MeshWeaver, and every consumer — another plugin
 repo's gate, a disposable e2e mesh, a production portal — **installs it as a plugin at image boot**,
