@@ -34,4 +34,3 @@ MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.SharedOrlean
 MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.SharedSiloConfigurator  #2501 — test machinery, no module binds it
 MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.TestClientConfigurator  #2501 — test machinery, no module binds it
 MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.TestSiloConfigurator  #2501 — test machinery, no module binds it
-MeshWeaver.Hosting.Orleans.TestBase:MeshWeaver.Hosting.Orleans.Test.TwoSiloCacheUpdateFixture  #2501 — test machinery, no module binds it
