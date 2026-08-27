@@ -187,6 +187,67 @@ the same way any other plugin arrives. Not staged as source. Not recompiled.
 
 ---
 
+## The build principal — the credential lives in the mesh, not in a cloud tenant
+
+Step 2 needs a credential: something has to prove *this build may fetch that publication*. Today
+that proof lives in the wrong place, and the first attempt to wire `upstream-seed` showed exactly
+how: the publications sit on Azure Files, the only thing that can read them is an Azure OIDC
+identity, and that identity's federated credentials are maintained in the Entra tenant — four of
+them, all scoped to `ref:refs/heads/main`, none for `pull_request`, so the gate cannot fetch on the
+one event it exists for. Nothing in the mesh knows those credentials exist, which repos hold one,
+or who authorised them. That is the shape of the plaintext-provider-key incident: a security fact
+with no record a reader can point at.
+
+**The concept: a BUILD PRINCIPAL.** GitHub has one — the identity a workflow runs as, with its own
+token and its own permissions. MeshWeaver gets the same thing, as a mesh-native identity:
+
+- **It is a key lane.** The registry already has four — `mwr_` registration, `mwi_` instance,
+  `mwa_` sync-access, `mw_` API — each minted once, stored only as a SHA-256, resolved fail-closed by
+  `InstanceRegistryAuthenticator` (a read failure is a 401, never an allow), indexed by a 12-char
+  hash prefix under `MeshWeaverInstance/_Index/`. A build principal is the fifth lane: `mwb_`.
+- **It is the identity that runs the build queue.** The module-pack lane *already* POSTs to
+  `/api/plugins/bundles` with a registry-issued Bearer token (`PLUGIN_REGISTRY_PUBLISH_TOKEN`), held
+  in the repo's GitHub secrets. That token IS a build principal in all but name; today it has one
+  permission (publish) and no record naming it. The build principal is that token, given a node,
+  a scope, and a second permission.
+- **Its scopes are the two halves of step 2 and step 3:** `publish:<source>` (what this repo may
+  bake INTO the registry) and `fetch:<source>` (what it may install FROM it). A satellite's
+  principal holds `publish:socialmedia` + `fetch:plugins`; it can never publish as Plugins or fetch
+  something it does not depend on.
+- **It is issued by a control node, never by hand** — `Store/BuildPrincipal`, the shape every
+  admin action here already takes (`Store/Provision`, `Store/Enrollment`): a global admin writes
+  `requestedAction: Issue` with the repo and scopes, the watcher mints the raw key ONCE into the
+  node's response, stores only the hash, and the admin pastes the raw key into the repo's secrets.
+  `Revoke` is the same node. The node is the record: which repo, which scopes, who issued it, when
+  it was last presented.
+
+**The mechanism: the registry SERVES publications.** The gate should never touch Azure. The portal
+already mounts `/data/prebuilt-bundles`, and the bundle route already has a GET side
+(`FetchIndex`, `ModuleFetchCommand`). Add
+`GET /api/plugins/bundles/prebuilt/<framework-identity>/<source>/` — the sealed publication, under
+the same authenticator, requiring `fetch:<source>` — and `upstream-seed` becomes a `curl` with the
+principal's Bearer token. No OIDC, no federated credential, no per-event subject to forget, and the
+same token that already publishes.
+
+Why this is the right boundary, and not merely a convenience:
+
+| | Azure OIDC credential | Build principal |
+|---|---|---|
+| where the grant is recorded | Entra tenant | a mesh node an audit query can list |
+| who can see which repos may fetch | whoever has tenant access | `search nodeType:Store/BuildPrincipal` |
+| revocation | portal + `az` | `requestedAction: Revoke` |
+| PR vs main | a credential per event subject, per format | one token, the event is irrelevant |
+| tied to the build queue | no — a storage reader, not a build identity | yes — the SAME token that publishes |
+
+The last row is the security tie the concept exists for: the identity that may *fetch* a
+publication is the identity that may *publish* one, scoped per source, and both facts live on one
+node the mesh owns.
+
+**Until this lands** the Azure route in `upstream-seed` works on `main` and fails on PRs; the
+credential gap is recorded on the PRs that hit it, and it is a maintainer decision either way.
+
+---
+
 ## The contract, restated as checks
 
 For any plugin repo, these are answerable and should be answered:
