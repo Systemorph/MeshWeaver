@@ -89,7 +89,6 @@ WEIGHTS=$(cat <<'EOF'
 663 MeshWeaver.Hosting.Monolith.Test 2
 348 MeshWeaver.PluginCatalog.Test
 269 MeshWeaver.Hosting.Orleans.Test
-218 MeshWeaver.Hosting.PostgreSql.Test
 189 MeshWeaver.AI.Test
 91 MeshWeaver.Data.Test
 76 MeshWeaver.Messaging.Hub.Test
@@ -105,8 +104,6 @@ WEIGHTS=$(cat <<'EOF'
 46 MeshWeaver.Security.Test
 44 MeshWeaver.Auth.Test
 42 MeshWeaver.Threading.Test
-28 MeshWeaver.Hosting.Cosmos.Test
-27 MeshWeaver.InstanceSync.Test
 26 MeshWeaver.Layout.Test
 25 Memex.Portal.Shared.Test
 18 MeshWeaver.NodeOperations.Test
@@ -116,12 +113,10 @@ WEIGHTS=$(cat <<'EOF'
 9 MeshWeaver.ContentCollections.Indexing.Graph.Test
 8 MeshWeaver.Hosting.Test
 7 MeshWeaver.ContentCollections.Test
-6 MeshWeaver.Hosting.Grpc.Test
 6 MeshWeaver.Documentation.Test
 6 MeshWeaver.AccessControl.Test
 5 MeshWeaver.Todo.Test
 5 MeshWeaver.MathDemo.Test
-4 MeshWeaver.Hosting.Sqlite.Test
 4 MeshWeaver.Serialization.Test
 3 MeshWeaver.Json.Test
 2 MeshWeaver.ContentCollections.Indexing.Test
@@ -130,9 +125,7 @@ WEIGHTS=$(cat <<'EOF'
 2 MeshWeaver.Markdown.Collaboration.Test
 2 MeshWeaver.Social.Test
 2 MeshWeaver.PluginImage.Test
-2 MeshWeaver.Hosting.Snowflake.Test
 2 MeshWeaver.Portal.E2E.Test
-2 MeshWeaver.Connection.SignalR.Test
 2 MeshWeaver.Reactive.Assertions.Test
 1 MeshWeaver.TestDomain
 1 MeshWeaver.Data.TestDomain
