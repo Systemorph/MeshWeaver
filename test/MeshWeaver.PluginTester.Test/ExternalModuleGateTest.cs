@@ -42,20 +42,30 @@ public class ExternalModuleGateTest
     }
 
     [Fact]
-    public void ExternalModules_JoinBothActivationLists_SoAnAbsentOneIsLoudNotSkipped()
+    public void ExternalModules_AreCarriedOnTheGateOptions_VerbatimAndInOrder()
     {
-        // Every external module is listed under Modules:Assemblies (activation) AND
-        // Modules:Required (the loud half). The pairing is the point: a listed-but-absent module is
-        // SKIPPED by design — right for a feature a deployment can live without, wrong for a module
-        // the gate was explicitly told to load, which is why the gate also requires it.
+        // Named for what it actually asserts (Copilot review): the OPTION carries the paths. That
+        // they then join BOTH activation lists is covered where the behaviour lives — the
+        // Modules:Required half by MissingRequired_NamesAnAbsentExternalModule below, and the
+        // end-to-end fold by the gate suites that boot a mesh with the engine module activated.
         var options = new GateOptions
         {
             RepoRoot = ".",
-            ExternalModules = ["/mnt/build/MeshWeaver.Widget/MeshWeaver.Widget.dll"],
+            ExternalModules =
+            [
+                "/mnt/build/MeshWeaver.Widget/MeshWeaver.Widget.dll",
+                "/mnt/build/MeshWeaver.Gadget/MeshWeaver.Gadget.dll",
+            ],
         };
 
-        Assert.Single(options.ExternalModules);
-        Assert.Equal("/mnt/build/MeshWeaver.Widget/MeshWeaver.Widget.dll", options.ExternalModules[0]);
+        // Verbatim: a path the caller mounted must reach the loader unchanged — rewriting one is
+        // how a mounted module gets silently replaced by a same-named copy in the image.
+        Assert.Equal(
+            [
+                "/mnt/build/MeshWeaver.Widget/MeshWeaver.Widget.dll",
+                "/mnt/build/MeshWeaver.Gadget/MeshWeaver.Gadget.dll",
+            ],
+            options.ExternalModules);
     }
 
     [Fact]
