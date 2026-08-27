@@ -100,14 +100,23 @@ public static class PluginGateRunner
             var pool = harness.ServiceProvider.GetRequiredService<IoPoolRegistry>()
                 .Get("plugin-test:files");
             return LocalNodeRepo.Load(options.RepoRoot, pool)
-                .SelectMany(snapshot => LocalNodeRepo.DiscoverPackages(snapshot)
-                    .SelectMany(packages => RunPackages(harness, options, snapshot, packages)
+                // The seed's UPSTREAM packages are materialized into the snapshot so the gate
+                // INSTALLS its dependencies (node definitions register their types; the seed's
+                // assemblies stamp their compiles) - see SeedPackages for the failure this ends.
+                .Select(snapshot => SeedPackages.Materialize(snapshot, options.Seed, options.Output))
+                .SelectMany(m => LocalNodeRepo.DiscoverPackages(m.Snapshot)
+                    .SelectMany(packages => RunPackages(harness, options, m.Snapshot, packages, m.UpstreamIds)
                         // The bake artifact rides the compile the gate just performed (#1660 WS1):
                         // persisting is part of the run, INSIDE the outer Catch, so a bake fault is
                         // a FatalError and the run exits RED — an artifact stage must never fail
                         // into a green gate.
+                        // The upstream seed is CONSUMED, never re-emitted: persisting an
+                        // upstream's bundle as this repo's own would let one repo publish
+                        // another's bytes under its own name (the #1814 identity class).
                         .SelectMany(report => BakeOutput.Persist(
-                            harness.Mesh, options, snapshot, packages, report))))
+                            harness.Mesh, options, m.Snapshot,
+                            packages.Where(p => !m.UpstreamIds.Contains(p.Id)).ToImmutableList(),
+                            report))))
                 // The CONSUMPTION postcondition (#1763), applied to every report the run PRODUCES
                 // — a red one included, so a shortfall neither masks an unrelated failure nor is
                 // masked by one. Adoption leaves no trace in a gate verdict (an adopted type
@@ -151,7 +160,7 @@ public static class PluginGateRunner
 
     private static IObservable<GateReport> RunPackages(
         GateMesh harness, GateOptions options, RepoSnapshot snapshot,
-        IReadOnlyList<PackageManifest> packages)
+        IReadOnlyList<PackageManifest> packages, ImmutableHashSet<string> upstreamIds)
     {
         if (packages.Count == 0)
             return Observable.Return(new GateReport([])
@@ -168,13 +177,15 @@ public static class PluginGateRunner
         // Sequential (Concat): installs respect the dependency order; compiles keep running in
         // the background while later packages install.
         return ordered
-            .Select(package => TestPackage(harness, options, snapshot, package))
+            .Select(package => TestPackage(
+                harness, options, snapshot, package, upstreamIds.Contains(package.Id)))
             .ToObservable().Concat().ToList()
             .Select(results => new GateReport(results.ToImmutableList()));
     }
 
     private static IObservable<PackageResult> TestPackage(
-        GateMesh harness, GateOptions options, RepoSnapshot snapshot, PackageManifest package)
+        GateMesh harness, GateOptions options, RepoSnapshot snapshot, PackageManifest package,
+        bool upstream)
     {
         var source = new NodeRepoPackageSource(
             (_, _, _, _) => Observable.Return(snapshot), repoUrl: "local");
@@ -195,7 +206,13 @@ public static class PluginGateRunner
             {
                 stage = "install";
                 options.Output.WriteLine($"── {package.Id}: installing {files.Count} file(s)…");
-                var types = DiscoverNodeTypes(package, files);
+                // An upstream package is INSTALLED, not gated: its types register and its
+                // assemblies adopt from the seed, but compile/render/Tests verdicts belong to
+                // the repo that owns it - running them here would double-judge every upstream
+                // on every satellite and let an upstream flake red a repo that changed nothing.
+                var types = upstream
+                    ? (IReadOnlyList<NodeTypeUnderTest>)[]
+                    : DiscoverNodeTypes(package, files);
                 // The authorizing principal is EXPLICIT — see GateMesh.AuthorizingUserId. Passing
                 // nothing means "nobody authorized this", which PackageEntitlement refuses for any
                 // priced package; the gate would then report a commercial package as failed
@@ -222,6 +239,7 @@ public static class PluginGateRunner
                                     authorizingUserId: GateMesh.AuthorizingUserId)
                                 .Select(second => new PackageResult(package.Id)
                                 {
+                                    Upstream = upstream,
                                     NodeCount = install.Total,
                                     IdempotenceError = second.Written == 0
                                         ? null
@@ -235,6 +253,7 @@ public static class PluginGateRunner
                                 })
                                 .Catch((Exception ex) => Observable.Return(new PackageResult(package.Id)
                                 {
+                                    Upstream = upstream,
                                     NodeCount = install.Total,
                                     IdempotenceError = $"re-install failed: {ex.GetType().Name}: {ex.Message}",
                                     NodeTypes = typeResults.ToImmutableList(),
@@ -243,6 +262,7 @@ public static class PluginGateRunner
             })
             .Catch((Exception ex) => Observable.Return(new PackageResult(package.Id)
             {
+                Upstream = upstream,
                 // Named for the stage that actually threw, and marked as NOT a measurement so
                 // WriteSummary prints "counts unavailable" instead of a fabricated "0 node(s)".
                 CountsMeasured = false,

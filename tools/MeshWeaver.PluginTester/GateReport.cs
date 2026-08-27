@@ -68,6 +68,14 @@ public sealed record PackageResult(string Id)
     public int NodeCount { get; init; }
 
     /// <summary>
+    /// True when the package arrived from the bake seed's upstream publication: it is INSTALLED
+    /// (a failure still fails the run - a gate that cannot install its dependencies proves
+    /// nothing) but its types are not gated here; their verdicts belong to the repo that owns
+    /// them. See <see cref="SeedPackages"/>.
+    /// </summary>
+    public bool Upstream { get; init; }
+
+    /// <summary>
     /// Whether <see cref="NodeCount"/> / <see cref="NodeTypes"/> are a MEASUREMENT. False when the
     /// package pipeline threw before the install reported, in which case both are defaults and
     /// printing them asserts a count nobody took.
@@ -170,7 +178,8 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
             output.WriteLine($"[{Label(package, verdict)}] {package.Id} " +
                              (package.CountsMeasured
                                  ? $"({package.NodeCount} node(s), {package.NodeTypes.Count} type(s))"
-                                 : "(counts unavailable — the pipeline threw before the install reported)"));
+                                 : "(counts unavailable — the pipeline threw before the install reported)") +
+                             (package.Upstream ? " [upstream: installed, not gated here]" : ""));
             if (package.InstallError is not null)
                 output.WriteLine($"    install{Debt(verdict, package.Id, "install")}: {package.InstallError}");
             if (package.IdempotenceError is not null)
