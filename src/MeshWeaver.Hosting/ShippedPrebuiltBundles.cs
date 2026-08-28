@@ -352,15 +352,40 @@ public static class ShippedPrebuiltBundles
                                     .Select(bundle => SeedBundle(
                                         mesh, pool, store, bundle, existing, logger))
                                     .Concat()
-                                    .Aggregate(default(SeedTally), (total, one) => total + one))
-                                .Do(tally => logger?.LogInformation(
-                                    "ShippedPrebuiltBundles: {Covered} prebuilt assembly(ies) from "
-                                    + "{Bundles} shipped bundle(s) under {Directory} are backed by "
-                                    + "the assembly store — {Adopted} adopted now, {Current} already "
-                                    + "current and skipped WITHOUT activating their NodeType hubs — "
-                                    + "in {Elapsed}",
-                                    tally.Covered, bundles.Count, dir, tally.Adopted,
-                                    tally.AlreadyCurrent, DateTimeOffset.UtcNow - startedAt))
+                                    .Aggregate(default(SeedTally), (total, one) => total + one)
+                                    .Do(tally =>
+                                    {
+                                        logger?.LogInformation(
+                                            "ShippedPrebuiltBundles: {Covered} prebuilt assembly(ies) from "
+                                            + "{Bundles} shipped bundle(s) under {Directory} are backed by "
+                                            + "the assembly store — {Adopted} adopted now, {Current} already "
+                                            + "current and skipped WITHOUT activating their NodeType hubs — "
+                                            + "in {Elapsed}",
+                                            tally.Covered, bundles.Count, dir, tally.Adopted,
+                                            tally.AlreadyCurrent, DateTimeOffset.UtcNow - startedAt);
+                                        // 🚨 A mount that backed NOTHING needs its reason at the SAME level as
+                                        // the summary, or the summary is unactionable. "0 of N, 0 declined" has
+                                        // exactly one cause left once identity is ruled out: every bundle named
+                                        // only NodeTypes absent from this mesh, and the per-bundle line saying so
+                                        // is LogDebug — invisible wherever this actually matters (CI and prod both
+                                        // run at Information). Diagnosing one 0-of-37 boot on the Education gate
+                                        // cost a source read of this file to learn the filter even existed, which
+                                        // is precisely what the "Loud, so an operator can see WHY an image that
+                                        // ships bundles still compiled" comment below is meant to prevent.
+                                        // ONE aggregate line, only in the pathological case — never per bundle.
+                                        if (tally.Covered == 0)
+                                            logger?.LogInformation(
+                                                "ShippedPrebuiltBundles: NONE of the {Bundles} bundle(s) under "
+                                                + "{Directory} backed an assembly, and none was declined for "
+                                                + "framework identity — so every one named only NodeTypes this "
+                                                + "mesh does not hold. This mesh's NodeType snapshot carries "
+                                                + "{Types} path(s). A snapshot of 0 means the content is not "
+                                                + "imported YET, which is normal for a mesh that installs after "
+                                                + "boot: adoption then depends entirely on the install-time "
+                                                + "re-seed (IPrebuiltAssemblyConsumer.SeedForTypes), not on this "
+                                                + "pass. The sweep compiles whatever stays uncovered",
+                                                bundles.Count, dir, existing.Paths.Count);
+                                    }))
                                 .Select(tally => tally.Covered);
                         }))
                 // The seeding is an optimisation in front of the sweep — a fault here must degrade
