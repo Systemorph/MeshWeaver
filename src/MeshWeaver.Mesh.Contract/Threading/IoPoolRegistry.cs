@@ -139,8 +139,14 @@ public sealed class IoPoolRegistry : IDisposable
         {
             var residual = kvp.Value.Drain();
             if (residual != 0)
+                // 🚨 "IoPoolDrain", not "IoPoolSiloTeardown" (Copilot review, PR #2598): DrainAll()
+                // is the generic mesh-teardown phase 2 (MeshTeardownExtensions AND
+                // MonolithMeshTestBase.DisposeAsync both call it), not just the Orleans silo path —
+                // the earlier prefix mislabeled every non-silo residual as if it came from
+                // IoPoolSiloTeardown specifically. That class's own Dispose()/Disposed path below
+                // keeps the "IoPoolSiloTeardown" prefix; it is where that name is accurate.
                 _logger?.LogWarning(
-                    "IoPoolSiloTeardown: pool '{PoolName}' did not finish {Residual} leaf(es) within "
+                    "IoPoolDrain: pool '{PoolName}' did not finish {Residual} leaf(es) within "
                     + "the drain budget — a leaf ignored its cancellation token; fix the leaf, do not "
                     + "widen the budget.", kvp.Key, residual);
             leaked += residual;

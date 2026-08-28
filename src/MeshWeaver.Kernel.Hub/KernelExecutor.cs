@@ -492,12 +492,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     private async Task<Unit> EnsureInitializedAsync(CancellationToken ct)
     {
         if (initialized) return Unit.Default;
-        initialized = true;
 
         var defaultLogger = publicHub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger("MeshWeaver.Kernel.Script");
-        scriptLogger = new ScriptLogger(defaultLogger);
-        scriptGlobals = new MeshScriptGlobals { Mesh = publicHub, Log = scriptLogger };
+        var localScriptLogger = new ScriptLogger(defaultLogger);
+        var localScriptGlobals = new MeshScriptGlobals { Mesh = publicHub, Log = localScriptLogger };
 
         // Curated anchors + DI-contributed module assemblies + default imports all come
         // from MeshScriptEnvironment — the ONE description of the script environment,
@@ -507,9 +506,19 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // metadata block per reference PER SESSION (~350 refs ≈ 150-200 MiB of native
         // memory per kernel session, never reclaimed — the CI memory-pressure leak; see
         // KernelScriptReferences docs).
+        //
+        // 🚨 `initialized` flips to true ONLY after every step below has succeeded (Copilot
+        // review, PR #2598). It used to be set FIRST — harmless when the reference build was a
+        // synchronous call that either finished or threw synchronously right there, but this
+        // method is now `await`-based and genuinely cancellable, so a cancellation or a
+        // transient fault partway through used to leave `initialized == true` with
+        // `scriptOptions` still null FOREVER: the guard at the top would then skip every future
+        // submission's attempt to build it, permanently wedging the session. Local variables
+        // here (rather than writing straight into the instance fields) keep a failed attempt
+        // from leaving scriptLogger/scriptGlobals half-set either.
         var references = await MeshScriptEnvironment.ReferencesAsync(publicHub.ServiceProvider, ct)
             .ConfigureAwait(false);
-        scriptOptions = ScriptOptions.Default
+        var options = ScriptOptions.Default
             .WithReferences(references)
             // 🚨 Required for the sharing to be complete: the compilation resolves
             // the globals type's transitive closure via ResolveMissingAssembly —
@@ -518,6 +527,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             .WithMetadataResolver(MeshScriptEnvironment.MetadataResolver)
             .WithImports(MeshScriptEnvironment.Imports)
             .WithEmitDebugInformation(true);
+
+        scriptLogger = localScriptLogger;
+        scriptGlobals = localScriptGlobals;
+        scriptOptions = options;
+        initialized = true;
         return Unit.Default;
     }
 
