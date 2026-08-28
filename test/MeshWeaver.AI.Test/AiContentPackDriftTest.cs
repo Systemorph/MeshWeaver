@@ -14,24 +14,24 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// 🚨 <b>content/ai IS A MIRROR, AND THE MIRROR MUST NOT DRIFT SILENTLY</b> — issue #1627.
+/// 🚨 <b>content/ai IS THE ONE MASTER for the built-in agents and skills</b> — and edits to it
+/// must be DELIBERATE, never drift. Originally issue #1627, reframed 2026-08-28.
 ///
-/// <para>The <b>served</b> master for the built-in agents and skills is the
-/// <c>Systemorph/MeshWeaver.Plugins</c> pack (<c>Agent/</c>, <c>Skill/</c>);
-/// <c>src/MeshWeaver.AI/MeshWeaver.AI.csproj</c> says so in as many words. This repo's
-/// <c>content/ai</c> is the in-memory fixture the framework's delegation / picker / tool-wiring
-/// suites run against. Two copies of the same text, edited by different people at different times,
-/// with <b>nothing comparing them</b> — so drift accumulated in BOTH directions and was found only
-/// by measuring by hand.</para>
+/// <para><b>History, because the ledger's field names still show it:</b> the roster used to exist
+/// twice — here AND as the <c>Agent/</c> + <c>Skill/</c> packages in the private
+/// <c>Systemorph/MeshWeaver.Plugins</c> repo. The copies drifted in both directions for weeks.
+/// On 2026-08-28 the duplicate packages were consolidated away (their genuine deltas adopted
+/// here first), so <c>content/ai</c> — served on every portal by the AI engine's
+/// <c>BuiltIn*Provider</c>s — is the single master, and every ledger entry is
+/// <c>PackAbsent</c> by construction.</para>
 ///
-/// <para><b>Why this is a guard and not a sync.</b> The pack repo is <b>private</b> and this repo is
-/// <b>public</b>. A "just copy the master over" job would have published a real customer's node path
-/// into a public repository — that difference is a deliberate <b>sanitisation</b>, not drift, and it
-/// is the one divergence that must be preserved forever. So the guard does two things a diff cannot:
-/// it pins the reconciliation point (<c>TestData/AiContentPackSync.json</c>) so a core edit has to
-/// state what it did about the master, and it refuses any file <b>in this section</b> carrying an
-/// identifier that must never appear in public. Everything below is scoped to
-/// <c>content/ai/**</c> — this is a mirror guard, not a repository-wide secret scan.</para>
+/// <para><b>What the guard still does, and why it stays:</b> it pins the ROSTER and every file's
+/// content hash (<c>TestData/AiContentPackSync.json</c>), so adding, deleting or editing a
+/// built-in agent/skill is a recorded decision rather than an accident — these are the DEFAULT
+/// CHAT INSTRUCTIONS of every deployment. And it refuses any file <b>in this section</b> carrying
+/// an identifier that must never appear in public: the retired pack was private, this repo is
+/// public, and the sanitised placeholders are permanent. Everything below is scoped to
+/// <c>content/ai/**</c> — it is not a repository-wide secret scan.</para>
 ///
 /// <para><b>The forbidden identifiers are stored as HASHES</b>, and a hit is reported by
 /// <c>file:line</c> only — never by echoing the token. A deny-list that spells the name out, or a
@@ -139,8 +139,8 @@ public class AiContentPackDriftTest
 
         onDisk.Should().Equal(pinned,
             "every file under content/ai must have a ledger entry and vice versa. Added: [{0}]. "
-            + "Removed: [{1}]. Add or delete the entry in test/MeshWeaver.AI.Test/TestData/{2} and "
-            + "state in it what you did about the MeshWeaver.Plugins master.",
+            + "Removed: [{1}]. Add or delete the entry in test/MeshWeaver.AI.Test/TestData/{2} — "
+            + "this roster is the built-in default of every deployment, so it changes on purpose.",
             string.Join(", ", onDisk.Except(pinned, StringComparer.Ordinal)),
             string.Join(", ", pinned.Except(onDisk, StringComparer.Ordinal)),
             LedgerFileName);
@@ -169,11 +169,10 @@ public class AiContentPackDriftTest
             .ToArray();
 
         drifted.Should().BeEmpty(
-            "content/ai mirrors the Systemorph/MeshWeaver.Plugins pack, which is what actually SERVES "
-            + "— so an edit here that is not carried over to the master is a change production never "
-            + "sees, and an edit there that is not carried here is one the framework tests never see. "
-            + "Re-pin the entry in test/MeshWeaver.AI.Test/TestData/{0} (paste the new hash, set the "
-            + "state, say what you did about the master). Drifted: {1}",
+            "content/ai is the ONE master for the built-in agents and skills — what every portal "
+            + "serves as its default chat instructions — so an edit must be a recorded decision, "
+            + "not an accident. Re-pin the entry in test/MeshWeaver.AI.Test/TestData/{0} (paste "
+            + "the new hash and say in the note what changed). Drifted: {1}",
             LedgerFileName, string.Join(" | ", drifted));
     }
 
@@ -234,9 +233,11 @@ public class AiContentPackDriftTest
                 "{0} must keep its sanitised placeholder '{1}' — this repo is PUBLIC and the pack "
                 + "master is PRIVATE, so this divergence is permanent, never something to reconcile",
                 entry.File, entry.SanitisedToken!);
-            entry.State.Should().Be("SanitisedOnly",
-                "{0} differs from the master only by the placeholder; recording it as anything else "
-                + "invites a future sync to 'fix' it", entry.File);
+            // With the pack retired every entry is PackAbsent; the placeholder rule above is the
+            // half that outlives the pack, and SanitisedOnly remains valid for history.
+            entry.State.Should().BeOneOf(["SanitisedOnly", "PackAbsent"],
+                "{0} carries a sanitised placeholder — its entry must not claim the un-sanitised "
+                + "text is fine", entry.File);
         }
     }
 

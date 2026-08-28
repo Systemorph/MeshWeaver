@@ -14,12 +14,13 @@
              2) Content copy-to-output ("AiContent" beside the assembly) for a deployed offline build;
              3) the repo working tree itself — a dev edits it in the mesh and syncs it back here.
 
-             🚨 ROLES since the Agent plugin (MeshWeaver.Plugins/Agent): on a portal that serves the
-             Agent partition from the DB, the PLUGIN is the served master — nothing here is imported
-             any more (AgentStaticRepoSource is retired). This embedded copy exists for the
-             IN-MEMORY path only: tests, the monolith, MAUI offline — the fixture the framework's
-             delegation/picker/tool-wiring suites run against. A content improvement belongs in the
-             plugin first; mirror it here when the framework tests depend on it. -->
+             🚨 THIS SECTION IS THE ONE MASTER (2026-08-28). The duplicate Agent/ and Skill/
+             packages in MeshWeaver.Plugins were consolidated away — the built-in roster is served
+             from HERE on every portal by BuiltInAgentProvider / BuiltInSkillProvider, delivered
+             with the AI engine module. Edit content/ai and re-pin the entry in
+             test/MeshWeaver.AI.Test/TestData/AiContentPackSync.json (AiContentPackDriftTest) —
+             these files are every deployment's default chat instructions, so changes are recorded
+             decisions, never drift. -->
         <EmbeddedResource Include="..\..\content\ai\**\*.md" LinkBase="Data" />
         <Content Include="..\..\content\ai\**\*.md"
                  Link="AiContent\%(RecursiveDir)%(Filename)%(Extension)"

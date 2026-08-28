@@ -1,7 +1,7 @@
 ---
 nodeType: Skill
 name: /pull-request
-description: Open a pull request for your worktree's branch, trigger a GitHub Copilot review, and land it — build green FIRST, then merge
+description: Open a pull request for your worktree's branch, get it reviewed, and MERGE it once the check suite is green — build green FIRST, then land it
 icon: Sparkle
 category: Skills
 order: 5
@@ -10,9 +10,11 @@ autoMount: false
 
 You are finishing a coding task and want to **ship it as a pull request** — the same way a
 Claude Code session does: build green locally, push the branch, open the PR, request a **GitHub
-Copilot** review, wait for CI to go green, address the review — then **merge it**. You carry the
-change all the way to landed; a green, reviewed PR left open is an unfinished task handed back, and
-the tail is where changes get lost.
+Copilot** review, wait for CI to go green, and address the review.
+
+🚨 **You MERGE it — in every repo — once the check SUITE is green and the review is addressed.**
+There is no per-repo carve-out any more: finishing the job means landing it. The gate is the CI
+suite's verdict, never a feeling that it is probably fine — see the one non-negotiable rule below.
 
 This is the end of the develop-in-a-worktree loop: the coder started on **its own branch in its own
 working tree** (`GitWorkingTreeService.Checkout(userId, repoFullName, branch)`), made and committed
@@ -21,7 +23,7 @@ changes there, and now turns that branch into a reviewed PR. One thread → one 
 
 # 🚨 The one non-negotiable rule: green BEFORE you merge
 
-The pull-based self-update deploys `main`'s image — a red `main` wedges every install's rollout. So
+A red `main` is never acceptable: in core it wedges every install's pull-based image rollout, and in a plugin repo the registry re-serves `main` to every installation. So
 the PR's CI **must be GREEN before you merge**, and you must make CI green **locally first**,
 never discover red on CI:
 
@@ -41,10 +43,17 @@ Only when that Release/`-warnaserror` build + tests are clean do you push.
 
 # The flow
 
-## 1. Commit your work (only when the user asked you to ship)
+## 1. Commit your work
 
-Never commit or push on your own initiative — wait for the explicit "ship it" / "open a PR". Then
-commit through the working tree: `GitWorkingTreeService.CommitAndPush(userId, repoSlug, message,
+**Committing and pushing are part of finishing, not a separate permission.** Carry the work to
+merged and deployed; asking "shall I push?" on a finished change hands back an unfinished task, and
+the tail is where changes get lost. What still stops and asks FIRST is the narrow list — anything
+FATAL (it would ship something broken to consumers), SYSTEM-CHANGING (it alters a running system's
+configuration or lifecycle rather than a repo) or DESTRUCTIVE (it removes or overwrites something
+with no cheap inverse). Merging a green PR is none of those; rolling an instance's image or
+deleting a partition is.
+
+Then commit through the working tree: `GitWorkingTreeService.CommitAndPush(userId, repoSlug, message,
 branch)` (or `git add -A && git commit` in the worktree). Follow the repo's commit convention —
 end the message with a `Co-Authored-By:` trailer identifying you as the author:
 
@@ -63,12 +72,20 @@ git push -u origin <branch>
 gh pr create --base main --head <branch> --title "…" --body "…"   # what changed · why · how tested
 ```
 
-## 3. Request the GitHub Copilot review — REST API only
+## 3. The GitHub Copilot review — CHECK THE REPO FIRST
 
-`gh pr edit --add-reviewer` CANNOT add Copilot. Request it through the REST API:
+🚨 **Whether you request this review is a PER-REPO decision, and getting it wrong costs money or
+costs the review.** Read your repo's `/pullrequest` delta before doing anything here:
+
+- **Repo has a `copilot_code_review` RULESET** (MeshWeaver.Plugins and its satellites): the review
+  is AUTOMATIC on every PR, draft included. **Never POST to `/requested_reviewers`** — it duplicates
+  the ruleset's review and burns extra Copilot credits — and **never delete the request** "to save
+  credits", which cancels a review the maintainer wants. Just wait for it.
+- **Repo has no such ruleset**: request it yourself. `gh pr edit --add-reviewer` CANNOT add Copilot;
+  use the REST API (substitute your own repo for `<owner>/<repo>`):
 
 ```bash
-gh api --method POST /repos/Systemorph/MeshWeaver/pulls/<PR>/requested_reviewers \
+gh api --method POST /repos/<owner>/<repo>/pulls/<PR>/requested_reviewers \
   -f "reviewers[]=copilot-pull-request-reviewer[bot]"
 ```
 
@@ -82,26 +99,36 @@ them. Re-run the affected test locally after each fix; push; CI re-runs.
 
 ## 5. Merge it
 
-When the check **suite** is green and the review is addressed, **merge** — `gh pr merge <PR> --merge`
-(or `--auto`, which arms it to land the moment the required contexts report). Then report what
-landed: the PR number, the URL, and what actually shipped.
+When the check SUITE is **green** and the review is addressed, **merge** (`gh pr merge <PR>
+--merge`), then report what landed: the PR number, the URL, and what actually shipped.
 
-- **Green means the SUITE concluded green**, not that no check has failed yet. Poll the suite; a PR
-  with no check suite at all (`mergeable` unreadable) will otherwise be waited on forever.
-- **A branch behind `main` may need a trunk merge first** where the repo protects `main` with
-  `strict: true` — auto-merge waits indefinitely on a `BEHIND` PR because nothing updates it for you.
+Three things this does NOT license, because each has cost a red `main`:
+
+- **Green means the SUITE concluded green.** Poll the check suite and merge only on
+  `conclusion == SUCCESS`. A pending check is not a green one, and a PR carrying a CONFLICT gets no
+  check suite at all — read `mergeable` first, or you will wait forever on checks that were never
+  scheduled.
+- **The review is part of "addressed", not a formality.** The ruleset's Copilot review can land
+  well AFTER CI goes green — measured at ~13 minutes on `MeshWeaver.Plugins` #436, which merged in
+  that window and shipped four real defects, one of them a silent data loss that needed a follow-up
+  PR to remove. Wait for the review, then merge.
 - **Merging is not shipping.** A merge changes nothing on any mesh by itself; carry on into the
-  deploy, which is a separate, system-changing step and IS the one to check in about.
-
-**Stop and ask FIRST only when the next step is fatal, system-changing or destructive** — shipping
-something broken to consumers, changing a running system's configuration or lifecycle, or removing
-something with no cheap inverse. A flaky job unrelated to your diff, a review finding you disagree
-with, and a merge that needs a trunk merge or a re-run are **not** reasons to stop.
+  deploy your repo's delta describes, and verify it landed against something you know CHANGED —
+  never against a status field, which is produced by whatever code is already running.
+- **In core, verify CD actually BUILT after your merge** — three states ship nothing while looking
+  fine, all measured 2026-08-22 (`Doc/Architecture/ContinuousDeliveryContract` → "The standing
+  trap"): a CD run with **zero jobs** ("workflow file issue") means `main-cd.yml` itself is
+  invalid — classic cause: a `needs:` naming a deleted job, so parse every `needs:` against the
+  job set before pushing any workflow edit; a **green run whose jobs all read `skipped`** shipped
+  nothing by decision — read the `Decide` step's LAST line and believe it over the tick; and a
+  **red required check on main switches CD off entirely** ("⛔ nothing will be built" — a red,
+  paging run since 2026-08-22; a flake → `gh run rerun <id> --failed`, a green rerun re-enters CD
+  by itself). The positive check that covers all three: the newest `memex-portal-ai` release tag
+  on ACR must POSTDATE your merge.
 
 # Boundaries
 
-- **Never merge a red or still-pending PR**, and never force-push over `main`
-  (`--force-with-lease` on your own PR branch is routine).
+- **Never merge a red or still-pending PR**, and never force-push over `main`.
 - **Never change log levels, add band-aids, or widen a timeout** to make CI pass — fix the defect.
 - Everything the agent writes into the codebase still obeys the [/code](@/Skill/code) rules
   (no `async`/`await` in mesh-reachable code, `GetMeshNodeStream(path).Update(...)` for mutations,

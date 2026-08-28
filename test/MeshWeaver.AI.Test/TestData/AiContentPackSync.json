@@ -1,23 +1,10 @@
 {
-  "$comment": [
-    "PACK SYNC LEDGER for content/ai — the drift guard's pinned reconciliation point (#1627).",
-    "content/ai is a MIRROR: the served master is Systemorph/MeshWeaver.Plugins (Agent/, Skill/),",
-    "and drift runs in BOTH directions. Nothing compares the two automatically, because that repo",
-    "is PRIVATE and this one is PUBLIC — so this file records the reconciliation point instead,",
-    "and AiContentPackDriftTest fails the build when a core file moves away from it.",
-    "REGENERATE: edit the file, run the test, and paste the 'core' hash it prints into this entry",
-    "together with the state/note that says what you did about the pack master."
-  ],
-  "hash": "sha256 of the file's text as UTF-8, BOM stripped, CRLF/CR folded to LF, trailing newlines trimmed",
   "pack": {
     "repo": "Systemorph/MeshWeaver.Plugins",
-    "commit": "c29a0de",
-    "observed": "2026-08-25",
-    "note": "The pack half cannot be checked from this repo's CI — it is private and this repo holds no credential for it. The 'pack' hashes are an ATTESTATION of what was measured at the commit above, not something the test verifies."
+    "commit": null,
+    "observed": "2026-08-28",
+    "note": "THE PACK IS RETIRED. The duplicate Agent/ and Skill/ packages in Systemorph/MeshWeaver.Plugins were consolidated away on 2026-08-28 (Roland: 'remove agents and skill package and serve from the main ai package') after their genuine deltas were adopted here (/pull-request body, Assistant's /feedback row, /driver-release, /package-versions) — ThreadNamer was already core-code-defined (BuiltInAgentProvider.CreateThreadNamerNode), so the pack's copy simply dies. content/ai is the ONE master, served on every portal by the AI engine's providers; every entry is PackAbsent by construction and the ledger's remaining job is pinning deliberate core edits and the sanitisation guard."
   },
-  "notes": [
-    "Skill/*.md entries have pack:null because the pack master still stores its skills as typed .json nodes (Skill/*.json), not the .md-with-front-matter format this repo uses. A byte comparison is therefore impossible for skills; only the roster and the sanitisation rules apply to them."
-  ],
   "forbiddenIdentifiers": [
     {
       "sha256": "eaf8859353effdd6182703ab92af8cd88360df4d3452bd3ab27d763947ff97e5",
@@ -27,92 +14,89 @@
   "files": [
     {
       "file": "Agent/Assistant.md",
-      "core": "9386bc34d4f5e60430a9f035f929c907642ddc29f6db69f6424a53e88934e6e3",
-      "pack": "4a9cb965ee065983446a9c97d275fd1d1ae6f046edcca6971898e7b76212d0b3",
-      "state": "PackAhead",
-      "note": "The pack master carries one extra skill row the core fixture does not. Reconciling it is a change to agent INSTRUCTIONS and needs its own review (#1627)."
+      "core": "4a9cb965ee065983446a9c97d275fd1d1ae6f046edcca6971898e7b76212d0b3",
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/CommentingReference.md",
       "core": "8ca83e8185749880750607b29c671ea4b293d144b4b63cf5fa5b1cae67e479e6",
-      "pack": "d7db39e2185ea89e624ff01b3763b297294b31bf368d6c257bb91fef459ef175",
-      "state": "SanitisedOnly",
-      "note": "Byte-identical to the pack master EXCEPT the example namespace, which is sanitised here. This divergence is PERMANENT and must never be reconciled: the pack repo is private, this one is public.",
+      "pack": null,
+      "state": "PackAbsent",
+      "note": "The example namespace stays the sanitised placeholder — the private pack copy that carried a real customer name is deleted with the pack, and the placeholder is the only form this PUBLIC repo may ever hold.",
       "sanitisedToken": "Acme"
     },
     {
       "file": "Agent/DescriptionWriter.md",
       "core": "28bad6b71e891f57d04d49df76119dee22328a8bccfe74a0f28579406f4befa1",
-      "pack": "28bad6b71e891f57d04d49df76119dee22328a8bccfe74a0f28579406f4befa1",
-      "state": "InSync"
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/EmailRouter.md",
       "core": "00c014318f7a029ff9b6773bdcf5329556ec14fc361f0cf1f84d5dcecfd6afd9",
-      "pack": "00c014318f7a029ff9b6773bdcf5329556ec14fc361f0cf1f84d5dcecfd6afd9",
-      "state": "InSync"
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/ExecutiveAssistant.md",
       "core": "3985e92e165e859ba83a8a92fba35ddb3beb2ded67d561ce5008c56e5407b9ca",
-      "pack": "3985e92e165e859ba83a8a92fba35ddb3beb2ded67d561ce5008c56e5407b9ca",
-      "state": "InSync"
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/LogTriage.md",
       "core": "49a7468dc8910259f8ed066fdd9a2aae3f8b56133675a603a534e280dd65ef82",
-      "pack": "99769e78e6497b33b093205ec3692a81f4d21566878571c0e281fda9687e50f9",
-      "state": "CoreAhead",
-      "note": "Core documents the current incident shape (normalizedDetail / variants); the pack master still describes the earlier single-field shape. The pack is what SERVES, so production runs the older text (#1627)."
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/NodeInitializer.md",
       "core": "4852779220d127d30d8f577cc314ec5903ec4329c0774d8c61162ad6ef06d987",
-      "pack": "4852779220d127d30d8f577cc314ec5903ec4329c0774d8c61162ad6ef06d987",
-      "state": "InSync"
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/NotificationTriage.md",
       "core": "4787815823cff81136848cb9fa86ff6e83f55908ac15304426f4d67c67d0dc25",
-      "pack": "4787815823cff81136848cb9fa86ff6e83f55908ac15304426f4d67c67d0dc25",
-      "state": "InSync"
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/PullRequestWriter.md",
       "core": "57ec31e3d007de116ef526e51be31a9c1d6653cd71afef866091d7152593bc24",
-      "pack": "57ec31e3d007de116ef526e51be31a9c1d6653cd71afef866091d7152593bc24",
-      "state": "InSync"
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/Researcher.md",
       "core": "8f93b1d3644730c9340000b3bb12b5ea06ed6e656fbd0e8ad202c01c09a5bf56",
-      "pack": "8f93b1d3644730c9340000b3bb12b5ea06ed6e656fbd0e8ad202c01c09a5bf56",
-      "state": "InSync"
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/ToolsReference.md",
       "core": "3dcd15ddf71d7bd826aa6cd054603e69902caf694d1610f12ac70805ba560b4c",
-      "pack": "3dcd15ddf71d7bd826aa6cd054603e69902caf694d1610f12ac70805ba560b4c",
-      "state": "InSync"
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/TrainingSim.md",
       "core": "dfe6749a31fd7baf70456e904999f802021175829cf640ed1609929b14d3db98",
-      "pack": "dfe6749a31fd7baf70456e904999f802021175829cf640ed1609929b14d3db98",
-      "state": "InSync"
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/Tutor.md",
       "core": "4112c94f27b91a6e5971358faddf5d17fc3f25b5f609f9770fe45b19b04d11df",
-      "pack": "0a66bfbb4c14c8945683295c0959fd2fe53d2a217995783d83ada935d56475e3",
-      "state": "CoreAhead",
-      "note": "Core describes the node-native course model (Edu/Module, Edu/Lesson, Edu/Exercise); the pack master still describes the retired Course/Module/ExerciseAttempt model. The pack is what SERVES (#1627)."
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Agent/Worker.md",
       "core": "b881490b3ca767ca11a44c6d596615ebd053ff4277e4bccc9bc613ddd05ba5a9",
-      "pack": "b881490b3ca767ca11a44c6d596615ebd053ff4277e4bccc9bc613ddd05ba5a9",
-      "state": "InSync"
+      "pack": null,
+      "state": "PackAbsent"
     },
     {
       "file": "Skill/access.md",
@@ -145,6 +129,13 @@
       "state": "PackAbsent"
     },
     {
+      "file": "Skill/driver-release.md",
+      "core": "5e4214b62e80a07b0d0bba3470d383e6f34255509df44694fe6ab8ee23d18ce2",
+      "pack": null,
+      "state": "PackAbsent",
+      "note": "Adopted from the retired MeshWeaver.Plugins pack in the same change that deleted it — content/ai is the one master now."
+    },
+    {
       "file": "Skill/group.md",
       "core": "c72243ed16ffa6639ad09643befeef35cef9eab20647442bc40d14489195afd9",
       "pack": null,
@@ -160,8 +151,7 @@
       "file": "Skill/layout-area.md",
       "core": "aa1d75d5c1bad31d61116bf93347f292bf2745ee5dc58428af4b8a07eed6c90d",
       "pack": null,
-      "state": "PackAbsent",
-      "note": "MAUI residue sweep: dropped the retired client's data-binding paragraph; master pack absent, nothing to carry over"
+      "state": "PackAbsent"
     },
     {
       "file": "Skill/logon-action.md",
@@ -194,6 +184,13 @@
       "state": "PackAbsent"
     },
     {
+      "file": "Skill/package-versions.md",
+      "core": "91460797f3207082b54e6bdda1bd0264e7941ecd68cc86f84d8b5f6484a64cd1",
+      "pack": null,
+      "state": "PackAbsent",
+      "note": "Adopted from the retired MeshWeaver.Plugins pack in the same change that deleted it — content/ai is the one master now."
+    },
+    {
       "file": "Skill/presentation.md",
       "core": "394db08b881f6455b2b9b4561bb94ad2c00db167a89ca78413dd5be32a1d0087",
       "pack": null,
@@ -207,7 +204,7 @@
     },
     {
       "file": "Skill/pull-request.md",
-      "core": "27eb0a672388e20e5be33f5c2f9a18a1fd7f6fc5ef4b7b6456ec6412905fb550",
+      "core": "26ba5d477849311e6dec67f5bc32cfcd7e3e5041b5b9c83d6bbde82c5e9ae0af",
       "pack": null,
       "state": "PackAbsent"
     },
@@ -239,8 +236,7 @@
       "file": "Skill/ui-extensibility.md",
       "core": "845eb2a1a309d3dc474d5bacfc2b04b62e84593d667e16e429a6f09b28eb55ac",
       "pack": null,
-      "state": "PackAbsent",
-      "note": "MAUI residue sweep: dropped the optional MauiViewRegistry step; master pack absent, nothing to carry over"
+      "state": "PackAbsent"
     }
   ]
 }
