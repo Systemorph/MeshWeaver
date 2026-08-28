@@ -2773,10 +2773,12 @@ public static class PackageInstaller
                 .SelectMany(current =>
                     current is not null && current.SyncBehavior != SyncBehavior.Include
                         ? Observable.Return(0)
-                        : Observable.Using(
-                                () => accessService?.ImpersonateAsSystem()
-                                      ?? System.Reactive.Disposables.Disposable.Empty,
-                                _ => meshService.DeleteNode(path))
+                        // Sealed at Subscribe (RunAsSystem), never Observable.Using(ImpersonateAsSystem):
+                        // impersonation is an AsyncLocal store/restore pair, and Using disposes on the
+                        // TERMINATING thread — for a cross-hub delete, the owning hub's response thread,
+                        // not the one that opened the scope — which latches system-security onto whatever
+                        // runs next on the subscribing thread (#1790).
+                        : accessService.RunAsSystem(() => meshService.DeleteNode(path))
                             .Take(1)
                             .Select(deleted => deleted ? 1 : 0))
                 .Catch<int, Exception>(ex =>
