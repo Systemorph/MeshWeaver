@@ -219,6 +219,36 @@ on:
         required: false
         type: string
         default: 'main'
+      module-artifacts:
+        description: >-
+          Artifact-name pattern (actions/download-artifact `pattern`) of module bundles UPLOADED
+          BY THIS RUN (each a *.module.nupkg) whose module DLLs the bake and the gate must
+          compose. The tester image ships NO modules since MeshWeaver#2276
+          (TesterModules.ImageShipped is empty by design; a repo mounts its own build with
+          --module, #2541) — so a repo whose NodeType source binds a module's types names that
+          module here or in registry-modules, or its bake fails CS0103/CS0246 on every wave.
+          Empty = none.
+        required: false
+        type: string
+        default: ''
+      registry-modules:
+        description: >-
+          Package ids (whitespace-separated, e.g. `AI`) whose module bundle to fetch from
+          registry-url and compose into the bake/gate with --module — for a repo that stages the
+          package's CONTENT but does not build its module. The module lane is FLOOR-gated, not
+          identity-gated (PluginBundleClient.AdoptModule), so the registry's current bundle is
+          the right bytes for any image satisfying the module's minMeshVersion. Requires
+          registry-url and the registry-key secret; asserted RED in preflight, never skipped.
+        required: false
+        type: string
+        default: ''
+      registry-url:
+        description: >-
+          Base URL of the registry serving /api/plugins/bundles (the caller's MW_REGISTRY_URL
+          variable). Needed only when registry-modules is set.
+        required: false
+        type: string
+        default: ''
     secrets:
       acr-username:
         description: Registry user able to pull the test image.
@@ -248,6 +278,11 @@ on:
       stage-repo-app-private-key:
         description: Private key (PEM) of that App.
         required: false
+      registry-key:
+        description: >-
+          Instance key (mwi_…) able to read the packages named in registry-modules from
+          registry-url. Needed only when registry-modules is set.
+        required: false
 
 jobs:
   publish-bake:
@@ -274,6 +309,9 @@ jobs:
           STAGE_MODULES: ${{ inputs.stage-modules }}
           NARROW: ${{ inputs.narrow-by-affected }}
           PRE_BAKE: ${{ inputs.pre-bake-script }}
+          REGISTRY_MODULES: ${{ inputs.registry-modules }}
+          REGISTRY_URL_IN: ${{ inputs.registry-url }}
+          REGISTRY_KEY: ${{ secrets.registry-key }}
         run: |
           set -euo pipefail
           missing=()
@@ -311,6 +349,10 @@ jobs:
           # filter, snapshot or synthesise packages), so "the affected closure" is not a set this
           # job may substitute for it. Picking one and carrying on would mean a caller reading its
           # own workflow could not tell which mount ran.
+          if [ -n "${REGISTRY_MODULES:-}" ]; then
+            [ -n "${REGISTRY_URL_IN:-}" ] || missing+=("registry-url (input, the caller's MW_REGISTRY_URL variable) — registry-modules is set")
+            [ -n "${REGISTRY_KEY:-}" ]    || missing+=("registry-key (secret, the caller's MW_REGISTRY_KEY) — registry-modules is set")
+          fi
           if [ "${NARROW:-false}" = "true" ] && [ -n "${PRE_BAKE:-}" ]; then
             missing+=("narrow-by-affected and pre-bake-script are mutually exclusive — a hook that builds its own bake mount owns its composition, so the affected closure cannot also decide it. Drop one.")
           fi
@@ -567,6 +609,57 @@ jobs:
       - name: Pre-bake hook
         if: inputs.pre-bake-script != ''
         run: ${{ inputs.pre-bake-script }}
+      - name: Download this run's module-bundle artifacts
+        if: inputs.module-artifacts != ''
+        uses: actions/download-artifact@v7
+        with:
+          pattern: ${{ inputs.module-artifacts }}
+          path: ${{ runner.temp }}/ext-bundles
+          merge-multiple: true
+      # 🚨 EXTERNAL MODULES (#2541): the tester image ships no modules since #2276, so a module a
+      # NodeType binds must be handed in explicitly. Every failure here is RED and NAMED — a bake
+      # that quietly ran without a module it needed blames the CONTENT (CS0246), which is exactly
+      # the misdiagnosis that froze the fleet on 2026-08-28.
+      - name: "External modules: assemble what the compile surface must compose"
+        if: inputs.module-artifacts != '' || inputs.registry-modules != ''
+        env:
+          REGISTRY_MODULES: ${{ inputs.registry-modules }}
+          REGISTRY_URL: ${{ inputs.registry-url }}
+          REGISTRY_KEY: ${{ secrets.registry-key }}
+        run: |
+          set -euo pipefail
+          EXT="${RUNNER_TEMP:-/tmp}/ext-modules"; mkdir -p "$EXT"; chmod 777 "$EXT"
+          BUNDLES="${RUNNER_TEMP:-/tmp}/ext-bundles"; mkdir -p "$BUNDLES"
+          for pkg in ${REGISTRY_MODULES:-}; do
+            idx=$(curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" "$REGISTRY_URL/api/plugins/bundles/index.json") \
+              || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
+            ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
+            [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key — check the key's grants, and that the upstream wave has published the bundle."; exit 1; }
+            curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
+              || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
+            echo "fetched $pkg@$ver from $REGISTRY_URL"
+          done
+          shopt -s nullglob
+          MODULE_ARGS=""
+          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
+            u="${RUNNER_TEMP:-/tmp}/unpack-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
+            unzip -o -q "$b" -d "$u"
+            name=""
+            [ -f "$u/meshweaver/manifest.json" ] && name=$(jq -r '.module.assemblyName // empty' "$u/meshweaver/manifest.json")
+            if [ -z "$name" ]; then
+              set -- "$u"/meshweaver/modules/*.dll
+              { [ $# -eq 1 ] && [ -f "$1" ]; } || { echo "::error::$(basename "$b"): cannot identify the module's entry assembly (no manifest module.assemblyName; meshweaver/modules/ holds $# dll(s))"; exit 1; }
+              name=$(basename "$1" .dll)
+            fi
+            test -f "$u/meshweaver/modules/$name.dll" || { echo "::error::$(basename "$b"): meshweaver/modules/$name.dll is missing from the bundle"; exit 1; }
+            mkdir -p "$EXT/$name"
+            cp -R "$u"/meshweaver/modules/. "$EXT/$name/"
+            MODULE_ARGS="$MODULE_ARGS --module /ext/$name/$name.dll"
+            echo "external module composed: $name ($(basename "$b"))"
+          done
+          [ -n "$MODULE_ARGS" ] || { echo "::error::external modules were requested but none were assembled — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
+          echo "EXT_MODULES_DIR=$EXT" >> "$GITHUB_ENV"
+          echo "EXT_MODULE_ARGS=$MODULE_ARGS" >> "$GITHUB_ENV"
       - name: Bake (compiler --output), then gate a mesh against it (--seed)
         # scope=none means the decision above VERIFIED that this exact content is already sealed
         # for this framework identity at every target — a positive finding, logged with both
@@ -637,18 +730,22 @@ jobs:
           # and main-cd.yml's publish-bake) and held the pair in bake-then-gate.sh so they could
           # not drift — this reusable lane was the one caller left on the old shape, so every node
           # repo (Plugins, Education, Reinsurance, SocialMedia) still baked through a mesh.
-          docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
+          EXT_V=()
+          [ -n "${EXT_MODULES_DIR:-}" ] && EXT_V=(-v "$EXT_MODULES_DIR:/ext")
+          # shellcheck disable=SC2086  # EXT_MODULE_ARGS is a flag list built above; word-splitting is the point
+          docker run --rm --init "${EXT_V[@]}" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
             --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" compile /repo \
-            "${ALLOW_ARGS[@]}" \
+            "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
             --output /bake --source-sha "$GITHUB_SHA"
 
           # ══ 2. THE GATE — a mesh, CONSUMING the bake above ═════════════════════════════════
           # Strictly stronger than the fused form as a gate: fused, the mesh rendered and ran
           # `Tests` against a PRIVATE recompile — bytes nothing ever ships. Seeded, it exercises
           # the very assemblies this lane is about to publish, which are the ones a portal adopts.
-          docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
+          # shellcheck disable=SC2086
+          docker run --rm --init "${EXT_V[@]}" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
             --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" /repo \
-            "${ALLOW_ARGS[@]}" \
+            "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
             --seed /bake
           # Postcondition, not a hope: a green tester that wrote no identity is a bake-stage
           # regression (or an image predating --bake-output support).
