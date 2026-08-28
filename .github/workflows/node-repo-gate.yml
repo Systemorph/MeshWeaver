@@ -128,6 +128,28 @@ on:
         required: false
         type: string
         default: ''
+      module-artifacts:
+        description: >-
+          Artifact-name pattern (actions/download-artifact `pattern`) of module bundles UPLOADED
+          BY THIS RUN (each a *.module.nupkg) whose module DLLs the gate must compose with
+          `--module`. The mirror of the same input on node-repo-publish-bake.yml, and it exists
+          for the same reason: since MeshWeaver#2276 the tester image ships NO modules.
+        required: false
+        type: string
+        default: ''
+      registry-modules:
+        description: >-
+          Package ids (whitespace-separated, e.g. `AI`) whose module bundle to fetch from
+          registry-url and compose into the gate with `--module` — for a repo that consumes a
+          package's types but does not build its module. Requires registry-url + registry-key.
+
+          🚨 A repo whose content declares `Skill` or `Agent` nodes needs `AI` here. Those are
+          ENGINE NodeTypes served by MeshWeaver.AI, so without the module they are unregistered
+          and every such package fails at INSTALL with `NodeType(s) not registered: Skill` —
+          a CONTENT-shaped error with an INFRASTRUCTURE cause.
+        required: false
+        type: string
+        default: ''
       capture-coredumps:
         description: >-
           Run the tester with minidump-on-crash enabled and upload any dumps as a run artifact
@@ -447,6 +469,63 @@ jobs:
           token: ${{ steps.stage-token.outputs.token }}
           path: cross-repo-stage
           sparse-checkout: ${{ inputs.stage-modules }}
+      - name: Download this run's module-bundle artifacts
+        if: inputs.module-artifacts != ''
+        uses: actions/download-artifact@v7
+        with:
+          pattern: ${{ inputs.module-artifacts }}
+          path: ${{ runner.temp }}/ext-bundles
+          merge-multiple: true
+      # 🚨 EXTERNAL MODULES — the same composition node-repo-publish-bake.yml does, for the same
+      # reason (#2276: the tester image ships no modules) and by the same recipe, so the GATE and
+      # the BAKE cannot disagree about what a mesh contains.
+      #
+      # Without it the gate stands up a mesh missing whatever module the content binds, and the
+      # failure is CONTENT-shaped with an INFRASTRUCTURE cause — `NodeType(s) not registered:
+      # Skill` at install, or CS0246 at compile. Measured 2026-08-28 across every plugin repo at
+      # once, while bumping their pins past #2276: 17 packages failed to install in one run.
+      # Every failure below is RED and NAMED, because a gate that quietly ran without a module it
+      # needed is worse than one that did not run at all.
+      - name: "External modules: assemble what the gate must compose"
+        if: inputs.module-artifacts != '' || inputs.registry-modules != ''
+        env:
+          REGISTRY_MODULES: ${{ inputs.registry-modules }}
+          REGISTRY_URL: ${{ inputs.registry-url }}
+          REGISTRY_KEY: ${{ secrets.registry-key }}
+        run: |
+          set -euo pipefail
+          EXT="${RUNNER_TEMP:-/tmp}/ext-modules"; mkdir -p "$EXT"; chmod 777 "$EXT"
+          BUNDLES="${RUNNER_TEMP:-/tmp}/ext-bundles"; mkdir -p "$BUNDLES"
+          for pkg in ${REGISTRY_MODULES:-}; do
+            idx=$(curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" "$REGISTRY_URL/api/plugins/bundles/index.json") \
+              || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
+            ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
+            [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key — check the key's grants, and that the upstream wave has published the bundle."; exit 1; }
+            curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
+              || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
+            echo "fetched $pkg@$ver from $REGISTRY_URL"
+          done
+          shopt -s nullglob
+          MODULE_ARGS=""
+          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
+            u="${RUNNER_TEMP:-/tmp}/unpack-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
+            unzip -o -q "$b" -d "$u"
+            name=""
+            [ -f "$u/meshweaver/manifest.json" ] && name=$(jq -r '.module.assemblyName // empty' "$u/meshweaver/manifest.json")
+            if [ -z "$name" ]; then
+              set -- "$u"/meshweaver/modules/*.dll
+              { [ $# -eq 1 ] && [ -f "$1" ]; } || { echo "::error::$(basename "$b"): cannot identify the module's entry assembly (no manifest module.assemblyName; meshweaver/modules/ holds $# dll(s))"; exit 1; }
+              name=$(basename "$1" .dll)
+            fi
+            test -f "$u/meshweaver/modules/$name.dll" || { echo "::error::$(basename "$b"): meshweaver/modules/$name.dll is missing from the bundle"; exit 1; }
+            mkdir -p "$EXT/$name"
+            cp -R "$u"/meshweaver/modules/. "$EXT/$name/"
+            MODULE_ARGS="$MODULE_ARGS --module /ext/$name/$name.dll"
+            echo "external module composed: $name ($(basename "$b"))"
+          done
+          [ -n "$MODULE_ARGS" ] || { echo "::error::external modules were requested but none were assembled — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
+          echo "EXT_MODULES_DIR=$EXT" >> "$GITHUB_ENV"
+          echo "EXT_MODULE_ARGS=$MODULE_ARGS" >> "$GITHUB_ENV"
       - name: Import + compile + render + run tests for each node repo
         env:
           TEST_IMAGE: ${{ inputs.test-image }}
@@ -544,16 +623,20 @@ jobs:
           # Reinsurance run 33091175986; the flag on the compile line had never been exercised).
           # The gate below stands the mesh up on the repo's own bundles PLUS the upstream seed —
           # that is where consuming a bake means something.
-          docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/bake" "${DUMP_ARGS[@]}" \
+          EXT_V=()
+          [ -n "${EXT_MODULES_DIR:-}" ] && EXT_V=(-v "$EXT_MODULES_DIR:/ext")
+          # shellcheck disable=SC2086  # EXT_MODULE_ARGS is a flag list; word-splitting is the point
+          docker run --rm --init "${EXT_V[@]}" -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/bake" "${DUMP_ARGS[@]}" \
             --entrypoint /app/mw-plugin-test "$IMAGE" compile /repo \
-            "${ALLOW_ARGS[@]}" \
+            "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
             --output /bake --source-sha "$GITHUB_SHA"
           [ -s "$OWN_BAKE/framework-mvid.txt" ] || { echo "::error::compile ran but wrote no bake identity — the bake stage regressed (or the image predates the compile verb; pin ≥ 77bc5f1)"; exit 1; }
           # Gate on the bake: own bundles AND the upstream seed together in one seed directory.
           if [ -n "${SEED_DIR:-}" ]; then cp "$SEED_DIR"/*.zip "$OWN_BAKE"/ 2>/dev/null || true; fi
-          docker run --rm --init -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/seed:ro" "${DUMP_ARGS[@]}" \
+          # shellcheck disable=SC2086
+          docker run --rm --init "${EXT_V[@]}" -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/seed:ro" "${DUMP_ARGS[@]}" \
             --entrypoint /app/mw-plugin-test "$IMAGE" /repo \
-            "${ALLOW_ARGS[@]}" --seed /seed
+            "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} --seed /seed
           echo "OWN_BAKE=$OWN_BAKE" >> "$GITHUB_ENV"
           echo "bake identity: $(cat "$OWN_BAKE/framework-mvid.txt") — $(ls "$OWN_BAKE"/*.zip | wc -l | tr -d ' ') bundle(s), gated on their own bytes"
       # 🚨 The dump is written by the CONTAINER, which runs as root, so the file lands owned by

@@ -57,6 +57,33 @@ on:
         required: false
         type: boolean
         default: false
+      module-artifacts:
+        description: >-
+          Artifact-name pattern (actions/download-artifact `pattern`) of module bundles UPLOADED
+          BY THIS RUN whose assemblies belong in the reference set.
+        required: false
+        type: string
+        default: ''
+      registry-modules:
+        description: >-
+          Package ids (whitespace-separated, e.g. `AI`) whose module bundle to fetch from
+          registry-url and add to the reference set — for a repo that BINDS a module's types but
+          does not build the module.
+
+          🚨 Since MeshWeaver#2276 the image is no longer the whole framework. `/app` ships no
+          MeshWeaver.AI, so `AiSettings`, `ThreadMessage`, `ThreadNodeType`,
+          `AgentPickerProjection`, `ModelProviderConfiguration` and the `IMessageHub.StartThread`
+          extension are simply ABSENT — and every NodeType binding them fails CS0246 / CS0103 /
+          CS1061. Those errors name the CONTENT, so they read as the repo breaking rather than as
+          a reference set that is missing a module.
+        required: false
+        type: string
+        default: ''
+      registry-url:
+        description: The registry serving module bundles for registry-modules.
+        required: false
+        type: string
+        default: ''
     secrets:
       acr-username:
         description: Registry user able to pull the image.
@@ -64,6 +91,9 @@ on:
       acr-password:
         description: Registry password for that user.
         required: true
+      registry-key:
+        description: An instance key (mwi_…) able to read the packages named in registry-modules.
+        required: false
 
 jobs:
   compile-check:
@@ -147,6 +177,47 @@ jobs:
           docker cp "$id:/app/." refs/ >/dev/null
           docker rm -v "$id" >/dev/null
           echo "framework assemblies: $(find refs -name 'MeshWeaver.*.dll' | wc -l)"
+      - name: Download this run's module-bundle artifacts
+        if: inputs.module-artifacts != ''
+        uses: actions/download-artifact@v7
+        with:
+          pattern: ${{ inputs.module-artifacts }}
+          path: ${{ runner.temp }}/ref-bundles
+          merge-multiple: true
+      # 🚨 THE IMAGE IS NO LONGER THE WHOLE FRAMEWORK (#2276). A repo binding an external module's
+      # types must add that module's assemblies, or the gate compiles against a framework no mesh
+      # actually runs — and reports the gap as CONTENT errors.
+      - name: Add external modules to the reference set
+        if: inputs.module-artifacts != '' || inputs.registry-modules != ''
+        env:
+          REGISTRY_MODULES: ${{ inputs.registry-modules }}
+          REGISTRY_URL: ${{ inputs.registry-url }}
+          REGISTRY_KEY: ${{ secrets.registry-key }}
+        run: |
+          set -euo pipefail
+          BUNDLES="${RUNNER_TEMP:-/tmp}/ref-bundles"; mkdir -p "$BUNDLES"
+          for pkg in ${REGISTRY_MODULES:-}; do
+            idx=$(curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" "$REGISTRY_URL/api/plugins/bundles/index.json") \
+              || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
+            ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
+            [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key."; exit 1; }
+            curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
+              || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
+            echo "fetched $pkg@$ver from $REGISTRY_URL"
+          done
+          shopt -s nullglob
+          added=0
+          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
+            u="${RUNNER_TEMP:-/tmp}/refunpack-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
+            unzip -o -q "$b" -d "$u"
+            [ -d "$u/meshweaver/modules" ] || { echo "::error::$(basename "$b"): no meshweaver/modules/ in the bundle"; exit 1; }
+            cp -R "$u"/meshweaver/modules/*.dll refs/ 2>/dev/null || true
+            added=$((added + 1))
+          done
+          # RED, not "nothing to do": silently falling back to the image-only set is exactly the
+          # state this input exists to leave.
+          [ "$added" -gt 0 ] || { echo "::error::external modules were requested but none were added — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
+          echo "reference set topped up from $added module bundle(s): $(find refs -name 'MeshWeaver.*.dll' | wc -l) assemblies"
       - name: Compile-check every NodeType
         working-directory: repo
         # --refs points at the assemblies unpacked from the platform image — a FLAT directory;
