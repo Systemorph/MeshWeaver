@@ -31,7 +31,7 @@ namespace MeshWeaver.Kernel.Hub;
 ///
 /// <para><b>The fix:</b> one <see cref="PortableExecutableReference"/> per assembly
 /// file, once per process, shared by every session — both for the declared
-/// reference set (<see cref="GetReferences"/>) and for resolver-driven resolution
+/// reference set (<see cref="GetReferencesAsync"/>) and for resolver-driven resolution
 /// (<see cref="SharedScriptMetadataResolver"/> wraps
 /// <see cref="ScriptMetadataResolver.Default"/> and memoizes per path). Roslyn
 /// shares the underlying <c>AssemblyMetadata</c> across compilations that use the
@@ -54,8 +54,15 @@ internal static class KernelScriptReferences
     private static readonly ConcurrentDictionary<string, PortableExecutableReference> Materialized =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private static readonly Lazy<ImmutableArray<PortableExecutableReference>> SharedSnapshot =
-        new(CreateSharedSnapshot, LazyThreadSafetyMode.ExecutionAndPublication);
+    // 🚨 Task, not a bare value — see GetReferencesAsync. The materialization below is
+    // synchronous, uncancellable (no CancellationToken overload exists for
+    // MetadataReference.CreateFromFile) CPU/disk work over ~350 assemblies, run via Task.Run so
+    // it executes on its OWN detached ThreadPool work item, decoupled from whichever caller's
+    // pooled leaf happens to trigger the FIRST-ever build. A caller's own cancellation must never
+    // abort this — it is shared by every mesh in the process — so GetReferencesAsync races the
+    // CALLER's token against this shared Task with Task.WaitAsync, never against the work itself.
+    private static readonly Lazy<Task<ImmutableArray<PortableExecutableReference>>> SharedSnapshot =
+        new(() => Task.Run(CreateSharedSnapshot), LazyThreadSafetyMode.ExecutionAndPublication);
 
     private static ImmutableArray<PortableExecutableReference> CreateSharedSnapshot()
         => AppDomain.CurrentDomain.GetAssemblies()
@@ -165,12 +172,27 @@ internal static class KernelScriptReferences
     /// References for one kernel session: the process-shared snapshot plus shared
     /// references for any assembly in <paramref name="sessionAssemblies"/> (curated
     /// core set + DI-contributed module assemblies) that was loaded after the
-    /// snapshot was taken. The per-session cost is ~zero — everything resolves to
-    /// the same process-wide instances.
+    /// snapshot was taken. The per-session cost is ~zero once the snapshot is warm —
+    /// everything resolves to the same process-wide instances.
+    ///
+    /// <para>🚨 <paramref name="ct"/> governs only how long THIS caller waits — it is raced
+    /// against the shared snapshot Task via <c>Task.WaitAsync</c>, never used to cancel the
+    /// snapshot build itself. The build is a process-wide, cache-forever memo shared by every
+    /// mesh in the process (issues #2480 /
+    /// #2578: it used to run inline inside a per-request pooled leaf with no cancellation
+    /// participation at all — the FIRST caller in the process paid its full, sometimes
+    /// multi-second cold cost while holding that leaf's IIoPool gate permit, and a silo/mesh
+    /// teardown racing that first caller had no way to reclaim the permit within the drain
+    /// budget). Racing the WAIT (not the work) means: this caller's own pooled leaf settles
+    /// promptly on cancellation and releases its gate permit, while the shared build keeps
+    /// running to completion in the background for whichever mesh/request needs it next — safe,
+    /// because it never touches a collectible NodeType ALC or any one mesh's disposed DI scope
+    /// (<see cref="CreateSharedSnapshot"/> explicitly excludes collectible-ALC assemblies).</para>
     /// </summary>
-    public static ImmutableArray<MetadataReference> GetReferences(IEnumerable<Assembly> sessionAssemblies)
+    public static async Task<ImmutableArray<MetadataReference>> GetReferencesAsync(
+        IEnumerable<Assembly> sessionAssemblies, CancellationToken ct)
     {
-        var snapshot = SharedSnapshot.Value;
+        var snapshot = await SharedSnapshot.Value.WaitAsync(ct).ConfigureAwait(false);
         var result = ImmutableArray.CreateBuilder<MetadataReference>(snapshot.Length + 4);
         var seen = new HashSet<PortableExecutableReference>();
         foreach (var reference in snapshot)

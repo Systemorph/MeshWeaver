@@ -349,17 +349,17 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // No lock and no gate here: REPL ordering across submissions is owned by the serial
         // Concat pump (see `submissions`), which subscribes this observable only after the
         // previous submission completed. So Execute is just: init → resolve NuGet refs → run
-        // the Roslyn pass. SubscribeOn moves the WHOLE subscribe — including
-        // EnsureInitialized's AppDomain scan — onto the ThreadPool, so the executor action
-        // block is never blocked by a compile. (The Roslyn compile itself runs on the bounded
-        // Compile IoPool inside RunOnePass; NuGet restore on the Http pool.)
+        // the Roslyn pass. SubscribeOn moves the WHOLE subscribe onto the ThreadPool, so the
+        // executor action block is never blocked by a compile. EnsureInitializedAsync's
+        // AppDomain scan is ADDITIONALLY routed through the bounded Compile IoPool (issues
+        // #2480/#2578) — it used to run as a bare synchronous call here, off any pool, which
+        // meant it could neither be tracked nor cancelled by silo/mesh teardown; now it is the
+        // same tracked, drainable leaf shape as the Roslyn compile itself in RunOnePass.
         return Observable.Defer(() =>
-            {
-                EnsureInitialized();
-                return EnsureCellSurfaceReferences()
+                compilePool.Invoke(t => EnsureInitializedAsync(t))
+                    .SelectMany(_ => EnsureCellSurfaceReferences())
                     .SelectMany(_ => nugetPool.Invoke(t => ResolveNuGetReferencesAsync(code, t)))
-                    .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, accessContext, ct));
-            })
+                    .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, accessContext, ct)))
             .Catch<object?, Exception>(ex =>
             {
                 if (ex is OperationCanceledException) return Observable.Throw<object?>(ex);
@@ -479,16 +479,24 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// Build script options once on first submission. Pulls the IMessageHub for
     /// the globals from the public hub (the parent), so scripts see the SAME hub
     /// external callers do — they can post messages, subscribe streams, etc.
+    ///
+    /// <para>🚨 Runs INSIDE the Compile IoPool leaf <see cref="Execute"/> wraps it in — never bare
+    /// on the ThreadPool as before (issues #2480/#2578). The reference materialization behind
+    /// <see cref="MeshScriptEnvironment.ReferencesAsync"/> can be genuinely slow the first time
+    /// any mesh in the process touches it, and used to hold no pool gate at all while doing so —
+    /// invisible to <c>IoPoolRegistry.DrainAll</c> and therefore never cancelled or joined by
+    /// teardown. Now the wait is a real, trackable, cancellable leaf; <paramref name="ct"/>
+    /// governs only how long THIS session waits, never the shared snapshot build itself (see
+    /// <see cref="KernelScriptReferences.GetReferencesAsync"/>).</para>
     /// </summary>
-    private void EnsureInitialized()
+    private async Task<Unit> EnsureInitializedAsync(CancellationToken ct)
     {
-        if (initialized) return;
-        initialized = true;
+        if (initialized) return Unit.Default;
 
         var defaultLogger = publicHub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger("MeshWeaver.Kernel.Script");
-        scriptLogger = new ScriptLogger(defaultLogger);
-        scriptGlobals = new MeshScriptGlobals { Mesh = publicHub, Log = scriptLogger };
+        var localScriptLogger = new ScriptLogger(defaultLogger);
+        var localScriptGlobals = new MeshScriptGlobals { Mesh = publicHub, Log = localScriptLogger };
 
         // Curated anchors + DI-contributed module assemblies + default imports all come
         // from MeshScriptEnvironment — the ONE description of the script environment,
@@ -498,8 +506,20 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // metadata block per reference PER SESSION (~350 refs ≈ 150-200 MiB of native
         // memory per kernel session, never reclaimed — the CI memory-pressure leak; see
         // KernelScriptReferences docs).
-        scriptOptions = ScriptOptions.Default
-            .WithReferences(MeshScriptEnvironment.References(publicHub.ServiceProvider))
+        //
+        // 🚨 `initialized` flips to true ONLY after every step below has succeeded (Copilot
+        // review, PR #2598). It used to be set FIRST — harmless when the reference build was a
+        // synchronous call that either finished or threw synchronously right there, but this
+        // method is now `await`-based and genuinely cancellable, so a cancellation or a
+        // transient fault partway through used to leave `initialized == true` with
+        // `scriptOptions` still null FOREVER: the guard at the top would then skip every future
+        // submission's attempt to build it, permanently wedging the session. Local variables
+        // here (rather than writing straight into the instance fields) keep a failed attempt
+        // from leaving scriptLogger/scriptGlobals half-set either.
+        var references = await MeshScriptEnvironment.ReferencesAsync(publicHub.ServiceProvider, ct)
+            .ConfigureAwait(false);
+        var options = ScriptOptions.Default
+            .WithReferences(references)
             // 🚨 Required for the sharing to be complete: the compilation resolves
             // the globals type's transitive closure via ResolveMissingAssembly —
             // with the default resolver that re-materializes every assembly's
@@ -507,6 +527,12 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             .WithMetadataResolver(MeshScriptEnvironment.MetadataResolver)
             .WithImports(MeshScriptEnvironment.Imports)
             .WithEmitDebugInformation(true);
+
+        scriptLogger = localScriptLogger;
+        scriptGlobals = localScriptGlobals;
+        scriptOptions = options;
+        initialized = true;
+        return Unit.Default;
     }
 
     /// <summary>

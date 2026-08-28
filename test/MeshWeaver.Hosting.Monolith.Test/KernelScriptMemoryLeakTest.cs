@@ -31,7 +31,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// with only a small managed delta. That signature = a small managed pin holding
 /// the script's <c>ScriptState</c> → <c>Compilation</c> → the ~300
 /// <c>AssemblyMetadata</c> native metadata blocks built by
-/// <c>KernelExecutor.EnsureInitialized</c> (one per loaded assembly).</para>
+/// <c>KernelExecutor.EnsureInitializedAsync</c> (one per loaded assembly).</para>
 ///
 /// <para>This probe runs one kernel script the same way MonolithKernelTest does,
 /// disposes the mesh AND its ServiceProvider, forces GC, and then BFS-walks the

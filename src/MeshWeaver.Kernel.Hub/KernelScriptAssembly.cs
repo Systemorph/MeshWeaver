@@ -8,7 +8,7 @@ namespace MeshWeaver.Kernel.Hub;
 /// MeshNodes (export, import, NodeType compile, …) registers one
 /// <see cref="KernelScriptAssembly"/> per assembly that scripts need to reference.
 ///
-/// <para>The kernel's <see cref="KernelExecutor.EnsureInitialized"/> resolves all
+/// <para>The kernel's <see cref="KernelExecutor.EnsureInitializedAsync"/> resolves all
 /// instances via <c>IServiceProvider.GetServices&lt;KernelScriptAssembly&gt;</c>
 /// and adds each <see cref="Assembly"/> to the Roslyn script options. That way
 /// the script's <c>using MyNamespace;</c> directive resolves even if Roslyn's
