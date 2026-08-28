@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.PluginTester;
@@ -31,7 +32,7 @@ internal static class TesterModules
     /// <c>GetFileNameWithoutExtension</c>, so a bare <c>"MeshWeaver.AI"</c> would probe
     /// <c>modules/MeshWeaver/</c> and read as absent.</para>
     /// </summary>
-    public static readonly string[] ImageShipped = ["MeshWeaver.AI.dll"];
+    public static readonly ImmutableArray<string> ImageShipped = ["MeshWeaver.AI.dll"];
 
     /// <summary>
     /// Every module entry this run activates: the image-shipped set, then the <c>--module</c>
