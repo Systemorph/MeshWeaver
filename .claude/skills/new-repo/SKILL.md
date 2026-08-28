@@ -542,6 +542,48 @@ is what turns another repo's green lane red. Full text:
 Dependabot: `secrets` provisioned for Actions are **not** visible to Dependabot-triggered runs —
 provision the pair under *Secrets → Dependabot* too, or a dependabot PR fails preflight.
 
+## 10a. Provisioning, end to end — measured 2026-08-28 standing up MeshWeaver.Crm
+
+Everything in §10 is a NAME; this is where each VALUE comes from, in the order that worked, with
+the three traps that cost a retry. Nothing here needs a second person — Systemorph issues every
+credential itself ([registry-credentials-we-issue](../../../AGENTS.md)).
+
+| Input | Where the value comes from | Trap |
+|---|---|---|
+| `ACR_USERNAME` / `ACR_PASSWORD` | a per-repo ACR **token** on a per-repo **scope map** — the fleet convention is `<short>-ci-pull` on `<short>-ci-pull-scope-map` (`repositories/mw-plugin-test/content/read`): `az acr scope-map create --registry meshweaver -n <short>-ci-pull-scope-map --repository mw-plugin-test content/read metadata/read` then `az acr token create --registry meshweaver -n <short>-ci-pull --scope-map <short>-ci-pull-scope-map` | 🚨 `token create` ECHOES the password in a docker-login hint on stderr. Treat it as burned: `az acr token credential generate … --password1 --query 'passwords[0].value' -o tsv > file 2>/dev/null`, then `gh secret set … < file`. Prove it with `docker login … --password-stdin < file` |
+| `MESHWEAVER_APP_ID` / `_PRIVATE_KEY` | the org GitHub App `meshweaver-cloud`, id **4220566** (`gh api /orgs/Systemorph/installations --jq '.installations[]|select(.app_slug=="meshweaver-cloud")|.app_id'`); PEM = keyvault `meshweaverkeyvault/github-app-privatekey` | verify the pairing before trusting it: mint an RS256 app JWT with the PEM and call `GET https://api.github.com/app` — the answer's `id`/`slug` must be 4220566 / meshweaver-cloud |
+| `AZURE_CLIENT_ID` / `_TENANT_ID` | `az identity show -g memex-aks-rg -n github-actions-bake --query '{clientId:clientId,tenantId:tenantId}'` | — |
+| `AZURE_SUBSCRIPTION_ID` | `az account show --query id` | — |
+| the two OIDC federated credentials | §10's two `az identity federated-credential create` calls; `REPO_ID` = `gh api repos/Systemorph/<Repo> --jq .id`, org id 77832550 | keep BOTH formats |
+| `MW_REGISTRY_URL` / `BAKE_PUBLISH_TARGETS` | the same literal every sibling carries — copy it: `gh api repos/Systemorph/MeshWeaver.Reinsurance/actions/variables --jq '.variables[]|"\(.name)=\(.value)"'` | variables are readable across repos; secrets never are |
+| `MW_REGISTRY_KEY` | mint a 20-minute `mwr_` on the registry (an executable Code node in your home, `execute_script`, calling `RegistrationKeyService.Mint(userId, name, email, description, expiresAt)` from `MeshWeaver.PluginCatalog`; the raw key lands in the activity log a second after `Succeeded`), then ONE pipeline: `curl -X POST https://memex.meshweaver.cloud/api/instances/register -d '{"bootstrapKey":…,"instanceId":"ci-<short>",…}' > file` → `python3 -c "…print(instanceKey,end='')" | gh secret set MW_REGISTRY_KEY --repo …` | registration AUTO-creates `Admin/_PluginGrant/ci-<short>` (`Plugins/*`, by `system-security`) — never create it by hand; delete the mint node afterwards |
+
+**Dependabot store too.** `gh secret set … --app dependabot` for `ACR_*` and `MESHWEAVER_APP_*` — a
+dependabot-triggered run reads the Dependabot store, and preflight fails red on the Actions-only
+pair (the same shape MeshWeaver#2249 documents).
+
+**The rest of the repo, from the CLI, in the order that worked:**
+
+```bash
+gh repo create Systemorph/MeshWeaver.<Name> --private --description "…"
+gh api -X PATCH repos/Systemorph/MeshWeaver.<Name> -f allow_auto_merge=true
+gh api -X PUT repos/Systemorph/MeshWeaver.<Name>/vulnerability-alerts
+gh api -X PUT repos/Systemorph/MeshWeaver.<Name>/automated-security-fixes
+gh api -X PUT repos/Systemorph/MeshWeaver.<Name>/collaborators/<login> -f permission=push   # per maintainer
+# the Copilot ruleset is data — copy a sibling's verbatim:
+rid=$(gh api repos/Systemorph/MeshWeaver.Reinsurance/rulesets --jq '.[0].id')
+gh api repos/Systemorph/MeshWeaver.Reinsurance/rulesets/$rid \
+  --jq '{name,target,enforcement,conditions,rules,bypass_actors}' > ruleset.json
+gh api -X POST repos/Systemorph/MeshWeaver.<Name>/rulesets --input ruleset.json
+```
+
+🚨 **`gen-manifests.py` refuses an EMPTY remote.** It reads the trunk's committed lock as the second
+version witness (`git ls-remote --symref origin HEAD`), so on a repo with no `main` yet it fails
+*"could not resolve which branch 'origin' publishes"* — and `validate-repos.py` fails on the missing
+lock. Push a bootstrap commit (README only — no `ci.yml`, so nothing runs) FIRST, then generate the
+manifest, then push the module. Two commits on a brand-new `main` is the cost; branch protection
+goes on AFTER the first real run has produced the three contexts to require.
+
 ## 11. Make the content reachable — register the repo as a catalog source
 
 A repo nobody reads ships nothing. The registry holds the git credential and re-serves per
