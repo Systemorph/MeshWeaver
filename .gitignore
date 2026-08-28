@@ -453,7 +453,7 @@ memex/aspire/Memex.Portal.Distributed/wwwroot/app/
 # mounted at /models/model.bin (see deploy/whisper/docker-compose.yml).
 #
 # 🗄️ BACKUP OF RECORD — a GitHub RELEASE ASSET on this repo, which is exempt from the 100 MB blob
-# limit (2 GB/asset): tag `voice-model-swiss-german`, asset `ggml-swiss-german-turbo-q5_0.bin`
+# limit (2 GB/asset): tag `voice-model-swiss-german` on MeshWeaver.Plugins (moved 2026-08-28)
 # (574,041,195 bytes). Re-fetch it exactly as deploy/whisper/README.md documents:
-#   curl -fSL https://github.com/Systemorph/MeshWeaver/releases/download/voice-model-swiss-german/ggml-swiss-german-turbo-q5_0.bin -o deploy/whisper/models/model.bin
+#   gh release download voice-model-swiss-german --repo Systemorph/MeshWeaver.Plugins --pattern 'ggml-swiss-german-turbo-q5_0.bin' --output deploy/whisper/models/model.bin   (PRIVATE repo — gh auth required)
 deploy/whisper/models/
