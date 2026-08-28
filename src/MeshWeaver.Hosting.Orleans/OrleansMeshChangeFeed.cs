@@ -100,7 +100,7 @@ public class OrleansMeshChangeFeed : IMeshChangeFeed, IDisposable
             return Unit.Default;
         }
 
-        var streamNs = $"mesh-{change.Kind.ToString().ToLowerInvariant()}";
+        var streamNs = PathCacheInvalidatorGrain.StreamNamespaceOf(change.Kind);
         var streamProvider = client.GetStreamProvider(StreamProviders.Memory);
         var stream = streamProvider.GetStream<MeshChangeEvent>(
             StreamId.Create(streamNs, Guid.Empty));
