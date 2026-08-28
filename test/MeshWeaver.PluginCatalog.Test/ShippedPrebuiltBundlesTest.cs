@@ -1,6 +1,8 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -15,6 +17,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Plugin.Packaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.PluginCatalog.Test;
@@ -650,6 +653,76 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
             .ToTask();
+    }
+
+    /// <summary>
+    /// A mount that backs NOTHING must name its reason at INFORMATION. The per-bundle
+    /// "names {n} NodeType(s) this mesh does not hold" line is <c>LogDebug</c>, and CI and prod
+    /// both run at Information — so the summary reads "0 prebuilt assembly(ies) from N shipped
+    /// bundle(s) … 0 adopted, 0 already current", with zero declines, and nothing anywhere says
+    /// why. Diagnosing exactly that on the Education gate (37 bundles, 0 covered, 0 declined, 16 ms)
+    /// required reading this file to discover the NodeType filter existed at all, which is what the
+    /// seeder's own "Loud, so an operator can see WHY an image that ships bundles still compiled"
+    /// intent is supposed to prevent.
+    ///
+    /// <para>The fixture is the real-world shape: a bundle whose framework identity MATCHES (so it
+    /// is never declined) naming a NodeType this mesh does not hold — i.e. a mesh that installs its
+    /// content after boot.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ABundleNamingOnlyAbsentTypes_SaysWhyAtInformation_NotJustZero()
+    {
+        // Deliberately NOT calling CreateNodeType: the absence IS the fixture.
+        var typePath = $"{TestPartition}/NeverImported";
+        var dir = CreateBundleDirectory();
+        var log = new CapturingLogger();
+        try
+        {
+            WriteBundle(
+                Path.Combine(dir, "absent.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream([1, 2, 3])));
+
+            var adopted = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, log)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+
+            adopted.Should().Be(0, "this mesh holds no NodeType at that path");
+
+            log.Information.Should().Contain(
+                line => line.Contains("NONE of the") && line.Contains("backed an assembly"),
+                "0-of-N with 0 declines has exactly one remaining cause once identity is ruled "
+                + "out, and an operator must be able to read it without opening the source");
+            log.Information.Should().Contain(
+                line => line.Contains("NodeType snapshot carries"),
+                "the snapshot size is what separates 'content not imported yet' (0) from "
+                + "'bundles for a content set this mesh does not serve' (>0)");
+        }
+        finally
+        {
+            TryDelete(dir);
+        }
+    }
+
+    /// <summary>Test-local <see cref="ILogger"/> that keeps what was written, per level. Not a mock
+    /// of a framework interface — the seeder takes an <c>ILogger?</c> and this is a real one.</summary>
+    private sealed class CapturingLogger : ILogger
+    {
+        private readonly ConcurrentQueue<string> information = new();
+
+        public IEnumerable<string> Information => information;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Information)
+                information.Enqueue(formatter(state, exception));
+        }
     }
 
     private static string CreateBundleDirectory()
