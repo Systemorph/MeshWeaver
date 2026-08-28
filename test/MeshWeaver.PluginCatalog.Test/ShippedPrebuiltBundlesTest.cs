@@ -690,7 +690,8 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
             adopted.Should().Be(0, "this mesh holds no NodeType at that path");
 
             log.Information.Should().Contain(
-                line => line.Contains("NONE of the") && line.Contains("backed an assembly"),
+                line => line.Contains("nothing was backed")
+                        && line.Contains("named only NodeTypes this mesh does not hold"),
                 "0-of-N with 0 declines has exactly one remaining cause once identity is ruled "
                 + "out, and an operator must be able to read it without opening the source");
             log.Information.Should().Contain(
