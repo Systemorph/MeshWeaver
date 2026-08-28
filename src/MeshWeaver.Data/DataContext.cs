@@ -1,5 +1,8 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
@@ -440,110 +443,160 @@ public sealed record DataContext : IDisposable
         // prod wedge). Time-box it so a hang reaches the SAME terminal failed state
         // as a fault — mirroring MessageHub.HandleInitialize's .Timeout(StartupTimeout).
         //
-        // The delay is CANCELLED by Dispose(): a hub disposed mid-init (normal for
-        // transient probe hubs — $model-probe/$schema-probe live for one read) must not
-        // leave this watchdog armed to fire minutes post-mortem (issue #1122: the 120s
-        // timer fired 90s AFTER the probe hub was disposed and stamped a fail-level
-        // "TIMED OUT … FAILED state" on a hub that no longer existed).
-        watchdogCancellation = new CancellationTokenSource();
-        Task.WhenAny(allInit, Task.Delay(InitializationTimeout, watchdogCancellation.Token))
-            .ContinueWith(_ =>
+        // 🚨 The wait is a SUBSCRIPTION, never a Task-shaped timer race (#2528; the
+        // disposal twin is #2488). This replaced Task.WhenAny(allInit, Task.Delay(…))
+        // + ContinueWith + a watchdog CancellationTokenSource. Amb over three one-shot
+        // arms; whichever fires first settles the gate, and the outcome is read off
+        // allInit's ACTUAL state at settle time (same discrimination the old shape did):
+        //
+        //   1. init settled — allInit bridged Task→IObservable (the sanctioned
+        //      direction) and Materialize'd, so a FAULTED or CANCELED init still RUNS
+        //      the settle body instead of skipping past it to an error arm;
+        //   2. the time-box — Observable.Timer(InitializationTimeout). The bound itself
+        //      is deliberate and STAYS: deleting it re-opens the 2026-06-26 wedge above.
+        //      Its expiry fails FAST and LOUDLY (fail-level log + InitializationError +
+        //      rejection handler) — never "proceed as if initialized";
+        //   3. the disarm — fired by Dispose(). 🚨 Disarm means FIRE NOW, not
+        //      unsubscribe (an Amb arm, never a TakeUntil): the settle body must still
+        //      run so the gate gets its terminal ANSWER — returning without it strands
+        //      every deferred delivery (#1270) — while Hub.IsShuttingDown routes it to
+        //      the recognized-shutdown outcome that stamps no post-mortem FAILED
+        //      residue (#1122). The AsyncSubject replays its terminal, so a Dispose
+        //      that ran BEFORE this gate armed (a probe hub torn down in the same
+        //      breath it was built) settles immediately instead of waiting out the
+        //      full time-box — the old CTS shape armed a fresh, never-cancelled timer
+        //      in that ordering.
+        //
+        // Take(1): every arm yields exactly one value and the first unsubscribes the
+        // rest — the losing timer is disposed with its subscription, so nothing roots
+        // this context and the subscription need not be stored. ObserveOn: the settle
+        // body must not run inline on the last data source's completing thread (arm 1)
+        // nor on Dispose()'s teardown stack (arm 3) — the same hop the previous
+        // ContinueWith(TaskScheduler.Default) gave it.
+        var initSettled = allInit.ToObservable().Materialize().Take(1).Select(_ => Unit.Default);
+        var timeBox = Observable.Timer(InitializationTimeout).Select(_ => Unit.Default);
+        Observable.Amb(initSettled, timeBox, watchdogDisarm)
+            .Take(1)
+            .ObserveOn(TaskPoolScheduler.Default)
+            .Subscribe(
+                _ => SettleInitializationGate(allInit),
+                ex =>
+                {
+                    // Fluent error arm — a try/catch around Subscribe would see nothing
+                    // (the fault arrives later, on another thread). None of the three
+                    // arms can OnError (arm 1 is Materialize'd), so this is a
+                    // scheduler-level fault: log it AND still settle, because the one
+                    // unacceptable outcome is a gate that never gets its answer.
+                    logger.LogError(ex,
+                        "DataContext init watchdog stream faulted for {Address} — settling the gate anyway.",
+                        Hub.Address);
+                    SettleInitializationGate(allInit);
+                });
+    }
+
+    /// <summary>
+    /// The init watchdog's terminal body: discriminates shutdown / timed-out / faulted /
+    /// canceled / clean off <paramref name="allInit"/>'s state at settle time, records the
+    /// outcome, and always ANSWERS the gate (<see cref="IMessageHub.FailGate"/> on shutdown,
+    /// <see cref="IMessageHub.OpenGate"/> otherwise). Runs exactly once, whichever watchdog
+    /// arm fired first — see <see cref="OpenInitializationGate"/>.
+    /// </summary>
+    private void SettleInitializationGate(Task allInit)
+    {
+        // Recognized shutdown, NOT a failure: the hub was disposed (or its subtree
+        // frozen by an ancestor's disposal) while its data sources were still
+        // initializing. The disposal pipeline already answers all traffic
+        // (ErrorType.ShuttingDown); recording InitializationError / erroring the data
+        // streams / registering a rejection handler here would stamp fail-level FAILED
+        // residue onto a hub that is already gone.
+        if (Hub.IsShuttingDown)
+        {
+            logger.LogDebug(
+                "DataContext initialization for {Address} ended by hub disposal — recognized "
+                + "shutdown outcome, no failure state recorded.", Hub.Address);
+            // 🚨 …but "no failure state" must never mean "no answer". Returning here used
+            // to leave InitializationGateName SHUT FOREVER — shutdown is precisely the
+            // outcome after which nothing can ever open it — and every delivery already
+            // parked behind it (plus every one that arrives during the remaining teardown,
+            // which can be the full QuiesceTimeout) was stranded. The sender's
+            // hub.Observe(...) then heard nothing until an unrelated deadline expired: the
+            // 30 s per-message deferral timeout, or whenever the teardown finally reached
+            // messageService.Dispose(). Observed in production shape as a CreateNodeRequest
+            // recorded `DEFERRED gates=[DataContextInit]` at runLevel=Quiescing that never
+            // drained (issue #1270; the SkillAutocompleteTest teardown hang #1269 fixed at
+            // the CALLER — the gate itself still stranded anything that parked there).
+            //
+            // FailGate is the terminal ANSWER, not a timeout: shutdown is a KNOWN outcome,
+            // so every deferred caller gets a transient DeliveryFailure ("the address may
+            // reactivate; retry") immediately. It records no InitializationError, no
+            // fail-level log and no errored data streams — the post-mortem FAILED residue
+            // #1122 removed stays removed.
+            Hub.FailGate(InitializationGateName,
+                $"Hub '{Hub.Address}' is shutting down; its DataContext initialization ended "
+                + $"without opening '{InitializationGateName}', which can therefore never open. "
+                + "The address may reactivate (recycle / restart); retry to get the "
+                + "authoritative answer.");
+            return;
+        }
+
+        Exception? failure = null;
+        if (!allInit.IsCompleted)
+        {
+            failure = new TimeoutException(
+                $"Hub '{Hub.Address}' DataContext initialization did not complete within "
+                + $"{InitializationTimeout.TotalSeconds:F0}s — likely a stuck NodeType compile, "
+                + "or a data source that never initialised.");
+            logger.LogError(failure,
+                "DataContext initialization TIMED OUT for {Address}. Hub is now in FAILED state.", Hub.Address);
+        }
+        else if (allInit.IsFaulted)
+        {
+            failure = new InvalidOperationException(
+                $"Hub '{Hub.Address}' initialization failed", allInit.Exception);
+            logger.LogError(allInit.Exception,
+                "DataContext initialization failed for {Address}. Hub is now in FAILED state.", Hub.Address);
+        }
+        else if (allInit.IsCanceled)
+        {
+            logger.LogWarning("DataContext initialization was canceled for {Address}", Hub.Address);
+        }
+        else
+        {
+            logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
+        }
+
+        if (failure is not null)
+        {
+            InitializationError = failure;
+
+            // Register a global rejection handler for all data requests: every
+            // subsequent request to this hub gets an immediate DeliveryFailure,
+            // so callers (and the MeshNodeStreamCache negative cache) get a
+            // TERMINAL answer and stop re-subscribing — never the 30s-defer loop.
+            RegisterInitializationFailureHandler(failure);
+
+            // Also propagate to existing data source streams.
+            foreach (var ds in DataSources)
             {
-                // Recognized shutdown, NOT a failure: the hub was disposed (or its subtree
-                // frozen by an ancestor's disposal) while its data sources were still
-                // initializing. The disposal pipeline already answers all traffic
-                // (ErrorType.ShuttingDown); recording InitializationError / erroring the data
-                // streams / registering a rejection handler here would stamp fail-level FAILED
-                // residue onto a hub that is already gone.
-                if (Hub.IsShuttingDown)
+                try
                 {
-                    logger.LogDebug(
-                        "DataContext initialization for {Address} ended by hub disposal — recognized "
-                        + "shutdown outcome, no failure state recorded.", Hub.Address);
-                    // 🚨 …but "no failure state" must never mean "no answer". Returning here used
-                    // to leave InitializationGateName SHUT FOREVER — shutdown is precisely the
-                    // outcome after which nothing can ever open it — and every delivery already
-                    // parked behind it (plus every one that arrives during the remaining teardown,
-                    // which can be the full QuiesceTimeout) was stranded. The sender's
-                    // hub.Observe(...) then heard nothing until an unrelated deadline expired: the
-                    // 30 s per-message deferral timeout, or whenever the teardown finally reached
-                    // messageService.Dispose(). Observed in production shape as a CreateNodeRequest
-                    // recorded `DEFERRED gates=[DataContextInit]` at runLevel=Quiescing that never
-                    // drained (issue #1270; the SkillAutocompleteTest teardown hang #1269 fixed at
-                    // the CALLER — the gate itself still stranded anything that parked there).
-                    //
-                    // FailGate is the terminal ANSWER, not a timeout: shutdown is a KNOWN outcome,
-                    // so every deferred caller gets a transient DeliveryFailure ("the address may
-                    // reactivate; retry") immediately. It records no InitializationError, no
-                    // fail-level log and no errored data streams — the post-mortem FAILED residue
-                    // #1122 removed stays removed.
-                    Hub.FailGate(InitializationGateName,
-                        $"Hub '{Hub.Address}' is shutting down; its DataContext initialization ended "
-                        + $"without opening '{InitializationGateName}', which can therefore never open. "
-                        + "The address may reactivate (recycle / restart); retry to get the "
-                        + "authoritative answer.");
-                    return;
+                    var stream = ds.GetStreamForPartition(null);
+                    stream?.OnError(failure);
                 }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "Error propagating init failure to data source {Id}", ds.Id);
+                }
+            }
+        }
 
-                Exception? failure = null;
-                if (!allInit.IsCompleted)
-                {
-                    failure = new TimeoutException(
-                        $"Hub '{Hub.Address}' DataContext initialization did not complete within "
-                        + $"{InitializationTimeout.TotalSeconds:F0}s — likely a stuck NodeType compile, "
-                        + "or a data source that never initialised.");
-                    logger.LogError(failure,
-                        "DataContext initialization TIMED OUT for {Address}. Hub is now in FAILED state.", Hub.Address);
-                }
-                else if (allInit.IsFaulted)
-                {
-                    failure = new InvalidOperationException(
-                        $"Hub '{Hub.Address}' initialization failed", allInit.Exception);
-                    logger.LogError(allInit.Exception,
-                        "DataContext initialization failed for {Address}. Hub is now in FAILED state.", Hub.Address);
-                }
-                else if (allInit.IsCanceled)
-                {
-                    logger.LogWarning("DataContext initialization was canceled for {Address}", Hub.Address);
-                }
-                else
-                {
-                    logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
-                }
-
-                if (failure is not null)
-                {
-                    InitializationError = failure;
-
-                    // Register a global rejection handler for all data requests: every
-                    // subsequent request to this hub gets an immediate DeliveryFailure,
-                    // so callers (and the MeshNodeStreamCache negative cache) get a
-                    // TERMINAL answer and stop re-subscribing — never the 30s-defer loop.
-                    RegisterInitializationFailureHandler(failure);
-
-                    // Also propagate to existing data source streams.
-                    foreach (var ds in DataSources)
-                    {
-                        try
-                        {
-                            var stream = ds.GetStreamForPartition(null);
-                            stream?.OnError(failure);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogDebug(ex, "Error propagating init failure to data source {Id}", ds.Id);
-                        }
-                    }
-                }
-
-                // Always open the gate so the hub can process messages.
-                // On failure/timeout, streams already have errors propagated and the
-                // rejection handler is registered; keeping the gate closed would hang
-                // the hub forever.
-                logger.LogDebug("DataContext: Opening {GateName} gate for {Address} (failed={Failed})",
-                    InitializationGateName, Hub.Address, failure is not null);
-                Hub.OpenGate(InitializationGateName);
-            }, TaskScheduler.Default);
+        // Always open the gate so the hub can process messages.
+        // On failure/timeout, streams already have errors propagated and the
+        // rejection handler is registered; keeping the gate closed would hang
+        // the hub forever.
+        logger.LogDebug("DataContext: Opening {GateName} gate for {Address} (failed={Failed})",
+            InitializationGateName, Hub.Address, failure is not null);
+        Hub.OpenGate(InitializationGateName);
     }
 
     /// <summary>
@@ -574,27 +627,26 @@ public sealed record DataContext : IDisposable
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
     private readonly List<Task> tasks = new();
     private readonly List<WorkspaceReference> initialized = new();
-    // Cancels the init-watchdog Task.Delay armed in OpenInitializationGate. Assigned there
-    // (never at config time, so record with-ers copying this field pre-arm is harmless) and
-    // cancelled by Dispose so a hub disposed mid-init doesn't keep a live timer whose
-    // continuation would fire minutes after the hub is gone (issue #1122).
-    private CancellationTokenSource? watchdogCancellation;
+    // The init watchdog's DISARM arm (issue #1122): fired by Dispose so a hub disposed
+    // mid-init settles the gate NOW, through the recognized-shutdown branch that stamps no
+    // FAILED residue — instead of leaving a live timer whose continuation fires minutes
+    // after the hub is gone. An AsyncSubject replays its terminal to late subscribers, so a
+    // Dispose that runs BEFORE OpenInitializationGate arms the watchdog still disarms it.
+    // (Record with-ers copy the reference at config time; a DataContext is created per hub
+    // and only the final instance ever arms/disarms, so sharing across with-copies is
+    // harmless — same reasoning the CTS this replaced documented.)
+    private readonly AsyncSubject<Unit> watchdogDisarm = new();
     /// <summary>Disposes every configured data source and disarms the init watchdog.</summary>
     public void Dispose()
     {
         // Disarm the init watchdog FIRST: DataContext.Dispose only runs during hub teardown
         // (Workspace.Dispose), so from here on "init did not complete" is a shutdown outcome,
-        // not a timeout. Cancelling completes the Task.WhenAny immediately; its continuation
-        // observes Hub.IsShuttingDown and records nothing.
-        try
-        {
-            watchdogCancellation?.Cancel();
-            watchdogCancellation?.Dispose();
-        }
-        catch (ObjectDisposedException)
-        {
-            // Dispose raced a second Dispose call — the watchdog is already disarmed.
-        }
+        // not a timeout. Firing the arm settles the watchdog's Amb immediately; the settle
+        // body observes Hub.IsShuttingDown and records nothing (#1122) while still ANSWERING
+        // the gate (#1270). Idempotent: an AsyncSubject ignores notifications after its
+        // terminal, so a racing second Dispose is a no-op.
+        watchdogDisarm.OnNext(Unit.Default);
+        watchdogDisarm.OnCompleted();
 
         foreach (var dataSource in DataSourcesById.Values)
         {
