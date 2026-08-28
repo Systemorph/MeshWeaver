@@ -38,24 +38,38 @@ secrets:
     ConnectionStrings__memex: "Host=memex-postgres-service;Port=5432;Database=memex;Username=postgres;Password=__PG_PASSWORD__"
     # AI key-protection master key (encrypts stored provider keys). Generated once.
     Ai__KeyProtection__MasterKey: "__AI_MASTER_KEY__"
-    # Microsoft Entra client secret — see LocalColimaMac.md §9. Fill this in.
-    Authentication__Microsoft__ClientSecret: "<entra-client-secret>"
+    # Microsoft Entra client secret — ONLY needed if you opt into the Entra flow
+    # below (LocalColimaMac.md §9). Left commented so a local portal never asks a
+    # developer to put a real tenant secret on their disk to log into their own machine.
+    # Authentication__Microsoft__ClientSecret: "<entra-client-secret>"
     # OpenAI-compatible (Ollama) API key — any non-empty token; "ollama" per doc §10.
     OpenAICompatible__ApiKey: "ollama"
 
 config:
   memex_portal:
-    # ---- Auth: Microsoft Entra OAuth (LocalColimaMac.md §9) ------------------
-    # Fill ClientId / TenantId from your dedicated local-dev app registration.
-    # Register redirect URIs: https://memex.localhost:8443/signin-microsoft
-    #                     and https://memex.localhost/signin-microsoft
-    Authentication__Provider: "Microsoft"
-    Authentication__Microsoft__ClientId: "<entra-client-id>"
-    Authentication__Microsoft__TenantId: "<entra-tenant-id>"
-    # ---- No-Azure fallback ---------------------------------------------------
-    # If you have no Entra app yet, comment out the three Microsoft lines above
-    # and uncomment the next line to log in via the built-in dev login instead.
-    # Authentication__EnableDevLogin: "true"
+    # ---- Auth: the built-in developer login (the local default) ---------------
+    # A local portal signs you in WITHOUT a cloud identity provider. DevLogin
+    # self-provisions on first sign-in (DevAuthController -> UserOnboardingService),
+    # so a fresh machine needs no tenant, no app registration, no redirect URI and
+    # no client secret on disk.
+    #
+    # 🚨 These two are a PAIR. EnableDevLogin turns the login on; DevAdminUsers is
+    # the comma-separated list of ids granted platform admin when they sign in that
+    # way. One without the other is a portal you can log into and then administer
+    # nothing on — set both, or neither.
+    Authentication__EnableDevLogin: "true"
+    Authentication__DevAdminUsers: "<your-username>"
+    # ---- Opt-in: Microsoft Entra OAuth (LocalColimaMac.md §9) -----------------
+    # Only needed to exercise the ENTRA FLOW ITSELF locally — signing in for
+    # ordinary local work does not require it. Uncomment these plus the
+    # ClientSecret above, fill them from a dedicated local-dev app registration,
+    # and register the redirect URIs:
+    #   https://memex.localhost:8443/signin-microsoft
+    #   https://memex.localhost/signin-microsoft
+    # Note this also moves the sign-out path from /dev/logout to /auth/logout.
+    # Authentication__Provider: "Microsoft"
+    # Authentication__Microsoft__ClientId: "<entra-client-id>"
+    # Authentication__Microsoft__TenantId: "<entra-tenant-id>"
 
     # ---- Instance identity (tab title + favicon badge — LocalColimaMac.md §12)
     Portal__InstanceName: "Local"
