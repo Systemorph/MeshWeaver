@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reflection;
 using MeshWeaver.Compiler;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph.Configuration;
@@ -58,6 +59,22 @@ public static class TreeBake
         /// <summary>Factory for the leaf loggers the toolchain's own services want (the NuGet
         /// resolver). Null keeps them silent.</summary>
         public ILoggerFactory? LoggerFactory { get; init; }
+
+        /// <summary>
+        /// The module assemblies this bake compiles against, as RESOLVED file paths — build them
+        /// with <see cref="TesterModules.ResolvedPaths"/>, which is the one list the gate reads too.
+        ///
+        /// <para>A module lives under <c>modules/&lt;name&gt;/</c> and is therefore NOT in
+        /// <c>TRUSTED_PLATFORM_ASSEMBLIES</c>, so it reaches the compile only by being composed in
+        /// — see <see cref="InstalledModuleAssembly"/>, which names this as its first purpose.</para>
+        ///
+        /// <para>🚨 Already-resolved PATHS, not entry names, and deliberately so: resolving means
+        /// calling <c>MeshBuilder.ResolveModulePath</c>, and <c>MeshFreeBakePathTest</c> fails the
+        /// build if anything reachable from <see cref="Run"/> so much as NAMES a mesh type. That
+        /// guard is right — a bake is a build step and must not touch a mesh — so resolution
+        /// happens at the CLI boundary and the bake receives the answer.</para>
+        /// </summary>
+        public IReadOnlyList<string> ModuleAssemblyPaths { get; init; } = [];
     }
 
     /// <summary>One NodeType's outcome.</summary>
@@ -149,15 +166,31 @@ public static class TreeBake
             $"bake: {treeNodes.Length} node(s) from {packages.Count} package(s); "
             + $"framework={frameworkIdentity}");
 
+        // 🚨 The bake compiles against the SAME reference set a portal does — the TPA baseline PLUS
+        // this deployment's installed modules. No mesh here, but "no mesh" never meant "no modules":
+        // a module published into modules/<name>/ is by construction absent from
+        // TRUSTED_PLATFORM_ASSEMBLIES, so a bake using the bare Default set cannot see ONE module
+        // type, while a portal — which composes them — compiles the very same content fine.
+        //
+        // That asymmetry hides itself. The gate's compile-check stands up a mesh and therefore
+        // composes modules, so it goes GREEN; only publish-bake goes red, which reads as a bake
+        // infrastructure failure rather than as a missing reference. It shipped exactly that way
+        // when the AI engine left the content surface (#2276): Store/Installer's `AiSettings` calls
+        // stopped resolving HERE and nowhere else, five Store NodeTypes went RED, no bundle was
+        // sealed for the new framework identity, and every install then correctly declined to
+        // self-update onto an image whose content had no bake (#2563) — a fleet held back by a
+        // reference list, with nothing in the failure naming a reference.
+        var modules = LoadExternalModules(options);
         var idOf = CompiledDependencies.CreateIdResolver(
             FrameworkBuildIdentity.ProcessSurfacePairs,
-            // No mesh ⇒ no installed modules. A deployment that installs modules keys its own
-            // record on them; a type that binds one is DECLINED by the consumer's dependency check
-            // rather than silently adopted, which is the safe direction.
-            ImmutableDictionary<string, string>.Empty,
+            // Modules resolve FIRST and by exact-build MVID, so the record a consumer checks names
+            // the same build it will bind. Empty here (the old value) made a module-bound type
+            // fall through to the platform branch and record `ref:`/absent, which cannot match the
+            // `mvid:` a module-installing portal computes — the second half of #2563.
+            ModuleMvidsOf(modules),
             FrameworkBuildIdentity.ProcessImplMvidOf);
         var toolchainId = CompiledDependencies.ComputeToolchainId(FrameworkBuildIdentity.ProcessImplMvidOf);
-        var references = CompileReferences.Default;
+        var references = CompileReferences.ComposeWithModules(modules);
 
         // 🚨 The NuGet resolver is WIRED, not omitted. `#r "nuget:…"` is a compile input like any
         // other — samples/Graph/Data/MathDemo/Matrix declares `#r "nuget:MathNet.Numerics, 5.0.0"` —
@@ -190,6 +223,59 @@ public static class TreeBake
                 // A leftover temp directory costs disk, never correctness.
             }
         }
+    }
+
+    /// <summary>
+    /// Loads the module entry assemblies the same way a mesh installs them —
+    /// <see cref="Assembly.LoadFrom(string)"/>, so they land in the Default ALC, file-backed, and
+    /// expose a <c>Location</c> the compiler can turn into a Roslyn <c>MetadataReference</c>.
+    ///
+    /// <para>🚨 A module that will not load is FATAL, never skipped. Skipping would produce the
+    /// precise failure this whole change exists to remove: a bake that silently compiled without a
+    /// module's types, reported the resulting misses as CONTENT errors, and named nothing about a
+    /// reference. Loud here, once, beats five red NodeTypes and a fleet that will not roll.</para>
+    /// </summary>
+    private static IReadOnlyList<InstalledModuleAssembly> LoadExternalModules(Options options)
+    {
+        var paths = options.ModuleAssemblyPaths;
+        if (paths.Count == 0)
+            return [];
+        var loaded = new List<InstalledModuleAssembly>(paths.Count);
+        foreach (var path in paths)
+        {
+            Assembly assembly;
+            try
+            {
+                assembly = Assembly.LoadFrom(Path.GetFullPath(path));
+            }
+            catch (Exception ex) when (ex is IOException or BadImageFormatException)
+            {
+                throw new InvalidOperationException(
+                    $"bake: --module '{path}' could not be loaded — {ex.Message}. Pass the module's "
+                    + "ENTRY assembly (…/<Name>/<Name>.dll), built for this framework.", ex);
+            }
+            loaded.Add(new InstalledModuleAssembly(assembly));
+            options.Output.WriteLine(
+                $"bake: module {assembly.GetName().Name} "
+                + $"mvid={assembly.ManifestModule.ModuleVersionId:N} — composed into the reference set");
+        }
+        return loaded;
+    }
+
+    /// <summary>Installed module simple name → implementation MVID ("N"). Deliberately the same
+    /// projection the mesh makes (<c>NodeTypeCompilationHelpers.ModuleMvidsOf</c>): producer and
+    /// consumer have to compute one id for one build, or every bundle is declined.</summary>
+    private static IReadOnlyDictionary<string, string> ModuleMvidsOf(
+        IReadOnlyList<InstalledModuleAssembly> modules)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var module in modules)
+        {
+            var name = module.Assembly.GetName().Name;
+            if (!string.IsNullOrEmpty(name))
+                map[name] = module.Mvid.ToString("N");
+        }
+        return map;
     }
 
     private static Report BakeAll(

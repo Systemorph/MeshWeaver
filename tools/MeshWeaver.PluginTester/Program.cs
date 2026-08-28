@@ -79,6 +79,7 @@ static int RunCompile(string[] args)
     string? compileSourceSha = null;
     var compileAllow = GateAllowlist.Empty;
     var compileAllowApplied = false;
+    var compileModules = new List<string>();
     for (var i = 0; i < args.Length; i++)
     {
         switch (args[i])
@@ -119,13 +120,34 @@ static int RunCompile(string[] args)
                 compileAllowApplied = true;
                 break;
             }
-            case "--output" or "--source-sha" or "--allow":
+            // 🚨 THE SAME MODULE SET THE GATE LOADS — and for a stronger reason here. The gate
+            // needs a module to ACTIVATE its node types; the bake needs it to COMPILE against,
+            // because a module under modules/<name>/ is absent from TRUSTED_PLATFORM_ASSEMBLIES.
+            // Omit it and the bake resolves fewer types than the portal that consumes the bundles,
+            // then reports the shortfall as content errors (#2563). Repeatable, validated here for
+            // the same reason the gate validates it: a bake that quietly ran without a module it
+            // was told to load blames the CONTENT for a missing reference.
+            case "--module" when i + 1 < args.Length:
+            {
+                var compileModulePath = Path.GetFullPath(args[++i]);
+                if (!File.Exists(compileModulePath))
+                {
+                    Console.Error.WriteLine(
+                        $"compile: --module '{compileModulePath}' does not exist. Pass the module's "
+                        + "ENTRY assembly (…/<Name>/<Name>.dll) and make sure it is mounted into "
+                        + "the container.");
+                    return 2;
+                }
+                compileModules.Add(compileModulePath);
+                break;
+            }
+            case "--output" or "--source-sha" or "--allow" or "--module":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value.");
                 return 2;
             case "--help" or "-h":
                 Console.WriteLine(
                     "usage: mw-compiler compile <checkout-root> --output <dir> [--allow <file>] "
-                    + "[--source-sha <sha>]");
+                    + "[--source-sha <sha>] [--module <dll>]...");
                 return 0;
             default:
                 if (args[i].StartsWith('-') || compileRoot is not null)
@@ -153,6 +175,10 @@ static int RunCompile(string[] args)
         RepoRoot = compileRoot,
         OutputDirectory = outputDirectory,
         SourceSha = compileSourceSha,
+        // Resolved HERE, at the CLI boundary: TesterModules is the one list the gate reads too, and
+        // resolution names MeshBuilder — which MeshFreeBakePathTest forbids anywhere the bake can
+        // reach. The bake gets paths; it never meets a mesh type.
+        ModuleAssemblyPaths = TesterModules.ResolvedPaths(compileModules),
     });
     if (bake.FatalError is not null)
         Console.Error.WriteLine($"compile: FATAL — {bake.FatalError}");
