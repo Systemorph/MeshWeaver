@@ -13,6 +13,8 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Logging;
 
+using Memex.Portal.Shared.Authentication;
+
 namespace Memex.Portal.Shared.Social;
 
 /// <summary>
@@ -166,11 +168,16 @@ public static class GitHubLoginEndpoints
         return endpoints;
     }
 
-    /// <summary>Only ever redirect to a local path — never an attacker-supplied absolute URL (open-redirect guard).</summary>
-    internal static string SafeLocal(string? returnUrl) =>
-        string.IsNullOrWhiteSpace(returnUrl) || !returnUrl.StartsWith("/", StringComparison.Ordinal) || returnUrl.StartsWith("//", StringComparison.Ordinal)
-            ? "/"
-            : returnUrl;
+    /// <summary>
+    /// Only ever redirect to a local path — never an attacker-supplied absolute URL.
+    ///
+    /// <para>🚨 Delegates to <see cref="ReturnUrlPolicy.Sanitize"/> rather than re-implementing the
+    /// check. The hand-written version here rejected <c>//host</c> but ACCEPTED <c>/\host</c>, and
+    /// browsers normalise a backslash to a slash in special-scheme URLs — so a crafted target still
+    /// became a protocol-relative external redirect (#2302). Three sinks in this assembly each had
+    /// their own copy of this rule and two of them were wrong; there is now one.</para>
+    /// </summary>
+    internal static string SafeLocal(string? returnUrl) => ReturnUrlPolicy.Sanitize(returnUrl);
 
     private static string GenerateState()
     {
