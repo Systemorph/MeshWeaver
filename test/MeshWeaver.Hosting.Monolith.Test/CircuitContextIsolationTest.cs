@@ -23,8 +23,8 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <para>The field is gone. <c>SetCircuitContext</c> now writes ONLY the AsyncLocal, so identity
 /// resolution fails CLOSED off the circuit's own call tree. The two legitimate "identity must
 /// survive every hop" cases are served by correctly-scoped APIs instead:
-/// <see cref="AccessService.SetHostIdentity"/> (a single-identity process — MAUI device client,
-/// xUnit host) and <see cref="AccessService.SetStandingIdentity"/> (per-hub owner injection).</para>
+/// <see cref="AccessService.SetHostIdentity"/> (a single-identity process — a native device
+/// client, the xUnit host) and <see cref="AccessService.SetStandingIdentity"/> (per-hub owner injection).</para>
 /// </summary>
 public class CircuitContextIsolationTest
 {
@@ -75,9 +75,9 @@ public class CircuitContextIsolationTest
     [Fact(Timeout = 20_000)]
     public async Task SetHostIdentity_SurvivesHops_ForSingleIdentityHosts()
     {
-        // The MAUI device client and the xUnit test host serve exactly one user and have no
+        // A native device client and the xUnit test host serve exactly one user and have no
         // circuit, so their standing identity legitimately survives every hop. This is the
-        // contract TestUsers.DevLogin and MauiProgram depend on.
+        // contract TestUsers.DevLogin depends on.
         var access = new AccessService();
         access.SetHostIdentity(new AccessContext { ObjectId = "device-user", Name = "Device User" });
 
