@@ -165,6 +165,72 @@ public class RedLogBurstReconstructionTest
     }
 
     /// <summary>
+    /// #2466 verbatim: the single bare header production actually fingerprinted —
+    /// <c>fail: MeshWeaver.Connection.Orleans.OrleansRoutingService[0]</c>, nothing else in the
+    /// window. It must never reach <c>Reports</c>; it is the recoverable window-edge case, so the
+    /// watcher holds its cursor at the header and reads the burst whole next poll (and reports it
+    /// as a capture gap if it genuinely has no body).
+    /// </summary>
+    [Fact]
+    public void The_2466_bare_header_is_never_fingerprinted()
+    {
+        var entries = ImmutableList.Create(
+            Line(0, Pod, "fail: MeshWeaver.Connection.Orleans.OrleansRoutingService[0]"));
+
+        var aggregation = BurstAggregator.Aggregate(entries, maxSamples: 10, maxSampleLength: 4000);
+
+        aggregation.Reports.Should().BeEmpty(
+            "an incident keyed on category+event id alone names a component and no defect (#2466)");
+        var open = aggregation.HeaderOnly.Should().ContainSingle().Which;
+        open.Category.Should().Be("MeshWeaver.Connection.Orleans.OrleansRoutingService");
+        open.AtWindowEdge.Should().BeTrue("nothing followed it, so the body may be past the edge");
+    }
+
+    /// <summary>
+    /// Two consecutive RED headers from the SAME pod: the first burst provably has no body — its
+    /// pod's very next line opened another red event — so it is bodyless-final, while the second is
+    /// the recoverable window-edge case. Neither may be fingerprinted. This is the
+    /// <c>Orleans.Messaging[100071]</c> shape from #2466's recurrences, where bare headers kept
+    /// folding into the degenerate incident.
+    /// </summary>
+    [Fact]
+    public void Consecutive_red_headers_from_one_pod_are_two_bodyless_bursts_not_incidents()
+    {
+        var entries = ImmutableList.Create(
+            Line(0, Pod, "fail: Orleans.Messaging[100071]"),
+            Line(5, Pod, "fail: Orleans.Messaging[100071]"));
+
+        var aggregation = BurstAggregator.Aggregate(entries, maxSamples: 10, maxSampleLength: 4000);
+
+        aggregation.Reports.Should().BeEmpty();
+        aggregation.HeaderOnly.Should().HaveCount(2);
+        aggregation.HeaderOnly[0].AtWindowEdge.Should().BeFalse(
+            "its own pod's next red header proves there was no body");
+        aggregation.HeaderOnly[1].AtWindowEdge.Should().BeTrue(
+            "the last burst's body may simply be past the window's edge");
+        aggregation.RedBursts.Should().Be(2, "both were red bursts and are counted honestly");
+    }
+
+    /// <summary>
+    /// A burst whose only continuation is whitespace — the shape of a call site logging an empty
+    /// template with no exception — is bodyless, not an incident with a blank message.
+    /// </summary>
+    [Fact]
+    public void A_whitespace_only_body_is_still_bodyless()
+    {
+        var entries = ImmutableList.Create(
+            Line(0, Pod, "fail: MeshWeaver.Connection.Orleans.OrleansRoutingService[0]"),
+            Line(1, Pod, "      "),
+            Line(2, Pod, "info: MeshWeaver.Hosting.MeshNodeStreamCache[0]"));
+
+        var aggregation = BurstAggregator.Aggregate(entries, maxSamples: 10, maxSampleLength: 4000);
+
+        aggregation.Reports.Should().BeEmpty("whitespace carries no diagnostic");
+        var bodyless = aggregation.HeaderOnly.Should().ContainSingle().Which;
+        bodyless.AtWindowEdge.Should().BeFalse("the pod moved on to another event, so this is final");
+    }
+
+    /// <summary>
     /// The masking / dedup contract still holds across the per-pod grouping: the same fault on two
     /// replicas is ONE incident with both pods on it, not one incident per replica.
     /// </summary>
