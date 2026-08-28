@@ -1,6 +1,6 @@
 ---
 name: storm
-description: Diagnose and CURE storms that wedge the portal — resubscribe/retry storms, NotFound/DeliveryFailure storms, per-instance-hub accumulation, create-in-render loops. A storm makes the process unresponsive → liveness /healthz times out → the pod is pulled from the Service → ingress returns 502 → SIGKILL + restart. Use when a portal pod restarts/502s, memory climbs unbounded, the log volume explodes, or you are reviewing reactive code that could re-fire on every emission. Storms come from exactly two roots: (1) sync-over-async blocking, (2) uncaught / not-forwarded exceptions or delivery failures. Grounded in ErrorPropagationAndWedges, AccessContextPropagation.md; pairs with the /async skill.
+description: 'Diagnose and CURE storms that wedge the portal — resubscribe/retry storms, NotFound/DeliveryFailure storms, per-instance-hub accumulation, create-in-render loops. A storm makes the process unresponsive → liveness /healthz times out → the pod is pulled from the Service → ingress returns 502 → SIGKILL + restart. Use when a portal pod restarts/502s, memory climbs unbounded, the log volume explodes, or you are reviewing reactive code that could re-fire on every emission. Storms come from exactly two roots: (1) sync-over-async blocking, (2) uncaught / not-forwarded exceptions or delivery failures. Grounded in ErrorPropagationAndWedges, AccessContextPropagation.md; pairs with the /async skill.'
 user-invocable: true
 allowed-tools:
   - Read
