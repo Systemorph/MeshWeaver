@@ -685,6 +685,32 @@ public record NodeTypeDefinition
     public string? FailedBuildInputs { get; init; }
 
     /// <summary>
+    /// The build-inputs token the in-flight compile was dispatched for, stamped by the RELEASE
+    /// WATCHER on the commit where it flips <see cref="CompilationStatus"/> to Pending (#2544).
+    ///
+    /// <para>🚨 <b>Null means "no watcher dispatch vouches for the compile in flight".</b> Several
+    /// kickoff paths — first build, recovery, framework-stale, the failed-verdict re-drive — flip
+    /// to Pending WITHOUT going through the watcher, and they now clear this field explicitly.
+    /// That is load-bearing rather than tidy: leaving a previous dispatch's token behind would let
+    /// a later request be absorbed against a compile nobody recorded the inputs of, and if that
+    /// compile fails the absorbed release request is simply lost.</para>
+    ///
+    /// <para>🚨 It exists so a release request can be recognised by WHAT it asks for, not by WHEN
+    /// it was asked. <c>RequestedReleaseAt</c> is a fresh <c>UtcNow</c> on every write, so two
+    /// requests for identical content are two distinct values that can never be seen as one. A
+    /// trigger arriving while the type is Pending/Compiling was therefore parked and re-fired by
+    /// the first compile's own terminal write-back — one logical event (a merge, a push, an
+    /// install wave) became N sequential Roslyn compiles of the same sources, each invalidating the
+    /// type's instance hubs and raising the "newer build available" adornment. Measured in
+    /// production: pairs 65 ms apart, three inside 2 s, and seven compiles for one merge.</para>
+    ///
+    /// <para>When this equals the token the current request resolves to, the in-flight compile will
+    /// produce byte-for-byte what the request asks for, so the request is CONSUMED rather than
+    /// queued. <c>RequestedReleaseForce</c> remains the user's escape hatch and always compiles.</para>
+    /// </summary>
+    public string? DispatchedBuildInputs { get; init; }
+
+    /// <summary>
     /// 🚨 Round-trip buffer for content members this compiled shape does not declare —
     /// schema evolution: a property written by a NEWER build, or one removed since the
     /// JSON was persisted. Without this, System.Text.Json silently DROPS such members on
