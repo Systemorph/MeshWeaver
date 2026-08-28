@@ -505,7 +505,10 @@ stream answers *what it says*:
 // the node is written, and a stale negative only means waiting a beat longer. select:path —
 // nothing here reads Content.
 hub.GetQuery($"usage:{parentPath}", $"path:{parentPath}/_Usage scope:children nodeType:TokenUsage select:path")
-    .Where(nodes => nodes.Any(n => string.Equals(n.Path, target, StringComparison.OrdinalIgnoreCase)))
+    // Ordinal, never OrdinalIgnoreCase: mesh paths are case-SENSITIVE. A case-insensitive match
+    // lets a DIFFERENT node satisfy the gate, and the point read below then opens on a path
+    // that does not exist — exactly the NotFound this gate exists to rule out.
+    .Where(nodes => nodes.Any(n => string.Equals(n.Path, target, StringComparison.Ordinal)))
     .Take(1)
     // CONTENT — the OWNER's authoritative stream, opened only now that the node demonstrably
     // exists, so it can neither NotFound nor trip the storm breaker. Live (no Take): later
