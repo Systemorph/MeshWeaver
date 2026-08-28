@@ -79,7 +79,11 @@ If you are reaching for any of these to build a UI feature, STOP and find the co
    `RenderHtml`-shaped helper, or `Controls.Html(handBuiltMarkup)`. → use a CONTROL:
    `Controls.DataGrid(rows).WithColumn(new PropertyColumnControl<T> { Property = nameof(Row.X).ToCamelCase() }.WithTitle("…").WithFormat("N0"))`,
    composed with `Controls.Stack` / `Controls.LayoutGrid` / `Controls.Title` / `Controls.Markdown`.
-   (`Controls.Html` is ONLY for genuinely pre-rendered markdown/rich text.)
+   (`Controls.Html` is ONLY for genuinely pre-rendered markdown/rich text.) This is the exact hack
+   the maintainer banned on 2026-06-19 (*"use just controls and layout areas … get rid of RenderHtml
+   … I don't want to see such hacks any more"*) — and the hand-rolled `RenderHtml`'s
+   string-interpolation + LINQ also caused the >10-min AI-project compile regression (`e30e9b5f1`).
+   If you're reaching for a string of HTML, STOP and find the control.
 3. **Hand-built `<select>`/checkbox/textarea + a `/data` section** → the `Edit` macro + the attributes
    above, or `Controls.Select` / `Controls.Combobox` / `Controls.Listbox` / `Controls.Text`.
 4. **`.Take(1)` on a stream feeding a live data-bound view** — freezes the binding. Stay subscribed
@@ -88,6 +92,16 @@ If you are reaching for any of these to build a UI feature, STOP and find the co
    bypasses the cache; writes through `_cache.Update` won't be observed. Use `_cache.GetStream(path)`.
 6. **`async`/`await`/`Task<T>`/`.ToTask()`/`QueryAsync`/`SelectMany(async …)` in a layout area** —
    deadlocks the hub; pairs with the [/async](../async/SKILL.md) rule.
+7. **A bespoke submit path for a chat message.** Submitting goes through the existing
+   `hub.StartThread(...)` / `hub.SubmitMessage(threadPath, text, …)` extensions and nothing else —
+   no wrapper class, no path→id resolution, no create-or-submit logic beyond those APIs. Pass node
+   PATHS through; downstream loads the node (`StartThread` takes a model PATH and loads the model
+   from its mesh-node stream — don't pre-resolve an id). The full surface is in
+   [/mesh-data](../mesh-data/SKILL.md); it lives with the AI engine in MeshWeaver.Plugins (#2276).
+
+Before writing ANY UI/binding/persistence code, FIND the existing framework area / control / macro /
+extension and use it. If you're reaching for `GetDataStream` / `Subscribe` / `Update` /
+`CombineLatest` / a new wrapper for a UI feature, STOP.
 
 ## The controls language
 

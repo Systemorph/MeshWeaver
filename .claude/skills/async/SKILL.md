@@ -120,7 +120,78 @@ does not believe it covers the stream.
 
 > Reading a single node's content? Use the synced stream (`GetMeshNodeStream(path)`), not
 > `QueryAsync` (eventually consistent → stale after writes) and not a blocking await. See
-> SyncedMeshNodeQueries.md.
+> SyncedMeshNodeQueries.md and [/mesh-data](../mesh-data/SKILL.md).
+
+### 🚨🚨🚨 ABSOLUTE: `Observable.FromAsync` is NEVER tolerated
+
+**Writing `Observable.FromAsync(...)` anywhere in `src/` is FORBIDDEN — no exceptions, no "Postgres
+is special", no "storage is the hot path".** A bare `FromAsync` runs the function's synchronous
+prologue on the **subscribing thread** (the hub/grain scheduler when the subscribe happens
+mid-handler) and applies no concurrency bound — the exact deadlock-and-exhaustion bug class the I/O
+pool exists to kill. There is exactly **one** place `FromAsync` may appear: sealed *inside* `IoPool`
+itself. Everywhere else it is a defect.
+
+**Every async / blocking / IO edge goes through `IIoPool`** (`MeshWeaver.Mesh.Threading`), resolved
+from `IoPoolRegistry` (mesh-scoped singleton — never static):
+
+| You have | Use |
+|---|---|
+| A `Task<T>`-returning leaf (DB round-trip, blob, HTTP, async file) | `pool.Invoke(ct => SomethingAsync(ct))` — or `pool.Run(...)` for the eager **promise-cache** (ReplaySubject-backed: runs once, replays to all) |
+| A sync-blocking / CPU leaf (`File.ReadAllBytes`, Roslyn compile, `Process`) | `pool.InvokeBlocking(ct => Work(ct))` — or `pool.RunBlocking(...)` for the promise-cache |
+| An `IAsyncEnumerable<T>` leaf | `pool.InvokeStream(...)` / `pool.RunStream(...)` |
+
+**The promise-cache pattern (idempotent one-shots like schema provisioning):** hold the
+`pool.Run(...)` observable in an *instance* **`PromiseCache<TKey,TValue>`** (or `PromiseSlot<TValue>`
+when there is no key) — never static, and 🚨 **never a bare
+`ConcurrentDictionary<key, IObservable<T>>`**: a `ReplaySubject` latches `OnError` too, so a bare
+dictionary replays ONE transient fault to every later caller for the life of the process (#1369 — a
+single connect blip left a partition permanently un-provisionable, every write `42P01`).
+`PromiseCache` caches success and **evicts a fault, pair-exact** — the next caller re-attempts; it
+never retries on its own. Canonical:
+`PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned`
+(`_provisioned.GetOrAdd(schema, _ => _ioPool.Run(ct => EnsureSchemaAsync(def, ct)))`). PG pools are
+named `pg:{adapter}` and capped at **1** so the gate *is* the single Npgsql connection.
+
+- **Public surface returns `IObservable<T>`, never `Task<T>`.** A `Task`-returning method that does
+  IO is the smell; rewrite it to return `IObservable<T>` and bridge the leaf through `IIoPool`
+  internally.
+- **MCP/SDK surface adapters**: a one-line
+  `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ToTask();` is the only place `Task`
+  appears at the boundary — and even there the body is reactive.
+
+Full reference:
+[ControlledIoPooling.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ControlledIoPooling.md).
+
+### 🚨🚨🚨 ABSOLUTE: no hand-woven async/concurrency primitives — not even a `SemaphoreSlim`
+
+**A `SemaphoreSlim` (or any hand-rolled async gate / lock-for-async / signal) anywhere in `src/` is
+FORBIDDEN — outside the one place sealed inside `IoPool`.** `SemaphoreSlim.WaitAsync()`
+blocks/parks a thread and its continuation captures the awaiting scheduler. On a hub it parks the
+single-threaded action block (or a grain turn) → the message you're waiting on can never be
+processed → **deadlock**. This is the same defect class as `async`/`await`/`Task<T>` in hub code; a
+`SemaphoreSlim` is just a lock-shaped version of it.
+
+- **Serialization channels through the hub, never a semaphore.** "Only one at a time" / "wait your
+  turn" is what the hub's single-threaded action block already gives you for free. When you need
+  ordered, one-at-a-time processing, push items into a `Subject<T>` and run them with
+  `.Select(Run).Concat().Subscribe(...)` — `Concat` subscribes the next only after the previous
+  completes, so you get order without a lock (the canonical fix is `KernelExecutor`'s REPL queue,
+  which **replaced** a hand-woven `SemaphoreSlim`) — or route state changes through
+  `GetMeshNodeStream(path).Update(...)`, where the owning hub serialises every writer.
+- **Concurrency bounding / one-shot init / "run once" channels through `IIoPool`** — a bounded I/O
+  gate, a promise-cached one-shot (schema provisioning, blob-cache init, connect handshake), a
+  "first caller does it, the rest wait". That is `pool.Run(...)` held in an **instance**
+  `PromiseCache`/`PromiseSlot`. NOT a `SemaphoreSlim(1,1)` `_initLock` / `_connectGate`.
+- **`Task`-as-a-gate is the same sin.** `TaskCompletionSource` used to make callers "await a
+  signal", a `Task.Delay` timeout race, `ManualResetEventSlim`, `lock`-around-`await` — all
+  hand-woven async. Make the **source observable** (`AsyncSubject`/`Subject` + `Concat`) and
+  `Subscribe`, or push it onto `IIoPool`.
+
+**The ONLY sanctioned `SemaphoreSlim` is the one sealed inside `IoPool` itself** — it IS the single
+boundary between the turn-based hub schedulers and genuinely-async I/O leaves, running work OFF the
+hub with `ConfigureAwait(false)`. Everywhere else, a `SemaphoreSlim` is a bug to delete. The litmus
+test: if your gate runs on (or is awaited from) a hub action block / grain turn / Blazor circuit, it
+deadlocks — channel it through a hub or `IIoPool` instead.
 
 ## Rule 2 — Carry the identity across every boundary
 
@@ -147,10 +218,17 @@ using (accessService.ImpersonateAsSystem())                // "system-security",
         .Subscribe(_ => { }, ex => logger.LogWarning(ex, "notify failed"));
 ```
 
+A write that must run as the hub rather than a user (legitimate infrastructure — cache hydration,
+SyncStream heartbeats) says so explicitly: `using (accessService.ImpersonateAsHub(hub)) { … }`, or
+`o.ImpersonateAsHub(hub.Address)` on the post, which stamps the hub's address as principal.
+
 The owner re-stamp pattern (re-establish `SwitchAccessContext(owner)` at *each* cross-hub
 `Append`/`Finish` write) is shown in `ContentIndexingActivity.cs` and
-`MeshWeaver.GitSync.ActivityRunner`. The "silently stamp hub-self as principal" fallback was
-**deleted** (2026-05-21) — application code that writes MUST carry a real identity.
+`MeshWeaver.GitSync.ActivityRunner`. `PostPipeline` **fails closed** when no context is set, and the
+"silently stamp hub-self as principal" fallback was **deleted** (2026-05-21) — it masked the prod
+EventCalendar bug. Application code that writes MUST carry a real user identity on
+`AccessService.Context` (the MessageHub sets it on every handler invocation from
+`delivery.AccessContext`).
 
 ### The smell test
 

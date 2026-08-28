@@ -10,6 +10,56 @@ allowed-tools:
 
 # /pullrequest — open → wait for CI → merge, and NEVER merge a red or pending main
 
+## 🚨 Finishing a change set means MERGED — merge it yourself on green
+
+A PR left open with a link handed back is unfinished work: it rots against a moving `main` and the
+human has to return to press a button whose only precondition is the one the flow already proves.
+Asking is not extra safety. The safety IS the gate — green CI plus the automatic Copilot review,
+both of which you wait for anyway (and, for anything a portal runs, the image check in
+[/release](../release/SKILL.md)).
+
+Stop only when CI is red for a reason you cannot fix, when the review asks for a decision that
+changes what the change set IS, or when the work turns out to need a scope call the user has not
+made — one line, then stop. A change set spanning repos (MeshWeaver.Education,
+MeshWeaver.Plugins) is finished when every part is merged in dependency order: platform first, then
+what depends on it.
+
+### PR capability is CREDENTIAL × REPO — measure it, never remember it
+
+The guidance here once read *"`gh` CLI has read + push only — cannot merge, resolve threads, or
+request reviewers"*, which was wrong in a way that cost real throughput: believing it makes a
+session stop at the finish line and hand the merge back, exactly the pause the rule above says not
+to take once CI is green.
+
+Both factors are real and neither alone predicts the answer. **The repo half** is branch protection,
+`strict`, required checks, who may bypass. **The credential half** is the one nobody expects,
+because it makes the SAME repo answer differently to two sessions on the same day (2026-08-26): one
+measured `admin:false, maintain:false` on `MeshWeaver` with scopes `gist, read:org, repo, workflow`,
+while another measured `admin:true, maintain:true` with
+`admin:org, delete:packages, gist, repo, workflow, write:packages` — and merged #2328 and #2429
+there. So a static table of either shape is false for somebody, and a refusal you hit is not
+evidence about anyone else's session. Check both:
+
+```bash
+gh api repos/Systemorph/<repo> --jq '.permissions'   # push is normally enough to merge
+gh auth status                                        # scopes, if the above surprises you
+```
+
+Merging and resolving threads both work wherever the credential allows them (verified on
+`MeshWeaver`, `Memex` and `MeshWeaver.Education` on 2026-08-26). **Never reach for `--admin`** — a
+refusal is information about the gate, not an obstacle to route around. If a call comes back
+`FORBIDDEN`, re-authenticate with `! gh auth login`.
+
+```bash
+# Find unresolved review threads
+gh api graphql -f query='query($owner:String!, $repo:String!, $pr:Int!) { repository(owner:$owner, name:$repo) { pullRequest(number:$pr) { reviewThreads(first:100) { nodes { id isResolved } } } } }' \
+  -f owner=Systemorph -f repo=MeshWeaver -F pr=PR_NUMBER \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | .id'
+# Resolve a thread
+gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ clientMutationId }}' -f id=THREAD_ID
+gh pr merge PR_NUMBER --merge
+```
+
 ## 🚨🚨🚨 The one rule: main must be GREEN before you merge
 
 **The pull-based self-update deploys `main`.** The `memex-local autoroll` watches the moving
@@ -164,6 +214,71 @@ gh pr merge <PR> --merge
 #    fails or thrashes it. This fast-forwards the local `main` REF while you stay on your branch:
 git fetch origin main:main        # local main -> origin/main (ff-only); current branch untouched
 ```
+
+## 🚨 "Is the build finished?" — filter by WORKFLOW, never wait for all check suites
+
+**Never wait for every check suite on the commit to reach `COMPLETED` — that never happens.** GitHub
+creates a check suite for *every* installed App holding the Checks permission, and an App that posts
+no check runs leaves its suite at `queued` forever. This repo has exactly that: the **Azure Boards**
+App (installed 2026-08-03, `latest_check_runs_count: 0`, zero `AB#` references in the history) puts
+a permanently-`queued` suite on every commit. It never blocks a merge — `mergeStateStatus` stays
+`CLEAN` — but a naive "all suites complete" poll hangs until its timeout and then looks like CI
+never finished. Poll the `MeshWeaver Build and Test` suite specifically (step 3 above does).
+
+Two further gotchas:
+
+- **`Consolidate test results` is the required check** — and the ONLY one to require. `Build solution
+  (once)` and the shards are legitimately *skipped* when a run reuses an already-green tree, and a
+  skipped required check blocks the merge forever.
+- **Also check the clock before declaring a job stuck.** GitHub timestamps are UTC; a local-time
+  comparison makes a healthy 7-minute build look like a 33-minute hang. `date -u` first.
+
+## 🚨 SUBSCRIBE to a PR — one persistent Monitor over EVERY event you'd act on
+
+**Waiting on a PR is event-driven work: arm ONE persistent `Monitor` (the harness tool) when you
+open the PR, and let it wake you.** Hand-re-armed one-shot polls die at their timeout cap and leave
+dead air between "CI finished" and "you noticed" — and a watch that only fires on the happy path is
+the same defect as a gate that skips on missing input: **silence looks identical to "still running"
+while the thing you needed to react to already happened** (maintainer, 2026-08-17: "we keep losing
+time because of such problems"). The monitor's poll loop (GraphQL, ~45 s) must emit a line on EACH
+of these transitions, not just green:
+
+- **suite `COMPLETED/SUCCESS`** — the merge signal;
+- **suite `COMPLETED/<anything else>`** (FAILURE / CANCELLED / TIMED_OUT / STALE) — go read the
+  failing job log NOW, not at the next manual check;
+- **a NEW unresolved review thread** (the ruleset's Copilot review lands minutes after open —
+  unwatched, it silently gates the merge);
+- **`mergeStateStatus = DIRTY`** — a dirty PR runs ZERO CI, so with a success-only watch it waits
+  forever;
+- **`MERGED` / `CLOSED`** — the monitor's own exit condition.
+
+One monitor can cover several open PRs (loop over them; emit per-PR lines; exit when all are
+terminal). The same rule applies to any long-running external wait — a deploy, a bake, a
+reconciler: enumerate the terminal states first, subscribe to all of them, and treat "my filter only
+matches success" as a bug to fix before arming.
+
+## 🚨 Merging is a SHARED action — coordinate before you land
+
+A merge to `main` supersedes whatever run is QUEUED behind the one in flight, **including a run
+another session is waiting on**. Several sessions merge into this repo at once, so "wait for the
+run" only works if *everyone* waits; two sessions each merging politely still cancel each other's
+pending run. (Why main's *in-progress* runs are never cancelled, and what that does and does not
+buy, is in [/ci](../ci/SKILL.md).)
+
+- **Before merging, check whether main has a run in flight that someone is gating a deploy on.** If
+  so, **hold and say so.** On 2026-08-26 a routine merge killed the run another session was watching
+  to end a CD freeze — no damage beyond a lost cycle, but the fix is coordination, not care.
+- **The wait is owed to a merge that must ship ON ITS OWN** (a CD fix, a hotfix someone is
+  verifying): merge it, then wait for **that merge commit's** Build-and-Test to COMPLETE — and check
+  the completed run's **head SHA is your merge commit**, because "a run completed" and "the run for
+  my commit completed" diverge during exactly the burst you are working around.
+- 🚨 **A hold reaches your hands, NOT your subagents' — push it to them explicitly.** An agent
+  briefed to "root-cause and open a PR" follows the merge-on-green default, which is correct on any
+  other day. The same 2026-08-26 hold was then broken **twice more, by two subagents**, each merging
+  a perfectly good fix at exactly the wrong moment. When you take a hold: message every running
+  agent, tell them to push and PARK, and disarm any auto-merge already armed. The general form — **a
+  constraint is only as complete as the set of hands it reaches** — applies to anything you
+  delegate, not just merges.
 
 ### Why GraphQL, not `gh run watch` — the rate limit and the late-shard race, solved together
 
