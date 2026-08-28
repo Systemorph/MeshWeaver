@@ -17,6 +17,7 @@
     <ProjectReference Include="..\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
@@ -25,6 +26,7 @@
     <!-- The tests that build on this machinery, here and in MeshWeaver.Plugins (the storage and
          transport suites that run over an Orleans cluster). -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.AI.Orleans.Test" />
     <InternalsVisibleTo Include="MeshWeaver.AI.Orleans.TestBase" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.PostgreSql.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Grpc.Test" />

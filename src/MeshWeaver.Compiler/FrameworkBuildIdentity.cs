@@ -119,7 +119,6 @@ public static class FrameworkBuildIdentity
         // CompileReferences.ComposeWithModules — never part of the framework identity. Content
         // referencing AI types compiles wherever the AI module is installed (the bake host lands
         // it too), and an image shipping AI.dll in its app closure would 409 the registry module.
-        "MeshWeaver.Application.Styles",
         "MeshWeaver.Compiler",
         "MeshWeaver.ContentCollections",
         "MeshWeaver.ContentCollections.Indexing",
