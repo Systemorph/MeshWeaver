@@ -9,6 +9,9 @@
     <!-- ConfigurationFeatureFlags reads the deployment's Features:Flags section (abstractions only —
          the providers come from the host). -->
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
+    <!-- IHostedService only: module-contributed hosted services are isolated at ACTIVATION
+         (#2449, IsolatedModuleHostedService). Abstractions only — no host, no runtime. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
   </ItemGroup>
 
   <ItemGroup>

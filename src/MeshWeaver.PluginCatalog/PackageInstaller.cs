@@ -1368,7 +1368,11 @@ public static class PackageInstaller
                     return Observable.Return(Unit.Default);
                 }
 
-                hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(rootPath!)));
+                // Impersonated for the same reason as the pings below: the recycle runs from the
+                // installer's chain, where no ambient AccessContext exists on a fresh boot.
+                var accessService = hub.ServiceProvider.GetService<AccessService>();
+                using (accessService?.ImpersonateAsSystem())
+                    hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(rootPath!)));
                 return WaitForRootReady(hub, rootPath!, logger);
             });
     }
@@ -1387,6 +1391,7 @@ public static class PackageInstaller
         IMessageHub hub, string rootPath, ILogger? logger)
     {
         var address = new Address(rootPath);
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
         return Observable.Defer(Probe)
             .Repeat()
             .Where(alive => alive)
@@ -1402,8 +1407,16 @@ public static class PackageInstaller
                 return Observable.Return(Unit.Default);
             });
 
+        // 🚨 Impersonated PER PING (each Repeat re-subscription is its own post), because a
+        // fresh-boot reconcile runs from a hosted-service chain with no ambient AccessContext —
+        // without this, PostPipeline refused EVERY ping ("AccessContext must never be null for an
+        // application post"): a fail-level storm per retry until RootReadyTimeout, the wait
+        // degraded into a pure delay, and the install then proceeded against a hub that was still
+        // tearing down. RunAsSystem seals the scope at Subscribe (the identity-latch ratchet,
+        // #1790); an infrastructure probe posts under SYSTEM at its call site, never off ambient.
         IObservable<bool> Probe() =>
-            hub.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(address))
+            accessService.RunAsSystem(() =>
+                    hub.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(address)))
                 .Take(1)
                 .Timeout(RootPingTimeout)
                 .Select(_ => true)
