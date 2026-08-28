@@ -77,6 +77,22 @@ internal class RoutingGrain(
         logger);
 
     /// <summary>
+    /// Windows the KNOWN-dead-target refusal logging (issues #2426/#2546): the first refusal of an
+    /// address earns the full Error line, repeats inside <see cref="DeadTargetRefusalLog.DefaultWindow"/>
+    /// log at Debug and are counted into the next full line. Refusals, traces and NACKs are NOT
+    /// windowed — see <see cref="DeadTargetRefusalLog"/> for the full argument (including why this
+    /// is deliberately not a fast-refuse negative cache on the delivery path).
+    /// </summary>
+    private readonly DeadTargetRefusalLog refusalLog = new(DeadTargetRefusalLog.DefaultWindow);
+
+    /// <summary>
+    /// The same window for the two "the NACK itself is undeliverable" Error lines in
+    /// <see cref="PostFailure"/>, keyed by the unreachable SENDER — the #2426 shadow population
+    /// ("a NACK has no NACK of its own", 7,128 identical lines in 13 minutes per dead circuit).
+    /// </summary>
+    private readonly DeadTargetRefusalLog nackLog = new(DeadTargetRefusalLog.DefaultWindow);
+
+    /// <summary>
     /// Routes dispatched but not yet terminated. This is the back-pressure signal that used to be
     /// INVISIBLE: before #1028 the only evidence a route had stopped making progress was Orleans'
     /// own <c>NonReentrancyQueueSize</c> growing into the hundreds inside a "Response did not
@@ -472,6 +488,14 @@ internal class RoutingGrain(
         void PostFailureToSender(string failureMessage, ErrorType errorType) =>
             PostFailure(delivery, address, streamProvider, grainFactory, failureMessage, errorType);
 
+        // The refusal's NACK carries the AUTHORITATIVE stamp: the cluster-wide subscription
+        // registry answered "nobody serves that address", which is the one verdict the owner-side
+        // client-subscription eviction may act on (DeliveryFailure.TargetUnserved). Only this
+        // site stamps it — an application-level NotFound from a LIVE hub must never evict.
+        void PostRefusalToSender(string failureMessage, ErrorType errorType) =>
+            PostFailure(delivery, address, streamProvider, grainFactory, failureMessage, errorType,
+                targetUnserved: true);
+
         return Observable.Defer(() =>
         {
             logger.LogDebug("[ROUTE] {Address} type={Type} declared stream-routed → memory stream", addressPath, address.Type);
@@ -484,10 +508,18 @@ internal class RoutingGrain(
             // silence. See RefuseNoSubscriber for what the check does and does not buy.
             return HasLiveSubscriber(
                     TryGetSubscriptionManager(streamProvider), s.StreamId, addressPath, logger, SubscriberProbeTimeout)
-                .SelectMany(alive => alive
-                    ? PostToStream(delivery, () => s.OnNextAsync(delivery), addressPath,
-                        delivery.Sender, PostFailureToSender, logger, StreamPostTimeout)
-                    : RefuseNoSubscriber(delivery, addressPath, PostFailureToSender, logger));
+                .SelectMany(alive =>
+                {
+                    if (alive)
+                    {
+                        // A live answer closes the address's refusal window, so a LATER death
+                        // earns a fresh full Error line immediately instead of a Debug repeat.
+                        refusalLog.Clear(addressPath);
+                        return PostToStream(delivery, () => s.OnNextAsync(delivery), addressPath,
+                            delivery.Sender, PostFailureToSender, logger, StreamPostTimeout);
+                    }
+                    return RefuseNoSubscriber(delivery, addressPath, PostRefusalToSender, logger, refusalLog);
+                });
         })
             // Composition-time faults must ALSO reach the sender — see BuildGrainRoute's trailing
             // Catch for the full rationale (the classic one: GetStream NRE'ing out of
@@ -564,21 +596,41 @@ internal class RoutingGrain(
     /// the address simply names no hub that any silo in this cluster is currently serving. That is
     /// the same classification an unresolvable node path gets from
     /// <see cref="BuildGrainRoute"/>, and it is what lets a caller distinguish "gone" from "broke".</para>
+    ///
+    /// <para>🚨 <b>Every delivery is still refused, traced and NACKed — only the Error LINE is
+    /// windowed</b> (issues #2426/#2546: 20,718 error lines in 3 h / ~36 per second for the same
+    /// three dead addresses). The first refusal of an address logs the full line at Error; repeats
+    /// inside the window log at Debug and are counted into the next full line, so the storm's
+    /// volume stays on the record while Loki stops paying per delivery. The NACK is deliberately
+    /// NOT suppressed: it is each sender's terminal answer AND the eviction signal the owner acts
+    /// on (<see cref="DeliveryFailure.TargetUnserved"/>) — suppressing it would re-open the very
+    /// leak that produced the volume.</para>
     /// </summary>
-    private static IObservable<Unit> RefuseNoSubscriber(
+    internal static IObservable<Unit> RefuseNoSubscriber(
         IMessageDelivery delivery,
         string addressPath,
         Action<string, ErrorType> postFailureToSender,
-        ILogger logger)
+        ILogger logger,
+        DeadTargetRefusalLog? refusalLog = null)
     {
         var reason =
             $"Stream-routed delivery to '{addressPath}' has no live subscriber: no silo in this cluster "
             + "is currently serving that hub, so the message could not be delivered.";
-        logger.LogError(
-            "[ROUTE] {Reason} Message {MessageType} ({DeliveryId}) from {Sender} was NOT posted — a publish "
-            + "to a subscriber-less stream succeeds and discards, which is why this had to be checked "
-            + "rather than observed. Surfacing DeliveryFailure to the sender.",
-            reason, delivery.Message?.GetType().Name ?? "(null)", delivery.Id, delivery.Sender);
+        var suppressedSincePriorReport = 0;
+        if (refusalLog is null || refusalLog.ShouldReport(addressPath, out suppressedSincePriorReport))
+            logger.LogError(
+                "[ROUTE] {Reason} Message {MessageType} ({DeliveryId}) from {Sender} was NOT posted — a publish "
+                + "to a subscriber-less stream succeeds and discards, which is why this had to be checked "
+                + "rather than observed. Surfacing DeliveryFailure to the sender. {Suppressed} earlier "
+                + "refusal(s) of this address since the last such line were logged at Debug; further ones "
+                + "inside the window will be too, while every one is still refused and NACKed.",
+                reason, delivery.Message?.GetType().Name ?? "(null)", delivery.Id, delivery.Sender,
+                suppressedSincePriorReport);
+        else
+            logger.LogDebug(
+                "[ROUTE] {Reason} Message {MessageType} ({DeliveryId}) from {Sender} was NOT posted; "
+                + "refusal windowed (see the Error line for this address). Surfacing DeliveryFailure to the sender.",
+                reason, delivery.Message?.GetType().Name ?? "(null)", delivery.Id, delivery.Sender);
         RoutingGrainTrace.Write(
             $"RoutingGrain.RouteMessage MEMORY_STREAM_NO_SUBSCRIBER addr={addressPath} id={delivery.Id} sender={delivery.Sender}");
         postFailureToSender(reason, ErrorType.NotFound);
@@ -692,7 +744,8 @@ internal class RoutingGrain(
         IStreamProvider streamProvider,
         IGrainFactory grainFactory,
         string failureMessage,
-        ErrorType errorType)
+        ErrorType errorType,
+        bool targetUnserved = false)
     {
         if (delivery.Sender == null) return;
         // The answer-once contract — see AnswerPolicy for what it forbids and why. 🚨 Read the
@@ -709,7 +762,15 @@ internal class RoutingGrain(
         // echoed payload. A payload that fits is echoed unchanged.
         var echoedDelivery = StreamMessageSizeGuard.WithoutOversizedPayload(delivery);
         var failureDelivery = new MessageDelivery<DeliveryFailure>(
-            new DeliveryFailure(echoedDelivery, failureMessage) { ErrorType = errorType },
+            new DeliveryFailure(echoedDelivery, failureMessage)
+            {
+                ErrorType = errorType,
+                // Stamped ONLY by the no-live-subscriber refusal (see PostRefusalToSender): the
+                // authoritative routing verdict that lets the owner-side client-subscription
+                // eviction distinguish "that subscriber's process is gone" from an
+                // application-level NotFound a live hub answered.
+                TargetUnserved = targetUnserved,
+            },
             new PostOptions(address)
                 .WithTarget(delivery.Sender)
                 .WithProperty(PostOptions.RequestId, delivery.Id),
@@ -760,9 +821,9 @@ internal class RoutingGrain(
         //
         // The stream publish stays as the fallback for the two cases BuildPodHubRoute documents —
         // a previous-release pod that has not claimed itself yet (the roll window), and a hub owned
-        // by an Orleans CLIENT process, which cannot host a grain — plus a sender whose address type
-        // is not stream-routed at all. It keeps its subscriber probe, so even the fallback says
-        // loudly when it cannot deliver.
+        // by an Orleans CLIENT process, which cannot host a grain — plus a sender that is neither
+        // stream-routed nor node-backed (see DeliverNackOverGrainTransport). It keeps its
+        // subscriber probe, so even the fallback says loudly when it cannot deliver.
         var senderPath = delivery.Sender.ToString();
 
         // The pod-hub transport serves exactly the stream-routed address types, so ask only for
@@ -770,9 +831,23 @@ internal class RoutingGrain(
         // one would mint an activation per failed delivery only to have it answer PodHubNotHere and
         // deactivate — churn on precisely the path a NotFound storm hammers. The same O(1) set
         // lookup RouteMessage branches on, so the two agree by construction.
+        //
+        // 🚨 A GRAIN-HOSTED sender gets its NACK over the GRAIN transport — the same
+        // IMessageHubGrain call every forward delivery to it takes (issues #2426/#2546). This
+        // branch used to publish to the sender's Orleans stream, and a per-node grain hub NEVER
+        // subscribes a stream — so the NACK to precisely the senders that fan out to dead
+        // subscribers (per-node owner hubs: `OpenStreetMap/_Policy`, user partitions) was
+        // undeliverable BY CONSTRUCTION, every one of them a "NACK has no NACK of its own" Error
+        // line, and the owner could never learn that its subscriber was gone. The resolve gate
+        // below keeps this from minting garbage activations: only a sender whose address resolves
+        // EXACTLY to a node (i.e. a real per-node hub) takes the grain call; anything else — a
+        // sync/ sub-hub, an unresolvable address — degrades to the stream publish, exactly as
+        // before. A NACK whose grain call faults falls back to the stream too, and there is no
+        // NACK for a NACK anywhere on this path (failureDelivery is a DeliveryFailure, which
+        // MayAnswer() already refuses to answer), so no loop is possible.
         if (!meshConfig.StreamRoutedAddressTypes.Contains(delivery.Sender.Type))
         {
-            SubscribeNack(PublishFailureOverStream());
+            SubscribeNack(DeliverNackOverGrainTransport());
             return;
         }
 
@@ -824,6 +899,54 @@ internal class RoutingGrain(
                 ex => logger.LogWarning(ex,
                     "[ROUTE] Failed to deliver {ErrorType} failure to sender {Sender}", errorType, delivery.Sender));
 
+        // The NACK leg for a GRAIN-hosted sender (a per-node hub): resolve the sender's path the
+        // same way the forward leg would, and when it names a real node, deliver the NACK as the
+        // directed IMessageHubGrain call every forward message to that hub already takes — with
+        // DeliverToGrainObservable's bounded transient retry, and the stream publish as the
+        // fallback on any fault. A sender that does NOT resolve to a node (a sync/ sub-hub, a
+        // deleted path) keeps today's stream-publish behaviour — for those the grain call could
+        // only mint a broken activation per NACK, churn on exactly the path a storm hammers.
+        IObservable<Unit> DeliverNackOverGrainTransport() =>
+            pathResolver.ResolveRoute(senderPath)
+                .Take(1)
+                .Timeout(ResolveTimeout)
+                .Catch<AddressResolution?, Exception>(ex =>
+                {
+                    RoutingGrainTrace.Write(
+                        $"RoutingGrain.RouteMessage FAILURE_SENDER_RESOLVE_FAULT id={delivery.Id} sender={delivery.Sender} ex={ex.Message}");
+                    return Observable.Return<AddressResolution?>(null);
+                })
+                .SelectMany(resolution =>
+                {
+                    // Not node-backed → exactly the pre-existing behaviour: the stream publish,
+                    // with SubscribeNack's warning arm as the terminal for a fault.
+                    if (resolution is null || !string.IsNullOrEmpty(resolution.Remainder))
+                        return PublishFailureOverStream();
+                    return DeliverToGrainObservable(
+                            () => grainFactory.GetGrain<IMessageHubGrain>(resolution.Prefix)
+                                .DeliverMessage(failureDelivery),
+                            resolution.Prefix, delivery.Id, logger)
+                        .Select(_ =>
+                        {
+                            // CONFIRMED: the grain call landed on the sender's own hub — the
+                            // owner heard its NACK (and, for a TargetUnserved verdict, can now
+                            // evict the dead subscriber's server-side stream).
+                            RoutingGrainTrace.Write(
+                                $"RoutingGrain.RouteMessage FAILURE_DELIVER_GRAIN_OK id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
+                            return Unit.Default;
+                        })
+                        .Catch<Unit, Exception>(grainEx => Observable.Defer(() =>
+                        {
+                            RoutingGrainTrace.Write(
+                                $"RoutingGrain.RouteMessage FAILURE_DELIVER_GRAIN_FAULT id={delivery.Id} sender={delivery.Sender} ex={grainEx.Message}");
+                            return PublishFailureOverStream()
+                                .Catch<Unit, Exception>(streamEx => LogUndeliverableNack(
+                                    new AggregateException(
+                                        "Neither the directed node-grain call nor the stream publish could carry the NACK.",
+                                        grainEx, streamEx)));
+                        }));
+                });
+
         // The one-release / Orleans-client fallback, and the only path for a sender the pod-hub
         // transport cannot serve: probe first so an undeliverable NACK is LOUD, then publish anyway
         // (the probe is check-then-act, and a subscriber that attaches in the gap would otherwise
@@ -835,14 +958,30 @@ internal class RoutingGrain(
                     TryGetSubscriptionManager(streamProvider), senderStream.StreamId, senderPath, logger, SubscriberProbeTimeout)
                 .Do(alive =>
                 {
-                    if (alive) return;
+                    if (alive)
+                    {
+                        nackLog.Clear(senderPath);
+                        return;
+                    }
                     RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_NO_SUBSCRIBER id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
-                    logger.LogError(
-                        "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender}: "
-                        + "no pod-hub activation claims that address AND its stream has no live subscriber, and a "
-                        + "NACK has no NACK of its own. The sender will wait out its own request budget — the "
-                        + "original failure was: {FailureMessage}",
-                        errorType, delivery.Id, delivery.Sender, failureMessage);
+                    // Windowed like RefuseNoSubscriber's line, keyed by the unreachable SENDER:
+                    // this is the #2426 shadow ("a NACK has no NACK of its own" at the fan-out
+                    // rate). The first line per sender per window is the full Error; repeats log
+                    // at Debug and are counted into the next full line.
+                    if (nackLog.ShouldReport(senderPath, out var suppressedNacks))
+                        logger.LogError(
+                            "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender}: "
+                            + "no pod-hub activation claims that address AND its stream has no live subscriber, and a "
+                            + "NACK has no NACK of its own. The sender will wait out its own request budget — the "
+                            + "original failure was: {FailureMessage}. {Suppressed} earlier undeliverable NACK(s) to "
+                            + "this sender since the last such line were logged at Debug.",
+                            errorType, delivery.Id, delivery.Sender, failureMessage, suppressedNacks);
+                    else
+                        logger.LogDebug(
+                            "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender} "
+                            + "(no pod-hub activation, no stream subscriber); windowed — see the Error line for this "
+                            + "sender. Original failure: {FailureMessage}",
+                            errorType, delivery.Id, delivery.Sender, failureMessage);
                 })
                 .SelectMany(_ => senderStream.OnNextAsync(failureDelivery).ToObservable())
                 .Select(_ =>
@@ -863,12 +1002,23 @@ internal class RoutingGrain(
         IObservable<Unit> LogUndeliverableNack(Exception ex)
         {
             RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_FAIL id={delivery.Id} ex={ex.Message}");
-            logger.LogError(ex,
-                "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender}: "
-                + "BOTH transports failed — the directed call to its pod-hub activation AND the stream "
-                + "publish. The sender will wait out its own request budget — the original failure "
-                + "was: {FailureMessage}",
-                errorType, delivery.Id, delivery.Sender, failureMessage);
+            // Same window, same key as the no-subscriber line above: one dead sender earns one
+            // full Error line per window across BOTH undeliverable-NACK shapes, with repeats
+            // counted rather than shipped.
+            if (nackLog.ShouldReport(senderPath, out var suppressedNacks))
+                logger.LogError(ex,
+                    "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender}: "
+                    + "BOTH transports failed — the directed call to its grain/pod-hub activation AND the stream "
+                    + "publish. The sender will wait out its own request budget — the original failure "
+                    + "was: {FailureMessage}. {Suppressed} earlier undeliverable NACK(s) to this sender since "
+                    + "the last such line were logged at Debug.",
+                    errorType, delivery.Id, delivery.Sender, failureMessage, suppressedNacks);
+            else
+                logger.LogDebug(ex,
+                    "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender} "
+                    + "(both transports failed); windowed — see the Error line for this sender. "
+                    + "Original failure: {FailureMessage}",
+                    errorType, delivery.Id, delivery.Sender, failureMessage);
             return Observable.Return(Unit.Default);
         }
     }

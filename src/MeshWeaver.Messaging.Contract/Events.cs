@@ -68,6 +68,28 @@ public record DeliveryFailure(IMessageDelivery Delivery, string? Message = null)
     public string? NodeTypePath { get; init; }
 
     /// <summary>
+    /// True when the ROUTING layer itself established that NO hub anywhere in the cluster
+    /// currently serves the failed delivery's TARGET address — the authoritative
+    /// "that address is dead / was never activated" verdict a refused stream-routed delivery
+    /// carries (RoutingGrain's no-live-subscriber refusal, issues #2426/#2546).
+    ///
+    /// <para>🚨 <b>This is deliberately DISTINCT from <see cref="ErrorType"/> being
+    /// <see cref="MeshWeaver.Messaging.ErrorType.NotFound"/> alone.</b> A LIVE hub also answers
+    /// NotFound — e.g. an unhandled request (<c>MessageHub.FinishDelivery</c>) — and a consumer
+    /// that keyed "the target is gone" recovery on the ErrorType would tear down state for a
+    /// perfectly healthy subscriber. Only the router, which asked the cluster-wide subscription
+    /// registry, may stamp this.</para>
+    ///
+    /// <para>The one consumer that acts on it is the owner-side client-subscription eviction
+    /// (<c>MeshWeaver.Data</c>): a <c>DataChangedEvent</c> fan-out answered with this stamp means
+    /// the subscriber's process died without an <c>UnsubscribeRequest</c>, so the owner disposes
+    /// that subscriber's server-side stream instead of fanning out to the corpse forever — the
+    /// 20,718-errors-in-3h delivery storm of #2426. Absence of the stamp (older producer, other
+    /// NACK site, wire loss) safely means "do not evict".</para>
+    /// </summary>
+    public bool TargetUnserved { get; init; }
+
+    /// <summary>
     /// Builds a delivery failure from a caught exception, capturing its type name,
     /// message, and stack trace under <see cref="MeshWeaver.Messaging.ErrorType.Exception"/>.
     /// </summary>
