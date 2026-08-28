@@ -1,6 +1,8 @@
 #pragma warning disable CS1591
 
 using System;
+using System.IO;
+using System.Text.Json;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.SelfUpdate;
 using Xunit;
@@ -53,5 +55,44 @@ public class ViewerZoneTimestampTest
         Assert.Equal(
             UpdatePolicySettingsTab.StatusMarkdown(content, Echo),
             UpdatePolicySettingsTab.StatusMarkdown(content, Echo, null));
+    }
+
+    /// <summary>
+    /// 🚨 A converted timestamp must not sit next to a label that still says "UTC". Caught in
+    /// review: converting the value while `ui.updateCheckedAt` remained "_(checked {0} UTC)_"
+    /// renders a LOCAL wall-clock time asserting it is UTC — strictly worse than the unconverted
+    /// version, which was at least honest. The three keys dropped the suffix; this stops it
+    /// coming back.
+    ///
+    /// <para>The time-zone SETTING description still mentions UTC on purpose ("stored times stay
+    /// in UTC, only the display converts"), which is why this pins the three label keys by name
+    /// rather than banning the word.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("ui.updateCheckedAt")]
+    [InlineData("ui.updateHeldAt")]
+    [InlineData("ui.updateVerifiedAtLine")]
+    public void Timestamp_labels_do_not_claim_UTC(string key)
+    {
+        foreach (var lang in new[] { "en", "de" })
+        {
+            var path = Path.Combine(
+                RepoRoot(), "src", "MeshWeaver.Messaging.Hub", "Localization", $"strings.{lang}.json");
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            Assert.True(doc.RootElement.TryGetProperty(key, out var v), $"{key} missing from {lang}");
+            Assert.False(
+                v.GetString()!.Contains("UTC", StringComparison.Ordinal),
+                $"strings.{lang}.json[{key}] still claims UTC while the value is rendered in the "
+                + "viewer's zone — the label would assert a timezone the number is not in.");
+        }
+    }
+
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
+            dir = dir.Parent;
+        Assert.NotNull(dir);
+        return dir!.FullName;
     }
 }
