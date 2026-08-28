@@ -236,11 +236,19 @@ public sealed class InstanceAutoRegistrationService(
             // genuinely is none.
             : EnsureRegistered(options, registry).Catch((Exception ex) =>
             {
+                // 🚨 Say what actually failed, not a menu of guesses. The old text asserted
+                // "registration failed (401/409)" for ANY exception here — including a LOCAL
+                // failure after the registry had already accepted the request, which is how #2585
+                // read as a bad key while the key had been issued and lost. The exception carries
+                // the truth; the guidance stays as guidance.
                 logger.LogError(ex,
-                    "First-startup instance registration against {Url} failed (401 = invalid or "
-                    + "revoked bootstrap key, 409 = instance id already taken). Continuing to the "
-                    + "install phase, which uses whatever key this installation already holds.",
-                    registry.Url);
+                    "First-startup instance registration against {Url} did not complete: {Reason}. "
+                    + "If this is an HTTP refusal: 401 = invalid or revoked bootstrap key, 409 = "
+                    + "instance id already taken. A failure AFTER the request (a store or "
+                    + "encryption error) can mean the registry already holds the id — check it "
+                    + "before re-registering under a new one. Continuing to the install phase, "
+                    + "which uses whatever key this installation already holds.",
+                    registry.Url, ex.Message);
                 return Observable.Return(Unit.Default);
             });
 
@@ -331,6 +339,59 @@ public sealed class InstanceAutoRegistrationService(
     }
 
     /// <summary>
+    /// The registration pre-flight, as a PURE decision — every branch that decides whether this
+    /// installation may present its bootstrap key is here, unit-testable with no mesh.
+    ///
+    /// <para>🚨 The master-key probe is the #2585 fix, and its ORDER is the point: the issued
+    /// <c>mwi_</c> key is returned exactly once and stored encrypted-or-not-at-all, so an
+    /// installation that CANNOT encrypt must refuse to register — probing after
+    /// <c>Register</c> succeeded is how a valid registration's key was thrown away and the
+    /// instance id burned (the registry held the id, the pod held nothing, and no retry could
+    /// ever succeed).</para>
+    /// </summary>
+    /// <param name="bootstrapKey">The configured bootstrap key, if any.</param>
+    /// <param name="registryToken">An explicitly configured registry token, if any.</param>
+    /// <param name="instanceId">The configured instance id, if any.</param>
+    /// <param name="masterKeyPresent">Whether the platform key protector can actually encrypt.</param>
+    internal static (RegistrationPreflight Action, string? Reason) DecideRegistration(
+        string? bootstrapKey, string? registryToken, string? instanceId, bool masterKeyPresent)
+    {
+        if (string.IsNullOrWhiteSpace(bootstrapKey))
+            return (RegistrationPreflight.Skip, null);  // manual token (or none) — nothing to register
+        if (!string.IsNullOrWhiteSpace(registryToken))
+            return (RegistrationPreflight.Skip,
+                "PluginCatalog:BootstrapKey is set but a registry token is already configured — the "
+                + "explicit token wins; skipping auto-registration.");
+        if (string.IsNullOrWhiteSpace(instanceId))
+            return (RegistrationPreflight.Abort,
+                "PluginCatalog:BootstrapKey is set but PluginCatalog:InstanceId is not. The instance "
+                + "id is a stable global identity and is never derived from a machine or pod name — "
+                + "set it explicitly.");
+        if (!masterKeyPresent)
+            return (RegistrationPreflight.Abort,
+                "PluginCatalog:BootstrapKey is set but no encryption master key is configured "
+                + "(Ai:KeyProtection:MasterKey), so the instance key the registry would issue could "
+                + "not be stored — it is stored encrypted or not at all. REFUSING to register before "
+                + "anything is consumed: the bootstrap key stays valid and the instance id stays "
+                + "free, so configuring the master key and restarting completes the registration. "
+                + "(Registering first and failing to store would burn both — #2585.)");
+        return (RegistrationPreflight.Register, null);
+    }
+
+    /// <summary>What the registration pre-flight decided.</summary>
+    internal enum RegistrationPreflight
+    {
+        /// <summary>Nothing to register — proceed to the install phase.</summary>
+        Skip = 0,
+
+        /// <summary>Misconfigured — log the reason and do not go on to install.</summary>
+        Abort = 1,
+
+        /// <summary>Present the bootstrap key.</summary>
+        Register = 2,
+    }
+
+    /// <summary>
     /// Phase 1 — make sure this installation holds an instance key: auto-register when a bootstrap
     /// key is configured and nothing is stored yet. Emits once when a credential is in place (or
     /// when none is needed because a token is configured explicitly).
@@ -338,25 +399,24 @@ public sealed class InstanceAutoRegistrationService(
     private IObservable<Unit> EnsureRegistered(PluginCatalogOptions options, PluginRegistryReference registry)
     {
         var bootstrapKey = options.BootstrapKey?.Trim() ?? "";
-        if (bootstrapKey.Length == 0)
-            return Observable.Return(Unit.Default);    // manual token (or none) — nothing to register
-
-        if (!string.IsNullOrWhiteSpace(registry.Token))
+        // The probe asks the key PROVIDER, not Protect: the provider answers "can anything be
+        // encrypted right now" without a throw, which is exactly what a pre-flight needs
+        // (IProviderKeyProtector's own doc names this as the sanctioned order).
+        var masterKeyPresent =
+            hub.ServiceProvider.GetService<IMasterKeyProvider>()?.GetMasterKey() is not null;
+        var (action, reason) = DecideRegistration(
+            bootstrapKey, registry.Token, options.InstanceId, masterKeyPresent);
+        switch (action)
         {
-            logger.LogInformation(
-                "PluginCatalog:BootstrapKey is set but a registry token is already configured — the "
-                + "explicit token wins; skipping auto-registration.");
-            return Observable.Return(Unit.Default);
+            case RegistrationPreflight.Skip:
+                if (reason is not null)
+                    logger.LogInformation("{Reason}", reason);
+                return Observable.Return(Unit.Default);
+            case RegistrationPreflight.Abort:
+                logger.LogError("{Reason}", reason);
+                return Observable.Empty<Unit>();       // misconfigured → do not go on to install
         }
-        var instanceId = options.InstanceId?.Trim() ?? "";
-        if (instanceId.Length == 0)
-        {
-            logger.LogError(
-                "PluginCatalog:BootstrapKey is set but PluginCatalog:InstanceId is not. The instance "
-                + "id is a stable global identity and is never derived from a machine or pod name — "
-                + "set it explicitly.");
-            return Observable.Empty<Unit>();           // misconfigured → do not go on to install
-        }
+        var instanceId = options.InstanceId!.Trim();
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
