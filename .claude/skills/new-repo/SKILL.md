@@ -51,7 +51,7 @@ assuming). Then the skeleton, all copied:
 | `.github/workflows/ci.yml` | `MeshWeaver.SocialMedia/.github/workflows/ci.yml` | §5 |
 | `.github/dependabot.yml` | any node repo — they share a verbatim header and the `github-actions` block | drop the `/e2e` npm block if no e2e |
 | `scripts/` | §4 | the `SKIP` set |
-| `.claude/skills/{debug,pullrequest}/SKILL.md` | `MeshWeaver.SocialMedia/.claude/skills/` | §2 |
+| `.claude/skills/{debug,pullrequest,node-files,gates,module-versions}/SKILL.md` | `MeshWeaver.SocialMedia/.claude/skills/` | §2 — all five; the table used to name two and §2 five |
 
 `LICENSE` where the content is licensed (Reinsurance, SocialMedia, Manufacturing carry one;
 Plugins and Education do not). No node repo has a root `docs/` — its documentation lives on the
@@ -390,7 +390,15 @@ provision, and every gate `needs:` it and runs UNCONDITIONALLY.**
   preflight:
     name: Required CI inputs
     runs-on: ubuntu-latest
-    outputs: {image-digest: "${{ steps.pin.outputs.image-digest }}"}
+    outputs:
+      # 🚨 TWO outputs, and they are not interchangeable. The GATES read the PIN — an immutable
+      # digest every job shares, so one run cannot straddle two images. The BAKE reads whatever
+      # the release tag resolves to RIGHT NOW, because its job is to republish against the
+      # identity the platform actually released. Defining only `image-digest` leaves the
+      # publish-bake job in §6 consuming an output that does not exist: it resolves to the empty
+      # string, and the bake targets nothing while the run still goes green.
+      image-digest: ${{ steps.pin.outputs.image-digest }}
+      bake-image-digest: ${{ steps.bake-target.outputs.image-digest }}
     if: github.event.pull_request.head.repo.fork != true      # the ONLY exemption, on the EVENT
     steps:
       - name: Assert every externally-provisioned CI input is present
