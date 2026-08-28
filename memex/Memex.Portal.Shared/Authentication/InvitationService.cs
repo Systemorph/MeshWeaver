@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.Authentication;
@@ -42,7 +43,13 @@ public sealed class InvitationService(
     public IObservable<MeshNode?> FindPendingInvitation(IWorkspace workspace, string email)
     {
         var jsonOptions = workspace.Hub.JsonSerializerOptions;
-        return workspace.GetQuery(
+        var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
+        // As System — this ran under the caller's identity while the summary above already said it
+        // "runs as System", so the prose was describing a guarantee the code did not make. It is a
+        // pre-identity read (the invitee has no mesh User node yet, which is the point) against the
+        // Admin partition, so per-user RLS has no established identity to be correct about, and an
+        // invitation filtered out is indistinguishable from one that was never issued.
+        return accessService.RunAsSystem(() => workspace.GetQuery(
                 $"invite:byEmail:{email}",
                 // PATH-scoped to Admin/Invitation so it routes to the admin schema (routing is by
                 // the path's first segment). Invitations live in the Admin partition, which is
@@ -59,7 +66,7 @@ public sealed class InvitationService(
                     "FindPendingInvitation({Email}): no snapshot within {Timeout} — treating as not invited",
                     email, LookupTimeout);
                 return Observable.Return<MeshNode?>(null);
-            }));
+            })));
     }
 
     /// <summary>
