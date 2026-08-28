@@ -74,22 +74,15 @@ public sealed class EaConsentController(
     /// <c>EaConnectOpenRedirectTest</c>, which is the part that makes a hand-written rule
     /// trustworthy.</para>
     /// </summary>
-    internal static string SafeReturnUrl(string? candidate)
-    {
-        if (string.IsNullOrWhiteSpace(candidate))
-            return "/";
-        // Rooted paths only. The second character decides: "//host" is protocol-relative (the
-        // browser resolves it against the current scheme and leaves the site), and "/\host" is
-        // normalised into an authority by some browsers — both are off-site despite the leading
-        // slash that a naive prefix test would accept.
-        if (candidate[0] == '/')
-            return candidate.Length == 1 || (candidate[1] != '/' && candidate[1] != '\\')
-                ? candidate
-                : "/";
-        // Anything else — absolute (https://…, javascript:, mailto:) or an unrooted relative path
-        // whose resolution depends on the current page — is refused.
-        return "/";
-    }
+    /// <summary>
+    /// Only ever redirect to a local path. Delegates to <see cref="ReturnUrlPolicy.Sanitize"/>.
+    ///
+    /// <para>🚨 This was a correct hand-written copy of the rule — it already rejected both
+    /// <c>//host</c> and <c>/\host</c>. It is delegated anyway, because being right was not the
+    /// problem: this assembly had FOUR implementations of one rule and only two were right
+    /// (#2302). Correct duplicates are what make an incorrect one look normal.</para>
+    /// </summary>
+    internal static string SafeReturnUrl(string? candidate) => ReturnUrlPolicy.Sanitize(candidate);
 
     [HttpGet(ConnectAction)]
     public async Task<IActionResult> Connect(
