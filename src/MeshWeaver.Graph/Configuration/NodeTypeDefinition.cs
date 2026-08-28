@@ -685,8 +685,15 @@ public record NodeTypeDefinition
     public string? FailedBuildInputs { get; init; }
 
     /// <summary>
-    /// The build-inputs token the IN-FLIGHT compile was dispatched for, stamped on the same commit
-    /// that flips <see cref="CompilationStatus"/> to Pending (#2544).
+    /// The build-inputs token the in-flight compile was dispatched for, stamped by the RELEASE
+    /// WATCHER on the commit where it flips <see cref="CompilationStatus"/> to Pending (#2544).
+    ///
+    /// <para>🚨 <b>Null means "no watcher dispatch vouches for the compile in flight".</b> Several
+    /// kickoff paths — first build, recovery, framework-stale, the failed-verdict re-drive — flip
+    /// to Pending WITHOUT going through the watcher, and they now clear this field explicitly.
+    /// That is load-bearing rather than tidy: leaving a previous dispatch's token behind would let
+    /// a later request be absorbed against a compile nobody recorded the inputs of, and if that
+    /// compile fails the absorbed release request is simply lost.</para>
     ///
     /// <para>🚨 It exists so a release request can be recognised by WHAT it asks for, not by WHEN
     /// it was asked. <c>RequestedReleaseAt</c> is a fresh <c>UtcNow</c> on every write, so two

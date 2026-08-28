@@ -584,7 +584,14 @@ internal static class NodeTypeCompilationHelpers
                     {
                         Content = def with
                         {
-                            CompilationStatus = CompilationStatus.Pending,
+                            CompilationStatus = CompilationStatus.Pending, 
+                            // 🚨 CLEAR the watcher's stamp (#2544). This flip does not come from
+                            // the release watcher and records no inputs, so leaving a previous
+                            // dispatch's token behind would let a later request be absorbed
+                            // against a compile nobody can vouch for — and if that compile fails,
+                            // the absorbed release request is simply lost. Null means "unstamped",
+                            // and the absorber parks on it exactly as it did before this change.
+                            DispatchedBuildInputs = null,
                         }
                     };
                 }).Subscribe(_ => { },
@@ -636,7 +643,7 @@ internal static class NodeTypeCompilationHelpers
                     if (def.CompilationStatus != CompilationStatus.Compiling) return curr;
                     return curr with
                     {
-                        Content = def with { CompilationStatus = CompilationStatus.Pending }
+                        Content = def with { CompilationStatus = CompilationStatus.Pending, DispatchedBuildInputs = null }
                     };
                 }).Subscribe(_ => { },
                     ex => logger?.LogWarning(ex,
@@ -758,7 +765,7 @@ internal static class NodeTypeCompilationHelpers
                     if (!HasStaleFrameworkBuild(def, guards)) return curr;
                     return curr with
                     {
-                        Content = def with { CompilationStatus = CompilationStatus.Pending }
+                        Content = def with { CompilationStatus = CompilationStatus.Pending, DispatchedBuildInputs = null }
                     };
                 }).Subscribe(_ => { },
                     ex => logger?.LogWarning(ex,
@@ -1490,9 +1497,9 @@ internal static class NodeTypeCompilationHelpers
                             // an UNSTAMPED in-flight compile (a direct Pending flip from one of the
                             // kickoff paths, which never sets the token) parks exactly as before —
                             // absorbing against an unknown input set would be a guess.
-                            var inFlightToken = BuildInputsToken(
+                            var requestedToken = BuildInputsToken(
                                 GuardsOf(hub).ModulesHash, def.CurrentSourceVersions);
-                            if (IsSatisfiedByInFlightCompile(def, inFlightToken))
+                            if (IsSatisfiedByInFlightCompile(def, requestedToken))
                             {
                                 logger?.LogInformation(
                                     "[ReleaseRequestWatcher] {HubPath}: release request absorbed — a "
@@ -1833,10 +1840,10 @@ internal static class NodeTypeCompilationHelpers
     ///   guess; park instead, exactly as before.</item>
     /// </list>
     /// </summary>
-    internal static bool IsSatisfiedByInFlightCompile(NodeTypeDefinition def, string inFlightToken)
+    internal static bool IsSatisfiedByInFlightCompile(NodeTypeDefinition def, string requestedToken)
         => !def.RequestedReleaseForce
            && def.DispatchedBuildInputs is { } dispatched
-           && string.Equals(dispatched, inFlightToken, StringComparison.Ordinal);
+           && string.Equals(dispatched, requestedToken, StringComparison.Ordinal);
 
     internal static string BuildInputsToken(
         string? modulesHash, IReadOnlyDictionary<string, long>? sources) =>
@@ -2005,7 +2012,8 @@ internal static class NodeTypeCompilationHelpers
                 // never writes back at all (process death mid-compile, the parked
                 // re-settle, a poisoned content read).
                 FailedBuildInputs = BuildInputsToken(modulesHash, d.CurrentSourceVersions),
-                CompilationStatus = CompilationStatus.Pending
+                CompilationStatus = CompilationStatus.Pending,
+                DispatchedBuildInputs = null
             }
         };
     }
