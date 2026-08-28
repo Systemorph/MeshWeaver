@@ -349,6 +349,66 @@ change-feed resubscribe latch **stay armed** and the subscriber rehydrates after
 
 ---
 
+## A recycle owes its subscribers a goodbye — and can only say it BEFORE the teardown
+
+A routed `DisposeRequest` is a **recycle**, not an end: the address comes back on the next
+access. The automatic ones exist *for* the people currently looking at a page —
+`NodeTypeEnrichmentHelpers.WithOverlaySelfHeal` recycles an instance hub the moment its NodeType
+reaches a usable build, so the compile-progress overlay is replaced by the real page;
+`NodeTypeRebindWatcher` and the stale-build convergence branch do the same for a superseded
+binding.
+
+**But the teardown itself is structurally mute.** `JsonSynchronizationStream` emits
+`StreamEndedEvent` from the server-side stream's disposal, and that emission is *deliberately
+suppressed* once the owning hub is winding down — a dying owner that reaches up the hub tree for
+a last word re-activates the very Orleans activation it is retiring. It delegates the
+owning-hub-tearing-down case to two other recoveries, and **neither can fire for a recycle**:
+
+- the **recycle re-arm** needs an in-flight `SubscribeRequest` to be NACKed — an *established*
+  subscription has none;
+- the **change-feed latch** needs a WRITE to the owner's path — and a recycle is not a write.
+
+So the subscriber received no frame, no completion and no error, and its mirror served the last
+snapshot it ever saw for the life of the page. The visible symptom was a page frozen on the
+compile-progress overlay while the compile had succeeded seconds earlier — and because a
+framework-identity bump recompiles every dynamic NodeType at once, that is every open page in the
+portal on one deploy (Systemorph/MeshWeaver#2533 / #2551).
+
+**The seam is `RecycleAnnouncement`,** hung on the hub with `hub.Set(...)` and invoked by
+`HandleDispose` on the recycle's own turn:
+
+```csharp
+// MessageHub.HandleDispose
+if (!IsShuttingDown)          // an ancestor's cascade is NOT a recycle — see below
+    AnnounceRecycle();        // Get<RecycleAnnouncement>()?.Announce()
+Dispose();
+```
+
+`Workspace` registers the one real implementation, because the client-subscription registry that
+knows who is listening lives there. Three properties make it safe, and each is load-bearing:
+
+| Property | Why |
+|---|---|
+| **Announced BEFORE `Dispose()`** | The hub is still whole: the registry is intact and `Configuration.ParentHub` still resolves. Both are gone or unreliable a phase later. |
+| **DELIVERED after `DisposalCompleted`, through the PARENT hub** | The subscriber answers with ONE bounded re-ask. Delivered earlier, that re-ask lands on the still-dying instance, is NACKed `ShuttingDown`, and burns a budget meant for a genuinely non-converging owner. Delivered by the dying hub itself, it is the up-the-tree post that resurrects the activation. The parent outlives the target and speaks to a third party. |
+| **Never for an ancestor's cascade** (`IsShuttingDown` already true) | There the address is *not* coming back, every subscriber is going down with it, and telling them to re-ask is exactly the resurrection the suppression exists to prevent. A direct `Dispose()` — how `HostedHubsCollection` tears its children down — never reaches `HandleDispose` at all, so it stays silent by construction. |
+
+Nothing here polls, retries or times out: `DisposalCompleted` is the event, and the re-ask it
+triggers is the pre-existing bounded one. A recycle of a hub nobody is subscribed to costs
+exactly what it did before.
+
+Repros: `RecycleStrandsLiveSubscriberTest` (Hosting.Monolith.Test — a live layout-area
+subscription re-converges on the re-activated hub after a bare `DisposeRequest`, with no node
+write anywhere) and `RecycleAnnouncementTest` (Messaging.Hub.Test — announced once, before the
+teardown; silent on a direct `Dispose()`).
+
+> Only the *automatic* recycles were affected. `MeshOperations.Recycle` (the MCP tool) publishes a
+> `MeshChangeEvent` for the path before its `DisposeRequest`, which is what fed the change-feed
+> latch and made that path look fine; `RecycleLayoutArea` is driven by the page shell, which
+> navigates on its own. The self-heal posted the dispose alone.
+
+---
+
 ## Adding disposal work — the rule
 
 - **Need to run sync cleanup on dispose?** `hub.RegisterForDisposal(IDisposable)`

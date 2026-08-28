@@ -949,7 +949,7 @@
   "composition.column.package": "Paket",
   "composition.column.parameter": "Parameter",
   "composition.column.kind": "Art",
-  "composition.column.provision": "Bereitstellen als",
+  "composition.column.provision": "Umgebungsvariable",
   "composition.column.supplied": "Bereitgestellt",
   "composition.supplied.yes": "Ja",
   "composition.supplied.no": "Nein – Installation verweigert",

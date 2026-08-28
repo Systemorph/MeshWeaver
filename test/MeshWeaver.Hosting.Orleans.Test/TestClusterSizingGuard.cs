@@ -84,7 +84,11 @@ public class TestClusterSizingGuard(ITestOutputHelper output)
         {
             Path.Combine(dir.FullName, "test", "MeshWeaver.Hosting.Orleans.Test"),
             Path.Combine(dir.FullName, "src", "MeshWeaver.Hosting.Orleans.TestBase"),
-            Path.Combine(dir.FullName, "src", "MeshWeaver.AI.Orleans.TestBase"),
+            // 🚨 MeshWeaver.AI.Orleans.TestBase used to sit here too; the AI rig left this repo
+            // with the engine (#2276), so its cluster-sizing is guarded by the same test in
+            // MeshWeaver.Plugins. A guard cannot police sources it cannot see — naming a directory
+            // that no longer exists would fail LOUD here, which is why this list is explicit
+            // rather than a glob.
         };
         foreach (var home in homes)
             if (!Directory.Exists(home))

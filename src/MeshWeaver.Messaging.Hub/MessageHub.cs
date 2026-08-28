@@ -2574,8 +2574,59 @@ public sealed class MessageHub : IMessageHub
                 Address, request.Sender);
             return request.Ignored();
         }
+
+        // 🚨 A RECYCLE MUST REACH THE SUBSCRIBERS IT IS ABOUT TO ORPHAN — and this turn is the
+        // only place it can (Systemorph/MeshWeaver#2533 / #2551).
+        //
+        // A routed DisposeRequest is a RECYCLE: the address is coming back, and the whole point of
+        // the automatic ones (NodeTypeEnrichmentHelpers.WithOverlaySelfHeal, NodeTypeRebindWatcher,
+        // the stale-build convergence branch) is to get LIVE viewers off a degraded page. But the
+        // teardown itself is silent by construction: JsonSynchronizationStream's StreamEndedEvent
+        // announcement is deliberately suppressed once the owning hub is disposing ("a hub must
+        // speak only for itself, and never while it is dying" — a dying owner reaching up the hub
+        // tree for a last word RESURRECTS the Orleans activation it is retiring). It delegates the
+        // teardown case to the recycle re-arm and the change-feed latch, and NEITHER can fire here:
+        // the re-arm needs an in-flight SubscribeRequest to be NACKed, and the latch needs a WRITE
+        // — and, as the same file says elsewhere, "a recycle IS NOT A WRITE". So the self-heal was
+        // tearing the hub down under the exact audience it exists for, and every one of them held
+        // its last frame (the compile-progress overlay) until the page was reloaded. On a
+        // framework-identity bump that is every instance hub in the fleet at once.
+        //
+        // Hence: announce FIRST, on this turn, while the hub is whole — the workspace's client
+        // subscription registry is intact and the parent hub is resolvable. The announcement
+        // implementation captures what it needs now and delivers AFTER DisposalCompleted through a
+        // carrier that outlives this hub, so nothing is posted from a dying hub and no re-ask races
+        // the teardown it is a response to.
+        //
+        // NOT for an ancestor's cascade (IsShuttingDown is already true because CloseCreation has
+        // frozen this subtree): there the address is NOT coming back, telling subscribers to re-ask
+        // is exactly the resurrection the suppression above exists to prevent, and the carrier
+        // (our parent) is going down with us.
+        if (!IsShuttingDown)
+            AnnounceRecycle();
+
         Dispose();
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Hands the <see cref="RecycleAnnouncement"/> hung on this hub (if any) its one turn — see
+    /// that type for the contract. Best-effort by design: a recycle that cannot announce must
+    /// still recycle, so a faulting announcement is logged and never propagated into the teardown.
+    /// </summary>
+    private void AnnounceRecycle()
+    {
+        try
+        {
+            Get<RecycleAnnouncement>()?.Announce();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Recycle announcement for hub {Address} faulted — its live subscribers fall back to "
+                + "the pre-fix behaviour (they recover on the owner's next write, or on reload)",
+                Address);
+        }
     }
 
 

@@ -14,9 +14,9 @@
        binary (#2276) — modules/ is laid by the closure lane, not copied by a ProjectReference, so
        this TEST bin needs its own lane run with the same tester-local single row. Same pattern as
        the old StorageModuleLayoutTest: reuse the real worker, never a hand-copied publish. -->
-  <Import Project="..\..\memex\MeshModulesPublish.targets" />
-  <ItemGroup>
-    <MeshModuleClosure Remove="@(MeshModuleClosure)" />
-    <MeshModuleClosure Include="$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '..', '..', 'src', 'MeshWeaver.AI', 'MeshWeaver.AI.csproj'))" />
-  </ItemGroup>
+  <!-- 🚨 No module lane here any more (#2276). This used to run the closure worker for a
+       tester-local MeshWeaver.AI row so the test bin mirrored the gate's modules/ layout — but the
+       AI engine has left this repo, and the image itself now ships no module. The module-composition
+       guard therefore COMPILES its own throwaway probe assembly instead of binding a real module,
+       which is stronger: it cannot rot when the next module moves out. -->
 </Project>
