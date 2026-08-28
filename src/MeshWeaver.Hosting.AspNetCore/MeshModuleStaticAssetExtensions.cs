@@ -354,7 +354,20 @@ public static partial class MeshModuleStaticAssetExtensions
             // serving it. That is what makes this safe to switch on before any pack flips.
             var moduleWwwroot = ModuleWwwrootPath(module.Assembly.Location, baseDirectory, name);
             if (!Directory.Exists(moduleWwwroot))
+            {
+                // 🚨 Say so. A module that ships assets, loads fine and then 404s every one of them
+                // is the hardest shape of this to diagnose — the portal renders unstyled and the log
+                // is silent, which is exactly how #2562 stayed invisible. Debug, not Warning: for a
+                // module still riding the app closure this path is legitimately absent and is the
+                // expected outcome, so it must not shout on every boot. Naming the path is the
+                // point — it is what distinguishes "nothing to mount" from "looked in the wrong
+                // place".
+                logger.LogDebug(
+                    "Module {Module} contributes no static assets — no wwwroot at {Path} "
+                    + "(assembly loaded from {Location}).",
+                    name, moduleWwwroot, module.Assembly.Location);
                 continue;
+            }
 
             // 1. The module's own assets, re-based onto its _content/<Name> namespace. A module
             //    name is unique, so this mount can never collide with another module's.
@@ -498,12 +511,48 @@ public static partial class MeshModuleStaticAssetExtensions
         var assemblyDirectory = string.IsNullOrEmpty(assemblyLocation)
             ? null
             : Path.GetDirectoryName(assemblyLocation);
-        var parent = string.IsNullOrEmpty(assemblyDirectory)
-            ? null
-            : Path.GetFileName(Path.GetDirectoryName(assemblyDirectory));
-        return string.Equals(parent, "modules", StringComparison.OrdinalIgnoreCase)
-            ? Path.Combine(assemblyDirectory!, "wwwroot")
-            : Path.Combine(baseDirectory, "modules", moduleName, "wwwroot");
+
+        // 🚨 The test is "is this the APP's own directory?", NOT "is the parent folder called
+        // modules?". The invariant being protected is the one the remarks above describe — never
+        // mount the host's web root through a module namespace — and only the app directory can do
+        // that. Keying on the FOLDER NAME instead was an accident of the two layouts that existed
+        // when this was written, and it broke the moment #2509 started loading modules from a
+        // process-local pin: `<tmp>/meshweaver-pinned-modules/<n>-<hash>/<Name>@<gen>/`, whose
+        // parent is a pin id rather than `modules`. Every landed module then fell back to the
+        // absent legacy path and every asset it ships 404'd, with the module itself loading fine —
+        // an unstyled portal and nothing in the log (#2562). Comparing against the app directory
+        // tests the actual hazard and is blind to where the loader put the bytes, so it survives
+        // the next relocation too.
+        // "The app's directory" has TWO senses here and both mean the same hazard. The REAL one is
+        // AppContext.BaseDirectory — what a module riding the app closure actually reports at
+        // runtime. The DECLARED one is the baseDirectory argument, which a caller passing a
+        // laid-out folder uses to say "treat this as the app root"; the discovery tests drive the
+        // mapping that way, with a real test assembly whose own folder holds no wwwroot.
+        var ridesTheAppClosure =
+            string.IsNullOrEmpty(assemblyDirectory)
+            || SameDirectory(assemblyDirectory!, baseDirectory)
+            || SameDirectory(assemblyDirectory!, AppContext.BaseDirectory);
+
+        return ridesTheAppClosure
+            ? Path.Combine(baseDirectory, "modules", moduleName, "wwwroot")
+            : Path.Combine(assemblyDirectory!, "wwwroot");
+    }
+
+    /// <summary>
+    /// Whether two paths name the same directory — compared as full paths with any trailing
+    /// separator removed, because <see cref="AppContext.BaseDirectory"/> carries one and
+    /// <see cref="Path.GetDirectoryName(string)"/> does not, so a raw string comparison would
+    /// answer "different" for the one case that must answer "same".
+    /// </summary>
+    private static bool SameDirectory(string left, string right)
+    {
+        static string Normalize(string path) =>
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+        return string.Equals(
+            Normalize(left),
+            Normalize(right),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
     /// <summary>
