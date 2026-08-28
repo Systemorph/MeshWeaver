@@ -584,6 +584,13 @@ lock. Push a bootstrap commit (README only — no `ci.yml`, so nothing runs) FIR
 manifest, then push the module. Two commits on a brand-new `main` is the cost; branch protection
 goes on AFTER the first real run has produced the three contexts to require.
 
+🚨 **`Store/Provision.subdirectory` is the PARENT folder, not the package folder.** `SystemInstall.
+EffectiveSubdirectory` appends the package id, so a request with `"subdirectory": "Crm"` for package
+`Crm` syncs `Crm/Crm` and the import refuses an empty snapshot ("No files found under subdirectory
+'Crm/Crm'"). For a repo whose package folder sits at the root, **omit `subdirectory`** (it derives
+`Crm`). Measured on systemorph, 2026-08-28; a retry is `patch` `subdirectory: null` +
+`requestedAction: "Provision"` — the phases reconcile the `_GitSync` they wrote.
+
 ## 11. Make the content reachable — register the repo as a catalog source
 
 A repo nobody reads ships nothing. The registry holds the git credential and re-serves per
