@@ -397,10 +397,20 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         IWorkspace workspace, string email, ILogger? logger)
     {
         var query = $"nodeType:User content.email:{email} limit:1";
+        var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
 
+        // As System, for the reason given on LoadUserRoles — and this read needs it MORE, being
+        // the FIRST in the pipeline: it answers "who is this?" when no identity exists yet, so
+        // there is nothing for the per-user filter to be correct about. `limit:1` stays; that is a
+        // unique-key point lookup, not a set being truncated.
+        //
+        // The failure it forecloses is the one this whole file exists to prevent (#637): an
+        // RLS-stripped User node is indistinguishable from "no such account", and the caller's
+        // response to that is to bounce a signed-in user to /onboarding — inviting them to create
+        // a SECOND account. RunAsSystem is cold, so the Defer this replaces is not lost: a
+        // synchronous throw while composing is still classified.
         return IdentityRead.Bounded(
-            // Deferred so a synchronous throw while composing is classified too.
-            Observable.Defer(() =>
+            accessService.RunAsSystem(() =>
                 // Fast path: the shared, cross-request synced-query snapshot. For a user this
                 // process has ALREADY seen, this replays the cached hit with no DB round-trip.
                 workspace.GetQuery($"auth:userByEmail:{email}", query)
@@ -494,12 +504,40 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         IWorkspace workspace, string username, ILogger? logger, TimeSpan? budget = null)
     {
         var jsonOptions = workspace.Hub.JsonSerializerOptions;
+        var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
 
+        // 🚨 As System — the same escape hatch, for the same reason, as
+        // SecurityService.ObserveScopeAssignments, which reads these very nodes and is described in
+        // WrapWithPerUserRls as doing so "by design".
+        //
+        // This read DECIDES the viewer's roles, so it is a security-fold read wearing ordinary
+        // clothes. `workspace.GetQuery` re-applies per-user RLS at the consumer, and that filter
+        // resolves permissions through PermissionEvaluator — which reads AccessAssignment nodes.
+        // Running it under the caller's identity therefore makes identity establishment depend on
+        // the identity being established, and re-enters the permission fold from the request path.
+        // Seeing System, WrapWithPerUserRls short-circuits to the raw upstream: "no per-user
+        // filter, no service resolution, NO RECURSION". That edge is what this removes.
+        //
+        // It grants the viewer nothing. The filter can only ever REMOVE grants they legitimately
+        // hold, and a stripped grant is indistinguishable from "no grants" — the empty-role outcome
+        // whose consequence the caller above documents as every screen answering "Access denied".
+        //
+        // RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)`, whose store and
+        // restore land on different threads and leave the subscriber latched (AGENTS.md; the
+        // ratchet guard fails the build at any new site).
         return IdentityRead.Bounded(
-            Observable.Defer(() =>
+            accessService.RunAsSystem(() =>
                 workspace.GetQuery(
                         $"auth:userRoles:{username}",
-                        $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree limit:10")
+                        // Through the SecurityQueries seam, which overwrites any limit with
+                        // `limit:all`. This query carried `limit:10`: a viewer with more than ten
+                        // AccessAssignment nodes got an arbitrary ten and the rest of their roles
+                        // vanished, silently — the truncation #2011 fixed for the security fold,
+                        // which that class exists to make structurally impossible. "A query string
+                        // that never reaches this class is the only way back to the defect", and
+                        // this was one. It fires on GROWTH, so the largest install first.
+                        SecurityQueries.Enumeration(
+                            $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree"))
                     .Do(items => logger?.LogDebug(
                         "LoadUserRoles({User}): synced query emit, items={Count}",
                         username, items.Count()))
