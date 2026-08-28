@@ -75,6 +75,12 @@ public class SharedOrleansFixture : IAsyncLifetime
     protected virtual Type SiloConfiguratorType => typeof(SharedSiloConfigurator);
 
     /// <summary>
+    /// Subclass hook: the CLIENT configurator. Separate from the silo's on purpose — the client
+    /// mesh is its own hub and needs its own registrations (see TestClientConfigurator.MeshExtra).
+    /// </summary>
+    protected virtual Type ClientConfiguratorType => typeof(TestClientConfigurator);
+
+    /// <summary>
     /// The silo container, for a subclass that registered its own services through its silo
     /// configurator and needs to read one back (per-cluster by construction).
     /// </summary>
@@ -105,7 +111,8 @@ public class SharedOrleansFixture : IAsyncLifetime
                 // live in MeshWeaver.Plugins while this fixture stays free of AI types (#2276).
                 builder.Options.SiloBuilderConfiguratorTypes.Add(
                     SiloConfiguratorType.AssemblyQualifiedName!);
-                builder.AddClientBuilderConfigurator<TestClientConfigurator>();
+                builder.Options.ClientBuilderConfiguratorTypes.Add(
+                    ClientConfiguratorType.AssemblyQualifiedName!);
             },
             // The Orleans client borrows the silo's InMemoryStorageAdapter so the two hosts are
             // one logical store — the shape prod gets for free from a shared PG database.
@@ -310,23 +317,36 @@ public class SharedSiloConfigurator : ISiloConfigurator, IHostConfigurator
 
     public void Configure(IHostBuilder hostBuilder)
     {
-        var configured = hostBuilder.UseOrleansMeshServer()
-            .ConfigurePortalMesh()
-            .AddGraph()
+        // 🚨 ORDER IS LOAD-BEARING and was measured, not reasoned about. The hook fires exactly
+        // where `.AddAI()` used to sit — after AddGraph, before AddRowLevelSecurity — and MeshExtra
+        // covers the OTHER call it made, inside ConfigurePortalMesh. It was added in BOTH places;
+        // keeping only one leaves 2 tests failing with "NodeType 'ModelProvider' is not registered".
+        ConfigureAdditional(
+                hostBuilder.UseOrleansMeshServer()
+                    .ConfigurePortalMesh(MeshExtra)
+                    .AddGraph())
             .AddRowLevelSecurity()
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IStaticNodeProvider, OrleansTestSeedProvider>();
                 return services;
-            });
-        ConfigureAdditional(configured)
+            })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
     /// <summary>
-    /// Subclass hook: registrations a module-owning repo adds to the silo — the slot
-    /// <c>.AddAI()</c> and the chat-factory singletons used to occupy inline. Default is
-    /// unchanged, which is what keeps core's agent-free Orleans tests on the plain configurator.
+    /// Subclass hook: registrations a module-owning repo adds to the silo — the DI singletons
+    /// <c>.AddAI()</c>'s chat factory used to occupy inline. Default is unchanged.
     /// </summary>
     protected virtual MeshBuilder ConfigureAdditional(MeshBuilder builder) => builder;
+
+    /// <summary>
+    /// Subclass hook: mesh registrations, passed INTO <c>ConfigurePortalMesh</c>.
+    ///
+    /// <para>🚨 Position matters, and getting it wrong is silent: <c>.AddAI()</c> used to sit
+    /// inside <c>ConfigurePortalMesh</c> between <c>AddGraph()</c> and <c>AddKernel()</c>. Adding
+    /// it AFTER that call instead compiles, boots, and then fails with
+    /// <c>NodeType 'ModelProvider' is not registered</c> — measured, 2 tests, 2026-08-28.</para>
+    /// </summary>
+    protected virtual Func<MeshBuilder, MeshBuilder>? MeshExtra => null;
 }

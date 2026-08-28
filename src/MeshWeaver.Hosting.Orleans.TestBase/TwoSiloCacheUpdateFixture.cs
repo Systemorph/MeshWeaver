@@ -33,6 +33,13 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class TwoSiloCacheUpdateFixture : IAsyncLifetime
 {
+    /// <summary>
+    /// Subclass hook: the silo configurator both silos are built with. A module-owning repo names
+    /// its own derived type here — the AI two-silo tests live in MeshWeaver.Plugins and do exactly
+    /// that (#2276).
+    /// </summary>
+    protected virtual Type SiloConfiguratorType => typeof(TwoSiloConfigurator);
+
     private OrleansTestClusterHost host = null!;
 
     public TestCluster Cluster => host.Cluster;
@@ -62,7 +69,10 @@ public class TwoSiloCacheUpdateFixture : IAsyncLifetime
                 // call. The realistic shape — a single silo can't test the
                 // cross-silo routing path.
                 builder.Options.InitialSilosCount = 2;
-                builder.AddSiloBuilderConfigurator<TwoSiloConfigurator>();
+                // By TYPE NAME, so a repo shipping a module can supply a derived configurator
+                // (see SharedOrleansFixture for the same seam and why it exists).
+                builder.Options.SiloBuilderConfiguratorTypes.Add(
+                    SiloConfiguratorType.AssemblyQualifiedName!);
 
                 // 🚨 The ONE fixture that needs a per-cluster instance inside a SILO host.
                 // Everywhere else the silo's own DI singleton is already per-cluster and only
@@ -107,8 +117,14 @@ public class TwoSiloCacheUpdateFixture : IAsyncLifetime
     }
 }
 
-internal sealed class TwoSiloConfigurator : ISiloConfigurator, IHostConfigurator
+public class TwoSiloConfigurator : ISiloConfigurator, IHostConfigurator
 {
+    /// <summary>
+    /// Subclass hook: registrations a module-owning repo adds to both silos — the slot
+    /// <c>.AddAI()</c> used to occupy inline. Default is unchanged.
+    /// </summary>
+    protected virtual MeshBuilder ConfigureAdditional(MeshBuilder builder) => builder;
+
     public void Configure(ISiloBuilder siloBuilder)
     {
         siloBuilder.ConfigureMeshWeaverServer()
@@ -118,9 +134,11 @@ internal sealed class TwoSiloConfigurator : ISiloConfigurator, IHostConfigurator
 
     public void Configure(IHostBuilder hostBuilder)
     {
-        hostBuilder.UseOrleansMeshServer()
+        var configured = hostBuilder.UseOrleansMeshServer()
             .ConfigurePortalMesh()
-            .AddGraph()
+            .AddGraph();
+        configured = ConfigureAdditional(configured);
+        configured
             // Both silos' in-memory adapters share the same backing dictionaries, mirroring
             // prod's shared PG schema — a Write on one silo is visible to the other's Read.
             // They do NOT share a change-feed Subject: each adapter has its own, exactly as
