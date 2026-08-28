@@ -19,6 +19,29 @@ public static class BoundedBody
     /// </summary>
     public static async Task<string?> ReadAsync(Stream body, long maxBytes, CancellationToken ct)
     {
+        var buffer = await ReadBufferAsync(body, maxBytes, ct);
+        return buffer is null ? null : Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+    }
+
+    /// <summary>
+    /// The body as RAW BYTES, or <c>null</c> if it exceeds <paramref name="maxBytes"/>. Same reader,
+    /// same cap.
+    ///
+    /// <para>🚨 Byte-exact, and that is the point: a signature is computed over the bytes GitHub
+    /// sent. Reading through <see cref="ReadAsync"/> and re-encoding the string would round-trip
+    /// through UTF-8, and any byte sequence that is not valid UTF-8 comes back as U+FFFD — a body
+    /// that verifies at the sender would fail here, and worse, one crafted around the substitution
+    /// could differ from what was verified. Signature verification must never see a decoded copy.</para>
+    /// </summary>
+    public static async Task<byte[]?> ReadBytesAsync(Stream body, long maxBytes, CancellationToken ct)
+    {
+        var buffer = await ReadBufferAsync(body, maxBytes, ct);
+        return buffer?.ToArray();
+    }
+
+    /// <summary>The one reader both public forms share, so the cap semantics cannot drift apart.</summary>
+    private static async Task<MemoryStream?> ReadBufferAsync(Stream body, long maxBytes, CancellationToken ct)
+    {
         var buffer = new MemoryStream();
         var chunk = new byte[16 * 1024];
         while (true)
@@ -34,6 +57,6 @@ public static class BoundedBody
             if (buffer.Length + read > maxBytes) return null;
             buffer.Write(chunk, 0, read);
         }
-        return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+        return buffer;
     }
 }
