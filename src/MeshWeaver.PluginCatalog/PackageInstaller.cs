@@ -1407,18 +1407,16 @@ public static class PackageInstaller
                 return Observable.Return(Unit.Default);
             });
 
-        // 🚨 Impersonated PER PING, like every other installer post (see PublishContentAssets:
-        // ambient impersonation does not survive the pipeline's scheduler hops, and each Repeat
-        // re-subscription is its own post). Without it, a fresh-boot reconcile — which runs from a
-        // hosted-service chain with no ambient AccessContext — had EVERY ping refused by
-        // PostPipeline ("AccessContext must never be null for an application post"): a fail-level
-        // storm per retry until RootReadyTimeout, the wait degraded into a pure delay, and the
-        // install then proceeded against a hub that was still tearing down. An infrastructure
-        // probe posts under the SYSTEM identity at its call site, never off ambient context.
+        // 🚨 Impersonated PER PING (each Repeat re-subscription is its own post), because a
+        // fresh-boot reconcile runs from a hosted-service chain with no ambient AccessContext —
+        // without this, PostPipeline refused EVERY ping ("AccessContext must never be null for an
+        // application post"): a fail-level storm per retry until RootReadyTimeout, the wait
+        // degraded into a pure delay, and the install then proceeded against a hub that was still
+        // tearing down. RunAsSystem seals the scope at Subscribe (the identity-latch ratchet,
+        // #1790); an infrastructure probe posts under SYSTEM at its call site, never off ambient.
         IObservable<bool> Probe() =>
-            Observable.Using(
-                    () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                    _ => hub.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(address)))
+            accessService.RunAsSystem(() =>
+                    hub.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(address)))
                 .Take(1)
                 .Timeout(RootPingTimeout)
                 .Select(_ => true)
