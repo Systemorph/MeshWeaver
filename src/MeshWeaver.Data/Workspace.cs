@@ -26,6 +26,11 @@ using Microsoft.Extensions.Logging;
 // (MonotonicTriggerMergeTest) against the exact internal seam the
 // PatchDataRequest handler runs — not a re-implementation of the call sequence.
 [assembly: InternalsVisibleTo("MeshWeaver.Data.Test")]
+// The dead-subscriber eviction end-to-end test (issues #2426/#2546) asserts on the
+// client-subscription registry of a per-node hub INSIDE the in-process silo — the only
+// observation point that proves the router's TargetUnserved NACK actually reached the owner
+// and disposed the leaked server-side stream, rather than merely that some log line appeared.
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans.Test")]
 
 namespace MeshWeaver.Data;
 
@@ -1174,6 +1179,68 @@ public class Workspace : IWorkspace
         return existing.Stream.Hub is { RunLevel: <= MessageHubRunLevel.Started }
             ? existing.Stream
             : null;
+    }
+
+    /// <summary>
+    /// Total client subscriptions this workspace evicted on an authoritative
+    /// <see cref="DeliveryFailure.TargetUnserved"/> verdict — see
+    /// <see cref="EvictClientSubscriptions"/>. Read by tests to make "the eviction ran" a
+    /// positive signal, so the absence of a registry entry can never be mistaken for one.
+    /// </summary>
+    private int clientSubscriptionsEvicted;
+
+    /// <inheritdoc cref="clientSubscriptionsEvicted"/>
+    internal int ClientSubscriptionsEvicted => Volatile.Read(ref clientSubscriptionsEvicted);
+
+    /// <summary>
+    /// 🚨 Disposes every server-side stream this owner still serves for
+    /// <paramref name="subscriberPath"/> — the OWNER-SIDE half of the dead-subscriber delivery
+    /// storm fix (issues #2426/#2546).
+    ///
+    /// <para>The registry's own comment (see <see cref="_clientSubscriptions"/>) names the leak:
+    /// "only an UnsubscribeRequest disposes a server-side stream", and a subscriber whose PROCESS
+    /// dies — a restarted portal's circuits, a disconnected gRPC participant — never sends one.
+    /// The owner then fans every change out to the corpse forever; the router refuses each
+    /// delivery ("no live subscriber") and answers with a <see cref="DeliveryFailure"/> whose
+    /// <see cref="DeliveryFailure.TargetUnserved"/> stamp is the authoritative "that address is
+    /// dead" verdict. This method is what that verdict finally reaches: it disposes each matching
+    /// stream through its own sync hub — the exact route an <c>UnsubscribeRequest</c> takes — and
+    /// the stream's disposal registration removes the registry entry pair-exact.</para>
+    ///
+    /// <para>Evict-only, like every recovery in this codebase: nothing here retries, resubscribes
+    /// or polls. A subscriber that was NOT actually dead (its stream subscription flapped) loses
+    /// only its server-side stream — its own change-feed latch resubscribes and the owner builds a
+    /// fresh one, exactly as after an owner recycle.</para>
+    /// </summary>
+    /// <param name="subscriberPath">The dead subscriber's address, as
+    /// <see cref="Address.ToString"/> renders it (the registry's key form).</param>
+    /// <returns>How many streams were disposed.</returns>
+    internal int EvictClientSubscriptions(string subscriberPath)
+    {
+        var evicted = 0;
+        foreach (var kv in _clientSubscriptions)
+        {
+            if (!string.Equals(kv.Key.Subscriber, subscriberPath, StringComparison.Ordinal))
+                continue;
+            try
+            {
+                // The same disposal route WithHandler<UnsubscribeRequest> takes: the per-stream
+                // sync hub (SynchronizationStream assigns its own sync/{clientId} sub-hub to
+                // .Hub — never the owner hub). Removal from the registry happens through the
+                // stream's own disposal registration, pair-exact by reference identity.
+                kv.Value.Stream.Hub.Dispose();
+                evicted++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Workspace {WorkspaceId}: failed to dispose server-side stream {StreamId} "
+                    + "for unserved subscriber {Subscriber}", Id, kv.Key.StreamId, subscriberPath);
+            }
+        }
+        if (evicted > 0)
+            Interlocked.Add(ref clientSubscriptionsEvicted, evicted);
+        return evicted;
     }
 
     /// <summary>

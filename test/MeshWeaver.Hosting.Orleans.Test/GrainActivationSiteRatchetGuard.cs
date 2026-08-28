@@ -33,7 +33,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <para><b>The two allowances are deliberate, and opposite.</b>
 /// <c>OrleansRoutingService</c> holds exactly ONE — inside <c>GrainWhileRunning</c>, the seam that
 /// applies the gate, which is why every other call in that file goes through it.
-/// <c>RoutingGrain</c> holds TWO, and they are deliberately UNGATED because they are the DRAIN: a
+/// <c>RoutingGrain</c> holds the rest, and they are deliberately UNGATED because they are the DRAIN: a
 /// message already accepted for routing must still land, and Orleans' own placement is what sends it
 /// to a HEALTHY silo rather than this one. Gating there would drop live work instead of relocating it
 /// — the invariant is "no new activations", never "no traffic" (#1971).</para>
@@ -72,8 +72,16 @@ public class GrainActivationSiteRatchetGuard(ITestOutputHelper output)
         //      would park a waiting sender on a silence, which is the very defect that PR fixed.
         //      It already limits its own activation churn by asking only for stream-routed sender
         //      types, so it never mints an activation just to be told PodHubNotHere.
+        //   4. PostFailure           → IMessageHubGrain.DeliverMessage — the NACK leg to a
+        //      GRAIN-HOSTED sender (#2426/#2546). The same answer as 3 for the other half of the
+        //      sender population: a per-node hub never subscribes a stream, so its NACK used to be
+        //      published to nobody by construction — which is how an owner fanning out to a dead
+        //      subscriber never learned to stop. Drain, not courtesy: it answers a delivery already
+        //      accepted for routing, and it limits churn by asking only for a sender whose address
+        //      resolves EXACTLY to a node (DeliverNackOverGrainTransport's resolve gate); anything
+        //      else falls back to the stream publish, as before.
         ["src/MeshWeaver.Hosting.Orleans/RoutingGrain.cs"] =
-            (3, "the drain: forward legs + the NACK leg, all answering already-accepted deliveries"),
+            (4, "the drain: forward legs + both NACK legs, all answering already-accepted deliveries"),
     };
 
     private const string Marker = "GetGrain";

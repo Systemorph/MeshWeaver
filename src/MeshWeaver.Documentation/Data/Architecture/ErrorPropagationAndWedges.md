@@ -120,6 +120,41 @@ makes an undeliverable reply *report*. Closing that gap means taking replies off
 see [Orleans Stream Pub-Sub Durability](/Doc/Architecture/OrleansStreamPubSubDurability) for the
 mechanism, what durability does and does not buy, and the shape of the remaining fix.
 
+#### A dead subscriber is a verdict the owner must act on (#2426, #2546)
+
+The router does ask before it publishes — `RoutingGrain.RefuseNoSubscriber` NACKs `NotFound` when
+the destination stream has no live subscriber — and for a long time that was the *end* of the story
+rather than the start of one. An owner hub serving a data stream to a subscriber whose **process
+died** (a restarted portal's circuits, a disconnected `node/` gRPC participant) keeps that
+server-side stream forever: only an `UnsubscribeRequest` disposes one, and a corpse sends none. So
+the owner fanned every change out to the dead address, the router refused each one at `Error`, and
+the NACK went to a **per-node grain sender that had no stream subscription to receive it on** — the
+one signal that could end the loop was produced and thrown away. That is the 20,718-lines-in-3-h
+storm, and it is not a retry loop: nothing retries, the fan-out simply never learns.
+
+Three edges close it, and each follows a rule already stated on this page:
+
+- **The verdict is stamped where it is known.** The refusal carries
+  `DeliveryFailure.TargetUnserved = true` — *deliberately* distinct from `ErrorType.NotFound`, which
+  a live hub also answers for an unhandled request. Only the router, which asked the cluster-wide
+  subscription registry, may stamp it; absence means "do not evict".
+- **The NACK reaches the sender.** A grain-hosted sender (a per-node hub) is answered over the
+  **grain transport** — the same `IMessageHubGrain.DeliverMessage` every forward delivery to it
+  takes — with the stream publish kept as the fallback for a sender that is not node-backed.
+- **The owner evicts.** `Workspace.EvictClientSubscriptions` disposes every server-side stream it
+  still serves for the unserved address, through the stream's own sync hub — the exact route an
+  `UnsubscribeRequest` takes. Evict-only: no watchdog, no re-probe, no resubscribe. A subscriber that
+  was in fact alive loses only its server-side half and re-asks through its own change-feed latch,
+  exactly as after an owner recycle.
+
+What is *not* done, on purpose: the delivery path carries no negative cache. The subscriber probe is
+authoritative and measured cheap (0.010 ms warm), and a fast-refuse window would NACK a subscriber
+that has just re-attached, manufacturing an evict/resubscribe loop out of the "optimisation". What
+is bounded instead is the **log**: a known-dead address earns one full `Error` line per window
+(`DeadTargetRefusalLog`, one minute), repeats inside it log at `Debug` and are counted into the next
+full line — the storm's volume stays on the record while Loki stops paying per delivery. Every
+delivery is still refused, traced and NACKed; only the line is windowed.
+
 ## Where this sits
 
 This is the *what must always happen* — errors reach a sink. The *why a single thread saturates* is [Action-Block Wedge Prevention](/Doc/Architecture/ActionBlockWedgePrevention) (amplification on the single-threaded action block). The *how to trace a live hang* is [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow). The reactive rules that keep forwarding intact across hops are [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) and [AccessContext Propagation](/Doc/Architecture/AccessContextPropagation).

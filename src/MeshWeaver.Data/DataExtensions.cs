@@ -738,6 +738,7 @@ public static class DataExtensions
             .WithHandler<DataChangeRequest>(HandleDataChangeRequest)
             .WithHandler<PatchDataRequest>(HandlePatchDataRequest)
             .WithHandler<SubscribeRequest>(HandleSubscribeRequest)
+            .WithHandler<DeliveryFailure>(HandleTargetUnservedFailure)
             .WithHandler<GetDomainTypesRequest>(HandleGetDomainTypesRequest)
             .WithHandler<GetDataRequest>(HandleGetDataRequest)
             .WithHandler<UpdateUnifiedReferenceRequest>(HandleUpdateUnifiedReferenceRequest)
@@ -1814,6 +1815,62 @@ public static class DataExtensions
         return request.Processed();
     }
 
+
+    /// <summary>
+    /// 🚨 THE EVICTION SIGNAL THE OWNER USED TO THROW AWAY — issues #2426/#2546.
+    ///
+    /// <para>When this hub fans a <c>DataChangedEvent</c> out to a subscriber whose PROCESS has
+    /// died (a restarted portal's circuits, a dead gRPC participant), the router refuses the
+    /// delivery — "no silo in this cluster is currently serving that hub" — and answers with a
+    /// <see cref="DeliveryFailure"/> stamped <see cref="DeliveryFailure.TargetUnserved"/>. That
+    /// NACK correlates to a fire-and-forget post, so no <c>Observe</c> callback consumes it, and
+    /// before this handler it was silently <c>Ignored()</c> — while the server-side stream kept
+    /// fanning every change out to the corpse at the change-feed rate, each one re-refused and
+    /// re-logged, forever (20,718 error lines in 3 h on memex-cloud). The registry's own comment
+    /// names why nothing else ever ends it: "only an UnsubscribeRequest disposes a server-side
+    /// stream", and a dead process sends none.</para>
+    ///
+    /// <para>The verdict gate is the STAMP, never the <see cref="ErrorType"/> alone: a LIVE hub
+    /// also answers NotFound (an unhandled request), and evicting on that would tear down a
+    /// healthy subscriber's stream. Only the router — the one component that asked the
+    /// cluster-wide subscription registry — stamps <c>TargetUnserved</c>, so absence of the stamp
+    /// safely means "not ours to act on" and the delivery passes through unchanged for whoever
+    /// else handles it (the request/response callback already ran; it is first in the rule
+    /// chain).</para>
+    ///
+    /// <para>Evict-only, and terminal per NACK: nothing here retries, re-probes or resubscribes. A
+    /// subscriber that was in fact alive but unreachable loses only its server-side stream, and
+    /// its own change-feed latch re-asks — exactly what it does after an owner recycle. Nothing is
+    /// posted from this handler either, so a NACK can never beget traffic to the dead address.</para>
+    /// </summary>
+    private static IMessageDelivery HandleTargetUnservedFailure(
+        IMessageHub hub, IMessageDelivery<DeliveryFailure> delivery)
+    {
+        var failure = delivery.Message;
+        if (!failure.TargetUnserved || failure.ErrorType != ErrorType.NotFound)
+            return delivery;
+        var deadSubscriber = failure.Delivery?.Target;
+        if (deadSubscriber is null || hub.GetWorkspace() is not Workspace workspace)
+            return delivery;
+
+        var evicted = workspace.EvictClientSubscriptions(deadSubscriber.ToString());
+        if (evicted == 0)
+            return delivery; // nothing of ours was fanning out to that address — not ours to act on
+
+        // ONE line per (owner, dead subscriber) — the storm this replaces was one Error line
+        // per fanned-out change. Warning: a subscriber process dying without an
+        // UnsubscribeRequest is abnormal-but-handled, and this line is the evidence of both
+        // halves (the death and the recovery) once the per-delivery refusals go quiet.
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Data.ClientSubscriptionEviction");
+        logger?.LogWarning(
+            "Owner {Owner}: routing reported subscriber {Subscriber} as unserved (no silo hosts "
+            + "that address) — disposed {Count} server-side stream(s) it was still being fanned "
+            + "out to. A live subscriber re-subscribes through its own latch; a dead one stops "
+            + "costing a refused delivery per change.",
+            hub.Address, deadSubscriber, evicted);
+        return delivery.Processed();
+    }
 
     private static IMessageDelivery HandleSubscribeRequest(IMessageHub hub, IMessageDelivery<SubscribeRequest> request)
     {

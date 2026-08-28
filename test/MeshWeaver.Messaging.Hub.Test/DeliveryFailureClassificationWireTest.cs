@@ -79,6 +79,37 @@ public class DeliveryFailureClassificationWireTest(ITestOutputHelper output) : H
     }
 
     /// <summary>
+    /// 🚨 The router's "no hub anywhere serves that target" verdict is a STAMP distinct from the
+    /// ErrorType (issues #2426/#2546): the owner-side client-subscription eviction keys on it,
+    /// because a live hub also answers NotFound. It travels the same JSON hop, so it must survive
+    /// — and its ABSENCE must read as false, since absence is the "do not evict" default.
+    /// </summary>
+    [Fact]
+    public void TheTargetUnservedVerdict_SurvivesTheWire_AndDefaultsToFalse()
+    {
+        var options = GetHost().JsonSerializerOptions;
+        var refused = new DeliveryFailure(ADelivery())
+        {
+            ErrorType = ErrorType.NotFound,
+            TargetUnserved = true,
+            Message = "Stream-routed delivery to 'portal/dead' has no live subscriber",
+        };
+
+        var json = JsonSerializer.Serialize(refused, options);
+        Output.WriteLine(json);
+        var round = JsonSerializer.Deserialize<DeliveryFailure>(json, options)!;
+        round.TargetUnserved.Should().BeTrue(
+            "the owner evicts the dead subscriber's server-side stream on this stamp; losing it on "
+            + "the wire re-opens the fan-out-to-a-corpse storm");
+        round.ErrorType.Should().Be(ErrorType.NotFound);
+
+        var plain = new DeliveryFailure(ADelivery()) { ErrorType = ErrorType.NotFound, Message = "x" };
+        JsonSerializer.Deserialize<DeliveryFailure>(JsonSerializer.Serialize(plain, options), options)!
+            .TargetUnserved.Should().BeFalse(
+                "an ordinary NotFound — a live hub's unhandled request — must never read as unserved");
+    }
+
+    /// <summary>
     /// 🚨 The verdict a FAILING SITE recorded on the DELIVERY must survive the wire too.
     ///
     /// <para><c>Failed(message, ErrorType)</c> exists so the classification is decided where the
