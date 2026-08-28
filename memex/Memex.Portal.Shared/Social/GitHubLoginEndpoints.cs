@@ -174,8 +174,8 @@ public static class GitHubLoginEndpoints
     /// <para>🚨 Delegates to <see cref="ReturnUrlPolicy.Sanitize"/> rather than re-implementing the
     /// check. The hand-written version here rejected <c>//host</c> but ACCEPTED <c>/\host</c>, and
     /// browsers normalise a backslash to a slash in special-scheme URLs — so a crafted target still
-    /// became a protocol-relative external redirect (#2302). Three sinks in this assembly each had
-    /// their own copy of this rule and two of them were wrong; there is now one.</para>
+    /// became a protocol-relative external redirect (#2302). Five sinks in this assembly each had
+    /// their own copy of this rule and three of them were wrong; there is now one.</para>
     /// </summary>
     internal static string SafeLocal(string? returnUrl) => ReturnUrlPolicy.Sanitize(returnUrl);
 
