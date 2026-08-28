@@ -52,6 +52,7 @@ create one of these, you MUST load its skill and follow it** — do not hand-imp
 - **A Markdown page** (or any node with a markdown body) → **`/markdown`** — `load_skill('Skill/markdown')`.
 - **A Space** (top-level container / partition) → **`/space`** — `load_skill('Skill/space')`.
 - **An access Group** (the Group + its grant + members/invites) → **`/group`** — `load_skill('Skill/group')`.
+- **User feedback** (capture the user's location + name, file it in the Feedback space) → **`/feedback`** — `load_skill('Skill/feedback')`.
 
 A **NodeType / source / data model / layout area / Script** is the **`/code`** skill (above). Load the skill
 that matches what you're about to create; when several apply across a multi-step task, load each as you reach
