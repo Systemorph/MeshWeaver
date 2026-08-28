@@ -1037,11 +1037,16 @@ public static class MeshNodeLayoutAreas
     /// <summary>
     /// Builds the node-content catalog (the shared body of the <see cref="Search"/> instance view and
     /// the legacy <c>Children</c> area): a <see cref="MeshSearchControl"/> over
-    /// <c>namespace:{nodePath} scope:subtree</c> (the whole descendant subtree, the default) — or
-    /// just <c>namespace:{nodePath}</c> (direct children) when <c>?subtree=false</c> — excluding
-    /// NodeType definitions. Every display knob comes from <paramref name="o"/> (see
-    /// <see cref="CatalogOptions"/>). The subtree default is what lets the namespace tree reveal
-    /// deeper nodes (lazily, per level) instead of stopping at direct children.
+    /// <c>namespace:{nodePath}</c> — the node's DIRECT CHILDREN — or over
+    /// <c>namespace:{nodePath} scope:subtree</c> (the whole descendant subtree) when the caller asks
+    /// for it, excluding NodeType definitions. Every display knob comes from <paramref name="o"/>
+    /// (see <see cref="CatalogOptions"/>).
+    ///
+    /// <para>🚨 The scope is decided by RENDER MODE, not by a blanket default — see
+    /// <see cref="DefaultIncludeSubtree"/>. Only the namespace tree takes the subtree, because it
+    /// alone reveals deeper levels lazily; every other mode renders one level, where a subtree query
+    /// cannot show more and merely spends the item limit on descendants. <c>?subtree=true</c>
+    /// overrides either way.</para>
     /// </summary>
     internal static MeshSearchControl BuildCatalog(string nodePath, CatalogOptions o)
     {
