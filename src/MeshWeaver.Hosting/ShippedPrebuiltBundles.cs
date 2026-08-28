@@ -241,14 +241,15 @@ public static class ShippedPrebuiltBundles
     /// and destroy the signal. <see cref="Covered"/> is therefore what callers see, and the log
     /// names both halves.</para>
     /// </summary>
-    private readonly record struct SeedTally(int Adopted, int AlreadyCurrent)
+    private readonly record struct SeedTally(int Adopted, int AlreadyCurrent, int FilteredOut = 0)
     {
         /// <summary>Assemblies this bundle has BACKED on the store — adopted now or already there.
         /// This is the coverage number; it is unchanged by the skip optimisation.</summary>
         public int Covered => Adopted + AlreadyCurrent;
 
         public static SeedTally operator +(SeedTally left, SeedTally right) =>
-            new(left.Adopted + right.Adopted, left.AlreadyCurrent + right.AlreadyCurrent);
+            new(left.Adopted + right.Adopted, left.AlreadyCurrent + right.AlreadyCurrent,
+                left.FilteredOut + right.FilteredOut);
     }
 
     /// <summary>
@@ -373,18 +374,19 @@ public static class ShippedPrebuiltBundles
                                         // is precisely what the "Loud, so an operator can see WHY an image that
                                         // ships bundles still compiled" comment below is meant to prevent.
                                         // ONE aggregate line, only in the pathological case — never per bundle.
-                                        if (tally.Covered == 0)
+                                        if (tally.Covered == 0 && tally.FilteredOut > 0)
                                             logger?.LogInformation(
-                                                "ShippedPrebuiltBundles: NONE of the {Bundles} bundle(s) under "
-                                                + "{Directory} backed an assembly, and none was declined for "
-                                                + "framework identity — so every one named only NodeTypes this "
+                                                "ShippedPrebuiltBundles: nothing was backed, and {Filtered} of "
+                                                + "{Bundles} bundle(s) under {Directory} named only NodeTypes this "
                                                 + "mesh does not hold. This mesh's NodeType snapshot carries "
                                                 + "{Types} path(s). A snapshot of 0 means the content is not "
                                                 + "imported YET, which is normal for a mesh that installs after "
                                                 + "boot: adoption then depends entirely on the install-time "
                                                 + "re-seed (IPrebuiltAssemblyConsumer.SeedForTypes), not on this "
-                                                + "pass. The sweep compiles whatever stays uncovered",
-                                                bundles.Count, dir, existing.Paths.Count);
+                                                + "pass. Any bundle NOT counted here exited for a reason already "
+                                                + "logged above (identity decline, hollow bundle, fault). The "
+                                                + "sweep compiles whatever stays uncovered",
+                                                tally.FilteredOut, bundles.Count, dir, existing.Paths.Count);
                                     }))
                                 .Select(tally => tally.Covered);
                         }))
@@ -465,7 +467,13 @@ public static class ShippedPrebuiltBundles
                         + "serves a subset)",
                         Path.GetFileName(bundlePath), assemblies.Count - present.Count);
                 if (present.Count == 0)
-                    return Observable.Return(default(SeedTally));
+                    // 🚨 COUNTED, not just skipped. Every other zero-coverage exit here — an
+                    // identity decline, a hollow bundle, a fault — already says so at Information
+                    // or louder. This one is the silent one, so it is the only one the aggregate
+                    // line below may attribute a zero to; a bare `default` would make "0 covered"
+                    // indistinguishable from "0 covered because everything was DECLINED", and the
+                    // line would then assert the opposite of what happened.
+                    return Observable.Return(new SeedTally(0, 0, FilteredOut: 1));
 
                 // Sequential (Concat, never Merge) for the same reason NodeTypeBakeStatus.Probe is:
                 // the store is typically a shared network volume or blob container, and a fan-out
