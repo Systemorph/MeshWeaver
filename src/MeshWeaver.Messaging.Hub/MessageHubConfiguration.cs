@@ -420,10 +420,33 @@ public record MessageHubConfiguration
             if (ServiceProvider != null!)
                 return; // Already created
 
+            // 🚨 Record the OWNERSHIP here, where the decision is actually made — this is the only
+            // line in the codebase that knows whether the hub got a scope of its own. Every other
+            // place that wants to know has to infer it, and every available proxy is wrong:
+            // `parentAddress is not null` misses a hub whose parent is a provider rather than a
+            // hub, and "is it an AutofacServiceProvider" is true for the container the HOST owns
+            // as well. See HostedHubsCollection.CloseScopeWhenDisposed for who acts on it.
+            OwnsServiceProvider = ParentServiceProvider is not null;
+
             ServiceProvider = ConfigureServices(parent)
                 .SetupModules(ParentServiceProvider);
         }
     }
+
+    /// <summary>
+    /// True when <see cref="CreateServiceProvider"/> built <see cref="ServiceProvider"/> as a CHILD
+    /// LIFETIME SCOPE of a parent container (<c>ServiceProviderExtensions.SetupModules</c> with a
+    /// non-null parent) — i.e. this hub owns a scope that <b>nothing else will ever close</b>, so
+    /// closing it is somebody's job. False when the configuration built a fresh root container
+    /// instead, which the host that built it disposes.
+    ///
+    /// <para>Ownership is not the same question as "does this hub have a parent hub": a root mesh
+    /// hub is nested under the generic host's container (so this is true) and yet has no parent
+    /// hub, and it is closed transitively when the host container goes down rather than by the
+    /// scope-closing path below — it is registered in no <c>HostedHubsCollection</c>, so nothing
+    /// there ever sees it.</para>
+    /// </summary>
+    internal bool OwnsServiceProvider { get; private set; }
 
     /// <summary>
     /// Materialises the hub: creates its service provider, resolves the <c>IMessageHub</c> instance,
