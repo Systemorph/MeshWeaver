@@ -60,6 +60,15 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
     public async Task Ctor_OnDisposingHost_Refuses_WithATransientHubDisposalError()
     {
         var host = GetHost();
+
+        // 🚨 ARRANGE BEFORE THE HOST GOES DOWN, so the act is only the constructor this test is
+        // about. `new ReduceManager<Empty>(host)` RESOLVES from the host's container, and a hub's
+        // lifetime scope is closed once its disposal completes — so building it inside the Action
+        // threw Autofac's `ObjectDisposedException` from the ARRANGE, before the constructor ran at
+        // all, and the test reported it as the constructor refusing with the wrong exception type.
+        // It only ever passed because nothing used to close that scope.
+        var reduceManager = new ReduceManager<Empty>(host);
+
         host.Dispose();
         await host.DisposalCompleted
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
@@ -71,7 +80,7 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
             new StreamIdentity(host.Address, null),
             host,
             new EntityReference("X", "Y"),
-            new ReduceManager<Empty>(host),
+            reduceManager,
             null);
 
         var ex = act.Should().Throw<HubDisposingException>(

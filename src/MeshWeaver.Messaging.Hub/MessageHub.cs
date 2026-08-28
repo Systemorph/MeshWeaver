@@ -2237,6 +2237,16 @@ public sealed class MessageHub : IMessageHub
                     logger.LogDebug("[DISPOSE-TRACE] {address}: messageService.Dispose() done in {elapsed}ms",
                         Address, shutdownStopwatch.ElapsedMilliseconds);
 
+                    // 🚨 The hub does NOT close its own container here — the thing that OPENED the
+                    // scope closes it, once this hub is terminally down. See
+                    // `HostedHubsCollection.CloseScopeWhenDisposed`, which subscribes to the
+                    // `DisposalCompleted` signalled a few lines below. Two reasons it cannot live
+                    // here: a hub is a singleton IN the scope it would be destroying, so it would
+                    // be pulling its own logger and the rest of the `finally` out from under
+                    // itself; and a hub disposed on its own (a recycle, not a teardown) is exactly
+                    // the case that leaks, and it never reaches the branch a parent's teardown
+                    // takes. What it costs when NOBODY closes it is in that method's remarks.
+
                     // Dead BEFORE signalling — callers awaiting DisposalCompleted must observe the
                     // terminal state, never a mid-teardown ShutDown snapshot. The force-teardown
                     // path already orders it this way; here Dead was only set in the FINALLY, so a
@@ -2296,6 +2306,14 @@ public sealed class MessageHub : IMessageHub
 
         return request.Processed();
     }
+
+    /// <summary>
+    /// True when this hub's <see cref="ServiceProvider"/> is a lifetime scope the configuration
+    /// opened for it (see <see cref="MessageHubConfiguration.OwnsServiceProvider"/>), so somebody
+    /// has to close it. Read by <see cref="HostedHubsCollection.Add"/>, which is the only place
+    /// that both knows the scope exists and can act strictly after this hub is terminally down.
+    /// </summary>
+    internal bool OwnsServiceProvider => Configuration.OwnsServiceProvider;
 
     /// <summary>
     /// Terminal step of the reactive Quiescing poll (see the Quiescing branch of
