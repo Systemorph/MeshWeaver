@@ -17,6 +17,7 @@
          the grant follows them. Grants are by assembly SIMPLE NAME, so this keeps working when
          MeshWeaver.AI.Test travels to MeshWeaver.Plugins. -->
     <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Auth.Test" />
   </ItemGroup>
 
   <ItemGroup>
