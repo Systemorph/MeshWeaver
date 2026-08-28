@@ -49,7 +49,14 @@ internal sealed class IsolatedModuleHostedService(
         }
 
         if (inner is null)
+        {
+            // A registration that produces null, or something that is not an IHostedService, is a
+            // broken module registration. Reporting it matters as much as an activation failure:
+            // both end with the feature absent, and a silent no-op here would leave the operator
+            // with a module that installed cleanly and simply never ran.
+            Report(null, "produced no IHostedService (null or wrong type) and was SKIPPED");
             return Task.CompletedTask;
+        }
 
         try
         {

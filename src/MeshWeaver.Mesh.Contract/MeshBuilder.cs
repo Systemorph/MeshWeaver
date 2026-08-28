@@ -344,29 +344,37 @@ public record MeshBuilder
     /// Runs one module's service configuration and replaces any <c>IHostedService</c> it registered
     /// with an <see cref="IsolatedModuleHostedService"/> bound to that module.
     ///
-    /// <para>The scoping is positional and deliberate: only descriptors added between the snapshot
-    /// and the return are this module's. A registration that was already there belongs to the
-    /// platform or to an earlier module and is left alone — this must never become a blanket catch
-    /// over host startup.</para>
+    /// <para>The scoping is by descriptor IDENTITY and deliberate: only descriptors that were not
+    /// present before this module's configuration ran are this module's. A registration that was
+    /// already there belongs to the platform or to an earlier module and is left alone — this must
+    /// never become a blanket catch over host startup.</para>
     /// </summary>
-    private static IServiceCollection IsolateModuleHostedServices(
+    internal static IServiceCollection IsolateModuleHostedServices(
         MeshNode meshNode,
         Func<IServiceCollection, IServiceCollection> configure,
         IServiceCollection services)
     {
-        var before = services.Count;
+        // 🚨 Scope by IDENTITY, not by index. An index snapshot assumes the configuration only
+        // APPENDS; one that removes, inserts or replaces a descriptor ahead of the mark shifts
+        // everything after it, and the loop would then wrap a PLATFORM (or earlier module's)
+        // hosted service — silently converting a fatal platform failure into a skipped one, which
+        // is the single thing this isolation must never do. Recording which descriptors existed
+        // beforehand costs one set and is immune to that.
+        var preExisting = new HashSet<ServiceDescriptor>(services, ReferenceEqualityComparer.Instance);
         var result = configure(services);
 
-        // A configuration that swapped the collection out from under us cannot be scoped
-        // positionally; leave it exactly as it is rather than guess.
-        if (!ReferenceEquals(result, services) || services.Count <= before)
+        // A configuration that swapped the collection out from under us cannot be scoped at all;
+        // leave it exactly as it is rather than guess.
+        if (!ReferenceEquals(result, services))
             return result;
 
-        for (var i = before; i < services.Count; i++)
+        for (var i = 0; i < services.Count; i++)
         {
             var descriptor = services[i];
             if (descriptor.ServiceType != typeof(IHostedService))
                 continue;
+            if (preExisting.Contains(descriptor))
+                continue;   // present before this module ran — platform or an earlier module
 
             var moduleName = meshNode.Path ?? meshNode.Id ?? "(unnamed module)";
             var resolve = ResolverFor(descriptor);

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
@@ -115,4 +116,71 @@ public class ModuleHostedServiceIsolationTest
         public Task StartAsync(CancellationToken ct) { onStart(); return Task.CompletedTask; }
         public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
     }
+    private interface IFillerA;
+    private interface IFillerB;
+    private interface IFillerC;
+    private sealed class Filler : IFillerA, IFillerB, IFillerC;
+
+    /// <summary>A hosted service the PLATFORM registered. Isolation must never reach it: a platform
+    /// service failing to start is fatal on purpose, and downgrading that to a logged skip is the
+    /// one outcome this whole mechanism must not be able to produce.</summary>
+    private sealed class PlatformService : IHostedService
+    {
+        public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 🚨 The scope is decided by descriptor IDENTITY, never by an index snapshot.
+    ///
+    /// <para>An index mark ("everything past position N is this module's") silently assumes the
+    /// configuration only APPENDS. A configuration that INSERTS ahead of the mark shifts every
+    /// later descriptor forward, and the mark then points into descriptors that were already
+    /// there — so the loop wraps a PLATFORM hosted service and converts its fatal startup failure
+    /// into a logged skip. Nothing about that outcome is visible: the portal comes up "healthy"
+    /// with a platform service silently absent, which is strictly worse than the crash this
+    /// isolation exists to prevent.</para>
+    ///
+    /// <para>Both halves are asserted because they fail in opposite directions — the platform's
+    /// must stay untouched, and the module's must still get wrapped.</para>
+    /// </summary>
+    [Fact]
+    public void Scoping_survives_a_module_configuration_that_INSERTS_ahead_of_the_mark()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IFillerA, Filler>();
+        services.AddSingleton<IHostedService, PlatformService>();   // platform — must stay fatal
+
+        var platformDescriptor = services.Single(d => d.ServiceType == typeof(IHostedService));
+
+        var result = MeshBuilder.IsolateModuleHostedServices(
+            new MeshNode("SomeModule"),
+            s =>
+            {
+                // The shape an index snapshot cannot survive: two inserts AHEAD of everything,
+                // pushing the platform's descriptor past where the mark was taken.
+                s.Insert(0, ServiceDescriptor.Singleton<IFillerB, Filler>());
+                s.Insert(0, ServiceDescriptor.Singleton<IFillerC, Filler>());
+                s.AddSingleton<IHostedService, ThrowsOnStart>();
+                return s;
+            },
+            services);
+
+        var hosted = result.Where(d => d.ServiceType == typeof(IHostedService)).ToList();
+        hosted.Should().HaveCount(2);
+
+        hosted.Should().Contain(
+            d => ReferenceEquals(d, platformDescriptor),
+            "the PLATFORM's hosted service must come out of this untouched — wrapping it would "
+            + "turn a deliberately fatal platform failure into a silent skip");
+
+        var moduleDescriptor = hosted.Single(d => !ReferenceEquals(d, platformDescriptor));
+        moduleDescriptor.ImplementationFactory.Should().NotBeNull(
+            "the MODULE's hosted service must still be wrapped — an index snapshot that gave up "
+            + "here would leave exactly the unprotected activation that aborted every pod");
+        moduleDescriptor.ImplementationType.Should().BeNull(
+            "a wrapped registration is produced through the isolating factory, not activated "
+            + "directly by the host");
+    }
+
 }
