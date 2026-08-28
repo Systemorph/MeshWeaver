@@ -214,7 +214,14 @@ jobs:
           # 🚨 Bounded retry, and deliberately NOT a skip-trapdoor: after the last attempt this
           # still fails RED, and a CREDENTIAL rejection fails IMMEDIATELY rather than being retried
           # three times — retrying a 401 only delays the same red while hiding which kind of
-          # failure it was. Only connection-level errors are retried.
+          # failure it was.
+          #
+          # Everything else IS retried, including failures this does not recognise. That is the
+          # intended default rather than an oversight: an unclassified docker login failure is far
+          # more often transient (daemon not ready, DNS, TLS reset) than permanent, and the one
+          # class known to be permanent — bad credentials — is carved out above. A positive
+          # allow-list of "connection-level" strings would fail fast on the next transient error
+          # nobody predicted, which is the failure mode this exists to remove.
           #
           # Three ACR logins failed on 2026-08-28 in two separate incidents an hour apart
           # ("dial tcp 51.12.25.80:443: connect: connection refused", registry healthy throughout),
