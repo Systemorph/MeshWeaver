@@ -301,8 +301,19 @@ public class PlatformBakeLaneGuard
             // never read as the hop itself.
             .Select(f => (file: Path.GetFileName(f), text: ExecutableLinesOf(File.ReadAllText(f))))
             .Where(x => x.text.Contains("publish-bake-bundles.sh", StringComparison.Ordinal))
+            // The invariant is CROSS-RUN adoption (#1725): a bundle from another run is a different
+            // compilation resolving a different framework identity. `gh run download` is cross-run
+            // by construction and stays forbidden outright. `actions/download-artifact` can only
+            // reach ANOTHER run when it names one (`run-id:` + a token) — without `run-id:` it sees
+            // exclusively the CURRENT run's artifacts, which is the property this guard exists to
+            // protect. That same-run form is how the bake composes this wave's MODULE bundles into
+            // the compile surface (#2628, `module-artifacts` → `--module`): the module lane is
+            // FLOOR-gated, not identity-gated (PluginBundleClient.AdoptModule), and the downloaded
+            // bytes are mounted at /ext for the compiler — they never enter the $BAKE directory
+            // that publish-bake-bundles.sh publishes.
             .Where(x => x.text.Contains("gh run download", StringComparison.Ordinal)
-                        || x.text.Contains("download-artifact", StringComparison.Ordinal))
+                        || (x.text.Contains("download-artifact", StringComparison.Ordinal)
+                            && x.text.Contains("run-id:", StringComparison.Ordinal)))
             .Select(x => x.file)
             .ToList();
 
