@@ -41,6 +41,13 @@ internal sealed class McpBackConnectionService : IMcpBackConnection
     private readonly IOptions<McpConfiguration> mcpConfig;
     private readonly ILogger<McpBackConnectionService> logger;
 
+    /// <summary>
+    /// How long a cache-hit validation may take before the cached token is reused anyway. Short by
+    /// design: this is the hot path of every CLI spawn, and the check is an optimisation on
+    /// revocation latency, not a security boundary — a revoked token is still refused at /mcp.
+    /// </summary>
+    private static readonly TimeSpan ValidationBudget = TimeSpan.FromSeconds(2);
+
     // Instance (not static) — lifetime == the portal host. userId → raw mw_ token.
     private readonly ConcurrentDictionary<string, string> tokensByUser = new(StringComparer.Ordinal);
 
@@ -84,6 +91,13 @@ internal sealed class McpBackConnectionService : IMcpBackConnection
         // fresh (no cache), which is what makes checking it here meaningful rather than circular.
         if (tokensByUser.TryGetValue(userId, out var cached))
             return tokenService.Validate(cached)
+                // 🚨 Bounded well below ApiTokenService.ValidationReadTimeout (8 s by default).
+                // This runs on EVERY CLI spawn, so an unbounded check would let a brief store blip
+                // stall every spawn for the full validation window — trading the stale-token bug
+                // for a latency one. Expiring here lands in the Catch below and REUSES the cached
+                // token, which is the Unavailable semantics this class already applies: "we could
+                // not find out" is never "it was revoked".
+                .Timeout(ValidationBudget)
                 .SelectMany(verdict => verdict.Status switch
                 {
                     // 🚨 Only INVALID evicts. Unavailable must NOT: "we could not find out" is not
