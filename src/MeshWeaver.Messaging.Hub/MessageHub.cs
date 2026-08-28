@@ -579,10 +579,12 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     private bool IsTerminatedByScopeTeardown(Exception exception)
     {
-        for (var e = exception; e is not null; e = e.InnerException)
-            if (e is ObjectDisposedException)
-                return IsServiceScopeDisposed();
-        return false;
+        // The graph, not the chain: an init fault that reaches here through a reactive Merge or a
+        // WhenAll arrives as an AggregateException whose ordering nobody controls, and walking only
+        // InnerException sees InnerExceptions[0] alone. Classifying a teardown by which fault
+        // happened to land first is a race, so this shares ONE walker with IsHubDisposal.
+        return ExceptionChain.Contains<ObjectDisposedException>(exception)
+               && IsServiceScopeDisposed();
     }
 
     /// <summary>Probes whether this hub's own DI scope still resolves (see
