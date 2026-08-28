@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -131,15 +133,20 @@ public class DeadTargetRefusalWindowTest
     [Fact]
     public async Task A_refusal_is_terminal_per_delivery()
     {
-        var completed = false;
-        var emissions = 0;
-        RoutingGrain.RefuseNoSubscriber(
+        // Materialize + ToList completes only when the SOURCE completes, so termination is asserted
+        // through the stream itself — no yield, no flag, no race; the Timeout is the bound that
+        // turns a leg that never terminates into a failure instead of a hang.
+        var notifications = await RoutingGrain.RefuseNoSubscriber(
                 Delivery("t1"), "portal/dead", (_, _) => { }, new RecordingLogger(),
                 new DeadTargetRefusalLog(TimeSpan.FromSeconds(60)))
-            .Subscribe(_ => emissions++, () => completed = true);
-        await Task.Yield();
-        emissions.Should().Be(1);
-        completed.Should().BeTrue("the leg must terminate so the routing pool slot is released");
+            .Materialize()
+            .ToList()
+            .Timeout(TimeSpan.FromSeconds(5))
+            .ToTask();
+
+        notifications.Select(n => n.Kind).Should().Equal(
+            [NotificationKind.OnNext, NotificationKind.OnCompleted],
+            "one emission and then completion — the leg must terminate so the routing pool slot is released");
     }
 
     // ---- DeadTargetRefusalLog mechanics, with a fake clock ------------------------------------

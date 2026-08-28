@@ -12,7 +12,8 @@ When a portal restarted, or a script worker connected over gRPC went away, every
 had open kept sending its changes to the address that was no longer there. The delivery was refused
 each time, an error was logged each time, and because the refusal could not be delivered back to the
 node that sent it, nothing ever told that node to stop — one production portal spent hours refusing
-tens of thousands of deliveries a second, burning CPU and log budget that real work competes for.
+tens of deliveries a second (over sixty thousand in half an hour), burning CPU and log budget that
+real work competes for.
 
 The refusal now carries the cluster's verdict that the address is genuinely unserved, that verdict
 reaches the sending node, and the node drops the dead subscription on the spot. A session that is
