@@ -704,11 +704,12 @@ public sealed class InstanceAutoRegistrationService(
     private IObservable<Unit> RecordSeeded(
         DefaultInstallLedger ledger, DefaultInstallSummary summary)
     {
-        // 🚨 A pass that attempted NOTHING knows nothing. A source listing that failed yields an
-        // empty summary, and treating that as "no package is missing" would erase the record of a
-        // genuinely missing one — the ledger would then be at its most optimistic exactly when the
-        // instance is least healthy.
-        if (summary.Packages.Count == 0)
+        // 🚨 A pass that attempted NOTHING and classified nothing knows nothing. A source listing
+        // that failed yields an empty summary, and treating that as "no package is missing" would
+        // erase the record of a genuinely missing one — the ledger would then be at its most
+        // optimistic exactly when the instance is least healthy. A skip-only pass, by contrast,
+        // DID read a listing (skips are derived from listed manifests), so it may write.
+        if (summary.Packages.Count == 0 && summary.Skipped.Count == 0)
             return Observable.Return(Unit.Default);
 
         var already = ledger.Seeded.ToImmutableHashSet(StringComparer.Ordinal);
@@ -720,7 +721,17 @@ public sealed class InstanceAutoRegistrationService(
             .OrderBy(x => x, StringComparer.Ordinal)
             .ToImmutableList();
 
-        if (delivered.Count == 0 && failures.SequenceEqual(ledger.Failed, StringComparer.Ordinal))
+        // Snapshot semantics, exactly like Failed (#2536): what THIS pass classified as outside
+        // the unattended lane's authority, deduplicated by package (records compare by value).
+        var skipped = summary.Skipped
+            .GroupBy(s => s.Package, StringComparer.Ordinal)
+            .Select(g => g.First())
+            .OrderBy(s => s.Package, StringComparer.Ordinal)
+            .ToImmutableList();
+
+        if (delivered.Count == 0
+            && failures.SequenceEqual(ledger.Failed, StringComparer.Ordinal)
+            && skipped.SequenceEqual(ledger.Skipped))
             return Observable.Return(Unit.Default);
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
@@ -745,6 +756,7 @@ public sealed class InstanceAutoRegistrationService(
             {
                 Seeded = already.Union(delivered).OrderBy(x => x, StringComparer.Ordinal).ToImmutableList(),
                 Failed = failures,
+                Skipped = skipped,
                 UpdatedAt = DateTimeOffset.UtcNow,
             },
         };
@@ -1176,19 +1188,67 @@ public sealed class InstanceAutoRegistrationService(
             .ToList();
     }
 
+    /// <summary>
+    /// Why the UNATTENDED default install must not even ATTEMPT <paramref name="package"/> — or
+    /// null when it may proceed. Pure.
+    ///
+    /// <para>🚨 <b>This is a CLASSIFICATION, not retry tuning (#2536).</b> A commercial package is
+    /// refused by <see cref="PackageEntitlement.Authorize"/> for want of an authorizing principal,
+    /// and on this lane that want is PERMANENT: no human can appear at boot to pay or approve.
+    /// Recording such a package as FAILED and re-attempting it at the next boot ("that retry is the
+    /// repair") was wrong twice — the retry could never succeed, and the per-boot <c>fail:</c>
+    /// advertised a defect where there is a standing decision. Such a package is recorded as
+    /// SKIPPED with this reason instead — durable on the ledger, never re-attempted as a repair.</para>
+    ///
+    /// <para>What changes the outcome is an EVENT the next pass observes, never a retry: a Global
+    /// Admin installs the package from the catalog (the lane with an authorizing principal), or the
+    /// package's own terms change — it stops being commercial. The classification is re-derived
+    /// from the CURRENT manifest on every pass, so it moves the moment its input does; nothing
+    /// polls the refused operation.</para>
+    /// </summary>
+    /// <param name="package">The selected candidate's manifest, as the catalog lists it now.</param>
+    /// <returns>The speaking skip reason, or null when the pass may install it.</returns>
+    internal static string? TerminalSkipReason(PackageManifest package) =>
+        package.IsCommercial() ? PackageEntitlement.Reason(package, null) : null;
+
     /// <summary>Installs the selected packages sequentially and folds their outcomes into one summary.</summary>
     private IObservable<DefaultInstallSummary> InstallAll(IReadOnlyList<InstallCandidate> candidates)
     {
         if (candidates.Count == 0)
             return Observable.Return(DefaultInstallSummary.Empty);
+
+        // The terminal skips FIRST — what this unattended pass must not even attempt (see
+        // TerminalSkipReason). They seed the aggregate so the ledger records them with their
+        // reasons, and they are reported ONCE, at Warning: actionable ("needs a Global Admin"),
+        // not a per-boot fail: with a stack trace (#2536).
+        var skipped = candidates
+            .Select(c => (c.Package.Id, Reason: TerminalSkipReason(c.Package)))
+            .Where(x => x.Reason is not null)
+            .Select(x => new DefaultInstallSkip(x.Id, x.Reason!))
+            .ToImmutableList();
+        var installable = skipped.Count == 0
+            ? candidates
+            : candidates.Where(c => TerminalSkipReason(c.Package) is null).ToList();
+        if (skipped.Count > 0)
+            logger.LogWarning(
+                "[DefaultInstall] {Count} declared package(s) require an authorization this "
+                + "unattended install can never obtain and are SKIPPED, not failed: [{Skipped}]. "
+                + "They are recorded with their reasons on {Ledger} and no boot re-attempts them — "
+                + "a Global Admin installing them from the catalog, or the package ceasing to be "
+                + "commercial, is what changes this.",
+                skipped.Count, string.Join(", ", skipped.Select(s => s.Package)), SeedLedgerPath);
+
+        var seed = DefaultInstallSummary.Empty with { Skipped = skipped };
+        if (installable.Count == 0)
+            return Observable.Return(seed);
         logger.LogInformation(
             "[DefaultInstall] {Count} package(s), in dependency order — {Packages}",
-            candidates.Count, string.Join(", ", candidates.Select(c => c.Package.Id)));
-        return candidates
+            installable.Count, string.Join(", ", installable.Select(c => c.Package.Id)));
+        return installable
             .Select(Install)
             .ToObservable()
             .Concat()
-            .Aggregate(DefaultInstallSummary.Empty, (acc, one) => acc.Add(one));
+            .Aggregate(seed, (acc, one) => acc.Add(one));
     }
 
     /// <summary>
@@ -1237,6 +1297,26 @@ public sealed class InstanceAutoRegistrationService(
                 UpToDate: result.Written > 0 ? 0 : 1,
                 Failed: 0,
                 Packages: [package.Id]))
+            // 🚨 The safety net behind TerminalSkipReason (#2536): a refusal that only becomes
+            // visible AT install time — commerciality stamped registry-side after listing, or a
+            // licence that requires an acceptance no boot-time principal can give — is STILL
+            // terminal for this lane. Record it as a SKIP carrying the refusal's own reason, never
+            // as a failure to retry: retrying an authorization refusal re-fails identically every
+            // boot, and what changes it is an event (an admin install, changed terms), not a retry.
+            .Catch((Exception exception) => exception
+                    is not PackageAuthorizationException and not LicenseAcceptanceRequiredException
+                ? Observable.Throw<DefaultInstallSummary>(exception)
+                : Observable.Defer(() =>
+                {
+                    logger.LogWarning(
+                        "[DefaultInstall] {Id} was refused and is SKIPPED, not failed — no boot "
+                        + "re-attempts it (recorded on {Ledger}): {Reason}",
+                        package.Id, SeedLedgerPath, exception.Message);
+                    return Observable.Return(DefaultInstallSummary.Empty with
+                    {
+                        Skipped = [new DefaultInstallSkip(package.Id, exception.Message)],
+                    });
+                }))
             .Catch((Exception exception) =>
             {
                 logger.LogError(exception,
@@ -1377,6 +1457,23 @@ public record DefaultInstallLedger
     /// </summary>
     public ImmutableList<string> Failed { get; init; } = ImmutableList<string>.Empty;
 
+    /// <summary>
+    /// The declared default packages the last pass deliberately did NOT act on, with the reason
+    /// each — the terminal-skip classification (#2536): an authorization the unattended lane can
+    /// never obtain. 🚨 NOT failures — a failure is retried next boot because a retry can repair
+    /// it; a skip is a standing decision no retry can change, so nothing re-attempts it and no
+    /// per-boot error is raised. What changes it is an event the next pass observes: a Global
+    /// Admin installs the package from the catalog, or its terms change (it stops being
+    /// commercial) — the classification is re-derived from the current manifest each pass.
+    ///
+    /// <para>A SNAPSHOT with the same semantics as <see cref="Failed"/>: an entry drops off the
+    /// moment the package stops being declared by default or stops being refusable. A skipped
+    /// package is never <see cref="Seeded"/> — so should it ever become free, the seed lane
+    /// installs it like any package it has not delivered yet.</para>
+    /// </summary>
+    public ImmutableList<DefaultInstallSkip> Skipped { get; init; } =
+        ImmutableList<DefaultInstallSkip>.Empty;
+
     /// <summary>When the ledger last changed.</summary>
     public DateTimeOffset UpdatedAt { get; init; }
 }
@@ -1406,6 +1503,19 @@ public readonly record struct DefaultInstallSummary(
     public ImmutableList<string> Failures { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// The packages this pass deliberately did NOT attempt, with the reason each — the
+    /// terminal-skip classification (#2536): an authorization the unattended installer can never
+    /// obtain (a commercial package with no authorizing principal, a licence nobody is present to
+    /// accept). Distinct from <see cref="Failures"/> in every consequence: a failure was attempted,
+    /// errored, and is retried next boot (that retry is the repair); a skip is a standing decision,
+    /// re-derived from the current manifest each pass and never retried. A skip is counted in
+    /// neither <see cref="Failed"/> nor <see cref="Packages"/>, so it can neither be ledgered as
+    /// seeded nor reported as a failure.
+    /// </summary>
+    public ImmutableList<DefaultInstallSkip> Skipped { get; init; } =
+        ImmutableList<DefaultInstallSkip>.Empty;
+
+    /// <summary>
     /// The ids this pass actually DELIVERED — installed or already current. The ledger's input:
     /// what the seed may stop re-asserting.
     /// </summary>
@@ -1425,11 +1535,30 @@ public readonly record struct DefaultInstallSummary(
     {
         Failures = (Failures ?? ImmutableList<string>.Empty)
             .AddRange(other.Failures ?? ImmutableList<string>.Empty),
+        Skipped = (Skipped ?? ImmutableList<DefaultInstallSkip>.Empty)
+            .AddRange(other.Skipped ?? ImmutableList<DefaultInstallSkip>.Empty),
     };
 
     /// <inheritdoc />
     public override string ToString() =>
         $"{Installed} installed, {UpToDate} up to date, {Failed} failed "
         + $"[{string.Join(", ", Packages)}]"
-        + (Failures is { Count: > 0 } f ? $" — FAILED: [{string.Join(", ", f)}]" : "");
+        + (Failures is { Count: > 0 } f ? $" — FAILED: [{string.Join(", ", f)}]" : "")
+        + (Skipped is { Count: > 0 } s
+            ? $" — SKIPPED (authorization, not retried): [{string.Join(", ", s.Select(x => x.Package))}]"
+            : "");
 }
+
+/// <summary>
+/// One package the unattended default install deliberately does not act on, and why (#2536): the
+/// declared default set names it, but acting on it needs an authorization this lane can never hold
+/// — a commercial package with no authorizing principal, or a licence nobody is present to accept.
+///
+/// <para>Recorded on the <see cref="DefaultInstallLedger"/> so the standing decision is durable
+/// and diagnosable without grepping a boot log. It does NOT mean the package is absent: a Global
+/// Admin may well have installed it through the catalog — it means the unattended lane does not
+/// manage it (neither installs nor auto-updates it), which stays true either way.</para>
+/// </summary>
+/// <param name="Package">The package id.</param>
+/// <param name="Reason">The speaking refusal reason (see <see cref="PackageEntitlement.Reason"/>).</param>
+public sealed record DefaultInstallSkip(string Package, string Reason);
