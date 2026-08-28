@@ -33,6 +33,22 @@ namespace MeshWeaver.PluginCatalog.Test;
 /// framework-identity flip, which recompiles every dynamic NodeType: with zero sources left to
 /// compile against, it fails, parks at <c>CompileError</c>, and holds every instance hub for the
 /// full 60 s activation budget (see NodeTypeCompilation.md).</para>
+///
+/// <para>🚨 A live orphan of exactly this shape was found on memex-cloud (<c>LinkedIn/Skill</c>) with
+/// its ENTIRE <c>Release/*</c> compile-history subtree still attached under the retired type's path —
+/// so the second thing this test pins is that the prune removes the SUBTREE, not just the retired
+/// node itself. It does, for free: <c>PruneRemovedNodes</c> prunes via
+/// <c>IMeshService.DeleteNode</c>, which <c>MeshService.DeleteNode</c> always issues with
+/// <c>Recursive = true</c>; the recursive delete's path collection
+/// (<c>IStorageAdapter.ListDescendantPaths</c>) is a prefix scan under the deleted root regardless of
+/// which physical table a descendant lives in (the production Postgres adapter UNIONs
+/// <c>mesh_nodes</c> with every satellite table). A compile's <c>Release/{version}</c> history node
+/// is never routed to a satellite table at all (<c>PartitionDefinition.StandardTableMappings</c>
+/// never routed it — see Memex.Database.Migration's <c>V19_DeleteLegacyReleaseNodes</c>), so it is an
+/// ordinary <c>mesh_nodes</c> row whose namespace is prefixed by the type's path — squarely inside
+/// the deleted subtree. <c>ReleaseHistorySurvivesUnderThePrunedType</c> below plants exactly such a
+/// node directly (bypassing the package installer, the way a live compile would create one) and
+/// pins it disappears along with its owning type.</para>
 /// </summary>
 public class RetiredNodePruneTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -160,6 +176,50 @@ public class RetiredNodePruneTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // The surviving root is untouched in content — only Thing left, nothing else broke.
         (await persistence.Exists("Widget").FirstAsync().ToTask()).Should().BeTrue();
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task ReleaseHistorySurvivesUnderThePrunedType_ThenIsPrunedWithIt()
+    {
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        // ── v1: install, then plant a Release-history child the way a live compile does —
+        // NEVER through the package installer (compile history is never shipped by a repo; it is
+        // written directly by MeshDataSource.TryCreateReleaseNode against the type's own path). ──
+        await PackageInstaller.Install(Mesh, Pkg(V1Module, "commit-1"), V1Files, "commit-1")
+            .FirstAsync().ToTask();
+        await Mesh.GetMeshNodeStream("Widget/Thing")
+            .Should().Within(90.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error);
+
+        var release = MeshNode.FromPath("Widget/Thing/Release/v1-abc123") with
+        {
+            NodeType = "Markdown",
+            Name = "Release v1",
+            State = MeshNodeState.Active,
+            Content = "# compiled at v1",
+        };
+        await meshService.CreateNode(release).FirstAsync().ToTask();
+        (await persistence.Exists("Widget/Thing/Release/v1-abc123").FirstAsync().ToTask()).Should().BeTrue(
+            "the planted release-history node must actually be there before the prune runs");
+
+        // ── v2: the repo retires Thing (and its compile history is never part of any manifest —
+        // the diff never names it, so ONLY a recursive delete of Thing's subtree removes it) ──
+        var v2Source = new RecordingSource(V2Files);
+        await CatalogLayoutAreas.InstallOrUpdate(Mesh, v2Source, "commit-2", Pkg(V2Module, "commit-2"), null)
+            .FirstAsync().ToTask();
+
+        // The RED-adjacent proof for the coordinator's concern: pruning Thing must take its
+        // Release history with it, not leave it orphaned under a now-nonexistent parent.
+        await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
+            .SelectMany(_ => persistence.Exists("Widget/Thing"))
+            .Where(exists => !exists)
+            .FirstAsync().Timeout(30.Seconds()).ToTask();
+        (await persistence.Exists("Widget/Thing/Release/v1-abc123").FirstAsync().ToTask()).Should().BeFalse(
+            "the retired type's Release history must be pruned WITH it (recursive delete), " +
+            "not left orphaned under a path nothing owns any more");
     }
 
     private static async Task<PackageManifest> ReadRecord(
