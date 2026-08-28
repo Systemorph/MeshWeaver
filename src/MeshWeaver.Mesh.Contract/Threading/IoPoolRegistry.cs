@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Linq;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh.Threading;
 
@@ -18,6 +19,7 @@ public sealed class IoPoolRegistry : IDisposable
 {
     private readonly ConcurrentDictionary<string, IoPool> _pools = new(StringComparer.Ordinal);
     private readonly IoPoolOptions _options;
+    private readonly ILogger<IoPoolRegistry>? _logger;
     private int _disposing;
     private readonly System.Reactive.Subjects.AsyncSubject<int> _disposed = new();
 
@@ -37,9 +39,15 @@ public sealed class IoPoolRegistry : IDisposable
     /// Creates the registry with the given per-resource-class concurrency options.
     /// </summary>
     /// <param name="options">Concurrency caps per pool name; defaults are used when null.</param>
-    public IoPoolRegistry(IoPoolOptions? options = null)
+    /// <param name="logger">
+    /// Optional — resolved from DI when the mesh registers logging. Names the offending pool at
+    /// <see cref="DrainAll"/> time (issue #2480: the teardown report carried no pool name, exception,
+    /// or stack, so a fingerprint could never be turned into a direct pointer to the leaf).
+    /// </param>
+    public IoPoolRegistry(IoPoolOptions? options = null, ILogger<IoPoolRegistry>? logger = null)
     {
         _options = options ?? new IoPoolOptions();
+        _logger = logger;
     }
 
     /// <summary>
@@ -127,8 +135,16 @@ public sealed class IoPoolRegistry : IDisposable
     public int DrainAll()
     {
         var leaked = 0;
-        foreach (var pool in _pools.Values)
-            leaked += pool.Drain();
+        foreach (var kvp in _pools)
+        {
+            var residual = kvp.Value.Drain();
+            if (residual != 0)
+                _logger?.LogWarning(
+                    "IoPoolSiloTeardown: pool '{PoolName}' did not finish {Residual} leaf(es) within "
+                    + "the drain budget — a leaf ignored its cancellation token; fix the leaf, do not "
+                    + "widen the budget.", kvp.Key, residual);
+            leaked += residual;
+        }
         return leaked;
     }
 
@@ -143,7 +159,7 @@ public sealed class IoPoolRegistry : IDisposable
         // Dispose(): `using var pool = …` in an async method runs it on a ThreadPool thread, and
         // parking one there while the leaves it waits for need pool threads starves into a
         // deadlock on a small runner. The WAIT lives on Disposed, awaited asynchronously.
-        var pools = _pools.Values.ToArray();
+        var pools = _pools.ToArray();
         _pools.Clear();
         if (pools.Length == 0)
         {
@@ -152,17 +168,35 @@ public sealed class IoPoolRegistry : IDisposable
             return;
         }
 
+        // Per-pool attribution (issue #2480: the silo-teardown report named neither pool nor leaf).
+        // Logged the moment EACH pool's own Disposed fires — independent of the Zip below, and
+        // independent of whether the caller's own bounded wait (IoPoolSiloTeardown's 30 s Timeout
+        // on the aggregate) has already given up. A pool that unwinds AFTER that timeout still gets
+        // attributed here, which is strictly more than the aggregate -1 residual ever names.
+        foreach (var kvp in pools)
+        {
+            var name = kvp.Key;
+            kvp.Value.Disposed.Subscribe(residual =>
+            {
+                if (residual != 0)
+                    _logger?.LogWarning(
+                        "IoPoolSiloTeardown: pool '{PoolName}' left {Residual} leaf(es) still "
+                        + "running at dispose — a leaf ignored its cancellation token; fix the "
+                        + "leaf, do not widen the budget.", name, residual);
+            });
+        }
+
         // Zip: one emission once EVERY pool has reported, carrying the total residual. A pool whose
         // leaf never unwinds never reports, so this never fires — and the caller's bounded wait
         // surfaces that as the timeout it is, rather than a false all-clear.
-        Observable.Zip(pools.Select(pool => pool.Disposed))
+        Observable.Zip(pools.Select(kvp => kvp.Value.Disposed))
             .Select(residuals => residuals.Sum())
             .Take(1)
             .Subscribe(
                 total => { _disposed.OnNext(total); _disposed.OnCompleted(); },
                 _ => { _disposed.OnNext(0); _disposed.OnCompleted(); });
 
-        foreach (var pool in pools)
-            pool.Dispose();
+        foreach (var kvp in pools)
+            kvp.Value.Dispose();
     }
 }

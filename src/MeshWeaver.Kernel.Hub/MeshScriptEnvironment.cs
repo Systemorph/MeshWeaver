@@ -68,7 +68,7 @@ public static class MeshScriptEnvironment
     /// free — only its metadata reference has to be guaranteed here, immune to the process-wide
     /// snapshot freeze in <see cref="KernelScriptReferences"/>. De-duplication against the
     /// snapshot and the anchors happens by file path in
-    /// <see cref="KernelScriptReferences.GetReferences"/>.
+    /// <see cref="KernelScriptReferences.GetReferencesAsync"/>.
     /// </summary>
     public static IReadOnlyCollection<Assembly> SessionAssemblies(IServiceProvider serviceProvider)
     {
@@ -98,9 +98,15 @@ public static class MeshScriptEnvironment
     /// The full, process-shared metadata reference set for a script session — the shared
     /// snapshot of every referenceable loaded assembly plus the session anchors. Safe to
     /// hand to a Roslyn workspace: every instance is the one shared materialization.
+    ///
+    /// <para>🚨 <paramref name="ct"/> governs only how long the CALLER waits for the shared,
+    /// process-wide snapshot — never used to abort the snapshot build itself, which keeps
+    /// running for the next caller regardless of this one's cancellation. See
+    /// <see cref="KernelScriptReferences.GetReferencesAsync"/>.</para>
     /// </summary>
-    public static ImmutableArray<MetadataReference> References(IServiceProvider serviceProvider)
-        => KernelScriptReferences.GetReferences(SessionAssemblies(serviceProvider));
+    public static Task<ImmutableArray<MetadataReference>> ReferencesAsync(
+        IServiceProvider serviceProvider, CancellationToken ct)
+        => KernelScriptReferences.GetReferencesAsync(SessionAssemblies(serviceProvider), ct);
 
     /// <summary>
     /// Whether an assembly is TEST SCAFFOLDING and must therefore be kept out of the script

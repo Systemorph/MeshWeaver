@@ -55,8 +55,18 @@ internal sealed class MeshNodeLanguageService(
     // lifetime, so a single lazily-built project serves every request: each suggest forks the
     // immutable solution with the in-flight text, nothing is applied back, and concurrent
     // requests never contend. Bounded: one AdhocWorkspace total, not one per cell.
-    private readonly Lazy<ScriptWorkspace> _scriptWorkspace = new(
-        () => BuildScriptWorkspace(hub.ServiceProvider),
+    //
+    // 🚨 Task, not a bare value (issues #2480/#2578). Building it touches
+    // MeshScriptEnvironment.ReferencesAsync, whose FIRST-ever call in the process can be
+    // genuinely slow (materializing ~350 assemblies' metadata) — it used to run synchronously,
+    // inline, inside this leaf's Compile-pool gate, with no cancellation participation at all,
+    // so a silo/mesh teardown racing the first caller could not reclaim that gate permit within
+    // the drain budget. Every caller now races its OWN `ct` against this shared Task via
+    // Task.WaitAsync (see GetScriptCompletionsAsync/GetScriptDiagnosticsAsync) — the FIRST
+    // caller's own token never cancels the build (it is shared by every request against this
+    // mesh instance), it only governs how long THAT caller waits.
+    private readonly Lazy<Task<ScriptWorkspace>> _scriptWorkspace = new(
+        () => BuildScriptWorkspaceAsync(hub.ServiceProvider),
         LazyThreadSafetyMode.ExecutionAndPublication);
 
     // Path used as the script document's FilePath — never a real MeshNode path.
@@ -469,7 +479,7 @@ internal sealed class MeshNodeLanguageService(
     {
         var usage = usageIndex;
         var memory = CurrentMemory();
-        var script = _scriptWorkspace.Value;
+        var script = await _scriptWorkspace.Value.WaitAsync(ct).ConfigureAwait(false);
         var document = script.Workspace.CurrentSolution
             .WithDocumentText(script.DocumentId, SourceText.From(StripKernelDirectives(proposedCode)))
             .GetDocument(script.DocumentId);
@@ -484,7 +494,7 @@ internal sealed class MeshNodeLanguageService(
     private async Task<IReadOnlyList<DiagnosticInfo>> GetScriptDiagnosticsAsync(
         string proposedCode, CancellationToken ct)
     {
-        var script = _scriptWorkspace.Value;
+        var script = await _scriptWorkspace.Value.WaitAsync(ct).ConfigureAwait(false);
         var document = script.Workspace.CurrentSolution
             .WithDocumentText(script.DocumentId, SourceText.From(StripKernelDirectives(proposedCode)))
             .GetDocument(script.DocumentId);
@@ -781,12 +791,20 @@ internal sealed class MeshNodeLanguageService(
     /// compilation's usings, the process-shared reference set, the shared metadata resolver,
     /// and the script globals as the submission's host object — so <c>Mesh</c>, <c>Log</c>,
     /// <c>Ct</c> and <c>Inputs</c> complete as bare identifiers exactly as they run.
+    ///
+    /// <para>🚨 Awaits the shared reference snapshot with <see cref="CancellationToken.None"/> —
+    /// this build is cached (once) for every future request against THIS mesh instance's
+    /// <c>_scriptWorkspace</c>, so it must never be torn down by whichever caller happens to be
+    /// first; each caller's own cancellation is applied at the `_scriptWorkspace.Value.WaitAsync`
+    /// call site instead (see the field's doc comment).</para>
     /// </summary>
-    private static ScriptWorkspace BuildScriptWorkspace(IServiceProvider serviceProvider)
+    private static async Task<ScriptWorkspace> BuildScriptWorkspaceAsync(IServiceProvider serviceProvider)
     {
         var workspace = new AdhocWorkspace();
         var projectId = ProjectId.CreateNewId();
         var docId = DocumentId.CreateNewId(projectId);
+        var references = await Kernel.Hub.MeshScriptEnvironment
+            .ReferencesAsync(serviceProvider, CancellationToken.None).ConfigureAwait(false);
         var projectInfo = ProjectInfo
             .Create(
                 projectId,
@@ -799,7 +817,7 @@ internal sealed class MeshNodeLanguageService(
                         metadataReferenceResolver: Kernel.Hub.MeshScriptEnvironment.MetadataResolver)
                     .WithUsings(Kernel.Hub.MeshScriptEnvironment.Imports),
                 parseOptions: new CSharpParseOptions(kind: SourceCodeKind.Script),
-                metadataReferences: Kernel.Hub.MeshScriptEnvironment.References(serviceProvider),
+                metadataReferences: references,
                 isSubmission: true,
                 hostObjectType: Kernel.Hub.MeshScriptEnvironment.GlobalsType)
             .WithDocuments(
