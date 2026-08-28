@@ -19,6 +19,29 @@ wearing different clothes —
 > **either `async`/`await` is involved, or a disposal-path observable was not properly
 > subscribed.**
 
+🚨 **And of those two, it is MOSTLY THE SECOND: a dispose nobody waited for.** Teardown here is
+reactive — `Dispose()` *starts* the work and returns; the completion arrives later on `Disposed`,
+`DisposalCompleted`, or a `StreamEndedEvent`. So "disposed" and "finished disposing" are different
+moments, and every crash in Family B is something acting during the gap: unloading an ALC, freeing a
+pool, tearing down a hub, while the previous phase is still running. **Start by asking which wait
+was skipped**, not which line faulted.
+
+The gap is dangerous in both directions, which is why it is worth naming rather than filing under
+"ordering":
+
+- **Nobody subscribed to the completion**, so teardown ran ahead of it → a use-after-free, and the
+  crash lands in whatever happened to still be executing (Family B).
+- **Somebody raced the completion with a timer** — `Task.WhenAny(done, Task.Delay(…))` — and then
+  acted on "the wait expired" as if it were "the work finished" (Family A). *Prefer retaining a
+  resource over acting on a guess.*
+- **The completion had nowhere to land.** The waiter is not wrong and not slow: it is holding a
+  subscription to something already torn down, so it receives no value, no completion and no error,
+  and only its own timeout ever fires. Seen 2026-08-28: a compile-overlay self-heal recycled an
+  instance hub with `DisposeRequest` while a live subscriber was mid-render; the terminal
+  `StreamEndedEvent` was dropped (`no synchronization hub found`) and the render sat 37.7 s of total
+  silence until its 50 s budget expired. **A burst of work then dead silence is this shape** — see
+  [/debug](../debug/SKILL.md); it is a missed observation, not a slow path.
+
 A timer race deciding "the wait expired, unload anyway"; a `Dispose()` that blocks; an unload
 ordered before the drain; a subscription whose `IDisposable` was discarded; a `Subscribe(onNext)`
 with no error arm. **Look there first** — before the dump, before the GC, before "flaky CI".
@@ -139,7 +162,12 @@ Three things enforce this, all current:
 - **`Take(1)`** — a subscription that never completes roots whatever the callback closes over. See
   Family B.
 
-## Family B — teardown phase inversion: something disposed under something still using it
+## Family B — a dispose nobody waited for *(this is most of them)*
+
+Also called teardown phase inversion, but that names the symptom. The cause is always the same: a
+phase treated `Dispose()` as if it had finished the work, when it had only started it. Find the
+completion signal that exists — `Disposed`, `DisposalCompleted`, `StoppedAsync`, the drain — and ask
+who was supposed to be waiting on it.
 
 **#613, root-caused 2026-08-08.** Node ALCs unloaded in `DisposeImpl()` — *before*
 `SignalDisposalCompleted()` — while in-flight pooled render work was only joined *after*
