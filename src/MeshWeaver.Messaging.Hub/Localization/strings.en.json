@@ -949,7 +949,7 @@
   "composition.column.package": "Package",
   "composition.column.parameter": "Parameter",
   "composition.column.kind": "Kind",
-  "composition.column.provision": "Provision as",
+  "composition.column.provision": "Environment variable",
   "composition.column.supplied": "Supplied",
   "composition.supplied.yes": "Yes",
   "composition.supplied.no": "No — install refused",
