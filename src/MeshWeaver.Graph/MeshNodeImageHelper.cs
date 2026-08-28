@@ -314,8 +314,43 @@ public static class MeshNodeImageHelper
     /// never silently keeps the previous page's icon.</para>
     /// </summary>
     /// <param name="node">The node whose page is being shown.</param>
-    public static IconLink ResolveIconLink(MeshNode node) =>
-        IconLinkFor(ResolveNodeIcon(node));
+    public static IconLink ResolveIconLink(MeshNode node)
+    {
+        var icon = ResolveNodeIcon(node);
+
+        // 🚨 THE ONE PLACE THE TAB AND THE CARD DELIBERATELY DIVERGE. A card showing a vendor's mark
+        // is nominative use — the package is an API client to that service, and the mark says which
+        // one. A FAVICON is not: it identifies the site occupying the tab, so a vendor mark there
+        // claims the tab IS theirs. The portal's own mark is the honest answer, and it is why
+        // IsOfficialMark exists as a query rather than only a render switch.
+        return IsOfficialMark(icon)
+            ? IconLinkFor(MeshWeaverMarkUrl)
+            : IconLinkFor(icon);
+    }
+
+    /// <summary>The portal's own mark, shipped as <c>Icons/meshweaver-logo.svg</c>.</summary>
+    private const string MeshWeaverMarkIcon = "meshweaver-logo";
+
+    /// <summary>
+    /// The URL of <see cref="MeshWeaverMarkIcon"/> — the browser-tab icon used wherever a node's own
+    /// icon is an official third-party mark.
+    ///
+    /// <para>🚨 Built as a URL rather than passed as a NAME on purpose: <see cref="ShippedIconFor"/>
+    /// only resolves names <see cref="IsFluentIconName"/> accepts, which requires an uppercase
+    /// initial and all-ASCII-letters — so the hyphenated, lower-case <c>meshweaver-logo</c> resolves
+    /// to null through that path and the tab would silently fall back to the neutral box. Same
+    /// construction as <see cref="NeutralIconUrl"/>.</para>
+    /// </summary>
+    public static readonly string MeshWeaverMarkUrl = $"/static/NodeTypeIcons/{MeshWeaverMarkIcon}.svg";
+
+    /// <summary>
+    /// Whether an icon VALUE is an official third-party mark — inline svg carrying
+    /// <see cref="IconBackplate.OfficialMarkAttribute"/>. Any other form (URL, glyph, Fluent name)
+    /// cannot make the claim, so it is false for them.
+    /// </summary>
+    public static bool IsOfficialMark(string? icon) =>
+        DomainIcon.Parse(icon) is { Provider: DomainIcon.InlineSvgProvider } parsed
+        && IconBackplate.IsOfficialMark(parsed.Id);
 
     /// <summary>
     /// The <c>&lt;link rel="icon"&gt;</c> form of one icon value, classified the same way the
