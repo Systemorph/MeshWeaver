@@ -1,6 +1,6 @@
 ---
 name: i18n
-description: 'Localize every user-visible string as you write it — the portal ships English + German, so a hard-coded UI string is a bug that renders English for every viewer. Use whenever you write or review text a human reads on screen: buttons, labels, tooltips, aria-labels, placeholders, page titles, empty states, validation messages, toasts, dialog copy, menu entries, settings tabs, notifications, errors. Covers the two shapes (a Translation attribute on a declaration, a strings.en/de key everywhere else), the second key home in the plugins repo whose drift guard currently runs nowhere, the CurrentUICulture ban (it covers date and number FORMATTING too), and the list of things deliberately NOT translated.'
+description: 'Localize every user-visible string as you write it — the portal ships English + German, so a hard-coded UI string is a bug that renders English for every viewer. Use whenever you write or review text a human reads on screen: buttons, labels, tooltips, aria-labels, placeholders, page titles, empty states, validation messages, toasts, dialog copy, menu entries, settings tabs, notifications, errors. Covers the two shapes (a Translation attribute on a declaration, a strings.en/de key everywhere else), the second key home in the plugins repo whose drift guard compares VALUES and merges core-first, the CurrentUICulture ban (it covers date and number FORMATTING too), and the list of things deliberately NOT translated.'
 user-invocable: true
 allowed-tools:
   - Read
@@ -75,18 +75,31 @@ read as deletion, and "there is no mirror" went into a merged PR body. The mirro
 behind by then. **Deleted and relocated look identical from one repo** — assume relocated until you
 have looked in the other one.
 
-🚨 **And do not count on the guard to catch it for you.** MeshWeaver.Plugins#771: **nothing currently
-runs those specs** — core's `clients.yml` covers only `clients/python` after the move, and the
-plugins repo runs `npm ci` there and nothing else. The drift guard whose entire job is to stop a
-server-side key reaching users as a raw string has been reporting to no one. Until that lane exists,
-run it by hand from the plugins checkout:
+✅ **The drift guard DOES run — this paragraph used to say it did not, and that was the dangerous
+half.** It read *"nothing currently runs those specs … the drift guard has been reporting to no one"*
+(from MeshWeaver.Plugins#771). That lane now exists: the plugins repo's
+**`RN app + web clients (typecheck + test)`** job runs `src/i18n/localize.test.ts`, and on
+2026-08-28 it caught a real drift within minutes of the push — a `composition.column.provision`
+value changed in the client catalog but not in core's:
+
+```
+FAIL src/i18n/localize.test.ts > catalog drift guard > strings.en.json is identical to the server catalog
+AssertionError: value drift for "composition.column.provision": expected 'Install as' to be 'Provision as'
+```
+
+**Core is the source of truth, so the order is fixed**: the core catalog change merges FIRST, and
+the plugins mirror PR stays red until it does. Do not "fix" that red by reverting the mirror — it is
+the guard doing its job across a repo boundary.
+
+🚨 **The guard compares VALUES, not just keys** — so it also catches the case `LocalizationTest`
+cannot see: a key present in both catalogs whose text has diverged.
+
+To run it by hand from the plugins checkout (it fails loudly, naming the paths it probed, when it
+cannot find a core checkout — so a green there is real and a skip is impossible):
 
 ```bash
 cd clients/react && MESHWEAVER_CORE=/path/to/MeshWeaver npx vitest run src/i18n/localize.test.ts
 ```
-
-It fails loudly, naming the paths it probed, when it cannot find a core checkout — so a green there
-is real, and a skip is impossible.
 
 ## 🚨 Never resolve from `CultureInfo.CurrentUICulture` / `CurrentCulture`
 
@@ -133,6 +146,5 @@ catalog "just this once".
 - [ ] Nothing resolves culture from `CurrentUICulture`/`CurrentCulture` — including date/number
       formatting.
 - [ ] If the string also appears in a web client, the mirror in
-      `MeshWeaver.Plugins/clients/react/src/i18n/` was updated (checked by hand — the guard runs
-      nowhere).
+      `MeshWeaver.Plugins/clients/react/src/i18n/` was updated — and the core change merges first.
 - [ ] No model-facing description, wire identifier, or glossary term was translated.

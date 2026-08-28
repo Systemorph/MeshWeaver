@@ -19,7 +19,7 @@ it, not before.
 | [/async](.claude/skills/async/SKILL.md) | any hub-reachable or Blazor-view call; IO; AccessContext |
 | [/gui](.claude/skills/gui/SKILL.md) | any layout area, control, editor, form, table |
 | [/i18n](.claude/skills/i18n/SKILL.md) | any string a human reads on screen |
-| [/debug](.claude/skills/debug/SKILL.md) · [/storm](.claude/skills/storm/SKILL.md) | a hang/timeout; a restart/502/log flood |
+| [/debug](.claude/skills/debug/SKILL.md) · [/storm](.claude/skills/storm/SKILL.md) · [/sigsegv](.claude/skills/sigsegv/SKILL.md) | a hang/timeout; a restart/502/log flood; a crashed host |
 
 ## Git Workflow
 
@@ -129,7 +129,7 @@ All docs are embedded in `src/MeshWeaver.Documentation/` and served under `Doc/`
 
 - **On a declaration** → `[Translation("de", "…")]` beside the existing `[Description]`. **Everywhere else** → a key in **both** `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json`, read via `Access.Localize("key")` (Blazor) or `host.Localize("key")` (layout areas). `LocalizationTest` fails if a language is missing any English key.
 - **Prefer text that needs no translation** — a language-neutral glyph (➕ ✏️ 🔖 ➡️ 📋 🗑️) plus a translated tooltip beats a translated label.
-- 🚨 **A new key has a SECOND home in another repo**: `MeshWeaver.Plugins/clients/react/src/i18n/`. Deleted and relocated look identical from one repo — assume relocated until you have looked. Its drift guard runs in no CI lane today, so run it by hand.
+- 🚨 **A new key has a SECOND home in another repo**: `MeshWeaver.Plugins/clients/react/src/i18n/`. Deleted and relocated look identical from one repo — assume relocated until you have looked. Its drift guard DOES run (the plugins repo's `RN app + web clients (typecheck + test)` job) and it compares VALUES, not just keys — so it catches the divergence `LocalizationTest` cannot see. **Core is the source of truth: the core catalog change merges FIRST** and the mirror PR stays red until it does; never "fix" that red by reverting the mirror.
 - 🚨 **Never resolve from `CultureInfo.CurrentUICulture`/`CurrentCulture`** — this covers date/number FORMATTING too. Resolution is always explicit off `AccessContext.Locale` (`ViewerLocale()`).
 - 🚨 **Do NOT translate**: LLM tool-parameter `[Description]`s (model-facing), wire identifiers (`nodeType:Thread`, `RequestAction("New")`, Fluent icon names), or the glossary terms kept English on purpose (Thread, Mesh, Node, Agent, Skill, Harness, Provider, Namespace, Partition, Store).
 
