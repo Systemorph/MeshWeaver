@@ -44,6 +44,38 @@ public static partial class IconBackplate
         "#334155", // slate
     ];
 
+    /// <summary>
+    /// 🚨 THE OVERSTEER: the attribute an authored icon sets on its root <c>&lt;svg&gt;</c> to declare
+    /// itself an OFFICIAL third-party mark — <c>data-mw-mark="official"</c>.
+    ///
+    /// <para>The default policy recolors <c>currentColor</c> to white and drops the glyph on a plate
+    /// in a hash-derived hue. For a house icon that is exactly right. For a vendor's registered mark
+    /// it is exactly wrong: every brand guideline these packages are nominatively invoking (we ship
+    /// API clients to those services) forbids recoloring the mark or placing it on an arbitrary
+    /// colored ground. An authored mark had no way to say so, so this is that way.</para>
+    ///
+    /// <para>It is a marker in the MARKUP rather than a field on the node deliberately: an icon
+    /// travels as one opaque string through four different forms, so the declaration has to ride
+    /// along with it — no service to thread, no plumbing to add, and it survives serialization,
+    /// copy, export and re-import intact.</para>
+    /// </summary>
+    public const string OfficialMarkAttribute = "data-mw-mark";
+
+    /// <summary>The value of <see cref="OfficialMarkAttribute"/> that claims official-mark treatment.</summary>
+    public const string OfficialMarkValue = "official";
+
+    /// <summary>
+    /// The plate an official mark gets: white, not a hue from <see cref="Palette"/>.
+    ///
+    /// <para>🚨 An official mark is NOT passed through bare, and that is not a compromise — it is the
+    /// same defect the generated plate exists to prevent. The OpenAI mark is near-black
+    /// (<c>#111827</c>); rendered plateless it vanishes on the dark theme exactly as the AppleMusic
+    /// mark did (2026-08-22). A white plate is also what the guidelines themselves prescribe — the
+    /// dark mark on a light ground, with clear space — so this keeps the mark byte-identical AND
+    /// legible on both themes, rather than trading one for the other.</para>
+    /// </summary>
+    public const string OfficialPlate = "#ffffff";
+
     /// <summary>The corner radius of a generated plate on the canonical 24-unit canvas.</summary>
     public const int CornerRadius = 5;
 
@@ -72,6 +104,23 @@ public static partial class IconBackplate
             hash *= 16777619u;
         }
         return Palette[(int)(hash % (uint)Palette.Count)];
+    }
+
+    /// <summary>
+    /// Whether <paramref name="svg"/> declares itself an official third-party mark — its ROOT
+    /// <c>&lt;svg&gt;</c> carries <c>data-mw-mark="official"</c>. Only the root counts: a nested
+    /// element could otherwise smuggle the claim in from arbitrary authored content.
+    /// </summary>
+    public static bool IsOfficialMark(string? svg)
+    {
+        if (string.IsNullOrWhiteSpace(svg))
+            return false;
+        var open = RootTag().Match(svg);
+        return open.Success
+               && string.Equals(
+                   AttrOf(open.Groups["attrs"].Value, OfficialMarkAttribute),
+                   OfficialMarkValue,
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -127,10 +176,18 @@ public static partial class IconBackplate
         if (HasBackplate(svg))
             return svg;
 
-        var hue = HueFor(svg);
-        var inner = svg.Replace("currentColor", "#fff", StringComparison.OrdinalIgnoreCase);
+        // An official mark keeps its own colors on a white plate; a house icon is recolored to white
+        // on a hash-derived hue. Both are plated — only the ground and the recolor differ.
+        var official = IsOfficialMark(svg);
+        var hue = official ? OfficialPlate : HueFor(svg);
+        var inner = official
+            ? svg
+            : svg.Replace("currentColor", "#fff", StringComparison.OrdinalIgnoreCase);
         inner = InsetRoot(inner);
-        return "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+        // The wrapper re-declares the claim, so "is this an official mark" survives plating and a
+        // caller downstream of Ensure reads the same answer as one upstream of it.
+        var claim = official ? $" {OfficialMarkAttribute}='{OfficialMarkValue}'" : "";
+        return $"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'{claim}>"
                + $"<rect width='24' height='24' rx='{CornerRadius}' fill='{hue}' stroke='none'/>"
                + inner
                + "</svg>";
