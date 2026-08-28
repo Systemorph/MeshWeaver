@@ -57,4 +57,39 @@ public class BoundedBodyTest
         using var s = new MemoryStream();
         Assert.Equal("", await BoundedBody.ReadAsync(s, maxBytes: 10, CancellationToken.None));
     }
+
+    /// <summary>
+    /// The bytes form must be BYTE-EXACT. A signature is computed over what the sender sent, so a
+    /// body that is not valid UTF-8 must survive the read unchanged — reading it as a string and
+    /// re-encoding turns every invalid sequence into U+FFFD, and the HMAC would then be computed
+    /// over bytes nobody signed. 0xFF 0xFE is not valid UTF-8, which is exactly why it is the probe.
+    /// </summary>
+    [Fact]
+    public async Task ReadBytes_is_byte_exact_for_input_that_is_not_valid_utf8()
+    {
+        byte[] raw = [0x7B, 0xFF, 0xFE, 0x00, 0x7D];
+        var got = await BoundedBody.ReadBytesAsync(new MemoryStream(raw), 1024, TestContext.Current.CancellationToken);
+        Assert.Equal(raw, got);
+
+        // And the contrast that makes the point: the string form cannot round-trip these bytes.
+        var viaString = await BoundedBody.ReadAsync(new MemoryStream(raw), 1024, TestContext.Current.CancellationToken);
+        Assert.NotEqual(raw, System.Text.Encoding.UTF8.GetBytes(viaString!));
+    }
+
+    [Fact]
+    public async Task ReadBytes_over_the_cap_is_refused()
+    {
+        var over = new byte[65];
+        var got = await BoundedBody.ReadBytesAsync(new MemoryStream(over), 64, TestContext.Current.CancellationToken);
+        Assert.Null(got);
+    }
+
+    [Fact]
+    public async Task ReadBytes_at_exactly_the_cap_is_returned()
+    {
+        var exact = new byte[64];
+        for (var i = 0; i < exact.Length; i++) exact[i] = (byte)i;
+        var got = await BoundedBody.ReadBytesAsync(new MemoryStream(exact), 64, TestContext.Current.CancellationToken);
+        Assert.Equal(exact, got);
+    }
 }
