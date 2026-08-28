@@ -14,8 +14,8 @@ MAUI all reach one endpoint. The mesh side is `MeshWeaver.Speech` (`WhisperConta
 cd deploy/whisper
 # 1. Fetch the Swiss-German model (~547 MB) into ./models/ (same file the on-device client downloads):
 mkdir -p models
-curl -fSL https://github.com/Systemorph/MeshWeaver/releases/download/voice-model-swiss-german/ggml-swiss-german-turbo-q5_0.bin \
-     -o models/model.bin
+# Model on the PRIVATE MeshWeaver.Plugins repo (moved 2026-08-28) — requires gh auth.
+gh release download voice-model-swiss-german --repo Systemorph/MeshWeaver.Plugins --pattern 'ggml-swiss-german-turbo-q5_0.bin' --output models/model.bin
 # 2. Build + start the container:
 docker compose up --build -d
 # 3. Smoke-test with any WAV (16 kHz mono is ideal):
