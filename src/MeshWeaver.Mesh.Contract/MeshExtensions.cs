@@ -2322,6 +2322,16 @@ public static class MeshExtensions
                     return Observable.Empty<System.Reactive.Unit>();
                 }
 
+                // 🚨 Resolve step 5's post-deletion handlers HERE, while this hub's scope is
+                //    still alive. Resolving them after the cascade reads hub.ServiceProvider once
+                //    the root's own hub is gone and its scope closed, and Autofac then answers
+                //    ObjectDisposedException at RESOLUTION — outside the per-handler .Catch, so it
+                //    escapes as "Delete failed" even though step 5's contract is that a handler
+                //    failure cannot un-delete anything. Resolving early keeps them RUNNING; a
+                //    guard around the resolution would silently skip the side effect that drops a
+                //    partition's backing store, leaking a database.
+                var postDeletionHandlers = ResolvePostDeletionHandlers(hub, rootNode);
+
                 // 2. Validate + check Delete permission for THIS node (root of the
                 //    operation). Descendants are validated by their own per-node
                 //    hub when fan-out fires a non-recursive DeleteNodeRequest at
@@ -2570,9 +2580,13 @@ public static class MeshExtensions
                                             //    is already gone, so a handler failure can't
                                             //    un-delete anything: it lands as a Warning on the
                                             //    activity and the response stays Ok.
+                                            // Handlers resolved BEFORE the cascade (see
+                                            // ResolvePostDeletionHandlers): by here the root's own
+                                            // hub is gone and its scope closed, so resolving now
+                                            // throws instead of running them.
                                             .SelectMany(deletedPaths =>
                                                 RunPostDeletionHandlersObs(
-                                                        hub, rootNode, capturedRequest.DeletedBy, logger, collectedMessages)
+                                                        postDeletionHandlers, rootNode, capturedRequest.DeletedBy, logger, collectedMessages)
                                                     .Select(_ => deletedPaths))
                                             .Do(deletedPaths =>
                                             {
@@ -3608,6 +3622,29 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// 🚨 Resolves the post-deletion handlers for <paramref name="node"/> BEFORE anything is
+    /// deleted, and hands the list to <see cref="RunPostDeletionHandlersObs"/> to invoke AFTER.
+    ///
+    /// <para>Resolving them afterwards reads <c>hub.ServiceProvider</c> when the hub is the one
+    /// that owned the node just deleted — its scope is closed by then, and Autofac answers
+    /// <c>ObjectDisposedException: … this LifetimeScope … has already been disposed</c>. That
+    /// throw lands at RESOLUTION, outside the per-handler <c>.Catch</c> below, so it escapes as
+    /// <c>Delete failed for '&lt;path&gt;'</c> even though step 5's whole contract is that a
+    /// handler failure cannot un-delete anything and must stay a warning.</para>
+    ///
+    /// <para>Resolving early keeps the handlers RUNNING. Guarding the resolution instead would
+    /// silently skip them — and they are the side effects that drop a partition's backing store
+    /// when a partition-owning Space root is deleted, so skipping them leaks a database.</para>
+    /// </summary>
+    private static IReadOnlyList<INodePostDeletionHandler> ResolvePostDeletionHandlers(
+        IMessageHub hub, MeshNode node) =>
+        string.IsNullOrEmpty(node.NodeType)
+            ? []
+            : hub.ServiceProvider.GetServices<INodePostDeletionHandler>()
+                .Where(h => h.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+    /// <summary>
     /// Runs the registered <see cref="INodePostDeletionHandler"/>s matching the deleted
     /// ROOT node's type, sequentially (<c>Concat</c>), after the subtree has been removed
     /// from persistence. A handler failure is logged and appended to
@@ -3615,20 +3652,18 @@ public static class MeshExtensions
     /// the delete response stays Ok (with Warning status) rather than reporting a failure
     /// for a deletion that DID happen. Emits exactly once (also with zero handlers) so the
     /// delete chain's <c>SelectMany</c> always proceeds to post the response.
+    ///
+    /// <para>Takes the handlers ALREADY RESOLVED (see
+    /// <see cref="ResolvePostDeletionHandlers"/>) rather than resolving them here: by the time
+    /// this runs, the root's own hub is disposed and its scope closed.</para>
     /// </summary>
     private static IObservable<System.Reactive.Unit> RunPostDeletionHandlersObs(
-        IMessageHub hub,
+        IReadOnlyList<INodePostDeletionHandler> handlers,
         MeshNode node,
         string? deletedBy,
         ILogger logger,
         ImmutableList<LogMessage>.Builder collectedMessages)
     {
-        if (string.IsNullOrEmpty(node.NodeType))
-            return Observable.Return(System.Reactive.Unit.Default);
-
-        var handlers = hub.ServiceProvider.GetServices<INodePostDeletionHandler>()
-            .Where(h => h.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
-            .ToList();
 
         if (handlers.Count == 0)
             return Observable.Return(System.Reactive.Unit.Default);
