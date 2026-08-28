@@ -8,7 +8,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Hosting.Monolith.TestBase;
-using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
