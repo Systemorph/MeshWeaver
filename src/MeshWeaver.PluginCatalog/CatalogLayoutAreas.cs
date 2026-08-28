@@ -568,8 +568,11 @@ public static class CatalogLayoutAreas
     /// rewrite); a differing one fetches only <c>manifest.lock</c>, diffs it against the record's
     /// installed-files baseline and updates just the changed nodes (pruning removed ones). Every
     /// other case — no manifest, no baseline, a shared-Source change (whose blast radius is every
-    /// type in the package), or ANY error on the incremental path — falls back to the legacy full
-    /// install, which is always correct.
+    /// type in the package), or ANY error on the incremental path — falls back to the full install
+    /// (<see cref="PackageInstaller.Install"/>), which prunes nodes the repo retired against the
+    /// SAME previous-record baseline whenever one exists (Systemorph/MeshWeaver#2473) — a node this
+    /// package shipped before but not any more never merely survives because the incremental path
+    /// declined to touch it.
     /// </summary>
     internal static IObservable<InstallResult> InstallOrUpdate(
         IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg, ILogger? logger,
