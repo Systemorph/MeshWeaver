@@ -88,9 +88,41 @@ jobs:
       - name: Log in to the image registry
         env:
           TEST_IMAGE: ${{ inputs.test-image }}
-        run: >
-          echo "${{ secrets.acr-password }}" |
-          docker login "${TEST_IMAGE%%/*}" -u "${{ secrets.acr-username }}" --password-stdin
+        run: |
+          # 🚨 Bounded retry, and deliberately NOT a skip-trapdoor: after the last attempt this
+          # still fails RED, and a CREDENTIAL rejection fails IMMEDIATELY rather than being retried
+          # three times — retrying a 401 only delays the same red while hiding which kind of
+          # failure it was.
+          #
+          # Everything else IS retried, including failures this does not recognise. That is the
+          # intended default rather than an oversight: an unclassified docker login failure is far
+          # more often transient (daemon not ready, DNS, TLS reset) than permanent, and the one
+          # class known to be permanent — bad credentials — is carved out above. A positive
+          # allow-list of "connection-level" strings would fail fast on the next transient error
+          # nobody predicted, which is the failure mode this exists to remove.
+          #
+          # Three ACR logins failed on 2026-08-28 in two separate incidents an hour apart
+          # ("dial tcp 51.12.25.80:443: connect: connection refused", registry healthy throughout),
+          # reddening three REQUIRED checks across two repos. On a strict:true repo the cost is not
+          # one re-run: the re-run lands against a moved main, the branch goes BEHIND, and it needs
+          # another sync and another full run — so one TCP reset re-stales every open PR (#2570).
+          for attempt in 1 2 3; do
+            if echo "${{ secrets.acr-password }}" \
+                 | docker login "${TEST_IMAGE%%/*}" -u "${{ secrets.acr-username }}" \
+                     --password-stdin 2>login.err; then
+              rm -f login.err
+              exit 0
+            fi
+            cat login.err
+            if grep -qiE 'unauthorized|authentication required|denied|401' login.err; then
+              echo "::error::ACR rejected the credentials for ${TEST_IMAGE%%/*} — that is not a"\
+                   "transient failure, so it is not retried. Check the acr-username/acr-password secrets."
+              exit 1
+            fi
+            if [ "$attempt" -lt 3 ]; then sleep $((attempt * 5)); fi
+          done
+          echo "::error::docker login to ${TEST_IMAGE%%/*} failed after 3 connection-level attempts."
+          exit 1
       - name: Take the framework assemblies from the platform image
         env:
           TEST_IMAGE: ${{ inputs.test-image }}

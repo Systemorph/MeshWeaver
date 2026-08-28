@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Memex.Portal.Shared.Api;
 using MeshWeaver.GitSync;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -30,6 +31,13 @@ namespace Memex.Portal.Shared.Social;
 /// </summary>
 public static class GitHubWebhookEndpoints
 {
+    /// <summary>
+    /// Hard ceiling on the request body this anonymous endpoint will buffer before the HMAC can be
+    /// checked. 25 MiB is GitHub's own documented maximum payload, so it can never refuse a genuine
+    /// delivery — it only bounds what a forged one costs.
+    /// </summary>
+    public const long MaxWebhookBodyBytes = 25L * 1024 * 1024;
+
     private const string WebhookPath = "/webhooks/github";
 
     public static IEndpointRouteBuilder MapGitHubWebhook(this IEndpointRouteBuilder endpoints)
@@ -49,12 +57,24 @@ public static class GitHubWebhookEndpoints
                 return Results.StatusCode(503);
             }
 
-            // Read the raw body (needed byte-exact for the HMAC).
-            byte[] body;
-            using (var ms = new MemoryStream())
+            // Read the raw body (needed byte-exact for the HMAC) — UNDER A CAP.
+            //
+            // 🚨 This endpoint is anonymous: the HMAC below is the ONLY thing authenticating it, and
+            // it cannot run until the body is in memory. A plain CopyToAsync therefore let an
+            // unauthenticated caller make the server buffer an arbitrarily large request before a
+            // single byte was checked, and a chunked request carries no Content-Length to reject it
+            // on (#2302). The cap bounds that to one GitHub-sized delivery per request.
+            //
+            // 25 MiB is GitHub's own documented maximum payload, so this can never refuse a genuine
+            // delivery — it is strictly a ceiling on what a forged one can cost.
+            var body = await BoundedBody.ReadBytesAsync(
+                http.Request.Body, MaxWebhookBodyBytes, http.RequestAborted);
+            if (body is null)
             {
-                await http.Request.Body.CopyToAsync(ms, http.RequestAborted);
-                body = ms.ToArray();
+                logger.LogWarning(
+                    "GitHub webhook body exceeded {MaxBytes} bytes — refused before signature verification.",
+                    MaxWebhookBodyBytes);
+                return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
             }
 
             var signature = http.Request.Headers["X-Hub-Signature-256"].ToString();

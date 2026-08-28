@@ -17,6 +17,8 @@ using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using Memex.Portal.Shared.Authentication;
+
 namespace Memex.Portal.Shared.Social;
 
 /// <summary>
@@ -155,7 +157,13 @@ public static class GitHubConnectEndpoints
 
     private static string SafeReturn(string returnPath, string status, string? reason)
     {
-        var rp = string.IsNullOrWhiteSpace(returnPath) || !returnPath.StartsWith("/", StringComparison.Ordinal) ? "/" : returnPath;
+        // 🚨 Sanitize, do not re-check. This tested only for a leading "/", so "//evil.example"
+        // and "/\evil.example" both passed and became protocol-relative EXTERNAL redirects — a
+        // LIVE open redirect, and the weakest of the five copies of this rule the assembly had
+        // grown (#2302). It was missed by the first pass of that issue AND by the first version of
+        // the guard below, twice over: the sink is named returnPath rather than returnUrl, and the
+        // helper is named SafeReturn — so a name-trusting check certified it.
+        var rp = ReturnUrlPolicy.Sanitize(returnPath);
         var sep = rp.Contains('?') ? "&" : "?";
         var url = $"{rp}{sep}connect={status}";
         if (!string.IsNullOrEmpty(reason))
