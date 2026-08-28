@@ -415,6 +415,27 @@ public class MeshQuery : IMeshQueryCore
         if (observables.Count == 0)
             return Observable.Empty<QueryResultChange<T>>();
 
+        // 🚨 Bounded transient-connect retry, composed HERE — in the caller's reactive chain,
+        // OUTSIDE the adapters' capped IIoPool leaves (issue #2521: one timed-out Npgsql
+        // connector open failed the whole layout-area render; the provider observables are
+        // cold, so each resubscription re-runs the query through a fresh pool invoke). Only
+        // errors BEFORE the provider's first emission are retried, only for the transient
+        // connect/timeout class (TransientStorageFaults.IsTransientConnectFault); everything
+        // else — and the exhausted budget's LAST error — propagates unchanged.
+        // 🚨 EffectiveQueries, not Query: a multi-query request carries its text in Queries and
+        // leaves Query null, so logging Query would print an empty string in the one line an
+        // operator reads to find out WHICH query is failing to reach the database.
+        var requestQuery = string.Join(" | ", request.EffectiveQueries);
+        observables = observables
+            .Select(t => (t.Stream.RetryTransientConnect(
+                    onRetry: (ex, attempt, delay) => Logger?.LogWarning(ex,
+                        "Query provider {Provider} hit a transient storage connect fault on query "
+                        + "'{Query}' — retry {Attempt}/{Max} in {Delay}ms",
+                        t.Provider, requestQuery, attempt,
+                        TransientStorageFaults.DefaultMaxRetries, delay.TotalMilliseconds)),
+                t.Provider))
+            .ToList();
+
         if (observables.Count == 1)
         {
             // Single provider — still funnel Initial through ClipMergedInitial
