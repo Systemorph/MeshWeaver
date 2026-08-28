@@ -49,8 +49,11 @@ namespace MeshWeaver.Graph.Security;
 ///
 /// <para>Bad-data TOLERANCE is unchanged: this guard never rejects a READ. An existing row that
 /// already carries the collision keeps loading (degraded, tolerated by
-/// <see cref="ObjectAsExtensions.As{T}"/>) until it is next written; only a NEW create/update that
-/// would (re)introduce the collision is refused.</para>
+/// <see cref="ObjectAsExtensions.As{T}"/>); only a NEW create/update that would (re)introduce the
+/// collision is refused. Rows PERSISTED with the collision before this guard existed are healed at
+/// startup by <see cref="SelfTypedDeclarationDurableRepair"/> (#2425/#2506) using
+/// <see cref="IsSelfTypedDeclaration"/> — the shared predicate that keeps the two halves exact
+/// mirrors.</para>
 /// </summary>
 public sealed class NodeTypeDeclarationSelfTypingValidator : INodeValidator
 {
@@ -69,21 +72,7 @@ public sealed class NodeTypeDeclarationSelfTypingValidator : INodeValidator
     {
         var node = context.Node;
 
-        // Nothing to judge unless the NodeType field claims to be an INSTANCE of something.
-        if (string.IsNullOrEmpty(node.NodeType)
-            || string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
-            return Observable.Return(NodeValidationResult.Valid());
-
-        if (!IsNodeTypeDeclarationContent(node.Content))
-            return Observable.Return(NodeValidationResult.Valid());
-
-        // SELF-typing only: the NodeType field names THIS declaration. An instance references a
-        // type by the declaration's path (`nodeType:"Pack/Widget"`) or, for a built-in at the root,
-        // by its id (`nodeType:"User"`) — so those two are the ways a declaration can enrol itself
-        // in its own instance query. Naming an UNRELATED type is a different shape and is legal
-        // (see the class doc).
-        if (!string.Equals(node.NodeType, node.Path, StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(node.NodeType, node.Id, StringComparison.OrdinalIgnoreCase))
+        if (!IsSelfTypedDeclaration(node))
             return Observable.Return(NodeValidationResult.Valid());
 
         return Observable.Return(NodeValidationResult.Invalid(
@@ -93,6 +82,39 @@ public sealed class NodeTypeDeclarationSelfTypingValidator : INodeValidator
             $"'nodeType:{node.NodeType}' query in the mesh. Set NodeType to " +
             $"'{MeshNode.NodeTypePath}', or leave it unset.",
             NodeRejectionReason.ValidationFailed));
+    }
+
+    /// <summary>
+    /// THE collision predicate, shared by the two halves of the fix: the write-boundary guard
+    /// (this validator, #2378) and the startup repair of rows persisted BEFORE the guard existed
+    /// (<see cref="SelfTypedDeclarationDurableRepair"/>, #2425/#2506). One definition, so what the
+    /// guard refuses and what the repair heals can never drift apart.
+    ///
+    /// <para>True when the node DECLARES a NodeType — its content is a
+    /// <see cref="Configuration.NodeTypeDefinition"/> — while its own
+    /// <see cref="MeshNode.NodeType"/> names ITSELF (its <see cref="MeshNode.Path"/> or
+    /// <see cref="MeshNode.Id"/>), i.e. the declaration is enrolled in its own instance query.
+    /// SELF-typing only: an instance references a type by the declaration's path
+    /// (<c>nodeType:"Pack/Widget"</c>) or, for a built-in at the root, by its id
+    /// (<c>nodeType:"User"</c>) — those two are the ways a declaration can collide with its own
+    /// instances. A declaration naming an UNRELATED type is a different, legal shape (see the
+    /// class doc: the UWDeepfield package root).</para>
+    /// </summary>
+    /// <param name="node">The node to classify.</param>
+    /// <returns><see langword="true"/> when the node is a declaration claiming to be an instance
+    /// of the type it declares.</returns>
+    public static bool IsSelfTypedDeclaration(MeshNode node)
+    {
+        // Nothing to judge unless the NodeType field claims to be an INSTANCE of something.
+        if (string.IsNullOrEmpty(node.NodeType)
+            || string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
+            return false;
+
+        if (!IsNodeTypeDeclarationContent(node.Content))
+            return false;
+
+        return string.Equals(node.NodeType, node.Path, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(node.NodeType, node.Id, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

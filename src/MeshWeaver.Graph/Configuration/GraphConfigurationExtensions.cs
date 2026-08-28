@@ -240,6 +240,17 @@ public static class GraphConfigurationExtensions
                 // CodeNodeSegmentNameValidator below.
                 services.AddScoped<INodeValidator, Security.NodeTypeDeclarationSelfTypingValidator>();
 
+                // The RETROACTIVE half of the same fix (#2425/#2506): the validator above only
+                // refuses NEW writes, and #2245 only fixed the STATIC registrations — a
+                // declaration row PERSISTED self-typed before either landed keeps answering its
+                // own instance query forever (prod: ~600 UserIdentityCache errors/hour on an
+                // image already carrying both). This startup pass retypes such durable rows at
+                // the storage seam (the serve path cannot reach them — the static claim shadows
+                // the row, #2534), using the validator's own predicate so guard and repair can
+                // never drift apart. One batched read per boot; writes nothing on a healthy
+                // store.
+                services.AddHostedService<Security.SelfTypedDeclarationDurableRepair>();
+
                 // Keeps the batch bake's "the union is every Code node" claim true BY
                 // CONSTRUCTION (issue #1235): a Code node named after a code-table routing
                 // segment (Source/Test) lands in the code table but has a namespace that
