@@ -17,4 +17,8 @@
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="YamlDotNet" />
+  </ItemGroup>
+
 </Project>
