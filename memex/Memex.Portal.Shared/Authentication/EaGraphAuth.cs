@@ -41,7 +41,12 @@ public sealed class EaGraphAuth(
         "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send " +
         "https://graph.microsoft.com/Calendars.ReadWrite offline_access";
 
-    private string TenantId => configuration["Authentication:Microsoft:TenantId"] ?? "common";
+    // Whitespace counts as unset: a configMap / env var cannot carry null, only "", and "" is not
+    // a tenant (it yields the authority `login.microsoftonline.com//oauth2/v2.0` — #2621).
+    private string TenantId =>
+        configuration["Authentication:Microsoft:TenantId"] is { } t && !string.IsNullOrWhiteSpace(t)
+            ? t.Trim()
+            : "common";
     private string? ClientId => configuration["Authentication:Microsoft:ClientId"];
     private string? ClientSecret => configuration["Authentication:Microsoft:ClientSecret"];
     private string Authority => $"https://login.microsoftonline.com/{TenantId}/oauth2/v2.0";

@@ -519,7 +519,12 @@ data:
          Modules__Required__N (#2104). */}}
   Authentication__DevAdminUsers: "{{ .Values.config.memex_portal.Authentication__DevAdminUsers | default "" }}"
   Authentication__Microsoft__ClientId: "{{ .Values.config.memex_portal.Authentication__Microsoft__ClientId | default "" }}"
-  Authentication__Microsoft__TenantId: "{{ .Values.config.memex_portal.Authentication__Microsoft__TenantId | default "" }}"
+  {{- /* 🚨 Never an EMPTY default here: an env var cannot be null, so "" reached the portal as a
+         tenant and the OIDC authority became login.microsoftonline.com//v2.0 — every Microsoft
+         sign-in 500-ed on memex-cloud (2026-08-28, #2621). The multi-tenant sign-in app the
+         onboarding doc prescribes uses `organizations`; an env that needs a single tenant sets
+         its id explicitly. */}}
+  Authentication__Microsoft__TenantId: "{{ .Values.config.memex_portal.Authentication__Microsoft__TenantId | default "organizations" }}"
   Authentication__Google__ClientId: "{{ .Values.config.memex_portal.Authentication__Google__ClientId | default "" }}"
   Authentication__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Authentication__LinkedIn__ClientId | default "" }}"
   # Apple: ClientId is the Services ID; TeamId/KeyId identify the Sign in with Apple key
