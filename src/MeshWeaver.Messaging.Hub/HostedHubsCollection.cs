@@ -178,16 +178,106 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     private readonly ConcurrentDictionary<Address, Lazy<IMessageHub?>> creations = new(AddressComparer.Instance);
 
     /// <summary>
-    /// Registers an externally constructed hub under its own address, wires its
-    /// removal from the registry on disposal, and notifies <see cref="HubAdded"/>
-    /// subscribers.
+    /// Registers a hub under its own address, wires its removal from the registry on disposal and
+    /// the closing of the lifetime scope it owns (see <see cref="CloseScopeWhenDisposed"/>), and
+    /// notifies <see cref="HubAdded"/> subscribers.
     /// </summary>
     /// <param name="hub">The hub to add; indexed by its <c>Address</c>.</param>
     public void Add(IMessageHub hub)
     {
         messageHubs[hub.Address] = hub;
         hub.RegisterForDisposal(h => messageHubs.TryRemove(h.Address, out _));
+        CloseScopeWhenDisposed(hub);
         try { _hubAdded.OnNext(hub); } catch { /* never throw on notification */ }
+    }
+
+    /// <summary>
+    /// Closes the lifetime scope a hosted hub OWNS, once that hub's disposal has TERMINATED.
+    ///
+    /// <para>🚨 <b>Nothing closed it before.</b> <c>MessageHubConfiguration.CreateServiceProvider</c>
+    /// gives every hub built under a parent its own <c>BeginLifetimeScope</c>, and the call that
+    /// would have closed it sat commented out in <c>MessageHub</c>'s ShutDown phase. Two costs that
+    /// look unrelated and are one bug:</para>
+    /// <list type="bullet">
+    ///   <item>every <see cref="IDisposable"/> in that scope OUTLIVES the hub — Roslyn load
+    ///     contexts, Npgsql connections, native buffers — so their finalizers run against a graph
+    ///     already torn down, the standard route to a SIGSEGV at process exit;</item>
+    ///   <item>an Autofac parent scope TRACKS every child scope until the parent itself dies, so a
+    ///     portal that recycles hubs for hours accumulates one live scope per hub, with everything
+    ///     each of them holds.</item>
+    /// </list>
+    ///
+    /// <para><b>Why HERE and not in the hub.</b> The hub is a singleton IN the scope it would be
+    /// destroying — closing it from inside its own ShutDown phase pulls its logger, and the rest of
+    /// that method's <c>finally</c>, out from under it. This collection is in the PARENT's scope,
+    /// is the thing that asked for the child to be built, and is the only place that sees a hub
+    /// disposed ON ITS OWN — a recycle — which is exactly the case that leaks and which never
+    /// reaches the branch a parent's own teardown takes.</para>
+    ///
+    /// <para><b>Strictly after the hub is down</b>, hence <c>DisposalCompleted</c> and not
+    /// <c>RegisterForDisposal</c>: the latter runs in <c>DisposeImpl</c>, several phases before the
+    /// hub stops resolving services out of this very scope.</para>
+    ///
+    /// <para>A hub that owns no scope is skipped — a root container belongs to the host that built
+    /// it, and closing it here would be closing somebody else's.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose scope to close when it finishes disposing.</param>
+    private void CloseScopeWhenDisposed(IMessageHub hub)
+    {
+        if (hub is not MessageHub owner || !owner.OwnsServiceProvider)
+            return;
+
+        // Capture both NOW: after disposal the hub's own members are the last thing to reach for,
+        // and `hub.ServiceProvider` is precisely the object we are about to close.
+        var address = hub.Address;
+        var scope = hub.ServiceProvider as IDisposable;
+        if (scope is null)
+            return;
+
+        hub.DisposalCompleted
+            .Take(1)
+            // 🚨 A FAULTED disposal must free the scope TOO — a teardown that failed is when the
+            // handles are most likely still held. Routing the error back into an onNext keeps the
+            // close on one path instead of duplicating it into an error callback.
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+            // …and a source that COMPLETES WITHOUT EMITTING must not silently skip it either: an
+            // answer that can never arrive has to be settled from the known-terminal state rather
+            // than parked (the same rule DisposeHubsReactive's legs follow).
+            .DefaultIfEmpty(Unit.Default)
+            .Subscribe(_ => CloseScope(address, scope));
+        // Not held: `Take(1)` releases the subscription on the terminal notification, and until
+        // then the child hub's own completion subject roots it. Holding it in a field would mean
+        // disposing it when THIS collection is disposed — which happens strictly BEFORE the
+        // children finish, i.e. it would cancel the very closes it exists to perform.
+    }
+
+    /// <summary>
+    /// Closes one hub's lifetime scope. Never throws: a container that faults on the way down must
+    /// not turn a completed teardown into a faulted one — the hub is already gone by every other
+    /// measure, and <see cref="ObjectDisposedException"/> here is the benign shape (something the
+    /// scope holds was disposed by an earlier phase).
+    ///
+    /// <para>Re-entrancy is expected and safe: the hub is a singleton in this scope, so closing it
+    /// calls back into <c>MessageHub.Dispose</c>, which returns immediately once disposal has
+    /// begun.</para>
+    /// </summary>
+    private void CloseScope(Address address, IDisposable scope)
+    {
+        try
+        {
+            scope.Dispose();
+            logger.LogDebug("[DISPOSE-CONTAINER] {Address}: lifetime scope closed", address);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Benign teardown shape — an earlier phase already took what this would have taken.
+        }
+        catch (Exception e)
+        {
+            logger.LogWarning(e,
+                "[DISPOSE-CONTAINER] {Address}: closing the hub's lifetime scope faulted — the hub is "
+                + "down regardless, but something it hosted did not let go cleanly", address);
+        }
     }
 
     private IMessageHub? CreateHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config)

@@ -12,6 +12,7 @@ using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace MeshWeaver.Data.Serialization;
 
@@ -1095,11 +1096,28 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
 
-        logger = Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
+        // 🚨 Resolve the logger DEFENSIVELY, and keep it FIRST. Both halves matter.
+        //
+        // Defensively, because a hub that has finished disposing no longer HAS a container — its
+        // lifetime scope is closed as the last act of its teardown
+        // (HostedHubsCollection.CloseScopeWhenDisposed). A hard `GetRequiredService` there throws
+        // Autofac's raw `ObjectDisposedException: … LifetimeScope … already disposed`, which is the
+        // same family as the refusal below but names the CONTAINER instead of the hub, carries no
+        // HubAddress for the caller to retry, and never reaches the ErrorType.ShuttingDown
+        // classification. This is not re-wrapping that failure: the refusal still comes from the
+        // gate, as a HubDisposingException. Only the LOGGER degrades, to Null.
+        //
+        // First, because moving it below the gate is a regression I actually shipped into a branch:
+        // the gate calls `GetHostedHub(…, ConfigureSynchronizationHub, …)`, which CONSTRUCTS the
+        // sync hub and runs its BuildupActions — and those reach back into stream code that logs.
+        // With the assignment moved down, that ran against a null field and every buildup faulted
+        // with `ArgumentNullException … (Parameter 'logger')`, leaving each hub FAILED and every
+        // observable emitting nothing. 34 of 34 DataTest cases went from green to timing out.
+        logger = ResolveLogger(Host);
 
         logger.LogDebug("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
-        // 🚨 A stream that cannot own its sub-hub is NOT a stream — REFUSE, never fabricate.
+        // A stream that cannot own its sub-hub is NOT a stream — REFUSE, never fabricate.
         //
         // The condition below is one fact: hosted-hub creation is frozen, so
         // GetHostedHub cannot give us the Hub this type declares as non-null. The freeze is
@@ -1157,6 +1175,30 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // an infrastructure-created stream captures null and falls back to the existing
         // PostPipeline behaviour — a hub/system principal is never captured.
         _creationContext = CaptureRealUserContext(Host);
+    }
+
+    /// <summary>
+    /// The stream's logger, resolved from <paramref name="host"/> — or
+    /// <see cref="NullLogger{T}"/> when the host's lifetime scope has already been closed.
+    ///
+    /// <para>NEVER returns null, and that is the contract that matters: the field it fills is read
+    /// from the constructor onward, including by the sync hub's BuildupActions, which run while the
+    /// constructor is still executing. A null there faults the buildup and leaves the hub FAILED —
+    /// a whole-suite outage produced by a missing log line.</para>
+    /// </summary>
+    private static ILogger<SynchronizationStream<TStream>> ResolveLogger(IMessageHub host)
+    {
+        try
+        {
+            return host.ServiceProvider.GetService<ILogger<SynchronizationStream<TStream>>>()
+                   ?? NullLogger<SynchronizationStream<TStream>>.Instance;
+        }
+        catch (ObjectDisposedException)
+        {
+            // The host's container is gone. Losing the debug line is the correct price; the caller
+            // is about to be refused with HubDisposingException, which carries the same two facts.
+            return NullLogger<SynchronizationStream<TStream>>.Instance;
+        }
     }
 
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
