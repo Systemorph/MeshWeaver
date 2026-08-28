@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Data.Common;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
@@ -48,12 +49,18 @@ public static class TransientStorageFaults
     /// (<c>40001</c>/<c>40P01</c>): those belong to the layer that owns the statement (the
     /// adapters' own retry), not to the query fan-in.
     /// </summary>
-    private static readonly HashSet<string> TransientConnectSqlStates = new(StringComparer.Ordinal)
+    /// <para>🚨 <c>FrozenSet</c>, not <c>HashSet</c>, and not an allowlist entry on
+    /// <c>NoStaticCollectionsTest</c>. The rule bans a static COLLECTION because it is
+    /// process-wide state that survives mesh disposal; this is a constant, so the fix is to say
+    /// so in the TYPE rather than to argue for it in a list. A mutable type here would also be a
+    /// standing invitation for someone to write to it later, which is the failure the ban exists
+    /// to prevent — and it read as an exception to a rule that has none.</para>
+    private static readonly FrozenSet<string> TransientConnectSqlStates = new[]
     {
         "08000", "08001", "08003", "08004", "08006", // connection_exception family
         "57P01", "57P02", "57P03",                   // admin/crash shutdown, cannot_connect_now
         "53300", "53400",                            // too_many_connections, configuration_limit_exceeded
-    };
+    }.ToFrozenSet(StringComparer.Ordinal);
 
     /// <summary>
     /// True when <paramref name="ex"/> is a TRANSIENT database connect/timeout fault worth a

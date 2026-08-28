@@ -422,7 +422,10 @@ public class MeshQuery : IMeshQueryCore
         // errors BEFORE the provider's first emission are retried, only for the transient
         // connect/timeout class (TransientStorageFaults.IsTransientConnectFault); everything
         // else — and the exhausted budget's LAST error — propagates unchanged.
-        var requestQuery = request.Query;
+        // 🚨 EffectiveQueries, not Query: a multi-query request carries its text in Queries and
+        // leaves Query null, so logging Query would print an empty string in the one line an
+        // operator reads to find out WHICH query is failing to reach the database.
+        var requestQuery = string.Join(" | ", request.EffectiveQueries);
         observables = observables
             .Select(t => (t.Stream.RetryTransientConnect(
                     onRetry: (ex, attempt, delay) => Logger?.LogWarning(ex,
