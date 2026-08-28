@@ -1037,6 +1037,62 @@ public class MeshOperations
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
 
     /// <summary>
+    /// Bounded wait for the CALLER'S OWN intended field values to be OBSERVABLE in the live
+    /// mirror — the Patch/Update analogue of <see cref="WaitForEditApplied"/>'s #1716 fix,
+    /// applied here for #2469. <see cref="WaitForReadYourWrites"/> alone is not a trustworthy
+    /// confirmation for Patch/Update: it only proves SOME version bump happened, and a concurrent
+    /// writer touching OTHER fields on the SAME node (e.g. <c>Admin/UpdatePolicy</c>'s self-update
+    /// poller ticking <c>checkedAt</c>/<c>latestAvailableTag</c> every few seconds) satisfies that
+    /// just as well as the caller's own write. A genuinely-refused write — a LATE
+    /// Conflict/AccessDenied NACK arriving after <c>UpdateRemote</c>'s optimistic emit, which is
+    /// only ever logged server-side (<c>LATE_NACK_TERMINAL</c>) and never propagated back to this
+    /// already-completed caller — could then still be reported as landed with a real version
+    /// delta shown. This checks the caller's OWN touched leaves specifically
+    /// (<see cref="FieldsLandedIn"/>), so it is neither fooled by, nor blind to, a concurrent
+    /// write elsewhere on the node. Also self-heals the legitimate no-op case (the caller's
+    /// values already match live): that is satisfied on the very first emission.
+    /// </summary>
+    private IObservable<MeshNode?> WaitForPatchApplied(string path, JsonObject expectedFields) =>
+        hub.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null
+                && JsonSerializer.SerializeToNode(n, hub.JsonSerializerOptions) is JsonObject live
+                && FieldsLandedIn(live, expectedFields))
+            .Take(1)
+            .Select(n => (MeshNode?)n)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
+
+    /// <summary>
+    /// True when every leaf in <paramref name="expected"/> (an RFC 7396-shaped delta — a nested
+    /// object recurses, a scalar/array/null is compared by value) matches the corresponding leaf
+    /// in <paramref name="live"/>. A <c>null</c> expected value (RFC 7396 "remove") matches a
+    /// live key that is absent OR explicitly null. Fields the caller did not touch are never
+    /// inspected, so a concurrent writer's changes elsewhere on the node can neither fail this
+    /// check nor satisfy it.
+    /// <para>Internal (not private): <c>InternalsVisibleTo</c> lets
+    /// <c>PatchLandedWriteCheckTest</c> pin this against the OLD version-only confirmation
+    /// directly and deterministically — see that test for why an integration-level timing
+    /// reproduction of the #2469 race is impractical in a single-silo test mesh (the per-path
+    /// write queue that gives <c>stream.Update</c> its ordering guarantee also prevents a second
+    /// writer from ever landing ahead of a still-unconfirmed one).</para>
+    /// </summary>
+    internal static bool FieldsLandedIn(JsonObject live, JsonObject expected)
+    {
+        foreach (var (key, expectedVal) in expected)
+        {
+            live.TryGetPropertyValue(key, out var liveVal);
+            if (expectedVal is JsonObject expectedObj)
+            {
+                if (liveVal is not JsonObject liveObj || !FieldsLandedIn(liveObj, expectedObj))
+                    return false;
+            }
+            else if (!JsonNode.DeepEquals(liveVal, expectedVal))
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Writes a full <see cref="MeshNode"/> to the node's own hub via
     /// <see cref="DataChangeRequest"/>. The target hub's data-change handler applies
     /// the update to its workspace (ticking the <c>MeshNodeReference</c> stream so
@@ -1626,18 +1682,33 @@ public class MeshOperations
                 var versionBefore = meshNode.Version;
                 var currentPath = meshNode.Path;
                 var nodeForCapture = meshNode;
+                // The caller's OWN intended field values (#2469 — see WaitForPatchApplied):
+                // restrict to the mutable surface (PatchableFields) so identity/audit fields
+                // (version, lastModified*, …) — which the OWNER re-stamps on apply and will
+                // therefore never match the caller's submitted snapshot — are never checked.
+                var nodeJson = JsonSerializer.SerializeToNode(nodeForCapture, hub.JsonSerializerOptions)
+                    as JsonObject ?? new JsonObject();
+                var expectedFields = new JsonObject();
+                foreach (var field in PatchableFields)
+                    if (nodeJson.TryGetPropertyValue(field, out var val))
+                        expectedFields[field] = val?.DeepClone();
                 perNode = perNode.Add(
                     ValidateContentWithSchema(nodeForCapture).SelectMany(validationError =>
                         validationError != null
                             ? Observable.Return(validationError)
                             : mesh.UpdateNode(nodeForCapture)
-                                // Read-your-writes barrier (see Patch): wait for the live
-                                // mirror to advance PAST the optimistic version before
-                                // returning, so a follow-up Get sees the reconciled update.
-                                .SelectMany(updated => WaitForReadYourWrites(currentPath, updated.Version)
-                                    .Select(confirmed =>
+                                // Gate the success string on the update PROVABLY landing — see
+                                // WaitForPatchApplied's #2469 note on Patch above; the same
+                                // late-NACK-after-optimistic-emit gap applies here.
+                                .SelectMany(_ => WaitForPatchApplied(currentPath, expectedFields)
+                                    .Select(after =>
                                     {
-                                        var after = confirmed ?? updated;
+                                        if (after is null)
+                                            return $"Error: the update to {currentPath} did not land "
+                                                + "within the confirmation window — a concurrent change "
+                                                + "may have conflicted with it, or the owner did not "
+                                                + "confirm the write in time. Get the node to see its "
+                                                + "current content and retry.";
                                         OnNodeChange?.Invoke(new NodeChangeEntry
                                         {
                                             Path = after.Path,
@@ -1750,6 +1821,14 @@ public class MeshOperations
                 // node so the polymorphic `$type` discriminator is present, so omitted
                 // keys are preserved and only the provided keys change. A null member
                 // deletes that key; arrays/scalars replace wholesale (RFC 7396).
+                // 🚨 Snapshot the CALLER'S OWN intended field values BEFORE the content merge
+                // below overwrites jsonObj["content"] with the full merged blob. WaitForPatchApplied
+                // (#2469) confirms the write landed by checking exactly these leaves against the
+                // live mirror — the caller's raw content sub-delta, not the merged snapshot (which
+                // also carries whatever unrelated fields — e.g. a poller's checkedAt — happened to
+                // be live at merge time, and would never match a busy node's live state again).
+                var expectedFields = jsonObj.DeepClone().AsObject();
+
                 if (jsonObj["content"] is JsonObject contentPatch)
                 {
                     var existingNodeJson = JsonSerializer.SerializeToNode(existing, hub.JsonSerializerOptions) as JsonObject;
@@ -1806,17 +1885,26 @@ public class MeshOperations
                     validationError != null
                         ? Observable.Return(validationError)
                         : mesh.UpdateNode(merged)
-                            // 🚨 Read-your-writes barrier. UpdateNode emits OPTIMISTICALLY —
-                            // the owner applies asynchronously and stamps a fresh, higher
-                            // Version on apply, so the emitted `updated` still carries the
-                            // pre-apply version. Without the wait, the immediately-following
-                            // Get races the propagation and reads the stale value. Wait
-                            // (bounded) for the live mirror to advance PAST versionBefore so
-                            // the reconciled update is observable before we return.
-                            .SelectMany(updated => WaitForReadYourWrites(resolvedPath, versionBefore)
-                                .Select(confirmed =>
+                            // 🚨 Gate the success string on the patch PROVABLY landing (#2469 —
+                            // mirrors EditContent's #1716 fix). UpdateNode/UpdateRemote emits
+                            // OPTIMISTICALLY after a short owner-response bound; a LATE
+                            // Conflict/AccessDenied NACK that arrives after that optimistic emit
+                            // is only ever LOGGED server-side (LATE_NACK_TERMINAL) — never
+                            // propagated back to this already-completed caller. The plain
+                            // WaitForReadYourWrites version-advance check cannot catch this on a
+                            // busy node: a concurrent unrelated writer (Admin/UpdatePolicy's
+                            // self-update poller, say) advances the version just as well as this
+                            // write would, so the tool could report "Patched:" — WITH a version
+                            // delta — while the caller's own field never changed. Verify the
+                            // caller's OWN touched leaves specifically instead.
+                            .SelectMany(_ => WaitForPatchApplied(resolvedPath, expectedFields)
+                                .Select(after =>
                                 {
-                                    var after = confirmed ?? updated;
+                                    if (after is null)
+                                        return $"Error: the patch to {resolvedPath} did not land within "
+                                            + "the confirmation window — a concurrent change may have "
+                                            + "conflicted with it, or the owner did not confirm the write "
+                                            + "in time. Get the node to see its current content and retry.";
                                     OnNodeChange?.Invoke(new NodeChangeEntry
                                     {
                                         Path = after.Path,

@@ -20,9 +20,14 @@
   <ItemGroup>
     <!-- The same two suites MeshWeaver.AI granted before MeshOperations moved here (#2276): they
          cover the internal edit primitives (ApplyAnchoredEdit / IsEditApplied / MergePatch) and the
-         upload path directly, not through a tool surface. -->
+         upload path directly, not through a tool surface. Both suites left with the AI engine
+         (#2276, now in MeshWeaver.Plugins) — dangling here but harmless; kept so a re-added suite
+         of the same name needs no csproj change. -->
     <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Threading.Test" />
+    <!-- #2469: pins FieldsLandedIn (the Patch/Update landed-write check) directly against a
+         hand-built fixture — same "internal primitive, not the tool surface" pattern as above. -->
+    <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
   </ItemGroup>
 
 </Project>
