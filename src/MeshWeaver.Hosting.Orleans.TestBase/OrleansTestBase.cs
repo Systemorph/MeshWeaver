@@ -198,8 +198,19 @@ public class TestClientConfigurator : IHostConfigurator
         // via new(). The deploying fixture passes it in through
         // OrleansTestCluster.DeployAsync's post-configure closure; see OrleansTestBackingStore.
         hostBuilder.UseOrleansMeshClient()
-            .ConfigurePortalMesh();
+            .ConfigurePortalMesh(MeshExtra);
     }
+
+    /// <summary>
+    /// Subclass hook: mesh registrations for the CLIENT mesh.
+    ///
+    /// <para>🚨 This is a SEPARATE player from the silo. The client mesh hub (<c>mesh/{id}</c>) is
+    /// what <c>Fixture.ClientMesh.Address</c> resolves to, and tests post <c>CreateNodeRequest</c>
+    /// straight at it — so a node type registered only on the SILO is refused here with
+    /// "NodeType 'X' is not registered". Wiring the silo and forgetting this reads as a missing
+    /// AddX() on the silo and is not (measured: 2 tests, 2026-08-28).</para>
+    /// </summary>
+    protected virtual Func<MeshBuilder, MeshBuilder>? MeshExtra => null;
 }
 
 /// <summary>
