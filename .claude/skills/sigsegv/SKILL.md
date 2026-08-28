@@ -1,6 +1,6 @@
 ---
 name: sigsegv
-description: Triage a host crash — exit=139 SIGSEGV, exit=134 SIGABRT, a createdump core, a trx that says "N passed" over a dead process, a pod crash-looping with lastExit=139. Use whenever a test host or portal dies on a signal instead of failing an assertion. In this codebase a crash is almost never a runtime bug: it is async on a turn-based scheduler, or a disposal whose wait was not a subscription. Read the exit code before naming a cause. Grounded in DebuggingNativeCrashes.md, AlcLeaseRegistry, the #613 teardown inversion.
+description: 'Triage a host crash — exit=139 SIGSEGV, exit=134 SIGABRT, a createdump core, a trx that says "N passed" over a dead process, a pod crash-looping with lastExit=139. Use whenever a test host or portal dies on a signal instead of failing an assertion. In this codebase a crash is almost never a runtime bug: it is async on a turn-based scheduler, or a disposal whose wait was not a subscription. Read the exit code before naming a cause. Grounded in DebuggingNativeCrashes.md, AlcLeaseRegistry, the #613 teardown inversion.'
 user-invocable: true
 allowed-tools:
   - Read
@@ -171,7 +171,7 @@ The ordering traps that produce this shape:
 - **`CancellationTokenSource.Cancel()` is SYNCHRONOUS** — it runs every registered callback inline
   on the caller's thread, and here those callbacks are entire downstream teardowns. Called from the
   teardown thread it runs arbitrary application cleanup unbounded; one leg that never returns parks
-  mesh teardown silently for ever (`exit=124` with `DISPOSE_INVOKED` and no `DISPOSE_DONE`, #2394).
+  mesh teardown silently forever (`exit=124` with `DISPOSE_INVOKED` and no `DISPOSE_DONE`, #2394).
 - **A leaf that ignores the pool token holds its permit** — `Drain()` then burns its full 30 s
   `DrainTimeout` and reports a leak. Signature: a test failing **in teardown** with
   `teardown DIRTY — N pooled I/O leaf(s) still running` and a dispose of **~32 000 ms**. The named
