@@ -190,8 +190,12 @@ ensure_overlay() {
       -e "s|__AI_MASTER_KEY__|${ai_key}|g" \
       "$share/values.local.yaml" > "$OVERLAY"
   chmod 600 "$OVERLAY"
-  warn "Edit $OVERLAY to fill in your Entra ClientId/TenantId/ClientSecret (§9),"
-  warn "or uncomment Authentication__EnableDevLogin for a no-Azure login."
+  # 🚨 Dev login is the DEFAULT, and this line is what tells a developer so. It used to
+  # send them to Entra first — a tenant, an app registration, a redirect URI and a client
+  # secret on disk, all to sign in to their own machine. The only thing a fresh install
+  # needs is a username: DevLogin self-provisions it on first sign-in.
+  warn "Edit $OVERLAY and set Authentication__DevAdminUsers to your username (§9)."
+  warn "Entra is opt-in — uncomment the Microsoft lines only to test the OAuth flow itself."
 }
 
 # ---------------------------------------------------------------------------
