@@ -9,6 +9,8 @@ using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting")]
 namespace MeshWeaver.Mesh;
@@ -323,10 +325,78 @@ public record MeshBuilder
         {
             foreach (var config in meshNode.GlobalServiceConfigurations)
             {
-                ConfigureServices(config);
+                // 🚨 Isolate the module's HOSTED SERVICES at activation (#2449). Everything else
+                // this class isolates is an INSTALL-time failure; a hosted service registered here
+                // only leaves a descriptor behind, and its constructor runs later — when the
+                // generic host resolves IHostedService[], outside this method entirely and
+                // all-or-nothing. One unsatisfiable constructor there aborted the whole portal
+                // (memex-cloud, 2026-08-26: every replacement pod SIGABRTed at boot and the
+                // rollout wedged for hours). Wrapping only what THIS module's configuration adds
+                // keeps platform-registered hosted services fatal, exactly as they should be.
+                var scoped = config;
+                ConfigureServices(services => IsolateModuleHostedServices(meshNode, scoped, services));
             }
             yield return meshNode;
         }
+    }
+
+    /// <summary>
+    /// Runs one module's service configuration and replaces any <c>IHostedService</c> it registered
+    /// with an <see cref="IsolatedModuleHostedService"/> bound to that module.
+    ///
+    /// <para>The scoping is positional and deliberate: only descriptors added between the snapshot
+    /// and the return are this module's. A registration that was already there belongs to the
+    /// platform or to an earlier module and is left alone — this must never become a blanket catch
+    /// over host startup.</para>
+    /// </summary>
+    private static IServiceCollection IsolateModuleHostedServices(
+        MeshNode meshNode,
+        Func<IServiceCollection, IServiceCollection> configure,
+        IServiceCollection services)
+    {
+        var before = services.Count;
+        var result = configure(services);
+
+        // A configuration that swapped the collection out from under us cannot be scoped
+        // positionally; leave it exactly as it is rather than guess.
+        if (!ReferenceEquals(result, services) || services.Count <= before)
+            return result;
+
+        for (var i = before; i < services.Count; i++)
+        {
+            var descriptor = services[i];
+            if (descriptor.ServiceType != typeof(IHostedService))
+                continue;
+
+            var moduleName = meshNode.Path ?? meshNode.Id ?? "(unnamed module)";
+            var resolve = ResolverFor(descriptor);
+            if (resolve is null)
+                continue;   // an instance registration has nothing to activate
+
+            services[i] = ServiceDescriptor.Describe(
+                typeof(IHostedService),
+                sp => new IsolatedModuleHostedService(
+                    moduleName,
+                    resolve,
+                    sp,
+                    (sp.GetService(typeof(ILoggerFactory)) as ILoggerFactory)
+                        ?.CreateLogger("MeshWeaver.Mesh.IncompatibleModule")),
+                descriptor.Lifetime);
+        }
+
+        return result;
+    }
+
+    /// <summary>How the wrapped service is produced, deferred so the failure happens inside
+    /// <see cref="IsolatedModuleHostedService.StartAsync"/> where it can be isolated — never while
+    /// the host is materialising the <c>IHostedService[]</c>.</summary>
+    private static Func<IServiceProvider, object>? ResolverFor(ServiceDescriptor descriptor)
+    {
+        if (descriptor.ImplementationFactory is { } factory)
+            return factory;
+        if (descriptor.ImplementationType is { } type)
+            return sp => ActivatorUtilities.CreateInstance(sp, type);
+        return null;    // ImplementationInstance: already constructed, nothing can fail to activate
     }
 
 
