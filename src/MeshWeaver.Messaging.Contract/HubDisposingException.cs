@@ -81,23 +81,6 @@ public sealed class HubDisposingException : ObjectDisposedException
     /// </summary>
     /// <param name="exception">The exception to classify; may be null.</param>
     /// <returns><c>true</c> when the failure is a hub-disposal race.</returns>
-    public static bool IsHubDisposal(Exception? exception) => IsHubDisposal(exception, depth: 0);
-
-    // depth caps the walk: an exception graph is caller-supplied data, and AggregateException
-    // fan-out makes the traversal a tree, not a chain. 16 is far beyond any real wrapping depth
-    // (the deepest observed is TargetInvocationException → HubDisposingException).
-    private static bool IsHubDisposal(Exception? exception, int depth)
-    {
-        if (depth > 16)
-            return false;
-        for (var e = exception; e is not null; e = e.InnerException)
-        {
-            if (e is HubDisposingException)
-                return true;
-            if (e is AggregateException agg
-                && agg.InnerExceptions.Any(inner => IsHubDisposal(inner, depth + 1)))
-                return true;
-        }
-        return false;
-    }
+    public static bool IsHubDisposal(Exception? exception)
+        => ExceptionChain.Contains<HubDisposingException>(exception);
 }

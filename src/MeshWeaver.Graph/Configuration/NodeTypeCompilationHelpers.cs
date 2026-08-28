@@ -584,7 +584,14 @@ internal static class NodeTypeCompilationHelpers
                     {
                         Content = def with
                         {
-                            CompilationStatus = CompilationStatus.Pending,
+                            CompilationStatus = CompilationStatus.Pending, 
+                            // 🚨 CLEAR the watcher's stamp (#2544). This flip does not come from
+                            // the release watcher and records no inputs, so leaving a previous
+                            // dispatch's token behind would let a later request be absorbed
+                            // against a compile nobody can vouch for — and if that compile fails,
+                            // the absorbed release request is simply lost. Null means "unstamped",
+                            // and the absorber parks on it exactly as it did before this change.
+                            DispatchedBuildInputs = null,
                         }
                     };
                 }).Subscribe(_ => { },
@@ -636,7 +643,7 @@ internal static class NodeTypeCompilationHelpers
                     if (def.CompilationStatus != CompilationStatus.Compiling) return curr;
                     return curr with
                     {
-                        Content = def with { CompilationStatus = CompilationStatus.Pending }
+                        Content = def with { CompilationStatus = CompilationStatus.Pending, DispatchedBuildInputs = null }
                     };
                 }).Subscribe(_ => { },
                     ex => logger?.LogWarning(ex,
@@ -758,7 +765,7 @@ internal static class NodeTypeCompilationHelpers
                     if (!HasStaleFrameworkBuild(def, guards)) return curr;
                     return curr with
                     {
-                        Content = def with { CompilationStatus = CompilationStatus.Pending }
+                        Content = def with { CompilationStatus = CompilationStatus.Pending, DispatchedBuildInputs = null }
                     };
                 }).Subscribe(_ => { },
                     ex => logger?.LogWarning(ex,
@@ -1474,7 +1481,45 @@ internal static class NodeTypeCompilationHelpers
                         // compile with the user's latest edits.
                         if (def.CompilationStatus is CompilationStatus.Pending
                                                   or CompilationStatus.Compiling)
+                        {
+                            // 🚨 CONSUME a trigger the in-flight compile already satisfies (#2544).
+                            // Parking every such trigger is what turned one logical event into N
+                            // sequential compiles: the high-water is deliberately not advanced, so
+                            // the trigger re-fires on the FIRST COMPILE'S OWN terminal write-back —
+                            // the compile does not re-trigger itself, it is the clock that releases
+                            // the next queued one. Measured in production as pairs 65 ms apart and
+                            // seven compiles for one merge.
+                            //
+                            // When the in-flight compile was dispatched for exactly these inputs it
+                            // will produce byte-for-byte what this request asks for, so re-running
+                            // it buys nothing and costs an instance-hub invalidation plus a
+                            // "newer build available" adornment. Force still always compiles, and
+                            // an UNSTAMPED in-flight compile (a direct Pending flip from one of the
+                            // kickoff paths, which never sets the token) parks exactly as before —
+                            // absorbing against an unknown input set would be a guess.
+                            var requestedToken = BuildInputsToken(
+                                GuardsOf(hub).ModulesHash, def.CurrentSourceVersions);
+                            if (IsSatisfiedByInFlightCompile(def, requestedToken))
+                            {
+                                logger?.LogInformation(
+                                    "[ReleaseRequestWatcher] {HubPath}: release request absorbed — a "
+                                    + "compile is already in flight for these exact inputs, so it "
+                                    + "produces what this request asks for", hubPath);
+                                dispatchHighWater.Advance(triggerAt);
+                                return curr with
+                                {
+                                    Content = def with
+                                    {
+                                        LastReleaseRequestHandledAt =
+                                            def.LastReleaseRequestHandledAt is { } a && a > triggerAt
+                                                ? def.LastReleaseRequestHandledAt
+                                                : triggerAt,
+                                        RequestedReleaseBy = null,
+                                    }
+                                };
+                            }
                             return curr;
+                        }
                         // #1707 slice 3 — "if yes, we take it; if no, we generate": a release
                         // request arriving while the CURRENT state already holds a VALID build of
                         // the CURRENT sources (typically just ADOPTED from a prebuilt bundle by
@@ -1515,6 +1560,11 @@ internal static class NodeTypeCompilationHelpers
                             Content = def with
                             {
                                 CompilationStatus = CompilationStatus.Pending,
+                                // Stamp WHAT this dispatch is for, on the same commit that flips to
+                                // Pending, so a later trigger for the same inputs can be recognised
+                                // as already satisfied instead of queued behind it.
+                                DispatchedBuildInputs = BuildInputsToken(
+                                    GuardsOf(hub).ModulesHash, def.CurrentSourceVersions),
                                 // Stamp the CARRIED trigger value, never the
                                 // (possibly flapped-back) live value, and never
                                 // below the existing stamp — the on-node stamp is
@@ -1775,6 +1825,26 @@ internal static class NodeTypeCompilationHelpers
     /// WHICH input the standing verdict was formed under. The source set is folded to
     /// <c>count:sha256[0..16]</c> so the token stays a line rather than a kilobyte of paths.</para>
     /// </summary>
+    /// <summary>
+    /// Whether a release request is already satisfied by the compile currently in flight (#2544).
+    ///
+    /// <para>Three ways this is deliberately FALSE, each for its own reason:</para>
+    /// <list type="bullet">
+    ///   <item><c>RequestedReleaseForce</c> — the user's explicit escape hatch always compiles.</item>
+    ///   <item>A DIFFERENT token — the sources, framework or modules moved after the in-flight
+    ///   compile was dispatched, so it will NOT produce what this request asks for. Absorbing here
+    ///   would silently drop the user's latest edits.</item>
+    ///   <item>An UNSTAMPED in-flight compile (<c>DispatchedBuildInputs is null</c>) — several
+    ///   kickoff paths flip straight to Pending without going through the release watcher, so
+    ///   nothing recorded what they were built for. Absorbing against an unknown input set is a
+    ///   guess; park instead, exactly as before.</item>
+    /// </list>
+    /// </summary>
+    internal static bool IsSatisfiedByInFlightCompile(NodeTypeDefinition def, string requestedToken)
+        => !def.RequestedReleaseForce
+           && def.DispatchedBuildInputs is { } dispatched
+           && string.Equals(dispatched, requestedToken, StringComparison.Ordinal);
+
     internal static string BuildInputsToken(
         string? modulesHash, IReadOnlyDictionary<string, long>? sources) =>
         $"fw={FrameworkVersion};mod={modulesHash ?? "(none)"};src={SourceToken(sources)}";
@@ -1942,7 +2012,8 @@ internal static class NodeTypeCompilationHelpers
                 // never writes back at all (process death mid-compile, the parked
                 // re-settle, a poisoned content read).
                 FailedBuildInputs = BuildInputsToken(modulesHash, d.CurrentSourceVersions),
-                CompilationStatus = CompilationStatus.Pending
+                CompilationStatus = CompilationStatus.Pending,
+                DispatchedBuildInputs = null
             }
         };
     }

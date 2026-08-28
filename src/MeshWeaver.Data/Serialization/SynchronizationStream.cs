@@ -1388,7 +1388,20 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                     // never Host.Version, so the init frame can't outrank later owned writes.
                     SetCurrent(hub, new ChangeItem<TStream>(init, StreamId, OwnerVersion()));
                     return System.Reactive.Unit.Default;
-                });
+                })
+                // 🚨 A faulted initial load must fault the STREAM, not only this hub's buildup.
+                // Without this hook the error stopped in HandleInitialize's .Catch: the hub
+                // entered its FAILED state, but SynchronizationGate stayed shut, RunLevel never
+                // reached Started, and Hub.Started never settled — so IDataSource.Initialized
+                // (Task.WhenAll over stream-hub Started tasks) HUNG and the owning DataContext
+                // could not tell a faulted init from a hung one until its time-box expired 120s
+                // later, reporting a TimeoutException instead of the real error. OnError routes
+                // the fault where the stream's other failure paths already go: it classifies
+                // (teardown stays quiet), faults the store, calls Hub.FailStartup (Initialized
+                // settles NOW, with the actual exception) and opens SynchronizationGate. The
+                // error still propagates to the buildup's .Catch, which records the hub-level
+                // FAILED state. Pinned by DataContextInitFaultedTest (#2528).
+                .Do(_ => { }, OnError);
         }
 
         // No custom initialization.

@@ -51,8 +51,9 @@ Every leg is pluggable, so the gateway also runs **fully local** — no cloud in
 
 ```bash
 brew install whisper-cpp ollama
-mkdir -p ~/models/whisper && curl -fSL -o ~/models/whisper/ggml-swiss-german-turbo-q5_0.bin \
-  https://github.com/Systemorph/MeshWeaver/releases/download/voice-model-swiss-german/ggml-swiss-german-turbo-q5_0.bin
+# The model lives on the PRIVATE MeshWeaver.Plugins repo (moved 2026-08-28; it is a
+# Systemorph-tuned model, deliberately not world-downloadable). Requires `gh auth login`.
+mkdir -p ~/models/whisper && gh release download voice-model-swiss-german --repo Systemorph/MeshWeaver.Plugins --pattern 'ggml-swiss-german-turbo-q5_0.bin' --dir ~/models/whisper
 pip install -e .
 SATELLITE_HOST=… SATELLITE_PSK=… GATEWAY_HOST=<this Mac's LAN IP> ./run-local.sh
 ```

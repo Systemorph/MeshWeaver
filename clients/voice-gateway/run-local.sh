@@ -1,7 +1,7 @@
 #!/bin/sh
 # All-local run on a Mac: whisper.cpp STT + Ollama brain + macOS `say` TTS.
 # Prereqs: brew install whisper-cpp ollama; the Swiss German GGML in ~/models/whisper/
-# (from the voice-model-swiss-german release); an Ollama model pulled (default qwen3.6).
+# (voice-model-swiss-german release on the PRIVATE MeshWeaver.Plugins repo — gh auth); an Ollama model pulled (default qwen3.6).
 # Required env: SATELLITE_HOST, SATELLITE_PSK, GATEWAY_HOST (this Mac's LAN IP).
 set -e
 
