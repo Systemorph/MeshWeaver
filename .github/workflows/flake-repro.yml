@@ -9,7 +9,7 @@
 # wedge is diagnosable — i.e. it manufactures the repro the fix must be proven against.
 #
 # Run it from the Actions tab (workflow_dispatch). Defaults target CodeEditRecompile;
-# re-dispatch with project=test/MeshWeaver.AI.Test filter=FullyQualifiedName~ThreadSubmissionIntegrationTest
+# re-dispatch with project=test/MeshWeaver.Hosting.Orleans.Test filter=FullyQualifiedName~PartitionRootActivationTest
 # (etc.) for the others.
 name: Flake repro (manual)
 

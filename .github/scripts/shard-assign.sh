@@ -19,8 +19,9 @@
 # Greedy LPT: heaviest first onto the currently least-loaded shard, ties to the
 # lowest shard id. Explicit and ORDER-INDEPENDENT — the original
 # `counter % SHARD_TOTAL` over a sorted csproj list silently depended on locale
-# byte order (C-locale sorts MeshWeaver.AI.Test BEFORE MeshWeaver.Acme.Test,
-# 'I' 0x49 < 'c' 0x63), which stacked AI + Orleans — two of the three
+# byte order (C-locale sorted the then-resident MeshWeaver.AI.Test BEFORE
+# MeshWeaver.Acme.Test, 'I' 0x49 < 'c' 0x63 — that suite has since moved to
+# MeshWeaver.Plugins, #2276), which stacked AI + Orleans — two of the three
 # ALC-heaviest projects — onto shard 0 and made it the ~19-minute long pole of
 # every run.
 #
@@ -45,11 +46,10 @@
 # ~331 s each. Adding shards below that buys nothing.
 #
 # SPLIT RULE: split a project only when its solo weight exceeds the ideal shard
-# load (sum ÷ SHARD_TOTAL, currently 2758 ÷ 6 ≈ 460 s), because only then is it
-# the binding floor. Monolith (662 s) qualifies; nothing else does. AI.Test's
-# split was dropped here — at 189 s it is far below the floor, so splitting it
-# bought no balance and cost a class enumeration plus shipping its bin to two
-# shards' artifacts instead of one.
+# load (sum ÷ SHARD_TOTAL, currently 2526 ÷ 6 ≈ 421 s), because only then is it
+# the binding floor. Monolith (662 s) qualifies; nothing else does. (AI.Test's
+# split was dropped for the same reason before the suite itself moved to
+# MeshWeaver.Plugins beside the engine, #2276.)
 #
 # Unlisted projects get DEFAULT_WEIGHT — a deliberate over-estimate, since an
 # unlisted project is a NEW one whose cost nobody has measured yet.
@@ -89,7 +89,6 @@ WEIGHTS=$(cat <<'EOF'
 663 MeshWeaver.Hosting.Monolith.Test 2
 348 MeshWeaver.PluginCatalog.Test
 269 MeshWeaver.Hosting.Orleans.Test
-189 MeshWeaver.AI.Test
 91 MeshWeaver.Data.Test
 76 MeshWeaver.Messaging.Hub.Test
 74 MeshWeaver.PluginTester.Test
@@ -103,7 +102,6 @@ WEIGHTS=$(cat <<'EOF'
 48 MeshWeaver.Autocomplete.Test
 46 MeshWeaver.Security.Test
 44 MeshWeaver.Auth.Test
-42 MeshWeaver.Threading.Test
 26 MeshWeaver.Layout.Test
 25 Memex.Portal.Shared.Test
 18 MeshWeaver.NodeOperations.Test
@@ -129,7 +127,6 @@ WEIGHTS=$(cat <<'EOF'
 1 MeshWeaver.TestDomain
 1 MeshWeaver.Data.TestDomain
 1 MeshWeaver.Hub.Fixture
-1 MeshWeaver.AI.Test.FakeCli
 EOF
 )
 

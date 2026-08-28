@@ -175,12 +175,22 @@ public class MigrationWorkloadModelGuard
     /// The files this guard reads: the operator-facing prose and scripts that can put a command in
     /// front of a human. Deliberately NOT the whole tree — <c>bin/</c>, <c>obj/</c> and the test
     /// sources (this file names both strings) would make it match itself.
+    ///
+    /// <para>🚨 <b><c>.claude/skills/</c> is a root because the deployment runbook MOVED there.</b>
+    /// <c>AGENTS.md</c> was compacted by factoring its bulk into on-demand skills, and the AKS
+    /// build/roll/verify commands — the exact prose this guard exists to police — went with it. A
+    /// guard whose subject relocates and whose roots do not keeps passing while scanning nothing,
+    /// which is the same skip-trapdoor shape the CI rules forbid. So the skills root is
+    /// <b>required</b>: <see cref="Directory.EnumerateFiles(string,string,SearchOption)"/> throws if
+    /// it is renamed or deleted, and the guard fails loudly instead of quietly checking less.</para>
     /// </summary>
     private static string[] ScannedFiles(string root) =>
     [
         .. new[] { "AGENTS.md", "CLAUDE.md" }
             .Select(name => Path.Combine(root, name))
             .Where(File.Exists),
+        .. Directory.EnumerateFiles(
+                Path.Combine(root, ".claude", "skills"), "*.md", SearchOption.AllDirectories),
         .. Directory.EnumerateFiles(Path.Combine(root, "deploy"), "*", SearchOption.AllDirectories)
             .Where(f => f.EndsWith(".md", StringComparison.Ordinal)
                         || f.EndsWith(".sh", StringComparison.Ordinal)
@@ -188,8 +198,21 @@ public class MigrationWorkloadModelGuard
         .. Directory.EnumerateFiles(
                 Path.Combine(root, "src", "MeshWeaver.Documentation", "Data"),
                 "*.md", SearchOption.AllDirectories),
-        .. Directory.EnumerateFiles(Path.Combine(root, "content"), "*.md", SearchOption.AllDirectories),
+        // 🚨 `content/` held only content/ai, which LEAVES with the AI engine (#2276) — so this
+        // ONE root is allowed to be absent, guarded rather than dropped so the scan keeps working
+        // both before and after the move. Enumerating it unconditionally threw
+        // DirectoryNotFoundException and took the whole guard down, which is how a deletion
+        // elsewhere silently disarmed a check here. The subject moved rather than disappeared:
+        // MeshWeaver.AI/Data/Skill/logon-action.md discusses migrations, so MeshWeaver.Plugins
+        // carries the matching guard over its own copy. A guard cannot police sources it cannot
+        // see — and one that scans nothing still passes.
+        .. OptionalMarkdownIn(Path.Combine(root, "content")),
     ];
+
+    private static IEnumerable<string> OptionalMarkdownIn(string directory) =>
+        Directory.Exists(directory)
+            ? Directory.EnumerateFiles(directory, "*.md", SearchOption.AllDirectories)
+            : [];
 
     /// <summary>
     /// Comment lines are stripped before probing the templates, for the same reason

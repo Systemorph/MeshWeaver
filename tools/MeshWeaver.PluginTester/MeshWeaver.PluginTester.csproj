@@ -76,17 +76,13 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
-    <!-- 🚨 MeshWeaver.AI is deliberately NOT a ProjectReference (#2276): the engine left the
-         content surface and ships as a registry MODULE, so the gate — like a portal — lands it
-         under modules/MeshWeaver.AI/ (the closure lane below) and activates it through
-         Modules:Assemblies (PluginGateRunner builds the in-memory configuration). A compiled
-         reference here would put MeshWeaver.AI back into the framework identity for every bake
-         host, and an image shipping AI.dll in its app closure 409s the registry module. -->
-    <!-- These four used to arrive TRANSITIVELY through MeshWeaver.AI and are still part of the
+    <!-- 🚨 MeshWeaver.AI is GONE from this repo (#2276) — engine and tests both live in
+         MeshWeaver.Plugins now. A node repo that needs the AI node types mounts its own build
+         with the tester's module flag (see the note at the foot of this file).
+         These five used to arrive TRANSITIVELY through MeshWeaver.AI and are still part of the
          content surface (in-mesh source compiles against them), so the closure keeps them
-         directly now that the engine reference is gone. -->
+         directly now that the engine is gone. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Operations\MeshWeaver.Mesh.Operations.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Markdown.Collaboration\MeshWeaver.Markdown.Collaboration.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing.Graph\MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
@@ -100,16 +96,17 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
   </ItemGroup>
 
-  <!-- ═════════ The AI engine rides the MODULE lane, exactly as a portal ships it ═════════
-       The closure lane lays modules/MeshWeaver.AI/ (entry DLL + its private NuGet closure) into
-       $(OutDir) after Build and into the publish dir after Publish — the same worker every host
-       uses, so the gate loads the very layout a portal loads. The row is TESTER-LOCAL: written
-       AFTER the import, replacing the shared inventory, so nothing here adds MeshWeaver.AI to any
-       portal image's closure (a closure module and a registry module of the same name are
-       mutually exclusive — the landing service answers 409). -->
-  <Import Project="..\..\memex\MeshModulesPublish.targets" />
-  <ItemGroup>
-    <MeshModuleClosure Remove="@(MeshModuleClosure)" />
-    <MeshModuleClosure Include="$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '..', '..', 'src', 'MeshWeaver.AI', 'MeshWeaver.AI.csproj'))" />
-  </ItemGroup>
+  <!-- ═════════ No module rides along any more — the AI engine left this repo (#2276) ═════════
+       This used to lay modules/MeshWeaver.AI/ into $(OutDir) from core source, so the gate had the
+       engine without compiling against it. The engine now lives in MeshWeaver.Plugins, which this
+       repo cannot build, so the image ships WITHOUT it and a node repo that needs the AI node types
+       mounts its OWN build with the tester's module flag (#2541). That is what
+       the flag exists for: "a module whose source has left the platform repo still reaches the
+       gate — the node repo's own CI built the bytes, mounts them, and names them here."
+
+       🚨 The BAKE composes those same modules into its reference set (#2565). It did not always:
+       for one day the gate composed them and the bake did not, so `compile-check` stayed green
+       while `publish-bake` went red with CS0246 on AI types, no bundle was sealed for the new
+       framework identity, and every install correctly declined to self-update. Do not re-introduce
+       a lane where only one of the two sees a module. -->
 </Project>

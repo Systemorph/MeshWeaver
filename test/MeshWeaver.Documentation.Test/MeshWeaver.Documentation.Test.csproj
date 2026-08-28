@@ -4,7 +4,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <!-- PlatformBakeLaneGuard pins the bake lane's published layout against the constants that
@@ -16,6 +15,10 @@
          reason as above: a guard that restates a key instead of referencing it goes green through
          the rename it exists to catch. -->
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="YamlDotNet" />
   </ItemGroup>
 
 </Project>

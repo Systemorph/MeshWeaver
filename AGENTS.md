@@ -1,958 +1,241 @@
 # AGENTS.md
 
-This file provides guidance to AI agents working with this repository.
+Guidance for AI agents working with this repository.
+
+**This file states the rules; the evidence lives in skills.** Every section is an imperative you must
+obey. Where one ends in `Full reference: [/name]`, the skill under `.claude/skills/<name>/` carries
+the worked examples, commands, war stories and incident history — load it when the task calls for
+it, not before.
+
+| Skill | Load it when |
+|---|---|
+| [/worktree](.claude/skills/worktree/SKILL.md) | starting any change: branch, edit, build, push |
+| [/pullrequest](.claude/skills/pullrequest/SKILL.md) | opening / reviewing / merging a PR |
+| [/ci](.claude/skills/ci/SKILL.md) | authoring a workflow, a gate, satellite-repo CI |
+| [/release](.claude/skills/release/SKILL.md) | shipping, tagging, checking what actually published |
+| [/deployment](.claude/skills/deployment/SKILL.md) | rolling a portal, patching an environment |
+| [/testing](.claude/skills/testing/SKILL.md) | writing or running a test, triaging a red run |
+| [/mesh-data](.claude/skills/mesh-data/SKILL.md) | any node read/write, query, payload cast, partition schema |
+| [/async](.claude/skills/async/SKILL.md) | any hub-reachable or Blazor-view call; IO; AccessContext |
+| [/gui](.claude/skills/gui/SKILL.md) | any layout area, control, editor, form, table |
+| [/i18n](.claude/skills/i18n/SKILL.md) | any string a human reads on screen |
+| [/debug](.claude/skills/debug/SKILL.md) · [/storm](.claude/skills/storm/SKILL.md) · [/sigsegv](.claude/skills/sigsegv/SKILL.md) | a hang/timeout; a restart/502/log flood; a crashed host |
 
 ## Git Workflow
 
-**When the task's goal is reached, automatically follow the [`pullrequest` skill](.claude/skills/pullrequest/SKILL.md)** — What's New entry (`Category: Fix` for a bug fix a user can notice, `Category: Feature` otherwise — fixes are the entries that go missing), commit, push, open the PR, wait for green CI, merge. "Goal reached" means the work is implemented, verified, and the touched projects build clean with CI's flags (`-c Release -warnaserror`); don't stop to ask permission for the PR flow at that point. Everything short of that stays manual: never commit or push half-done or unverified work, and the merge gate is absolute — never merge with CI red or pending.
+**When the task's goal is reached, automatically follow the [`pullrequest` skill](.claude/skills/pullrequest/SKILL.md)** — What's New entry (`Category: Fix` for a bug fix a user can notice, `Category: Feature` otherwise — fixes are the entries that go missing), commit, push, open the PR, wait for green CI, merge. "Goal reached" means implemented, verified, and the touched projects build clean with CI's flags; don't stop to ask permission at that point. Everything short of that stays manual: never commit or push half-done or unverified work, and **never merge with CI red or pending**.
 
 ### 🚨🚨🚨 ABSOLUTE: NEVER work on the primary checkout — it stays on `main`, untouched. EVERYONE creates a worktree.
 
-**The primary checkout (`/Users/roland/code/MeshWeaver`) is a READ-ONLY reference, not a workspace. It must stay parked on `main` and untouched — never edit, build, commit, `checkout`, `switch`, `reset`, or `stash` there, and never leave it on a feature branch.** It is the shared base that every session's worktree is cut from; the moment you mutate it (working tree, index, or HEAD) you can clobber every concurrent session's uncommitted WIP (a `reset --hard` there once wiped live work across every session).
+**The primary checkout (`/Users/roland/code/MeshWeaver`) is a READ-ONLY reference, not a workspace. It must stay parked on `main` and untouched — never edit, build, commit, `checkout`, `switch`, `reset`, or `stash` there, and never leave it on a feature branch.** It is the base every session's worktree is cut from; mutating it can clobber every concurrent session's uncommitted WIP.
 
-**EVERY agent session — no exceptions — works in its OWN `git worktree` on a fresh branch, and does ALL edits, builds, commits, and pushes there.** If you find yourself about to touch a file under `/Users/roland/code/MeshWeaver` directly, STOP and create a worktree first. Many Claude/agent sessions run against this repo at once; the worktree is what keeps them isolated.
+**EVERY agent session — no exceptions — works in its OWN `git worktree` on a fresh branch, and does ALL edits, builds, commits, and pushes there** (`git worktree add -b feat/x /Users/roland/code/MW-x origin/main`). About to touch a file under the primary? STOP and create a worktree first. **Never `git stash`** — the stash stack is repo-global and collides across worktrees; use `git diff > patch` + `git apply`. Parallel PR-building sub-agents must pass `isolation: "worktree"` as a tool PARAM (a prompt-only instruction does nothing).
 
-Create an isolated worktree on a fresh branch and do ALL work there:
+### 🚨 Before you push: make CI green LOCALLY first
 
-```bash
-# base on origin/main for a fresh change, or on the feature branch you're extending
-git worktree add -b feat/my-change /Users/roland/code/MW-my-change origin/main
-cd /Users/roland/code/MW-my-change      # isolated tree + index — your edits can't touch other sessions
-# …edit, commit, build with CI's flags, push, open the PR — all from here…
-git worktree remove /Users/roland/code/MW-my-change   # once merged/abandoned
-```
-
-- `git worktree list` shows every active worktree (and which branch each holds — a branch can be checked out in only one).
-- **Keep the primary parked on `main` and clean.** If you find it on a feature branch or with a dirty tree, capture any work you care about (`git diff > patch`) and restore it — `git switch main` — before continuing in a worktree. It is the cut-point for every other session; a dirty/feature-branch primary breaks the "cut a fresh worktree off `origin/main`" flow.
-- **Never `git stash`** — the stash stack is repo-global and collides across worktrees; use `git diff > patch` + `git apply` instead.
-- Parallel PR-building sub-agents must pass `isolation: "worktree"` as a tool PARAM (a prompt-only "work in a worktree" does nothing).
-
-### 🚨 Before you push: make CI green LOCALLY first — don't discover red on CI
-
-CI builds **Release with warnings-as-errors**: `dotnet build --no-restore -c Release -p:CIRun=true -warnaserror`. A plain local `dotnet build` (Debug, no `-warnaserror`) passes while CI fails — warnings are promoted to errors there. Pushing a red branch wastes a CI cycle and, per the green-merge gate, blocks the pull-based self-update if it reaches main. So **before every push**:
-
-1. **The bar is MERGEABLE, not merged.** A branch that is merely *behind* main merges fine — do NOT re-sync and re-run CI just to catch up. The `main pr protection` ruleset has **`strict_required_status_checks_policy: false`** and exactly ONE required check, `Consolidate test results`. Verify rather than trust this line:
-
-   ```bash
-   gh api repos/Systemorph/MeshWeaver/rulesets/2128472 \
-     --jq '.rules[] | select(.type=="required_status_checks") | .parameters | {strict: .strict_required_status_checks_policy, checks: [.required_status_checks[].context]}'
-   ```
-
-   Merging main into every branch before every push costs a full CI cycle per PR and, with several PRs in flight, most of the throughput — the first merge makes every other branch stale again. Merge to main, then let main's own build recompile. What you DO owe: no conflicts, and a green required check.
-
-   🚨 **`strict` is PER-REPO — check the repo you are actually in.** This differs across the node repos, and getting it wrong wastes a cycle in one direction or blocks you in the other. As of 2026-08-12:
-
-   | repo | `strict` | behind-main merges? |
-   |---|---|---|
-   | MeshWeaver | false (ruleset) | yes |
-   | MeshWeaver.Education (was education) | no branch protection | yes |
-   | MeshWeaver.Reinsurance | false | yes |
-   | MeshWeaver.SocialMedia | false | yes |
-   | **MeshWeaver.Plugins** | **true** | **NO — `mergeStateStatus: BEHIND`, must update the branch** |
-
-   One command answers it for any repo, and beats trusting this table:
-
-   ```bash
-   gh api repos/Systemorph/<repo>/branches/main/protection --jq '.required_status_checks.strict'   # 404 = unprotected
-   ```
-
-   **Merge main only when it actually buys something**, which — outside a `strict` repo — is exactly two cases:
-   - **The PR is `DIRTY`** (real conflicts). Resolve it — and afterwards run the revert-check: `git diff origin/main...HEAD --stat` (THREE dots) must show only your intended files. A branch-favoured hunk silently undoing someone else's merged work is a real failure mode here, not a hypothetical.
-   - **CI fails on something your diff does not touch.** Merge main *before* investigating: a stale branch re-samples flakes main has ALREADY fixed, and each one looks like a defect in your change. PR #794 burned five CI runs and most of a day that way — three different red tests, two already fixed on main, none caused by the branch.
-
-   🚨 But do not let that second case become a blanket excuse. Before attributing a red to main, check whether your diff can actually reach the failing test. "It's only markdown" is NOT such a check: `content/ai/**` ships as loadable Skill/Agent nodes with tests over them, and an unquoted `: ` in front matter stops a skill loading (2026-08-12).
-2. **Build with CI's flags**: `dotnet build -c Release -warnaserror` for at least the projects you touched and their dependents. Green here ⇒ green there for compile/warning errors. The classic miss: **CS9107** — a primary-constructor parameter captured *and* passed to a base ctor (warning in Debug, ERROR under `-warnaserror`). Fix it at the root: use the base's exposed member (e.g. `protected Output`) instead of capturing the param; do NOT just `NoWarn` it.
-3. **Only push when that Release/`-warnaserror` build is clean.** Then verify the PR check went green (`gh pr checks`) before declaring done.
-
-Full PR/merge gate: the `pullrequest` skill (CI must be GREEN before merge — main's image feeds the self-update).
+CI builds **Release with warnings-as-errors**; a plain local Debug build passes while CI fails. **Build every touched project and its dependents with `dotnet build -c Release -warnaserror`, one project per invocation, and only push when that is clean.** The bar is MERGEABLE, not merged: a branch merely *behind* main merges fine here (`strict: false`, one required check — `Consolidate test results`), so do NOT re-sync just to catch up; merge main only when the PR is `DIRTY` or CI fails on something your diff cannot reach. 🚨 `strict` is **PER-REPO** — `MeshWeaver.Plugins` is `strict: true`.
 
 ### 🚨 A verification step that cannot fail is not a verification step
 
-Every command below has produced a **false pass** on this repo — it looked like it succeeded and it
-did nothing. The cure is always the same shape: **demand a positive, specific success signal** —
-`0 Error(s)`, a `.trx` that exists, an elapsed time that makes sense — never "the command returned".
-
-| Trap | What you see | What actually happened | Instead |
-|---|---|---|---|
-| **`timeout` / `gtimeout`** | `command not found`, lost in a long log | Neither binary exists on this macOS host — the wrapped command **never ran** | Background it and enforce your own deadline (below) |
-| **`dotnet test --no-restore` on a project never built in this worktree** | **Zero output, exit 0, no `.trx`** | Nothing was built, so no test ran. A fresh worktree has no `bin/` — this is its default state, and `--no-build` behaves the same | `dotnet build <project>.csproj` first, then require a fresh `.trx` |
-| **`dotnet build a.csproj b.csproj`** (several project args) | `MSB1008: Only one project can be specified`, exit 1 | Nothing built. Reads like a transient and gets retried instead of fixed | One project per invocation |
-| **Piping a build into `tail`/`head`** | A tidy tail with no error lines | `Build FAILED` scrolled off, and `$?` is **the pager's** status, not the build's | Don't pipe it; capture the build's own exit code and grep the `0 Error(s)` summary |
-| **A build that finishes suspiciously fast** | `Build succeeded` in ~2 s | Up-to-date no-op — your edit may not be in it at all | Re-run with `--no-incremental` to prove a real compile happened |
-| **`--no-build` after editing a doc / non-`.cs` asset** | Tests pass, so the edit is fine | `src/MeshWeaver.Documentation/Data/**` ships as `<EmbeddedResource>`; a stale DLL still holds the **old** file, so the test never saw your change. Caught while writing this table — the run predated the edit by 54 s | Rebuild after editing embedded content, and check the DLL's mtime is newer than the file's |
-| **Reading a background task's output file right after launching it** | Plausible contents, so "the wait completed" | You read a stale, empty, or partial file. One session's "29 minutes of sleeps" had actually elapsed **2 minutes** | Compare wall-clock elapsed against the expected duration, not just the contents |
-
-**Capping a run without `timeout`** — `timeout` exists on CI's Linux runners, NOT on this macOS host.
-Locally: start the run in the background, hold the deadline yourself, and finish on the positive signal.
-
-```bash
-date -u                                                       # 1. record the start — UTC, so it compares with CI
-dotnet build test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj   # 2. never skip: --no-restore alone runs nothing
-dotnet test test/MeshWeaver.Data.Test --no-build --logger trx        # 3. run_in_background: true
-date -u                                                       # 4. poll; over budget ⇒ WEDGED, not slow
-ls -la test/MeshWeaver.Data.Test/TestResults/*.trx            # 5. the pass signal: a .trx newer than step 1
-```
-
-Over budget means **stuck** — find what is not completing (see "No band-aids"), never raise the bound.
+**Demand a positive, specific success signal — `0 Error(s)`, a `.trx` that exists, an elapsed time that makes sense — never "the command returned".** Each of these has produced a *false pass* here: `timeout`/`gtimeout` (no such binary on this macOS host — the wrapped command never runs), `--no-build`/`--no-restore` on a project this worktree never built (exit 0, no output, no `.trx`), several project args to one `dotnet build` (MSB1008), piping a build into `tail` (the exit code becomes the pager's), a 2-second "Build succeeded" (up-to-date no-op), `--no-build` after editing an embedded doc asset, and reading a background task's output right after launching it. Cap a local run by backgrounding it and holding your own deadline against `date -u`. Over budget means **stuck** — find what is not completing, never raise the bound. Full reference: [/worktree](.claude/skills/worktree/SKILL.md).
 
 ## 🚨🚨🚨 ABSOLUTE: Green CI does NOT mean the mesh compiles — in-mesh source is invisible to `dotnet build`
 
-**Every `.cs` stored in a mesh node — NodeType `Source/*.cs`, Scripts, layout areas — compiles at RUNTIME in the portal, NEVER in CI.** The repo's node trees are `<None>` content (`samples/Graph/MeshWeaver.Samples.Graph.csproj`), so **12k+ lines of C# under `samples/Graph/Data/` and `content/` are never type-checked by any build or any test.** Worse, **a NodeType's `configuration` lambda is C# stored in a JSON string field** — so it is invisible to every `.cs`-shaped habit at once: `grep --include='*.cs'`, `dotnet build`, and any compile gate that only scans `Source/`. When you delete a framework symbol, search the node **JSON** too.
+**Every `.cs` stored in a mesh node — NodeType `Source/*.cs`, Scripts, layout areas — compiles at RUNTIME in the portal, NEVER in CI**, and a NodeType's `configuration` lambda is C# inside a JSON string, invisible to `grep --include='*.cs'` as well.
 
-**A framework-version bump recompiles EVERY dynamic NodeType** (`HasUsableBuild` rule 3), so breakage never trickles in — the whole accumulated backlog detonates on one deploy. A NodeType left at `CompileError` **refuses portal readiness** and parks every instance hub for the full **60 s** activation budget: hung pages, failed liveness probes, dropped silos.
+- **Deleting or renaming ANY public framework surface is a breaking change to code the compiler cannot see.** Before deleting one, search the node trees (`samples/*/Data`, every node repo's content) **and the node JSON**, and search the live mesh (`search_chunks`) — it may hold callers the repo has already dropped. Port or delete them in the SAME change; a clean `-warnaserror` build proves nothing here.
+- **Before prod, sweep every NodeType green** (`Search('nodeType:NodeType')` → `LspDiagnosticsForNode` → fix roots first → re-sweep). 🚨 `ok:false` with a `status` other than `Compiled` (`Absent`/`NotCompilable`/`Unavailable`) is a sweep FAILURE, not a pass — that entry was never checked. Warnings count: `stayed an untyped JsonElement` means a view renders empty.
 
-- **Deleting or renaming ANY public framework surface is a breaking change to code the compiler cannot see.** Extension methods on `MessageHubConfiguration` / `IMessageHub`, `Controls.*`, `host.*` helpers, content base types — before you delete one: `grep -rn "<Symbol>" content samples/*/Data` **AND** search the live mesh (`search_chunks`), which may hold callers the repo has already dropped. Port or delete them in the SAME change. A clean `-c Release -warnaserror` build proves nothing here.
-- **Before prod, sweep every NodeType green.** `Search('nodeType:NodeType')` → `LspDiagnosticsForNode` per type → fix roots first (a red upstream makes every dependent `UpstreamFailed`) → re-sweep until all read `Ok`. 🚨 **`ok:false` with a `status` other than `Compiled` is a sweep FAILURE, not a pass** — `Absent` (renamed/mistyped/not on this replica), `NotCompilable` (wrong kind of node), `Unavailable` (the owning hub did not answer) each mean that entry was never checked. Until #1592 the tool answered `{"ok":true,"diagnostics":[]}` for all three, so a sweep over stale paths reported all-green having verified nothing. **Warnings count**: `stayed an untyped JsonElement`/unregistered-`$type` means a view **renders empty** and layout areas "cannot be found"; `CS0105`/`CS8632` noise is the camouflage that hides the one fatal diagnostic.
-
-Full protocol: [`/code` skill](content/ai/Skill/code.md) → "In-mesh source is NEVER compiled by CI" + "The pre-prod sweep". Mechanism: [NodeTypeCompilation.md](src/MeshWeaver.Documentation/Data/Architecture/NodeTypeCompilation.md).
+Full reference: [/ci](.claude/skills/ci/SKILL.md) · [NodeTypeCompilation.md](src/MeshWeaver.Documentation/Data/Architecture/NodeTypeCompilation.md).
 
 ## 🚨🚨🚨 ABSOLUTE: No band-aids — root cause only, literally always
 
-**The user is LITERALLY NEVER interested in a band-aid, workaround, mitigation, or symptom-suppression.** When something hangs, deadlocks, flakes, or errors, find the EXACT defect and fix THAT — never paper over it.
+**The user is LITERALLY NEVER interested in a band-aid, workaround, mitigation, or symptom-suppression.** When something hangs, deadlocks, flakes, or errors, find the EXACT defect and fix THAT. These are band-aids, and proposing one as "the fix" is forbidden:
 
-These are band-aids, and proposing one as "the fix" is forbidden:
-- **Increasing a bound to make it pass**: pool size, timeout, retry count, buffer size, `maxParallelThreads`. The question is never "how do I get more headroom" — it's "why is the slot/thread/budget not being released, or why is it erroring." A capped pool that exhausts means a slot is leaked or blocked; a timeout that trips means something never completes — fix the leak/block/non-completion.
-- **A watchdog / timer / poller that resubscribes or retries** to recover from a state that "shouldn't happen." If the initial state never arrives, find why it's dropped/erroring — don't add a timer to paper over it. (The 2026-06-08 prod outage was exactly this: an initial-state retry watchdog amplified a mishandled error into a resubscribe storm.)
+- **Increasing a bound to make it pass** — pool size, timeout, retry count, buffer size, `maxParallelThreads`. The question is never "how do I get more headroom", it is "why is the slot/thread/budget not released, or why is it erroring".
+- **A watchdog / timer / poller that resubscribes or retries** to recover from a state that "shouldn't happen". If the initial state never arrives, find why it is dropped or erroring.
 - **`catch {}` / swallow-and-continue / `.Catch(Observable.Empty)`** that hides a fault instead of surfacing or fixing it.
-- **Revert-and-move-on** when the revert just hides a defect that's still live underneath.
+- **Revert-and-move-on** when the revert just hides a defect that is still live underneath.
 - **A `Clear()` for test isolation, a widened `.Timeout(...)`, a sleep** — each is the *tell* of an unfixed root cause.
 
-If active bleeding genuinely needs a stopgap before the real fix lands, say so EXPLICITLY: "this is a temporary stopgap; the root cause is X; I will fix X" — then fix X. Default to writing a **deterministic repro** (a concurrency/deadlock test if that's the failure mode) that pins the true cause before changing code, so the fix is proven, not guessed. Full reference: memory `feedback_no_bandaids`.
+If active bleeding genuinely needs a stopgap first, say so EXPLICITLY ("this is a temporary stopgap; the root cause is X; I will fix X") — then fix X. Default to a **deterministic repro** that pins the true cause before changing code. Full reference: memory `feedback_no_bandaids`.
 
 ## 🚨🚨🚨 ABSOLUTE: No hand-woven async/concurrency primitives — the actor model does NOT tolerate `SemaphoreSlim`
 
-**A `SemaphoreSlim` (or any hand-rolled async gate / lock-for-async / signal) anywhere in `src/` is FORBIDDEN — outside the one place sealed inside `IoPool`.** `SemaphoreSlim.WaitAsync()` blocks/parks a thread and its continuation captures the awaiting scheduler. On a hub it parks the single-threaded action block (or a grain turn) → the message you're waiting on can never be processed → **deadlock**. This is the same defect class as `async`/`await`/`Task<T>` in hub code; a `SemaphoreSlim` is just a lock-shaped version of it.
+**A `SemaphoreSlim` — or any hand-rolled async gate, lock-for-async, or signal (`TaskCompletionSource` as a gate, a `Task.Delay` timeout race, `ManualResetEventSlim`, `lock`-around-`await`) — anywhere in `src/` is FORBIDDEN, outside the one place sealed inside `IoPool`.** It parks the single-threaded action block (or grain turn), so the message you are waiting on can never be processed → deadlock. **Serialization channels through the hub** (a `Subject<T>` + `.Select(Run).Concat().Subscribe(...)`, or `GetMeshNodeStream(path).Update(...)`), and **concurrency bounding / one-shot init channels through `IIoPool`** — `pool.Run(...)` held in an *instance* `PromiseCache`/`PromiseSlot`, never a `SemaphoreSlim(1,1)` and never a bare `ConcurrentDictionary<key, IObservable<T>>` (a ReplaySubject latches `OnError` and replays one transient fault forever, #1369).
 
-- **Serialization channels through the hub, never a semaphore.** "Only one at a time" / "wait your turn" is what the hub's single-threaded action block already gives you for free. When you need ordered, one-at-a-time processing, push items into a `Subject<T>` and run them with `.Select(Run).Concat().Subscribe(...)` (Concat subscribes the next only after the previous completes — order without a lock; the canonical fix is `KernelExecutor`'s REPL queue, which **replaced** a hand-woven `SemaphoreSlim`), or route state changes through `GetMeshNodeStream(path).Update(...)` (the owning hub serialises every writer).
-- **Concurrency bounding / one-shot init / "run once" channels through `IIoPool`.** A bounded I/O gate, a promise-cached one-shot (schema provisioning, blob-cache init, connect handshake), a "first caller does it, the rest wait" — that is `pool.Run(...)` held in an **instance** `PromiseCache<TKey,TValue>` / `PromiseSlot<TValue>` (`MeshWeaver.Mesh.Threading`; ReplaySubject-backed: runs once, replays to all, **evicts a fault**). NOT a `SemaphoreSlim(1,1)` `_initLock` / `_connectGate`, and NOT a bare `ConcurrentDictionary<key, IObservable<T>>` — a ReplaySubject latches `OnError`, so a bare dictionary replays ONE transient fault forever (#1369).
-- **`Task`-as-a-gate is the same sin.** `TaskCompletionSource` used to make callers "await a signal", a `Task.Delay` timeout race, `ManualResetEventSlim`, `lock`-around-`await` — all hand-woven async. Make the **source observable** (`AsyncSubject`/`Subject` + `Concat`) and `Subscribe`, or push it onto `IIoPool`.
-
-**The ONLY sanctioned `SemaphoreSlim` is the one sealed inside `IoPool` itself** (`MeshWeaver.Mesh.Threading`) — it IS the single boundary between the turn-based hub schedulers and genuinely-async I/O leaves, running work OFF the hub with `ConfigureAwait(false)`. Everywhere else, a `SemaphoreSlim` is a bug to delete. The litmus test: if your gate runs on (or is awaited from) a hub action block / grain turn / Blazor circuit, it deadlocks — channel it through a hub or `IIoPool` instead. Full reference: [ControlledIoPooling.md](src/MeshWeaver.Documentation/Data/Architecture/ControlledIoPooling.md), [AsynchronousCalls.md](src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md), memory `feedback_no_semaphoreslim`.
+Full reference: [/async](.claude/skills/async/SKILL.md) · [ControlledIoPooling.md](src/MeshWeaver.Documentation/Data/Architecture/ControlledIoPooling.md) · memory `feedback_no_semaphoreslim`.
 
 ## 🚨🚨🚨 ABSOLUTE: Never hand-roll UI / data-binding / persistence / submit — use the framework
 
-**A "UI feature" means wiring up the framework's EXISTING pieces, never reinventing them.** The framework already does data binding, node-content editing, auto-persistence, picking, **rendering (tables/lists via `DataGrid` and the typed controls)**, and thread submission ONE standard way that every layout area uses. Hand-rolling a parallel version — including emitting raw HTML strings instead of using a control — is FORBIDDEN.
+**A "UI feature" means wiring up the framework's EXISTING pieces, never reinventing them.** Before writing ANY UI/binding/persistence code, FIND the existing area/control/macro/extension and use it; if you are reaching for `GetDataStream`/`Subscribe`/`Update`/`CombineLatest`/a new wrapper for a UI feature, STOP.
 
-- **Editing a mesh node's content, data-bound + auto-persisting** → bind the GUI client DIRECTLY to the node stream: declare `MeshNodeContentEditorControl.ForType(path, typeof(MyContent))` (simple scalar/bool fields) and the Blazor view reads from `Hub.GetMeshNodeStream(path)` and writes per-field via `GetMeshNodeStream(path).Update(...)`. ONE source of truth — the node stream. Rich content (markdown/picking) → already-node-bound controls (`MarkdownEditorControl.WithAutoSave`, `MeshNodePickerControl`, `CollaborativeMarkdownView`).
-- **🚨 NEVER replicate the node into a layout-area `/data/{id}` copy + a server-side save subscription.** `host.UpdateData(id, node.Content)` + `GetDataStream(id).Debounce/Throttle.Subscribe(...GetMeshNodeStream(path).Update...)` — a.k.a. `OverviewLayoutArea.SetupAutoSave` / any `*AutoSave` helper / a "Save" button that reads `/data` and writes the node — is the FORBIDDEN replicate-then-save antipattern (two stores drift; the save loop clobbers unedited fields). The "standard EditNode / MeshNodePropertyEditor" editor IS this antipattern — do not copy it; migrate it.
-- **Picking a mesh node** → `[MeshNode("query")]` → `MeshNodePickerControl` (stores the node PATH). **Form controls** → the `Edit` macro + `[UiControl<T>]`/`[Description]`/`[Editable(false)]`. Don't hand-build selects/checkboxes/textareas + a data section.
-- **🚨 Rendering tabular / structured data → a framework CONTROL, NEVER hand-built HTML.** Tables → `Controls.DataGrid(rows).WithColumn(new PropertyColumnControl<T> { Property = nameof(Row.X).ToCamelCase() }.WithTitle("…").WithFormat("N0"))` bound to a plain row record (sorting / formatting / theming / virtualization for free; column API: `samples/Graph/Data/Cornerstone/Pricing/Source/PricingLayoutAreas.cs`). Compose `Controls.Stack` / `Controls.LayoutGrid` / `Controls.Title` / `Controls.Markdown`. **FORBIDDEN: building HTML strings** — `StringBuilder`/`$"<table>…"`/`$"<td>…"`, any `RenderHtml`-shaped helper, or `Controls.Html(handBuiltMarkup)` for structured data (`Controls.Html` is ONLY for genuinely pre-rendered markdown/rich text). This is the exact hack the user banned 2026-06-19 (*"use just controls and layout areas … get rid of RenderHtml … I don't want to see such hacks any more"*) — and the hand-rolled `RenderHtml`'s string-interpolation + LINQ also caused the >10-min MeshWeaver.AI compile regression (e30e9b5f1). If you're reaching for a string of HTML, STOP and find the control.
-- **Submitting a chat message** → existing `hub.StartThread(...)` / `hub.SubmitMessage(...)` (see the thread tests: `client.SubmitMessage(threadPath, text, …)`). No wrapper class, no path→id resolution, no create-or-submit logic beyond those APIs. Pass node PATHS through; downstream loads the node (e.g. `StartThread` takes a model PATH and loads the model from its mesh-node stream — don't pre-resolve an id).
-- **Never** `.Take(1)` on a stream feeding a live data-bound view — it freezes the binding (GUI/DataBinding.md).
+- **Editing a node's content** → bind the GUI DIRECTLY to the node stream (`MeshNodeContentEditorControl.ForType`, `MarkdownEditorControl.WithAutoSave`, `MeshNodePickerControl`). 🚨 **NEVER replicate the node into a layout-area `/data/{id}` copy plus a save subscription** — any `*AutoSave` helper, or a "Save" button that reads `/data` and writes the node, is the forbidden replicate-then-save antipattern (two stores drift; the save loop clobbers unedited fields).
+- **Tabular / structured data → a framework CONTROL, NEVER hand-built HTML.** `Controls.DataGrid` + `PropertyColumnControl<T>`, composed with `Controls.Stack`/`LayoutGrid`/`Title`/`Markdown`. **FORBIDDEN:** `StringBuilder`/`$"<table>…"`, any `RenderHtml`-shaped helper, or `Controls.Html(handBuiltMarkup)` for structured data.
+- **Form controls** → the `Edit` macro + `[UiControl<T>]`/`[Description]`/`[Editable(false)]`; no hand-built selects/checkboxes/textareas + a data section. **Submitting a chat message** → the existing `hub.StartThread(...)` / `hub.SubmitMessage(...)` extensions; no wrapper class, no path→id resolution.
+- **Never** `.Take(1)` on a stream feeding a live data-bound view — it freezes the binding.
 
-Before writing ANY UI/binding/persistence code, FIND the existing framework area/control/macro/extension and use it. If you're reaching for `GetDataStream`/`Subscribe`/`Update`/`CombineLatest`/a new wrapper for a UI feature, STOP. Full reference: memory `feedback_no_handrolling`; GUI/DataBinding.md; the data-bind tests (`InlineEditingWorkflowTest`).
+Full reference: [/gui](.claude/skills/gui/SKILL.md) · [GUI/DataBinding.md](src/MeshWeaver.Documentation/Data/GUI/DataBinding.md) · memory `feedback_no_handrolling`.
 
 ## 🚨🚨🚨 ABSOLUTE: Never change log levels in code for debug reasons
 
-**Editing `LogInformation` ↔ `LogDebug` ↔ `LogTrace` (or `appsettings.json` under `src/`) to dial verbosity up or down for a debugging session is FORBIDDEN.** Log levels in code reflect the production cost model — `Information` lines ship to Loki (pod stdout → Promtail) and ingest/storage isn't free. Changing them temporarily silently bleeds budget the next CI run.
+**Editing `LogInformation` ↔ `LogDebug` ↔ `LogTrace` (or `appsettings.json` under `src/`) to dial verbosity for a debugging session is FORBIDDEN** — log levels reflect the production cost model, and `Information` lines ship to Loki. To turn the volume up, edit the appsettings.json in the test's `bin/Debug/net10.0/` (`reloadOnChange: true` flips it mid-run). The src-tree `appsettings.json` and every `Log*` call in `src/` is committed contract; a genuinely mis-levelled call gets a real commit explaining the cost/value trade-off.
 
-To turn the volume up for debugging, **edit the appsettings.json in the test's `bin/Debug/net10.0/` (or the equivalent runtime config)** — `reloadOnChange: true` is wired so the level flips mid-run without a rebuild. The src-tree `appsettings.json` and every `Log*` call in `src/` is committed contract.
+## 🚨🚨🚨 ABSOLUTE: A gate NEVER tests its own inputs — no skip-trapdoors
 
-If a Log call is genuinely too noisy or too quiet at the level it's written, fix it permanently with a real commit message explaining the cost/value trade-off — don't sneak it in alongside an unrelated change.
+**A CI gate must never carry `continue-on-error:` on the step that fetches its input, nor an `if:` that asks whether a secret/variable is set.** GitHub paints a skipped job the same colour as a passed one, so "the gate never ran" and "the gate passed" become indistinguishable. Instead: one `preflight` job asserts every external input and fails RED naming what to provision; gates `needs:` it and run unconditionally; the fork-PR exemption is expressed once, on the *event*, never as "the secret is empty"; the required check carries `preflight` in `needs` plus an explicit fail step. The same applies to guard TESTS — a guard whose subject moved and whose roots did not passes having checked nothing.
 
-## Test Triage
-
-When CI fails, **DO NOT run entire test projects** — iterate one test at a time:
-
-1. Read failed test names from CI logs (`gh run view <id> --log`)
-2. `dotnet build <project>.csproj` — in a fresh worktree, skipping this makes step 3 a silent no-op (exit 0, no output, no `.trx`)
-3. `dotnet test <project> --filter "FullyQualifiedName~<TestName>" --no-build`
-4. **No skipping** — CI-only failures catch real timing/state bugs
-
-🚨 **Read the run's evidence before reasoning about it.** The shard artifact carries three things and
-they answer different questions: the per-project `.trx` (output lives in `<Output><TextMessages>`,
-**not** `<StdOut>` — the native xUnit v3 writer does not use `StdOut`, so finding it empty says
-nothing); `collected-logs/_meshweaver-test-trace.log`, the ONLY log that survives a host killed at
-the wall-clock cap, carrying `TEST_START`/`TEST_END` window markers and `[FAULT]` records with
-stacks, joinable by `pid=` and timestamp; and the classified `[CI] <name> exit=<n>` markers. A host
-that CRASHED is written into the trx as a `<project>.HOST_CRASHED` failure, so no summary can report
-a pass over a dead process. Full map: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md) → "Reading a CI Failure".
-
-Full guidance: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md) · [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) · [TestStateIsolation.md](src/MeshWeaver.Documentation/Data/Architecture/TestStateIsolation.md)
+**And never hand-roll (or copy-paste) a node repo's CI.** The shared jobs live here as `workflow_call` workflows (`.github/workflows/node-repo-{validate,compile-check,gate,tag-modules,publish-bake}.yml`); MeshWeaver.Plugins / .Education / .Reinsurance / .SocialMedia call them and keep only repo-specific policy. Adopting one renames that repo's required-status-check contexts to `<caller job> / <name>` — do it in the same change. Full reference: [/ci](.claude/skills/ci/SKILL.md).
 
 ## GitHub PR Operations
 
-🚨 **Finishing a change set means MERGED — merge it yourself on green, don't ask for permission.**
-A PR left open with a link handed back is unfinished work: it rots against a moving `main` and the
-human has to return to press a button whose only precondition is the one the flow already proves.
-Asking is not extra safety. The safety IS the gate — green CI plus the automatic Copilot review,
-both of which you wait for anyway (and, for anything a portal runs, the image check below). Stop
-only when CI is red for a reason you cannot fix, when the review asks for a decision that changes
-what the change set IS, or when the work turns out to need a scope call the user has not made —
-one line, then stop. A change set spanning repos (education, MeshWeaver.Plugins) is finished when
-every part is merged in dependency order: platform first, then what depends on it.
+🚨 **Finishing a change set means MERGED — merge it yourself on green, don't ask for permission.** A PR left open with a link handed back is unfinished work; the safety IS the gate (green CI plus the automatic Copilot review, which you never hand-request and never withdraw). Stop only when CI is red for a reason you cannot fix, when a review asks for a decision that changes what the change set IS, or when the work needs a scope call the user has not made. A change set spanning repos is finished when every part is merged in dependency order: platform first, then what depends on it.
 
-🚨 **PR capability is CREDENTIAL × REPO — measure it for the repo you are in, never
-remember it.** This line used to read *"`gh` CLI has read + push only — cannot merge, resolve
-threads, or request reviewers"*, which contradicted the very code block below it and was wrong in a
-way that cost real throughput: believing it makes a session stop at the finish line and hand the
-merge back, exactly the pause the PR-flow rule above says not to take once CI is green.
+🚨 **PR capability is CREDENTIAL × REPO — measure it for the repo you are in, never remember it** (`gh api repos/Systemorph/<repo> --jq '.permissions'`; `gh auth status`). The same repo answers differently to two sessions on the same day. **Never reach for `--admin`** — a refusal is information about the gate, not an obstacle to route around; on `FORBIDDEN`, re-authenticate with `! gh auth login`.
 
-Both factors are real and neither alone predicts the answer. **The repo half** is what the rest of
-this file already documents — branch protection, `strict`, required checks, who may bypass. **The
-credential half** is the one nobody expects, because it makes the SAME repo answer differently to
-two sessions on the same day (2026-08-26): one measured `admin:false, maintain:false` on
-`MeshWeaver` with scopes `gist, read:org, repo, workflow`, while another measured
-`admin:true, maintain:true` with `admin:org, delete:packages, gist, repo, workflow, write:packages`
-— and merged #2328 and #2429 there. So a static table of either shape is false for somebody, and a
-refusal you hit is not evidence about anyone else's session. Check both:
+🚨 **Poll the `MeshWeaver Build and Test` check SUITE by name via GraphQL and merge only on `COMPLETED/SUCCESS`.** Never wait for *all* check suites (an installed App that posts no runs leaves its suite `queued` forever), and never poll with `gh run watch` / `gh pr checks --watch` (REST rate-limit 403s masquerade as CI-red). `Consolidate test results` is the required check and the only one to require.
 
-```bash
-gh api repos/Systemorph/<repo> --jq '.permissions'   # push is normally enough to merge
-gh auth status                                        # scopes, if the above surprises you
-```
+🚨 **SUBSCRIBE to a PR — one persistent `Monitor` over EVERY event you would act on**, armed when you open it: suite green, suite *any other* terminal conclusion, a new unresolved review thread, `mergeStateStatus = DIRTY`, and `MERGED`/`CLOSED`. A success-only watch is the same defect as a gate that skips on missing input — silence looks identical to "still running".
 
-Merging and resolving threads both work wherever the credential allows them (verified on
-`MeshWeaver`, `Memex` and `MeshWeaver.Education` on 2026-08-26). **Never reach for `--admin`** — a
-refusal is information about the gate, not an obstacle to route around.
+🚨 **Merging is a shared action.** A merge supersedes the run QUEUED behind the one in flight, including one another session is waiting on. Before merging, check whether main has a run someone is gating a deploy on; if so, **hold and say so** — and push that hold to your subagents explicitly, because their default is merge-on-green.
 
-```bash
-# Find unresolved review threads
-gh api graphql -f query='query($owner:String!, $repo:String!, $pr:Int!) { repository(owner:$owner, name:$repo) { pullRequest(number:$pr) { reviewThreads(first:100) { nodes { id isResolved } } } } }' \
-  -f owner=Systemorph -f repo=MeshWeaver -F pr=PR_NUMBER \
-  --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | .id'
-# Resolve a thread
-gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ clientMutationId }}' -f id=THREAD_ID
-gh pr merge PR_NUMBER --merge
-```
-
-**If `FORBIDDEN`**: re-authenticate with `! gh auth login`.
-
-### 🚨 A merged fix can look SHIPPED while producing no image — verify the IMAGE, never the tick
-
-**Publishes are BATCHED (maintainer, 2026-08-16).** When repo var `CD_BATCH_WINDOW_MINUTES` is set,
-a green merge whose newest published set is younger than the window does NOT publish — the
-hourly reconciler publishes main's tip on its next tick instead. The decision step's summary says
-`🕐 Batched` when this happened, so "merged + green + no new tag" inside the window is INTENTIONAL,
-not the trap below. To ship a specific fix immediately: `gh workflow run main-cd.yml --ref main`
-(the manual path bypasses the window by construction). The probe fails OPEN — an unreadable
-registry publishes rather than blocks.
-
-🚨 **The window is NOT the wait.** A batched merge leaves main's HEAD without an image set, which is
-exactly what the reconciler heals — so it ships on the next TICK, whatever the window says. The
-window controls how many merges ride one image; the **reconcile cadence controls the tail**. Both
-were 3 h until 2026-08-17, which is the only reason a merge could sit unpublished that long
-(maintainer: *"3 hour window is not acceptable"*). Now: window 60 min, one tick at `:23`, so the
-worst case is ~1 h plus the ~20 min build. If you ever raise the cadence again, you are raising
-publish latency — not saving runner time, which the 3-attempts-per-commit budget already bounds.
-
-🚨 **Publication frequency is NOT portal-restart frequency — but only because a floor now exists.**
-Since #1773 an install checks per publication *event*, and `UpdatePolicyKind` picks a channel, not a
-cadence — so for a few hours there was nothing at all between "an image published" and "every portal
-restarted". #1780 closed that with **`SelfUpdate__MinRollInterval`**, a restart budget set to `1h` in
-`values.aks.yaml` beside the 24h/6h/1h trade. It is deliberately matched to this tick, so hourly
-publication means hourly delivery and no more.
-
-**If you change one, change the other, and in this order:** a faster tick with the floor left behind
-buys nothing (the floor gates the roll), while a shorter floor with the tick left behind just
-restarts pods onto the same image. And note the key that used to do this job,
-`SelfUpdate__PollInterval`, was RENAMED rather than deleted — it sat in the chart inert, reading as
-a live daily throttle, until #1778.
-
-`main-cd.yml` builds and pushes the deployment images. Its `workflow_run` path is still gated on
-`event == 'push' && head_branch == 'main'` — that gate is what stops a **fork's** pull_request run
-(whose `head_branch` can also be "main") from publishing untrusted code with this repo's secrets,
-so never relax it. Three consequences that trip people up, all SILENT:
-
-1. **No Build-and-Test run on main at all.** CD reacts to that workflow completing; if it never ran
-   on the merge commit (a CI incident, a stalled queue), CD sits `SKIPPED` with nothing to react to.
-2. **`workflow_dispatch` of Build-and-Test can never ship.** `gh workflow run "MeshWeaver Build and
-   Test" --ref main` RUNS and genuinely tests the merge commit, so main shows a **green
-   Build-and-Test** — but its `event` is `workflow_dispatch`, not `push`, so CD still skips. The
-   most convincing possible "it shipped" signal, and no image.
-3. 🚨 **Runs on `main` are never cancelled — and that is load-bearing, not a tuning choice.**
-   `dotnet-test.yml` sets `cancel-in-progress` to `github.event_name != 'workflow_dispatch' && github.ref
-   != 'refs/heads/main'`. Superseding stays on for PR branches (that is where #2316's ~28% of runner
-   demand is saved, and a later push there tests a strict successor of what was cancelled). It is OFF
-   for main because cancelling there loses two different things at once:
-
-   - **Nothing builds the combination that LANDED.** `strict: false` means each PR was tested against
-     the main it branched from, so the merged tree is first compiled by main's own run. This is not
-     hypothetical: five merges inside fifteen seconds put `CS0246: MeshOperations` on main on
-     2026-08-26 — two independently-green PRs, a semantic conflict neither could see (#2412).
-   - **Nothing publishes.** CD's delivery gate keys on `Consolidate test results` reaching `success`
-     **for that SHA**. CD *does* still fire on a cancelled run (`main-cd.yml` subscribes with
-     `types: [completed]`, and cancelled counts as completed) — it just finds no success to act on.
-
-   Before the fix, main's five consecutive runs from 20:28–20:38 on 2026-08-26 were all `cancelled`,
-   each by the next merge. **So do NOT re-introduce cancellation on main to save runner minutes.**
-   Batching *publication* is still right and `CD_BATCH_WINDOW_MINUTES` still does it; what is not
-   right is batching by destroying the evidence.
-
-   🚨 **But know exactly what this bought, because it is less than it looks.** `cancel-in-progress:
-   false` protects the run that is ALREADY RUNNING. It does not protect runs that are QUEUED behind
-   it: a concurrency group holds one in-progress plus one pending, and each new push supersedes the
-   pending one. Measured 2026-08-27 — five pushes to main inside **fourteen seconds** (`05:59:22`–
-   `05:59:36`): the first ran to completion, the other four were `cancelled` with
-   `run_started_at == created_at`, i.e. they never executed a step.
-
-   So a burst still leaves intermediate commits uncompiled, and **every landed commit being tested
-   is NOT what this achieves** — what it achieves is that a burst can no longer leave *nothing*
-   completed, which is what silenced CD entirely. The full fix is a merge queue (#2412), which tests
-   the prospective combination before it lands; this repo is still missing the `merge_group:` trigger
-   that MeshWeaver.Plugins already has.
-
-   🚨 **The wait is owed to a merge that must ship ON ITS OWN** (a CD fix, a hotfix someone is
-   verifying): merge it, then wait for **that merge commit's** Build-and-Test to COMPLETE — and
-   check the completed run's **head SHA is your merge commit**, because "a run completed" and "the
-   run for my commit completed" diverge during exactly the burst you are working around.
-
-   🚨 **A merge cancels whatever is in flight — including a run ANOTHER SESSION is waiting on.**
-   Several sessions merge into this repo at once, so "wait for the run" only works if *everyone*
-   waits; two sessions each merging politely still cancel each other. Before merging, check whether
-   main has a run in flight that someone is gating a deploy on, and if so **hold and say so**. On
-   2026-08-26 a routine merge killed the run another session was watching to end a CD freeze — no
-   damage beyond a lost cycle, but the fix is coordination, not care.
-
-   🚨 **A hold reaches your hands, NOT your subagents' — push it to them explicitly.** An agent
-   briefed to "root-cause and open a PR" follows this file's own merge-on-green default, which is
-   correct on any other day. The same 2026-08-26 hold was then broken **twice more, by two
-   subagents**, each merging a perfectly good fix at exactly the wrong moment. When you take a hold:
-   message every running agent, tell them to push and PARK, and disarm any auto-merge already
-   armed. The general form — **a constraint is only as complete as the set of hands it reaches** —
-   applies to anything you delegate, not just merges.
-
-**None of these is terminal any more.** CD carries a **reconciler**: an hourly `schedule` (plus its own
-`workflow_dispatch`) resolves main's tip through the API, asks ACR whether that commit has the
-complete four-image set, and publishes only when it does not — bounded at 3 attempts per commit,
-with every attempt and the final give-up written to the `ci-failure` issue. So:
-
-- **To kick CD by hand: `gh workflow run main-cd.yml --ref main`** (it heals HEAD; it can never
-  publish an untested tree — it re-checks `Consolidate test results` on the commit it resolved).
-- It heals **HEAD, not the commit that failed** — deliberately. The version tag comes from the
-  BUILDING run's number, so re-publishing older code would mint a higher `-ci.<n>` for it and roll
-  every install *backwards* past `VersionSelect`'s monotonic-build-number assumption.
-- **Publication is all-or-nothing**: each leg pushes only a non-selectable `staging-<sha>-<run_id>`
-  tag, and the `promote` job applies the real tags only after all five legs succeed, ending with
-  `memex-portal-ai:<version>` — the single write the self-updater acts on.
-
-**Before believing something is deployed, check the IMAGE, never the green tick:**
-
-```bash
-az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
-az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
-  "kubectl get deploy -A -o custom-columns=NS:.metadata.namespace,IMAGE:.spec.template.spec.containers[0].image --no-headers | grep memex-portal-ai"
-.github/scripts/check-image-set.sh <short-sha>   # the exact assertion CD itself makes
-```
-
-Then the portals self-update **on the publication event, not on a poll** (#1773): one pass at
-startup, then a check per build-completion event. `SelfUpdateOptions.PollInterval` no longer exists
-— `RetryInterval` (6 h) is only the backstop for a faulted watch — so an install that is behind is
-behind for a reason worth reading, not because a timer has not fired yet. `kubectl rollout restart`
-still forces an immediate check via the startup pass.
-
-### 🚨 "Is the build finished?" — filter by WORKFLOW, never wait for all check suites
-
-The merge gate is "CI green", so you must be able to tell when CI is actually *done*. **Never wait
-for every check suite on the commit to reach `COMPLETED` — that never happens.** GitHub creates a
-check suite for *every* installed App holding the Checks permission, and an App that posts no check
-runs leaves its suite at `queued` forever. This repo has exactly that: the **Azure Boards** App
-(installed 2026-08-03, `latest_check_runs_count: 0`, zero `AB#` references in the history) puts a
-permanently-`queued` suite on every commit. It never blocks a merge — `mergeStateStatus` stays
-`CLEAN` — but a naive "all suites complete" poll hangs until its timeout and then looks like CI
-never finished.
-
-**Poll the `MeshWeaver Build and Test` suite specifically:**
-
-```bash
-gh api graphql -f query='query($o:String!,$r:String!,$p:Int!){repository(owner:$o,name:$r){pullRequest(number:$p){
-  mergeStateStatus commits(last:1){nodes{commit{checkSuites(first:20){nodes{
-    status conclusion workflowRun{workflow{name}}}}}}}}}}' \
-  -f o=Systemorph -f r=MeshWeaver -F p=PR_NUMBER \
-  --jq '[.data.repository.pullRequest.commits.nodes[0].commit.checkSuites.nodes[]
-         | select(.workflowRun.workflow.name=="MeshWeaver Build and Test")
-         | "\(.status)/\(.conclusion)"]'
-```
-
-Merge only on `COMPLETED/SUCCESS` for that suite. Two further gotchas:
-
-- **`Consolidate test results` is the required check** — and the ONLY one to require. `Build solution
-  (once)` and the shards are legitimately *skipped* when a run reuses an already-green tree, and a
-  skipped required check blocks the merge forever.
-- **Don't poll with `gh run watch` / `gh pr checks --watch`.** They hammer REST and burn the shared
-  token budget into 403s that masquerade as CI-red. Use the GraphQL query above, or a `Monitor` that
-  filters on the workflow name.
-
-### 🚨 SUBSCRIBE to a PR — one persistent Monitor over EVERY event you'd act on, never a success-only watch
-
-**Waiting on a PR is event-driven work: arm ONE persistent `Monitor` (the harness tool) when you
-open the PR, and let it wake you.** Hand-re-armed one-shot polls die at their timeout cap and leave
-dead air between "CI finished" and "you noticed" — and a watch that only fires on the happy path is
-the same defect as a gate that skips on missing input: **silence looks identical to
-"still running" while the thing you needed to react to already happened** (maintainer, 2026-08-17:
-"we keep losing time because of such problems"). The monitor's poll loop (GraphQL, ~45s) must emit
-a line on EACH of these transitions, not just green:
-
-- **suite `COMPLETED/SUCCESS`** — the merge signal;
-- **suite `COMPLETED/<anything else>`** (FAILURE / CANCELLED / TIMED_OUT / STALE) — go read the
-  failing job log NOW, not at the next manual check;
-- **a NEW unresolved review thread** (the ruleset's Copilot review lands minutes after open —
-  unwatched, it silently gates the merge);
-- **`mergeStateStatus = DIRTY`** — a dirty PR runs ZERO CI, so with a success-only watch it waits
-  forever;
-- **`MERGED` / `CLOSED`** — the monitor's own exit condition.
-
-One monitor can cover several open PRs (loop over them; emit per-PR lines; exit when all are
-terminal). The same rule applies to any long-running external wait — a deploy, a bake, a
-reconciler: enumerate the terminal states first, subscribe to all of them, and treat "my filter
-only matches success" as a bug to fix before arming.
-
-**Also check the clock before declaring a job stuck.** GitHub timestamps are UTC; a local-time
-comparison makes a healthy 7-minute build look like a 33-minute hang. `date -u` first.
-
-### 🚨🚨🚨 ABSOLUTE: A gate NEVER tests its own inputs — no skip-trapdoors
-
-**A CI gate must never carry `continue-on-error:` on the step that fetches its input, nor an
-`if:` that asks whether a secret/variable is set** (`if: ${{ vars.X != '' }}`,
-`if: steps.token.outputs.present == 'true'`, `if: steps.checkout.outcome == 'success'`).
-GitHub renders a **skipped job with the same grey/green tick as a passed one**, so "the gate never
-ran" and "the gate passed" become indistinguishable — and a required check that passes on no
-evidence is worse than a flaky one.
-
-This is not theoretical. The cross-repo plugin gate was built that shape and therefore **never ran
-once**: its checkout failed (the secret was unprovisioned), `continue-on-error` rewrote the failure
-to `success`, the compile step skipped, and the job reported green. #683 deleted
-`AiSettingsNodeType.AddSkillSource` with a live caller in the plugins repo and put **nine** plugin
-partitions on the compilation-error overlay in production; a separate `AddTracking` deletion broke
-`SocialMedia/Post` the same way.
-
-The shape instead:
-
-- **One `preflight` job** asserts every CI input that comes from outside the tree (secrets, repo
-  variables) and **fails RED naming exactly what to provision**. Adding an input = one line in its
-  `missing` array.
-- **Gates depend on it (`needs: [preflight, …]`) and run unconditionally** — no input-shaped `if:`.
-- **The ONE legitimate exemption is a FORK PR** (GitHub withholds org secrets by design). Express it
-  **once**, as a check on the *event* (`github.event.pull_request.head.repo.fork != true`) — never as
-  a "the secret is empty" check. At the job level those two look identical and only one is safe.
-- **Propagate into the required check.** `collect-results` runs with `always()` and is the ONLY
-  required status check, so it needs `preflight` in `needs` **plus an explicit fail step** — a
-  skipped dependency does not fail an `always()` job, which would re-open the trapdoor one level up.
-
-Legitimate `continue-on-error` (do not "fix" these): the `Publish Test Results` reporter (the TRX
-summarize step is the real gate; a GitHub-API 429 must not fail the run) and the green-marker
-push/prune (losing a marker costs a redundant run, never correctness). The test is *what does a
-failure here hide?* — nothing, for a reporter; everything, for a gate.
-
-### Satellite CI = thin callers of THIS repo's reusable workflows
-
-**Never hand-roll (or copy-paste) a node repo's CI.** The shared jobs live here as `workflow_call`
-workflows — `.github/workflows/node-repo-{validate,compile-check,gate,tag-modules,publish-bake}.yml`
-— and MeshWeaver.Plugins / .Education / .Reinsurance / .SocialMedia call them, keeping only
-repo-specific policy (digest pin, gating, `repository_dispatch` receiver, their own `scripts/`).
-Adopting one renames that repo's required-status-check contexts to `<caller job> / <name>` — do it
-in the same change. Full contract: [CiContentBake.md](src/MeshWeaver.Documentation/Data/Architecture/CiContentBake.md)
-and [ContinuousDeliveryContract.md](src/MeshWeaver.Documentation/Data/Architecture/ContinuousDeliveryContract.md)
-(which also carries the GitHub OIDC subject-format rule: register BOTH subject formats per repo).
+Full reference: [/pullrequest](.claude/skills/pullrequest/SKILL.md) · delivery, batching and image verification: [/release](.claude/skills/release/SKILL.md) · workflow/gate authoring: [/ci](.claude/skills/ci/SKILL.md).
 
 ## 🚨 Postgres: One Schema Per Partition
 
-**`public.mesh_nodes` is empty by design.** Data lives in per-partition schemas (`acme.mesh_nodes`, `rbuergi.mesh_nodes`, etc.).
+**`public.mesh_nodes` is empty by design.** Data lives in per-partition schemas (`acme.mesh_nodes`, `rbuergi.mesh_nodes`, …), satellites routed by path segment (`_Access` → `access`, `_Thread` → `threads`, `_Activity` → `activities`, `_Comment`/`_Approval`/`_Tracking` → `annotations`, `Source`/`Test` → `code`). **`namespace` keeps the partition prefix — never strip it** (`rbuergi/ApiToken`, not `ApiToken`). **Never run raw `psql UPDATE` on a live portal** — it bypasses the workspace cache; use `MoveNodeRequest` or a Repair vN migration. 🚨 **Provisioning a partition schema is REACTIVE + POOLED: `EnsurePartitionProvisioned(namespace).SelectMany(_ => write…)`** — never declare a `PartitionDefinition` node to force a schema (it provisions the name verbatim while writes hit the lowercased one → 42P01), and never lowercase by hand.
 
-Satellite table routing by path segment:
-
-| Path segment | Table |
-|---|---|
-| `…/_Access/…` | `access` |
-| `…/_Thread/…` | `threads` |
-| `…/_Activity/…` | `activities` |
-| `…/_Comment/…`, `_Approval`, `_Tracking` | `annotations` |
-| `…/Source/…` or `…/Test/…` | `code` |
-| (none) | `mesh_nodes` |
-
-**`namespace` keeps the partition prefix — never strip it.** `namespace = rbuergi/ApiToken`, not `ApiToken`.
-
-**Never run raw `psql UPDATE` on a live portal** — bypasses the workspace cache. Use `MoveNodeRequest` or add a Repair vN migration. If you must SQL-edit, restart `Memex.Portal.Distributed`.
-
-**🚨 Partition schema: provision + existence are REACTIVE + POOLED — never declare a `PartitionDefinition` node to force a schema, never lowercase by hand.** The standard surface is on `IPartitionStorageProvider`:
-- `EnsurePartitionProvisioned(namespace) : IObservable<Unit>` — the ONE entry point that creates a partition's schema + tables. Reactive, idempotent (promise-cached), and **pooled** on the `pg:{adapter}` IoPool (the PG impl lowercases the schema correctly). Subscribe it; compose with `.SelectMany(_ => write…)` before writing to a not-yet-provisioned partition.
-- `PartitionExists(namespace) : IObservable<bool?>` — reactive existence check (`null` = indeterminate; OR-fold across providers as `PartitionWriteGuardValidator` does).
-
-The router maps a path's first segment to `seg.ToLowerInvariant()`; a `PartitionDefinition` with `Schema` left null provisions the schema **verbatim** (`"Agent"` capital) while writes hit `"agent"` → 42P01. So the way to make code that writes a not-yet-provisioned partition work is `EnsurePartitionProvisioned(p).SelectMany(_ => write…)` — **not** a partition-def node. The async schema DDL runs inside the IoPool, never `Observable.FromAsync` (see [ControlledIoPooling.md](src/MeshWeaver.Documentation/Data/Architecture/ControlledIoPooling.md)).
-
-Full reference: [PostgresSchemaArchitecture.md](src/MeshWeaver.Documentation/Data/Architecture/PostgresSchemaArchitecture.md)
+Full reference: [/mesh-data](.claude/skills/mesh-data/SKILL.md) · [PostgresSchemaArchitecture.md](src/MeshWeaver.Documentation/Data/Architecture/PostgresSchemaArchitecture.md).
 
 ## 🛡️ Global admin = admin on the Admin partition
 
-**"Global/platform admin" has ONE meaning: `Permission.All` at scope `Admin`** — an `AccessAssignment` granting the `Admin` role in the **`Admin/_Access`** namespace (`Admin` is a standard partition, schema `admin`, that holds platform-level data). This is a **platform admin, NOT a data superuser**: `Admin/_Access` is Admin-scoped — it does NOT grant access to spaces or user partitions. Standing access = platform management (invites, deletes, config); emergency cross-partition data change requires explicit **elevation (break-glass)**, never standing. A **root** `_Access` grant is the data-superuser shape and is deliberately NOT how platform admins are provisioned.
-
-- **The one predicate is `hub.IsGlobalAdmin()` / `hub.IsGlobalAdmin(userId)`** (`HubPermissionExtensions`). Every gate goes through it — NEVER an ad-hoc role-name (`Roles.Contains("PlatformAdmin")`) or root-scope (`GetEffectivePermissions("")`) check.
-- **The grant lives in `Admin/_Access`, never root `_Access`.** Writers (`GlobalAdminSeed` from `Auth:GlobalAdmins`, `UserOnboardingService.GrantPlatformAdmin`) and readers (`AdminMenuGate`, `UserNodeType.GetGlobalAdminTabAsync`, `UserProfile`) must agree on the Admin partition — a writer/reader split (root vs Admin) silently locks admins out of every admin tab (2026-06-08).
+**"Global/platform admin" has ONE meaning: `Permission.All` at scope `Admin`** — an `AccessAssignment` granting the `Admin` role in the **`Admin/_Access`** namespace. This is a **platform admin, NOT a data superuser**: it does NOT grant access to spaces or user partitions, and emergency cross-partition data change requires explicit **elevation (break-glass)**, never standing access. A **root** `_Access` grant is the data-superuser shape and is deliberately NOT how platform admins are provisioned. **The one predicate is `hub.IsGlobalAdmin()` / `hub.IsGlobalAdmin(userId)`** — never an ad-hoc role-name or root-scope check — and **the grant lives in `Admin/_Access`, never root `_Access`**: a writer/reader split silently locks admins out of every admin tab.
 
 Full reference: [AccessControl.md](src/MeshWeaver.Documentation/Data/Architecture/AccessControl.md) → "The Admin partition".
 
 ## Documentation
 
-All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at runtime.
+All docs are embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at runtime (`Data/Architecture/`, `Data/DataMesh/`, `Data/GUI/`, `Data/AI/`). **Agent and Skill node definitions ship with the AI engine, which lives in `MeshWeaver.Plugins` (#2276)** — not in this repo.
 
-| Topic area | Path |
-|---|---|
-| Architecture | `src/MeshWeaver.Documentation/Data/Architecture/` |
-| DataMesh | `src/MeshWeaver.Documentation/Data/DataMesh/` |
-| GUI | `src/MeshWeaver.Documentation/Data/GUI/` |
-| AI Integration | `src/MeshWeaver.Documentation/Data/AI/` |
-| Agent definitions | `content/ai/Agent/` |
+**Writing/editing a doc page:** follow [AuthoringDocumentation.md](src/MeshWeaver.Documentation/Data/Architecture/AuthoringDocumentation.md). Links resolve against the page's FULL node path at render time — sibling links need `../Sibling`, absolute links start `/Doc/…`; `xref:` and `.md` suffixes never resolve. `DocumentationLinkIntegrityTest` fails on any broken internal link — run it after doc edits (it travels with the Agent/Skill partitions it also validates, so it moves to MeshWeaver.Plugins with the AI engine).
 
-**Writing/editing a doc page:** follow [AuthoringDocumentation.md](src/MeshWeaver.Documentation/Data/Architecture/AuthoringDocumentation.md). Links resolve against the page's FULL node path at render time — sibling links need `../Sibling`, absolute links start `/Doc/…`; `xref:` and `.md` suffixes never resolve. `DocumentationLinkIntegrityTest` (test/MeshWeaver.Documentation.Test) fails on any broken internal link — run it after doc edits.
+**Node FILE formats (every `Data/` tree and every node repo):** the extension is a convention, not a free choice. **Agents and skills are `.md`** — front matter (`nodeType: Agent`/`Skill`) carries the configuration, the body IS the instructions; never JSON with an escaped instructions string. **C# source nodes are `.cs`** with the `// <meshweaver>` heading block (`// Id:`, `// DisplayName:`, optional `// NodeType:`); never JSON with the code in an escaped string. **`.json` remains** for typed nodes and executable code cells — the `.cs` header carries ONLY those three keys, so a cell with `isExecutable`/`activityParentPath` (or node-level `description`/`order`) authored as `.cs` silently loses its Run button on import.
 
-**Node FILE formats (Data/ and every node repo):** the extension is a convention, not a free choice. **Agents and skills are authored as `.md`** — front matter (`nodeType: Agent` / `nodeType: Skill`) carries the configuration, the markdown body IS the instructions (`AgentFileParser`); never JSON with an escaped instructions string. **C# source nodes are `.cs`** with the `// <meshweaver>` heading block (`// Id:`, `// DisplayName:`, optional `// NodeType:` — `CSharpFileParser`); never JSON with the code in an escaped string. **`.json` remains** for typed nodes and for executable code cells: the `.cs` header carries ONLY `Id`/`DisplayName`/`NodeType`, so a cell with `isExecutable`/`activityParentPath` (or node-level `description`/`order`) authored as `.cs` silently loses its Run button on import (e.g. `Data/Architecture/PythonCodeNodes/SampleStatistics.json` stays JSON deliberately).
-
-**Hub-handler test hangs or message disappears:** read [DebuggingMessageFlow.md](src/MeshWeaver.Documentation/Data/Architecture/DebuggingMessageFlow.md) first — it tells you which trace tags to grep and why you should never rerun a hung test "to see".
-
-**`type 'X' is not registered in this hub's TypeRegistry`:** Fix is `WithType(typeof(X), nameof(X))` on the receiving hub. See DebuggingMessageFlow.md → "Type-registry mismatch".
-
-**Use `hub.Observe(...)` not `RegisterCallback`/`AwaitResponse`** — those overloads are `[Obsolete]` and deadlock. Tests use `MonolithMeshTestBase.AwaitResponseAsync(...)`.
+**Hub-handler test hangs or a message disappears:** read [DebuggingMessageFlow.md](src/MeshWeaver.Documentation/Data/Architecture/DebuggingMessageFlow.md) first — never rerun a hung test "to see". **`type 'X' is not registered in this hub's TypeRegistry`:** the fix is `WithType(typeof(X), nameof(X))` on the receiving hub. **Use `hub.Observe(...)`, not `RegisterCallback`/`AwaitResponse`** — those overloads are `[Obsolete]` and deadlock.
 
 ## 🌍🌍🌍 ALWAYS think about internationalization — every user-visible string, every time
 
-**Before you write ANY text a user will read, stop and ask: "how does this render for a German viewer?"** This is not a final-polish step or a follow-up ticket — it is part of writing the feature, the same way a null check is. The portal ships English + German; **a hard-coded UI string is a bug**, because it renders English for every viewer regardless of their language.
+**Before you write ANY text a user will read, stop and ask: "how does this render for a German viewer?"** This is part of writing the feature, not a follow-up ticket. The portal ships English + German; **a hard-coded UI string is a bug** — buttons, labels, tooltips, `aria-label`s, placeholders, page titles, empty states, validation messages, toasts, dialog copy, menu entries, settings tabs, notification text and errors alike.
 
-This applies to every surface, not just obvious ones: buttons, labels, tooltips, `aria-label`s, placeholders, page titles, empty states, validation messages, toasts, dialog copy, menu entries, settings tabs, notification text, and error strings. If a human reads it on screen, it needs a key or a `[Translation]`.
+- **On a declaration** → `[Translation("de", "…")]` beside the existing `[Description]`. **Everywhere else** → a key in **both** `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json`, read via `Access.Localize("key")` (Blazor) or `host.Localize("key")` (layout areas). `LocalizationTest` fails if a language is missing any English key.
+- **Prefer text that needs no translation** — a language-neutral glyph (➕ ✏️ 🔖 ➡️ 📋 🗑️) plus a translated tooltip beats a translated label.
+- 🚨 **A new key has a SECOND home in another repo**: `MeshWeaver.Plugins/clients/react/src/i18n/`. Deleted and relocated look identical from one repo — assume relocated until you have looked. Its drift guard DOES run (the plugins repo's `RN app + web clients (typecheck + test)` job) and it compares VALUES, not just keys — so it catches the divergence `LocalizationTest` cannot see. **Core is the source of truth: the core catalog change merges FIRST** and the mirror PR stays red until it does; never "fix" that red by reverting the mirror.
+- 🚨 **Never resolve from `CultureInfo.CurrentUICulture`/`CurrentCulture`** — this covers date/number FORMATTING too. Resolution is always explicit off `AccessContext.Locale` (`ViewerLocale()`).
+- 🚨 **Do NOT translate**: LLM tool-parameter `[Description]`s (model-facing), wire identifiers (`nodeType:Thread`, `RequestAction("New")`, Fluent icon names), or the glossary terms kept English on purpose (Thread, Mesh, Node, Agent, Skill, Harness, Provider, Namespace, Partition, Store).
 
-**Prefer text that doesn't need translating at all.** A language-neutral glyph beats a translated word: the AI menu's "new thread" entry uses **➕**, and the node menu uses ✏️ 🔖 ➡️ 📋 🗑️. An icon plus a translated tooltip is usually better than a translated label — it shrinks the translation surface and reads identically in every locale. (The tooltip still needs a key.)
-
-Two shapes, pick by whether the text hangs off a declaration:
-
-- **On a declaration** (property label, node-type name, enum member) → add `[Translation("de", "…")]` next to the existing `[Description]`. Nothing else to wire.
-- **Everywhere else** (Blazor markup, inline `Controls.*`, toasts) → add a key to **both** `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json` and read it via `Access.Localize("key")` (Blazor, `@inject AccessService Access`) or `host.Localize("key")` (layout areas).
-
-`LocalizationTest` fails if a language is missing any English key, so a half-translated string cannot merge — and it is now the ONLY localization guard.
-
-🚨 **A new key still has a SECOND home — it MOVED, it was not deleted: `MeshWeaver.Plugins/clients/react/src/i18n/`.** `044a85618` ("The GUI leaves the platform", 2026-08-25) moved the web clients out; `clients/` here now holds only `python/` and `voice-gateway/`, and the six guards the old text and the `Clients` workflow named — `i18n/localize.test.ts`, `render/parity.test.ts`, `ciTrigger.test.ts`, `grpc-web/src/{wire,rest}Contract.test.ts`, `portal-next/e2e` — no longer exist **in this repo**. Do not recreate them here; the mirror belongs where the client lives.
-
-🚨 **But the REQUIREMENT survived the move, and this paragraph briefly said otherwise.** It read *"That is gone … do not go looking for the mirror"*, which is true of the directory and false of the rule. On 2026-08-27 that cost two keys: they were added server-side, the mirror was looked for **in core**, its absence was read as deletion, and "there is no mirror" went into a merged PR body. The mirror was three keys behind by then. **Deleted and relocated look identical from one repo** — assume relocated until you have looked in the other one.
-
-🚨 **And do not count on the guard to catch it for you.** MeshWeaver.Plugins#771: **nothing currently runs those specs** — core's `clients.yml` covers only `clients/python` after the move, and the plugins repo runs `npm ci` there and nothing else. The drift guard whose entire job is to stop a server-side key reaching users as a raw string has been reporting to no one. Until that lane exists, run it by hand from the plugins checkout:
-
-```bash
-cd clients/react && MESHWEAVER_CORE=/path/to/MeshWeaver npx vitest run src/i18n/localize.test.ts
-```
-
-It fails loudly, naming the paths it probed, when it cannot find a core checkout — so a green there is real, and a skip is impossible.
-
-🚨 **Never resolve from `CultureInfo.CurrentUICulture` or `CurrentCulture`** — and this covers *formatting* (dates, numbers, calendars), not just translated strings. Two independent reasons: (1) a layout-area render hops the hub scheduler and an ambient AsyncLocal culture does not survive it, so one user's UI would pick up another user's language; (2) on Blazor Server the ambient culture is the **server process's**, i.e. the container the portal runs in — identical for every simultaneous viewer and unrelated to any of them. `DateTimeView` defaulted its calendar culture that way until 2026-08-17 and rendered English month names for German users regardless of their choice. Resolution is always explicit off `AccessContext.Locale` (`AccessService.ViewerLocale()` / `host.ViewerLocale()`); derive a `CultureInfo` from that when you need one.
-
-**The language policy: take the language of the USER's computer, and put it on the user.** The onboarding form's first field is a language picker pre-selected from the visitor's own `Accept-Language`; it writes `User.Locale` at user creation. It is then editable in two places sharing ONE control (`MeshNodeContentEditorControl` over `User.Locale`): the profile editor and User → Settings → *Preferences*. A **silent** auto-detect of an unshipped language stores nothing (so a later translation applies automatically); an **explicit** pick is always honoured — `Locales.TryMatch` vs `Locales.Resolve` is that distinction in code.
-
-🚨 **Do NOT translate**: LLM tool-parameter `[Description]`s (model-facing — translating degrades tool-calling), wire identifiers (`nodeType:Thread` in help text, `RequestAction("New")`, Fluent icon names), or the glossary terms kept English on purpose (Thread, Mesh, Node, Agent, Skill, Harness, Provider, Namespace, Partition, Store).
-
-**Adding a language is cheap by design** — a tag in `Locales.Supported`, a `strings.{tag}.json`, and the matching `[Translation]` attributes. Keep it that way: never scatter a second resolution mechanism, and never let a string bypass the catalog "just this once".
-
-Full reference: [Localization.md](src/MeshWeaver.Documentation/Data/Architecture/Localization.md)
+Full reference: [/i18n](.claude/skills/i18n/SKILL.md) · [Localization.md](src/MeshWeaver.Documentation/Data/Architecture/Localization.md).
 
 ## Deployment
 
-**Two deploy routes, different targets — neither deprecated.** Pick by target, don't mix:
-- **AKS** — the shared cluster `memex` portal. Full ref: [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md).
-- **Azure Container Apps** — the Aspire `test`/`prod` modes, via `tools/deploy.sh prod|test`. Full ref: [DeploymentContainerApps.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentContainerApps.md).
+**Two deploy routes, different targets — neither deprecated. Pick by target, don't mix.** **AKS** (the shared cluster `memex` portal): a code update is *build image → set image → restart*; the cluster is PRIVATE, so `kubectl` runs ONLY through `az aks command invoke`; an env's `deploy.sh` is first-time ENV SETUP, never a code-update path, and env folders live in the private `Systemorph/Memex` repo. **Azure Container Apps** (the Aspire `test`/`prod` modes, via `tools/deploy.sh prod|test`): never point these at the AKS cluster.
 
-**🚨 Before any AKS deploy, read [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md) end-to-end** — it is the source of truth for build → roll-out → verify. 🚨 It no longer describes an auto-baked mesh-local `#r` package feed: the `BakeMeshLocalFeed` target was **REMOVED (#395)**, `dist/packages` is gone, and a legacy `#r "nuget:MeshWeaver.BusinessRules.Generator"` now hard-fails on a deployed image (`"The local source '/app/dist/packages' doesn't exist"` — the prod BalanceSheet failure). The generator ships built-in and `GeneratorPipeline` strips that `#r` instead. Nothing bakes at BUILD time on any machine, dev Macs included: `--bake-output` exists only in CI scripts, never in a `.targets`/`.props`/`.csproj`. The commands inlined below are a quick reference, not a substitute for the doc.
+🚨 **Before any AKS deploy, read [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md) end-to-end.** Nothing bakes at BUILD time on any machine — `BakeMeshLocalFeed` was removed (#395) and a legacy `#r "nuget:…"` hard-fails on a deployed image.
 
-The `memex` portal runs on the shared **AKS cluster** `<aks-cluster>` (RG `<aks-resource-group>`, swedencentral) — namespace `memex` — against the Postgres Flexible Server, images in ACR `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via `az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`.**
+🚨 **The database migration is a run-once `Job` that `helm upgrade` runs — never a Deployment to roll.** The chart defines no such Deployment; a command aimed at one either errors or keeps a cluster-only orphan alive that re-runs the migration forever (#1788). A crash-looping migration pod is a FAILURE, not noise. Before declaring a deploy successful, confirm the Job logged `Database migration completed. Version: N` AND the portal serves HTTP 200; `DbVersionGate` stops the app with a `LogCritical` when the schema is behind, so a portal rolled ahead of its database refuses to serve rather than serving a half-migrated one.
 
-**On AKS a code update = build image → set image → restart** (the AKS route does NOT use `tools/deploy.sh` or `aspire deploy` — those are the Container Apps route):
+🚨 **Verify the IMAGE, never the green tick** — read the running tag back off the deployment.
 
-```bash
-az acr login -n meshweaver
-# Portal (custom base) AND migration (the migration is what creates schema + the matview):
-dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj -c Release \
-  -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
-  -p:ContainerRepository=memex-portal-ai -p:ContainerImageTag=<tag> \
-  -p:ContainerBaseImage=meshweaver.azurecr.io/memex-portal-ai-base:latest
-dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj -c Release \
-  -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
-  -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
-# Roll out (NS = memex). 🚨 The MIGRATION is a Job, not a Deployment — see below.
-az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "\
-  kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
-  kubectl -n <NS> rollout restart deployment/memex-portal-deployment; \
-  kubectl -n <NS> rollout status deployment/memex-portal-deployment --timeout=300s"
-```
-
-- **An env's `deploy.sh` is first-time ENV SETUP only** (helm install + PVCs + KV SecretProviderClass + ingress + connection-string patch). Do NOT use it for a code update — it re-runs the whole chart and can reset live config. 🚨 **Env folders live in the PRIVATE `Systemorph/Memex` repo**, not `deploy/aks/envs/<env>/` — they moved out 2026-08-08/09 (`a69959165`) because their directory names are tenant identities; `deploy/aks/envs/example/` here is the reference template only.
-- **Don't run `tools/deploy.sh` or `aspire deploy` against the AKS cluster** — those are the *Container Apps* route (a different target), not a code-update path for AKS.
-- 🚨 **The migration is a run-once `Job`, NOT a Deployment** (`deploy/helm/templates/memex-migration/job.yaml`: `kind: Job`, `restartPolicy: Never`, name embeds `.Release.Revision`, `ttlSecondsAfterFinished`). It runs on **`helm upgrade`**, not on an image-tag roll — so `kubectl set image` / `rollout restart` against a `memex-migration-deployment` is a command with no object: the chart does not define one, and any that exists in a live namespace is a cluster-only orphan of a chart revision that predates the Job (#1788). Do not resurrect it. A `MigrationWorkloadModelGuard` (test/MeshWeaver.Documentation.Test) fails the build if a command like that returns to this file, a doc or a deploy script.
-- **A crash-looping migration pod is a FAILURE, not noise.** It used to be modelled as a Deployment, which restarted it forever after each clean exit — three prod namespaces sat at 50/53/38 restarts, each rebuilding `public.top_level_index` across every partition schema. Documenting that as "benign" is what made a real migration failure unreadable. With the Job form the pod runs once and stops, so `CrashLoopBackOff` on it now means exactly what it says. Before declaring a deploy successful, confirm the Job's log shows `Database migration completed. Version: N` AND the portal serves (HTTP 200) — `kubectl -n <NS> get jobs -l app.kubernetes.io/component=memex-migration` and `kubectl -n <NS> logs job/memex-migration-<revision>`.
-- **The schema still has a hard gate.** `DbVersionGate` (a hosted service in `Memex.Portal.Distributed`) reads `admin.mesh_nodes.db_version` at startup and `StopApplication()`s with a `LogCritical` when it is below `DbVersion.Latest`. So a portal rolled ahead of its schema refuses to serve rather than serving a half-migrated database — loud, and the reason the ordering between the two workloads cannot silently invert.
-
-Routes + full reference: [Deployment.md](src/MeshWeaver.Documentation/Data/Architecture/Deployment.md) (index) · [DeploymentAKS.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md) · [DeploymentContainerApps.md](src/MeshWeaver.Documentation/Data/Architecture/DeploymentContainerApps.md)
+Full reference: [/deployment](.claude/skills/deployment/SKILL.md) · [Deployment.md](src/MeshWeaver.Documentation/Data/Architecture/Deployment.md) (index) · delivery/batching: [/release](.claude/skills/release/SKILL.md).
 
 ## Bash Command Guidelines
 
-**Stay at the root of your worktree** — never the primary checkout, and never a hard-coded path (the
-old `C:\dev\MeshWeaver` here predated the worktree rule above). Avoid chained commands (`&&`, `||`),
-`for` loops, and `cd` — they all require user confirmation. Avoid piping a build or test through
-`tail`/`head` too: the pipeline's exit code becomes the pager's, hiding `Build FAILED`.
+**Stay at the root of your worktree** — never the primary checkout, never a hard-coded path. Avoid chained commands (`&&`, `||`), `for` loops, and `cd` — they all require user confirmation. Avoid piping a build or test through `tail`/`head`: the pipeline's exit code becomes the pager's, hiding `Build FAILED`.
 
 ## Development Commands
 
 ```bash
-dotnet build                                              # Build solution (ONE project arg max — several is an MSB1008 no-op)
-dotnet build test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj   # Build one project — required before --no-build
-dotnet test test/MeshWeaver.Data.Test --no-build          # Run one test project (built above; unbuilt = silent exit 0)
-dotnet run --project ../MeshWeaver.Plugins/src/Memex.Portal.Monolith          # Monolith standalone (https://localhost:7122, http://localhost:5022)
-dotnet run --project ../MeshWeaver.Plugins/src/Memex.AppHost           # Aspire (requires Docker) — portal at https://localhost:7202, http://localhost:5202
-aspire run --project ../MeshWeaver.Plugins/src/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`) — same URLs as above
-aspire start --no-build --project ../MeshWeaver.Plugins/src/Memex.AppHost  # Background + NO rebuild — fast bring-up; `aspire ps` / `aspire stop` to manage. --no-build reuses the last build (won't pick up source edits)
+dotnet build                                              # Solution (ONE project arg max — several is an MSB1008 no-op)
+dotnet build test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj   # One project — required before --no-build
+dotnet test test/MeshWeaver.Data.Test --no-build          # One test project (unbuilt = silent exit 0)
+dotnet run   --project ../MeshWeaver.Plugins/src/Memex.Portal.Monolith   # Monolith  → https://localhost:7122
+dotnet run   --project ../MeshWeaver.Plugins/src/Memex.AppHost           # Aspire (Docker) → https://localhost:7202
+aspire run   --project ../MeshWeaver.Plugins/src/Memex.AppHost           # Same, via the CLI (registers with `aspire mcp`)
+aspire start --no-build --project ../MeshWeaver.Plugins/src/Memex.AppHost  # Background, no rebuild; `aspire ps` / `aspire stop`
 ```
 
-### Restarting just the Portal (no full Aspire restart)
-
-When you change code in `Memex.Portal.Distributed` or any project it references, you do NOT need to kill the whole AppHost. Three options, ordered by cost:
-
-1. **Hot reload (cheapest)** — start with `dotnet watch` instead of `dotnet run` / `aspire run`:
-   ```bash
-   dotnet watch --project ../MeshWeaver.Plugins/src/Memex.AppHost
-   ```
-   File save → Aspire restarts the affected resource only. Preserves the dashboard, the Postgres container, and the SignalR endpoints. Most code changes apply within seconds.
-2. **Aspire dashboard UI** — open `https://localhost:17200/` → Resources tab → click the ⋯ next to `memex-portal-distributed` → **Restart**. Runs `dotnet build` + restart in-place.
-3. **Process kill (last resort, when watch missed a change)**:
-   ```powershell
-   Get-Process Memex.Portal.Distributed -ErrorAction SilentlyContinue | Stop-Process -Force
-   ```
-   Aspire's resource watcher detects the exit and restarts the resource within ~5 s. Avoids a full `aspire run` restart (which would also rebuild every other resource and re-launch Postgres / blob-storage containers).
-
-**Don't** kill the whole `aspire` / `Memex.AppHost` process unless you changed AppHost wiring itself — full restart costs 30-60 s and loses the dashboard auth token.
-
-Full reference: [LocalDevWorkflow.md](src/MeshWeaver.Documentation/Data/Architecture/LocalDevWorkflow.md)
+Changed code in `Memex.Portal.Distributed` or a project it references? **Don't kill the whole AppHost** — `dotnet watch` restarts only the affected resource; the dashboard's Resources → ⋯ → **Restart** is the fallback; a process kill is the last resort. Full reference: [LocalDevWorkflow.md](src/MeshWeaver.Documentation/Data/Architecture/LocalDevWorkflow.md).
 
 ## 🚨🚨🚨 ABSOLUTE: `GetMeshNodeStream().Update()` is the ONLY mutation API
 
-**Every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(current => modified)`. There is no other mutation surface — do NOT invent one: no `SubmitMessageRequest`-style wire messages, no completion callbacks via `hub.Set<Action<...>>`, no bespoke `IRequest`/`IResponse` pairs for state changes. Migrate any straggler you touch to `stream.Update`.**
+**Every mesh-node mutation goes through `workspace.GetMeshNodeStream(path).Update(current => modified)`. There is no other mutation surface — do NOT invent one: no `SubmitMessageRequest`-style wire messages, no completion callbacks via `hub.Set<Action<...>>`, no bespoke `IRequest`/`IResponse` pairs for state changes. Migrate any straggler you touch to `stream.Update`.** The same API works for a node this hub does not own — the write routes to the owning per-node hub as an RFC 7396 merge patch, which the owner serialises, so concurrent writers never clobber each other's fields.
 
-**Thread submissions** go through the canonical `IMessageHub` extension surface defined in `src/MeshWeaver.AI/HubThreadExtensions.cs`:
+1. **Writes**: `stream.Update(current => current with { … })`. State-machine semantics? Set a `RequestedX` field and let the owning hub's watcher react.
+2. **Reads**: `GetMeshNodeStream(path)` — server-side AND Blazor, via the process-wide `IMeshNodeStreamCache`. `GetRemoteStream<MeshNode, …>` is framework plumbing; never use it for a node by path.
+3. **Delete the request type.** Writing `class XxxRequest` to mutate a thread / message / NodeType? Stop. Add a `RequestedXxx` field to the node's content and watch it from the owning hub.
 
-```csharp
-hub.StartThread(namespacePath, userText, agentName: ..., contextPath: ..., onCreated: ..., onError: ...);
-hub.SubmitMessage(threadPath, userText, agentName: ..., contextPath: ...);
-hub.ResubmitMessage(threadPath, userMessageId, newUserText: ...);
-hub.DeleteFromMessage(threadPath, atMessageId);
-hub.MarkThreadDone(threadPath, done);
-hub.RecordSubmissionFailure(threadPath, userMessageId, userText, errorMessage);
-```
+**Observing completion**: subscribe to `GetMeshNodeStream(path)` and wait for the state on the node's `Content` — the GUI databinds the same way, and a test that posts a verb-shaped request and waits for a `*Response` is testing a deprecated API. **Thread and activity operations** have canonical `IMessageHub` extension surfaces (`hub.StartThread`/`SubmitMessage`/`ResubmitMessage`/`DeleteFromMessage`/`MarkThreadDone`/`RecordSubmissionFailure`, with the AI engine in `MeshWeaver.Plugins`; `hub.CancelActivity`/`RequestActivityStatus` in `src/MeshWeaver.Mesh.Contract`) — every one writes through `stream.Update`, and there is no other entry point. **Per-user work at logon is a `LogonAction`, never a SQL backfill** looping partition schemas; it runs as the USER and lands its effect plus ledger entry in ONE patch. **Sanctioned exceptions (NOT state mutations):** `CreateNodeRequest`/`DeleteNodeRequest`/`MoveNodeRequest` (lifecycle — they route, they don't mutate content) and transient queries that belong on no node.
 
-Every method writes the thread node via `hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(...)` (or `CreateNodeRequest` for new-thread lifecycle). The per-thread submission watcher reacts to the resulting state changes, drains `PendingUserMessages` into `Messages`, allocates cells, and invokes `ThreadExecution.ExecuteMessageAsync(execHub, RoundParams, AccessContext?)` **directly as a method** — no message dispatch. It returns `IObservable<Unit>`; the watcher **subscribes** and treats completion (gated on the terminal `Status` write) as round-done. **Tests, GUI, and agents all call these extensions — this is the complete submission surface; there is no other entry point.**
-
-Full reference: [ThreadOperations.md](src/MeshWeaver.Documentation/Data/Architecture/ThreadOperations.md).
-
-**Activity operations** go through the matching `IMessageHub` extensions in `src/MeshWeaver.Mesh.Contract/HubActivityExtensions.cs`:
-
-```csharp
-hub.CancelActivity(activityPath);                                  // RequestedStatus = Cancelled
-hub.RequestActivityStatus(activityPath, ActivityStatus.Running);   // generic flip
-```
-
-Both write the activity node via `hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(...)`; the activity hub's `WatchControlPlane` subscription reacts. Full reference: [ActivityOperations.md](src/MeshWeaver.Documentation/Data/Architecture/ActivityOperations.md).
-
-**Completion**: agent reaching terminal state writes `Status = Completed/Cancelled/Error` to the response cell via `PushToResponseMessage(...)` (stream.Update), AND creates a `Notification` MeshNode satellite at `{threadPath}/_Notification/{id}` via `EmitCompletionNotification`. The user's notification bell databinds to this — same source the tests assert on. Query shape: `path:{threadPath}/_Notification scope:children nodeType:Notification` (filter by nodeType for robustness when other satellite types live under the thread).
-
-**Observing completion**: subscribe to `workspace.GetMeshNodeStream(path)` and wait for the relevant state on the node's `Content` (e.g. `MeshThread.Messages.Count >= 2`, `RequestedStatus = Cancelled`, `Status = Completed`). The GUI databinds the same way; tests do too.
-
-**Tests**: any test that posts a verb-shaped request and waits for a response shape (`*Request → *Response`) is testing a deprecated API. Migrate to: write via `stream.Update`, observe via `GetMeshNodeStream(path).Where(node => predicate).FirstAsync().Timeout(...)`.
-
-**Application code uses only `stream.Update`.** Internal plumbing that `stream.Update` itself uses (`PatchDataRequest` for cross-hub writes, `DataChangedEvent` for stream fan-out) is fine where it already exists — but you never `hub.Post(PatchDataRequest, ...)` from application code. If you find yourself doing that, you're bypassing the API; use `workspace.GetMeshNodeStream(path).Update(...)` and the framework posts the patch for you.
-
-### Updating an external node — `GetMeshNodeStream(path).Update(...)`
-
-The same API works for nodes the caller does NOT own. `workspace.GetMeshNodeStream(path)` returns a handle that auto-dispatches:
-
-- `path == my-hub's-address`: writes go through the local data source (`UpdateOwn`).
-- `path != my-hub's-address`: writes route to the owning per-node hub via the process-wide `IMeshNodeStreamCache`, which opens a sync subscription + posts a JSON-merge `PatchDataRequest` (RFC 7396) to that hub. The owner serialises every mirror's write through its single-threaded action block — no race, no clobber.
-
-```csharp
-// Own node (this hub) — Update is COLD: the trailing Subscribe runs the write.
-workspace.GetMeshNodeStream().Update(node => node with { Content = ... })
-    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "update failed"));
-
-// External node (anywhere in the mesh — same API):
-workspace.GetMeshNodeStream(otherPath).Update(node => node with { Content = ... })
-    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "update failed"));
-```
-
-The remote variant returns the locally-computed updated snapshot optimistically; if you need the owner's reconciled state, take the next emission off the same `GetMeshNodeStream(path)` handle.
-
-**Eventual-consistency safe**: cross-hub `stream.Update` does NOT send the whole node back. It diffs `current` vs `update(current)` and sends only the RFC 7396 JSON-merge patch. The owner merges the patch against its CURRENT state, so concurrent writers from different mirrors don't clobber each other's fields (Mirror A's `{Content: {Field1: X}}` and Mirror B's `{Content: {Field2: Y}}` both land — never "last write wins on whole node"). Treat your `update` lambda accordingly: touch only the fields you intend to change.
-
-### The 3 rules (unchanged)
-
-This is the unification of three rules we used to write separately:
-
-1. **Writes**: `stream.Update(current => current with { Content = ... })`. The owning hub's action block serialises; no race. State-machine semantics? Set a `RequestedX` field — the owning hub's watcher reacts (see [ActivityControlPlane.md](src/MeshWeaver.Documentation/Data/Architecture/ActivityControlPlane.md)).
-2. **Reads**: `workspace.GetMeshNodeStream(path)` / `Hub.GetMeshNodeStream(path)` — server-side AND Blazor, backed by the process-wide [IMeshNodeStreamCache](src/MeshWeaver.Hosting/MeshNodeStreamCache.cs) (one shared handle per path; see [GUI Data Binding](src/MeshWeaver.Documentation/Data/GUI/DataBinding.md)). `GetRemoteStream<MeshNode, …>` is framework plumbing — never use it for a node by path. Never `meshService.QueryAsync(path:X)` for a single node's content (stale by design).
-3. **Delete the request type.** If you find yourself writing `class XxxRequest` to mutate a thread / message / NodeType, stop. Add a `RequestedXxx` field to the node's content and watch it from the owning hub.
-
-### Per-user work at logon — a `LogonAction`, never a SQL backfill
-
-**When an EXISTING user needs something a new user gets, declare a logon action — do NOT write an
-`IMigration` that loops partition schemas patching `mesh_nodes`.** `INodePostCreationHandler` fires
-once at account creation and can never fire again, which is why `V29_PinDocsForExistingUsers` and
-`V33_SeedChatInputForExistingUsers` exist; those raw `UPDATE`s bypass the workspace cache, run once
-per DEPLOYMENT rather than per user, and only someone shipping a `DbVersion` bump can write one.
-
-- **Two modes.** `RunOnce` (a migration; ledger = `User.CompletedLogonActions[id]`, durable and
-  replicated) or `EveryLogon` (a repair that must keep catching new work — and which MUST carry a
-  cheap "nothing to do" check, or it is a per-logon storm).
-- **Idempotency is the effect and the ledger entry in ONE `stream.Update` patch** on the user's
-  profile, with the ledger check *inside* the lambda so a rebased patch re-reads it and no-ops.
-- **It runs as the USER** — `access.RunAs(identity, …)`. 🚨 Never
-  `Observable.Using(() => access.ImpersonateAsSystem(), …)`: store and restore land on different
-  threads and the subscriber stays latched (a ratchet-guard test fails the build at any new site).
-- **Deployment-specific work is DATA** — a `LogonAction` node at `Admin/_LogonAction/{id}`. Zero
-  action nodes ship, and pin targets are existence-checked, so a portal without the content pins
-  nothing instead of writing a dangling path.
-
-Full reference: [LogonActions.md](src/MeshWeaver.Documentation/Data/Architecture/LogonActions.md) ·
-[`/logon-action` skill](content/ai/Skill/logon-action.md).
-
-Sanctioned exceptions (NOT for state mutations):
-- `CreateNodeRequest` / `DeleteNodeRequest` / `MoveNodeRequest` — node-lifecycle on the mesh hub. These route, they don't mutate node content.
-- Transient queries that don't belong on any node (e.g. autocomplete completions).
-
-Why this rule unblocks tests: every "hub becomes unresponsive after the second compile" failure (CodeEditRecompile, NodeTypeRelease, LinkedInPullActions, ThreadAgentIntegration in CI 26036857424) traces back to bespoke request/response patterns that race the watcher → two concurrent activities → leaked callbacks → wedged hub.
-
-Canonical references:
-- [MeshNodeStreamCache.md](src/MeshWeaver.Documentation/Data/Architecture/MeshNodeStreamCache.md) — the handle contract: one cache per silo, one shared handle per path, serial write queue, storm breaker.
-- [RequestViaStreamUpdate.md](src/MeshWeaver.Documentation/Data/Architecture/RequestViaStreamUpdate.md) — the canonical pattern + helpers (`hub.WatchControlPlane`, `hub.WatchSubmission`).
-- [ActivityControlPlane.md](src/MeshWeaver.Documentation/Data/Architecture/ActivityControlPlane.md) — `Status`/`RequestedStatus` pair, operations-as-scripts.
-- [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) — read semantics + why `QueryAsync` lags.
-- [DataBinding.md](src/MeshWeaver.Documentation/Data/GUI/DataBinding.md) — the Blazor-side mirror of the same pattern.
+Full reference: [/mesh-data](.claude/skills/mesh-data/SKILL.md) (which links `RequestViaStreamUpdate`, `MeshNodeStreamCache`, `ActivityControlPlane`, `ThreadOperations`, `LogonActions`).
 
 ## 🚨 Never write as hub — AccessContext propagation
 
-**Every framework write primitive (`meshService.CreateNode/UpdateNode/DeleteNode/CopyNode`, `MeshNodeStreamHandle.Update`, `IMeshNodeStreamCache.Update`) automatically carries the caller's `AccessContext` through `.Subscribe()` boundaries.** Callers keep writing the natural `.Subscribe(...)` shape; the framework guarantees the operation runs under the calling user's identity even when the emission lands on another thread.
-
-If a write must run as system/hub (legitimate infrastructure — cache hydration, SyncStream heartbeats), wrap explicitly:
-- `using (accessService.ImpersonateAsSystem()) { … }` — well-known `"system-security"` identity; `Permission.All` granted unconditionally.
-- `using (accessService.ImpersonateAsHub(hub)) { … }` or `o.ImpersonateAsHub(hub.Address)` on the post — stamps the hub's address as principal.
-
-PostPipeline fails closed when no context is set. The "silently stamp hub-self as principal" fallback was deleted 2026-05-21 — it masked the prod EventCalendar bug. Application code that needs to write MUST have a real user identity on `AccessService.Context` (set by MessageHub on every handler invocation from `delivery.AccessContext`).
-
-Canonical reference: [AccessContextPropagation.md](src/MeshWeaver.Documentation/Data/Architecture/AccessContextPropagation.md).
+**Every framework write primitive (`meshService.CreateNode/UpdateNode/DeleteNode/CopyNode`, `MeshNodeStreamHandle.Update`, `IMeshNodeStreamCache.Update`) automatically carries the caller's `AccessContext` through `.Subscribe()` boundaries** — keep writing the natural `.Subscribe(...)` shape. A write that must run as system/hub (legitimate infrastructure only — cache hydration, SyncStream heartbeats) says so explicitly: `using (accessService.ImpersonateAsSystem()) { … }` or `ImpersonateAsHub(hub)` / `o.ImpersonateAsHub(hub.Address)`. `PostPipeline` fails closed when no context is set, and the "silently stamp hub-self as principal" fallback was deleted because it masked a prod bug: application code that writes MUST have a real user identity on `AccessService.Context`. Full reference: [/async](.claude/skills/async/SKILL.md) · [AccessContextPropagation.md](src/MeshWeaver.Documentation/Data/Architecture/AccessContextPropagation.md).
 
 ## 🚨🚨🚨 ABSOLUTE: Nothing async, EVER — *NO* `async`, *NO* `await`, *NO* `Task<T>` in hub/UI code
 
-**The user is LITERALLY NEVER OK with `async`/`await`/`Task<T>`/`.ToTask()`/`TaskCompletionSource` in any hub-reachable OR Blazor-view/component code.** It runs continuations on the wrong scheduler, deadlocks the single-threaded action block, and (the 2026-06-10 chat regression) NotFound-storms a partition hub until the whole portal wedges. **Read [AsynchronousCalls.md](src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md) BEFORE writing any call that touches the hub, a mesh node, or a stream.**
+**The user is LITERALLY NEVER OK with `async`/`await`/`Task<T>`/`Task.Run`/`.ToTask()`/`TaskCompletionSource`/`.Result`/`.Wait()` in any hub-reachable OR Blazor-view/component code.** It runs continuations on the wrong scheduler, deadlocks the single-threaded action block, and NotFound-storms a partition hub until the whole portal wedges. Everything is `IObservable<T>` end-to-end — compose with `.Select`/`.SelectMany`/`.Where`/`.Timeout` and **`.Subscribe(onNext, onError)`**, never `await`. Handlers, services and layout areas return `IObservable<T>` (or `void`), never `Task<T>`; click actions are `WithClickAction(ctx => { …; return Task.CompletedTask; })`, never `async ctx =>`. **Tests only**: `await .FirstAsync().ToTask()` is acceptable; nowhere else.
 
-Everything is `IObservable<T>` end-to-end — compose and **`.Subscribe(...)`**, never `await`:
-- **Create / read / update a node** → `meshService.CreateNode(node).Subscribe(...)` · `hub.Observe<TResp>(req).Subscribe(...)` · `workspace.GetMeshNodeStream(path).Update(cur => …).Subscribe(...)`. NEVER `await …Async()`. (For create-or-update use the reactive `hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)).Subscribe(...)` — see `StaticRepoImporter` / `NodeCopyHelper`.)
-- Handlers, services, layout areas → return `IObservable<T>` (or `void` for fire-and-forget). Never `Task<T>`.
-- Compose with `.SelectMany`, `.Select`, `.Where`, `.Timeout`. Chain dependent work in `.SelectMany`, not `await`.
-- Click actions: `WithClickAction(ctx => { ...; return Task.CompletedTask; })` — never `async ctx =>`.
-- `async`/`await`/`Task.Run`/`TaskCompletionSource`/`.ToTask()`/`.Result`/`.Wait()` in hub or Blazor-view code = red flag — delete it, return/compose `IObservable<T>` and Subscribe.
-- **Tests only**: `await .FirstAsync().ToTask()` is acceptable. Nowhere else.
+🚨 **`Observable.FromAsync` is NEVER tolerated anywhere in `src/`** — no exceptions, no "storage is the hot path". It runs the prologue on the subscribing thread with no concurrency bound. **Every async / blocking / IO edge goes through `IIoPool`** (`pool.Invoke` / `InvokeBlocking` / `InvokeStream`, or `pool.Run*` for the promise-cached one-shot), resolved from the mesh-scoped `IoPoolRegistry`. Public surfaces return `IObservable<T>`, never `Task<T>`.
 
-### 🚨🚨🚨 ABSOLUTE: `Observable.FromAsync` is NEVER tolerated
-
-**Writing `Observable.FromAsync(...)` anywhere in `src/` is FORBIDDEN — no exceptions, no "Postgres is special", no "storage is the hot path".** A bare `FromAsync` runs the function's synchronous prologue on the **subscribing thread** (the hub/grain scheduler when the subscribe happens mid-handler) and applies no concurrency bound — the exact deadlock-and-exhaustion bug class the I/O pool exists to kill. There is exactly **one** place `FromAsync` may appear: sealed *inside* `IoPool` itself. Everywhere else it is a defect.
-
-**Every async / blocking / IO edge goes through `IIoPool`** (`MeshWeaver.Mesh.Threading`), resolved from `IoPoolRegistry` (mesh-scoped singleton — never static):
-
-| You have | Use |
-|---|---|
-| A `Task<T>`-returning leaf (DB round-trip, blob, HTTP, async file) | `pool.Invoke(ct => SomethingAsync(ct))` — or `pool.Run(...)` for the eager **promise-cache** (ReplaySubject-backed: runs once, replays to all) |
-| A sync-blocking / CPU leaf (`File.ReadAllBytes`, Roslyn compile, `Process`) | `pool.InvokeBlocking(ct => Work(ct))` — or `pool.RunBlocking(...)` for the promise-cache |
-| An `IAsyncEnumerable<T>` leaf | `pool.InvokeStream(...)` / `pool.RunStream(...)` |
-
-**The promise-cache pattern (idempotent one-shots like schema provisioning):** hold the `pool.Run(...)` observable in an *instance* **`PromiseCache<TKey,TValue>`** (or `PromiseSlot<TValue>` when there is no key) — never static, and 🚨 **never a bare `ConcurrentDictionary<key, IObservable<T>>`**: a `ReplaySubject` latches `OnError` too, so a bare dictionary replays ONE transient fault to every later caller for the life of the process (#1369 — a single connect blip left a partition permanently un-provisionable, every write `42P01`). `PromiseCache` caches success and **evicts a fault, pair-exact** — the next caller re-attempts; it never retries on its own. Canonical: `PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned` (`_provisioned.GetOrAdd(schema, _ => _ioPool.Run(ct => EnsureSchemaAsync(def, ct)))`). PG pools are named `pg:{adapter}` and capped at **1** so the gate *is* the single Npgsql connection.
-
-- **Public surface returns `IObservable<T>`, never `Task<T>`.** A `Task`-returning method that does IO is the smell; rewrite it to return `IObservable<T>` and bridge the leaf through `IIoPool` internally.
-- **MCP/SDK surface adapters**: one-line `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ToTask();` is the only place `Task` appears at the boundary — and even there the body is reactive.
-- Full reference: [ControlledIoPooling.md](src/MeshWeaver.Documentation/Data/Architecture/ControlledIoPooling.md).
-
-**🚨 Cold observables: Subscribe is mandatory.** Every method that performs a write returns a cold `IObservable<T>` — the side effect runs on `Subscribe`, not on call. Forgetting to subscribe means the work silently doesn't happen.
+🚨 **Cold observables: Subscribe is mandatory.** Every write returns a cold `IObservable<T>` — the side effect runs on `Subscribe`, not on call, so a composed write you never subscribe to silently does nothing (the chat-doesn't-work root cause). `Update(...)` returns a `RequireSubscribeObservable` that logs a warning at GC if never subscribed — search the `MeshWeaver.Mesh.RequireSubscribe` log channel after every CI run.
 
 ```csharp
-// ❌ WRONG — fire-and-forget. UpdateMeshNode is cold; the dsStream.Update side
-//   effect only runs on Subscribe. This was the chat-doesn't-work root cause.
+// ❌ fire-and-forget — cold, so the write never happens
 workspace.GetMeshNodeStream().Update(node => node with { … });
-
-// ✅ RIGHT — subscribe with explicit error propagation.
+// ✅ subscribe with explicit error propagation
 workspace.GetMeshNodeStream().Update(node => node with { … })
     .Subscribe(_ => { }, ex => logger.LogWarning(ex, "Update failed for {Path}", path));
 ```
 
-`workspace.GetMeshNodeStream()` returns a `MeshNodeStreamHandle` that is both `IObservable<MeshNode>` (read) AND has `.Update(update)` (write). Writes return `RequireSubscribeObservable<MeshNode>` which **logs a warning at GC if Subscribe was never called** — search the `MeshWeaver.Mesh.RequireSubscribe` log channel after every CI run. Old API `workspace.UpdateMeshNode(...)` is `[Obsolete]`.
-
-**Auto-save pattern:** Form fields update the MeshNode via `stream.UpdateMeshNode` (debounced). The click action reads nothing — just flips a trigger field. No `Take(1)` on a hot stream.
-
-Full patterns + mistake ledger: [AsynchronousCalls.md](src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md)
+Full reference: [/async](.claude/skills/async/SKILL.md) · [AsynchronousCalls.md](src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md) · [ControlledIoPooling.md](src/MeshWeaver.Documentation/Data/Architecture/ControlledIoPooling.md).
 
 ## 🚨🚨🚨 ABSOLUTE: Never cast an `object` payload — `.As<T>()` / `.ContentAs<T>()`, always
 
-**`node.Content is MyType` / `payload as MyType` is a TRAP-DOOR.** It is correct only when the value
-already happens to be your CLR type, and yields a **silent null** in the three cases that actually
-happen in a running mesh:
+**`node.Content is MyType` / `payload as MyType` is a TRAP-DOOR.** It is correct only when the value already happens to be your CLR type, and yields a **silent null** in the three cases that actually happen in a running mesh: untyped JSON (the polymorphic converter degrades an unresolvable `$type` to a raw `JsonElement`), the as-written `JsonObject` DOM before the materialization pipeline re-types it, and a same-named type from another collectible assembly (every NodeType recompile mints one). All three look identical from outside — the value reads as absent, the view renders empty, a reactive wait never completes; no exception, no log, nothing to grep. Use `node.ContentAs<T>(hub.JsonSerializerOptions)` / `payload.As<T>(hub.JsonSerializerOptions, logger)` instead.
 
-1. **Untyped JSON** — the polymorphic converter DEGRADES an unresolvable `$type` to a raw
-   `JsonElement` instead of throwing, so any hub whose TypeRegistry lacks the discriminator hands you
-   JSON, not an instance.
-2. **The as-written DOM** — application code builds content as `JsonObject`, and a change
-   notification forwards that shape verbatim until the materialization pipeline re-types it.
-3. **A same-named type from another assembly** — every recompile of a dynamic NodeType mints a new
-   collectible assembly, so "the same" record has a different CLR identity per build.
-
-Every one of these has caused a production outage, and they all look identical from outside: the
-value reads as absent, the view renders empty, a reactive wait never completes. No exception, no log,
-nothing to grep. That is why this is not a style preference:
-
-```csharp
-// ❌ the trap-door
-var store = node.Content as StoreContent;
-if (delivery.Message.Payload is MySettings s) { … }
-
-// ✅ bad-data tolerant, and it says why when it cannot convert
-var store = node.ContentAs<StoreContent>(hub.JsonSerializerOptions);
-var s = delivery.Message.Payload.As<MySettings>(hub.JsonSerializerOptions, logger);
-```
-
-`ContentAs<T>` is `As<T>` with the node's path in the diagnostics. Both recover a degraded
-`JsonElement`/`JsonNode`, recover a SAME-short-named type from another build by JSON round-trip, and
-return null for a DIFFERENTLY-named type so probe-dispatch call sites keep working.
-
-**🚨 FIRST, though: deserialize as close as possible to where the type IS registered — which usually
-means the RIGHT HUB should be handling it at all.** A `$type` resolves against the TypeRegistry
-behind the options you pass, so a payload read on a hub that never registered the type is untyped by
-construction, and `.As<T>()` is then papering over a routing mistake rather than bad data. The
-durable fix for a repeated degradation is to move the work to the owning hub (the per-node hub for
-its own content; the hub that declares the type via `WithType`) — or to register the type where the
-read happens. Reach for the accessor at genuine boundaries: a cross-hub query result, a control
-payload, storage JSON.
-
-Full reference: `src/MeshWeaver.Mesh.Contract/ObjectAsExtensions.cs`.
+**🚨 FIRST, though: deserialize as close as possible to where the type IS registered** — a payload read on a hub that never registered the type is untyped by construction, and `.As<T>()` would be papering over a routing mistake. The durable fix is to move the work to the owning hub, or register the type where the read happens. Full reference: `src/MeshWeaver.Mesh.Contract/ObjectAsExtensions.cs` · [/mesh-data](.claude/skills/mesh-data/SKILL.md).
 
 ## 🚨 CQRS — Never Query for a Single Node's Content
 
-`QueryAsync`/`ObserveQuery` are eventually consistent — **stale after writes**. To read a specific node:
+`Query`/`ObserveQuery` are eventually consistent — **stale after writes**. Read a specific node from `workspace.GetMeshNodeStream(path)`, which is authoritative and live. **Valid query uses:** listing children, searching by predicate, autocomplete — anywhere a stale negative is harmless. **Wrong:** reading content by exact path, reading state before a write, polling for job completion, deciding create-or-skip for a known path. 🚨 **Existence of a SPECIFIC path is NOT a valid query use** — a query's negative can be minutes old, and where the target id is minted per attempt a stale negative produces DUPLICATE DATA (#2229).
 
-```csharp
-// ❌ WRONG — lagged index, stale after writes
-var node = await mesh.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
+🚨 **A node that may NOT EXIST YET needs BOTH halves — a `scope:children` listing for EXISTENCE, then `GetMeshNodeStream(target)` for CONTENT.** A point read of an absent node is a framework defect, not merely slow: the owner answers a routing NotFound that terminates the stream AND opens the storm-breaker on that path — and the breaker fast-fails WRITES too, so the read suppresses the write it is waiting for. The index trails the store, so "the index has seen it" implies "the store has it". Creating the node anyway? Skip the check and use `CreateOrUpdateNodeRequest`. This is about ONE known path you are GATING on — summing a SET for display off a `scope:children` query, `content` and all, is correct and cheaper than N point reads.
 
-// ✅ CORRECT — authoritative, live (shared IMeshNodeStreamCache handle)
-workspace.GetMeshNodeStream(path)
-    .Where(node => node is not null)
-    .Take(1).Timeout(TimeSpan.FromSeconds(10));
-```
+**Free-floating words → vector search.** A query with bare text tokens (`laptop nodeType:Story`) on a PG backend with an `IEmbeddingProvider` routes through the HNSW cosine index automatically; structured-only queries stay on the SQL path.
 
-**Valid query uses:** listing children (`path/*`), searching by predicate, autocomplete — anywhere a
-stale negative is harmless.  
-🚨 **Existence of a SPECIFIC path is NOT one of them** — use `GetMeshNodeStream(path)` / a direct read.
-A query's negative can be minutes old, so a caller that reads it as "absent" redoes work that already
-happened. This line used to sanction existence checks, and that was wrong in a way that shipped: on
-2026-08-25 a `search` reported two just-minted tiles missing while a direct `get` returned both
-(#2229), and a create whose reply was lost plus a query that then answered "absent" gave one caller
-two independent reasons to conclude nothing had happened — two mesh-wide sweeps were armed 40 seconds
-apart on that basis. Existence-by-query is safe only where the write it guards is path-deterministic
-and idempotent (the redundant write lands on the same path); where the target id is minted per
-attempt, a stale negative produces DUPLICATE DATA, not merely duplicated work.  
-**Wrong:** reading content by exact path, reading state before a write, polling for job completion,
-deciding create-or-skip for a known path.
+Full reference: [/mesh-data](.claude/skills/mesh-data/SKILL.md) · [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) · [VectorSearch.md](src/MeshWeaver.Documentation/Data/Architecture/VectorSearch.md).
 
-`GetMeshNodeStream(path)` + `Where(...).Take(1)` is also the right primitive for **waiting for work to finish** — for a node that **exists**.
+## Mesh URL Shape · `@/` is Local-Only
 
-🚨 **A node that may NOT EXIST YET is the one case where neither half is enough on its own, and each
-half alone is a defect that has shipped.** Do not pick a horn:
-
-- **A point read of an ABSENT node is forbidden by the framework**, not merely slow: the owner
-  answers an authoritative routing NotFound which **terminates the stream with an error** (it cannot
-  wait for the node to appear), and that NotFound opens `MeshNodeStreamCache`'s **storm-breaker**
-  window on the path — and the breaker **fast-fails WRITES too**, so the read suppresses the write it
-  is waiting for. The breaker says so itself: *"A point node-access to a node that does not exist is
-  a defect — read optional nodes via GetQuery (empty-on-absent), not GetMeshNodeStream(exactPath)."*
-- **Reading that node's CONTENT out of a query is forbidden above** — unbounded lag.
-
-**The composition, and it is the canonical pattern — listing for EXISTENCE, stream for CONTENT:**
-
-```csharp
-hub.GetQuery(id, $"path:{parent} scope:children nodeType:X select:path")   // EXISTENCE — empty-on-absent
-    .Where(nodes => nodes.Any(n => string.Equals(n.Path, target, StringComparison.OrdinalIgnoreCase)))
-    .Take(1)
-    .SelectMany(_ => workspace.GetMeshNodeStream(target))                  // CONTENT — authoritative, live
-    .Select(node => node.ContentAs<X>(hub.JsonSerializerOptions));
-```
-
-The index **trails** the store, so "the index has seen it" implies "the store has it" — the point read
-opened on that signal can never be early, and never NotFounds. The same lag that disqualifies a query
-for CONTENT is what makes it a safe gate. Creating the node anyway? Skip the check entirely and use
-`CreateOrUpdateNodeRequest`.
-
-🚨 **This is about ONE known path whose value you are GATING on — not about node counts.** The
-worked counter-example is `src/MeshWeaver.Blazor.Portal/Chat/ThreadTokenChip.razor.cs:106`: it reads
-`content` out of the very same `{thread}/_Usage scope:children` query, **and it is correct** — it
-sums a SET to paint a total, and a briefly-stale total is cosmetic. Converting it to N point reads
-would mean N per-node hub activations per render, and on a legitimately EMPTY set (a thread with no
-rounds yet) every one is an absent-node read tripping the breaker **on the render path**. So: stale
-answer merely looks wrong on screen → query, `content` and all. Stale answer DECIDES whether
-something proceeds, passes, or is written → the owner's stream. Full pattern:
-[CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) → "An OPTIONAL node".
-
-**Free-floating words → vector search.** When a query contains bare text tokens (`laptop nodeType:Story`) AND PG is the backend AND an `IEmbeddingProvider` is registered, `PostgreSqlMeshQuery.QueryAsync` automatically routes through the HNSW cosine index instead of ILIKE substring scan. Structured-only queries (`nodeType:Story namespace:ACME`) stay on the regular SQL path. Full reference: [VectorSearch.md](src/MeshWeaver.Documentation/Data/Architecture/VectorSearch.md).
-
-Full treatment: [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md)
-
-## Mesh URL Shape
-
-`{baseUrl}/{meshpath}` — no `/node/` segment, no URL-encoding of separators.
-
-| Environment | Base URL |
-|---|---|
-| Prod | `https://memex.meshweaver.cloud` |
-| Dev — Aspire (`../MeshWeaver.Plugins/src/Memex.AppHost`) | `https://localhost:7202` (HTTP fallback `http://localhost:5202`) |
-| Dev — Monolith standalone (`../MeshWeaver.Plugins/src/Memex.Portal.Monolith`) | `https://localhost:7122` (HTTP fallback `http://localhost:5022`) |
-
-## `@/` is Local-Only
+`{baseUrl}/{meshpath}` — no `/node/` segment, no URL-encoding of separators. Prod `https://memex.meshweaver.cloud`; dev Aspire `https://localhost:7202` (fallback `http://localhost:5202`), Monolith `https://localhost:7122` (fallback `http://localhost:5022`).
 
 `@/path` is a Unified Content Reference for markdown links (`[text](@/Path)`), autocomplete, and agent tool args — **never in `href=""` attributes or HTTP URLs**. Markdig strips `@` in native markdown syntax but NOT inside `<a href>`.
 
 ## 🚨🚨🚨 ABSOLUTE: No static collections — ever
 
-**A `static` field that is a collection or cache is FORBIDDEN** anywhere in `src/` or `test/`: no `static ConcurrentDictionary`, `static Dictionary`, `static HashSet`, `static List`, `static ConcurrentBag`/`Queue`, `static MemoryCache`/`IMemoryCache`, `[ThreadStatic]`, or `static Lazy<…>` of mutable data. Process-wide static state survives mesh disposal, so it **bleeds across tests** — the moment you add a `Clear()` method "for test isolation", that method *is* the proof of the bug — and across users/partitions in prod.
+**A `static` field that is a collection or cache is FORBIDDEN** anywhere in `src/` or `test/`: no `static ConcurrentDictionary`, `static Dictionary`, `static HashSet`, `static List`, `static ConcurrentBag`/`Queue`, `static MemoryCache`/`IMemoryCache`, `[ThreadStatic]`, or `static Lazy<…>` of mutable data. Process-wide static state survives mesh disposal, so it **bleeds across tests** — the moment you add a `Clear()` "for test isolation", that method *is* the proof of the bug — and across users/partitions in prod.
 
-**Every cache and every repository is an instance owned by the mesh.** Register it in `MeshBuilder` (`ConfigureServices` / `WithServices`) as a **singleton** so its lifetime IS the mesh's: when the mesh hub is disposed (end of test / shutdown), the cache dies with it. Hold the backing store (`IMemoryCache`, an instance `ConcurrentDictionary`, …) as an **instance field** on that singleton; resolve via `hub.ServiceProvider.GetRequiredService<T>()`.
-
-```csharp
-// ❌ FORBIDDEN — process-wide, survives mesh disposal, bleeds across tests
-public static class NodeTypeRegistry
-{
-    private static readonly ConcurrentDictionary<string, MeshNode> Nodes = new();
-    public static void Clear() => Nodes.Clear();   // ← "for test isolation" = the tell
-}
-
-// ✅ REQUIRED — instance repo, registered in MeshBuilder, lifetime = mesh
-public sealed class NodeTypeRepository
-{
-    private readonly ConcurrentDictionary<string, MeshNode> nodes = new();   // instance, not static
-    public void Register(MeshNode node) => nodes[node.Path] = node;
-    public bool TryGet(string path, out MeshNode? node) => nodes.TryGetValue(path, out node);
-}
-builder.ConfigureServices(s => s.AddSingleton<NodeTypeRepository>());          // dies with the mesh — no Clear() needed
-```
-
-**Allowed `static readonly`:** immutable, read-only constant lookups initialized once and never written at runtime (media-type maps, reserved-word sets, role tables). If it never takes a write after construction it's a *constant*, not a cache — fine. The instant something writes to it at runtime, it must become a mesh-scoped instance singleton.
-
-Full reference: [NoStaticState.md](src/MeshWeaver.Documentation/Data/Architecture/NoStaticState.md).
+**Every cache and every repository is an instance owned by the mesh.** Register it in `MeshBuilder` (`ConfigureServices`/`WithServices`) as a **singleton** so its lifetime IS the mesh's; hold the backing store as an **instance field** on that singleton; resolve via `hub.ServiceProvider.GetRequiredService<T>()`. **Allowed `static readonly`:** immutable, read-only constant lookups initialized once and never written at runtime (media-type maps, reserved-word sets, role tables) — the instant something writes to one at runtime it must become a mesh-scoped instance singleton. Full reference: [NoStaticState.md](src/MeshWeaver.Documentation/Data/Architecture/NoStaticState.md).
 
 ## Collections Policy
 
-**NEVER use mutable collections.** Always `System.Collections.Immutable`:  
-`List<T>` → `ImmutableList<T>`, `Dictionary<K,V>` → `ImmutableDictionary<K,V>`, `HashSet<T>` → `ImmutableHashSet<T>`, `Queue<T>` → `ImmutableQueue<T>`.  
-Exception: `ConcurrentDictionary` for concurrent mutation — **as an instance field on a mesh-scoped singleton, never `static`** (see "No static collections" above).
+**NEVER use mutable collections.** Always `System.Collections.Immutable`: `List<T>` → `ImmutableList<T>`, `Dictionary<K,V>` → `ImmutableDictionary<K,V>`, `HashSet<T>` → `ImmutableHashSet<T>`, `Queue<T>` → `ImmutableQueue<T>`. Exception: `ConcurrentDictionary` for concurrent mutation — **as an instance field on a mesh-scoped singleton, never `static`**.
 
 ## Architecture Overview
 
-Actor-model message hub (`MeshWeaver.Messaging.Hub`) with address-based partitioning. UI is reactive Layout Areas rendered in Blazor Server. AI agents use plugins (MeshPlugin, LayoutAreaPlugin).
+Actor-model message hub (`MeshWeaver.Messaging.Hub`) with address-based partitioning; UI is reactive Layout Areas. The AI engine (agents, threads, skills, the AI plugin surface) is a **module hosted in `MeshWeaver.Plugins`** (#2276), not part of this repo. Layout: `src/` core framework (50+ projects) · `samples/Graph/Data/` sample data nodes · `memex/aspire/` Aspire microservices · `../MeshWeaver.Plugins/src/Memex.Portal.Monolith/` the dev portal.
 
-| Directory | Contents |
-|---|---|
-| `src/` | Core framework (50+ projects) |
-| `samples/Graph/Data/` | Sample data nodes (ACME, Northwind, Cornerstone, etc.) |
-| `../MeshWeaver.Plugins/src/Memex.Portal.Monolith/` | Dev portal with full Graph + Documentation support |
-| `memex/aspire/` | Microservices with .NET Aspire orchestration |
-
-**Request-Response:** `hub.Observe<TResponse>(request, o => o.WithTarget(address)).Subscribe(resp => …, ex => …)`  
-Response sent as: `hub.Post(responseMessage, o => o.ResponseFor(request))`  
-**Fire-and-Forget:** `hub.Post(message, o => o.WithTarget(address))`  
-**Layout area route:** `@{address}/{areaName}/{areaId}`
+**Request-Response:** `hub.Observe<TResponse>(request, o => o.WithTarget(address)).Subscribe(resp => …, ex => …)`; the response is sent as `hub.Post(responseMessage, o => o.ResponseFor(request))`. **Fire-and-Forget:** `hub.Post(message, o => o.WithTarget(address))`. **Layout area route:** `@{address}/{areaName}/{areaId}`.
 
 ## Data Access Patterns
 
@@ -960,113 +243,42 @@ Never use `IMeshStorage` or `IMeshCatalog` directly — internal infrastructure 
 
 | Operation | API |
 |---|---|
-| Read (query) | `IMeshService.Query<T>(request)` — reactive. 🚨 There is **no** `QueryAsync` on the production interface; it survives only as a test-only bridge in `MeshWeaver.Fixture`. One-shot snapshot = `.Where(c => c.ChangeType == QueryChangeType.Initial).Select(c => c.Items).FirstAsync()` |
+| Read (query) | `IMeshService.Query<T>(request)` — reactive. 🚨 There is **no** `QueryAsync` on the production interface; it survives only as a test-only bridge in `MeshWeaver.Fixture` |
 | Read (single node) | `workspace.GetMeshNodeStream(path)` |
 | Create/Delete | `meshService.CreateNode(node).Subscribe(...)` / `meshService.DeleteNode(path).Subscribe(...)` |
 | Update | `workspace.GetMeshNodeStream(path).Update(current => current with { … })` |
 | Move | `hub.Observe(new MoveNodeRequest(src, dst)).Subscribe(...)` |
 
-Always `GetRequiredService<T>()` — never `GetService<T>()` + null check for required services.
-
-Full reference: [DataAccessPatterns.md](src/MeshWeaver.Documentation/Data/Architecture/DataAccessPatterns.md)
+Always `GetRequiredService<T>()` — never `GetService<T>()` + null check for required services. Full reference: [DataAccessPatterns.md](src/MeshWeaver.Documentation/Data/Architecture/DataAccessPatterns.md).
 
 ## Memex is available through MCP
 
-The memex mesh is reachable through the **`meshweaver` MCP server** — a per-user `meshweaver` MCP wired for agents working on this repo AND for the co-hosted **Claude Code / GitHub Copilot** harnesses, wired **automatically** (authenticated as the calling user). 🚨 An MCP server named after a *deployment* (e.g. a client portal) connects to THAT portal, not necessarily this user's memex — verify which mesh a tool talks to before any mutation. The mesh — NOT a local file tree — is the workspace: use the MCP tools to read/modify mesh content rather than guessing — `get` / `search` (read), `create` / `update` / `patch` / `move` / `copy` / `delete` (mutate), `execute_script`, `render_area`, `navigate_to`, `upload`. This file (`AGENTS.md`, read by both Claude Code and Copilot) is the canonical place that tells the co-hosted agents the mesh is MCP-accessible.
+The memex mesh is reachable through the **`meshweaver` MCP server** — wired automatically for agents working on this repo AND for the co-hosted Claude Code / GitHub Copilot harnesses, authenticated as the calling user. 🚨 An MCP server named after a *deployment* (e.g. a client portal) connects to THAT portal, not necessarily this user's memex — verify which mesh a tool talks to before any mutation. The mesh — NOT a local file tree — is the workspace: use the MCP tools rather than guessing (`get`/`search` to read; `create`/`update`/`patch`/`move`/`copy`/`delete` to mutate; `execute_script`, `render_area`, `navigate_to`, `upload`).
 
-## MCP Mutations — Always Show a Diff
-
-For every MCP mutation (`patch`, `update`, `create`, `delete`, `move`, `copy`):
-1. `get @path` **before** — cache the JSON
-2. Mutate
-3. `get @path` **after** — cache the new JSON
-4. Render a ` ```diff ` block showing the changed region in your response
-
-Read-only tools skip this: `get`, `search`, `recycle`, `get_diagnostics`, `navigate_to`, `execute_script`.
+**For every MCP mutation, show a diff:** `get @path` before (cache the JSON) → mutate → `get @path` after → render a ` ```diff ` block of the changed region in your response. Read-only tools skip this: `get`, `search`, `recycle`, `get_diagnostics`, `navigate_to`, `execute_script`.
 
 ## Development Patterns
 
-For detailed patterns with code examples, read:
-- Layout areas + UI controls: [UserInterface.md](src/MeshWeaver.Documentation/Data/Architecture/UserInterface.md) and [GUI docs](src/MeshWeaver.Documentation/Data/GUI/)
-- Message handling: [MessageBasedCommunication.md](src/MeshWeaver.Documentation/Data/Architecture/MessageBasedCommunication.md)
-- AI plugins: [AI docs](src/MeshWeaver.Documentation/Data/AI/)
-- Activity control plane / operations as scripts: [ActivityControlPlane.md](src/MeshWeaver.Documentation/Data/Architecture/ActivityControlPlane.md)
-- Reactive click handlers + service patterns: [AsynchronousCalls.md](src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md)
+Detailed patterns with code examples: [UserInterface.md](src/MeshWeaver.Documentation/Data/Architecture/UserInterface.md) + [GUI docs](src/MeshWeaver.Documentation/Data/GUI/) (layout areas, controls) · [MessageBasedCommunication.md](src/MeshWeaver.Documentation/Data/Architecture/MessageBasedCommunication.md) · [AI docs](src/MeshWeaver.Documentation/Data/AI/) · [ActivityControlPlane.md](src/MeshWeaver.Documentation/Data/Architecture/ActivityControlPlane.md) · [AsynchronousCalls.md](src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md).
 
-**Static handlers for one-shot pipelines** — don't extract `IFooService` for DI cleanliness when there's no state. Resolve deps via `hub.ServiceProvider.GetRequiredService<T>()` inside the static handler.
+**Static handlers for one-shot pipelines** — don't extract `IFooService` for DI cleanliness when there's no state; resolve deps via `hub.ServiceProvider.GetRequiredService<T>()` inside the static handler. **Operations with inputs + progress + output** (export, import, compile, mirror) → Code MeshNode template + form-bound inputs + `RequestedStatus = Running` trigger, not a bespoke `XxxRequest`/`XxxResponse` handler.
 
-**Operations with inputs + progress + output** (export, import, compile, mirror) → Code MeshNode template + form-bound inputs + `RequestedStatus = Running` trigger. Not a bespoke `XxxRequest/XxxResponse` handler. See [ActivityControlPlane.md](src/MeshWeaver.Documentation/Data/Architecture/ActivityControlPlane.md).
-
-## Key Dependencies
-
-.NET 10.0 · Orleans · Blazor Server · Microsoft.Extensions.AI · xUnit v3 · FluentAssertions · Markdig · Chart.js · Azure SDKs
+**Key dependencies:** .NET 10.0 · Orleans · Blazor Server · Microsoft.Extensions.AI · xUnit v3 · FluentAssertions · Markdig · Chart.js · Azure SDKs.
 
 ## Testing Guidelines
 
-Before building NodeTypes, data models, layout areas, or CSV loaders — read the [/code skill](content/ai/Skill/code.md) first (canonical guide + non-negotiable testing standards).
+**No mocking.** Use `MonolithMeshTestBase` / `HubTestBase` and the real Orleans cluster machinery in `MeshWeaver.Hosting.Orleans.TestBase` — never mock `IMessageHub`, `IMeshService`, or core interfaces. **Always `run_in_background: true`** for test runs; **never `--verbosity minimal`** when tests may fail — it hides stack traces.
 
-**No mocking.** Use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshService`, or core interfaces.  
-**Always `run_in_background: true`** for test runs (they take minutes).  
-**Never `--verbosity minimal`** when tests may fail — it hides stack traces.
+**Never `Task.Delay` to wait for propagation.** Wait on the actual condition via `stream.Where(...).FirstAsync().Timeout(...)`; for a request/response source wrap the re-query in `Observable.Interval(50.Milliseconds()).StartWith(0L).SelectMany(...).Where(predicate).FirstAsync().Timeout(...)`. Hand-rolled `while + Task.Delay(50)` poll loops are forbidden. Sanctioned uses: forcing distinct timestamps for sort assertions, and negative "nothing happened" tests with no positive signal to filter for. **Never assert "exactly N change events"** on a stream backed by pg_notify or any change feed that can race the initial snapshot — filter on the emission shape instead.
 
-**Never `Task.Delay` to wait for propagation.** A fixed sleep races CI load: too short → flakes, too long → wastes minutes across the suite. Wait on the actual condition via `stream.Where(...).FirstAsync().Timeout(...)`. When the source is request/response (not an observable), wrap the re-query in `Observable.Interval(50.Milliseconds()).StartWith(0L).SelectMany(...).Where(predicate).FirstAsync().Timeout(...)`. Hand-rolled `while + Task.Delay(50)` poll loops are forbidden. Sanctioned `Task.Delay` uses: forcing distinct timestamps for sort assertions, and "wait to confirm nothing happened" negative tests where there's no positive signal to filter for. See WritingTests.md → "Polling loops around QueryAsync" for the full pattern.
+**🚨 NEVER re-run a test unless code under test has changed.** Re-running to "see if it was a flake" hides the bug — flakes are real races. Only exceptions: the harness itself crashed, or the user killed the previous run.
 
-**Never assert "exactly N change events"** on a stream backed by pg_notify or any change feed that can race the initial-snapshot path. Filter on the emission shape (e.g. `.Where(c => c.ChangeType == QueryChangeType.Initial)`), not the count.
+**When CI fails, do NOT run entire test projects** — read the failed test names from the run, build the one project, then iterate with `--filter "FullyQualifiedName~<TestName>" --no-build`. No skipping: CI-only failures catch real timing/state bugs. Build first, every time — `--no-build`/`--no-restore` against a project this worktree never built exits 0 having run nothing.
 
-xUnit v3 config (`test/xunit.runner.json`): `parallelizeAssembly: false`,
-`parallelizeTestCollections: false`, `maxParallelThreads: 1`, `methodTimeout: 30000` (30 s).
+🚨 **xUnit's `methodTimeout` (30 s, `test/xunit.runner.json`) only bounds time spent INSIDE a test method** — a wedge in fixture construction, class init or teardown runs unbounded, so always give a local run its own wall-clock cap (background it and hold the deadline yourself; there is no `timeout` binary here). If a run hits a cap it is stuck — do not raise the bound.
 
-**🚨 `methodTimeout` only bounds time spent INSIDE a test method.** A wedge in fixture
-construction, class init, or teardown is outside it and runs unbounded — on 2026-08-04 an
-orphaned local run sat at a pegged core for 25+ minutes, and together with a leaking e2e
-container drove the colima VM to 128 MB free / load average 195, OOM-killing unrelated
-containers. So **always give a local test run its own wall-clock cap** — but **not with `timeout`**:
-neither `timeout` nor `gtimeout` exists on this macOS host, so `timeout 20m dotnet test …` runs
-**nothing** and reports `command not found`. Background the run and hold the deadline yourself,
-against `date -u`: see "A verification step that cannot fail is not a verification step" above for
-the five-step shape (build first, run in background, poll elapsed, require a fresh `.trx`).
-
-CI has the equivalent at two levels — its runners are Linux, where `timeout` does exist: `timeout 8m`
-per project inside the shard loop, and `timeout-minutes: 20` on the shard job itself for a wedge
-BETWEEN projects (which the per-project cap cannot see). If a run hits either, it is stuck — do not
-raise the bound, find what is not completing (AGENTS.md → "No band-aids").
-
-Full guidance: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md)
-
-### Running Tests
-
-```bash
-dotnet build test/MeshWeaver.Hosting.Monolith.Test/MeshWeaver.Hosting.Monolith.Test.csproj
-dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-build
-dotnet test test/MeshWeaver.Graph.Test --filter "FullyQualifiedName~AccessAssignment" --no-build
-```
-
-Build first, every time: `dotnet test --no-restore`/`--no-build` against a project this worktree has
-never built exits **0 with no output and no `.trx`** — an unmissable-looking pass that ran nothing.
-
-Workflow: run once in background → read failures → fix → run once more. **🚨 NEVER re-run a test (single or suite) unless code under test has changed.** Re-running to "see if it was a flake" hides the bug — flakes are real races. Either fix the race or pin the failure with a smaller repro; do not retry. The only exceptions: (a) the test harness itself crashed (MSBuild MSB4166, infrastructure error — re-run is the same input), (b) the previous run was killed by the user before completion.
-
-### DevLogin and Access Control
-
-`MonolithMeshTestBase` auto-logs in `rbuergi@systemorph.com` as Admin. Available helpers: `TestUsers.Admin`, `TestUsers.SampleUsers()`, `builder.AddSampleUsers()`.
-
-For per-user access control tests, use `accessService.SetCircuitContext(new AccessContext { ObjectId = "...", Name = "..." })` before creating test data; set `null` after.
-
-### Node Types
-
-Standard types from `AddGraph()`: `Markdown`, `Code`, `Agent`, `Group`, `User`, `VUser`, `Role`, `Notification`, `Approval`, `AccessAssignment`, `GroupMembership`, `PartitionAccessPolicy`, `ActivityLog`, `UserActivity`, `Comment`, `Thread`, `ThreadMessage`, `Redirect`
-
-Custom types: `builder.AddMeshNodes(new MeshNode("MyType") { Name = "My Type" })` in `ConfigureMesh`.
-
-### Test Base Classes
-
-- **`MonolithMeshTestBase`** (recommended) — full integration with persistence, messaging, DI; use `AwaitResponseAsync(request, ...)` for request/response in tests
-- **`HubTestBase`** — message routing / layout tests; bridge to Task via `.FirstAsync().ToTask(ct)`
-
-For satellite entities (comments, threads, tracked changes): [SatelliteEntityPatterns.md](src/MeshWeaver.Documentation/Data/Architecture/SatelliteEntityPatterns.md)
+Full reference: [/testing](.claude/skills/testing/SKILL.md) · [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md).
 
 ## Project Structure
 
-Framework code in `src/`, tests in `test/`, samples in `samples/`.  
-Main branch: `main`. Solution file: `MeshWeaver.slnx` (50+ projects).  
-Package management: `Directory.Packages.props` — update this, not individual `.csproj` files.
+Framework code in `src/`, tests in `test/`, samples in `samples/`. Main branch: `main`. Solution file: `MeshWeaver.slnx` (50+ projects). Package management: `Directory.Packages.props` — update this, not individual `.csproj` files.

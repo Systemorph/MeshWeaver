@@ -24,15 +24,22 @@ namespace MeshWeaver.PluginTester;
 internal static class TesterModules
 {
     /// <summary>
-    /// Modules this IMAGE ships, laid beside the binary by the <c>MeshModuleClosure</c> lane in
+    /// Modules this IMAGE ships, laid beside the binary by a <c>MeshModuleClosure</c> row in
     /// <c>MeshWeaver.PluginTester.csproj</c>.
     ///
-    /// <para>🚨 The <c>.dll</c> suffix is the convention every host uses AND load-bearing:
-    /// <see cref="MeshBuilder.ResolveModulePath(string)"/> derives the folder with
-    /// <c>GetFileNameWithoutExtension</c>, so a bare <c>"MeshWeaver.AI"</c> would probe
+    /// <para><b>Empty since #2276</b>: the one entry was <c>MeshWeaver.AI.dll</c>, and the engine
+    /// has left this repo for MeshWeaver.Plugins — which this repo cannot build. A node repo that
+    /// needs the AI node types now mounts its OWN build with <c>--module</c>, which is exactly what
+    /// that flag was added for (#2541). Empty is therefore the correct value, not a gap: it says
+    /// this image carries no module of its own, while everything below still works unchanged for
+    /// the externals a caller names.</para>
+    ///
+    /// <para>🚨 If an entry ever returns here, the <c>.dll</c> suffix is the convention every host
+    /// uses AND load-bearing: <see cref="MeshBuilder.ResolveModulePath(string)"/> derives the
+    /// folder with <c>GetFileNameWithoutExtension</c>, so a bare <c>"MeshWeaver.X"</c> would probe
     /// <c>modules/MeshWeaver/</c> and read as absent.</para>
     /// </summary>
-    public static readonly ImmutableArray<string> ImageShipped = ["MeshWeaver.AI.dll"];
+    public static readonly ImmutableArray<string> ImageShipped = [];
 
     /// <summary>
     /// Every module entry this run activates: the image-shipped set, then the <c>--module</c>
