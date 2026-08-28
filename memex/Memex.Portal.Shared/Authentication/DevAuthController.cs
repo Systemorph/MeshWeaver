@@ -57,17 +57,23 @@ public class DevAuthController : ControllerBase
         // (e.g. a reused dev DB) therefore throws UnauthorizedAccessException ("Anonymous lacks Read on
         // '{personId}'"), which — uncaught — 500s the signin and blocks onboarding entirely. Resolving an
         // existing user pre-auth is legitimate auth infrastructure, so impersonate System (same as
-        // ProvisionDevUser's grants). Observable.Using captures System at SUBSCRIBE and disposes it when
-        // the read completes — the sanctioned reactive impersonation (ApiTokenService / DeviceOnboarding).
+        // ProvisionDevUser's grants).
+        //
+        // 🚨 RunAsSystem, NOT Observable.Using(ImpersonateAsSystem, …). Impersonation is an AsyncLocal
+        // store/restore pair, and Using splits the halves across threads: it opens the scope on the
+        // SUBSCRIBING thread and disposes it when the inner observable TERMINATES — for a cross-hub
+        // read, the owning hub's response thread. Nothing disposes it here, so this ASP.NET request
+        // thread goes back to the pool still holding system-security (#1790). RunAsSystem opens and
+        // closes inside one synchronous Subscribe and delivers notifications under the subscriber's
+        // own identity (#1444).
         // Read the partition-root User node as System (pre-auth, private node). A brand-new user has
         // none, so routing the read to '{personId}' surfaces "No node found" (a DeliveryFailureException)
         // through the Rx OnError channel — NOT as a throw a try/catch around the await would see. Handle it
         // REACTIVELY: a .Catch that maps the not-found (and the 5s timeout miss) to NO emission, so
         // FirstOrDefaultAsync yields null and we fall through to the fallback query + DevLogin
         // self-provisioning. Any OTHER error is rethrown (never silently swallowed).
-        var node = await Observable.Using(
-                () => _accessService.ImpersonateAsSystem(),
-                _ => _hub.GetMeshNodeStream(personId)
+        var node = await _accessService.RunAsSystem(
+                () => _hub.GetMeshNodeStream(personId)
                     .Where(n => n is not null
                         && string.Equals(n.NodeType, "User", StringComparison.OrdinalIgnoreCase)
                         && n.Content is not null)
@@ -86,9 +92,8 @@ public class DevAuthController : ControllerBase
         {
             // Same pre-auth rationale: under Anonymous the nodeType:User query is RLS-filtered to nothing
             // (private user partitions), so an existing user is MISSED → spurious re-provision. Read as System.
-            var change = await Observable.Using(
-                    () => _accessService.ImpersonateAsSystem(),
-                    _ => _meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User")))
+            var change = await _accessService.RunAsSystem(
+                    () => _meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User")))
                 .FirstAsync();
             node = change.Items.FirstOrDefault(n =>
                 string.Equals(n.Id, personId, StringComparison.OrdinalIgnoreCase)
