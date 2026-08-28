@@ -40,6 +40,37 @@ public static class WhatsNewSettingsTab
     public const string WhatsNewNamespace = "Doc/WhatsNew";
 
     /// <summary>
+    /// The node type a release-note entry declares in its front matter (<c>nodeType: WhatsNew</c>)
+    /// when it does NOT live under <see cref="WhatsNewNamespace"/> — which is every entry authored
+    /// outside this repository.
+    /// </summary>
+    public const string EntryNodeType = "WhatsNew";
+
+    /// <summary>
+    /// The listing, as a UNION of two lanes (#2539) — <c>GetQuery</c> takes several queries and
+    /// unions their result sets, deduped by path.
+    ///
+    /// <para><b>Why two.</b> The feed used to be a single <c>path:Doc/WhatsNew scope:children</c>
+    /// listing, and that path exists only in the platform repository. A satellite — Plugins,
+    /// Education, Reinsurance, SocialMedia, Memex — had NO route to file an entry from its own PR,
+    /// so a user-noticeable fix landing there was simply absent from the changelog. That is not a
+    /// gap that holds steady: every extraction moves more user-visible behaviour out of core, so
+    /// the feed acquires a systematic bias toward platform work and a reader would conclude that
+    /// plugin-side fixes had stopped happening.</para>
+    ///
+    /// <para>The second lane keys on the node TYPE instead of a path, so a satellite writes
+    /// <c>WhatsNew/&lt;date&gt;-&lt;slug&gt;.md</c> in its own tree with <c>nodeType: WhatsNew</c>
+    /// in the front matter and it appears in the one feed — authorship stays with the change and no
+    /// cross-repo PR is needed. The 612 entries already under <c>Doc/WhatsNew</c> keep working
+    /// untouched, which is why this is a union and not a migration.</para>
+    /// </summary>
+    public static readonly string[] ListingQueries =
+    [
+        $"path:{WhatsNewNamespace} scope:children",
+        $"nodeType:{EntryNodeType}",
+    ];
+
+    /// <summary>
     /// <c>Category</c> of an entry that announces something new or improved — rendered in full, with
     /// its description. Written by the <c>/pullrequest</c> skill from the branch prefix.
     /// </summary>
@@ -63,7 +94,7 @@ public static class WhatsNewSettingsTab
         // entry content is rendered by the doc view when the link is opened (never read from the
         // lagging query index).
         stack = stack.WithView((h, _) =>
-            h.Hub.GetQuery("whatsnew:list", $"path:{WhatsNewNamespace} scope:children")
+            h.Hub.GetQuery("whatsnew:list", ListingQueries)
             .Select(nodes => (UiControl?)Controls.Markdown(Render(nodes, h)))
             // Generic message to the (ungated, any-user) UI — never surface the raw exception; log it
             // server-side instead so an internal detail can't leak into the page.
@@ -85,7 +116,10 @@ public static class WhatsNewSettingsTab
     /// </summary>
     private static string Render(IEnumerable<MeshNode> nodes, LayoutAreaHost host)
     {
-        var entries = (nodes ?? []).Where(n => n is not null).ToList();
+        // DistinctBy: an entry that lives under Doc/WhatsNew AND declares nodeType:WhatsNew matches
+        // both lanes. The synced layer already dedupes by path, so this is belt-and-braces — but a
+        // duplicated entry is VISIBLE in the feed, and the cost of being sure is one operator.
+        var entries = (nodes ?? []).Where(n => n is not null).DistinctBy(n => n.Path).ToList();
         if (entries.Count == 0)
             return host.Localize("ui.mdWhatsNewEmpty");
 

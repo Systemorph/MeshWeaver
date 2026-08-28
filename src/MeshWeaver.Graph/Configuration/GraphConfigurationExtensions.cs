@@ -45,6 +45,7 @@ public static class GraphConfigurationExtensions
                 // and SlideShowControl with its Blazor view (the pack emits the control).
                 .AddCommentType()
                 .AddRedirectType()
+                .AddWhatsNewType()
                 .AddTrackedChangeType()
                 .AddAccessAssignmentType()
                 .AddPartitionAccessPolicyType()

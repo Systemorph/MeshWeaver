@@ -135,8 +135,22 @@ dotnet build src/<TheProjectYouTouched> -c Release -warnaserror --no-restore   #
 #       fix/                     → Category: Fix       (bundled into the day's one-line fix summary)
 #     Order is -YYYYMMDD (a NEGATIVE date), which sorts the doc tree and the Doc/WhatsNew folder
 #     page newest-first — without it they fall back to alphabetical by title.
+#
+#     🚨 IN A SATELLITE REPO (Plugins, Education, Reinsurance, SocialMedia, Memex) the path below
+#     does not exist — it is core-only. Write the entry into YOUR repo instead, at
+#     `WhatsNew/${DATE}-<slug>.md`, and add ONE line to the front matter:
+#
+#         nodeType: WhatsNew
+#
+#     That is the whole difference. The feed lists entries by node TYPE as well as by the core
+#     path (#2539), so an entry declaring it reaches the one Doc/WhatsNew feed from any repo, with
+#     no cross-repo PR. Everything else — Name / Category / Description / Icon / Order, and the
+#     rule that a user-noticeable FIX gets an entry — is identical.
+#
+#     Before #2539 there was no route at all, so satellite fixes were simply skipped, and the feed
+#     drifted toward being a platform-only changelog while reading as a complete one.
 DATE=$(date -u +%Y-%m-%d)                   # no clock in scripts elsewhere, but this is a shell step
-NOTE_FILE=src/MeshWeaver.Documentation/Data/WhatsNew/${DATE}-<slug>.md
+NOTE_FILE=src/MeshWeaver.Documentation/Data/WhatsNew/${DATE}-<slug>.md   # core; satellites: WhatsNew/${DATE}-<slug>.md
 # Frontmatter is printf'd (Order needs the date substituted); the PROSE goes in a QUOTED heredoc so
 # a note containing `$`, `${…}` or backticks is written literally instead of being expanded by bash.
 printf -- '---\nName: %s\nCategory: %s\nDescription: %s\nIcon: Sparkle\nOrder: -%s\n---\n\n' \
