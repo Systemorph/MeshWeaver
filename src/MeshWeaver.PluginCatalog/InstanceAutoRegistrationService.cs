@@ -236,11 +236,26 @@ public sealed class InstanceAutoRegistrationService(
             // genuinely is none.
             : EnsureRegistered(options, registry).Catch((Exception ex) =>
             {
-                logger.LogError(ex,
-                    "First-startup instance registration against {Url} failed (401 = invalid or "
-                    + "revoked bootstrap key, 409 = instance id already taken). Continuing to the "
-                    + "install phase, which uses whatever key this installation already holds.",
-                    registry.Url);
+                if (ex is RegistrationPersistException persist)
+                    // 🚨 NOT a failed registration, and the difference is the whole message: the
+                    // registry ACCEPTED this instance and issued its key, and we then failed to
+                    // store it. The key is issued exactly once, so it is gone; the id is taken, so
+                    // re-running this cannot recover it. Say that, rather than sending the operator
+                    // to re-check a bootstrap key that worked perfectly.
+                    logger.LogError(persist.InnerException,
+                        "Instance '{InstanceId}' WAS registered at {Url} — and storing its issued "
+                        + "key then failed, so the key is lost (the registry issues it exactly "
+                        + "once) and the id is permanently taken. Retrying will not recover it: "
+                        + "mint a NEW bootstrap key, choose a NEW PluginCatalog:InstanceId, and fix "
+                        + "the underlying store failure first. Continuing to the install phase, "
+                        + "which uses whatever key this installation already holds.",
+                        persist.InstanceId, persist.RegistryUrl);
+                else
+                    logger.LogError(ex,
+                        "First-startup instance registration against {Url} failed (401 = invalid or "
+                        + "revoked bootstrap key, 409 = instance id already taken). Continuing to the "
+                        + "install phase, which uses whatever key this installation already holds.",
+                        registry.Url);
                 return Observable.Return(Unit.Default);
             });
 
@@ -363,6 +378,28 @@ public sealed class InstanceAutoRegistrationService(
         var client = hub.ServiceProvider.GetRequiredService<InstanceRegistrationClient>();
         var credentialPath = PluginRegistryCredentials.Path(registry.Url);
 
+        // 🚨 Resolved BEFORE the register call, and that ordering is the fix (#2585).
+        // Registration is IRREVERSIBLE in two ways at once: the registry takes the instance id
+        // permanently, and it issues the instance key EXACTLY ONCE. So every local precondition
+        // for STORING that key has to hold before we ask for it. Resolving the protector
+        // afterwards — with GetRequiredService, inside the success callback — turned a missing
+        // registration into the worst available outcome: the remote instance exists, the key was
+        // issued and then dropped on the floor, and the id can never be registered again, so a
+        // retry cannot fix it and the operator has to mint a fresh bootstrap key AND a new id.
+        var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
+        if (protector is null)
+        {
+            logger.LogError(
+                "PluginCatalog:BootstrapKey is set, but this mesh registers no IProviderKeyProtector, "
+                + "so an issued instance key could not be stored in the clear-text-free form the "
+                + "credential node requires. NOT registering '{InstanceId}' at {Url}: the registry "
+                + "would take the id permanently and issue the key exactly once, so asking for it "
+                + "now would burn both for nothing. Add the protector (AddGraph registers it) and "
+                + "restart — nothing has been consumed.",
+                instanceId, registry.Url);
+            return Observable.Empty<Unit>();      // nothing burned — a retry can still succeed
+        }
+
         return (Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
                 _ => hub.GetMeshNode(credentialPath, TimeSpan.FromSeconds(10)))
@@ -385,8 +422,8 @@ public sealed class InstanceAutoRegistrationService(
                         // 🚨 Required, and no `?? result.InstanceKey` fallback: the issued key is
                         // this installation's credential at the registry. Storing it in the clear
                         // is the same defect as a plaintext provider key, so a protector that
-                        // cannot encrypt it means we do not store it at all.
-                        var protector = hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>();
+                        // cannot encrypt it means we do not store it at all — which is why its
+                        // absence is now decided ABOVE, before the id is spent.
                         var node = new MeshNode(
                             credentialPath.Split('/').Last(), PluginRegistryCredentials.Namespace)
                         {
@@ -416,7 +453,14 @@ public sealed class InstanceAutoRegistrationService(
                                     return Unit.Default;
                                 })
                                 .Finally(() => write.Dispose());
-                        });
+                        })
+                        // Everything from here on runs AFTER the id was spent and the key issued,
+                        // so a failure here is a categorically different event from a failed
+                        // request — and reporting it as one is what sent the operator to check a
+                        // bootstrap key that was never the problem (#2585). Tag it so the handler
+                        // at the top of Phase 1 can say what actually happened.
+                        .Catch((Exception ex) => Observable.Throw<Unit>(
+                            new RegistrationPersistException(result.InstanceId, registry.Url, ex)));
                     })
                     // Concurrent replicas race this whole block: both read "no credential", one
                     // registers first, and the loser sees 409 (the id is taken) — or, narrower, the
@@ -1372,4 +1416,26 @@ public readonly record struct DefaultInstallSummary(
         $"{Installed} installed, {UpToDate} up to date, {Failed} failed "
         + $"[{string.Join(", ", Packages)}]"
         + (Failures is { Count: > 0 } f ? $" — FAILED: [{string.Join(", ", f)}]" : "");
+}
+
+/// <summary>
+/// Raised when the registry ACCEPTED an instance registration and storing the issued key then
+/// failed — the one failure in this flow that cannot be retried into success (#2585).
+///
+/// <para>🚨 It exists to keep two events that look alike from being REPORTED alike. A failed
+/// request leaves nothing consumed and is fixed by correcting the bootstrap key or the id. This
+/// one leaves the id permanently taken and the key — issued exactly once — gone, so the same
+/// advice sends the operator to re-check a credential that worked. The distinction is carried as
+/// a type rather than a log string because the handler is several operators away from the throw
+/// site, with a convergence <c>Catch</c> in between that legitimately swallows the sibling-replica
+/// case.</para>
+/// </summary>
+internal sealed class RegistrationPersistException(string instanceId, string registryUrl, Exception inner)
+    : Exception($"Instance '{instanceId}' was registered at {registryUrl}, but its issued key could not be stored.", inner)
+{
+    /// <summary>The instance id the registry has now taken permanently.</summary>
+    public string InstanceId { get; } = instanceId;
+
+    /// <summary>The registry that accepted the registration and issued the key.</summary>
+    public string RegistryUrl { get; } = registryUrl;
 }
