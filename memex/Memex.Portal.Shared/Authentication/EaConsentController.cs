@@ -50,46 +50,14 @@ public sealed class EaConsentController(
     private string CallbackUri => $"{Request.Scheme}://{Request.Host}/{BasePath}/{CallbackAction}";
 
     /// <summary>
-    /// Reduces a caller-supplied return target to a SAME-SITE relative path, or <c>"/"</c>.
+    /// Only ever redirect to a local path. Delegates to <see cref="ReturnUrlPolicy.Sanitize"/>.
     ///
-    /// <para>🚨 Both redirect sites take their target from the request — <c>?returnUrl=</c> on
-    /// connect, and <c>state</c> on the callback, which is just that value round-tripped through
-    /// the identity provider. Handing either straight to <c>Redirect</c> is an OPEN REDIRECT:
-    /// <c>/auth/ea/connect?returnUrl=https://phish.example</c> would bounce an authenticated user
-    /// off-site, and the already-connected fast path makes it a single hop with no dialog in
-    /// between — the shape phishing wants, wearing our domain in the link.</para>
-    ///
-    /// <para>Accepted: a rooted relative path (<c>/x/y?q=1#f</c>). Rejected — and collapsed to the
-    /// home page — is everything else: absolute URLs (<c>https://…</c>, and any other scheme
-    /// including <c>javascript:</c>), <b>protocol-relative</b> <c>//host/path</c> (a URL the
-    /// browser resolves against the current scheme, which is why checking only for a leading
-    /// <c>/</c> is not enough), backslash variants (<c>/\host</c>) that some browsers normalise
-    /// into an authority, and anything that is not rooted at all.</para>
-    ///
-    /// <para>The rule is ASP.NET's own <c>IsLocalUrl</c> algorithm, spelled out here rather than
-    /// delegated to <c>Url.IsLocalUrl</c>: <see cref="ControllerBase.Url"/> is populated by MVC's
-    /// activator, so it is NULL for a controller constructed directly, and a security check that
-    /// throws a <see cref="NullReferenceException"/> depending on how the type was built is a
-    /// worse failure than the one it guards. Static and total — every variant below is pinned by
-    /// <c>EaConnectOpenRedirectTest</c>, which is the part that makes a hand-written rule
-    /// trustworthy.</para>
+    /// <para>🚨 This was a correct hand-written copy of the rule — it already rejected both
+    /// <c>//host</c> and <c>/\host</c>. It is delegated anyway, because being right was not the
+    /// problem: this assembly had FIVE implementations of one rule and only two were right
+    /// (#2302). Correct duplicates are what make an incorrect one look normal.</para>
     /// </summary>
-    internal static string SafeReturnUrl(string? candidate)
-    {
-        if (string.IsNullOrWhiteSpace(candidate))
-            return "/";
-        // Rooted paths only. The second character decides: "//host" is protocol-relative (the
-        // browser resolves it against the current scheme and leaves the site), and "/\host" is
-        // normalised into an authority by some browsers — both are off-site despite the leading
-        // slash that a naive prefix test would accept.
-        if (candidate[0] == '/')
-            return candidate.Length == 1 || (candidate[1] != '/' && candidate[1] != '\\')
-                ? candidate
-                : "/";
-        // Anything else — absolute (https://…, javascript:, mailto:) or an unrooted relative path
-        // whose resolution depends on the current page — is refused.
-        return "/";
-    }
+    internal static string SafeReturnUrl(string? candidate) => ReturnUrlPolicy.Sanitize(candidate);
 
     [HttpGet(ConnectAction)]
     public async Task<IActionResult> Connect(

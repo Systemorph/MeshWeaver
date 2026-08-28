@@ -176,7 +176,7 @@ public class DevAuthController : ControllerBase
                 ExpiresUtc = DateTimeOffset.UtcNow.AddDays(7)
             });
 
-        return Redirect(returnUrl ?? "/");
+        return Redirect(ReturnUrlPolicy.Sanitize(returnUrl));
     }
 
     /// <summary>
@@ -240,7 +240,7 @@ public class DevAuthController : ControllerBase
     public async Task<IActionResult> Logout([FromQuery] string? returnUrl)
     {
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        return Redirect(returnUrl ?? "/");
+        return Redirect(ReturnUrlPolicy.Sanitize(returnUrl));
     }
 
     private static PersonInfo? ExtractPersonInfo(string id, object content)
