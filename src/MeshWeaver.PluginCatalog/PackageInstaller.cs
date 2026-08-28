@@ -2117,6 +2117,7 @@ public static class PackageInstaller
 
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
         var nodeTypePaths = nodes.Where(n => n.Content is NodeTypeDefinition).Select(n => n.Path).ToArray();
 
         // Ordering solves two chicken-and-eggs at once:
@@ -2640,6 +2641,16 @@ public static class PackageInstaller
                 // an install that reports success while its partition is unreadable is the failure
                 // this whole ordering exists to make impossible, and it must never be silent.
                 return VerifyDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id, logger)
+                    // 🚨 Prune nodes THIS package no longer ships — read BEFORE WriteInstalledRecord
+                    // overwrites the baseline below, so a node the repo retired is deleted rather
+                    // than surviving forever (Systemorph/MeshWeaver#2473). A full install runs here
+                    // whenever the delta path refuses an update (CatalogLayoutAreas.IncrementalUpdate,
+                    // "changed shared Source/Test files; full install required") as well as on a
+                    // fresh install — the exact route by which a retired NodeType with its Source
+                    // deleted kept serving its last-built assembly until the framework identity
+                    // moved, then recompiled against zero sources and parked the portal's readiness.
+                    .SelectMany(_ => PruneRetiredNodes(
+                        hub, manifest, moduleManifest, nodes, persistence, meshService, options, logger))
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, moduleManifest, authorizingUserId))
                     // Adoption first (it can settle a release without compiling at all), then the
@@ -2673,6 +2684,109 @@ public static class PackageInstaller
                     .Select(_ => result);
             }));
             });
+    }
+
+    /// <summary>
+    /// The FULL install's counterpart to <see cref="InstallNodeRepoDeltaCore"/>'s prune — applied
+    /// without a caller-handed diff, because a full install is exactly what runs when there IS no
+    /// diff to hand in: a fresh install (nothing installed before — nothing to prune, and this
+    /// returns 0 immediately) and, critically, whenever <c>CatalogLayoutAreas.IncrementalUpdate</c>
+    /// refuses an update because it touches the package's shared <c>Source/</c>/<c>Test/</c> and
+    /// falls back here. That fallback is the route by which a node the source repo retired used to
+    /// survive in the mesh FOREVER (Systemorph/MeshWeaver#2473): the full install upserts everything
+    /// the package still ships and, before this method existed, pruned nothing — so a NodeType whose
+    /// <c>Source/</c> the repo deleted kept serving its last-built assembly until the framework
+    /// identity next moved, at which point it recompiled against zero sources, parked at
+    /// <c>CompileError</c>, and held every instance hub for the full 60 s activation budget.
+    ///
+    /// <para>Reads THIS package's own previous install record (<c>{InstalledPartition}/{Id}</c>) for
+    /// its <see cref="PackageManifest.InstalledFiles"/> baseline — read here, BEFORE the caller's
+    /// <c>WriteInstalledRecord</c> overwrites it — and diffs it against <paramref name="moduleManifest"/>
+    /// via the same <see cref="ModuleManifest.DiffFrom"/> the delta path uses. A removed file whose
+    /// node path is still produced by a currently-shipped file (the <c>X.json</c> → <c>X/index.json</c>
+    /// layout-move case) is never a prune candidate. Bounded by construction to paths THIS package's
+    /// own record previously listed — never a scan of the shared partition — so it can never touch
+    /// another package's content. No-ops (returns 0) when the package ships no <c>manifest.lock</c>
+    /// (no file-level baseline exists at all) or has no prior record with a file map.</para>
+    /// </summary>
+    private static IObservable<int> PruneRetiredNodes(
+        IMessageHub hub, PackageManifest manifest, ModuleManifest? moduleManifest,
+        IReadOnlyList<MeshNode> nodes, IStorageAdapter? persistence, IMeshService? meshService,
+        JsonSerializerOptions options, ILogger? logger)
+    {
+        if (moduleManifest is null || persistence is null)
+            return Observable.Return(0);
+
+        var recordPath = $"{InstalledPartition}/{manifest.Id}";
+        return persistence.Read(recordPath, options).Take(1)
+            .Select(n => n?.ContentAs<PackageManifest>(options)?.InstalledFiles)
+            .Catch<ImmutableSortedDictionary<string, string>?, Exception>(
+                _ => Observable.Return<ImmutableSortedDictionary<string, string>?>(null))
+            .SelectMany(previousFiles =>
+            {
+                if (previousFiles is not { Count: > 0 })
+                    return Observable.Return(0);
+
+                var currentNodePaths = nodes.Select(n => n.Path)
+                    .ToImmutableHashSet(StringComparer.Ordinal);
+                var removedNodePaths = moduleManifest.DiffFrom(previousFiles).RemovedFiles
+                    .Select(NodePathForFile)
+                    .Where(p => p is not null && !currentNodePaths.Contains(p))
+                    .Select(p => p!)
+                    .ToImmutableHashSet(StringComparer.Ordinal);
+
+                return PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, options, logger)
+                    .Do(pruned =>
+                    {
+                        if (pruned > 0)
+                            logger?.LogInformation(
+                                "[PackageInstaller] {Id}: pruned {Pruned} node(s) the repo no longer "
+                                + "ships (full install).", manifest.Id, pruned);
+                    });
+            });
+    }
+
+    /// <summary>
+    /// Deletes each of <paramref name="removedNodePaths"/>, System-impersonated per delete like
+    /// every installer write. A failed/absent delete degrades to a log line — never fails the
+    /// install/update it runs inside. Shared by <see cref="InstallNodeRepoDeltaCore"/>'s prune
+    /// (whose removed set comes from a caller-handed manifest diff) and
+    /// <see cref="PruneRetiredNodes"/>'s (whose removed set comes from the same diff computed
+    /// against the package's own previous install record).
+    ///
+    /// <para>Read-before-delete: a CLAIMED node (<see cref="MeshNode.SyncBehavior"/> other than
+    /// <see cref="SyncBehavior.Include"/>) is the user's, not the repo's — the repo dropping its
+    /// file revokes the PACKAGE's copy, never the user's claim. The same fence
+    /// <see cref="UpsertIfChanged"/> applies on the write side.</para>
+    /// </summary>
+    private static IObservable<int> PruneRemovedNodes(
+        IMessageHub hub, IMeshService? meshService, IStorageAdapter? persistence,
+        IReadOnlyCollection<string> removedNodePaths, JsonSerializerOptions options, ILogger? logger)
+    {
+        if (meshService is null || removedNodePaths.Count == 0)
+            return Observable.Return(0);
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return removedNodePaths
+            .Select(path => (persistence is not null
+                    ? persistence.Read(path, options).Take(1)
+                    : Observable.Return<MeshNode?>(null))
+                .SelectMany(current =>
+                    current is not null && current.SyncBehavior != SyncBehavior.Include
+                        ? Observable.Return(0)
+                        // Sealed at Subscribe (RunAsSystem), never Observable.Using(ImpersonateAsSystem):
+                        // impersonation is an AsyncLocal store/restore pair, and Using disposes on the
+                        // TERMINATING thread — for a cross-hub delete, the owning hub's response thread,
+                        // not the one that opened the scope — which latches system-security onto whatever
+                        // runs next on the subscribing thread (#1790).
+                        : accessService.RunAsSystem(() => meshService.DeleteNode(path))
+                            .Take(1)
+                            .Select(deleted => deleted ? 1 : 0))
+                .Catch<int, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex, "Pruning removed node {Path} failed.", path);
+                    return Observable.Return(0);
+                }))
+            .ToObservable().Concat().Sum();
     }
 
     /// <summary>
@@ -2785,27 +2899,7 @@ public static class PackageInstaller
         // removedNodePaths is already restricted to previously-installed paths, so a user-ADDED
         // node was never a prune candidate to begin with.
         IObservable<int> Prune() =>
-            meshService is null || removedNodePaths.Count == 0
-                ? Observable.Return(0)
-                : removedNodePaths
-                    .Select(path => (persistence is not null
-                            ? persistence.Read(path, options).Take(1)
-                            : Observable.Return<MeshNode?>(null))
-                        .SelectMany(current =>
-                            current is not null && current.SyncBehavior != SyncBehavior.Include
-                                ? Observable.Return(0)
-                                : Observable.Using(
-                                        () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
-                                              ?? System.Reactive.Disposables.Disposable.Empty,
-                                        _ => meshService.DeleteNode(path))
-                                    .Take(1)
-                                    .Select(deleted => deleted ? 1 : 0))
-                        .Catch<int, Exception>(ex =>
-                        {
-                            logger?.LogWarning(ex, "Pruning removed node {Path} failed.", path);
-                            return Observable.Return(0);
-                        }))
-                    .ToObservable().Concat().Sum();
+            PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, options, logger);
 
         // 🚨 The declared access is re-asserted BEFORE the delta's writes, not after them (#1758).
         // An UPDATE re-asserts it at all so a package that only just flipped its declaration (or
