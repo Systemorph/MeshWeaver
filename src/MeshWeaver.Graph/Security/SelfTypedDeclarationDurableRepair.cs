@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Disposables;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -51,14 +52,30 @@ namespace MeshWeaver.Graph.Security;
 /// <c>InstalledPackageRepairService</c> — a repair must never delay or fail startup; a skipped
 /// pass heals on the next boot.</para>
 /// </summary>
-/// <param name="hub">Hub supplying the service provider and serializer options.</param>
-public sealed class SelfTypedDeclarationDurableRepair(IMessageHub hub) : IHostedService
+public sealed class SelfTypedDeclarationDurableRepair : IHostedService
 {
-    private IDisposable? subscription;
+    // Both fields are RELEASED the moment they are no longer needed — the hub on StartAsync, the
+    // subscription when the one-shot sweep terminates. A hosted-service instance outlives the mesh
+    // it belongs to (test harnesses keep the started instances to stop them at teardown), so any
+    // field here that can reach the hub roots the entire DISPOSED hub graph across meshes —
+    // MeshHubDisposalLeakTest names exactly this chain (started-services list → this service →
+    // MessageHub) when either field is retained.
+    private IMessageHub? hub;
+    private SingleAssignmentDisposable? subscription;
+
+    /// <summary>Captures the hub — held only until <see cref="StartAsync"/> consumes it.</summary>
+    /// <param name="hub">Hub supplying the service provider and serializer options.</param>
+    public SelfTypedDeclarationDurableRepair(IMessageHub hub) => this.hub = hub;
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        // Take the hub ONCE and drop the field: everything below lives in locals and in the
+        // chain's closures, which are released when the sweep terminates (see the gate below).
+        var hub = Interlocked.Exchange(ref this.hub, null);
+        if (hub is null)
+            return Task.CompletedTask;
+
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger<SelfTypedDeclarationDurableRepair>();
         // A mesh without a storage adapter has no durable rows to heal.
@@ -77,8 +94,14 @@ public sealed class SelfTypedDeclarationDurableRepair(IMessageHub hub) : IHosted
             return Task.CompletedTask;
 
         // Subscribe-and-return per the IHostedService rule (AsynchronousCalls.md): the turn
-        // returns immediately and the work belongs to the observable chain.
-        subscription = storage.ReadMany(declarationPaths, options)
+        // returns immediately and the work belongs to the observable chain. The
+        // SingleAssignmentDisposable gate makes the retained state exactly the in-flight window:
+        // on a synchronously-completing store (in-memory) Finally nulls the field before the
+        // gate is even armed, and arming a disposed gate disposes the inner subscription on the
+        // spot — so a finished sweep leaves this instance referencing NOTHING.
+        var gate = new SingleAssignmentDisposable();
+        subscription = gate;
+        gate.Disposable = storage.ReadMany(declarationPaths, options)
             .Where(NodeTypeDeclarationSelfTypingValidator.IsSelfTypedDeclaration)
             .SelectMany(fossil => storage
                 .Write(fossil with
@@ -102,6 +125,10 @@ public sealed class SelfTypedDeclarationDurableRepair(IMessageHub hub) : IHosted
                         + "self-typed and will be retried on the next start", fossil.Path);
                     return Observable.Return<MeshNode?>(null);
                 }))
+            // A finished one-shot has nothing left to cancel, so it drops its own handle rather
+            // than keeping the sweep's closures (storage, options, and through them the hub)
+            // reachable from the host's IHostedService[] for the rest of the process.
+            .Finally(Release)
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex,
@@ -114,8 +141,11 @@ public sealed class SelfTypedDeclarationDurableRepair(IMessageHub hub) : IHosted
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        subscription?.Dispose();
-        subscription = null;
+        Release();
         return Task.CompletedTask;
     }
+
+    /// <summary>Drops the sweep handle and, with it, everything the sweep closed over. Safe to
+    /// call twice — the sweep completing and the host stopping race by construction.</summary>
+    private void Release() => Interlocked.Exchange(ref subscription, null)?.Dispose();
 }
