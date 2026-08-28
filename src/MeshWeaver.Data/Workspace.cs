@@ -1211,6 +1211,15 @@ public class Workspace : IWorkspace
     /// or polls. A subscriber that was NOT actually dead (its stream subscription flapped) loses
     /// only its server-side stream — its own change-feed latch resubscribes and the owner builds a
     /// fresh one, exactly as after an owner recycle.</para>
+    ///
+    /// <para>The registry entry is removed HERE, before the hub is disposed, not left to the
+    /// stream's own disposal registration. Hub disposal is asynchronous and the sync hub's
+    /// <c>RunLevel</c> stays <c>Started</c> for a moment after <c>Dispose()</c> returns, so a
+    /// resubscribe landing in that window would pass <see cref="GetClientSubscription"/>'s
+    /// liveness probe and be re-asserted onto a stream that is being torn down — served off a
+    /// corpse instead of getting a fresh stream. Pair-exact (the <c>KeyValuePair</c> overload
+    /// removes only this exact entry), so a later stream that legitimately took the key over is
+    /// never unregistered or disposed by this pass — its own fan-out earns its own verdict.</para>
     /// </summary>
     /// <param name="subscriberPath">The dead subscriber's address, as
     /// <see cref="Address.ToString"/> renders it (the registry's key form).</param>
@@ -1222,12 +1231,16 @@ public class Workspace : IWorkspace
         {
             if (!string.Equals(kv.Key.Subscriber, subscriberPath, StringComparison.Ordinal))
                 continue;
+            // Unregister first, pair-exact — see the remarks. A miss means another pass (or the
+            // stream's own disposal) already took this entry; nothing of ours is left to dispose.
+            if (!_clientSubscriptions.TryRemove(kv))
+                continue;
             try
             {
                 // The same disposal route WithHandler<UnsubscribeRequest> takes: the per-stream
                 // sync hub (SynchronizationStream assigns its own sync/{clientId} sub-hub to
-                // .Hub — never the owner hub). Removal from the registry happens through the
-                // stream's own disposal registration, pair-exact by reference identity.
+                // .Hub — never the owner hub). The stream's own disposal registration then finds
+                // the entry already gone and does nothing.
                 kv.Value.Stream.Hub.Dispose();
                 evicted++;
             }
