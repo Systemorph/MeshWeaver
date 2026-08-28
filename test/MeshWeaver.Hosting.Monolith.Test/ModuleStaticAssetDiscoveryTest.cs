@@ -307,11 +307,40 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 <b>The PINNED shape — the one that shipped broken (#2562).</b>
+    ///
+    /// <para>#2509 stopped loading a landed module from the shared <c>modules/</c> tree and began
+    /// copying its generation into a process-local pin first:
+    /// <c>&lt;tmp&gt;/meshweaver-pinned-modules/&lt;n&gt;-&lt;hash&gt;/&lt;Name&gt;@&lt;gen&gt;/</c>.
+    /// The pin carries <c>wwwroot</c> with it, so the assets sit directly beside the loaded
+    /// assembly — but the resolver keyed on the PARENT FOLDER being named <c>modules</c>, and here
+    /// it is a pin id. Every landed module fell back to the absent legacy path, contributed no
+    /// mounts, and every asset it ships 404'd: the portal came up unstyled with the modules loading
+    /// perfectly and nothing in the log to say why.</para>
+    ///
+    /// <para>This is why the rule is now "not the app's own directory" rather than a folder name —
+    /// a name-based test only ever knew about the layouts that existed when it was written.</para>
+    /// </summary>
+    [Fact]
+    public void PinnedGenerationModule_TakesItsAssetsFromTheLoadedAssemblysOwnFolder()
+    {
+        // The shape #2509 introduced: a pin id, not "modules", is the parent folder.
+        var pinned = Path.Combine(
+            Path.GetTempPath(), "meshweaver-pinned-modules", "1-a457e6a1", $"{ModuleName}@96af4c59");
+
+        MeshModuleStaticAssetExtensions.ModuleWwwrootPath(
+                Path.Combine(pinned, $"{ModuleName}.dll"),
+                AppContext.BaseDirectory,
+                ModuleName)
+            .Should().Be(Path.Combine(pinned, "wwwroot"));
+    }
+
+    /// <summary>
     /// 🚨 A module still riding the APP CLOSURE must contribute NOTHING. Its assembly sits in the
     /// app folder, whose <c>wwwroot</c> is the HOST's — mounting that under
     /// <c>_content/&lt;Name&gt;</c> would serve the entire host web root through a module
-    /// namespace. Only an assembly sitting directly inside a <c>modules/</c> tree supplies its own
-    /// folder; everything else falls back to the (absent) legacy name-based path.
+    /// namespace. This is the invariant the resolver actually protects, and the reason it compares
+    /// against the app directory rather than trusting a folder name.
     /// </summary>
     [Fact]
     public void AppClosureModule_NeverMountsTheHostsOwnWwwroot()
