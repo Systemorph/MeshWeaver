@@ -71,6 +71,127 @@ public class Workspace : IWorkspace
         // and adapt the Subscribe(Action<MeshChangeEvent>, MeshChangeKind?) signature.
         _changeFeedSubscription = TrySubscribeToChangeFeed(hub.ServiceProvider, _logger,
             evtPath => EvictForPath(evtPath));
+
+        // 🚨 Give the hub the goodbye it cannot say for itself — see RecycleAnnouncement and
+        // AnnounceRecycleToClientSubscriptions. Registered here because the client-subscription
+        // registry lives on THIS workspace, and it is the only thing that knows who is listening.
+        hub.Set(new RecycleAnnouncement(AnnounceRecycleToClientSubscriptions));
+    }
+
+    /// <summary>
+    /// 🚨 <b>Tells every live client subscription that its owner is being RECYCLED</b> — the
+    /// missing half of <c>StreamEndedEvent</c>, whose own contract already promises the case
+    /// ("the owning hub tearing down — deactivation, recycle, restart") that its emitter
+    /// deliberately refuses to send, because a dying hub must never speak (see
+    /// <c>JsonSynchronizationStream</c>'s teardown guard, and <see cref="RecycleAnnouncement"/>
+    /// for the full history).
+    ///
+    /// <para><b>Called on the recycled hub's own turn</b>, before its disposal starts — so the
+    /// registry below is intact and the parent hub is resolvable. What it does NOT do is post
+    /// anything yet: the delivery is deferred to <see cref="IMessageHub.DisposalCompleted"/> and
+    /// carried by the PARENT hub, which outlives this one. Both halves of that are load-bearing:</para>
+    /// <list type="bullet">
+    /// <item><description><b>Posted by the parent</b>, because a hub that is tearing down cannot
+    /// reliably deliver its own last message — and the version of this that reached up the tree
+    /// from INSIDE the teardown resurrected the very Orleans activation it was retiring
+    /// (OrleansGrainTeardownStragglerTest). Here the parent speaks about a recycle it hosted, to a
+    /// third party, with nothing routed at the dead address.</description></item>
+    /// <item><description><b>After DisposalCompleted</b>, because the subscriber answers this
+    /// event with ONE bounded re-ask (JsonSynchronizationStream's recycle re-arm). Announcing
+    /// earlier makes that re-ask race the teardown: it lands on the still-dying instance, is
+    /// NACKed <c>ShuttingDown</c>, and burns a budget that exists for a genuinely non-converging
+    /// owner — the #1360 shape, "four rejections in 11 ms". Waiting for the signal the hub already
+    /// publishes costs no timer, no poll and no watchdog.</description></item>
+    /// </list>
+    ///
+    /// <para>Fires at most once per stream (the registry is emptied by the disposal that follows),
+    /// and never at all when nothing is subscribed — a recycle of an unwatched hub stays exactly
+    /// as cheap as it was.</para>
+    /// </summary>
+    private void AnnounceRecycleToClientSubscriptions()
+    {
+        // Snapshot NOW: the streams (and with them these registry entries) are torn down by the
+        // disposal we are about to precede.
+        var orphaned = _clientSubscriptions
+            .Select(kv => (kv.Value.Subscriber, kv.Key.StreamId))
+            .ToArray();
+        if (orphaned.Length == 0)
+            return;
+
+        // The carrier must OUTLIVE the target. A per-node hub is hosted by the mesh hub, a client
+        // hub by whoever created it; when there is no parent there is nothing that can still speak
+        // after we are gone, and the subscriber falls back to the pre-fix recovery (the owner's
+        // next write, or a reload).
+        IMessageHub? carrier;
+        try
+        {
+            carrier = Hub.Configuration.ParentHub;
+        }
+        catch (Exception ex)
+        {
+            // ParentHub re-resolves from the parent service provider, which can already be
+            // disposed when a whole tree is going down. Probing must never throw into a teardown.
+            _logger.LogDebug(ex,
+                "Workspace {WorkspaceId}: could not resolve a carrier for the recycle announcement",
+                Id);
+            return;
+        }
+
+        // 🚨 A SELF-PARENT IS NOT A CARRIER. `Configuration.ParentHub` resolves `IMessageHub` from
+        // the parent DI scope, and for a root hub that is the hub ITSELF (the same self-parent
+        // DataExtensions.RouteStreamMessage terminates its walk on). Posting through it would be
+        // posting from the dying hub — exactly the thing this indirection exists to avoid.
+        if (carrier is null || ReferenceEquals(carrier, Hub) || carrier.Address.Equals(Hub.Address))
+        {
+            _logger.LogDebug(
+                "Workspace {WorkspaceId}: recycled hub has no parent to announce through — "
+                + "{Count} live subscription(s) fall back to the change-feed latch",
+                Id, orphaned.Length);
+            return;
+        }
+
+        _logger.LogDebug(
+            "Workspace {WorkspaceId}: recycling — announcing the end of {Count} live client "
+            + "subscription(s) through {Carrier} once teardown completes",
+            Id, orphaned.Length, carrier.Address);
+
+        void Announce()
+        {
+            foreach (var (subscriber, streamId) in orphaned)
+            {
+                try
+                {
+                    carrier.Post(new StreamEndedEvent(streamId), o => o.WithTarget(subscriber));
+                }
+                catch (Exception ex)
+                {
+                    // Best-effort per subscriber: one unreachable mirror must not silence the rest.
+                    // StreamEndedEvent is [CanBeIgnored], so a subscriber that has itself gone away
+                    // is dropped by routing rather than NACKed.
+                    _logger.LogDebug(ex,
+                        "Workspace {WorkspaceId}: could not announce the recycle of stream "
+                        + "{StreamId} to {Subscriber}", Id, streamId, subscriber);
+                }
+            }
+        }
+
+        // Event-driven, not timed: DisposalCompleted is a ReplaySubject(1) that the hub signals as
+        // the last act of its teardown (the disposal watchdog force-completes it if the phased path
+        // ever wedges), so this leg is already guaranteed terminal and needs no deadline of its own.
+        Hub.DisposalCompleted
+            .Take(1)
+            .Subscribe(
+                _ => Announce(),
+                // A FAULTED disposal is still a disposal: the address is gone either way, and
+                // leaving the subscriber silent is the defect this exists to fix. The fault itself
+                // is surfaced by the disposal path, never swallowed here.
+                ex =>
+                {
+                    _logger.LogDebug(ex,
+                        "Workspace {WorkspaceId}: disposal faulted — announcing the recycle anyway",
+                        Id);
+                    Announce();
+                });
     }
 
     private static IDisposable? TrySubscribeToChangeFeed(
@@ -1019,8 +1140,15 @@ public class Workspace : IWorkspace
     // GetHashCode/Equals recurse into StreamConfiguration (which holds the stream back) — a
     // record wrapper around one stack-overflows the process the moment the dictionary hashes
     // or compares it. See the _evictedRemoteStreams field note.
-    private sealed class ClientSubscription(WorkspaceReference reference, ISynchronizationStream stream)
+    private sealed class ClientSubscription(
+        Address subscriber, WorkspaceReference reference, ISynchronizationStream stream)
     {
+        /// <summary>
+        /// The subscriber's ADDRESS, kept alongside the string that keys the dictionary: a recycle
+        /// announcement has to post back to it, and an Address cannot be reconstructed faithfully
+        /// from its own ToString() (a routed target can carry a Host qualifier).
+        /// </summary>
+        public Address Subscriber { get; } = subscriber;
         public WorkspaceReference Reference { get; } = reference;
         public ISynchronizationStream Stream { get; } = stream;
     }
@@ -1059,7 +1187,7 @@ public class Workspace : IWorkspace
         if (subscriber is null || string.IsNullOrEmpty(streamId))
             return;
         var key = (subscriber.ToString(), streamId);
-        _clientSubscriptions[key] = new ClientSubscription(reference, stream);
+        _clientSubscriptions[key] = new ClientSubscription(subscriber, reference, stream);
         // Pair-exact removal by REFERENCE identity (never value equality — see ClientSubscription):
         // a later stream that legitimately took over this key must not be unregistered by an
         // earlier stream's teardown.
