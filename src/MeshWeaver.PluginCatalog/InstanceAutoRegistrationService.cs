@@ -387,18 +387,6 @@ public sealed class InstanceAutoRegistrationService(
         // issued and then dropped on the floor, and the id can never be registered again, so a
         // retry cannot fix it and the operator has to mint a fresh bootstrap key AND a new id.
         var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
-        if (protector is null)
-        {
-            logger.LogError(
-                "PluginCatalog:BootstrapKey is set, but this mesh registers no IProviderKeyProtector, "
-                + "so an issued instance key could not be stored in the clear-text-free form the "
-                + "credential node requires. NOT registering '{InstanceId}' at {Url}: the registry "
-                + "would take the id permanently and issue the key exactly once, so asking for it "
-                + "now would burn both for nothing. Add the protector (AddGraph registers it) and "
-                + "restart — nothing has been consumed.",
-                instanceId, registry.Url);
-            return Observable.Empty<Unit>();      // nothing burned — a retry can still succeed
-        }
 
         return (Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
@@ -410,6 +398,31 @@ public sealed class InstanceAutoRegistrationService(
                 {
                     logger.LogDebug("Registry credential already stored at {Path} — no registration needed.",
                         credentialPath);
+                    return Observable.Return(Unit.Default);
+                }
+
+                // 🚨 Decline HERE, not earlier, and emit rather than completing empty.
+                //
+                // Two things this placement gets right that an early return did not (both caught
+                // by review on the first draft). (1) It sits AFTER the "is there already a stored
+                // credential?" read, so an installation that registered long ago is untouched by a
+                // missing protector — bailing out above would have punished every already-
+                // registered portal for a service it no longer needs. (2) It returns a VALUE:
+                // `Start()` chains `.SelectMany(_ => registered).SelectMany(_ => InstallDefaults(…))`,
+                // so an empty observable completes without emitting and silently skips the entire
+                // default install phase — contradicting this file's own rule that "a failed
+                // registration must NOT sink the install phase. The phases are independent."
+                // Phase 2 resolves whatever key exists and fails closed on its own if there is none.
+                if (protector is null)
+                {
+                    logger.LogError(
+                        "PluginCatalog:BootstrapKey is set, but this mesh registers no "
+                        + "IProviderKeyProtector, so an issued instance key could not be stored. NOT "
+                        + "registering '{InstanceId}' at {Url}: the registry takes the id "
+                        + "permanently and issues the key exactly once, so asking for it now would "
+                        + "burn both for nothing. Add the protector (AddGraph registers it) and "
+                        + "restart — nothing has been consumed. Continuing to the install phase.",
+                        instanceId, registry.Url);
                     return Observable.Return(Unit.Default);
                 }
 
