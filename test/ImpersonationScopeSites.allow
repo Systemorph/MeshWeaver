@@ -40,7 +40,6 @@
 memex/Memex.Portal.Shared/Api/SeoEndpoints.cs	1
 memex/Memex.Portal.Shared/Authentication/ApiTokenService.cs	1
 memex/Memex.Portal.Shared/Authentication/BootstrapController.cs	1
-memex/Memex.Portal.Shared/Authentication/DevAuthController.cs	2
 memex/Memex.Portal.Shared/Authentication/InvitationService.cs	2
 memex/Memex.Portal.Shared/Authentication/MeshWeaverInstanceService.cs	3
 memex/Memex.Portal.Shared/Authentication/OnboardingMiddleware.cs	1
@@ -68,9 +67,6 @@ src/MeshWeaver.Graph/StaticRepoImporter.cs	1
 src/MeshWeaver.Hosting.Monolith.TestBase/MonolithMeshTestBase.cs	1
 src/MeshWeaver.Hosting/MeshNodeStreamCache.cs	1
 src/MeshWeaver.Hosting/NodeUpdatePipeline.cs	1
-src/MeshWeaver.InstanceSync/InstanceSyncCoordinator.cs	1
-src/MeshWeaver.InstanceSync/InstanceSyncService.cs	1
-src/MeshWeaver.InstanceSync/InstanceSyncWorker.cs	1
 src/MeshWeaver.Mesh.Contract/MeshExtensions.cs	1
 src/MeshWeaver.PluginCatalog/InstanceAutoRegistrationService.cs	6
 src/MeshWeaver.PluginCatalog/InstanceComboReader.cs	1
