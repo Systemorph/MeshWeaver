@@ -250,9 +250,18 @@ public static class TreeBake
             }
             catch (Exception ex) when (ex is IOException or BadImageFormatException)
             {
+                // 🚨 Name BOTH provenances, because this list carries both and they have opposite
+                // fixes: an image-shipped module missing is a broken image build, while a mounted
+                // one missing is a bad path. Blaming `--module` for the first would be this PR's
+                // own bug in miniature — an error naming the wrong cause. Mirrors the gate's
+                // message (PluginGateRunner) so the two lanes explain a missing module alike.
                 throw new InvalidOperationException(
-                    $"bake: --module '{path}' could not be loaded — {ex.Message}. Pass the module's "
-                    + "ENTRY assembly (…/<Name>/<Name>.dll), built for this framework.", ex);
+                    $"bake: module '{path}' could not be loaded — {ex.Message}. Modules this image "
+                    + "ships come from the MeshModulesPublish closure lane in "
+                    + "MeshWeaver.PluginTester.csproj; modules passed with --module must exist at "
+                    + "the absolute path given (mount them into the container). A bake whose "
+                    + "modules are missing would resolve fewer types than the portal that consumes "
+                    + "its bundles.", ex);
             }
             loaded.Add(new InstalledModuleAssembly(assembly));
             options.Output.WriteLine(
