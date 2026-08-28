@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 
 namespace MeshWeaver.Messaging;
@@ -203,7 +204,28 @@ public static class ImpersonationScopeExtensions
             var caller = access.Context;
             using (openScope())
             {
-                var source = work();
+                IObservable<T> source;
+                try
+                {
+                    source = work();
+                }
+                catch (Exception ex)
+                {
+                    // 🚨 Mirror Observable.Defer: a synchronous throw while COMPOSING is an
+                    // OnError, not an exception escaping Subscribe. Without this, replacing a
+                    // `Observable.Defer(...)` with `RunAsSystem(...)` silently changes the fault
+                    // channel — and callers that classify faults off the sequence stop seeing
+                    // them. IdentityRead.Bounded is exactly such a caller: it maps OnError to
+                    // IdentityReadOutcome.Unavailable, and an escaping throw bypasses that
+                    // classification entirely, turning "we could not find out" back into an
+                    // unclassified request failure (the #637 collapse this codebase spent real
+                    // effort to eliminate). Caught on MeshWeaver#2583 by review.
+                    //
+                    // Only the factory is guarded, which is precisely what Defer guards; an
+                    // exception thrown by the subscribe itself keeps propagating as Rx expects.
+                    observer.OnError(ex);
+                    return Disposable.Empty;
+                }
                 // A null caller passes through unwrapped: clamping to null here would fail-close a
                 // background flow that never had a user. Same rule as ContainIdentity.
                 return caller is null

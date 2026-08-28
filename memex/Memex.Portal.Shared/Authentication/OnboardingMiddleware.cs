@@ -407,8 +407,14 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         // The failure it forecloses is the one this whole file exists to prevent (#637): an
         // RLS-stripped User node is indistinguishable from "no such account", and the caller's
         // response to that is to bounce a signed-in user to /onboarding — inviting them to create
-        // a SECOND account. RunAsSystem is cold, so the Defer this replaces is not lost: a
-        // synchronous throw while composing is still classified.
+        // a SECOND account.
+        //
+        // The Defer this replaces is not lost — but that was NOT free, and as first written this
+        // comment was wrong. Review caught it: SubscribeScopedObservable invoked the factory with
+        // no catch, so a synchronous composition throw escaped Subscribe and bypassed
+        // IdentityRead.Bounded's classification, turning "we could not find out" back into an
+        // unclassified failure — the #637 collapse. RunAsSystem now mirrors Observable.Defer and
+        // reports OnError, which is what makes dropping the explicit Defer safe here.
         return IdentityRead.Bounded(
             accessService.RunAsSystem(() =>
                 // Fast path: the shared, cross-request synced-query snapshot. For a user this
