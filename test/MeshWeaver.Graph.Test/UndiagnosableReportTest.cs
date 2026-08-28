@@ -49,10 +49,11 @@ public class UndiagnosableReportTest
         Occurrences = 1,
         FirstSeen = Seen,
         LastSeen = Seen,
+        // The evidence line is the bare header of THIS category — the shape verbatim.
         Samples = ImmutableList.Create(new LogSample(
             Seen,
             "memex-portal-deployment-6c954fd5bf-7b4xq",
-            "fail: MeshWeaver.Connection.Orleans.OrleansRoutingService[0]")),
+            $"fail: {category}[0]")),
     };
 
     // ── The shapes production actually minted ─────────────────────────────────
@@ -159,12 +160,44 @@ public class UndiagnosableReportTest
         var gap = LogIncidentReportSanity.AsCaptureGap(Report(
             "Orleans.Messaging", "Orleans.Messaging[{n}]"));
 
-        gap.Samples.Should().HaveCountGreaterThan(1, "the original samples must survive the reroute");
-        gap.Samples[0].Line.Should()
+        gap.Samples.Should().HaveCount(2, "the original sample must survive the reroute");
+        gap.Samples[0].Line.Should().Be("fail: Orleans.Messaging[0]",
+            "the sender's own evidence comes first and unchanged — the bare header IS the evidence");
+        gap.Samples[^1].Line.Should()
             .Contain("Orleans.Messaging", "the finding must still say WHERE the capture came from")
             .And.Contain("b0a265175dc88c80", "and which degenerate fingerprint was refused");
-        gap.Samples[1].Line.Should().StartWith("fail:", "the bare header itself is the evidence");
     }
+
+    /// <summary>
+    /// 🚨 The provenance sample goes LAST because the ingest trims from the FRONT: it keeps the most
+    /// recent <c>MaxSamples</c>, and the watcher's own sample cap is configured independently. A
+    /// report that already carries a full budget of evidence must not lose the one line that says
+    /// which fingerprint was refused before it is ever stored.
+    /// </summary>
+    [Fact]
+    public void The_provenance_sample_survives_a_report_that_already_fills_the_sample_budget()
+    {
+        var full = Report("Orleans.Messaging", "Orleans.Messaging[{n}]") with
+        {
+            Samples = Enumerable.Range(0, 10)
+                .Select(i => new LogSample(Seen.AddSeconds(i), "pod", "fail: Orleans.Messaging[100071]"))
+                .ToImmutableList(),
+        };
+
+        var gap = LogIncidentReportSanity.AsCaptureGap(full);
+
+        // The same trim the ingest applies (LogIncidentIngestService.Trim: keep the LAST max).
+        var stored = gap.Samples.RemoveRange(0, gap.Samples.Count - 10);
+        stored.Should().HaveCount(10);
+        stored[^1].Line.Should().Contain("b0a265175dc88c80",
+            "trimming to the budget must keep the provenance, not the oldest header");
+    }
+
+    [Fact]
+    public void The_reroute_keeps_the_variant_count()
+        => LogIncidentReportSanity.AsCaptureGap(
+                Report("Orleans.Messaging", "Orleans.Messaging[{n}]") with { Variants = 7 })
+            .Variants.Should().Be(7, "a folded site-level report says how many shapes it stood for");
 
     [Fact]
     public void The_reroute_never_downgrades_a_critical()

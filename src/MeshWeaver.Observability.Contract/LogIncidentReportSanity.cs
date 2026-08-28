@@ -76,8 +76,13 @@ public static class LogIncidentReportSanity
     /// Reroutes an undiagnosable report onto the per-namespace capture-gap incident — the same one
     /// a current watcher files via <c>LogPipelineGap.HeaderOnlyReport</c> — instead of letting it
     /// mint (or fold into) an incident that names a component and no defect. The original category
-    /// and fingerprint survive as the first evidence sample, so the finding still says WHERE the
+    /// and fingerprint survive as the LAST evidence sample, so the finding still says WHERE the
     /// bodyless capture came from.
+    ///
+    /// <para>Last, not first, on purpose: the ingest keeps the most recent
+    /// <c>LogWatchOptions.MaxSamples</c> samples and trims from the FRONT, and the watcher's own
+    /// sample cap is configured independently — so a report that already carries a full budget of
+    /// evidence would lose a provenance sample placed at the head before it was ever stored.</para>
     /// </summary>
     public static LogIncidentReport AsCaptureGap(LogIncidentReport report)
     {
@@ -88,6 +93,8 @@ public static class LogIncidentReportSanity
             Category = PipelineCategory,
             // Never downgrade a crit: the merge rule keeps the max anyway.
             Severity = report.Severity > LogSeverity.Error ? report.Severity : LogSeverity.Error,
+            // A folded site-level report says how many shapes it stands for; that is evidence too.
+            Variants = report.Variants,
             NormalizedMessage =
                 $"Red log line(s) in namespace '{report.Namespace ?? "unknown"}' arrived with NO "
                 + "body: a 'fail:'/'crit:' header and no message, no exception and no stack frame. "
@@ -103,13 +110,11 @@ public static class LogIncidentReportSanity
             Occurrences = report.Occurrences,
             FirstSeen = report.FirstSeen,
             LastSeen = report.LastSeen,
-            Samples = ImmutableList
-                .Create(new LogSample(
-                    report.LastSeen,
-                    null,
-                    $"refused undiagnosable report {report.Fingerprint} for category "
-                    + $"{report.Category} — no message, no exception, no stack frame"))
-                .AddRange(report.Samples),
+            Samples = report.Samples.Add(new LogSample(
+                report.LastSeen,
+                null,
+                $"refused undiagnosable report {report.Fingerprint} for category "
+                + $"{report.Category} — no message, no exception, no stack frame")),
         };
     }
 }
