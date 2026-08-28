@@ -188,7 +188,12 @@ public class MigrationWorkloadModelGuard
         .. Directory.EnumerateFiles(
                 Path.Combine(root, "src", "MeshWeaver.Documentation", "Data"),
                 "*.md", SearchOption.AllDirectories),
-        .. Directory.EnumerateFiles(Path.Combine(root, "content"), "*.md", SearchOption.AllDirectories),
+        // 🚨 content/ is GONE from this repo — it held only content/ai, which left with the AI
+        // engine (#2276). Enumerating it unconditionally threw DirectoryNotFoundException and took
+        // the whole guard down, which is how a deletion elsewhere silently disarmed a check here.
+        // The subject moved rather than disappeared: MeshWeaver.AI/Data/Skill/logon-action.md
+        // discusses migrations, so MeshWeaver.Plugins carries the matching guard over its own copy.
+        // A guard cannot police sources it cannot see — and one that scans nothing still passes.
     ];
 
     /// <summary>
