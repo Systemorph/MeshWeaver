@@ -186,6 +186,13 @@ public static class ApiTokensSettingsTab
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
 
+        // 🚨 Render instants in the VIEWER's zone, resolved explicitly off AccessContext — never
+        // the process's ambient culture, which on Blazor Server is the container's and identical
+        // for every simultaneous viewer. Formatting counts as localization: a token created at
+        // 23:30Z shows a day EARLIER than it happened for anyone east of UTC, so even the
+        // date-only fields are wrong, not merely unlocalised (#2302).
+        var zoneId = host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId();
+
         foreach (var token in tokens)
         {
             var expired = token.ExpiresAt.HasValue && token.ExpiresAt.Value < DateTimeOffset.UtcNow;
@@ -202,9 +209,12 @@ public static class ApiTokensSettingsTab
             // renders them as text rather than as markup we had to hand-escape.
             row = row.WithView(Controls.Markdown(
                     $"**{token.Label}**  \n"
-                    + $"`{token.HashPrefix}` · {host.Localize("apiTokens.created")} {token.CreatedAt:yyyy-MM-dd}"
-                    + $" · {host.Localize("apiTokens.expires")} {(token.ExpiresAt?.ToString("yyyy-MM-dd") ?? never)}"
-                    + $" · {host.Localize("apiTokens.lastUsed")} {(token.LastUsedAt?.ToString("yyyy-MM-dd HH:mm") ?? never)}")
+                    + $"`{token.HashPrefix}` · {host.Localize("apiTokens.created")} "
+                    + $"{DisplayTimeExtensions.ToDisplayTime(token.CreatedAt, zoneId):yyyy-MM-dd}"
+                    + $" · {host.Localize("apiTokens.expires")} "
+                    + $"{(token.ExpiresAt is { } exp ? DisplayTimeExtensions.ToDisplayTime(exp, zoneId).ToString("yyyy-MM-dd") : never)}"
+                    + $" · {host.Localize("apiTokens.lastUsed")} "
+                    + $"{(token.LastUsedAt is { } used ? DisplayTimeExtensions.ToDisplayTime(used, zoneId).ToString("yyyy-MM-dd HH:mm") : never)}")
                 .WithStyle("flex: 1;"));
 
             row = row.WithView(Controls.Markdown($"**{host.Localize(statusKey)}**"));

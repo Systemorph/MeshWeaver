@@ -65,7 +65,8 @@ public static class UpdatePolicySettingsTab
             .Select(node => (UiControl?)Controls.Markdown(
                 StatusMarkdown(
                     UpdatePolicyNodeType.Parse(node, h.Hub.JsonSerializerOptions),
-                    (key, args) => h.Localize(key, args))))
+                    (key, args) => h.Localize(key, args),
+                    h.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId())))
             .StartWith((UiControl?)Controls.Markdown("")));
 
         // Manual apply (installs that can self-patch). Reads the latest tag, then patches via the Http pool.
@@ -157,8 +158,15 @@ public static class UpdatePolicySettingsTab
     /// (<c>InstanceComboReader.ProvenanceCaveat</c> documents the choice); every label around them
     /// is localized.
     /// </summary>
+    /// <param name="zoneId">
+    /// The viewer's IANA zone (<c>AccessService.ViewerZoneId()</c>); null renders UTC. Optional so
+    /// the existing callers and tests compile unchanged — but the production caller passes it,
+    /// because an instant formatted in UTC is simply the wrong time for the person reading it
+    /// (#2302), and on Blazor Server the ambient culture is the CONTAINER's, identical for every
+    /// simultaneous viewer.
+    /// </param>
     internal static string StatusMarkdown(
-        UpdatePolicyContent content, Func<string, object?[], string> localize)
+        UpdatePolicyContent content, Func<string, object?[], string> localize, string? zoneId = null)
     {
         if (string.IsNullOrEmpty(content.LatestAvailableTag))
             return localize("ui.updateNoNewerVersion", []);
@@ -166,7 +174,7 @@ public static class UpdatePolicySettingsTab
         var tag = content.LatestAvailableTag!;
         var available = localize("ui.updateLatestAvailable", [tag])
             + (content.CheckedAt is { } at
-                ? " " + localize("ui.updateCheckedAt", [at.ToString("yyyy-MM-dd HH:mm")])
+                ? " " + localize("ui.updateCheckedAt", [DisplayTimeExtensions.ToDisplayTime(at, zoneId).ToString("yyyy-MM-dd HH:mm")])
                 : "");
 
         // 🚨 The availability hold (#1754) is reported BEFORE the combo verdict, because it is the
@@ -181,7 +189,7 @@ public static class UpdatePolicySettingsTab
                     ? ""
                     : "\n\n> " + Sanitize(content.HeldReason!))
                 + (content.HeldAt is { } heldAt
-                    ? "\n\n" + localize("ui.updateHeldAt", [heldAt.ToString("yyyy-MM-dd HH:mm")])
+                    ? "\n\n" + localize("ui.updateHeldAt", [DisplayTimeExtensions.ToDisplayTime(heldAt, zoneId).ToString("yyyy-MM-dd HH:mm")])
                     : "");
 
         var verdict = content.VerificationFor(tag);
@@ -189,7 +197,7 @@ public static class UpdatePolicySettingsTab
             return available;
 
         var verifiedAt = localize("ui.updateVerifiedAtLine",
-            [verdict.VerifiedAt.ToString("yyyy-MM-dd HH:mm"), verdict.ImageDigest ?? "?"]);
+            [DisplayTimeExtensions.ToDisplayTime(verdict.VerifiedAt, zoneId).ToString("yyyy-MM-dd HH:mm"), verdict.ImageDigest ?? "?"]);
         // 🚨 Caveats are surfaced on EVERY verdict — ComboVerification.Caveats documents them as
         // mandatory-to-surface. A Green over a moving pin, or a Red whose input diverged, must
         // never render as an unqualified answer (Copilot review on #1099).
