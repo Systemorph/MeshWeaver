@@ -971,6 +971,24 @@ public static class MeshNodeLayoutAreas
         public string Placeholder { get; init; } = "Search... (use @ for references)";
     }
 
+    /// <summary>
+    /// Whether a catalog should query the whole descendant subtree, by render mode.
+    ///
+    /// <para>🚨 Only the NAMESPACE TREE needs it — that renderer reveals deeper levels lazily and
+    /// would otherwise stop at direct children. Every other mode shows ONE level, so a subtree
+    /// query buys nothing and costs correctness: the item limit is spent on descendants before the
+    /// level being displayed is complete.</para>
+    ///
+    /// <para>Measured on the 14-lesson <c>AdvancedBusinessRules</c> course, whose Contents index is
+    /// this catalog: the subtree query returned only <b>5 of the 14 lessons</b>, in no useful order,
+    /// interleaved with every <c>Quiz</c>, <c>MyExercises</c>, <c>Solution/</c> and <c>Exercise/</c>
+    /// node, and was STILL truncated. Scoped to children it returns all 14 in order, plus the three
+    /// real siblings — 17 rows, complete. Nothing about depth is lost: each card carries a
+    /// drill-down into its own Search area, which is how browsing was always meant to descend.</para>
+    /// </summary>
+    internal static bool DefaultIncludeSubtree(MeshSearchRenderMode mode)
+        => mode == MeshSearchRenderMode.NamespaceTree;
+
     /// <summary>Reads every catalog knob from the layout area's query string (see <see cref="CatalogOptions"/>).
     /// Booleans accept <c>true/1/yes/on</c> (and their negation by absence); ints must be positive.</summary>
     private static CatalogOptions ReadCatalogOptions(LayoutAreaHost host, MeshSearchRenderMode fallbackMode)
@@ -980,7 +998,17 @@ public static class MeshNodeLayoutAreas
         {
             Mode = mode,
             GroupByProperty = groupProp,
-            IncludeSubtree = ReadBool(host, "subtree", true),
+            // 🚨 The subtree is the NAMESPACE TREE's need, not every catalog's. Defaulting it on
+            // for all modes made the Contents index of a multi-part document unusable: on a
+            // 14-lesson course the query returned the whole descendant tree — every Quiz,
+            // MyExercises invite, Solution/ and Exercise/ node — and the item limit was spent
+            // before most of the lessons were reached. Measured on AdvancedBusinessRules: only
+            // 5 of 14 lessons appeared, in no particular order, and the result was still
+            // truncated. `scope:children` returns the 14 in order plus the three real siblings,
+            // 17 rows, complete. Depth is not lost — every card carries a drill-down to its own
+            // Search area (WithDrillDownArea below), which is how browsing was meant to descend.
+            // `?subtree=true` still opts back in.
+            IncludeSubtree = ReadBool(host, "subtree", DefaultIncludeSubtree(mode)),
             SearchTerm = host.GetQueryStringParamValue("q")?.Trim(),
             ShowSearchBox = ReadBool(host, "searchBar", true),
             ShowEmptyMessage = ReadBool(host, "emptyMessage", false),
@@ -1015,7 +1043,7 @@ public static class MeshNodeLayoutAreas
     /// <see cref="CatalogOptions"/>). The subtree default is what lets the namespace tree reveal
     /// deeper nodes (lazily, per level) instead of stopping at direct children.
     /// </summary>
-    private static MeshSearchControl BuildCatalog(string nodePath, CatalogOptions o)
+    internal static MeshSearchControl BuildCatalog(string nodePath, CatalogOptions o)
     {
         var scope = o.IncludeSubtree ? " scope:subtree" : "";
         var search = Controls.MeshSearch
