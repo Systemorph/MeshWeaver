@@ -649,21 +649,21 @@ public static class PluginGateRunner
             // node repo's own CI built the bytes, mounts them, and names them here. Absolute paths
             // pass through ResolveModulePath untouched, so a mounted module is used exactly as
             // given — an image copy can never silently substitute for it.
+            // 🚨 The entry list is TesterModules' — shared with the bake, which compiles against
+            // exactly these. Both lanes reading one list is the fix for the two having disagreed
+            // (see TesterModules): a module added for the gate can no longer go missing from the
+            // bake's reference set, which is how five Store NodeTypes came to read as content
+            // errors while the gate's own compile-check stayed green.
             var moduleEntries = new Dictionary<string, string?>
             {
-                ["Modules:Assemblies:0"] = "MeshWeaver.AI.dll",
-                // The .dll suffix is the convention every host uses AND load-bearing: the
-                // resolver derives the folder with GetFileNameWithoutExtension, so a bare
-                // "MeshWeaver.AI" would probe modules/MeshWeaver/ and read as absent.
-                ["Modules:Required:0"] = "MeshWeaver.AI.dll",
                 ["Features:StaticRepoSync:Partitions:0"] = "Agent",
             };
-            var externalIndex = 1;
-            foreach (var module in externalModules ?? [])
+            var moduleIndex = 0;
+            foreach (var module in TesterModules.Entries(externalModules))
             {
-                moduleEntries[$"Modules:Assemblies:{externalIndex}"] = module;
-                moduleEntries[$"Modules:Required:{externalIndex}"] = module;
-                externalIndex++;
+                moduleEntries[$"Modules:Assemblies:{moduleIndex}"] = module;
+                moduleEntries[$"Modules:Required:{moduleIndex}"] = module;
+                moduleIndex++;
             }
             var gateModules = new ConfigurationBuilder()
                 .AddInMemoryCollection(moduleEntries)
