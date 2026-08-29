@@ -22,14 +22,14 @@ HOSTING_CMD="hosting-deploy"
 
 CHART="${HOSTING_CHART:-/opt/hosting/chart}"
 
-namespace="" release="" database="" values="" config_file=""
+namespace="" release="" database="" values="" image=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --namespace)   namespace="${2:-}";   shift 2 ;;
     --release)     release="${2:-}";     shift 2 ;;
     --database)    database="${2:-}";    shift 2 ;;
     --values)      values="${2:-}";      shift 2 ;;
-    --config-file) config_file="${2:-}"; shift 2 ;;
+    --image)       image="${2:-}";       shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -42,8 +42,22 @@ hosting::safe_name release "$release"
 hosting::safe_name database "$database"
 
 [ -d "$CHART" ] || hosting::die "no chart at ${CHART}. It is baked into the operator image (COPY helm/ /opt/hosting/chart) precisely so a run cannot deploy a chart nobody reviewed — an image built without it is broken, not degraded."
+# 🚨 THE VALUES FILE IS RENDERED FROM THE DEPLOYMENT RECORD (HelmValues in the Hosting plugin)
+# and materialised by run.sh from HOSTING_VALUES. There is no fleet template and no per-environment
+# overlay any more: the record is the only source. A missing or empty file is a refusal, because
+# helm would fall through to CHART DEFAULTS — ghcr.io/…:latest and an in-cluster Postgres this
+# fleet does not run — and report success.
 [ -n "$values" ] && [ -f "$values" ] \
-  || hosting::die "the fleet template values file '${values:-<unset>}' does not exist. It is supplied as \$VALUES_FILE by Hosting:Operator:Environment and mounted into the job; without it the release would fall through to CHART DEFAULTS, which point at ghcr.io/…:latest and an in-cluster Postgres this fleet does not run."
+  || hosting::die "the rendered values file '${values:-<unset>}' does not exist. It is rendered from the Deployment record by the Hosting plugin and passed to the job as HOSTING_VALUES; without it the release would fall through to CHART DEFAULTS, which point at ghcr.io/…:latest and an in-cluster Postgres this fleet does not run."
+[ -s "$values" ] \
+  || hosting::die "the rendered values file '${values}' is EMPTY — the record rendered nothing, which is a bug in the caller, not an instance with no configuration."
+grep -q "^# GENERATED from the Hosting/Deployment record" "$values" \
+  || hosting::die "'${values}' does not carry the HelmValues header — it is not a rendered record. A hand-written values file is exactly what this step no longer accepts."
+if [ -n "$image" ]; then
+  # A full image reference, and a plain one: it lands in a --set and then in a pod spec.
+  [[ "$image" =~ ^[A-Za-z0-9][A-Za-z0-9./_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || hosting::die "--image '${image}' is not a plain image reference (registry/repository:tag) — refusing to interpolate it"
+fi
 
 # Per-instance identity, derived from the record. Everything else comes from the template.
 host="${HOSTING_HOST:-}"
@@ -56,6 +70,26 @@ sets=(
   --set "config.memex_portal.MEMEX_DATABASENAME=${database}"
 )
 [ -n "$host" ] && sets+=( --set "ingress.host=${host}" )
+
+# 🚨 A DEPLOY MUST NOT ROLL THE BUILD. Two things write the portal image: this upgrade (from
+# portal.image) and the in-portal self-updater, which patches the live Deployment on every
+# publication event. If the record pins a tag the plan passes it as --image and that is a
+# deliberate roll. Otherwise: keep the image the install is ALREADY RUNNING, so the upgrade is a
+# no-op on the build; and on a first install with nothing running and no pin, REFUSE — the chart
+# default is ghcr :latest, which on this fleet is a release tag that cannot boot.
+if [ -z "$image" ] && ! grep -q '^portal:' "$values"; then
+  running="$(hosting::read kubectl -n "$namespace" get deploy memex-portal-deployment \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="memex-portal")].image}' 2>/dev/null || true)"
+  if [ -n "$running" ]; then
+    image="$running"
+    hosting::log "image     keeping the running ${image}"
+  else
+    hosting::die "no image to deploy: the record pins no tag, the values file carries none, and namespace ${namespace} runs no portal yet (first install). Pin an image tag on the Deployment record for the first install."
+  fi
+fi
+if [ -n "$image" ]; then
+  sets+=( --set "portal.image=${image}" --set "migration.image=${image/memex-portal-ai/memex-migration}" )
+fi
 if [ -n "$pg_host" ]; then
   sets+=(
     --set "config.memex_portal.MEMEX_HOST=${pg_host}"
@@ -66,13 +100,10 @@ fi
 
 # The catalog config the mesh composed (plugin mounts + pre-install patterns) is a values FILE, so
 # it layers like any other and stays visible in `helm get values`.
+# ONE values file. The catalog wiring, the module policy, the envelope and the volumes all ride in
+# it, in the chart's own shape — there is no second file to forget.
 files=( -f "$values" )
-if [ -n "$config_file" ] && [ -f "$config_file" ]; then
-  files+=( -f "$config_file" )
-  hosting::log "catalog config: ${config_file} ($(wc -c < "$config_file") bytes)"
-else
-  hosting::log "catalog config: none supplied — the instance will come up with no plugin mounts"
-fi
+hosting::log "values    ${values} ($(wc -c < "$values") bytes, rendered from the record)"
 
 hosting::log "chart     ${CHART}"
 hosting::log "release   ${release} → namespace ${namespace}"
