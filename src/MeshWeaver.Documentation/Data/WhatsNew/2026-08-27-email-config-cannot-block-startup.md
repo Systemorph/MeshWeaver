@@ -18,3 +18,8 @@ starts and serves normally; mail alone is switched off, with an error naming the
 Anything already queued stays visibly unsent, and goes out by itself once the keys are set and the portal
 restarts — mail settings are read at startup, so completing them takes effect on the next roll. Nothing
 is ever marked as delivered when it was not.
+
+**Since 2026-08-29** this is refined rather than reversed: an installation that never wanted mail — a
+blank or absent mail section — still starts exactly as described above, but one that *switches mail on*
+without finishing its settings is now stopped at startup and told which settings are missing, instead
+of serving with mail silently dark. See *A portal that says mail is on now proves it at startup*.
