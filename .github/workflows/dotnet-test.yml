@@ -263,9 +263,19 @@ jobs:
         echo "Comparing against merge base $base"
         python3 scripts/check-record-signatures.py --base "$base"
     # The OTHER half of the same class (#2370): a public TYPE moving assemblies, which no repo-local
-    # build can see. `landed-modules-gate` compiles the plugins repo's module SOURCE against this PR
-    # and therefore goes GREEN on exactly this break — the module that is already published binds a
-    # TypeRef, not a `using`.
+    # build can see. `landed-modules-gate` used to compile the plugins repo's module SOURCE against
+    # this PR and went GREEN on exactly this break — the module that is already published binds a
+    # TypeRef, not a `using` — and it is gone besides (see the note above `clients-gate`).
+    #
+    # 🚨 NO `--sibling` HERE, DELIBERATELY (#2398). The script can resolve a type that left this
+    # repo entirely into "moved to MeshWeaver.Plugins" vs "deleted" when handed a sibling checkout,
+    # and that is a maintainer/local affordance, not a CI one: this repo is PUBLIC and
+    # MeshWeaver.Plugins is PRIVATE, so the checkout needs a secret on a `pull_request` gate — in a
+    # workflow that today has NO secret and NO preflight job (both deliberate; see "No preflight job
+    # right now" above), and reinstating the input means reinstating preflight. It would also make
+    # this gate's verdict depend on ANOTHER repo's moving HEAD, so the same diff could go red or
+    # green with no change of its own. Without the flag the gate is the CONSERVATIVE one: it reports
+    # every departure and fails, and the flag can only ever relax that.
     - name: "Prove the type-move gate is not vacuous"
       run: python3 scripts/check-type-forwards.py --self-test
     - name: "Refuse a public type moving assemblies without a forwarder"

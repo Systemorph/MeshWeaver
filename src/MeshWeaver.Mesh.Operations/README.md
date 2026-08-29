@@ -66,5 +66,6 @@ first cut chose. `MovedTypeBinaryContractTest` fails if either drifts, and
 
 **Source compatibility is not the question.** The first cut was verified by BUILDING the plugins
 repo's `MeshWeaver.Mcp` against the branch — 0 errors — and that build proved nothing about the
-module that was already published. `landed-modules-gate` has the same blind spot by construction: it
-compiles module SOURCE.
+module that was already published. `landed-modules-gate` had the same blind spot by construction —
+it compiled module SOURCE — and it no longer exists at all, so nothing in core's CI compiles a line
+of module source today.
