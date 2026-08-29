@@ -564,6 +564,24 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             ?.Dispatch(requestId, delivery.Message);
                     return delivery.Processed();
                 })
+                // 🚨 The OTHER half of the late seam — issue #2661. A NACK is not always a
+                // PatchDataResponse: the owner's RLS refusal is a DeliveryFailure{Unauthorized}
+                // posted by AccessControlPipeline ahead of the owner's action block, correlated to
+                // the SAME request id. With only the handler above, such a failure arriving after
+                // UpdateRemote's bounded wait closed reached nobody — HandleCallbacks found no live
+                // subject, logged "No subject found for response message", and marked it processed
+                // — so the caller kept an optimistic SUCCESS for a write the owner had refused.
+                // HandleCallbacks still runs first, so a TIMELY failure errors the caller's pending
+                // callback and that callback disarms the registry entry synchronously; the dispatch
+                // here is then a no-op, exactly as for PatchDataResponse.
+                .WithHandler<DeliveryFailure>((hub, delivery) =>
+                {
+                    if (delivery.Properties.TryGetValue(PostOptions.RequestId, out var rid)
+                        && rid?.ToString() is { Length: > 0 } requestId)
+                        hub.ServiceProvider.GetService<LatePatchResponseRegistry>()
+                            ?.DispatchFailure(requestId, delivery.Message);
+                    return delivery.Processed();
+                })
                 .WithInitialization(hub =>
                     hub.RegisterForDisposal(routingService.RegisterStream(hub))),
             HostedHubCreation.Always)!;
@@ -2066,13 +2084,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
         // RLS on the write is enforced authoritatively by the OWNER: the
         // [RequiresPermission(Permission.Update)] gate on PatchDataRequest posts
-        // DeliveryFailure(Unauthorized) on denial, which UpdateRemote surfaces fail-fast
-        // as UnauthorizedAccessException on the caller's Rx OnError (the denial is posted
-        // by the pipeline gate ahead of the owner's action block, so it returns within
-        // UpdateRemote's short response bound even while a round is running). The previous
-        // cache-only client gate here was a stopgap for when UpdateRemote emitted purely
-        // optimistically and swallowed the denial — redundant now that UpdateRemote bounds
-        // (not eliminates) its wait and re-surfaces the denial.
+        // DeliveryFailure(Unauthorized) on denial, which UpdateRemote surfaces as
+        // UnauthorizedAccessException on the caller's Rx OnError. The previous cache-only
+        // client gate here was a stopgap for when UpdateRemote emitted purely optimistically
+        // and swallowed the denial.
+        //
+        // 🚨 This used to add "the denial is posted by the pipeline gate ahead of the owner's
+        // action block, so it returns within UpdateRemote's short response bound even while a
+        // round is running". That was an ASSUMPTION, not a guarantee — the bound also covers
+        // owner-hub activation and the pipeline's own permission fold, either of which can
+        // dominate under load — and the whole of #2661 hung off it: when the denial lost that
+        // race, UpdateRemote had already completed the caller as a success and nothing anywhere
+        // observed the refusal. Correctness no longer depends on the denial being fast:
+        // UpdateRemote settles the caller on the owner's verdict wherever it arrives, early or
+        // late (LatePatchResponseRegistry now watches DeliveryFailure as well as
+        // PatchDataResponse), and never on a bound expiring.
         return UpdateRaw(path, wrapped);
     }
 

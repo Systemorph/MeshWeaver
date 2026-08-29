@@ -40,6 +40,13 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// rare locally and common under CI load is CONSTRUCTED here, not raced for: the owner's merge turn
 /// is parked behind a gated turn (the same device as <c>LateNackReenqueueTest</c>), so the first
 /// write's ack provably cannot arrive inside its 2 s window. No cluster, no load, no sleep.</para>
+///
+/// <para>🚨 Since #2661 the first write's caller is no longer settled at that bound — a bound
+/// expiring is not a commit — so both writes are SUBSCRIBED rather than awaited and the gate is
+/// released before either verdict is expected. The invariant under test is untouched: the successor
+/// must diff against its predecessor's acknowledged state, and the slot that gates it is released by
+/// the HAND-OFF, never by the caller's terminal. That independence is precisely why holding the
+/// caller open for its verdict cannot stall the successor.</para>
 /// </summary>
 public class QueuedWriteAdvancesOnHandoffTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -79,7 +86,7 @@ public class QueuedWriteAdvancesOnHandoffTest(ITestOutputHelper output) : Monoli
 
         // Park the owner's merge executor: the write below is accepted by the owner's handler, but
         // its merge turn provably cannot run, so no PatchDataResponse can arrive inside the caller's
-        // UpdateResponseWaitBound and the caller's terminal is the optimistic snapshot.
+        // UpdateResponseWaitBound — the queue's hand-off is therefore late, which is the whole point.
         var primary = nodeHub!.GetWorkspace().DataContext
             .GetDataSourceForType(typeof(MeshNode))!
             .GetStreamForPartition(null)!;
@@ -96,17 +103,24 @@ public class QueuedWriteAdvancesOnHandoffTest(ITestOutputHelper output) : Monoli
 
         try
         {
-            // WRITE 1 — its ack cannot arrive while the merge turn is parked, so this returns the
-            // optimistic snapshot. Pre-fix, THAT is what released the queue slot.
-            var first = await workspace.GetMeshNodeStream(path)
+            // WRITE 1 — its ack cannot arrive while the merge turn is parked. Pre-#2346 the
+            // caller's terminal at that bound is what released the queue slot; pre-#2661 that
+            // terminal existed at all. Subscribe and fence on the patch being in flight instead:
+            // the armed late watch is the proof that write 1 has been dispatched to the owner.
+            MeshNode? firstTerminal = null;
+            Exception? firstError = null;
+            using var firstSub = workspace.GetMeshNodeStream(path)
                 .Update(n => n with { Name = "first" })
+                .Subscribe(n => firstTerminal = n, ex => firstError = ex);
+            var registry = Mesh.ServiceProvider.GetRequiredService<LatePatchResponseRegistry>();
+            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .Where(_ => registry.ArmedCount > 0)
                 .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
-            first.Name.Should().Be("first", "the caller's terminal is the optimistic snapshot");
-            Output.WriteLine("[write 1] optimistic terminal received (owner's merge is parked)");
+            Output.WriteLine("[write 1] patch dispatched to the owner (whose merge is parked)");
 
-            // WRITE 2 — the successor. Subscribing is what enqueues it. Pre-fix the slot is already
-            // free, so this dispatches HERE, synchronously, diffing against a mirror that predates
-            // write 1. With the hand-off gate it waits for write 1's verdict instead.
+            // WRITE 2 — the successor. Subscribing is what enqueues it. Pre-#2346 the slot is
+            // already free, so this dispatches HERE, synchronously, diffing against a mirror that
+            // predates write 1. With the hand-off gate it waits for write 1's verdict instead.
             //
             // 🚨 TWO fields, and that is the whole point — it is what makes the loss SILENT and what
             // reproduces the production shape. `Name` collides with write 1 (a manufactured
@@ -164,6 +178,10 @@ public class QueuedWriteAdvancesOnHandoffTest(ITestOutputHelper output) : Monoli
             persisted.Description.Should().Be("successor-also-wrote-this");
             secondError.Should().BeNull("the successor's write must not fault");
             secondTerminal.Should().NotBeNull("the successor's caller must receive its terminal");
+            firstError.Should().BeNull("the predecessor's write must not fault either");
+            firstTerminal.Should().NotBeNull(
+                "#2661: the predecessor's caller is settled by the owner's verdict, which arrives "
+                + "once the parked merge turn drains — never by the response bound expiring");
             Output.WriteLine("[assert] store converged on the successor's value");
         }
         finally
