@@ -62,7 +62,8 @@ def read_receipts(directory: Path) -> tuple[dict[str, dict], list[str]]:
 
 
 def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
-           pack_result: str, receipts_dir_exists: bool) -> tuple[int, list[str], list[str]]:
+           pack_result: str, receipts_dir_exists: bool,
+           scope: str = "") -> tuple[int, list[str], list[str]]:
     """(exit code, error lines, note lines)."""
     errors: list[str] = []
     notes: list[str] = []
@@ -72,6 +73,17 @@ def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
     if broken:
         errors.append(f"{len(broken)} receipt file(s) could not be read as a receipt: "
                       + ", ".join(broken))
+
+    # 🚨 "BUILD EVERYTHING" AND "EVERYTHING IS NOTHING" CANNOT BOTH BE TRUE. A `full` scope with
+    # an empty expectation is an internal contradiction, and the shape it takes is a green tick
+    # over a lane that built nothing — a bad --root, an empty matrix input, a tree that could not
+    # be listed. The selector refuses it now; this is the second lock, because the two are
+    # computed in different jobs and only one of them has to be wrong.
+    if scope == "full" and not want:
+        return 1, [f"the scope is '{scope}' but the selection is EMPTY — 'build everything' and "
+                   "'everything is nothing' cannot both be true. Something upstream (a --root "
+                   "that is not the checkout, an empty matrix input) produced a contradiction, "
+                   "and nothing was built."], []
 
     if not want:
         # An empty selection is legitimate (a diff reaching no package and no module project) —
@@ -134,9 +146,9 @@ def self_test() -> int:
         if not ok:
             failures.append(name)
 
-    def run(directory: Path, expected: list[str], result: str = "success"):
+    def run(directory: Path, expected: list[str], result: str = "success", scope: str = ""):
         receipts, broken = read_receipts(directory)
-        return verify(expected, receipts, broken, result, directory.is_dir())
+        return verify(expected, receipts, broken, result, directory.is_dir(), scope)
 
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp) / "receipts"
@@ -199,6 +211,17 @@ def self_test() -> int:
         code, errors, notes = run(empty, [], "skipped")
         check("zero selected + zero receipts + a skipped job ⇒ pass, and says so",
               code == 0 and bool(notes), f"{errors}")
+        code, errors, notes = run(empty, [], "success")
+        check("zero selected + zero receipts + a job GitHub reported success ⇒ pass",
+              code == 0 and bool(notes), f"{errors}")
+        # 🚨 The contradiction lock. Without the scope, this is indistinguishable from the case
+        # above — which is why the count alone was not enough.
+        code, errors, _ = run(empty, [], "skipped", scope="full")
+        check("scope=FULL with an empty selection ⇒ fail (a contradiction, not a scope)",
+              code == 1 and any("cannot both be true" in e for e in errors), f"{errors}")
+        code, errors, _ = run(empty, [], "skipped", scope="narrowed")
+        check("…while scope=narrowed with an empty selection stays legitimate",
+              code == 0, f"{errors}")
         (empty / "MeshWeaver.AI.json").write_text(json.dumps({"module": "MeshWeaver.AI"}),
                                                   encoding="utf-8")
         code, errors, _ = run(empty, [], "skipped")
@@ -212,7 +235,8 @@ def self_test() -> int:
               "skipped module bundle.")
         return 1
     print("\n✓ node-repo-pack-verify self-test: 2 green-run assertions, 7 mutations that must go "
-          "red, 2 empty-selection cases — all green.")
+          "red, and 5 empty-selection cases including the scope=full contradiction lock — all "
+          "green.")
     return 0
 
 
@@ -223,6 +247,9 @@ def main() -> int:
     p.add_argument("--receipts", default="", help="directory the receipt artifacts were merged into")
     p.add_argument("--pack-result", default="", dest="pack_result",
                    help="the pack job's aggregated result (needs.pack.result)")
+    p.add_argument("--scope", default="",
+                   help="the selection's own scope (full|narrowed). A 'full' scope with an empty "
+                        "selection is a contradiction and is refused.")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     args = p.parse_args()
     if args.self_test:
@@ -233,7 +260,8 @@ def main() -> int:
     directory = Path(args.receipts)
     expected = [m for m in args.expected.split() if m]
     receipts, broken = read_receipts(directory)
-    code, errors, notes = verify(expected, receipts, broken, args.pack_result, directory.is_dir())
+    code, errors, notes = verify(expected, receipts, broken, args.pack_result,
+                                 directory.is_dir(), args.scope)
 
     for note in notes:
         print(f"✓ {note}")

@@ -434,9 +434,22 @@ jobs:
           PACK_RESULT: ${{ needs.pack.result }}
           SCOPE: ${{ needs.select.outputs.scope }}
           COUNT: ${{ needs.select.outputs.count }}
+          DECLARED: ${{ inputs.modules }}
         run: |
           set -euo pipefail
           echo "scope=$SCOPE, selection named $COUNT module bundle(s); pack job: $PACK_RESULT"
+          # 🚨 An INDEPENDENT recount, because the count and the selection come from the same
+          # call and therefore agree by construction — they cannot catch a selection that is
+          # simply wrong. This one has a second source: on a FULL scope the answer must be every
+          # entry the CALLER declared, counted here from `inputs.modules` rather than from
+          # anything `select` produced.
+          declared=$(jq 'length' <<< "$DECLARED")
+          if [ "$SCOPE" = "full" ] && [ "$COUNT" != "$declared" ]; then
+            echo "::error title=Module bundles incomplete::the scope is FULL, so every one of the \
+          $declared declared module(s) must be packed — but the selection named $COUNT. The \
+          selection and the caller's matrix disagree."
+            exit 1
+          fi
           # 🚨 `select` itself failing must not read as "nothing was selected" — that would turn a
           # broken selector into a green wall with an empty matrix behind it.
           if [ "${{ needs.select.result }}" != "success" ]; then
@@ -448,4 +461,5 @@ jobs:
           python3 meshweaver/.github/scripts/node-repo-pack-verify.py \
             --expected "$EXPECTED" \
             --receipts "$RUNNER_TEMP/receipts" \
-            --pack-result "$PACK_RESULT"
+            --pack-result "$PACK_RESULT" \
+            --scope "$SCOPE"

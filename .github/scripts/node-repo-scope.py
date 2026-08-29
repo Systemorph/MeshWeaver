@@ -77,24 +77,33 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-# 🚨 EXACTLY scripts/affected-modules.py's NOOP_DIRS, verbatim — the top-level dirs a change in
-# which can reach no build at all. It is copied rather than widened on purpose: every entry NOT in
-# this set falls through to a FULL run, so ADDING one here silently un-builds something. `clients/`
-# is deliberately absent (the established selector treats it as ALL, and a client asset can be
-# embedded by a host), as are editor dirs — a repo that wants them exempt changes the selector
-# both lanes already share, so the two answers cannot drift.
-NOOP_DIRS = {"legacy", "e2e", "docs", "app", ".claude", ".worktrees"}
+# 🚨 scripts/affected-modules.py's NOOP_DIRS, and it must stay EQUAL to it — the top-level dirs a
+# change in which can reach no build at all. Every entry NOT in this set falls through to a FULL
+# run, so adding one silently un-builds something and dropping one merely costs a full run.
+# `clients/` is deliberately absent (the established selector treats it as ALL, and a client asset
+# can be embedded by a host).
+#
+# 🚨 A HAND COPY IS NOT A GUARANTEE, and this one drifted on its first day: `WhatsNew` was missing,
+# so a note-only PR ran the entire fleet's module suite — the exact case affected-modules.py added
+# it for. `assert_noop_dirs_match()` below now READS the caller's set and refuses to narrow when
+# the two disagree, so the next drift is a full run with a named reason instead of a silent one.
+NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees"}
 
 SELECTOR = "scripts/affected-modules.py"        # the caller's NODE graph
 PROJECTS = "scripts/project-closure.py"          # the caller's PROJECT graph
 
 # Events whose diff means anything. Everything else runs the full set, each for its own reason.
-NARROWABLE = {"pull_request", "pull_request_target", "merge_group"}
+# 🚨 `pull_request_target` is deliberately ABSENT. With the default checkout it runs at the BASE
+# tip, so `origin/<base>...HEAD` is empty and it could only ever take the empty-diff fallback — and
+# the day someone adds `ref: github.event.pull_request.head.sha` it would start narrowing on
+# fork-controlled content. A lane that cannot narrow should not claim it can.
+NARROWABLE = {"pull_request", "merge_group"}
 
 FULL_REASONS = {
     "modules": {
@@ -187,16 +196,45 @@ def project_hits(root: Path, entries: list[str], changed: list[str], say) -> dic
 # ── classification ───────────────────────────────────────────────────────────────────────────
 
 def node_packages(root: Path) -> set[str]:
+    """Top-level dirs carrying an index.json — the caller's node packages.
+
+    🚨 An OSError here is NOT caught. "I could not read the tree" must never become "the tree is
+    empty": a swallowed error made this function return an empty set, `full()` then answered
+    scope=full with count=0, and both lanes reported SUCCESS having built nothing — a green tick
+    over a compile gate that compiled zero packages. Letting it raise exits non-zero and fails the
+    job, which is the loud version of the same fact.
+    """
     # "meshweaver" is CI's checkout of Systemorph/MeshWeaver — gen-manifests.py skips it for the
     # same reason. The select job keeps the two trees apart anyway; this is the belt to that brace,
     # because the day core grows a root index.json is the day the framework becomes a plugin.
     skip = {".git", ".github", ".claude", ".worktrees", "scripts", "src", "test", "docs", "e2e",
             "app", "clients", "legacy", "meshweaver"}
+    return {d.name for d in root.iterdir()
+            if d.is_dir() and d.name not in skip and (d / "index.json").exists()}
+
+
+def assert_noop_dirs_match(root: Path) -> str | None:
+    """None when the caller's NOOP_DIRS equals ours; otherwise why we must not narrow.
+
+    Read out of the caller's source rather than imported: affected-modules.py is a CLI, and
+    importing it would run its argparse. A set literal on one line is what it has always been; if
+    that ever stops parsing, the honest answer is "cannot verify" — which is also a full run.
+    """
     try:
-        return {d.name for d in root.iterdir()
-                if d.is_dir() and d.name not in skip and (d / "index.json").exists()}
-    except OSError:
-        return set()
+        text = (root / SELECTOR).read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"{SELECTOR} could not be read ({exc})"
+    match = re.search(r"^NOOP_DIRS\s*=\s*\{([^}]*)\}", text, re.M)
+    if not match:
+        return f"{SELECTOR} has no single-line NOOP_DIRS literal to compare against"
+    theirs = set(re.findall(r"[\"']([^\"']+)[\"']", match.group(1)))
+    if theirs != NOOP_DIRS:
+        only_theirs = ", ".join(sorted(theirs - NOOP_DIRS)) or "(none)"
+        only_ours = ", ".join(sorted(NOOP_DIRS - theirs)) or "(none)"
+        return (f"this script's NOOP_DIRS has drifted from {SELECTOR}'s — only theirs: "
+                f"{only_theirs}; only ours: {only_ours}. The two must classify a top-level dir "
+                "identically or the lanes disagree about what a change reaches")
+    return None
 
 
 def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
@@ -219,7 +257,7 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
 # ── the decision ─────────────────────────────────────────────────────────────────────────────
 
 def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: str | None,
-           override: list[str] | None, say) -> dict:
+           override: list[str] | None, say, publishing: bool = False) -> dict:
     all_packages = sorted(node_packages(root))
     universe = ([e["module"] for e in entries] if lane == "modules" else all_packages)
 
@@ -229,14 +267,34 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
                 "packages": all_packages if lane == "packages" else [],
                 "count": len(universe), "selected": sorted(universe), "skipped": [], "why": {}}
 
+    def refuse(reason: str) -> dict:
+        return {"lane": lane, "scope": "refuse", "reason": reason, "modules": [], "packages": [],
+                "count": 0, "selected": [], "skipped": [], "why": {}}
+
+    # 🚨 THE ANSWER "BUILD EVERYTHING, AND EVERYTHING IS NOTHING" IS NOT AN ANSWER. `full` with a
+    # count of 0 is an internal contradiction, and it is REACHABLE: a --root that does not match
+    # the checkout path, a matrix input of `[]`, a tree that could not be listed. Every consumer
+    # keys on the count alone, so it sailed through as a green tick over a lane that built nothing
+    # — the precise failure this script exists to prevent. It is a refusal, not a scope.
+    if not universe:
+        return refuse(
+            f"there is nothing to select from: {'the modules input is empty' if lane == 'modules' else f'no node package was found under {root}'}. "
+            "'Build everything' and 'everything is nothing' cannot both be true, so this is a "
+            "broken input (a --root that does not match the checkout?), not a scope.")
+
+    if publishing:
+        return full("this run PUBLISHES, and a publishing run is never narrowed — the derived "
+                    "version is the change detector on that path, and a diff that misses a unit "
+                    "means that unit silently never ships.")
     if event not in NARROWABLE:
         return full(FULL_REASONS[lane].get(
             event, f"event '{event}' has no meaningful content diff — running the full set."))
-    if not universe:
-        return full("there is nothing to select from — running the full set.")
     if not (root / SELECTOR).is_file():
         return full(f"the caller repo ships no {SELECTOR}, so the affected closure cannot be "
                     "computed — running the full set.")
+    drift = assert_noop_dirs_match(root)
+    if drift is not None:
+        return full(f"{drift} — running the full set.")
 
     if override is not None:
         files = [f for f in override if f.strip()]
@@ -298,11 +356,30 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
     # ── the modules lane also needs the COMPILED half ──
     # An entry built from outside this checkout (a platform-hosted transition entry) can never be
     # shown unaffected by this repo's diff.
-    external = [e for e in entries if not e.get("project", "").startswith("src/")]
-    if external:
-        return full(f"matrix entry '{external[0].get('module')}' builds "
-                    f"{external[0].get('project')}, which is outside this checkout's src/ — its "
-                    "reachability cannot be decided from this diff. Packing every module.")
+    # 🚨 EVERY ENTRY MUST BE REACHABLE IN PRINCIPLE BEFORE ANY OF THEM IS RULED OUT, and this
+    # check is UNCONDITIONAL — not behind `if src_files`, or a diff that touches no src/ path
+    # would never look at the entry list at all.
+    #
+    # A stale entry (a renamed csproj, a package that no longer exists) used to be caught on the
+    # first PR, because every PR built every entry and went red immediately. Narrowed, it is
+    # simply never selected: the closure cannot reach a project that is not there, so the entry
+    # goes quiet and the failure defers to the next `push` on main — which is exactly where this
+    # repo's policy says the cost must not land. Two direct filesystem facts, no graph needed.
+    for e in entries:
+        project = e.get("project", "")
+        if not project.startswith("src/"):
+            return full(f"matrix entry '{e.get('module')}' builds {project}, which is outside "
+                        "this checkout's src/ — its reachability cannot be decided from this "
+                        "diff. Packing every module.")
+        if not (root / project).is_file():
+            return full(f"matrix entry '{e.get('module')}' names {project}, which does not exist "
+                        "in this checkout — the matrix and the tree have drifted, and a narrowed "
+                        "run would simply never select it. Packing every module, so the entry "
+                        "fails on THIS pull request rather than on the next push to main.")
+        if e.get("package") not in all_packages:
+            return full(f"matrix entry '{e.get('module')}' names package '{e.get('package')}', "
+                        "which is not a node package in this checkout (no index.json) — the "
+                        "matrix and the tree have drifted. Packing every module.")
 
     hits: dict[str, list[str]] = {e["project"]: [] for e in entries}
     if src_files:
@@ -375,7 +452,10 @@ _STUB_PROJECTS = (
     "json.dump({'projects':sorted(KNOWN),'changedProjects':sorted(hit),'unclassified':unc,"
     "'entries':{e:sorted(CLOSURE.get(e,set())&hit) for e in entries}},sys.stdout)\n")
 
+# 🚨 The stub carries a NOOP_DIRS literal because the real selector does and this script now
+# READS it — a fixture without one would make every case take the drift fallback.
 _STUB_SELECTOR = (
+    'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees"}\n'
     "import json,sys\n"
     "paths=[l for l in open(sys.argv[sys.argv.index('--changed')+1]).read().splitlines() if l]\n"
     "pk=sorted({p.split('/')[0] for p in paths})\n"
@@ -417,14 +497,21 @@ def _fixture(root: Path) -> None:
     (root / "README.md").write_text("x\n", encoding="utf-8")
 
 
-def _run(root: Path, lane: str, event: str, changed: list[str] | None) -> dict:
+def _raw(root: Path, lane: str, event: str, changed: list[str] | None,
+         matrix: list[dict] | None = None, extra: list[str] | None = None):
     argv = [sys.executable, str(Path(__file__).resolve()), "--for", lane,
             "--root", str(root), "--event", event]
     if lane == "modules":
-        argv += ["--modules", json.dumps(_MATRIX)]
+        argv += ["--modules", json.dumps(_MATRIX if matrix is None else matrix)]
     if changed is not None:
         argv += ["--changed-list", ",".join(changed)]
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=600)
+    argv += extra or []
+    return subprocess.run(argv, capture_output=True, text=True, timeout=600)
+
+
+def _run(root: Path, lane: str, event: str, changed: list[str] | None,
+         matrix: list[dict] | None = None, extra: list[str] | None = None) -> dict:
+    proc = _raw(root, lane, event, changed, matrix, extra)
     if proc.returncode != 0:
         raise SystemExit(f"self-test harness: exit {proc.returncode}\n{proc.stderr}")
     return json.loads(proc.stdout)
@@ -433,8 +520,11 @@ def _run(root: Path, lane: str, event: str, changed: list[str] | None) -> dict:
 def self_test() -> int:
     import tempfile
     failures: list[str] = []
+    ran = 0
 
     def check(name: str, ok: bool, detail: str = "") -> None:
+        nonlocal ran
+        ran += 1
         print(f"  {'✓' if ok else '✗'} {name}{'' if ok else ': ' + detail}")
         if not ok:
             failures.append(name)
@@ -465,10 +555,14 @@ def self_test() -> int:
                 check(f"[{lane}] {label}", got["scope"] == "full" and got["count"] == n,
                       f"scope={got['scope']} count={got['count']} — {got['reason']}")
         for label, changed in (
-                ("src/<file> outside any project (Directory.Build.props) ⇒ ALL",
-                 ["src/Directory.Build.props"]),
-                ("src/<dir> holding no csproj ⇒ ALL", ["src/Loose/notes.txt"]),
-                ("a project that no longer exists (renamed/deleted) ⇒ ALL",
+                # 🚨 This one does NOT go through `unclassified`: `src/Directory.Build.props` has a
+                # single slash, so it never reaches the project graph at all — it is the
+                # TWO-SLASH GUARD that sends it to the global scope. Labelled for what it pins,
+                # because it was labelled for what the case below pins and neither was tested.
+                ("a file directly under src/ (one slash: Directory.Build.props) ⇒ ALL, without "
+                 "ever consulting the project graph", ["src/Directory.Build.props"]),
+                ("src/<dir> holding no csproj ⇒ ALL (via `unclassified`)", ["src/Loose/notes.txt"]),
+                ("a project that no longer exists (renamed/deleted) ⇒ ALL (via `unclassified`)",
                  ["src/Acme.Gone/Gone.cs"])):
             got = _run(root, "modules", "pull_request", changed)
             check(f"[modules] {label}", got["scope"] == "full" and got["count"] == 2,
@@ -546,6 +640,56 @@ def self_test() -> int:
               got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"],
               f"scope={got['scope']} selected={got['selected']}")
 
+        print("REFUSALS — 'build everything' and 'everything is nothing' cannot both be true:")
+        # 🚨 The bug this pins shipped as a GREEN TICK: an empty universe took the `full` branch,
+        # which set count = len(universe) = 0, and every consumer keys on the count alone — so
+        # both lanes reported success having built nothing. It is a broken input, not a scope.
+        proc = _raw(root, "modules", "pull_request", ["Alpha/index.json"], matrix=[])
+        check("an EMPTY matrix input is refused (exit 2), never answered as full/0",
+              proc.returncode == 2 and "nothing to select from" in proc.stderr,
+              f"exit={proc.returncode}")
+        proc = _raw(root, "packages", "pull_request", ["Alpha/index.json"],
+                    extra=["--root", str(root / "no-such-dir")])
+        check("a --root that is not the checkout is refused, never answered as full/0",
+              proc.returncode != 0 and '"count": 0' not in proc.stdout,
+              f"exit={proc.returncode} stdout={proc.stdout[:120]}")
+
+        print("a PUBLISHING run never narrows, whatever the event:")
+        got = _run(root, "packages", "pull_request", ["Alpha/index.json"], extra=["--publishing"])
+        check("--publishing forces FULL even on a pull_request",
+              got["scope"] == "full" and got["count"] == 3 and "PUBLISHES" in got["reason"],
+              f"scope={got['scope']} count={got['count']}")
+
+        print("a stale matrix entry must fail on THIS PR, not on the next push to main:")
+        ghost = _MATRIX + [{"package": "Alpha", "module": "Acme.Ghost",
+                            "project": "src/Acme.Ghost/Acme.Ghost.csproj"}]
+        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], matrix=ghost)
+        check("an entry whose csproj does not exist ⇒ ALL (it could never be selected)",
+              got["scope"] == "full" and "does not exist" in got["reason"], f"{got['reason'][:90]}")
+        nopkg = _MATRIX + [{"package": "NoSuchPkg", "module": "Acme.Nope",
+                            "project": "src/Acme.Beta/Acme.Beta.csproj"}]
+        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], matrix=nopkg)
+        check("an entry naming a package with no index.json ⇒ ALL",
+              got["scope"] == "full" and "not a node package" in got["reason"],
+              f"{got['reason'][:90]}")
+        # 🚨 UNCONDITIONAL: a diff touching no src/ path must still look at the entry list.
+        got = _run(root, "modules", "pull_request", ["Alpha/index.json"], matrix=ghost)
+        check("…and it is checked even when the diff touches NO src/ path",
+              got["scope"] == "full" and "does not exist" in got["reason"], f"{got['reason'][:90]}")
+
+        print("the NOOP_DIRS copy cannot drift from the caller's unnoticed:")
+        selector_src = (root / "scripts" / "affected-modules.py").read_text(encoding="utf-8")
+        (root / "scripts" / "affected-modules.py").write_text(
+            'NOOP_DIRS = {"legacy", "e2e"}\n' + selector_src, encoding="utf-8")
+        got = _run(root, "modules", "pull_request", ["Alpha/index.json"])
+        check("a NOOP_DIRS that disagrees with the caller's ⇒ ALL, naming both sides",
+              got["scope"] == "full" and "drifted" in got["reason"], f"{got['reason'][:100]}")
+        (root / "scripts" / "affected-modules.py").write_text(selector_src, encoding="utf-8")
+        got = _run(root, "modules", "pull_request", ["WhatsNew/note.md"])
+        check("WhatsNew/ is a NOOP dir — a note-only PR builds NOTHING, not everything",
+              got["scope"] == "narrowed" and got["count"] == 0,
+              f"scope={got['scope']} count={got['count']}")
+
         print("the caller's graphs are load-bearing — every failure of theirs is a FULL run:")
         selector = root / "scripts" / "affected-modules.py"
         for label, body in (
@@ -561,7 +705,20 @@ def self_test() -> int:
         check("[modules] no selector in the caller repo ⇒ ALL",
               got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
         selector.write_text(_STUB_SELECTOR, encoding="utf-8")
-        (root / "scripts" / "project-closure.py").unlink()
+        projects = root / "scripts" / "project-closure.py"
+        graph_src = projects.read_text(encoding="utf-8")
+        for label, body in (
+                ("a project graph that REFUSES", "import sys; sys.exit(1)\n"),
+                ("an unparseable project-graph answer", "not json\n"),
+                ("a project graph that answers for FEWER entries than were asked about",
+                 "import json,sys; json.dump({'entries':{},'unclassified':[],"
+                 "'projects':[],'changedProjects':[]},sys.stdout)\n")):
+            projects.write_text(body, encoding="utf-8")
+            got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"])
+            check(f"[modules] {label} ⇒ ALL", got["scope"] == "full" and got["count"] == 2,
+                  f"scope={got['scope']} — {got['reason'][:80]}")
+        projects.write_text(graph_src, encoding="utf-8")
+        projects.unlink()
         got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"])
         check("[modules] no project-closure.py in the caller repo ⇒ ALL",
               got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
@@ -571,9 +728,11 @@ def self_test() -> int:
               "script decides what is NOT rebuilt; a fallback that stops falling back is a stale "
               "assembly the registry keeps serving, or an in-mesh compile break that reaches main.")
         return 1
-    print("\n✓ node-repo-scope self-test: 23 full-run fallbacks, 9 narrowing assertions (the "
-          "last over a REAL git range — a rename must select the end it LEFT), 2 explicit-empty "
-          "answers, 5 caller-graph refusals — all green.")
+    print(f"\n✓ node-repo-scope self-test: {ran} cases green — full-run fallbacks, "
+          "narrowing assertions (one over a REAL git range: a rename must select the end it "
+          "LEFT), two explicit-empty answers, the two REFUSALS that must never render as "
+          "'full, count 0', the stale-matrix-entry guard, the NOOP_DIRS drift guard, the "
+          "publishing guard, and every caller-graph failure mode.")
     return 0
 
 
@@ -587,6 +746,10 @@ def main() -> int:
                    help="the PR base branch — the diff is origin/<base-ref>...HEAD")
     p.add_argument("--changed-list", default=None, dest="changed_list",
                    help="comma-separated changed paths instead of a git diff (tests only)")
+    p.add_argument("--publishing", action="store_true",
+                   help="this run hands its output to a registry or feed — never narrow. The "
+                        "publish path's change detector is the derived version, and a diff that "
+                        "misses a unit means that unit silently never ships.")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     args = p.parse_args()
     if args.self_test:
@@ -611,7 +774,18 @@ def main() -> int:
     say = lambda *a: print(*a, file=sys.stderr)  # noqa: E731
     changed = None if args.changed_list is None else [c for c in args.changed_list.split(",") if c]
     answer = decide(root, args.lane, entries, args.event,
-                    f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say)
+                    f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
+                    publishing=args.publishing)
+
+    # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
+    # goes red. Emitting it as an answer is how "build everything, and everything is nothing"
+    # became a green tick in the first place.
+    if answer["scope"] == "refuse":
+        print(f"::error title=Cannot decide the build scope::{answer['reason']}", file=sys.stderr)
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+                fh.write(f"### ⛔ Cannot decide the build scope\n\n{answer['reason']}\n\n")
+        return 2
 
     say("")
     say(f"scope: {answer['scope']} — {answer['reason']}")

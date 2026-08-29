@@ -167,8 +167,15 @@ jobs:
             git -C plugins fetch --no-tags origin \
               "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           fi
+          # 🚨 `--publishing` when this run PUSHES, whatever the event. `merge_group` is a
+          # narrowable event, and the push step below is gated only on `dry-run` — so a caller
+          # with a merge queue and `dry-run: false` would have published a narrowed subset,
+          # contradicting the very argument this lane's header makes about the version being the
+          # change detector on the publish path. Belt on the reusable side, where it cannot be
+          # forgotten by a caller.
           python3 meshweaver/.github/scripts/node-repo-scope.py \
             --for packages --root plugins \
+            ${{ inputs.dry-run && ' ' || '--publishing' }} \
             --event "$EVENT" --base-ref "${BASE_REF:-}" > "$RUNNER_TEMP/scope.json"
 
       - name: Build the tool
@@ -185,6 +192,22 @@ jobs:
           failed=()
           packed=0
           echo "scope=$SCOPE — the selection names $EXPECTED plugin(s)"
+          # 🚨 An INDEPENDENT recount. `$EXPECTED` and `$SELECTED` come from the same call and
+          # agree by construction, so on their own they can only catch a lost output — never a
+          # selection that is simply wrong. On a FULL scope there IS a second source: the tree.
+          if [ "$SCOPE" = "full" ]; then
+            onDisk=$(find plugins -mindepth 2 -maxdepth 2 -name index.json | wc -l | tr -d " ")
+            if [ "$onDisk" != "$EXPECTED" ]; then
+              echo "::error title=Pack count does not match the tree::the scope is FULL, so every \
+          plugin in the checkout must be packed — the tree holds $onDisk and the selection named \
+          $EXPECTED."
+              exit 1
+            fi
+            echo "full scope cross-checked against the tree: $onDisk plugin(s)"
+          fi
+          # The loop word-splits $SELECTED deliberately; globbing is NOT wanted, and it is the one
+          # way `seen` could exceed the count for a reason that is not a real discrepancy.
+          set -f
           for name in $SELECTED; do
             plugin="plugins/$name"
             # 🚨 NOT `|| continue`. The old loop globbed the tree and skipped anything without an
@@ -209,7 +232,14 @@ jobs:
             fi
             echo "::endgroup::"
           done
+          set +f
           echo "packed $packed plugin(s) of $EXPECTED selected"
+          # Written BEFORE the failure branches: a red run is the one whose summary matters.
+          {
+            echo "### 📦 Packed $packed of $EXPECTED selected plugin(s) — scope \`$SCOPE\`"
+            echo ""
+            echo "\`${SELECTED:-(nothing)}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
           # ══════════════ THE COUNT GATE ══════════════
           # 🚨 "we can estimate the required count and validate it." A loop over a list that came
           # out empty, short, or mis-parsed packs less than it should and exits 0 — a green tick
@@ -228,11 +258,6 @@ jobs:
             echo "::error::packing failed for: ${failed[*]} — nothing was pushed"
             exit 1
           fi
-          {
-            echo "### 📦 Packed $packed of $EXPECTED selected plugin(s) — scope \`$SCOPE\`"
-            echo ""
-            echo "\`$SELECTED\`"
-          } >> "$GITHUB_STEP_SUMMARY"
 
       # Reached only when EVERY plugin packed. A content-only plugin produces no package and that
       # is a success, so an empty directory is not an error — but it must be SAID, or "published
