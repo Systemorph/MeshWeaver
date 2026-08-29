@@ -195,7 +195,8 @@ public static class ShippedPrebuiltBundles
     /// </summary>
     public static IObservable<int> SeedForTypes(
         IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
-        string? imageDirectory = null, string? publishedRoot = null)
+        string? imageDirectory = null, string? publishedRoot = null,
+        Action<string>? onCovered = null)
         => Observable.Defer(() =>
         {
             if (typePaths.Count == 0)
@@ -217,13 +218,13 @@ public static class ShippedPrebuiltBundles
                         .EnumerateFiles(imageDir, "*.zip", SearchOption.TopDirectoryOnly)
                         .OrderBy(f => f, StringComparer.Ordinal)
                         .ToList(),
-                    logger, paths),
+                    logger, paths, onCovered),
             };
             if (!string.IsNullOrWhiteSpace(publishedRoot))
             {
                 var identityDir = Path.Combine(publishedRoot, PrebuiltAssemblySeeder.LiveFrameworkMvid);
                 seeds.Add(SeedBundles(mesh, identityDir,
-                    () => CompletePublishedBundlesOf(identityDir, logger), logger, paths));
+                    () => CompletePublishedBundlesOf(identityDir, logger), logger, paths, onCovered));
             }
             return seeds.Concat().Aggregate(0, (total, adopted) => total + adopted);
         });
@@ -276,7 +277,7 @@ public static class ShippedPrebuiltBundles
     /// caller already knows which types it is consuming for (#1707 slice 3).</summary>
     private static IObservable<int> SeedBundles(
         IMessageHub mesh, string dir, Func<List<string>> enumerateBundles, ILogger? logger,
-        ImmutableHashSet<string>? typePathFilter = null)
+        ImmutableHashSet<string>? typePathFilter = null, Action<string>? onCovered = null)
         => Observable.Defer(() =>
         {
             if (!Directory.Exists(dir))
@@ -351,7 +352,7 @@ public static class ShippedPrebuiltBundles
                             return snapshot
                                 .SelectMany(existing => bundles
                                     .Select(bundle => SeedBundle(
-                                        mesh, pool, store, bundle, existing, logger))
+                                        mesh, pool, store, bundle, existing, logger, onCovered))
                                     .Concat()
                                     .Aggregate(default(SeedTally), (total, one) => total + one)
                                     .Do(tally =>
@@ -420,7 +421,8 @@ public static class ShippedPrebuiltBundles
         IAssemblyStore store,
         string bundlePath,
         TypeSnapshot snapshot,
-        ILogger? logger)
+        ILogger? logger,
+        Action<string>? onCovered = null)
         => pool
             .InvokeBlocking(_ => Plugin.Packaging.BundleReader.ReadManifest(bundlePath))
             .SelectMany(manifest =>
@@ -491,6 +493,13 @@ public static class ShippedPrebuiltBundles
                             .Select(c => c.Entry.NodePath)
                             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
                         var alreadyCurrent = checks.Count - deviating.Count;
+                        // An already-current entry is COVERED — the store holds its bytes under the
+                        // record the mesh already carries. It counts toward Covered, so it must be
+                        // witnessed here too, or the shortfall would name a type that is fine.
+                        if (onCovered is not null)
+                            foreach (var check in checks)
+                                if (check.Current)
+                                    onCovered(check.Entry.NodePath);
 
                         if (deviating.IsEmpty)
                         {
@@ -507,7 +516,7 @@ public static class ShippedPrebuiltBundles
                                 .ReadFile(bundlePath, deviating))
                             .SelectMany(payload => SeedPayloads(
                                 mesh, bundlePath, manifest.FrameworkMvid,
-                                payload.Assemblies, alreadyCurrent, logger));
+                                payload.Assemblies, alreadyCurrent, logger, onCovered));
                     });
             })
             .Catch<SeedTally, Exception>(ex =>
@@ -584,12 +593,18 @@ public static class ShippedPrebuiltBundles
         string? frameworkMvid,
         IReadOnlyList<Plugin.Packaging.BundleReader.Payload> assemblies,
         int alreadyCurrent,
-        ILogger? logger)
+        ILogger? logger,
+        Action<string>? onCovered = null)
         => assemblies
             .Select(a => PrebuiltAssemblySeeder
                 .Seed(mesh, a.NodePath, a.Assembly, a.Pdb, frameworkMvid, logger, a.Dependencies)
                 .Take(1)
                 .Timeout(SeedBudget)
+                .Do(adopted =>
+                {
+                    if (adopted)
+                        onCovered?.Invoke(a.NodePath);
+                })
                 .Catch<bool, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
