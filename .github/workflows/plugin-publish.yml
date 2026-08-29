@@ -73,7 +73,13 @@ on:
         required: true
         type: string
       meshweaver-ref:
-        description: Ref of Systemorph/MeshWeaver to build the plugin-build tool from.
+        description: >
+          Ref of Systemorph/MeshWeaver to build the plugin-build tool from — and, since the
+          narrowing landed, to read .github/scripts/node-repo-scope.py from. 🚨 PIN IT TO A COMMIT
+          THAT HAS BOTH: a caller using this workflow at a ref NEWER than its `meshweaver-ref`
+          calls a script that checkout does not have, and the run dies in the scope step instead
+          of anywhere that names the cause (run 33073476996's exact failure, one lane over). The
+          default keeps the two in step; if you pin one, pin both.
         required: false
         default: main
         type: string
