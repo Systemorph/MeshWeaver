@@ -2111,6 +2111,15 @@ internal static class NodeTypeCompilationHelpers
             // without a store so legacy consumers keep the AssemblyLocation path.
             LatestAssemblyCollection = result.Collection ?? def.LatestAssemblyCollection,
             LatestAssemblyPath = result.ContentPath ?? def.LatestAssemblyPath,
+            // 🚨 The IDENTITY of the bytes, beside their ADDRESS (#2471). The path is a store key
+            // whose contents a pod resolves through its own local cache, so a path comparison
+            // cannot tell "this instance is on the published build" from "this instance is on a
+            // stale local copy at the same key" — which is why every recycle was inert while a
+            // portal served old code under a green Ok. Read from the emitted assembly (metadata
+            // only, nothing loaded); a producer with no readable file leaves the previous stamp
+            // alone rather than erasing it, exactly as the other assembly fields do.
+            LatestAssemblyMvid =
+                ServedBuildIdentity.OfFile(result.AssemblyLocation) ?? def.LatestAssemblyMvid,
             // The framework the assembly bound against — HasUsableBuild compares this to the
             // live FrameworkVersion so a MeshWeaver redeploy forces a recompile instead of
             // loading an ABI-stale DLL.

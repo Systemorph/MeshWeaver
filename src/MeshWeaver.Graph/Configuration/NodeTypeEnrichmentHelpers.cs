@@ -1173,11 +1173,19 @@ internal static class NodeTypeEnrichmentHelpers
                     // WithStaleAssemblySelfHeal for why the gate is the published assembly path
                     // and not the node version.
                     var boundAssembly = def.LatestAssemblyPath;
+                    // 🚨 The IDENTITY of the bytes about to be bound, read ONCE per activation
+                    // (metadata only, nothing loaded) — the half the path cannot supply, and the
+                    // only thing that makes "compiled Ok" checkable against what is served (#2471).
+                    // Taken here rather than inside the watcher because the mismatch is true AT
+                    // BIND TIME: there is no later publication to wait for, which is exactly why a
+                    // publication-driven watcher stayed silent while memex served old code.
+                    var boundMvid = ServedBuildIdentity.OfFile(localPath);
 
                     if (compilationService is null)
                         return Observable.Return(WithStaleAssemblySelfHeal(
                             ApplyEntry(node, localPath, hubConfig: null, nodeType, meshConfiguration),
-                            meshHub, nodeType, boundAssembly, meshConfiguration, logger));
+                            meshHub, nodeType, boundAssembly, meshConfiguration, logger,
+                            def.LatestAssemblyMvid, boundMvid));
 
                     return compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType)
                         .Take(1)
@@ -1191,7 +1199,8 @@ internal static class NodeTypeEnrichmentHelpers
                                 ApplyEntry(
                                     node, localPath, matching?.HubConfiguration,
                                     nodeType, meshConfiguration),
-                                meshHub, nodeType, boundAssembly, meshConfiguration, logger);
+                                meshHub, nodeType, boundAssembly, meshConfiguration, logger,
+                                def.LatestAssemblyMvid, boundMvid);
                         })
                         .Catch<MeshNode, Exception>(ex =>
                         {
@@ -1204,7 +1213,8 @@ internal static class NodeTypeEnrichmentHelpers
                                 nodeType, ex.GetType().Name, node.Path);
                             return Observable.Return(WithStaleAssemblySelfHeal(
                                 ApplyEntry(node, localPath, hubConfig: null, nodeType, meshConfiguration),
-                                meshHub, nodeType, boundAssembly, meshConfiguration, logger));
+                                meshHub, nodeType, boundAssembly, meshConfiguration, logger,
+                                def.LatestAssemblyMvid, boundMvid));
                         });
                 });
         }
@@ -1727,13 +1737,28 @@ internal static class NodeTypeEnrichmentHelpers
     /// </param>
     /// <param name="meshConfiguration">Used only for the null-config carve-out above.</param>
     /// <param name="logger">Best-effort diagnostics.</param>
+    /// <param name="publishedAssemblyMvid">
+    /// <see cref="NodeTypeDefinition.LatestAssemblyMvid"/> — the identity of the bytes the type
+    /// says it published. Null on a node stamped before that field existed.
+    /// </param>
+    /// <param name="boundAssemblyMvid">
+    /// 🚨 The MVID of the bytes this instance ACTUALLY BOUND, read from the local file
+    /// (<see cref="ServedBuildIdentity.OfFile"/>). This is the half the path comparison above
+    /// cannot supply: the store key is <c>(nodeTypePath, LastCompiledVersion)</c> and each pod
+    /// resolves it through its own local cache, so an instance can sit on a DIFFERENT build at the
+    /// SAME path — the #2471 state, in which the node reads <c>Ok</c>, the banner stayed empty, and
+    /// six recycles changed nothing. Null when the file could not be read; a null on either side is
+    /// "unknown" and never fires.
+    /// </param>
     internal static MeshNode WithStaleAssemblySelfHeal(
         MeshNode bound,
         IMessageHub meshHub,
         string nodeType,
         string? boundAssemblyPath,
         MeshConfiguration meshConfiguration,
-        ILogger? logger)
+        ILogger? logger,
+        string? publishedAssemblyMvid = null,
+        string? boundAssemblyMvid = null)
     {
         // Nothing published to compare against, or nothing that would compose a configuration:
         // leave the node exactly as it is.
@@ -1763,10 +1788,35 @@ internal static class NodeTypeEnrichmentHelpers
                         // seeded null so an instance on the current build shows nothing at all.
                         // Set() owns its disposal ("Disposed with the hub" — IMessageHub.Set), so
                         // no separate RegisterForDisposal for the subject.
-                        instanceHub.Set(new BehaviorSubject<StaleBuildOffer?>(null));
+                        // 🚨 SEEDED WITH THE VERDICT, not unconditionally null (#2471). If the
+                        // bytes this instance just bound are not the bytes the type says it
+                        // published, that is true AT BIND TIME — there is no later publication to
+                        // wait for, which is exactly why the watcher below (which only ever fires
+                        // on an incoming emission) stayed silent through 30+ minutes and six
+                        // recycles while memex served old code under a green Ok. The comparison is
+                        // taken once, here, and it is what makes the claim CHECKABLE at all.
+                        var served = ServedBuildIdentity.Mismatch(
+                            publishedAssemblyMvid, boundAssemblyMvid, nodeType);
+                        if (served is not null)
+                            // LogError, not Warning: a portal serving a build nobody published is
+                            // an integrity failure, and the whole cost of #2471 was that NOTHING
+                            // said so — every surface reported success.
+                            logger?.LogError(
+                                "Served build is NOT the published build for instance "
+                                + "'{InstancePath}': {Detail}", instanceHub.Address, served);
+                        instanceHub.Set(new BehaviorSubject<StaleBuildOffer?>(
+                            served is null
+                                ? null
+                                : new StaleBuildOffer(nodeType, boundAssemblyPath, boundAssemblyPath)
+                                {
+                                    Kind = StaleBuildKind.ServedBuildIsNotPublished,
+                                    PublishedAssemblyMvid = publishedAssemblyMvid,
+                                    BoundAssemblyMvid = boundAssemblyMvid,
+                                }));
                         instanceHub.RegisterForDisposal(ArmStaleAssemblySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
                             instanceHub, nodeType, boundAssemblyPath, logger,
+                            boundAssemblyMvid: boundAssemblyMvid,
                             guards: NodeTypeCompilationHelpers.GuardsOf(meshHub),
                             // Deployment policy, resolved off the MESH hub's configuration: a
                             // production portal opts into convergence (auto-recycle), everything
@@ -1805,7 +1855,8 @@ internal static class NodeTypeEnrichmentHelpers
         ILogger? logger,
         IScheduler? scheduler = null,
         NodeTypeCompilationHelpers.BuildGuards? guards = null,
-        bool autoRecycle = false)
+        bool autoRecycle = false,
+        string? boundAssemblyMvid = null)
         // 🚨 ContentAs, never `is NodeTypeDefinition` (#1669): the type node reaches this stream
         // in UN-MATERIALIZED JSON shape whenever the publication just crossed a sync stream — the
         // normal shape for exactly the emission this watcher exists to catch. A CLR type test is
@@ -1819,10 +1870,18 @@ internal static class NodeTypeEnrichmentHelpers
             // (a second ContentAs would also duplicate its degraded-content warning logs).
             .Select(t => (Node: t,
                 Def: t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger)))
+            // 🚨 EITHER identity may differ, and the second one is the whole of #2471. A PATH is a
+            // store key — (nodeTypePath, LastCompiledVersion), resolved per pod through a local
+            // cache — so a republication at the SAME key with different bytes is invisible to the
+            // path test, and that is the state in which a portal served stale code while reporting
+            // Ok through six recycles. The MVID test is added, never substituted: a legacy node
+            // carries no published MVID and must keep healing on the path exactly as before.
             .Where(x => x.Def is { } d
                 && NodeTypeCompilationHelpers.HasUsableBuild(x.Node!, d, guards)
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
-                && !string.Equals(d.LatestAssemblyPath, boundAssemblyPath, StringComparison.Ordinal))
+                && (!string.Equals(d.LatestAssemblyPath, boundAssemblyPath, StringComparison.Ordinal)
+                    || ServedBuildIdentity.Mismatch(
+                        d.LatestAssemblyMvid, boundAssemblyMvid, nodeType) is not null))
             // 🚨 Wait for the type to stop publishing — see AssemblySettleWindow. An install
             // publishes twice (type, then its Source/) while instances are being read, and
             // recycling on each one disposes hubs mid-read.
@@ -1832,6 +1891,23 @@ internal static class NodeTypeEnrichmentHelpers
                 x =>
                 {
                     var published = x.Def?.LatestAssemblyPath;
+                    // 🚨 A SAME-PATH difference is not a build to converge ON, it is a build
+                    // MISMATCH to report (#2471). The path is a store key; if it did not move, a
+                    // recycle re-resolves the same key from the same local cache and lands on the
+                    // same bytes — which is precisely what was measured on memex six times over
+                    // while every surface reported success. So the auto-recycle branch below is
+                    // skipped here: converging on nothing would consume the Take(1) and leave the
+                    // instance in the same state with its one shot spent, and the banner never
+                    // shown.
+                    var samePath = string.Equals(
+                        published, boundAssemblyPath, StringComparison.Ordinal);
+                    if (samePath)
+                        logger?.LogError(
+                            "Served build is NOT the published build for instance '{InstancePath}': "
+                            + "{Detail}", instanceHub.Address,
+                            ServedBuildIdentity.Mismatch(
+                                x.Def?.LatestAssemblyMvid, boundAssemblyMvid, nodeType));
+
                     // 🚨 The DEPLOYMENT decides between the two terminal behaviours
                     // (AutoRecycleConfigKey):
                     //
@@ -1843,7 +1919,7 @@ internal static class NodeTypeEnrichmentHelpers
                     // and an unrelated node write costs nothing. Without it, prod after a package
                     // update is a mixture of old and new assemblies for as long as viewers do not
                     // click (the 2026-08-25 Store outage).
-                    if (autoRecycle)
+                    if (autoRecycle && !samePath)
                     {
                         logger?.LogInformation(
                             "Stale-build convergence: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — auto-recycling instance '{InstancePath}' ({ConfigKey}=true)",
@@ -1865,8 +1941,19 @@ internal static class NodeTypeEnrichmentHelpers
                     // assembly indefinitely — safe, since that build worked, but "published" no
                     // longer implies "every instance is running it"; a deployment whose invariant
                     // is convergence opts into the branch above instead.
+                    // 🚨 The KIND follows which identity moved. A republication at the SAME path
+                    // whose bytes differ is not "a newer build is available, recycle to pick it
+                    // up" — the recycle re-binds the same local copy — so it must not be offered
+                    // as one (#2471). Only a genuine path advance earns the recycle link.
                     instanceHub.Get<BehaviorSubject<StaleBuildOffer?>>()
-                        ?.OnNext(new StaleBuildOffer(nodeType, published, boundAssemblyPath));
+                        ?.OnNext(new StaleBuildOffer(nodeType, published, boundAssemblyPath)
+                        {
+                            Kind = samePath
+                                ? StaleBuildKind.ServedBuildIsNotPublished
+                                : StaleBuildKind.NewerBuildAvailable,
+                            PublishedAssemblyMvid = x.Def?.LatestAssemblyMvid,
+                            BoundAssemblyMvid = boundAssemblyMvid,
+                        });
                 },
                 ex => logger?.LogWarning(ex,
                     "Stale-assembly self-heal watcher for NodeType '{NodeType}' (instance '{InstancePath}') faulted — falling back to manual Recycle",
