@@ -516,8 +516,13 @@ jobs:
           # instead of "healing" it back into a build every tick.
           IRRELEVANT='^clients/(react-native|voice-gateway)/'
           relevant=true
+          # `--detail` is load-bearing: WITHOUT it show-tags returns an array of plain STRINGS,
+          # so `[].name` matches nothing and newest_short is ALWAYS empty. Every gate log has read
+          # `Newest published set: <none>` for as long as this step has existed. It fails open
+          # (relevant stays true), so it never turned CD red — it only meant the image-irrelevant
+          # skip below could never fire. The batching probe above already passes --detail.
           newest_short=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
-            --orderby time_desc --top 60 --query "[].name" -o tsv 2>/dev/null \
+            --orderby time_desc --detail --top 60 --query "[].name" -o tsv 2>/dev/null \
             | grep -E '^[0-9a-f]{7}$' | head -1 || true)
           if [ -n "$newest_short" ] && [ "$newest_short" != "$(printf '%s' "$SHA" | cut -c1-7)" ]; then
             base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$newest_short" --jq .sha 2>/dev/null || true)
