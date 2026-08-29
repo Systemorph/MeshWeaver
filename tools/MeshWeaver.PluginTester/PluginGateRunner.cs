@@ -411,8 +411,13 @@ public static class PluginGateRunner
     {
         var result = new NodeTypeResult(type.Path, type.Package);
         return AwaitCompile(harness, options, type, result)
-            .SelectMany(afterCompile => afterCompile.Compile == CheckOutcome.Failed
-                // A broken compile already fails the gate — rendering it would only add noise.
+            // 🚨 .Fails(), never `== Failed`: a type whose compile produced NO verdict
+            // (Inconclusive/Unrecorded) has no settled build either, so rendering it would add a
+            // second, more confusing failure on top of the first. An equality test against one
+            // member silently admits every member added after it.
+            .SelectMany(afterCompile => afterCompile.Compile.Fails()
+                // A compile that did not pass already fails the gate — rendering it would only
+                // add noise.
                 ? Observable.Return(afterCompile with
                 {
                     Render = CheckOutcome.Skipped,
@@ -453,12 +458,72 @@ public static class PluginGateRunner
                         : def.CompilationError,
                 };
             })
-            .Catch((TimeoutException _) => Observable.Return(result with
+            // 🚨 A TIMEOUT IS NOT A COMPILE FAILURE. It used to be scored one, and the cost was
+            // paid twice: #2454 (a PR of one markdown line, a test ledger and a test-list row,
+            // annotated as a public-API break) and #2463 (main red and a production rollout held
+            // ~11 hours on a compile the same run's own log had recorded as `ok`).
+            .Catch((TimeoutException _) => Observable.Return(
+                NoTerminalCompileStatus(result, type.Path, options.Seed, options.CompileTimeout)));
+    }
+
+    /// <summary>
+    /// Classifies "the mesh never wrote a terminal compile status within the budget" — the ONE
+    /// observation behind both #2454 and #2463 — into the outcome whose reader can act on it.
+    /// Pure, so the classification is unit-testable without a mesh.
+    ///
+    /// <para>The discriminator is EVIDENCE, not a guess: on a run that CONSUMES a bake
+    /// (<see cref="GateOptions.Seed"/>), a bundle carrying an assembly for this exact NodeType is
+    /// proof the compile SUCCEEDED — the compiler stage emitted those bytes with no mesh involved
+    /// at all ("<c>mw-compiler compile … (no mesh)</c>"). So when the bake declares the type and
+    /// the mesh still reported nothing, the compile is not in question and the STATUS WRITE is
+    /// what was lost: <see cref="CheckOutcome.Unrecorded"/>. Without that evidence the honest
+    /// answer is narrower — nothing answered, and the gate does not know why:
+    /// <see cref="CheckOutcome.Inconclusive"/>.</para>
+    ///
+    /// <para>🚨 <b>Both still fail the run</b>, and the detail says why in the reader's own terms.
+    /// This is deliberately NOT "the bake said ok, so pass": the type never settled, so its render
+    /// and <c>Tests</c> checks never ran, and reporting green would assert checks that did not
+    /// happen — the failure shape the whole gate exists to refuse.</para>
+    /// </summary>
+    /// <param name="result">The result so far for this type.</param>
+    /// <param name="typePath">The NodeType path, matched against the bake's declared assemblies
+    /// with the seeder's own OrdinalIgnoreCase comparer (<see cref="BakeSeed.DeclaredTypePaths"/>)
+    /// — a stricter comparer here would report "no evidence" for bytes the seeder had happily
+    /// adopted under a case difference.</param>
+    /// <param name="seed">The bake this run consumed, or null on a self-producing run.</param>
+    /// <param name="budget">The elapsed per-type compile budget, named in the detail.</param>
+    internal static NodeTypeResult NoTerminalCompileStatus(
+        NodeTypeResult result, string typePath, BakeSeed? seed, TimeSpan budget)
+    {
+        var seconds = $"{budget.TotalSeconds:F0}s";
+        if (seed is not null && seed.DeclaredTypePaths.Contains(typePath))
+            return result with
             {
-                Compile = CheckOutcome.Failed,
-                CompileDetail = $"no terminal compile status within " +
-                                $"{options.CompileTimeout.TotalSeconds:F0}s",
-            }));
+                Compile = CheckOutcome.Unrecorded,
+                CompileDetail =
+                    $"the COMPILE SUCCEEDED — the bake this run consumed ('{seed.Directory}') "
+                    + "carries an assembly for this type, produced by the compiler stage with no "
+                    + $"mesh involved — but no terminal compile status was written within {seconds}. "
+                    + "The mesh lost the STATUS WRITE (a MergeGuard stale/reordered refusal on the "
+                    + "cross-hub compile-state fields, or the owning hub disposed with its "
+                    + "CreateOrUpdateNodeRequest still in flight). This is INFRASTRUCTURE, not the "
+                    + "plugin source: do not diff the content or the framework's public API. "
+                    + "Systemorph/MeshWeaver#2463, #2454.",
+            };
+        return result with
+        {
+            Compile = CheckOutcome.Inconclusive,
+            CompileDetail =
+                $"no terminal compile status within {seconds} — the gate observed NO compile "
+                + "result. This is a TIMEOUT, not a compiler diagnostic: nothing reported an "
+                + "error and no source was judged. Investigate the mesh (a wedged hub, a lost or "
+                + "refused status write, an install racing its own teardown), not the plugin "
+                + "source. Systemorph/MeshWeaver#2454."
+                + (seed is null
+                    ? ""
+                    : $" (The bake in '{seed.Directory}' declares no assembly for this type, so "
+                      + "there is no evidence here that the compile itself succeeded.)"),
+        };
     }
 
     private static IObservable<NodeTypeResult> RenderGate(

@@ -314,8 +314,18 @@ public sealed class InstanceComboVerifier
         return ComboVerdictKind.Green;
     }
 
-    /// <summary>The breadth-complete failure lines of one package: install, idempotence, and every
-    /// failed per-NodeType check with its diagnostics.</summary>
+    /// <summary>
+    /// The breadth-complete failure lines of one package: install, idempotence, and every failed
+    /// per-NodeType check with its diagnostics.
+    ///
+    /// <para>🚨 Each line says WHICH KIND of not-passing it is. A <see cref="GateRunOutcome"/>
+    /// that is <see cref="GateRunOutcome.Inconclusive"/> or <see cref="GateRunOutcome.Unrecorded"/>
+    /// must not be rendered as "compile failed" — that is #2454/#2463 reproduced one process
+    /// boundary out, in the text a human reads off the combo verdict. And the test must be
+    /// <see cref="Fails"/>, not <c>== Failed</c>: an equality test would have DROPPED both new
+    /// members from the failure list, so a run that judged nothing would report a package with an
+    /// empty failure list beside a non-zero exit code.</para>
+    /// </summary>
     private static ImmutableList<string> FailuresOf(GateRunPackage package)
     {
         var failures = ImmutableList.CreateBuilder<string>();
@@ -325,17 +335,35 @@ public sealed class InstanceComboVerifier
             failures.Add($"idempotence: {package.IdempotenceError}");
         foreach (var type in package.NodeTypes)
         {
-            if (type.Compile == GateRunOutcome.Failed)
-                failures.Add($"{type.Path}: compile failed"
+            if (Fails(type.Compile))
+                failures.Add($"{type.Path}: compile {Verb(type.Compile)}"
                              + (type.CompilationStatus is null ? "" : $" ({type.CompilationStatus})")
                              + Detail(type.CompileDetail));
-            if (type.Render == GateRunOutcome.Failed)
-                failures.Add($"{type.Path}: render failed{Detail(type.RenderDetail)}");
-            if (type.Tests == GateRunOutcome.Failed)
-                failures.Add($"{type.Path}: tests failed{Detail(type.TestsDetail)}");
+            if (Fails(type.Render))
+                failures.Add($"{type.Path}: render {Verb(type.Render)}{Detail(type.RenderDetail)}");
+            if (Fails(type.Tests))
+                failures.Add($"{type.Path}: tests {Verb(type.Tests)}{Detail(type.TestsDetail)}");
         }
         return failures.ToImmutable();
     }
+
+    /// <summary>Whether an outcome fails the run — every state that is neither a pass nor a
+    /// deliberate skip.</summary>
+    private static bool Fails(GateRunOutcome outcome) =>
+        outcome is GateRunOutcome.Failed
+            or GateRunOutcome.Inconclusive
+            or GateRunOutcome.Unrecorded;
+
+    /// <summary>How the failure line NAMES the outcome — a verdict, a missing verdict, or a lost
+    /// record.</summary>
+    private static string Verb(GateRunOutcome outcome) => outcome switch
+    {
+        GateRunOutcome.Inconclusive =>
+            "produced NO VERDICT (a timeout or a wedge in the mesh — not a diagnostic)",
+        GateRunOutcome.Unrecorded =>
+            "SUCCEEDED but the mesh did not record it (infrastructure, not the content)",
+        _ => "failed",
+    };
 
     private static string Detail(string? detail) =>
         string.IsNullOrWhiteSpace(detail) ? "" : $" — {detail}";
