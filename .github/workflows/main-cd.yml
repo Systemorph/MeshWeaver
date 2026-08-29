@@ -447,6 +447,17 @@ jobs:
       # 🚨 FAILS OPEN: if the registry cannot be read, the age reports 999999 and the merge
       # publishes — a broken batching probe must cost at most one extra image build, never a
       # missed publish. Unset/empty var = publish every merge (the historical behavior).
+      #
+      # 🚨 …but fail-open is a CONTROL-FLOW decision, and it never justified `2>/dev/null`.
+      # `|| true` alone delivers the whole fail-open; the stderr swallow only deleted the
+      # evidence of WHY the probe was empty, which is precisely how #2642's sibling read spent
+      # nine scheduled runs blaming a healthy component for its own crashed query. Keep the
+      # `|| true`; never put the redirect back. `.github/scripts/check-workflow-shell.py` now
+      # fails the PR on that combination.
+      #
+      # The `name &&` guard in the query is the same lesson one layer down: jmespath's
+      # `contains()` THROWS on a null field and the throw aborts the WHOLE query, so a single
+      # untagged row would make this probe permanently blind. Costs nothing when name is set.
       - name: "Age of the newest published set (batching probe)"
         id: freshness
         if: steps.target.outputs.reason == 'push' && vars.CD_BATCH_WINDOW_MINUTES != ''
@@ -454,14 +465,14 @@ jobs:
           set -uo pipefail
           newest=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
             --orderby time_desc --detail --top 20 \
-            --query "[?contains(name, 'ci.')] | [0].lastUpdateTime" -o tsv 2>/dev/null || true)
+            --query "[?name && contains(name, 'ci.')] | [0].lastUpdateTime" -o tsv || true)
           # Fail-open must survive EVERY failure shape, including a timestamp `date -d` cannot
           # parse: an error inside arithmetic expansion is fatal to the shell, which would fail
           # this step — and the gate job with it — CLOSED. So the epoch parse is guarded on its
           # own line and age_min only computed from a verified number (Copilot review, #1691).
           age_min=999999
           if [ -n "$newest" ]; then
-            epoch=$(date -u -d "$newest" +%s 2>/dev/null || true)
+            epoch=$(date -u -d "$newest" +%s || true)
             case "$epoch" in
               ''|*[!0-9]*) echo "::warning::Batching probe could not parse '$newest' — failing OPEN (this merge publishes)." ;;
               *) age_min=$(( ( $(date -u +%s) - epoch ) / 60 )) ;;
@@ -522,12 +533,12 @@ jobs:
           # (relevant stays true), so it never turned CD red — it only meant the image-irrelevant
           # skip below could never fire. The batching probe above already passes --detail.
           newest_short=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
-            --orderby time_desc --detail --top 60 --query "[].name" -o tsv 2>/dev/null \
+            --orderby time_desc --detail --top 60 --query "[].name" -o tsv \
             | grep -E '^[0-9a-f]{7}$' | head -1 || true)
           if [ -n "$newest_short" ] && [ "$newest_short" != "$(printf '%s' "$SHA" | cut -c1-7)" ]; then
-            base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$newest_short" --jq .sha 2>/dev/null || true)
+            base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$newest_short" --jq .sha || true)
             if [ -n "$base" ]; then
-              files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$SHA" --jq '.files[].filename' 2>/dev/null || true)
+              files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$SHA" --jq '.files[].filename' || true)
               if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE "$IRRELEVANT"; then
                 relevant=false
               fi
@@ -1924,7 +1935,7 @@ jobs:
           # hole and it must stay loud. So the discriminator is tip-ness, not colour.
           if [ "$REASON" = "push" ] && [ "$PUBLISH" != "true" ] && [ "$GREEN" != "true" ] \
              && [ "${CONCLUSION#*/}" = "cancelled" ]; then
-            TIP=$(gh api "repos/${{ github.repository }}/commits/main" --jq '.sha' 2>/dev/null || echo "")
+            TIP=$(gh api "repos/${{ github.repository }}/commits/main" --jq '.sha' || echo "")
             if [ -z "$TIP" ]; then
               # \U0001f6a8 Say what is true, not what is convenient. Tip-ness was NOT established, so
               # claiming it (either way) would be the same sin this step exists to correct: a
