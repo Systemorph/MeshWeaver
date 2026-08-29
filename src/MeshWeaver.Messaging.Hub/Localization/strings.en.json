@@ -556,6 +556,7 @@
   "ui.connectOAuth": "Connect with the remote's login (OAuth)",
   "ui.applyUpdateNow": "Apply available update now",
   "ui.updateNoNewerVersion": "_No newer version detected yet._",
+  "ui.updateNeverChecked": "_This install has not completed an update check yet — so nothing here says a newer version does not exist. If this persists, the update checker is not running._",
   "ui.updateLatestAvailable": "**Latest available:** `{0}`",
   "ui.updateCheckedAt": "_(checked {0})_",
   "ui.updateVerifiedGreen": "✅ Verified against this instance's modules: all {0} module(s) compile and test green against this build.",

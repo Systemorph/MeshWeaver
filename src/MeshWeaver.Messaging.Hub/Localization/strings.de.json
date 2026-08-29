@@ -556,6 +556,7 @@
   "ui.connectOAuth": "Mit dem Login der Gegenstelle verbinden (OAuth)",
   "ui.applyUpdateNow": "Verfügbares Update jetzt anwenden",
   "ui.updateNoNewerVersion": "_Noch keine neuere Version erkannt._",
+  "ui.updateNeverChecked": "_Diese Installation hat noch keine Update-Prüfung abgeschlossen — diese Anzeige besagt also nicht, dass es keine neuere Version gibt. Bleibt das so, läuft die Update-Prüfung nicht._",
   "ui.updateLatestAvailable": "**Neueste verfügbare Version:** `{0}`",
   "ui.updateCheckedAt": "_(geprüft {0})_",
   "ui.updateVerifiedGreen": "✅ Gegen die Module dieser Instanz verifiziert: alle {0} Modul(e) kompilieren und testen grün gegen diesen Build.",

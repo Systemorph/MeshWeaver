@@ -52,6 +52,35 @@ public record UpdatePolicyContent
     public DateTimeOffset? CheckedAt { get; init; }
 
     /// <summary>
+    /// 🚨 When this install last COMPLETED an update check — whatever the check concluded.
+    ///
+    /// <para>Distinct from <see cref="CheckedAt"/>, and the difference is the defect it closes
+    /// (#2553). <see cref="CheckedAt"/> is stamped beside <see cref="LatestAvailableTag"/>, so it
+    /// only ever advances on a check that FOUND something newer. An install that checks hourly and
+    /// finds nothing therefore has no record of ever having checked — indistinguishable from an
+    /// install whose checker is dead, which is precisely the state memex was in for 7 h while its
+    /// Updates tab read "No newer version detected yet."</para>
+    ///
+    /// <para>Written by the poller on EVERY check, on every outcome path, as a best-effort
+    /// bookkeeping write that can never gate the roll (#1020). Not user-editable.</para>
+    /// </summary>
+    [Browsable(false)]
+    public DateTimeOffset? LastCheckedAt { get; init; }
+
+    /// <summary>The one-sentence verdict of the check <see cref="LastCheckedAt"/> stamps — see
+    /// <c>SelfUpdateVerdict</c>. Durable on purpose: a log line depends on a per-category log level
+    /// that a deployment may simply not have set (and had not), a node write does not. Not
+    /// user-editable.</summary>
+    [Browsable(false)]
+    public string? LastCheckVerdict { get; init; }
+
+    /// <summary>What woke that check — <c>Startup</c>, <c>BuildCompletion</c>, <c>PolicyChange</c>
+    /// or <c>SafetyNet</c>. An install whose checks are ONLY ever <c>SafetyNet</c> has a dead event
+    /// channel, and that is not visible from anything else. Not user-editable.</summary>
+    [Browsable(false)]
+    public string? LastCheckTrigger { get; init; }
+
+    /// <summary>
     /// Combo-verification verdicts per candidate tag — what the Candidate Release Protocol's
     /// instance gate found when it ran this instance's module set inside a candidate image
     /// (<c>mw-combo-verify</c>). Written via
