@@ -262,9 +262,18 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s), source ${SOURCE_SHA:-unknown})"
 }
 
-PUBLISHED=0
-MARKERS=0
-for target in $BAKE_PUBLISH_TARGETS; do
+# 🚨 PER-TARGET ISOLATION (Plugins #2682, 2026-08-30). Each target is published in its OWN subshell:
+# a failure — an unreadable marker, a share that no longer exists, an upload that dies — fails THAT
+# target and the loop moves on, so a dead entry in BAKE_PUBLISH_TARGETS can no longer starve the
+# live ones. It is NOT a skip: every failed target is named at the end and the script exits 1. For
+# three days every Plugins main bake sealed the two live shares and then died on the third (a torn-
+# down instance's share, gone from the storage account) — whether anything sealed was ordering luck.
+# The refusals inside stay exactly as strict (an unreadable marker is still not an absent one); only
+# their blast radius shrinks from "the whole publication" to "this target".
+OUTCOMES="$SENTINEL_LOCAL_DIR/outcomes"
+: > "$OUTCOMES"
+publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `exit 1` fails this target only
+  local target="$1"
   ACCOUNT="${target%%/*}"
   REST="${target#*/}"
   SHARE="${REST%%/*}"
@@ -281,7 +290,7 @@ for target in $BAKE_PUBLISH_TARGETS; do
   # by `set -e`, deliberately: a silently missing marker holds everything.
   if [ -n "${RELEASE_MARKER_LOCAL:-}" ]; then
     publish_release_marker "$ACCOUNT" "$SHARE" "$BASE"
-    MARKERS=$((MARKERS + 1))
+    echo marker >> "$OUTCOMES"
   fi
   DEST="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
   # "Rebuild only when we need to" applies to the publish too (#1660 WS3), but the key is
@@ -374,25 +383,41 @@ for target in $BAKE_PUBLISH_TARGETS; do
       echo "sealed publication under $DEST carries no $MODULES_DIR_NAME/$MODULES_INDEX (exists=$module_set) — it predates module sealing; republishing WITH the module set."
       echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s))"
       publish_one_target "$ACCOUNT" "$SHARE" "$DEST" true
-      PUBLISHED=$((PUBLISHED + 1))
-      continue
+      echo published >> "$OUTCOMES"
+      return 0
     fi
     if [ -n "${SOURCE_SHA:-}" ] && [ "$published_sha" = "$SOURCE_SHA" ]; then
       echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication of THIS content under $DEST (sentinel present, source $published_sha) — already published; skipping."
-      continue
+      return 0
     fi
     if [ -z "${SOURCE_SHA:-}" ]; then
       # No content identity given (framework-repo producer): the framework identity IS the
       # content key, so a sealed directory is already this publication.
       echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication under $DEST ($SENTINEL present) — surface unchanged, bake already published; skipping."
-      continue
+      return 0
     fi
     resealing=true
     echo "sealed publication under $DEST is from source '${published_sha:-<unrecorded>}' but this bake is from '$SOURCE_SHA' — republishing."
   fi
   echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s))"
   publish_one_target "$ACCOUNT" "$SHARE" "$DEST" "$resealing"
-  PUBLISHED=$((PUBLISHED + 1))
+  echo published >> "$OUTCOMES"
+}
+
+FAILED=()
+for target in $BAKE_PUBLISH_TARGETS; do
+  if ( publish_to_target "$target" ); then
+    :
+  else
+    FAILED+=("$target")
+    echo "::error::target $target FAILED (see above) — continuing with the remaining targets so a dead target cannot starve the live ones"
+  fi
 done
+PUBLISHED=$(awk '/^published$/ { c++ } END { print c + 0 }' "$OUTCOMES")
+MARKERS=$(awk '/^marker$/ { c++ } END { print c + 0 }' "$OUTCOMES")
+if [ "${#FAILED[@]}" -gt 0 ]; then
+  echo "::error::bake publication FAILED on ${#FAILED[@]} of $(printf '%s\n' $BAKE_PUBLISH_TARGETS | wc -l | tr -d ' ') target(s): ${FAILED[*]} — identity=$IDENTITY source=$SOURCE. Every OTHER target above was published and sealed; these were not. A target that no longer exists (a torn-down instance's share) belongs OUT of BAKE_PUBLISH_TARGETS — remove it, never route around it."
+  exit 1
+fi
 
 echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} targets-published=$PUBLISHED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"
