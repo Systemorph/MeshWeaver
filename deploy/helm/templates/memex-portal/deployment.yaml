@@ -213,6 +213,16 @@ spec:
             - name: "memex-dumps"
               mountPath: "/data/dumps"
           imagePullPolicy: "IfNotPresent"
+{{- /* 🚨 The RAM/CPU envelope — the first thing an operator sizes — was a DEAD KEY until 2026-08-29:
+       every overlay and values.aks.yaml declared resources.portal, no template read it, and the
+       live envelope came from an out-of-band kubectl patch (portal-patch.json) that the next
+       `helm upgrade` silently dropped. An instance with no envelope runs BestEffort and can OOM the
+       node its neighbours share. Rendered only when declared, so a self-host that says nothing
+       keeps the chart's previous behaviour. */}}
+{{- with ((.Values.resources).portal) }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+{{- end }}
           # 🚦 Zero-502 rollouts. Without a readiness probe a pod counts as "Ready" the moment its
           # container starts — long before the app serves (Orleans + mesh + static-repo import take
           # tens of seconds) — so a rollout sends traffic to a still-booting pod → 502. /health

@@ -13,6 +13,9 @@
 #   HOSTING_PLAN             base64 of `name<TAB>command` lines — base64 so no step's quoting can
 #                            escape the environment value carrying it
 #   HOSTING_CATALOG_CONFIG   base64 of the catalog config lines, materialised at $CATALOG_CONFIG
+#   HOSTING_VALUES           base64 of the helm values RENDERED FROM THE DEPLOYMENT RECORD
+#                            (HelmValues in the Hosting plugin), materialised at
+#                            $HOSTING_VALUES_FILE — the ONE values file hosting-deploy consumes.
 #   plus Hosting:Operator:Environment entries (AZ_RESOURCE_GROUP, AZ_PORTAL_IDENTITY, INGRESS_IP,
 #   PAYWALL_URL, VALUES_FILE, CATALOG_CONFIG)
 #
@@ -49,6 +52,20 @@ if [ -n "${HOSTING_CATALOG_CONFIG:-}" ]; then
     hosting::log "catalog config → ${target} ($(wc -c < "$target") bytes)"
   else
     hosting::die "HOSTING_CATALOG_CONFIG is not valid base64"
+  fi
+fi
+
+# The rendered values file. Same shape as the catalog config above: base64 in, a file out, and
+# a decode failure is a refusal — a deploy step that found NO file would fall through to the
+# chart defaults (ghcr :latest, an in-cluster Postgres this fleet does not run), which is the
+# exact failure the record-driven render exists to end.
+if [ -n "${HOSTING_VALUES:-}" ]; then
+  HOSTING_VALUES_FILE="${HOSTING_VALUES_FILE:-/tmp/hosting-values.yaml}"
+  export HOSTING_VALUES_FILE
+  if printf '%s' "$HOSTING_VALUES" | base64 -d > "$HOSTING_VALUES_FILE"; then
+    hosting::log "rendered values → ${HOSTING_VALUES_FILE} ($(wc -c < "$HOSTING_VALUES_FILE") bytes)"
+  else
+    hosting::die "HOSTING_VALUES is not valid base64"
   fi
 fi
 
