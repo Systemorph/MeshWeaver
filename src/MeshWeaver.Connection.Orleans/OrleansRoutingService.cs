@@ -1073,7 +1073,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // — RoutingGrain.DeliverToGrainWithRetry retries this identical exception class. That
             // inconsistency between the two legs was the whole defect.
             //
-            // Bounded, loud, and still terminal: see AttachWithBoundedRetryAsync.
+            // Bounded, loud, and still terminal: see AttachWithBoundedRetry.
             var handle = await AttachWithBoundedRetry(
                 AttachSubscriptionAsync,
                 IsTransientFailure,
