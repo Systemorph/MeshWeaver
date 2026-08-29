@@ -50,6 +50,25 @@ on:
         description: 'What released — "platform" (images) or "packages" (NuGet)'
         required: true
         type: string
+      # The image the receivers rebuild AGAINST. Every satellite's bake resolves the released
+      # image from these (client_payload.image / .digest / .sha) — MeshWeaver.Manufacturing refuses
+      # a platform event whose payload carries no `sha256:` digest, and MeshWeaver.Education bakes
+      # against `client_payload.image` verbatim. Required for reason "platform"; asserted RED.
+      sha:
+        description: 'The platform commit the images were built from'
+        required: false
+        default: ''
+        type: string
+      image:
+        description: 'The tester image reference, pinned by digest (registry/mw-plugin-test@sha256:…)'
+        required: false
+        default: ''
+        type: string
+      digest:
+        description: 'That image''s digest (sha256:…)'
+        required: false
+        default: ''
+        type: string
     secrets:
       app-id:
         required: true
@@ -103,8 +122,23 @@ jobs:
           VERSION: ${{ inputs.version }}
           REASON: ${{ inputs.reason || 'manual-check' }}
           DRY_RUN: ${{ inputs.dry-run }}
+          SHA: ${{ inputs.sha }}
+          IMAGE: ${{ inputs.image }}
+          DIGEST: ${{ inputs.digest }}
         run: |
           set -euo pipefail
+
+          # 🚨 A platform release names the image it released, or it is not a release event. The
+          # receivers gate against client_payload.image / .digest, and an event without them makes
+          # every one of them either refuse (Manufacturing) or bake against nothing (Education).
+          if [ "$REASON" = "platform" ]; then
+            [ -n "$IMAGE" ]  || { echo "::error::reason=platform but inputs.image is empty — the receivers cannot know what to rebuild against."; exit 1; }
+            case "$DIGEST" in sha256:*) ;; *) echo "::error::reason=platform but inputs.digest is '$DIGEST', not a sha256: digest."; exit 1 ;; esac
+            [ -n "$SHA" ]    || { echo "::error::reason=platform but inputs.sha is empty."; exit 1; }
+          fi
+          payload=$(jq -cn --arg v "$VERSION" --arg r "$REASON" --arg sha "$SHA" --arg i "$IMAGE" --arg d "$DIGEST" \
+            '{version:$v, reason:$r, sha:$sha, image:$i, digest:$d, source:"platform", chain:["platform","plugins"]}')
+          echo "payload: $payload"
 
           # 🚨 INSTALLATION IS NOT SUBSCRIPTION. The App is installed org-wide for OTHER reasons
           # (GitSync), so its installation list is 33 repositories — customer and solution repos
@@ -152,10 +186,8 @@ jobs:
           # partial state is invisible. Notify everyone, then report.
           failed=""
           for repo in $repos; do
-            if gh api -X POST "/repos/$repo/dispatches" \
-                 -f "event_type=meshweaver-framework-released" \
-                 -F "client_payload[version]=$VERSION" \
-                 -F "client_payload[reason]=$REASON" 2>dispatch.err; then
+            if jq -cn --argjson p "$payload" '{event_type:"meshweaver-framework-released", client_payload:$p}' \
+                 | gh api -X POST "/repos/$repo/dispatches" --input - 2>dispatch.err; then
               echo "  dispatched → $repo"
             else
               # A repo with no `repository_dispatch:` receiver still ACCEPTS the POST (204) and

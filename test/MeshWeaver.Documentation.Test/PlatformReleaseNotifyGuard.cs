@@ -166,25 +166,42 @@ public class PlatformReleaseNotifyGuard
         Assert.DoesNotContain("BAKE_SUBSCRIBER_REPOS", body, StringComparison.Ordinal);
         Assert.DoesNotContain("DEPENDENT_DISPATCH_TOKEN", body, StringComparison.Ordinal);
 
-        var job = JobBlock(body, "dispatch-dependents:");
-        Assert.Contains("actions/create-github-app-token", job, StringComparison.Ordinal);
+        // ONE fan-out. Two sessions built this leg twice on 2026-08-29 (an inline job and the
+        // reusable notify-dependents.yml); the reusable then fired BEFORE the Plugins bake with a
+        // payload the receivers could not use (run 33276813173). A second job key here is the
+        // duplication coming back.
+        Assert.DoesNotContain("\n  dispatch-dependents:", body, StringComparison.Ordinal);
+
+        var job = JobBlock(body, "notify-dependents:");
+        Assert.Contains("uses: ./.github/workflows/notify-dependents.yml", job, StringComparison.Ordinal);
         Assert.Contains("secrets.DEPENDENT_DISPATCH_APP_ID", job, StringComparison.Ordinal);
         Assert.Contains("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY", job, StringComparison.Ordinal);
-        Assert.Contains("/installation/repositories", job, StringComparison.Ordinal);
-        Assert.Contains("meshweaver-framework-released", job, StringComparison.Ordinal);
-        Assert.DoesNotContain("continue-on-error", job, StringComparison.Ordinal);
-        Assert.DoesNotContain("::warning", job, StringComparison.Ordinal);
-        Assert.Contains("exit 1", job, StringComparison.Ordinal);
         // Plugins is built WITH the platform (plugins-bake), never told to rebuild — and the wave
-        // fires only after that publication is sealed.
+        // fires only after that publication is sealed: a satellite woken earlier seeds nothing.
         Assert.Contains("needs.plugins-bake.result == 'success'", job, StringComparison.Ordinal);
+        // The receivers read image + digest (+ sha); a version alone is not a release event.
+        Assert.Contains("image: ${{ needs.plugins-bake-image.outputs.image }}", job, StringComparison.Ordinal);
+        Assert.Contains("digest: ${{ needs.plugins-bake-image.outputs.digest }}", job, StringComparison.Ordinal);
+        Assert.Contains("sha: ${{ needs.gate.outputs.sha }}", job, StringComparison.Ordinal);
+
+        // The reusable itself: discovered subscribers, an App token minted per run, RED on any
+        // failed dispatch (collected, then exit 1 — never continue-on-error), and a platform event
+        // without its image refused rather than sent.
+        var reusable = File.ReadAllText(Path.Combine(FindRepoRoot(), ".github", "workflows", "notify-dependents.yml"));
+        Assert.Contains("actions/create-github-app-token", reusable, StringComparison.Ordinal);
+        Assert.Contains("/installation/repositories", reusable, StringComparison.Ordinal);
+        Assert.Contains("meshweaver-framework-released", reusable, StringComparison.Ordinal);
+        Assert.Contains("client_payload:$p", reusable, StringComparison.Ordinal);
+        Assert.Contains("reason=platform but inputs.image is empty", reusable, StringComparison.Ordinal);
+        Assert.DoesNotContain("continue-on-error", reusable, StringComparison.Ordinal);
+        Assert.Contains("exit 1", reusable, StringComparison.Ordinal);
 
         var preflight = SectionAfter(JobBlock(body, "preflight:"), "missing=()");
         Assert.Contains("DEPENDENT_DISPATCH_APP_ID", preflight, StringComparison.Ordinal);
         Assert.Contains("DEPENDENT_DISPATCH_APP_PRIVATE_KEY", preflight, StringComparison.Ordinal);
 
         var legs = SectionAfter(JobBlock(body, "delivery-verdict:"), "LEGS: >-");
-        Assert.Contains("dispatch-dependents=", legs, StringComparison.Ordinal);
+        Assert.Contains("notify-dependents=", legs, StringComparison.Ordinal);
         Assert.Contains("plugins-bake=", legs, StringComparison.Ordinal);
     }
 

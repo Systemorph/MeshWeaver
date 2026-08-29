@@ -1635,7 +1635,7 @@ jobs:
   # inbox watcher that would have run the pin updater is armed on an on-demand hub). The maintainer's
   # decision: "it should be github actions trigger — no in mesh baking — plugins is top level, built
   # with platform — on platform update ⇒ update all". The dispatch now happens HERE, in the
-  # `dispatch-dependents` job below, after `plugins-bake` has sealed the Plugins publication for
+  # `notify-dependents` job below, after `plugins-bake` has sealed the Plugins publication for
   # this run's identity; the mesh notify below stays for the portals' own self-update only.
   # (Historical, superseded:) There is deliberately no job here that dispatches to the node repos —
   # but the wave is now BROADCAST, not only pulled. The broadcast happens ONE HOP AWAY, in memex,
@@ -1718,14 +1718,21 @@ jobs:
   # memex's broadcast stays; this does not replace it. The two are independent paths to the same
   # event, and the failure that motivated this is that a wave depending on ONE hop through a mesh
   # is a wave that stops when that hop is unreachable — which is not observable from here.
+  # 🚨 AFTER `plugins-bake`, never merely after `promote`: Plugins is built WITH the platform and
+  # every satellite's bake seeds the Plugins publication for the released identity — woken before
+  # it is sealed, each one fails `upstream 'plugins' has no SEALED publication … for identity`.
+  # The payload is what the receivers read: image + digest (+ sha, version); see notify-dependents.yml.
   notify-dependents:
     name: "Push the release wave to dependent repos"
-    needs: [preflight, gate, portal-image, plugin-test-image, promote]
-    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    needs: [preflight, gate, portal-image, plugin-test-image, promote, plugins-bake, plugins-bake-image]
+    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success' && needs.plugins-bake.result == 'success'
     uses: ./.github/workflows/notify-dependents.yml
     with:
       version: ${{ needs.plugin-test-image.outputs.version }}
       reason: platform
+      sha: ${{ needs.gate.outputs.sha }}
+      image: ${{ needs.plugins-bake-image.outputs.image }}
+      digest: ${{ needs.plugins-bake-image.outputs.digest }}
     secrets:
       app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
       private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
@@ -1836,6 +1843,12 @@ jobs:
       # package changes; a platform release changes no package content. The bundles packed here
       # are the bake's inputs (artifacts), nothing more.
       publish: false
+    secrets:
+      # MeshWeaver.Plugins is PRIVATE: this run's GITHUB_TOKEN cannot check it out (the first wave
+      # died on `repository … not found`, run 33276813173). The dispatch App is installed on it
+      # with Contents: Read, so it doubles as the content credential; preflight asserts it.
+      content-app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+      content-app-private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
 
   plugins-bake-image:
     name: "Plugins: resolve this run's tester image digest"
@@ -1900,75 +1913,19 @@ jobs:
       azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
       azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # The content checkout of the private Plugins repo — see plugins-modules.
+      content-app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+      content-app-private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
 
   # ────────────────── DISPATCH DEPENDENTS: "on platform update ⇒ update all" ──────────────────
-  # Fires ONLY after the Plugins publication is sealed for this identity. Every repo the dispatch
-  # App is installed on, except this one and Plugins (built above, not a subscriber), receives
-  # `meshweaver-framework-released`; their CI already answers it by baking against the released
-  # image and refusing unless every upstream is sealed. Package-only publishes take the other
-  # path — the reusable bake's own `dispatch-dependents` job sends `meshweaver-upstream-published`
-  # to dependents only, and recurses.
-  #
-  # 🚨 No hand-maintained subscriber list and no skip-trapdoor: the set IS the App's installation
-  # (install the App on a repo = subscribe it), preflight asserts the credential RED, an empty set
-  # is RED, and a failed dispatch is RED naming the repo. A release that told nobody is not delivered.
-  dispatch-dependents:
-    name: "Dispatch meshweaver-framework-released to every dependent repo"
-    needs: [preflight, gate, plugin-test-image, promote, plugins-bake, plugins-bake-image]
-    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success' && needs.plugins-bake.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Mint an installation token for the dependents
-        id: app
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-          private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-      - name: Dispatch to every installed repo (except the platform and Plugins)
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          SHA: ${{ needs.gate.outputs.sha }}
-          VERSION: ${{ needs.plugin-test-image.outputs.version }}
-          IMAGE: ${{ needs.plugins-bake-image.outputs.image }}
-          DIGEST: ${{ needs.plugins-bake-image.outputs.digest }}
-          SELF: ${{ github.repository }}
-          PLUGINS: Systemorph/MeshWeaver.Plugins
-        run: |
-          set -euo pipefail
-          repos=$(gh api --paginate /installation/repositories --jq '.repositories[].full_name')
-          [ -n "$repos" ] || { echo "::error::the dispatch App is installed on NO repository — nobody is subscribed. Install DEPENDENT_DISPATCH's App on the node repos."; exit 1; }
-          payload=$(jq -cn --arg sha "$SHA" --arg v "$VERSION" --arg i "$IMAGE" --arg d "$DIGEST" \
-            '{sha:$sha, version:$v, image:$i, digest:$d, source:"platform", chain:["platform","plugins"]}')
-          dispatched=(); failed=()
-          for repo in $repos; do
-            case "$repo" in "$SELF"|"$PLUGINS") continue ;; esac
-            code=$(curl -sS -o /tmp/resp -w '%{http_code}' -X POST \
-              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$repo/dispatches" \
-              -d "$(jq -cn --argjson p "$payload" '{event_type:"meshweaver-framework-released", client_payload:$p}')") || code=000
-            case "$code" in
-              2*) dispatched+=("$repo") ;;
-              *)  failed+=("$repo (HTTP $code: $(head -c 200 /tmp/resp | tr '\n' ' '))") ;;
-            esac
-          done
-          if [ ${#dispatched[@]} -eq 0 ] && [ ${#failed[@]} -eq 0 ]; then
-            echo "::error::the App is installed only on $SELF / $PLUGINS — no dependent to dispatch. Install it on the node repos."; exit 1
-          fi
-          {
-            echo "### 📣 Platform ${VERSION} (${SHA:0:9}) released — dependents dispatched"
-            echo "- image: \`$IMAGE\`"
-            for r in "${dispatched[@]}"; do echo "- ✅ $r"; done
-            for r in "${failed[@]}";     do echo "- ❌ $r"; done
-          } >> "$GITHUB_STEP_SUMMARY"
-          for r in "${dispatched[@]}"; do echo "dispatched: $r"; done
-          if [ ${#failed[@]} -gt 0 ]; then
-            for r in "${failed[@]}"; do echo "::error::dispatch failed: $r"; done
-            exit 1
-          fi
+  # ONE fan-out, and it is `notify-dependents` above — gated on `plugins-bake`, so a satellite is
+  # woken only once the Plugins publication is sealed for this identity (its bake seeds that
+  # publication and refuses an unsealed one). Two sessions built this leg twice on 2026-08-29
+  # (an inline job here and the reusable notify-dependents.yml); the first wave then dispatched
+  # from the reusable BEFORE the bake and with a payload the receivers could not use. The guard
+  # (PlatformReleaseNotifyGuard) now pins a single job carrying the full payload.
+  # Package-only publishes take the other path — the reusable bake's own `dispatch-dependents`
+  # job sends `meshweaver-upstream-published` to dependents only, and recurses.
 
   verify-images:
     name: "Verify every image shipped"
@@ -2046,7 +2003,7 @@ jobs:
     # publish actually happened while it can only see two of the nine jobs that make it happen.
     needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote,
             publish-bake, notify-platform-update, verify-images,
-            plugins-modules, plugins-bake-image, plugins-bake, dispatch-dependents]
+            plugins-modules, plugins-bake-image, plugins-bake, notify-dependents]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2186,7 +2143,7 @@ jobs:
             plugins-modules=${{ needs.plugins-modules.result }}
             plugins-bake-image=${{ needs.plugins-bake-image.result }}
             plugins-bake=${{ needs.plugins-bake.result }}
-            dispatch-dependents=${{ needs.dispatch-dependents.result }}
+            notify-dependents=${{ needs.notify-dependents.result }}
         run: |
           set -euo pipefail
           bad=""
