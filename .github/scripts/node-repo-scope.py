@@ -187,8 +187,11 @@ def project_hits(root: Path, entries: list[str], changed: list[str], say) -> dic
 # ── classification ───────────────────────────────────────────────────────────────────────────
 
 def node_packages(root: Path) -> set[str]:
+    # "meshweaver" is CI's checkout of Systemorph/MeshWeaver — gen-manifests.py skips it for the
+    # same reason. The select job keeps the two trees apart anyway; this is the belt to that brace,
+    # because the day core grows a root index.json is the day the framework becomes a plugin.
     skip = {".git", ".github", ".claude", ".worktrees", "scripts", "src", "test", "docs", "e2e",
-            "app", "clients", "legacy"}
+            "app", "clients", "legacy", "meshweaver"}
     try:
         return {d.name for d in root.iterdir()
                 if d.is_dir() and d.name not in skip and (d / "index.json").exists()}

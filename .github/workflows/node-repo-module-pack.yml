@@ -131,8 +131,15 @@ jobs:
       selected: ${{ steps.scope.outputs.selected }}
       scope: ${{ steps.scope.outputs.scope }}
     steps:
+      # 🚨 The caller goes in its OWN directory, not the workspace root. Node packages are
+      # discovered as "top-level dirs carrying an index.json", and the platform checkout below
+      # lands INSIDE the workspace — clone core to the root beside the caller's content and the
+      # selector is one `index.json` away from treating the framework as a plugin of this repo.
+      # gen-manifests.py already carries "meshweaver" in its SKIP set for exactly this reason;
+      # keeping the two trees apart is the version that cannot rot.
       - uses: actions/checkout@v7
         with:
+          path: repo
           # 🚨 The diff is taken against the PR base, so the base commits must be present. A
           # shallow clone would make every range unresolvable — which the scope script turns into
           # a FULL pack rather than an empty one, but silently paying for 29 jobs is not the plan.
@@ -174,10 +181,11 @@ jobs:
             BASE_REF="${QUEUE_BASE_REF#refs/heads/}"
           fi
           if [ -n "${BASE_REF:-}" ]; then
-            git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+            git -C repo fetch --no-tags origin \
+              "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           fi
           python3 meshweaver/.github/scripts/node-repo-scope.py \
-            --for modules --root . --modules "@$RUNNER_TEMP/matrix.json" \
+            --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" > "$RUNNER_TEMP/scope.json"
 
   pack:
