@@ -1589,9 +1589,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // The FAILURE terminal, same identity restoration as EmitTerminal so a
                             // caller's OnError callback runs as the caller and not as
                             // system-security. Every rejection path funnels through here.
-                            void FailTerminal(Exception error)
+                            void RaiseError(Exception error)
                             {
-                                if (!ClaimTerminal()) return;
                                 if (accessServiceAtEntry is not null && capturedContextAtEntry is not null)
                                 {
                                     using (accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry))
@@ -1601,6 +1600,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 {
                                     observer.OnError(error);
                                 }
+                            }
+
+                            void FailTerminal(Exception error)
+                            {
+                                if (ClaimTerminal()) RaiseError(error);
                             }
 
                             // A re-enqueued attempt IS this write, still in flight, so its outcome
@@ -1998,23 +2002,37 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             // the very defect this change closes — one bound later.
                                             // The write stays posted and the update lambda re-diffs
                                             // idempotently, so a caller that retries loses nothing.
+                                            // The bound the caller actually experiences, measured from the
+                                            // post — reported verbatim in the log and the error so a
+                                            // diagnostic never names a deadline different from the one that
+                                            // fired.
+                                            var verdictBound = LatePatchResponseRegistry.LateResponseWatchBound
+                                                               + VerdictBoundGrace;
+                                            var verdictBoundSeconds = verdictBound.TotalSeconds;
                                             composite.Add(Observable
-                                                .Timer(LatePatchResponseRegistry.LateResponseWatchBound
-                                                       + VerdictBoundGrace - UpdateResponseWaitBound)
+                                                .Timer(verdictBound - UpdateResponseWaitBound)
                                                 .Subscribe(_ =>
                                                 {
-                                                    if (System.Threading.Volatile.Read(ref callerSettled) != 0)
-                                                        return;
-                                                    lateRegistry.Complete(requestId);
+                                                    // 🚨 ARBITRATE FIRST, act second — and arbitrate on the
+                                                    // REGISTRY ENTRY, not on a settled-flag. Dispatch removes the
+                                                    // entry and THEN runs the late callback, so between those two
+                                                    // steps a verdict is provably in flight while nothing has been
+                                                    // claimed yet; a deadline that read the flag could fire in that
+                                                    // window and fault a write the owner had actually answered.
+                                                    // Taking the entry is the one act that proves no verdict has
+                                                    // claimed this patch. Losing means the verdict wins — correct.
+                                                    if (!lateRegistry.TryComplete(requestId)) return;
+                                                    if (!ClaimTerminal()) return;
+                                                    // Only now may this touch shared state: the hand-off is
+                                                    // released with nothing to publish, because nothing landed.
                                                     onLocalState?.Invoke(null);
                                                     diagLogger?.LogWarning(
                                                         "[UpdateRemote] VERDICT_TIMEOUT hub={Hub} target={Path} bound={BoundSeconds}s — the owner produced no terminal for this patch inside the late-response window, which dominates every owner-side terminal path; the write is NOT confirmed",
-                                                        _workspace.Hub.Address, _path,
-                                                        LatePatchResponseRegistry.LateResponseWatchBound.TotalSeconds);
-                                                    FailTerminal(new MeshNodeStreamException(new MeshNodeError(
+                                                        _workspace.Hub.Address, _path, verdictBoundSeconds);
+                                                    RaiseError(new MeshNodeStreamException(new MeshNodeError(
                                                         MeshNodeErrorCode.OwnerUnreachable, _path!,
                                                         $"The owner of '{_path}' returned no verdict for this update within "
-                                                        + $"{LatePatchResponseRegistry.LateResponseWatchBound.TotalSeconds:0}s. "
+                                                        + $"{verdictBoundSeconds:0}s. "
                                                         + "The patch was posted and may still apply, but it is NOT confirmed — "
                                                         + "re-read the node and re-apply if the change is required.")));
                                                 }));

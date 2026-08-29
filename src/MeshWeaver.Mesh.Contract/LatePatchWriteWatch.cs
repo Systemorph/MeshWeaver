@@ -9,14 +9,19 @@ namespace MeshWeaver.Mesh;
 /// acked-write-loss fix behind <c>TwoSiloRecycleConvergenceTest</c> (main run 30159928718 /
 /// PR-645 run 30160988085).
 ///
-/// <para><b>Why this exists.</b> <c>MeshNodeStreamHandle.UpdateRemote</c> bounds the caller's
-/// wait for the owner's <c>PatchDataResponse</c> at <c>UpdateResponseWaitBound</c> (~2 s) and
-/// falls back to an optimistic emit — deliberately, so a busy owner never stalls the GUI. But
-/// the owner's TERMINAL verdict can legitimately arrive later: the disposal NACK
-/// (<see cref="MeshNodeErrorCode.OwnerDisposing"/>) lands only after the owner's phased
-/// teardown, and the cold-store-defer NotFound can fire up to ~10 s after a reactivation. With
-/// the response subscription killed at 2 s, a late NACK was observed by NOBODY — the caller saw
-/// success, the write was gone.</para>
+/// <para><b>Why this exists.</b> <c>MeshNodeStreamHandle.UpdateRemote</c> holds a pending
+/// <c>hub.Observe</c> callback for the owner's <c>PatchDataResponse</c> only as long as
+/// <c>UpdateResponseWaitBound</c> (~2 s) — any longer and the hub's Quiescing phase counts it as
+/// a leaked callback. But the owner's TERMINAL verdict can legitimately arrive later: the
+/// disposal NACK (<see cref="MeshNodeErrorCode.OwnerDisposing"/>) lands only after the owner's
+/// phased teardown, and the cold-store-defer NotFound can fire up to ~10 s after a reactivation.
+/// With the response subscription simply killed at 2 s, a late verdict was observed by NOBODY —
+/// the caller saw success (that emit was optimistic), and the write was gone.</para>
+///
+/// <para>🚨 Since #2661 the caller is NOT completed at that bound — a bound expiring is not a
+/// commit — so this registry is not a best-effort afterthought: it is the seam the caller's own
+/// terminal now arrives on. A late ack completes the write as a success, a late NACK or
+/// <see cref="DeliveryFailure"/> faults it.</para>
 ///
 /// <para><b>Why a registry + hub handler, not a detached 30 s <c>hub.Observe</c>
 /// subscription.</b> A pending <c>Observe</c> callback holds a <c>responseSubjects</c> entry,
@@ -110,7 +115,21 @@ public sealed class LatePatchResponseRegistry
     /// rejection, or delivery failure), so there is nothing late to act on.
     /// </summary>
     /// <param name="requestId">The patch request's delivery id.</param>
-    public void Complete(string requestId) => entries.TryRemove(requestId, out _);
+    public void Complete(string requestId) => TryComplete(requestId);
+
+    /// <summary>
+    /// 🚨 <see cref="Complete"/>, but reporting whether this call is the one that took the entry —
+    /// which makes the entry itself the ARBITER of "no verdict has claimed this write yet".
+    ///
+    /// <para>The caller's outer verdict bound needs exactly that. Reading a settled-flag instead
+    /// is racy: <see cref="Dispatch"/> removes the entry and then runs the callback, so between
+    /// those two steps a verdict is provably in flight while nothing has been claimed yet, and a
+    /// deadline firing in that window would fault a write the owner had in fact answered. Losing
+    /// this race means the verdict wins, which is the correct outcome.</para>
+    /// </summary>
+    /// <param name="requestId">The patch request's delivery id.</param>
+    /// <returns>True when an armed entry was removed BY THIS CALL.</returns>
+    public bool TryComplete(string requestId) => entries.TryRemove(requestId, out _);
 
     /// <summary>
     /// Delivers a LATE owner response to its armed watch. No-op (false) when the watch was
