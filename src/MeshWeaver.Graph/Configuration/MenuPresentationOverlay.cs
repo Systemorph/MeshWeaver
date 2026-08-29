@@ -22,6 +22,11 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 internal static class MenuPresentationOverlay
 {
+    /// <summary>
+    /// The projection a catalog read needs. <c>content</c> is named deliberately: a <c>select:</c>
+    /// that omits it yields a node whose <c>Content</c> is silently null, which would read as
+    /// "no catalog" for a catalog that exists.
+    /// </summary>
     internal const string CatalogProjection = "select:path,id,namespace,name,nodeType,content";
 
     /// <summary>
@@ -63,11 +68,6 @@ internal static class MenuPresentationOverlay
     /// renders its compiled presentation until someone chooses to override it. Seeding a copy of the
     /// compiled presentation would instead freeze it, and silently outrank every later change to it.
     /// </para>
-    /// </summary>
-    /// <summary>
-    /// The projection a catalog read needs. <c>content</c> is named deliberately: a <c>select:</c>
-    /// that omits it yields a node whose <c>Content</c> is silently null, which would read as
-    /// "no catalog" for a catalog that exists.
     /// </summary>
     public static IObservable<MenuPresentation?> CatalogStream(
         IWorkspace workspace, JsonSerializerOptions options, string context, ILogger? logger)
