@@ -178,12 +178,24 @@ The CLR then resolves the module's TypeRef through the old assembly to ONE type 
 shim, which would mint a second identity and reintroduce the `as`/`is` trap-door.
 
 🚨 **No repo-local build can see this break, and two green gates specifically cannot.**
-`landed-modules-gate` compiles the plugins repo's module SOURCE against the PR, which is a different
+`landed-modules-gate` compiled the plugins repo's module SOURCE against the PR, which is a different
 question from whether the module ALREADY PUBLISHED still binds — and on #2370 it passed, because the
-module's source carried `using` directives for both namespaces. The semver floor cannot see a type at
-all. `scripts/check-type-forwards.py` (wired into the *Public surface (binary compatibility)* job
+module's source carried `using` directives for both namespaces. (That job is **gone** besides: core
+builds the image and runs its own tests, and plugins are built by the repo that owns them, so nothing
+in core's CI compiles a line of module source today.) The semver floor cannot see a type at all.
+`scripts/check-type-forwards.py` (wired into the *Public surface (binary compatibility)* job
 beside #2298's `check-record-signatures.py`) is what refuses the next one; its allow file is a
 statement that no shipped module can hold the TypeRef, not a way to make it quiet.
+
+🚨 **A move OUT OF THIS REPO reads exactly like a deletion, and the gate used to be silent on it.**
+Since #2276 the module assemblies are built in MeshWeaver.Plugins, so a public type moving from a
+core assembly into one of them deletes files here and adds none. The gate's original scoping decision
+— a type that vanishes from `src/` entirely is out of scope, because "a deletion reads AS a deletion
+in review" — therefore stopped holding, and it reported `OK` across `v3.0.0-rc7 → main` while that
+window contained the seven types below. A **departure** (the type is gone from `src/` while the
+assembly it left is still built here) is now its own counted, named category and it fails; pass
+`--sibling <checkout>` to have the gate say which departures are cross-repo moves and which are
+deletions.
 
 **It had already happened again before the gate existed.** Replaying that gate across
 `v3.0.0-rc7 → main` found **17** unguarded moves; #2370 fixed four, and #2398 fixed six more that
