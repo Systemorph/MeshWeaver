@@ -146,9 +146,9 @@ public static class HubDisposalJoin
         var budget = timeout ?? DefaultJoinTimeout;
         var address = Describe(hub);
 
-        return !TryDispose(hub, address, report)
-            ? false
-            : hub.DisposalCompleted.JoinDisposal(address, report, budget, hub.GetPendingRequestDiagnostics);
+        return TryDispose(hub, address, report)
+               && hub.DisposalCompleted.JoinDisposal(
+                   address, report, budget, hub.GetPendingRequestDiagnostics);
     }
 
     /// <summary>
