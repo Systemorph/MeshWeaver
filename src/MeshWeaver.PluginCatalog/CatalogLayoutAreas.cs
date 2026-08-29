@@ -45,9 +45,10 @@ public static class CatalogLayoutAreas
             .AddMeshDataSource(s => s.WithContentType<PluginCatalogContent>())
             .AddLayout(layout => layout
                 .WithView(MeshNodeLayoutAreas.OverviewArea, Overview)
-                .WithView(CatalogArea, Catalog)
-                .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create)
-                .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
+                .WithView(CatalogArea, Catalog));
+            // Create / Delete are no longer re-registered here: their views ride the
+            // MeshWeaver.Graph.Views module, which registers them on every per-node hub, so this
+            // hub gets them without naming an implementation the platform no longer carries.
 
     /// <summary>The default Overview is the catalog.</summary>
     [Browsable(false)]

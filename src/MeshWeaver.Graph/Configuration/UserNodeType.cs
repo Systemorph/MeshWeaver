@@ -132,7 +132,7 @@ public static class UserNodeType
             .AddDefaultLayoutAreas()
             .AddUserActivityLayoutAreas()
             .AddGlobalAdminSettingsTab()
-            .AddPartitionSyncSettingsTab()
+            .ApplyNodeHubContributions(NodeType)
             .AddUserPreferencesSettingsTab()
             .AddLayout(layout => layout.WithDefaultArea(UserActivityLayoutAreas.ActivityArea))
     };

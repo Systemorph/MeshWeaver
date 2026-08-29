@@ -25,3 +25,26 @@
 # $(MeshWeaverRoot) (core, MeshWeaver.Plugins, MeshWeaver.SocialMedia — the latter pinned
 # pre-split). A forwarder is impossible here: the base would have to reference the AI assembly,
 # which references the base (the documented reference-cycle case).
+# #2678 — the Graph VIEWS carve-out (core → MeshWeaver.Plugins/src/MeshWeaver.Graph.Views). Nine
+# layout-area classes leave MeshWeaver.Graph; the platform keeps every area NAME and menu descriptor,
+# only the rendering moves. A forwarder is impossible: it would have to live in src/MeshWeaver.Graph
+# and reference MeshWeaver.Graph.Views, an assembly this repo does not build (the reference-cycle
+# case). Evidence that NO shipped module binds these TypeRefs, gathered 2026-08-29:
+#   - org-wide code search (Systemorph, all repos incl. Education): AccessAssignmentLayoutAreas and
+#     ReleaseLayoutAreas 0 hits; SpaceLayoutAreas / PartitionSyncAdminLayoutArea only in core itself
+#     plus two COMMENTS. Comments and <see cref> emit no IL TypeRef.
+#   - MeshWeaver.Plugins outside the new module: comments only; the one <see cref> (MeshWeaver.AI)
+#     is fixed in the companion PR #904, where it was a CS1574 build break, not a binding.
+#   - Reinsurance, SocialMedia, Crm, Manufacturing checkouts: no reference of any kind.
+#   - In-mesh source addresses layout areas by NAME (string), never by these classes — which is
+#     exactly why the move compiled clean and was caught only by runtime render tests (moved with it).
+#     #904's "Compile every NodeType" gate is the executable form of this claim for every node repo.
+MeshWeaver.Graph:MeshWeaver.Graph.AccessAssignmentLayoutAreas   #2678 views carve-out, see block above
+MeshWeaver.Graph:MeshWeaver.Graph.ApiTokenLayoutAreas           #2678 views carve-out, see block above
+MeshWeaver.Graph:MeshWeaver.Graph.GroupLayoutAreas              #2678 views carve-out, see block above
+MeshWeaver.Graph:MeshWeaver.Graph.GroupMembershipLayoutAreas    #2678 views carve-out, see block above
+MeshWeaver.Graph:MeshWeaver.Graph.MeshDataSourceLayoutAreas     #2678 views carve-out, see block above
+MeshWeaver.Graph:MeshWeaver.Graph.NotificationLayoutAreas       #2678 views carve-out, see block above
+MeshWeaver.Graph:MeshWeaver.Graph.PartitionSyncAdminLayoutArea  #2678 views carve-out, see block above
+MeshWeaver.Graph:MeshWeaver.Graph.ReleaseLayoutAreas            #2678 views carve-out, see block above
+MeshWeaver.Graph:MeshWeaver.Graph.SpaceLayoutAreas              #2678 views carve-out, see block above
