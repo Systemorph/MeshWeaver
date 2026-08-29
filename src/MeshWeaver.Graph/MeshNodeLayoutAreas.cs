@@ -196,15 +196,13 @@ public static class MeshNodeLayoutAreas
             .WithView(ContentDataArea, ContentData)
             .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
             .WithView(ExportArea, ExportLayoutArea.Export)
-            .WithView(CopyArea, CopyLayoutArea.Copy)
-            .WithView(MoveArea, MoveLayoutArea.Move)
             .WithView(RecycleArea, RecycleLayoutArea.Recycle)
             .WithView(VersionsArea, VersionLayoutArea.Versions)
             .WithView(VersionDiffArea, VersionLayoutArea.VersionDiff)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
-            .WithView(PinLayoutArea.PinArea, PinLayoutArea.Pin)
-            .WithView(PinLayoutArea.UnpinArea, PinLayoutArea.Unpin)
-            .WithView(PinLayoutArea.PinnedThumbnailArea, PinLayoutArea.PinnedThumbnail)
+            // Copy / Move / Pin / Unpin / PinnedThumbnail VIEWS ride the MeshWeaver.Graph.Views
+            // MODULE, registered on every per-node hub like OgCard below. Their area names and
+            // menu descriptors stay platform-side — the node menu is assembled here.
             // Presentation mode (#1803): the per-node mark lives beside Pin because it is the same
             // shape — a viewer-scoped list of paths on the viewer's OWN profile, never on the node.
             .WithView(PresentationLayoutArea.HideArea, PresentationLayoutArea.Hide)
