@@ -8,20 +8,34 @@
 # without it a restored database is a pile of undecryptable `enc:` values. A purge would convert a
 # reversible mistake into permanent data loss, so this step deliberately cannot make one.
 #
-# 🚨 It refuses an EMPTY prefix. With no prefix every name below resolves to the FLEET-WIDE secret
+# 🚨 It refuses an EMPTY prefix. With no prefix every name resolves to the FLEET-WIDE secret
 # (`Ai-KeyProtection-MasterKey` is memex's own), so tearing down one instance would delete the
 # control instance's envelope key. That is the single most destructive typo available here.
+#
+# 🚨 IT ENUMERATES, it does not guess. This used to delete a hard-coded TWO suffixes
+# (Ai-KeyProtection-MasterKey, PluginCatalog-RegistryToken). Real instances carry more — atioz held
+# five (2026-08-29: + Anthropic-ApiKey, Authentication-Microsoft-ClientSecret, Email-ClientSecret,
+# GitHub-OAuth-ClientSecret) — so a "successful" teardown left three live credentials in the vault
+# for an instance that no longer existed. Which secrets an instance owns depends on the providers
+# it configured, so no fixed list can be right; the vault is the only accurate inventory.
+#
+# 🚨 ENUMERATING BY PREFIX NEEDS AN AMBIGUITY GUARD, because one instance's prefix can be a prefix
+# of another's. Today's fleet is safe by luck, not design: `memex-` does not match `memexcloud-`
+# only because the sixth character is `c` and not `-`. A future `memex-dev` WOULD be swallowed by a
+# `memex` teardown. Pass every other instance's prefix as --sibling-prefix and this refuses rather
+# than guessing; with none passed it still runs, and this comment is the record of that residual risk.
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-kv-purge"
 
-vault="" prefix="" namespace=""
+vault="" prefix="" namespace="" siblings=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --vault)     vault="${2:-}";     shift 2 ;;
-    --prefix)    prefix="${2:-}";    shift 2 ;;
-    --namespace) namespace="${2:-}"; shift 2 ;;
+    --vault)          vault="${2:-}";     shift 2 ;;
+    --prefix)         prefix="${2:-}";    shift 2 ;;
+    --namespace)      namespace="${2:-}"; shift 2 ;;
+    --sibling-prefix) siblings="${siblings} ${2:-}"; shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -34,21 +48,36 @@ hosting::safe_name namespace "$namespace"
 [ -n "$prefix" ] || hosting::die "refusing to purge with an EMPTY --prefix: every per-instance secret name would resolve to the fleet-wide one, so this would delete the CONTROL instance's Ai-KeyProtection-MasterKey rather than the torn-down instance's. A deployment record without keyVaultSecretPrefix should not reach this step."
 hosting::safe_name prefix "$prefix"
 
-SUFFIXES="Ai-KeyProtection-MasterKey PluginCatalog-RegistryToken"
+# Refuse before deleting anything if another instance's prefix lives UNDER ours: every secret of
+# theirs would match our enumeration and be deleted by their neighbour's teardown.
+for sib in $siblings; do
+  [ -n "$sib" ] || continue
+  case "$sib" in
+    "$prefix") ;;                       # ourselves, when the caller passes the whole fleet
+    "$prefix"*) hosting::die "prefix '${prefix}' is a prefix of sibling instance prefix '${sib}' — enumerating by '${prefix}' would delete ${sib} secrets too. Rename one instance's keyVaultSecretPrefix so neither contains the other." ;;
+  esac
+done
 
-deleted=0 absent=0
-for suffix in $SUFFIXES; do
-  name="${prefix}${suffix}"
-  if ! az keyvault secret show --vault-name "$vault" --name "$name" --query id -o tsv >/dev/null 2>&1; then
-    hosting::log "absent  ${name}"
-    absent=$((absent + 1))
-    continue
-  fi
+# The vault is the inventory. --query does the prefix match server-side so a huge vault does not
+# come back over the wire just to be filtered here.
+names="$(hosting::read az keyvault secret list --vault-name "$vault" \
+    --query "[?starts_with(name, '${prefix}')].name" -o tsv 2>/dev/null)" \
+  || hosting::die "could not list secrets in vault ${vault}"
+names="$(printf '%s\n' "$names" | grep -v '^[[:space:]]*$' || true)"
+
+if [ -z "$names" ]; then
+  hosting::log "vault ${vault}: no secret starts with '${prefix}' — nothing to purge"
+  hosting::say kv_deleted 0
+  exit 0
+fi
+
+deleted=0
+for name in $names; do
   hosting::log "delete  ${name} (soft-delete — recoverable for the vault's retention window)"
   hosting::do az keyvault secret delete --vault-name "$vault" --name "$name" --output none \
     || hosting::die "could not delete ${name} from vault ${vault}"
   deleted=$((deleted + 1))
 done
 
-hosting::log "vault ${vault}: ${deleted} soft-deleted, ${absent} already absent"
+hosting::log "vault ${vault}: ${deleted} secret(s) soft-deleted"
 hosting::say kv_deleted "$deleted"
