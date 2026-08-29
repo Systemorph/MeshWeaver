@@ -29,10 +29,16 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// activation (bounded re-enqueue budget, re-diffed against the freshest state).</para>
 ///
 /// <para>The scripted interleaving: park the owner's merge turn behind a gated no-op turn
-/// (so no response can arrive inside the 2s window), let the caller take its optimistic
-/// terminal, THEN dispose the owner — the disposal NACK is necessarily LATE. The write must
-/// still reach durable storage via the re-enqueue. Without Part 2 the late NACK is dropped
-/// and the storage poll times out at the pre-write state.</para>
+/// (so no response can arrive inside the 2s window), THEN dispose the owner — the disposal
+/// NACK is necessarily LATE. The write must still reach durable storage via the re-enqueue.
+/// Without Part 2 the late NACK is dropped and the storage poll times out at the pre-write
+/// state.</para>
+///
+/// <para>🚨 Since #2661 the caller is NOT completed at the 2 s bound — a bound expiring is not
+/// a commit, so the write's terminal is the owner's verdict wherever it arrives. Here that
+/// verdict is the re-enqueued attempt's ack, chained back to the original caller, so this test
+/// now also pins that a late NACK's remedy is reported to the writer instead of being swallowed
+/// into a log line.</para>
 /// </summary>
 public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -76,25 +82,36 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
         try
         {
             // Cross-hub cache write — the production mirror path (UpdateRemote via the
-            // per-path queue). With the owner's merge parked, the caller's terminal is the
-            // OPTIMISTIC emit at ~2s carrying the locally-computed snapshot.
+            // per-path queue). With the owner's merge parked, no verdict can arrive inside the
+            // caller's response bound, so the caller is NOT settled here (#2661): it stays open
+            // on the late watch, and the terminal it eventually gets is the re-enqueued
+            // attempt's. Subscribe rather than await — awaiting a verdict the parked owner
+            // cannot give is what would hang.
             var marker = $"post-nack-{Guid.NewGuid():N}"[..24];
             var workspace = Mesh.GetWorkspace();
-            var optimistic = await workspace.GetMeshNodeStream(path)
+            MeshNode? callerTerminal = null;
+            Exception? callerError = null;
+            using var writeSub = workspace.GetMeshNodeStream(path)
                 .Update(n => n with { Name = marker })
-                .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
-            optimistic.Name.Should().Be(marker, "the caller's terminal is the optimistic snapshot");
-            Output.WriteLine($"[write] optimistic terminal received with marker {marker}");
+                .Subscribe(n => callerTerminal = n, ex => callerError = ex);
+            Output.WriteLine($"[write] patch posted with marker {marker}; owner merge is parked");
+
+            // Fence on the patch actually being in flight before the dispose below — the armed
+            // late watch is that fact, and it is the same fact the disposal NACK will land on.
+            var registry = Mesh.ServiceProvider.GetRequiredService<LatePatchResponseRegistry>();
+            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .Where(_ => registry.ArmedCount > 0)
+                .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
 
             // Fence: the patch handler has provably run on the owner (registered the
             // disposal NACK) before the dispose below.
             await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
                 .Should().Within(10.Seconds()).Emit();
 
-            // Dispose the owner AFTER the optimistic emit — its OwnerDisposing NACK
-            // (posted from the ShutDown-phase disposal action) is necessarily LATE. The
-            // armed late watch must consume it and re-enqueue the ORIGINAL update against
-            // the fresh activation the re-posted patch brings up.
+            // Dispose the owner AFTER the caller's response bound has expired — its
+            // OwnerDisposing NACK (posted from the ShutDown-phase disposal action) is
+            // necessarily LATE. The armed late watch must consume it and re-enqueue the
+            // ORIGINAL update against the fresh activation the re-posted patch brings up.
             nodeHub!.Dispose();
             Output.WriteLine($"[dispose] owner per-node hub disposal invoked for {path}");
 
@@ -107,8 +124,17 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
                 .Where(n => n is not null && n.Name == marker)
                 .FirstAsync().Timeout(45.Seconds()).ToTask(ct);
             persisted!.Name.Should().Be(marker,
-                "an optimistically-acked write whose owner NACKed OwnerDisposing must be "
-                + "re-enqueued and applied on the fresh activation — never silently lost");
+                "a write whose owner NACKed OwnerDisposing must be re-enqueued and applied on "
+                + "the fresh activation — never silently lost");
+
+            // #2661: the re-attempt's verdict is the CALLER's verdict. Chaining it back is what
+            // makes "saved" mean the owner committed, on the late path as much as the early one.
+            await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+                .Where(_ => callerTerminal is not null || callerError is not null)
+                .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+            callerError.Should().BeNull("the re-enqueued attempt landed, so the caller must see a success");
+            callerTerminal!.Name.Should().Be(marker,
+                "the caller's terminal is the verdict of the attempt that actually committed");
         }
         finally
         {
