@@ -492,19 +492,46 @@ jobs:
           REGISTRY_MODULES: ${{ inputs.registry-modules }}
           REGISTRY_URL: ${{ inputs.registry-url }}
           REGISTRY_KEY: ${{ secrets.registry-key }}
+          SEAL_UPSTREAMS: ${{ inputs.upstream-seed }}
+          IDENTITY: ${{ steps.seed-identity.outputs.identity }}
+          TARGETS: ${{ inputs.bake-publish-targets }}
+          JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           EXT="${RUNNER_TEMP:-/tmp}/ext-modules"; mkdir -p "$EXT"; chmod 777 "$EXT"
           BUNDLES="${RUNNER_TEMP:-/tmp}/ext-bundles"; mkdir -p "$BUNDLES"
-          for pkg in ${REGISTRY_MODULES:-}; do
-            idx=$(curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" "$REGISTRY_URL/api/plugins/bundles/index.json") \
-              || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
-            ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
-            [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key — check the key's grants, and that the upstream wave has published the bundle."; exit 1; }
-            curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
-              || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
-            echo "fetched $pkg@$ver from $REGISTRY_URL"
-          done
+          if [ -n "${REGISTRY_MODULES:-}" ]; then
+            if [ -n "${SEAL_UPSTREAMS:-}" ]; then
+              # 🚨 The publication is the unit of consistency (MeshWeaver#2698): module bytes come
+              # from the SEALED upstream publication for this identity, never the registry's
+              # package endpoint. No fallback — a missing seal or module set is RED in the script.
+              # The compose script at THIS workflow's own commit (github.job_workflow_sha) — never a floating
+              # ref, so a node repo pinned to a reusable sha gets the script that sha was written with.
+              SCRIPT="${RUNNER_TEMP:-/tmp}/compose-sealed-modules.sh"
+              gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-sealed-modules.sh?ref=${JOB_WORKFLOW_SHA}" --jq .content | base64 -d > "$SCRIPT" \
+                || { echo "::error::could not fetch compose-sealed-modules.sh at ${JOB_WORKFLOW_SHA} from Systemorph/MeshWeaver"; exit 1; }
+              chmod +x "$SCRIPT"
+              if [ -n "${REGISTRY_URL:-}" ]; then
+                "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" \
+                  --registry-url "$REGISTRY_URL" --registry-key "$REGISTRY_KEY"
+              else
+                "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" \
+                  --storage-target "$(printf '%s\n' $TARGETS | head -1)"
+              fi
+            else
+              echo "::notice::composing registry-modules ($REGISTRY_MODULES) from the REGISTRY's package endpoint: this repo declares no upstream seed, so there is no sealed publication to take module bytes from. These bytes are whatever the module's own lane published last — a bake-consumption decline against a publication that composed different ones is expected, and is the reason to declare the upstream (upstream-seed / upstream-sources) instead."
+            for pkg in ${REGISTRY_MODULES:-}; do
+              idx=$(curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" "$REGISTRY_URL/api/plugins/bundles/index.json") \
+                || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
+              ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
+              [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key — check the key's grants, and that the upstream wave has published the bundle."; exit 1; }
+              curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
+                || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
+              echo "fetched $pkg@$ver from $REGISTRY_URL"
+            done
+            fi
+          fi
           shopt -s nullglob
           MODULE_ARGS=""
           for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do

@@ -137,6 +137,19 @@ SENTINEL_LOCAL_DIR=$(mktemp -d)
 trap 'rm -rf "$SENTINEL_LOCAL_DIR"' EXIT
 SENTINEL_LOCAL="$SENTINEL_LOCAL_DIR/$SENTINEL"
 for zip in "${BUNDLES[@]}"; do basename "$zip"; done | sort > "$SENTINEL_LOCAL"
+# 🚨 THE MODULE SET (MeshWeaver#2698). A publication is sealed against the exact module bytes its
+# bake composed; a consumer pinned to this identity must compose THOSE, not the registry's
+# package endpoint (which serves the module's own lane's last build under an unmoved version). So
+# the composed bundles travel with the publication under modules/, listed in modules/_index —
+# written before the top-level sentinel, so "sealed" implies "module set present". A bake dir
+# with no modules/ composed nothing and seals an EMPTY index: a reader can then tell "nothing
+# composed" from "predates module sealing" (no index at all), and the latter is republished.
+MODULES_DIR_NAME="modules"
+MODULES_INDEX="_index"
+MODULES=("$BAKE_DIR/$MODULES_DIR_NAME"/*.module.nupkg)
+MODULES_INDEX_LOCAL="$SENTINEL_LOCAL_DIR/$MODULES_INDEX"
+: > "$MODULES_INDEX_LOCAL"
+for m in "${MODULES[@]}"; do basename "$m"; done | sort > "$MODULES_INDEX_LOCAL"
 
 # The CONTENT identity marker: which source commit this publication was baked from. It is NOT
 # part of the reader's contract (SeedPublishedRoot seeds only what the sentinel lists; extra
@@ -219,6 +232,19 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
       --auth-mode login --backup-intent --only-show-errors > /dev/null
     echo "published: $account/$share/$dest/$(basename "$zip")"
   done
+  # The module set: every bundle, then its index — both strictly before the sentinel.
+  ensure_directory "$account" "$share" "$dest/$MODULES_DIR_NAME"
+  local m
+  for m in "${MODULES[@]}"; do
+    az storage file upload --account-name "$account" --share-name "$share" \
+      --path "$dest/$MODULES_DIR_NAME/$(basename "$m")" --source "$m" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null
+    echo "published module: $account/$share/$dest/$MODULES_DIR_NAME/$(basename "$m")"
+  done
+  az storage file upload --account-name "$account" --share-name "$share" \
+    --path "$dest/$MODULES_DIR_NAME" --source "$MODULES_INDEX_LOCAL" \
+    --auth-mode login --backup-intent --only-show-errors > /dev/null
+  echo "module set: $account/$share/$dest/$MODULES_DIR_NAME/$MODULES_INDEX (${#MODULES[@]} bundle(s))"
   # 🚨 Both marker uploads pass the DIRECTORY as --path on purpose — the CLI appends the source
   # basename. An extensionless "$dest/$SENTINEL" --path would be silently re-interpreted as a
   # DIRECTORY and fail ParentNotFound (see the SENTINEL_LOCAL comment above).
@@ -337,6 +363,20 @@ for target in $BAKE_PUBLISH_TARGETS; do
       --path "$DEST/$SOURCE_MARKER" --dest "$SENTINEL_LOCAL_DIR/remote-$SOURCE_MARKER" \
       --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 \
       && tr -d '[:space:]' < "$SENTINEL_LOCAL_DIR/remote-$SOURCE_MARKER" || echo "")
+    # A publication sealed before module sealing existed has no modules/_index. Under the current
+    # contract that publication is INCOMPLETE — a consumer cannot compose from it — so it is
+    # republished even when the content is unchanged. This is what converges the fleet (#2698):
+    # the next bake of each source re-seals it WITH its module set, and nothing is done by hand.
+    module_set=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
+      --path "$DEST/$MODULES_DIR_NAME/$MODULES_INDEX" --auth-mode login --backup-intent --query exists -o tsv \
+      --only-show-errors 2>/dev/null || echo unknown)
+    if [ "$module_set" != "true" ]; then
+      echo "sealed publication under $DEST carries no $MODULES_DIR_NAME/$MODULES_INDEX (exists=$module_set) — it predates module sealing; republishing WITH the module set."
+      echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s))"
+      publish_one_target "$ACCOUNT" "$SHARE" "$DEST" true
+      PUBLISHED=$((PUBLISHED + 1))
+      continue
+    fi
     if [ -n "${SOURCE_SHA:-}" ] && [ "$published_sha" = "$SOURCE_SHA" ]; then
       echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication of THIS content under $DEST (sentinel present, source $published_sha) — already published; skipping."
       continue
@@ -350,7 +390,7 @@ for target in $BAKE_PUBLISH_TARGETS; do
     resealing=true
     echo "sealed publication under $DEST is from source '${published_sha:-<unrecorded>}' but this bake is from '$SOURCE_SHA' — republishing."
   fi
-  echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s))"
+  echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s))"
   publish_one_target "$ACCOUNT" "$SHARE" "$DEST" "$resealing"
   PUBLISHED=$((PUBLISHED + 1))
 done
