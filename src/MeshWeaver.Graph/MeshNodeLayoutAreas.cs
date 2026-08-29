@@ -199,8 +199,8 @@ public static class MeshNodeLayoutAreas
             .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
             .WithView(ExportArea, ExportLayoutArea.Export)
             .WithView(RecycleArea, RecycleLayoutArea.Recycle)
-            .WithView(VersionsArea, VersionLayoutArea.Versions)
-            .WithView(VersionDiffArea, VersionLayoutArea.VersionDiff)
+            // The Versions and VersionDiff VIEWS ride the MeshWeaver.Graph.Views MODULE. The
+            // ROLLBACK / UNDO handlers above stay here — they are message handlers, not views.
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
             // Copy / Move / Pin / Unpin / PinnedThumbnail VIEWS ride the MeshWeaver.Graph.Views
             // MODULE, registered on every per-node hub like OgCard below. Their area names and

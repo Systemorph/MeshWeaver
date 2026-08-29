@@ -16,7 +16,10 @@ namespace MeshWeaver.Graph;
 /// (60s of a blank page), which is exactly the cost a "is it installed?" question must not
 /// have.</para>
 /// </summary>
-internal static class PluginSurfaceProbe
+// Public rather than internal: the view modules probe for an installed package the same way the
+// platform's own areas do (MarkdownOverviewLayoutArea's approvals section), and a probe that only
+// the platform can call would force every module to hand-roll its own.
+public static class PluginSurfaceProbe
 {
     /// <summary>How long a probe waits for the index to answer before reporting "not here".</summary>
     private static readonly TimeSpan Budget = TimeSpan.FromMilliseconds(800);
@@ -33,7 +36,7 @@ internal static class PluginSurfaceProbe
     /// The timeout's fallback EMITS <c>false</c> rather than completing empty — an empty completion
     /// is how a bounded wait still hangs its subscriber (the paywall-chain lesson).</para>
     /// </summary>
-    internal static IObservable<bool> Exists(IMeshService? mesh, string path)
+    public static IObservable<bool> Exists(IMeshService? mesh, string path)
         => mesh is null
             ? Observable.Return(false)
             : mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
