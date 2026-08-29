@@ -295,10 +295,12 @@ config:
     # and every joint of it fails SILENTLY. An install whose event channel is dead
     # is indistinguishable from one that is up to date: healthy pods, no errors, a
     # check that simply never runs. memex sat three builds behind for 7 h exactly
-    # so. SelfUpdate__SafetyNetCheckInterval (default 1h; empty or 0 disables)
-    # bounds how long that can hide. It cannot change the ROLL cadence — a
-    # safety-net check passes through the floor below like any other — so it only
-    # ever shortens DISCOVERY.
+    # so. SelfUpdate__SafetyNetCheckInterval bounds how long that can hide. It
+    # cannot change the ROLL cadence — a safety-net check passes through the floor
+    # below like any other — so it only ever shortens DISCOVERY.
+    # 🚨 "00:00:00" disables it; NEVER "". Like MinRollInterval this binds to a
+    # TimeSpan, and an empty string aborts the host in the configuration binder
+    # (the chart renders a real default for exactly that reason).
     #
     # What this number now sets is the floor between two AUTOMATIC rolls. It is a
     # RESTART budget, not a delivery speed: a roll restarts the pod and drops every
