@@ -1477,9 +1477,19 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // unload (the teardown use-after-unload SIGSEGV). A live change-feed leaf never
             // completes on its own, so a WAIT-only drain would time out and let the scope
             // dispose under it; DrainAll() cancels the leaf so it stops, then joins.
-            var leakedIoLeaves = ioPools?.DrainAll() ?? 0;
+            // 🚨 The residual must NAME ITS POOL, and it must do so through TestPhaseTrace rather
+            // than an ILogger. IoPoolRegistry.DrainAll already logs a warning naming the pool, and
+            // that warning is structurally invisible here: the mesh's log sink stops capturing at
+            // Mesh.Dispose(), so of 294 dispose windows in the #2616 shard-2 trx, ZERO carry an
+            // ILogger line at any level. TestPhaseTrace writes the file CI keeps and is the only
+            // thing that survives both dispose and an exit=124 host kill. Without the name a
+            // residual reads as an anonymous "1" — which is how #2578 and #2616 both ended with
+            // nothing to act on. (Query=1 and Compile=1 are different bugs.)
+            IReadOnlyList<IoPoolRegistry.PoolResidual> residualByPool = [];
+            var leakedIoLeaves = ioPools is null ? 0 : ioPools.DrainAll(out residualByPool);
             TestPhaseTrace(testName, "DISPOSE_IOPOOL_DRAIN_DONE", sw.ElapsedMilliseconds,
-                $"leakedIoLeaves={leakedIoLeaves}");
+                $"leakedIoLeaves={leakedIoLeaves}"
+                + (residualByPool.Count > 0 ? $" pools=[{string.Join(", ", residualByPool)}]" : ""));
             // After all the sync stuff is disposed (and everyone has enqueued their async
             // cleanup), quiesce the async dispose queue before the scope closes below.
             var asyncDisposeClean = asyncDisposeQueue is null

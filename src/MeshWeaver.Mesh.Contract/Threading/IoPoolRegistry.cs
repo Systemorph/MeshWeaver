@@ -41,7 +41,7 @@ public sealed class IoPoolRegistry : IDisposable
     /// <param name="options">Concurrency caps per pool name; defaults are used when null.</param>
     /// <param name="logger">
     /// Optional — resolved from DI when the mesh registers logging. Names the offending pool at
-    /// <see cref="DrainAll"/> time (issue #2480: the teardown report carried no pool name, exception,
+    /// <see cref="DrainAll()"/> time (issue #2480: the teardown report carried no pool name, exception,
     /// or stack, so a fingerprint could never be turned into a direct pointer to the leaf).
     /// </param>
     public IoPoolRegistry(IoPoolOptions? options = null, ILogger<IoPoolRegistry>? logger = null)
@@ -132,12 +132,38 @@ public sealed class IoPoolRegistry : IDisposable
     /// (see <see cref="IoPool.Drain"/>). <c>0</c> means the join is real and the caller may proceed
     /// to scope disposal / ALC unload. Non-zero means live work survives teardown — surface it.
     /// </returns>
-    public int DrainAll()
+    public int DrainAll() => DrainAll(out _);
+
+    /// <summary>
+    /// <see cref="DrainAll()"/>, but also handing back WHICH pool leaked and how much.
+    ///
+    /// <para>🚨 <b>Why the ILogger warning was not enough.</b> The residual warning added for
+    /// #2480 goes to <see cref="ILogger"/>, and <c>DrainAll</c> runs during mesh teardown — after
+    /// the mesh's log sink has stopped capturing. Measured on the #2616 shard-2 trx: of <b>294</b>
+    /// <c>Mesh.Dispose() invoking</c> windows, <b>zero</b> contain a single ILogger line at any
+    /// level, while the same trx carries 84 <c>[Warning] [SynchronizationStream]</c> and 76
+    /// <c>[Warning] [RoutingServiceBase]</c> records from BEFORE dispose. So the one diagnostic
+    /// written to name the offending pool is structurally invisible in exactly the window it
+    /// exists for: two occurrences of the drain flake (#2578, #2616) and the leaf is still an
+    /// anonymous <c>"1"</c>.</para>
+    ///
+    /// <para>The residual therefore has to travel back as a RETURN VALUE, so the caller can put it
+    /// somewhere that survives dispose — <c>TestPhaseTrace</c> in the test base, the
+    /// <c>TeardownReport</c> in production. A diagnostic that can only be read where nobody is
+    /// listening is the same defect as no diagnostic at all.</para>
+    /// </summary>
+    /// <param name="byPool">
+    /// One entry per pool that did NOT fully unwind, in drain order. Empty on a clean drain.
+    /// </param>
+    public int DrainAll(out IReadOnlyList<PoolResidual> byPool)
     {
         var leaked = 0;
+        var residuals = new List<PoolResidual>();
         foreach (var kvp in _pools)
         {
             var residual = kvp.Value.Drain();
+            if (residual != 0)
+                residuals.Add(new PoolResidual(kvp.Key, residual));
             if (residual != 0)
                 // 🚨 "IoPoolDrain", not "IoPoolSiloTeardown" (Copilot review, PR #2598): DrainAll()
                 // is the generic mesh-teardown phase 2 (MeshTeardownExtensions AND
@@ -151,7 +177,19 @@ public sealed class IoPoolRegistry : IDisposable
                     + "widen the budget.", kvp.Key, residual);
             leaked += residual;
         }
+        byPool = residuals;
         return leaked;
+    }
+
+    /// <summary>
+    /// One pool's unfinished-leaf count from <see cref="DrainAll(out IReadOnlyList{PoolResidual})"/>.
+    /// <see cref="ToString"/> is the wire format the teardown traces embed, so a residual reads as
+    /// <c>Query=1</c> rather than as a bare <c>1</c>.
+    /// </summary>
+    public readonly record struct PoolResidual(string Pool, int Residual)
+    {
+        /// <inheritdoc />
+        public override string ToString() => $"{Pool}={Residual}";
     }
 
     /// <summary>Disposes every created pool and clears the registry; called when the mesh is torn down.</summary>
