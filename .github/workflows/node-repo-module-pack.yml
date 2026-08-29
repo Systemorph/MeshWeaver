@@ -111,6 +111,27 @@ on:
         type: string
         required: false
         default: ''
+      platform-image:
+        description: >
+          The PORTAL image the modules will load into (e.g. meshweaver.azurecr.io/memex-portal-ai).
+          With platform-image-digest set, each module compiles against that image's /app assemblies
+          instead of rebuilding the platform closure from platform-ref source — the maintainer's
+          "take the image from build, not build its own; only upon core rebuild" (2026-08-29):
+          reference set = runtime set, no platform build in the module lane, and a platform change
+          is exactly a pin move. The tester image is NOT sufficient (no Hosting.AspNetCore / Blazor /
+          Blazor.Views). Empty (the default) keeps the source build.
+        type: string
+        required: false
+        default: ''
+      platform-image-digest:
+        description: >
+          The digest (sha256:…) of platform-image to compile against — the promoted set's MULTI-ARCH
+          manifest-list digest (immutable, never re-tagged), pulled as linux/amd64 below. Record the
+          x64 framework identity beside the pin in the caller (mw-plugin-test --print-framework-identity
+          on the linux-x64 member) so a mismatch is diagnosable by eye. Empty = build from source.
+        type: string
+        required: false
+        default: ''
       registry-source:
         description: >
           The registry SOURCE these packages belong to ("Plugins", "Education", …) — it stamps the
@@ -139,6 +160,12 @@ on:
     secrets:
       publish-token:
         description: The registry's Plugins:Registry:PublishToken. Required when publish is true.
+        required: false
+      acr-username:
+        description: Pull credential for platform-image's registry. Required when platform-image-digest is set.
+        required: false
+      acr-password:
+        description: Pull credential for platform-image's registry. Required when platform-image-digest is set.
         required: false
 
 jobs:
@@ -265,11 +292,55 @@ jobs:
           echo "floor=$floor" >> "$GITHUB_OUTPUT"
           echo "packing $MODULE as $PACKAGE@$version, platform floor $floor"
 
+      # 🚨 THE PLATFORM IS THE IMAGE. When the caller pins platform-image-digest, the module is
+      # compiled against the assemblies the portal actually runs (docker cp of /app, cached per
+      # digest so a run pulls it once), and the platform checkout above serves only restore
+      # (Directory.Packages.props, the test/ props) — no platform project is built here. The
+      # caller's src/Directory.Build.targets must honour MeshWeaverRefs (Plugins #926); a caller
+      # without it just builds from source as before, which is why this is additive.
+      - name: Restore the platform image's assemblies from cache
+        if: inputs.platform-image-digest != ''
+        id: platform-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/platform-refs
+          key: platform-refs-${{ inputs.platform-image-digest }}
+      - name: Take the platform from the image (docker cp /app)
+        if: inputs.platform-image-digest != '' && steps.platform-cache.outputs.cache-hit != 'true'
+        env:
+          IMAGE: ${{ inputs.platform-image }}
+          DIGEST: ${{ inputs.platform-image-digest }}
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
+        run: |
+          set -euo pipefail
+          [ -n "$IMAGE" ] || { echo "::error::platform-image-digest is set but platform-image is empty — name the image the digest belongs to"; exit 1; }
+          [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but the acr-username/acr-password secrets are not passed — the image cannot be pulled"; exit 1; }
+          echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          # 🚨 --platform linux/amd64 ALWAYS: framework identities are per-architecture build (the
+          # ci.6469 manifest list resolves to s770d75c… on x64 and sfe27877f… on arm64), and the
+          # bundles are sealed under the x64 identity the portals run. A multi-arch digest pulled on
+          # an arm64 runner would compile against a platform the gates never test.
+          # Strip a TAG only — a colon after the last slash. `${IMAGE%%:*}` would also eat a registry
+          # port (registry:5000/repo) and `${IMAGE%:*}` would eat the path when there is no tag.
+          case "${IMAGE##*/}" in *:*) IMAGE_NOTAG="${IMAGE%:*}" ;; *) IMAGE_NOTAG="$IMAGE" ;; esac
+          cid=$(docker create --platform linux/amd64 "${IMAGE_NOTAG}@${DIGEST}")
+          mkdir -p "$RUNNER_TEMP/platform-refs"
+          docker cp "$cid:/app/." "$RUNNER_TEMP/platform-refs/"
+          docker rm "$cid" >/dev/null
+          shopt -s nullglob
+          dlls=("$RUNNER_TEMP"/platform-refs/*.dll)
+          n=${#dlls[@]}
+          [ "$n" -gt 50 ] || { echo "::error::the image's /app yielded $n assemblies — not a platform image"; exit 1; }
+          echo "platform refs: $n assemblies from ${IMAGE_NOTAG}@${DIGEST}"
       - name: Build the module (Release, warnings-as-errors)
+        env:
+          REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
         run: >
           dotnet build "${{ matrix.entry.project }}" -c Release -warnaserror
           -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
           -p:Version=${{ steps.identity.outputs.version }}
+          ${REFS:+-p:MeshWeaverRefs=$REFS}
 
       # 🚨 Only when THIS diff reaches the module (or on a full run): a floor-only entry — built
       # because the caller's gates compose it — carries test=false from the selection, and its
