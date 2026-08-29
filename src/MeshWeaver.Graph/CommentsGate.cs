@@ -5,7 +5,7 @@ namespace MeshWeaver.Graph;
 /// <summary>
 /// The platform-side GATE for document comments — the compiled residue that stays in
 /// <c>MeshWeaver.Graph</c> when the comment implementation ships as the
-/// <c>MeshWeaver.Collaboration</c> module.
+/// <c>MeshWeaver.Markdown.Collaboration</c> module.
 ///
 /// <para>🚨 This is deliberately not part of the module. <c>HasComments()</c> is called from
 /// IN-MESH source (a node's layout area asking whether to offer a Comments menu entry), which

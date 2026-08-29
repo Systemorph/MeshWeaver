@@ -10,7 +10,7 @@ namespace MeshWeaver.Graph.Configuration;
 ///
 /// <para>Introduced for the collaboration carve-out: <c>MarkdownNodeType</c> used to call
 /// <c>AddComments()</c> directly, which pinned the whole comment/tracked-change implementation into
-/// <c>MeshWeaver.Graph</c>. The registration now arrives from the <c>MeshWeaver.Collaboration</c>
+/// <c>MeshWeaver.Graph</c>. The registration now arrives from the <c>MeshWeaver.Markdown.Collaboration</c>
 /// module instead, and <c>MarkdownNodeType</c> only invokes whatever has been contributed.</para>
 ///
 /// <para>🚨 Why this shape and not a static registry: process-wide static state survives mesh

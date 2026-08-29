@@ -50,7 +50,7 @@ public static class MarkdownNodeType
             .WithExport(ExportDeclaration.Document)
             .AddMeshDataSource(s => s.WithContentType<MarkdownContent>())
             .AddContentCollections()
-            // Comments arrive as a MODULE CONTRIBUTION (MeshWeaver.Collaboration), not a direct
+            // Comments arrive as a MODULE CONTRIBUTION (MeshWeaver.Markdown.Collaboration), not a direct
             // call: this used to be .AddComments(), which pinned the whole comment and
             // tracked-change implementation into MeshWeaver.Graph. A mesh without the module
             // contributes nothing and this is a no-op.

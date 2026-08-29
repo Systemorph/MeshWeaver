@@ -44,7 +44,7 @@ public static class GraphConfigurationExtensions
                 // SlideNodeType/DeckNodeType consts + Matches (persistence parser, export gates),
                 // the content records (MarkdownFileParser), DeckSlidesCache (export templates),
                 // and SlideShowControl with its Blazor view (the pack emits the control).
-                // Comment / TrackedChange are NOT built-in any more: the MeshWeaver.Collaboration
+                // Comment / TrackedChange are NOT built-in any more: the MeshWeaver.Markdown.Collaboration
                 // MODULE owns both node types and the inline comment registration (Modules:Assemblies
                 // / AddCollaboration()). The compiled residue that stays platform-level is what keeps
                 // existing _Comment / _Tracking satellites readable and permission-delegating on a
@@ -106,7 +106,7 @@ public static class GraphConfigurationExtensions
 
             // Satellite permission delegation for the annotation satellites. Registered HERE and not
             // with their node types, for the same reason the key protector below is: the node types
-            // are optional (they ride the MeshWeaver.Collaboration module) and the access rule is
+            // are optional (they ride the MeshWeaver.Markdown.Collaboration module) and the access rule is
             // NOT. A _Comment / _Tracking row written before the module was delisted must keep
             // delegating its permissions to its MainNode; drop the rule with the node type and those
             // satellites fall through to the default rule instead — a silent access-control change
