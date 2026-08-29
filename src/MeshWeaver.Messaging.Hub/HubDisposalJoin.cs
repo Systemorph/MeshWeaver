@@ -1,3 +1,5 @@
+using System.Reactive;
+
 namespace MeshWeaver.Messaging;
 
 /// <summary>
@@ -30,11 +32,14 @@ namespace MeshWeaver.Messaging;
 /// swallowed. The budget exists to keep a wedged action block from hanging a whole suite — it is not
 /// a number to raise when it fires. A join that times out is a hub that is not finishing; find it.</para>
 ///
-/// <para>🚨 <b>No <c>Timeout</c> is composed into the signal</b>, in either overload — the bound is a
-/// <see cref="CancellationTokenSource"/> (async) or a <see cref="ManualResetEventSlim"/> wait (sync),
-/// and the subscription stays attached afterwards, so a fault arriving after the wait gave up is
-/// still reported instead of becoming the unobserved exception that xUnit v3 escalates to a
-/// Catastrophic failure (#2301/#2488, and <see cref="ReactiveCompletion"/>'s remarks).</para>
+/// <para>🚨 <b>No <c>Timeout</c> is composed into the signal</b>, in either form. Both go through
+/// <see cref="ReactiveCompletion.ObserveCompletion"/> — bounded by a
+/// <see cref="CancellationTokenSource"/> (async) or by <c>Task.Wait(TimeSpan)</c> (sync) — so the
+/// subscription stays attached after the wait gives up and a fault arriving later is still reported
+/// instead of becoming the unobserved exception that xUnit v3 escalates to a Catastrophic failure
+/// (#2301/#2488). It is also what makes the blocking form safe: the task is completed with
+/// <c>RunContinuationsAsynchronously</c>, so the signalling thread never carries on into the
+/// caller's code.</para>
 /// </summary>
 public static class HubDisposalJoin
 {
@@ -67,23 +72,55 @@ public static class HubDisposalJoin
 
         if (!TryDispose(hub, address, report)) return;
 
+        await hub.DisposalCompleted
+            .JoinDisposalAsync(address, report, budget, hub.GetPendingRequestDiagnostics)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Awaits a disposal-completion signal that something ELSE already started — a hub's
+    /// <see cref="IMessageHub.DisposalCompleted"/>, a
+    /// <see cref="HostedHubsCollection.DisposalCompleted"/>, any composed teardown signal — with the
+    /// same bound and the same loudness as <see cref="DisposeAndJoinAsync"/>. Split out so the join
+    /// itself is exercisable against a bare subject, which is how this repo pins signal behaviour
+    /// (see <c>DisposalWaitBridgeTest</c>'s remarks on why a real hub is the wrong instrument).
+    /// </summary>
+    /// <param name="disposalCompleted">The completion signal. Must terminate.</param>
+    /// <param name="description">How the thing being joined is named in a report — an address.</param>
+    /// <param name="report">Where a timeout, a fault or a late fault is SAID.</param>
+    /// <param name="timeout">The join budget; <see cref="DefaultJoinTimeout"/> when omitted.</param>
+    /// <param name="diagnostics">Optional in-flight snapshot, appended to a timeout report so it
+    /// says WHY. Evaluated only on expiry, and never allowed to throw out of teardown.</param>
+    /// <returns><c>true</c> if the signal terminated within the budget; <c>false</c> otherwise.</returns>
+    public static async Task<bool> JoinDisposalAsync(
+        this IObservable<Unit> disposalCompleted, string description, Action<string> report,
+        TimeSpan? timeout = null, Func<string?>? diagnostics = null)
+    {
+        ArgumentNullException.ThrowIfNull(disposalCompleted);
+        ArgumentNullException.ThrowIfNull(report);
+        report = Safely(report);
+        var budget = timeout ?? DefaultJoinTimeout;
+
         using var cts = new CancellationTokenSource(budget);
         try
         {
             // ConfigureAwait(false) on top of ObserveCompletion's RunContinuationsAsynchronously:
             // `await` captures TaskScheduler.Current absent a SynchronizationContext, so a teardown
             // entered from a hub scheduler would otherwise carry the rest of itself back onto one.
-            await hub.DisposalCompleted
-                .ObserveCompletion(LateFault(address, report), cts.Token)
+            await disposalCompleted
+                .ObserveCompletion(LateFault(description, report), cts.Token)
                 .ConfigureAwait(false);
+            return true;
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            report(NotJoined(address, budget, hub));
+            report(NotJoined(description, budget, diagnostics));
+            return false;
         }
         catch (Exception ex)
         {
-            report($"[dispose-join] hub {address}: disposal FAULTED — {ex.GetType().Name}: {ex.Message}");
+            report(Faulted(description, ex));
+            return false;
         }
     }
 
@@ -109,37 +146,58 @@ public static class HubDisposalJoin
         var budget = timeout ?? DefaultJoinTimeout;
         var address = Describe(hub);
 
-        if (!TryDispose(hub, address, report)) return false;
+        return !TryDispose(hub, address, report)
+            ? false
+            : hub.DisposalCompleted.JoinDisposal(address, report, budget, hub.GetPendingRequestDiagnostics);
+    }
 
-        var joined = new ManualResetEventSlim(false);
-        var lateFault = LateFault(address, report);
-        var settled = 0;
+    /// <summary>
+    /// The block-joining twin of <see cref="JoinDisposalAsync"/>, for a signal something ELSE
+    /// already started. Same bound, same three distinguishable outcomes, same loudness.
+    /// </summary>
+    /// <param name="disposalCompleted">The completion signal. Must terminate.</param>
+    /// <param name="description">How the thing being joined is named in a report — an address.</param>
+    /// <param name="report">Where a timeout, a fault or a late fault is SAID.</param>
+    /// <param name="timeout">The join budget; <see cref="DefaultJoinTimeout"/> when omitted.</param>
+    /// <param name="diagnostics">Optional in-flight snapshot, appended to a timeout report.</param>
+    /// <returns><c>true</c> if the signal terminated within the budget; <c>false</c> otherwise.</returns>
+    public static bool JoinDisposal(
+        this IObservable<Unit> disposalCompleted, string description, Action<string> report,
+        TimeSpan? timeout = null, Func<string?>? diagnostics = null)
+    {
+        ArgumentNullException.ThrowIfNull(disposalCompleted);
+        ArgumentNullException.ThrowIfNull(report);
+        report = Safely(report);
+        var budget = timeout ?? DefaultJoinTimeout;
 
-        // 🚨 The subscription handle is deliberately dropped, exactly as ReactiveCompletion does:
-        // unsubscribing when the WAIT ends is what loses a fault that arrives afterwards. The
-        // observer is rooted by DisposalCompleted (a ReplaySubject) until the source terminates,
-        // which is the only moment after which no fault can still come.
-        hub.DisposalCompleted.Subscribe(
-            _ => { },
-            error =>
-            {
-                if (Interlocked.Exchange(ref settled, 1) == 0)
-                {
-                    report($"[dispose-join] hub {address}: disposal FAULTED — "
-                           + $"{error.GetType().Name}: {error.Message}");
-                    joined.Set();
-                }
-                else
-                {
-                    lateFault(error);
-                }
-            },
-            () => { Interlocked.Exchange(ref settled, 1); joined.Set(); });
+        // The SAME bridge the async overload uses, waited on synchronously. Going through
+        // ReactiveCompletion rather than hand-rolling an event is what keeps the two forms honest
+        // about the same outcomes, and it is what makes the block safe: the task is completed with
+        // RunContinuationsAsynchronously, so the signalling thread returns to its own business
+        // instead of running the rest of this method, and the error arm stays attached after the
+        // wait, so a fault arriving later is still SAID.
+        var joined = disposalCompleted.ObserveCompletion(LateFault(description, report));
 
-        if (joined.Wait(budget)) return true;
+        // 🚨 Task.Wait(TimeSpan), NOT .Result / .GetAwaiter().GetResult(): expiry comes back as
+        // FALSE rather than as an exception, so the three outcomes stay distinguishable — joined,
+        // faulted (the AggregateException below), budget expired. All three are reported and none
+        // escapes a teardown path as an exception nobody catches.
+        bool completed;
+        try
+        {
+            completed = joined.Wait(budget);
+        }
+        catch (AggregateException ex)
+        {
+            // A disposal FAULT. It settled the wait, so it never reached the late-fault arm and
+            // would otherwise be lost with the task.
+            report(Faulted(description, ex.GetBaseException()));
+            return false;
+        }
 
-        Interlocked.Exchange(ref settled, 1);
-        report(NotJoined(address, budget, hub));
+        if (completed) return true;
+
+        report(NotJoined(description, budget, diagnostics));
         return false;
     }
 
@@ -180,28 +238,34 @@ public static class HubDisposalJoin
         }
     }
 
-    private static Action<Exception> LateFault(string address, Action<string> report) =>
+    private static Action<Exception> LateFault(string description, Action<string> report) =>
         error => report(
-            $"[dispose-join] hub {address}: disposal faulted AFTER the join stopped waiting on it "
-            + $"— {error.GetType().Name}: {error.Message}. Reported rather than orphaned.");
+            $"[dispose-join] hub {description}: disposal faulted AFTER the join stopped waiting on "
+            + $"it — {error.GetType().Name}: {error.Message}. Reported rather than orphaned.");
 
-    private static string NotJoined(string address, TimeSpan budget, IMessageHub hub)
+    private static string Faulted(string description, Exception error) =>
+        $"[dispose-join] hub {description}: disposal FAULTED — "
+        + $"{error.GetType().Name}: {error.Message}";
+
+    private static string NotJoined(string description, TimeSpan budget, Func<string?>? diagnostics)
     {
-        var diagnostics = SafeDiagnostics(hub);
-        return $"[dispose-join] hub {address}: teardown did NOT complete within "
+        var detail = SafeDiagnostics(diagnostics);
+        return $"[dispose-join] hub {description}: teardown did NOT complete within "
                + $"{budget.TotalSeconds:F0}s. The caller is proceeding OVER live teardown — that is "
                + "the use-after-dispose that crashes the host, so find what on this hub's action "
                + "block is not finishing; do not widen the budget."
-               + (diagnostics is null ? string.Empty : "\n" + diagnostics);
+               + (detail is null ? string.Empty : "\n" + detail);
     }
 
     /// <summary>
-    /// The hub's own in-flight snapshot, so a timeout says WHY. Defensive: the hub is mid-teardown
-    /// and diagnostics must never be the thing that throws out of a teardown path.
+    /// The caller's in-flight snapshot, so a timeout says WHY. Defensive twice over: the snapshot is
+    /// taken from a hub that is mid-teardown, and reporting must never be the thing that throws out
+    /// of a teardown path.
     /// </summary>
-    private static string? SafeDiagnostics(IMessageHub hub)
+    private static string? SafeDiagnostics(Func<string?>? diagnostics)
     {
-        try { return hub.GetPendingRequestDiagnostics(); }
+        if (diagnostics is null) return null;
+        try { return diagnostics(); }
         catch (Exception ex) { return $"(diagnostics unavailable: {ex.GetType().Name})"; }
     }
 
