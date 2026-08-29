@@ -267,6 +267,7 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
             report.append(f"  {f}  → (reaches nothing this lane builds — {top}/)")
         elif f.startswith("src/") and f.count("/") >= 2 and lane == "modules":
             src_files.append(f)
+            report.append(f"  {f}  → src/ (which project decides, below)")
         else:
             global_files.append(f)
             report.append(f"  {f}  → EVERYTHING (tooling / repo-root / unknown scope)")
@@ -320,8 +321,6 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
             return full(f"{PROJECTS} answered for {len(got or {})} of {len(hits)} entries — "
                         "packing every module.")
         hits = {k: list(v) for k, v in got.items()}
-        for f in src_files:
-            say(f"  {f}  → src/")
 
     selected: list[dict] = []
     why: dict[str, str] = {}
