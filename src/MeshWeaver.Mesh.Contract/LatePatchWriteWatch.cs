@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using MeshWeaver.Data;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
@@ -34,6 +35,16 @@ namespace MeshWeaver.Mesh;
 /// armed → <see cref="Dispatch"/> fires). Expired entries (past
 /// <see cref="LateResponseWatchBound"/>) are treated as silence — silence is NEVER retried: a
 /// merely-busy owner still applies the original patch when its queue drains.</para>
+///
+/// <para>🚨 <b>A NACK is not always a <see cref="PatchDataResponse"/> — issue #2661.</b> The
+/// owner's RLS refusal is a <see cref="DeliveryFailure"/><c>{ErrorType.Unauthorized}</c>, posted
+/// by <c>AccessControlPipeline</c> AHEAD of the owner's action block, and it carries the same
+/// correlation id as the ack would. Until #2661 this watch knew only about
+/// <c>PatchDataResponse</c>, so a denial that lost the race against the caller's bounded wait
+/// reached NOTHING: <c>MessageHub.HandleCallbacks</c> found no live subject, logged "No subject
+/// found for response message" and marked the delivery processed. The caller kept a success for a
+/// write the owner had refused. <see cref="DispatchFailure"/> is that missing seam, and it obeys
+/// the identical exactly-once rule.</para>
 /// </summary>
 public sealed class LatePatchResponseRegistry
 {
@@ -44,13 +55,20 @@ public sealed class LatePatchResponseRegistry
     /// cold-store-defer NotFound (up to ~10 s after reactivation), and the owner ack watcher's
     /// own 20 s bound. A response beyond this window is indistinguishable from a re-delivered
     /// stale verdict and is ignored.
+    ///
+    /// <para>🚨 Since #2661 this is ALSO the caller's outer verdict bound: <c>UpdateRemote</c> no
+    /// longer completes a write on the bounded-wait expiry, so this window is how long a caller
+    /// waits for the commit verdict before the owner is declared to have breached its own terminal
+    /// contract. Widening it therefore widens a real caller-visible wait — it is not free tuning.
+    /// </para>
     /// </summary>
     public static readonly TimeSpan LateResponseWatchBound = TimeSpan.FromSeconds(30);
 
     private sealed record Entry(
         string Path,
         DateTimeOffset ExpiresAt,
-        Action<PatchDataResponse> OnLateResponse);
+        Action<PatchDataResponse> OnLateResponse,
+        Action<DeliveryFailure> OnLateFailure);
 
     // Instance state on a mesh-scoped singleton (registered next to IMeshNodeStreamCache) —
     // dies with the mesh. Keyed by the PatchDataRequest delivery id (= the response's
@@ -66,8 +84,16 @@ public sealed class LatePatchResponseRegistry
     /// </summary>
     /// <param name="requestId">The patch request's delivery id.</param>
     /// <param name="path">The target node path (diagnostics).</param>
-    /// <param name="onLateResponse">Invoked with the owner's late response, at most once.</param>
-    public void Register(string requestId, string path, Action<PatchDataResponse> onLateResponse)
+    /// <param name="onLateResponse">Invoked with the owner's late <see cref="PatchDataResponse"/>,
+    /// at most once.</param>
+    /// <param name="onLateFailure">Invoked with the owner's late <see cref="DeliveryFailure"/> —
+    /// above all the RLS <c>Unauthorized</c> refusal — at most once. Exactly one of the two
+    /// callbacks ever runs for a given entry (#2661).</param>
+    public void Register(
+        string requestId,
+        string path,
+        Action<PatchDataResponse> onLateResponse,
+        Action<DeliveryFailure> onLateFailure)
     {
         var now = DateTimeOffset.UtcNow;
         foreach (var kv in entries)
@@ -75,7 +101,8 @@ public sealed class LatePatchResponseRegistry
             if (kv.Value.ExpiresAt < now)
                 entries.TryRemove(kv.Key, out _);
         }
-        entries[requestId] = new Entry(path, now + LateResponseWatchBound, onLateResponse);
+        entries[requestId] = new Entry(
+            path, now + LateResponseWatchBound, onLateResponse, onLateFailure);
     }
 
     /// <summary>
@@ -103,6 +130,33 @@ public sealed class LatePatchResponseRegistry
         return true;
     }
 
+    /// <summary>
+    /// 🚨 Delivers a LATE owner <see cref="DeliveryFailure"/> to its armed watch — the #2661 seam.
+    /// An RLS denial is a <c>DeliveryFailure{ErrorType.Unauthorized}</c>, not a
+    /// <see cref="PatchDataResponse"/>, so before this existed a denial that lost the race against
+    /// the caller's bounded wait was observed by nobody and the caller kept a success for a refused
+    /// write. Same exactly-once / expiry rules as <see cref="Dispatch"/>.
+    /// </summary>
+    /// <param name="requestId">The failure's <c>RequestId</c> correlation property.</param>
+    /// <param name="failure">The owner-side / pipeline NACK.</param>
+    /// <returns>True when an armed, unexpired watch consumed the failure.</returns>
+    public bool DispatchFailure(string requestId, DeliveryFailure failure)
+    {
+        if (!entries.TryRemove(requestId, out var entry))
+            return false;
+        if (entry.ExpiresAt < DateTimeOffset.UtcNow)
+            return false;
+        entry.OnLateFailure(failure);
+        return true;
+    }
+
     /// <summary>Number of armed watches — test seam.</summary>
     public int ArmedCount => entries.Count;
+
+    /// <summary>
+    /// The request ids of the currently armed watches — test seam. A test that must construct a
+    /// LATE verdict (rather than race for one) needs the correlation id of the patch that is
+    /// actually in flight; it is not otherwise observable from outside the write path.
+    /// </summary>
+    public IReadOnlyCollection<string> ArmedRequestIds => entries.Keys.ToArray();
 }

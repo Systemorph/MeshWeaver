@@ -83,26 +83,40 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     // NodeType after a re-import), EnsureTypedContent re-types it from here instead of degrading.
     private readonly MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? _contentTypeRegistry;
 
-    // 🚨 How long a cross-hub Update waits for the OWNER's PatchDataResponse before
-    // falling back to the optimistic snapshot. Deliberately SHORT (not the old 30s):
-    // a content write must EMIT AS SOON AS THE ACTIVITY IS STARTED (the message is
-    // received / the patch is accepted), NEVER block until the round finishes. Fast
-    // failures — RLS denial (DeliveryFailure Unauthorized) and validation rejection —
-    // are posted by the AccessControlPipeline gate AHEAD of the owner's action block,
-    // so they come back within this bound and still fault the caller (fail-fast). Only
-    // the SUCCESS ack can queue behind a long round on the busy owner; on that timeout
-    // we emit the optimistic snapshot (the patch applies when the owner drains its
-    // queue) — this is exactly what kills the 30s GUI "Response did not arrive in time"
-    // stall during thread execution. Callers needing the reconciled state follow the
-    // shared GetMeshNodeStream(path) handle.
+    // 🚨 How long the caller's write holds a PENDING hub.Observe callback for the OWNER's
+    // PatchDataResponse before handing the wait over to LatePatchResponseRegistry. This is a
+    // QUIESCING-BUDGET bound, not a verdict deadline: a responseSubjects entry held past a
+    // couple of seconds is what the hub's Quiescing leak detector counts as a leaked callback
+    // (QuiescingTimedOut — a hard test-teardown failure), which is the whole reason the late
+    // watch is a registry plus a hub handler rather than a long detached Observe. See
+    // LatePatchResponseRegistry.
     //
-    // The optimistic emit does NOT abandon the owner's verdict: the write stays armed in
-    // LatePatchResponseRegistry (LateResponseWatchBound, 30s) so a LATE terminal — above
-    // all the OwnerDisposing disposal NACK, which only lands after the owner's phased
-    // teardown — is still observed and a provably-unapplied write is re-enqueued. See
-    // LatePatchResponseRegistry for why the late watch is a registry + hub handler and
-    // not a detached hub.Observe subscription.
+    // 🚨 IT IS NOT A SUCCESS BOUND — issue #2661. Until then, expiry EMITTED THE OPTIMISTIC
+    // SNAPSHOT AND COMPLETED THE CALLER AS A SUCCESS, so a write the owner went on to refuse was
+    // reported as saved. That is the fail-open: "saved" means the owner COMMITTED (it does not
+    // mean the DB flushed, and it certainly does not mean two seconds elapsed with no bad news).
+    // add and delete have always waited for exactly that verdict — DataChangeStatus.Committed,
+    // or a real failure (UpdateDataPath / DeleteDataPath in MeshWeaver.Data) — and update was the
+    // odd one out. It no longer is: expiry of this bound emits NOTHING and completes NOTHING; it
+    // only moves the wait onto the registry, and the caller's terminal is the owner's verdict
+    // wherever it arrives.
+    //
+    // 🚨 The cost, stated plainly because it is real: for a BUSY owner the caller now waits for
+    // the owner's action-block queue to drain to this patch instead of being told "saved" at ~2s.
+    // That is the maintainer's explicit call ("for update, it has to wait until queue drains").
+    // The owner's own terminal is contractually bounded — the identity-gated ack watcher's 20s
+    // Timeout plus IPostCommitFlush's 10s, plus RegisterOwnerDisposingNack for teardown
+    // (MeshWeaver.Data/DataExtensions.cs) — which is precisely what LateResponseWatchBound (30s)
+    // is documented to dominate, so that window is the caller's outer bound too.
     private static readonly TimeSpan UpdateResponseWaitBound = TimeSpan.FromSeconds(2);
+
+    // 🚨 Slack added to LateResponseWatchBound before the caller's write is failed for SILENCE.
+    // The registry stops honouring a verdict at exactly LateResponseWatchBound; firing the
+    // caller's bound at the same instant would race a verdict that is still admissible. One
+    // second is enough to order the two, and it is not a retry, a backoff, or a knob to widen
+    // when something times out — a write still unanswered here has outlived every owner-side
+    // terminal path, so the answer is a fault, not a longer wait.
+    private static readonly TimeSpan VerdictBoundGrace = TimeSpan.FromSeconds(1);
 
     // 🚨 Retry budget for the provably-safe NACK cases — the ones where the owner STATED the
     // patch never applied: OwnerDisposing, OwnerNotReady, and Conflict. Each re-enqueue re-runs
@@ -829,7 +843,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         // delivered to ONLY the submitting caller (request/response is
                         // inherently correlated; it never calls reduced.OnError, so the
                         // SHARED read stream every other subscriber/mirror reads is never
-                        // faulted). It also confirms read-after-write (waits for the commit).
+                        // faulted). It also confirms read-after-write (waits for the commit),
+                        // and since #2661 that is unconditional: the caller's terminal IS
+                        // the owner's commit verdict, never a response bound expiring.
                         // Overwrite (full-replace, static-repo import) stays on the
                         // sync-stream path — see Overwrite below.
                         ? UpdateRemote(wrappedUpdate,
@@ -1531,14 +1547,30 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 return;
                             }
 
+                            // 🚨 EXACTLY-ONCE caller terminal (#2661). The verdict can now reach
+                            // the caller on FOUR seams — the bounded response wait, the late
+                            // PatchDataResponse watch, the late DeliveryFailure watch, and the
+                            // outer verdict bound — and the last three fire from the cache hub's
+                            // action block / a timer, concurrently with each other. Rx's own
+                            // single-terminal contract is a rule the SOURCE must keep, not one it
+                            // enforces, so the claim is explicit.
+                            var callerSettled = 0;
+                            bool ClaimTerminal() =>
+                                System.Threading.Interlocked.Exchange(ref callerSettled, 1) == 0;
+
                             // 🚨 Restore the caller's identity around OnNext: we're
                             // on the remote-stream emission thread (opened under
                             // ImpersonateAsSystem), so SwitchAccessContext back to
                             // capturedContextAtEntry (Context ?? CircuitContext) so
                             // the caller's Subscribe sees their identity, not
                             // system-security.
+                            //
+                            // 🚨 This is the SUCCESS terminal and it is now reached from exactly
+                            // one place: the owner's ACK, early or late. It is no longer reachable
+                            // from a timeout — see UpdateResponseWaitBound.
                             void EmitTerminal()
                             {
+                                if (!ClaimTerminal()) return;
                                 if (accessServiceAtEntry is not null && capturedContextAtEntry is not null)
                                 {
                                     using (accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry))
@@ -1552,6 +1584,55 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     observer.OnNext(updated);
                                     observer.OnCompleted();
                                 }
+                            }
+
+                            // The FAILURE terminal, same identity restoration as EmitTerminal so a
+                            // caller's OnError callback runs as the caller and not as
+                            // system-security. Every rejection path funnels through here.
+                            void FailTerminal(Exception error)
+                            {
+                                if (!ClaimTerminal()) return;
+                                if (accessServiceAtEntry is not null && capturedContextAtEntry is not null)
+                                {
+                                    using (accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry))
+                                        observer.OnError(error);
+                                }
+                                else
+                                {
+                                    observer.OnError(error);
+                                }
+                            }
+
+                            // A re-enqueued attempt IS this write, still in flight, so its outcome
+                            // is the caller's outcome. OnNext rides through unclaimed (the claim is
+                            // the TERMINAL, and a value precedes it); the terminal claims.
+                            //
+                            // 🚨 `attachToCaller` is not a detail. The EARLY
+                            // re-enqueue runs while the caller is demonstrably still subscribed, so
+                            // it joins the composite and dies with the caller — cancelling a write
+                            // nobody is waiting for is right. The LATE one must NOT: it fires from
+                            // the cache hub's action block, possibly after a fire-and-forget caller
+                            // has walked away, and the whole point of the late-NACK re-enqueue is
+                            // that a provably-unapplied write still LANDS (LateNackReenqueueTest).
+                            // Tying it to the composite would cancel exactly the recovery it exists
+                            // to perform. A terminal delivered to a detached observer is a safe
+                            // no-op, so chaining costs nothing there.
+                            void ChainTerminal(IObservable<MeshNode> reattempt, bool attachToCaller)
+                            {
+                                var sub = reattempt.Subscribe(
+                                    n =>
+                                    {
+                                        if (System.Threading.Volatile.Read(ref callerSettled) == 0)
+                                            observer.OnNext(n);
+                                    },
+                                    FailTerminal,
+                                    () =>
+                                    {
+                                        if (ClaimTerminal())
+                                            observer.OnCompleted();
+                                    });
+                                if (attachToCaller)
+                                    composite.Add(sub);
                             }
 
                             // 🚨 Arm the LATE-response watch BEFORE opening the bounded wait —
@@ -1570,6 +1651,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             var requestId = delivery.Id;
                             lateRegistry?.Register(requestId, _path!, resp =>
                             {
+                                // 🚨 EVERY branch below now settles the CALLER too (#2661). Before,
+                                // the caller had already been completed as a success at
+                                // UpdateResponseWaitBound, so a late verdict could only be logged;
+                                // now the late verdict IS the caller's terminal.
+
                                 if (resp.Success && resp.NodeError is null)
                                 {
                                     // 🚨 A LATE ack is STILL the owner's ack — the one signal that
@@ -1584,8 +1670,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     // starts on the ack instead of sitting out QueueAdvanceBound.
                                     onLocalState?.Invoke(updated);
                                     diagLogger?.LogDebug(
-                                        "[UpdateRemote] LATE_ACK hub={Hub} target={Path} — write applied after the optimistic emit",
+                                        "[UpdateRemote] LATE_ACK hub={Hub} target={Path} — the owner committed; completing the caller on its verdict",
                                         _workspace.Hub.Address, _path);
+                                    // The owner COMMITTED. That — not the elapsed bound — is what
+                                    // "saved" means, so this is the caller's success terminal.
+                                    EmitTerminal();
                                     return;
                                 }
                                 var lateErr = resp.NodeError ?? new MeshNodeError(
@@ -1624,15 +1713,20 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
                                         : null)
                                     {
-                                        UpdateRemote(update, attempt + 1, lateRebaseFrom,
-                                                onLocalState: onLocalState is null
-                                                    ? null
-                                                    : _ => onLocalState(null))
-                                            .Subscribe(
-                                                _ => { },
-                                                ex2 => diagLogger?.LogWarning(ex2,
+                                        // 🚨 CHAINED to the caller, exactly like the early
+                                        // OWNER_NACK_REENQUEUE arm (#2661). The re-attempt is this
+                                        // write still in flight, so its verdict is the caller's;
+                                        // swallowing it into a log line was only defensible while
+                                        // the caller had already been told "saved".
+                                        ChainTerminal(
+                                            UpdateRemote(update, attempt + 1, lateRebaseFrom,
+                                                    onLocalState: onLocalState is null
+                                                        ? null
+                                                        : _ => onLocalState(null))
+                                                .Do(_ => { }, ex2 => diagLogger?.LogWarning(ex2,
                                                     "[UpdateRemote] LATE_NACK_REENQUEUE failed hub={Hub} target={Path} attempt={Attempt}",
-                                                    _workspace.Hub.Address, _path, attempt + 1));
+                                                    _workspace.Hub.Address, _path, attempt + 1)),
+                                            attachToCaller: false);
                                     }
                                 }
                                 else
@@ -1642,32 +1736,68 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     // to wait for — release the slot rather than stall it.
                                     onLocalState?.Invoke(null);
                                     diagLogger?.LogWarning(
-                                        "[UpdateRemote] LATE_NACK_TERMINAL hub={Hub} target={Path} code={Code} attempt={Attempt} msg={Msg} — the optimistically-acked write did NOT apply and is not auto-retryable",
+                                        "[UpdateRemote] LATE_NACK_TERMINAL hub={Hub} target={Path} code={Code} attempt={Attempt} msg={Msg} — the write did NOT apply and is not auto-retryable; faulting the caller",
                                         _workspace.Hub.Address, _path, lateErr.Code, attempt, lateErr.Message);
+                                    FailTerminal(new MeshNodeStreamException(lateErr));
                                 }
+                            },
+                            failure =>
+                            {
+                                // 🚨🚨 THE #2661 DEFECT, closed. An RLS refusal is NOT a
+                                // PatchDataResponse — AccessControlPipeline posts a
+                                // DeliveryFailure{ErrorType.Unauthorized} ahead of the owner's
+                                // action block. When it beat UpdateResponseWaitBound it already
+                                // faulted the caller (the OWNER_DENIED arm below); when it LOST
+                                // that race it reached nothing at all, and the caller kept a
+                                // success for a write the owner had refused. It now lands here and
+                                // faults the caller with the SAME exception the early arm raises,
+                                // because a denial is a denial whenever it arrives.
+                                //
+                                // Nothing landed, so there is no base to hand forward: release the
+                                // queue slot rather than let the successor sit out QueueAdvanceBound.
+                                onLocalState?.Invoke(null);
+                                if (failure.ErrorType == ErrorType.Unauthorized)
+                                {
+                                    diagLogger?.LogWarning(
+                                        "[UpdateRemote] LATE_OWNER_DENIED hub={Hub} target={Path} msg={Msg} — the denial arrived after the response bound; faulting the caller",
+                                        _workspace.Hub.Address, _path, failure.Message);
+                                    FailTerminal(new UnauthorizedAccessException(
+                                        failure.Message ?? $"Access denied updating '{_path}'"));
+                                    return;
+                                }
+                                diagLogger?.LogWarning(
+                                    "[UpdateRemote] LATE_DELIVERY_FAILURE hub={Hub} target={Path} errorType={ErrorType} msg={Msg}",
+                                    _workspace.Hub.Address, _path, failure.ErrorType, failure.Message);
+                                FailTerminal(new MeshNodeStreamException(new MeshNodeError(
+                                    MeshNodeErrorCode.Unknown, _path!,
+                                    failure.Message ?? $"Update of '{_path}' failed: {failure.ErrorType}")));
                             });
 
-                            // 🚨 BOUNDED response wait — emit as soon as the activity is
-                            // STARTED (the patch is accepted), fail-fast on errors, and NEVER
-                            // wait for the round to finish. We still observe the owner's
-                            // PatchDataResponse so a genuine rejection surfaces fail-fast on the
-                            // caller's OnError (RLS denial → UnauthorizedAccessException;
-                            // validation → MeshNodeStreamException) — denials are posted by the
-                            // AccessControlPipeline gate AHEAD of the owner's action block, so a
-                            // busy round does NOT delay them. But the SUCCESS ack can queue
-                            // behind a long round on the busy owner; capping the wait at
-                            // UpdateResponseWaitBound and falling back to the optimistic snapshot
-                            // on timeout is what kills the old 30s GUI "Response did not arrive
-                            // in time" stall (the patch was already posted; it applies when the
-                            // owner drains its queue). The emitted value is the locally-computed
-                            // optimistic snapshot — the RFC 7396 patch is deterministic, so
-                            // `updated` matches the owner's reconciled state. Callers needing the
-                            // reconciled state follow the shared GetMeshNodeStream(path) handle.
+                            // 🚨 The caller's terminal is the OWNER'S COMMIT VERDICT — never a
+                            // bound expiring (#2661). add and delete have always worked this way
+                            // (RequestChange → DataChangeStatus.Committed, else a real failure);
+                            // update shipped a PatchDataRequest instead — because a cross-hub
+                            // writer holds only a MIRROR of the node, so its own workspace's
+                            // RequestChange would commit into the mirror and the owner would never
+                            // see the write — and then guessed the verdict when the bound expired.
+                            // The verdict machinery was never the problem: the owner's ack is
+                            // strictly STRONGER than add/delete's Committed (identity-gated
+                            // post-commit emission → IPostCommitFlush durable flush → ack). Only
+                            // the caller's terminal was decoupled from it.
                             //
-                            // Every REAL terminal below disarms the late watch (Complete); ONLY
-                            // the TimeoutException branch leaves it armed — that is the one case
-                            // where the owner's verdict is still outstanding after the caller's
-                            // optimistic emit.
+                            // So this subscription is the FAST seam, not the whole wait. It carries
+                            // the verdict when it arrives promptly — a denial (RLS →
+                            // UnauthorizedAccessException), a rejection (→ MeshNodeStreamException),
+                            // a re-enqueueable NACK, or the ack. When it does NOT, expiry hands the
+                            // wait to LatePatchResponseRegistry (armed above, and now watching
+                            // DeliveryFailure as well as PatchDataResponse) and emits NOTHING.
+                            // The value a success finally carries is still the locally-computed
+                            // snapshot — the RFC 7396 patch is deterministic, so `updated` matches
+                            // the owner's reconciled state.
+                            //
+                            // Every terminal below disarms the late watch (Complete); ONLY the
+                            // TimeoutException branch leaves it armed — that is the one case where
+                            // the owner's verdict is still outstanding.
                             var responseSub = _workspace.Hub.Observe(delivery)
                                 .Timeout(UpdateResponseWaitBound)
                                 .Take(1)
@@ -1750,18 +1880,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                     ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
                                                     : null)
                                                 {
-                                                    composite.Add(UpdateRemote(update, attempt + 1, rebaseFrom,
+                                                    ChainTerminal(UpdateRemote(update, attempt + 1, rebaseFrom,
                                                             onLocalState: onLocalState is null
                                                                 ? null
-                                                                : _ => onLocalState(null))
-                                                        .Subscribe(observer.OnNext, observer.OnError, observer.OnCompleted));
+                                                                : _ => onLocalState(null)),
+                                                        attachToCaller: true);
                                                 }
                                                 return;
                                             }
                                             diagLogger?.LogWarning(
                                                 "[UpdateRemote] OWNER_REJECTED hub={Hub} target={Path} code={Code} msg={Msg}",
                                                 _workspace.Hub.Address, _path, err.Code, err.Message);
-                                            observer.OnError(new MeshNodeStreamException(err));
+                                            FailTerminal(new MeshNodeStreamException(err));
                                         }
                                         else
                                         {
@@ -1779,9 +1909,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             // the write silently, forever
                                             // (TwoSiloRecycleConvergenceTest: the post-recycle
                                             // write retried past a disposing owner and the store
-                                            // never advanced). This runs before EmitTerminal, which
-                                            // is what releases the queue slot, so the successor
-                                            // cannot start before the hand-off.
+                                            // never advanced).
+                                            //
+                                            // 🚨 THIS call is what releases the queue slot — the
+                                            // hand-off, not EmitTerminal. #2346 moved the release
+                                            // off the caller's terminal for exactly the reason this
+                                            // whole comment gives, and MeshNodeStreamCache says so
+                                            // at the advance site ("Advance the per-path queue on
+                                            // the HAND-OFF … NOT on req.Result"). The stale claim
+                                            // that EmitTerminal releases the slot is what made
+                                            // #2661's own analysis fear that holding the caller's
+                                            // terminal would stall the successor. It does not:
+                                            // the successor waits on the hand-off, which is issued
+                                            // right here, on the ack.
                                             onLocalState?.Invoke(updated);
                                             EmitTerminal();
                                         }
@@ -1801,22 +1941,83 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             diagLogger?.LogWarning(
                                                 "[UpdateRemote] OWNER_DENIED hub={Hub} target={Path} msg={Msg}",
                                                 _workspace.Hub.Address, _path, dfx.Failure.Message);
-                                            observer.OnError(new UnauthorizedAccessException(
+                                            FailTerminal(new UnauthorizedAccessException(
                                                 dfx.Failure.Message ?? $"Access denied updating '{_path}'"));
                                         }
                                         else if (ex is TimeoutException)
                                         {
-                                            // No ack within the bound — the owner is busy (a round
-                                            // is running). Emit the optimistic snapshot now rather
-                                            // than wait for the activity to finish; the patch is
-                                            // posted and applies when the owner drains its queue.
-                                            // The late watch STAYS armed — a late OwnerDisposing
-                                            // NACK proves the patch will never apply and triggers
-                                            // the re-enqueue above.
+                                            // 🚨🚨 THE #2661 FIX. This branch used to call
+                                            // EmitTerminal() — the optimistic snapshot, emitted AND
+                                            // COMPLETED as a success — which is the write path
+                                            // failing OPEN: a bound expiring is not a commit, and a
+                                            // denial or rejection that lost the race against it
+                                            // reached nobody. "Saved" now means the owner committed,
+                                            // exactly as it does for add and delete, so this branch
+                                            // emits NOTHING and completes NOTHING. It only HANDS THE
+                                            // WAIT OVER: the late watch is already armed and, since
+                                            // #2661, watches DeliveryFailure too.
+                                            //
+                                            // The queue slot is untouched here, deliberately — it is
+                                            // released by the HAND-OFF (onLocalState), never by the
+                                            // caller's terminal (#2346), so holding the caller open
+                                            // does NOT stall the successor.
+                                            if (lateRegistry is null)
+                                            {
+                                                // No registry on this hub (the bypass-cache escape
+                                                // hatch) ⇒ there is no seam a late verdict could
+                                                // arrive on, so waiting for one could only hang.
+                                                // Keep the old optimistic terminal, and say so —
+                                                // this is the one place the fail-open survives, and
+                                                // it survives because nothing better is reachable.
+                                                diagLogger?.LogWarning(
+                                                    "[UpdateRemote] RESPONSE_TIMEOUT hub={Hub} target={Path} — no LatePatchResponseRegistry on this hub, so the owner's verdict can never be observed; completing OPTIMISTICALLY (unconfirmed)",
+                                                    _workspace.Hub.Address, _path);
+                                                EmitTerminal();
+                                                return;
+                                            }
                                             diagLogger?.LogDebug(
-                                                "[UpdateRemote] RESPONSE_TIMEOUT hub={Hub} target={Path} — optimistic emit (owner busy)",
+                                                "[UpdateRemote] RESPONSE_TIMEOUT hub={Hub} target={Path} — owner busy; the caller now waits on the late watch for the commit verdict",
                                                 _workspace.Hub.Address, _path);
-                                            EmitTerminal();
+
+                                            // 🚨 The OUTER verdict bound. Past
+                                            // LateResponseWatchBound the registry itself stops
+                                            // honouring a response, so without this the caller
+                                            // would wait forever on a verdict nothing can deliver.
+                                            //
+                                            // It FAULTS rather than completing optimistically, and
+                                            // that is a deliberate judgement, not an oversight:
+                                            // silence here is not "the owner is busy" — a busy
+                                            // owner acks late and the LATE_ACK arm above completes
+                                            // the caller as a success. Silence here means the owner
+                                            // produced NO terminal at all inside a window built to
+                                            // dominate every owner-side terminal path (the 20s
+                                            // identity-gated ack watcher, the 10s post-commit
+                                            // flush, and RegisterOwnerDisposingNack for teardown).
+                                            // At that point we do not know whether the write landed,
+                                            // and reporting "saved" for a write we cannot confirm is
+                                            // the very defect this change closes — one bound later.
+                                            // The write stays posted and the update lambda re-diffs
+                                            // idempotently, so a caller that retries loses nothing.
+                                            composite.Add(Observable
+                                                .Timer(LatePatchResponseRegistry.LateResponseWatchBound
+                                                       + VerdictBoundGrace - UpdateResponseWaitBound)
+                                                .Subscribe(_ =>
+                                                {
+                                                    if (System.Threading.Volatile.Read(ref callerSettled) != 0)
+                                                        return;
+                                                    lateRegistry.Complete(requestId);
+                                                    onLocalState?.Invoke(null);
+                                                    diagLogger?.LogWarning(
+                                                        "[UpdateRemote] VERDICT_TIMEOUT hub={Hub} target={Path} bound={BoundSeconds}s — the owner produced no terminal for this patch inside the late-response window, which dominates every owner-side terminal path; the write is NOT confirmed",
+                                                        _workspace.Hub.Address, _path,
+                                                        LatePatchResponseRegistry.LateResponseWatchBound.TotalSeconds);
+                                                    FailTerminal(new MeshNodeStreamException(new MeshNodeError(
+                                                        MeshNodeErrorCode.OwnerUnreachable, _path!,
+                                                        $"The owner of '{_path}' returned no verdict for this update within "
+                                                        + $"{LatePatchResponseRegistry.LateResponseWatchBound.TotalSeconds:0}s. "
+                                                        + "The patch was posted and may still apply, but it is NOT confirmed — "
+                                                        + "re-read the node and re-apply if the change is required.")));
+                                                }));
                                         }
                                         else
                                         {
@@ -1828,7 +2029,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             var msg = ex is DeliveryFailureException d2
                                                 ? (d2.Failure?.Message ?? ex.Message)
                                                 : ex.Message;
-                                            observer.OnError(new MeshNodeStreamException(
+                                            FailTerminal(new MeshNodeStreamException(
                                                 new MeshNodeError(MeshNodeErrorCode.Unknown, _path!, msg)));
                                         }
                                     });
