@@ -136,8 +136,15 @@ jobs:
             case "$DIGEST" in sha256:*) ;; *) echo "::error::reason=platform but inputs.digest is '$DIGEST', not a sha256: digest."; exit 1 ;; esac
             [ -n "$SHA" ]    || { echo "::error::reason=platform but inputs.sha is empty."; exit 1; }
           fi
+          # `source` and `chain` are what the receivers' cycle guard reads (client_payload.chain in
+          # node-repo-publish-bake.yml): a platform release carries Plugins in its chain because
+          # Plugins is baked WITH the platform, so no dependent may dispatch back to it. Any other
+          # reason (release-packages.yml sends "packages") is its own root — labelling it "platform"
+          # would claim an image release that did not happen and seed the chain with a Plugins
+          # publication that was never made.
           payload=$(jq -cn --arg v "$VERSION" --arg r "$REASON" --arg sha "$SHA" --arg i "$IMAGE" --arg d "$DIGEST" \
-            '{version:$v, reason:$r, sha:$sha, image:$i, digest:$d, source:"platform", chain:["platform","plugins"]}')
+            '{version:$v, reason:$r, sha:$sha, image:$i, digest:$d, source:$r,
+              chain:(if $r == "platform" then ["platform","plugins"] else [$r] end)}')
           echo "payload: $payload"
 
           # 🚨 INSTALLATION IS NOT SUBSCRIPTION. The App is installed org-wide for OTHER reasons
