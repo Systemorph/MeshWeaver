@@ -299,9 +299,15 @@ public sealed class PluginBundleClient
                         var entry = activation.Entries.FirstOrDefault(e =>
                             string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
 
+                        // 🚨 #2417 — the presence probe, bound to the landing service's OWN base
+                        // directory and resolved by ModuleActivationBoot, which is the same rule
+                        // boot uses. Never MeshBuilder.ResolveModulePath: its app-closure fallback
+                        // would find a same-named platform DLL and report a landed module that was
+                        // never landed here.
                         var verdict = ModuleUpdateDecision.Decide(
                             bundle?.Version, bundle?.MinMeshVersion,
-                            ModulePlatformFloor.DeclineReason, entry, declined);
+                            ModulePlatformFloor.DeclineReason, entry, declined,
+                            e => ModuleActivationBoot.LandedModuleDllExists(landing.BaseDirectory, e));
 
                         if (verdict.Action != ModuleUpdateAction.Land)
                         {
