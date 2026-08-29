@@ -635,9 +635,23 @@ public static class CatalogLayoutAreas
                     && string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
                 {
                     logger?.LogInformation(
-                        "Package {Id} is up to date (module {ModuleVersion}); nothing to sync.",
+                        "Package {Id} content is up to date (module {ModuleVersion}); nothing to sync.",
                         pkg.Id, pkg.ModuleVersion);
-                    return Observable.Return(new InstallResult(0, 0));
+                    // 🚨 #2417 — WithModule, and the missing wrapper here is half of why a package
+                    // could record as installed with no binary anywhere. This early return is a
+                    // CONTENT verdict: the manifest hash the record was stamped from equals the
+                    // one the source serves, so no node needs to travel. It says nothing whatever
+                    // about the module — and by returning unwrapped (the other two exits below are
+                    // both WithModule'd) it made the content answer stand in for the module
+                    // answer. Once a moduleVersion was stamped, no install and no reconcile would
+                    // ever ask about the binary again, on any deployment.
+                    //
+                    // The module lane costs nothing when there is nothing to ask: WithModule is
+                    // the identity for a package declaring no module or a source that serves no
+                    // bundles, and AdoptModule absorbs every failure into a logged zero — its
+                    // presence-aware ModuleUpdateDecision answers SkipUpToDate for the normal
+                    // case, in which nothing travels either.
+                    return WithModule(Observable.Return(new InstallResult(0, 0)));
                 }
                 if (record?.InstalledFiles is not { Count: > 0 })
                     return Full();

@@ -95,12 +95,32 @@ public static class ModuleUpdateDecision
     /// <param name="policyDecline">Why the deployment's update policy declines unattended landing,
     /// or null when it allows it (<see cref="IModuleUpdatePolicy"/>; null when no policy is
     /// registered — the platform default is auto-update).</param>
+    /// <param name="landedBytesPresent">
+    /// 🚨 Whether the entry's landed assembly is actually ON DISK — production passes
+    /// <see cref="ModuleActivationBoot.LandedModuleDllExists"/> bound to the module root, the same
+    /// resolution rule boot itself uses, so there is never a second notion of "landed".
+    ///
+    /// <para>Required, not optional-defaulting-to-true, and #2417 is why. Until this parameter
+    /// existed the "already landed" branch below was decided from the entry's recorded VERSION
+    /// alone — a string in a sidecar — and the bytes were never stat'd. That made every way a
+    /// landed binary can go missing PERMANENT and SILENT on every deployment: a recreated
+    /// <c>Modules:Root</c> volume, a half-completed landing, a generation directory collected out
+    /// from under its entry. The record said "module X at version V", the disk said nothing, and
+    /// no reconcile would ever look again. A default of <c>true</c> would keep exactly that
+    /// answer as the one a careless caller gets.</para>
+    ///
+    /// <para>Three other surfaces already diagnose this state and all three say "re-install"
+    /// (<see cref="ModuleActivationStatus"/>, <c>RequiredModuleStatus.StoreReason</c>,
+    /// <see cref="ModuleActivationBoot"/>'s skip reason). Nothing on the install path acted on it.
+    /// This is that action.</para>
+    /// </param>
     public static ModuleUpdateVerdict Decide(
         string? bundleVersion,
         string? bundleMinMeshVersion,
         Func<string?, string?> platformGate,
         ModuleActivationEntry? landed,
-        string? policyDecline)
+        string? policyDecline,
+        Func<ModuleActivationEntry, bool> landedBytesPresent)
     {
         if (string.IsNullOrWhiteSpace(bundleVersion))
             return new(ModuleUpdateAction.SkipNoBundle,
@@ -122,12 +142,23 @@ public static class ModuleUpdateDecision
             ? NuGetVersionComparer.Instance.Compare(bundleVersion, landed.Version)
             : (int?)null;
 
-        // Already landed at the served version: nothing travels. The version alone keys this —
-        // landed bytes stay loadable across platform builds (simple-name binding), so there is no
-        // "re-land the same version for a new build" case.
+        // Already landed at the served version: nothing travels — PROVIDED the bytes are there.
+        // The version alone still keys the no-op (landed bytes stay loadable across platform
+        // builds, simple-name binding, so there is no "re-land the same version for a new build"
+        // case) — but a version is a claim about the disk, not the disk.
+        //
+        // 🚨 #2417: this branch used to end here, and that single missing question is what made
+        // the whole lane SELF-SEALING. A recorded version with no assembly behind it answered
+        // "up to date" forever, on every deployment and every reconcile, while the package was in
+        // fact half-installed. Note the ordering: SkipUninstalled above still wins, because a
+        // disabled entry with no bytes is a completed uninstall, not damage to repair.
         if (landedComparison == 0)
-            return new(ModuleUpdateAction.SkipUpToDate,
-                $"version {bundleVersion} is already landed");
+            return landedBytesPresent(landed!)
+                ? new(ModuleUpdateAction.SkipUpToDate, $"version {bundleVersion} is already landed")
+                : new(ModuleUpdateAction.Land,
+                    $"version {bundleVersion} is recorded as landed but its assembly is ABSENT — "
+                    + "the landing never completed or its bytes were lost; re-landing (no restart "
+                    + "would have fixed it, and nothing else would ever have looked again)");
 
         // Never roll BACK unattended: a registry serving an older version than what is landed is a
         // deliberate operator situation (a pinned rollback, a lagging registry), and silently
