@@ -13,10 +13,14 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// "Stop synchronization" / "Resume synchronization" toggle — flips a node's
+/// The BASE TYPE for the "Stop synchronization" / "Resume synchronization" toggle: the area name
+/// and the menu descriptor the platform assembles the node menu from. The VIEW lives in
+/// <c>StopSyncViews</c> in the MeshWeaver.Graph.Views module.
+///
+/// <para>"Stop synchronization" / "Resume synchronization" toggle — flips a node's
 /// <see cref="MeshNode.SyncBehavior"/> so the static-repo import leaves it (and its subtree)
 /// alone. This is how a user CLAIMS an imported node: once stopped, the next import won't
-/// overwrite their edits. See <c>Doc/Architecture/StaticRepoImport.md</c>.
+/// overwrite their edits. See <c>Doc/Architecture/StaticRepoImport.md</c>.</para>
 /// </summary>
 public static class StopSyncLayoutArea
 {
@@ -43,50 +47,4 @@ public static class StopSyncLayoutArea
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, StopSyncArea))
             { LabelKey = excluded ? "menu.resumeSync" : "menu.stopSync" };
     }
-
-    /// <summary>
-    /// Toggles the own node's <see cref="MeshNode.SyncBehavior"/>
-    /// (<see cref="SyncBehavior.Include"/> ⇄ <see cref="SyncBehavior.ExcludeThisAndChildren"/>)
-    /// and renders a confirmation. The menu re-projects off the live node stream, so the label
-    /// flips once the write lands.
-    /// </summary>
-    [Browsable(false)]
-    public static IObservable<UiControl?> StopSync(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-        var backHref = MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.OverviewArea);
-        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger(typeof(StopSyncLayoutArea));
-
-        host.Hub.GetWorkspace().GetMeshNodeStream()
-            .Update(n => n with
-            {
-                SyncBehavior = n.SyncBehavior == SyncBehavior.Include
-                    ? SyncBehavior.ExcludeThisAndChildren
-                    : SyncBehavior.Include
-            })
-            .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "StopSync failed for {Path}", hubPath));
-
-        return Observable.Return<UiControl?>(BuildSimpleMessage(
-            "Synchronization toggled",
-            $"Toggled static-repo synchronization for <code>{System.Net.WebUtility.HtmlEncode(hubPath)}</code>. "
-            + "When excluded, the next import leaves this node (and its children) untouched.",
-            backHref));
-    }
-
-    private static UiControl BuildSimpleMessage(string title, string messageHtml, string backHref, string? locale = null)
-        => Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("padding: 24px;")
-            .WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(16)
-                .WithStyle("align-items: center; margin-bottom: 16px;")
-                .WithView(Controls.Button(LocalizationCatalog.Get("common.back", locale))
-                    .WithAppearance(Appearance.Lightweight)
-                    .WithIconStart(FluentIcons.ArrowLeft())
-                    .WithNavigateToHref(backHref))
-                .WithView(Controls.H2(title).WithStyle("margin: 0;")))
-            .WithView(Controls.Html(
-                $"<p style=\"color: var(--neutral-foreground-hint);\">{messageHtml}</p>"));
 }

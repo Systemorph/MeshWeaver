@@ -35,7 +35,7 @@ public static class AccessAssignmentNodeType
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
-            .AddAccessAssignmentViews()
+            .ApplyNodeHubContributions(NodeType)
             .AddMeshDataSource(source => source
                 .WithContentType<AccessAssignment>())
     };

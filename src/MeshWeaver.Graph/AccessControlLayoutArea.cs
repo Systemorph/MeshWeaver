@@ -25,62 +25,16 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class AccessControlLayoutArea
 {
+
     /// <summary>
-    /// Entry point for the Access Control layout area.
+    /// Deserializes an <see cref="AccessAssignment"/> from a node's content, tolerating the
+    /// untyped-JSON shape a cross-hub read produces. Public because the view that consumes it
+    /// ships in the MeshWeaver.Graph.Views MODULE while this content helper stays platform-side —
+    /// the deserialization is contract, the rendering is not.
     /// </summary>
-    public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext _)
-    {
-        var nodePath = host.Hub.Address.ToString();
-        var rlsEnabled = host.Hub.Configuration.Get<EffectivePermissionsDelegate>() != null;
-
-        if (!rlsEnabled)
-        {
-            return Observable.Return<UiControl?>(Controls.Stack
-                .WithStyle("padding: 24px;")
-                .WithView(Controls.Markdown(
-                    "> **Row-Level Security is not enabled.** Add `.AddRowLevelSecurity()` " +
-                    "to your mesh configuration to manage access here.")));
-        }
-
-        // Admin check — reactive Delete-permission probe (the manage-access gate). Sourcing
-        // from AccessService.Context.Roles is unreliable on the per-node hub (CircuitContext
-        // lives on a different AccessService instance), so probe effective permissions.
-        var isAdminStream = host.Hub.CheckPermission(nodePath, Permission.Delete);
-
-        // The node stream supplies only the section header name. If the reducer isn't registered
-        // (minimal hub configs) fall through to a name derived from the path.
-        IObservable<ChangeItem<MeshNode>>? nodeStream = null;
-        try
-        {
-            nodeStream = host.Workspace.GetStream(new MeshNodeReference());
-        }
-        catch (Exception)
-        {
-            // MeshNodeReference reducer not available on this hub — render without node.
-        }
-
-        if (nodeStream is null)
-            return isAdminStream.DistinctUntilChanged()
-                .Select(isAdmin => (UiControl?)BuildPage(host, nodeName: null, nodePath, isAdmin));
-
-        // The page's ONLY dependency on the node is its display name (the section header); its only
-        // dependency on the permission probe is the admin bool. Project each input down to exactly
-        // that and DistinctUntilChanged, so an unrelated node version bump or a repeated identical
-        // isAdmin emission does NOT recompose the whole tab. A recompose re-instantiates the
-        // per-row AccessAssignment thumbnails, which re-subscribes every subject stream — the #434
-        // flicker + repeated-toast loop. This keeps the binding LIVE (no .Take(1)); it only
-        // suppresses no-op re-renders on unrelated upstream emissions.
-        var nodeNameStream = nodeStream
-            .Select(change => change?.Value?.Name)
-            .DistinctUntilChanged();
-
-        return nodeNameStream.CombineLatest(isAdminStream.DistinctUntilChanged(), (nodeName, isAdmin)
-                => (UiControl?)BuildPage(host, nodeName, nodePath, isAdmin))
-            .Catch<UiControl?, Exception>(_ => isAdminStream.DistinctUntilChanged().Select(isAdmin =>
-                (UiControl?)BuildPage(host, nodeName: null, nodePath, isAdmin)));
-    }
-
-    internal static AccessAssignment? DeserializeAssignment(MeshNode node)
+    /// <param name="node">The assignment node.</param>
+    /// <returns>The assignment, or null when the content is absent or unreadable.</returns>
+    public static AccessAssignment? DeserializeAssignment(MeshNode node)
     {
         if (node.Content is AccessAssignment aa)
             return aa;
@@ -89,254 +43,10 @@ public static class AccessControlLayoutArea
         return null;
     }
 
-    private static UiControl BuildPage(LayoutAreaHost host, string? nodeName, string nodePath, bool isAdmin)
-    {
-        var stack = Controls.Stack.WithStyle("padding: 24px; gap: 20px; width: 100%;");
-
-        var currentName = nodeName ?? nodePath.Split('/').LastOrDefault() ?? nodePath;
-        if (string.IsNullOrEmpty(currentName)) currentName = "Root";
-
-        stack = stack.WithView(Controls.H2($"Access Control — {currentName}"));
-
-        // Parent section — the direct assignments at the parent scope. These rows render read-only
-        // unless the caller also manages the parent (their per-row effective permissions decide).
-        var parentPath = GetParentPath(nodePath);
-        if (parentPath != null)
-        {
-            var parentName = string.IsNullOrEmpty(parentPath)
-                ? "Root"
-                : parentPath.Split('/').LastOrDefault() ?? parentPath;
-            stack = stack
-                .WithView(Controls.H3($"Parent — {parentName}").WithStyle("margin: 8px 0 0 0;"))
-                .WithView(AccessList(parentPath));
-        }
-
-        // Current scope — the editable section.
-        stack = stack
-            .WithView(Controls.H3(currentName).WithStyle("margin: 8px 0 0 0;"))
-            .WithView(AccessList(nodePath));
-
-        // 🚨 A grant MUST refer to a partition. `nodePath` is the NAVIGATION CONTEXT
-        // (host.Hub.Address) — and in a ROOT context it is EMPTY, which AccessNamespace turns into
-        // a root-level "_Access" folder and both creation sites turn into MainNode = "". That is
-        // the DATA-SUPERUSER shape: All on every partition, every space and every user's private
-        // home, by scope inheritance — creatable from a button, and indistinguishable in the UI
-        // from a normal grant. So the add/advanced surfaces are not offered at root at all; the
-        // write boundary refuses the shape too (AccessAssignmentGuard), but the UI must not invite
-        // it in the first place.
-        if (isAdmin && AccessAssignmentGuard.CanGrantAt(nodePath))
-            stack = stack
-                .WithView(BuildAddRow(host, nodePath))
-                .WithView(BuildAdvancedSection(host, nodePath));
-        else if (isAdmin)
-            stack = stack.WithView(Controls.Markdown(
-                "_Access is granted **on a partition**. This is the root context, which has no "
-                + "partition to scope a grant to — navigate to the space, plugin or user partition "
-                + "you want to grant on. (A root-scoped grant would be a platform-wide superuser.)_"));
-
-        return stack;
-    }
-
-    /// <summary>The parent scope of a node path, or null when the node is the root.</summary>
-    private static string? GetParentPath(string nodePath)
-    {
-        if (string.IsNullOrEmpty(nodePath)) return null;       // root: no parent
-        var idx = nodePath.LastIndexOf('/');
-        return idx < 0 ? string.Empty : nodePath[..idx];        // top-level node → parent is root ("")
-    }
-
-    /// <summary>The <c>_Access</c> satellite namespace for a scope path.</summary>
-    private static string AccessNamespace(string path)
-        => string.IsNullOrEmpty(path) ? "_Access" : $"{path}/_Access";
-
-    /// <summary>
-    /// A live, one-per-row list of the AccessAssignment nodes at <paramref name="path"/>, rendered via
-    /// the AccessAssignment Thumbnail area (person/group + node-bound role editors).
-    /// </summary>
-    private static UiControl AccessList(string path)
-        => Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{AccessNamespace(path)} nodeType:AccessAssignment")
-            .WithShowSearchBox(false)
-            .WithReactiveMode(true)
-            .WithItemArea(MeshNodeLayoutAreas.ThumbnailArea)
-            .WithMaxColumns(1)
-            .WithDisableNavigation()
-            .WithStyle("width: 100%;");
-
-    /// <summary>
-    /// The inline add row: a user/group picker (already-provisioned subjects) OR an email field (invite
-    /// someone who hasn't signed up yet) + a role select (default Editor) + an Add button. A picked subject
-    /// creates the AccessAssignment node directly; an email grants the role now when an account exists, or
-    /// invites + schedules a deferred grant otherwise. Either way the assignment appears in the current
-    /// section automatically (reactive MeshSearch).
-    /// </summary>
-    private static UiControl BuildAddRow(LayoutAreaHost host, string nodePath)
-    {
-        var formId = $"add_access_{Guid.NewGuid().AsString()}";
-        host.UpdateData(formId, new Dictionary<string, object?>
-        {
-            ["accessObject"] = "",
-            ["email"] = "",
-            ["role"] = Role.Editor.Id
-        });
-        var dataContext = LayoutAreaReference.GetDataPointer(formId);
-
-        var userPicker = new MeshNodePickerControl(new JsonPointerReference("accessObject"))
-        {
-            Queries = AccessSubjectQueries.ForScope(nodePath),
-            FilterInMemory = true,
-            Label = "Add user or group",
-            DataContext = dataContext
-        }.WithStyle("flex: 1; min-width: 220px;");
-
-        var emailField = (new TextFieldControl(new JsonPointerReference("email"))
-            { Label = "…or invite by email", DataContext = dataContext })
-            .WithStyle("flex: 1; min-width: 220px;");
-
-        var roleSelect = (new SelectControl(new JsonPointerReference("role"), Array.Empty<object>())
-                .WithOptions(new[] { Role.Admin.Id, Role.Editor.Id, Role.Viewer.Id, Role.Commenter.Id }))
-            with { Label = "Role", DataContext = dataContext };
-
-        var addButton = Controls.Button(host.Localize("ui.plusAdd"))
-            .WithAppearance(Appearance.Accent)
-            .WithClickAction((Action<UiActionContext>)(ctx =>
-            {
-                ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
-                    .Take(1)
-                    .Subscribe(form =>
-                    {
-                        var subject = form.GetValueOrDefault("accessObject")?.ToString()?.Trim();
-                        var email = form.GetValueOrDefault("email")?.ToString()?.Trim();
-                        var role = form.GetValueOrDefault("role")?.ToString()?.Trim();
-                        if (string.IsNullOrEmpty(role)) role = Role.Editor.Id;
-
-                        // A picked, already-provisioned subject wins; otherwise fall back to the email
-                        // path (grant now if the account exists, else invite + deferred grant on sign-up).
-                        if (!string.IsNullOrEmpty(subject))
-                        {
-                            CreateAssignment(ctx, nodePath, subject, role);
-                            return;
-                        }
-                        if (!string.IsNullOrEmpty(email))
-                        {
-                            if (!email.Contains('@'))
-                            {
-                                ShowValidationError(ctx, "Please enter a valid **email address**.");
-                                return;
-                            }
-                            GrantByEmail(ctx, nodePath, email, role);
-                            return;
-                        }
-                        ShowValidationError(ctx,
-                            "Select a **user or group**, or enter an **email address** to invite someone "
-                            + "who hasn't signed up yet.");
-                    });
-            }));
-
-        return Controls.Stack
-            .WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("align-items: flex-end; gap: 12px; margin-top: 8px; flex-wrap: wrap;")
-                .WithView(userPicker)
-                .WithView(emailField)
-                .WithView(roleSelect)
-                .WithView(addButton))
-            .WithView(Controls.Markdown(
-                    "Pick an existing user or group — or enter an email to grant access to someone who "
-                    + "hasn't signed up yet: they're invited, and the grant lands automatically the moment "
-                    + "they sign in.")
-                .WithStyle("font-size: 12px; opacity: .75; margin-top: 4px;"));
-    }
-
-    /// <summary>
-    /// Grants <paramref name="role"/> at <c>{nodePath}/_Access</c> to <paramref name="email"/> — immediately
-    /// when an account already exists, otherwise via an Invitation + a durable deferred EventSubscription
-    /// that lands the SAME role at the SAME node path the moment that person signs up. Reuses
-    /// <see cref="SpaceInviteService"/>'s grant-or-schedule primitive with pinning OFF (a granular grant,
-    /// not a Space invite). The immediate grant runs under the caller's (admin's) identity; the Admin-partition
-    /// invitation + subscription writes run as system inside the service.
-    /// </summary>
-    private static void GrantByEmail(UiActionContext ctx, string nodePath, string email, string role)
-    {
-        var sp = ctx.Host.Hub.ServiceProvider;
-        var accessService = sp.GetRequiredService<AccessService>();
-        var svc = new SpaceInviteService(ctx.Host.Hub, sp.GetRequiredService<IMeshService>(), accessService);
-        var invitedBy = accessService.Context?.ObjectId;
-
-        svc.GrantOrScheduleAccess(nodePath, email, role, pin: false, invitedBy,
-                note: $"Invited to {(string.IsNullOrEmpty(nodePath) ? "the root scope" : nodePath)}")
-            .Subscribe(
-                outcome => ShowInfoDialog(ctx,
-                    outcome == SpaceInviteOutcome.Granted
-                        ? $"**{email}** already has an account — granted **{role}** here."
-                        : $"Invited **{email}** as **{role}**. Access is granted automatically when they sign up.",
-                    "Access"),
-                ex => ShowInfoDialog(ctx, $"Failed to grant access: {ex.Message}", "Error"));
-    }
-
-    private static void ShowInfoDialog(UiActionContext ctx, string markdown, string title) =>
-        ctx.Host.UpdateArea(DialogControl.DialogArea,
-            Controls.Dialog(Controls.Markdown(markdown), title).WithSize("S").WithClosable(true));
-
-    /// <summary>
-    /// Creates an AccessAssignment node for <paramref name="subject"/> with a single
-    /// <paramref name="role"/> (the bare role id — the value the permission evaluator resolves).
-    /// </summary>
-    private static void CreateAssignment(UiActionContext ctx, string nodePath, string subject, string role)
-    {
-        var subjectName = subject.Split('/').Last();
-        var newNode = new MeshNode($"{subjectName}_Access", AccessNamespace(nodePath))
-        {
-            NodeType = Configuration.AccessAssignmentNodeType.NodeType,
-            Name = $"{subjectName} Access",
-            MainNode = nodePath,
-            Content = new AccessAssignment
-            {
-                AccessObject = subject,
-                DisplayName = subjectName,
-                Roles = [new RoleAssignment { Role = role, Denied = false }]
-            }
-        };
-
-        var meshService = ctx.Host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(newNode).Subscribe(
-            _ => { },
-            ex =>
-            {
-                var dialog = Controls.Dialog(
-                    Controls.Markdown($"Failed to add: {ex.Message}"), "Error")
-                    .WithSize("S").WithClosable(true);
-                ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-            });
-    }
-
-    /// <summary>
-    /// The collapsed-by-design Advanced section: the partition policy that caps the permissions
-    /// available to everyone at this scope and below.
-    /// </summary>
-    private static UiControl BuildAdvancedSection(LayoutAreaHost host, string nodePath)
-    {
-        var workspace = host.Hub.GetWorkspace();
-        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var policyPath = string.IsNullOrEmpty(nodePath) ? "_Policy" : $"{nodePath}/_Policy";
-
-        return Controls.Stack
-            .WithStyle("gap: 8px; margin-top: 24px; padding-top: 16px; " +
-                       "border-top: 1px solid var(--neutral-stroke-divider-rest);")
-            .WithView(Controls.H3(host.Localize("ui.advanced")).WithStyle("margin: 0;"))
-            .WithView(Controls.Markdown(
-                "Partition policy caps the permissions available to **everyone** at this scope and below."))
-            .WithView(Controls.Button(host.Localize("ui.setPartitionPolicy"))
-                .WithAppearance(Appearance.Neutral)
-                .WithStyle("align-self: flex-start;")
-                .WithClickAction((Action<UiActionContext>)(ctx =>
-                    ShowSetPolicyDialog(ctx, nodePath, policyPath, policyExists: false, workspace, meshService, existing: null))));
-    }
-
     /// <summary>
     /// Deletes an AccessAssignment node.
     /// </summary>
-    internal static void DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
+    public static void DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
     {
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         nodeFactory.DeleteNode(nodePath).Subscribe(
@@ -355,7 +65,7 @@ public static class AccessControlLayoutArea
     /// Shows a dialog to add a new access assignment.
     /// Captures both Subject (user/group) AND Role in one dialog.
     /// </summary>
-    internal static void ShowAddAssignmentDialog(UiActionContext ctx, string nodePath)
+    public static void ShowAddAssignmentDialog(UiActionContext ctx, string nodePath)
     {
         var formId = $"add_assignment_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?>
@@ -465,126 +175,16 @@ public static class AccessControlLayoutArea
         ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
     }
 
-    private static void ShowValidationError(UiActionContext ctx, string message)
+    /// <summary>
+    /// Shows a validation error dialog. Public because BOTH halves call it: the add-assignment
+    /// dialog kept here, and the moved views in the MeshWeaver.Graph.Views module.
+    /// </summary>
+    public static void ShowValidationError(UiActionContext ctx, string message)
     {
         var errorDialog = Controls.Dialog(
             Controls.Markdown(message),
             "Validation Error"
         ).WithSize("S").WithClosable(true);
         ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-    }
-
-    private static void ShowSetPolicyDialog(
-        UiActionContext ctx, string nodePath, string policyPath, bool policyExists,
-        IWorkspace workspace, IMeshService meshService, PartitionAccessPolicy? existing)
-    {
-        var formId = $"set_policy_{Guid.NewGuid().AsString()}";
-        ctx.Host.UpdateData(formId, new Dictionary<string, object?>
-        {
-            ["allowRead"] = existing?.Read != false,
-            ["allowCreate"] = existing?.Create != false,
-            ["allowUpdate"] = existing?.Update != false,
-            ["allowDelete"] = existing?.Delete != false,
-            ["allowComment"] = existing?.Comment != false,
-            ["breaksInheritance"] = existing?.BreaksInheritance ?? false
-        });
-
-        var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
-            .WithView(Controls.Markdown(ctx.Host.Localize("ui.partitionPolicyHint")))
-            .WithView(new SwitchControl(new JsonPointerReference("allowRead"))
-            {
-                Label = "Read",
-                DataContext = LayoutAreaReference.GetDataPointer(formId)
-            })
-            .WithView(new SwitchControl(new JsonPointerReference("allowCreate"))
-            {
-                Label = "Create",
-                DataContext = LayoutAreaReference.GetDataPointer(formId)
-            })
-            .WithView(new SwitchControl(new JsonPointerReference("allowUpdate"))
-            {
-                Label = "Update",
-                DataContext = LayoutAreaReference.GetDataPointer(formId)
-            })
-            .WithView(new SwitchControl(new JsonPointerReference("allowDelete"))
-            {
-                Label = "Delete",
-                DataContext = LayoutAreaReference.GetDataPointer(formId)
-            })
-            .WithView(new SwitchControl(new JsonPointerReference("allowComment"))
-            {
-                Label = "Comment",
-                DataContext = LayoutAreaReference.GetDataPointer(formId)
-            })
-            .WithView(new SwitchControl(new JsonPointerReference("breaksInheritance"))
-            {
-                Label = "Break inheritance (discard roles from parent scopes)",
-                DataContext = LayoutAreaReference.GetDataPointer(formId)
-            });
-
-        var actions = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px;")
-            .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
-                .WithAppearance(Appearance.Neutral)
-                .WithClickAction((Action<UiActionContext>)(cancelCtx =>
-                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!))))
-            .WithView(Controls.Button(ctx.Host.Localize("common.save"))
-                .WithAppearance(Appearance.Accent)
-                .WithClickAction((Action<UiActionContext>)(saveCtx =>
-                {
-                    // Read form values via Subscribe (sync emission of the BehaviorSubject).
-                    // Pure reactive — no await, no FirstAsync, no Task bridging.
-                    saveCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
-                        .Take(1)
-                        .Subscribe(formValues =>
-                        {
-                            var policy = new PartitionAccessPolicy
-                            {
-                                Read = formValues.GetValueOrDefault("allowRead") is true ? null : false,
-                                Create = formValues.GetValueOrDefault("allowCreate") is true ? null : false,
-                                Update = formValues.GetValueOrDefault("allowUpdate") is true ? null : false,
-                                Delete = formValues.GetValueOrDefault("allowDelete") is true ? null : false,
-                                Comment = formValues.GetValueOrDefault("allowComment") is true ? null : false,
-                                BreaksInheritance = formValues.GetValueOrDefault("breaksInheritance") is true
-                            };
-
-                            // Caller (the UI) knows whether this is a create or an
-                            // update — branch directly instead of asking SecurityService.
-                            if (policyExists)
-                            {
-                                // In-place update through the canonical per-path mesh-node
-                                // handle. (Cold observable: must Subscribe.)
-                                workspace.GetMeshNodeStream(policyPath)
-                                    .Update(current => current with { Content = policy })
-                                    .Subscribe(_ => { }, _ => { /* surface via standard data-layer error path */ });
-                            }
-                            else
-                            {
-                                // First-time create — only IMeshService.CreateNode
-                                // brings the per-node hub into existence.
-                                // Satellite(): MainNode = the scope this policy caps, not the
-                                // policy's own path (#2383). CreateNode normalises this too, but a
-                                // writer that states its own parentage is what makes the durable row
-                                // right on EVERY backend, including the ones that bypass the handler.
-                                var policyNode = MeshNode.Satellite("_Policy", nodePath ?? "") with
-                                {
-                                    NodeType = "PartitionAccessPolicy",
-                                    Name = "Access Policy",
-                                    Content = policy,
-                                };
-                                meshService.CreateNode(policyNode).Subscribe(
-                                    _ => { },
-                                    _ => { /* surface via standard data-layer error path */ });
-                            }
-                            saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                        });
-                })));
-
-        var dialog = Controls.Dialog(formContent, "Partition Access Policy")
-            .WithSize("M")
-            .WithActions(actions);
-
-        ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
     }
 }

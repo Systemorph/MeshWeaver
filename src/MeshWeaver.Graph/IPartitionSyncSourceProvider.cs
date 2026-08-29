@@ -3,7 +3,7 @@ using MeshWeaver.Mesh;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// DI seam between the partition administration GUI (<see cref="PartitionSyncAdminLayoutArea"/>,
+/// DI seam between the partition administration GUI (<c>PartitionSyncAdminLayoutArea</c> (MeshWeaver.Graph.Views module),
 /// in this assembly) and a sync-source backend living in a HIGHER layer (e.g.
 /// <c>MeshWeaver.GitSync</c>'s per-space GitHub sources — GitSync references Graph, so Graph
 /// cannot call it directly). Each implementation exposes one KIND of sync source as config

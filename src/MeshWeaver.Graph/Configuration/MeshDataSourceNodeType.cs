@@ -40,7 +40,7 @@ public static class MeshDataSourceNodeType
         IsSatelliteType = false,
         ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
-            .AddMeshDataSourceViews()
+            .ApplyNodeHubContributions(NodeType)
             .AddMeshDataSource(source => source.WithContentType<MeshDataSourceConfiguration>())
     };
 }

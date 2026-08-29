@@ -34,7 +34,7 @@ public static class GroupMembershipNodeType
         Icon = "/static/NodeTypeIcons/person.svg",
         ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
-            .AddGroupMembershipViews()
+            .ApplyNodeHubContributions(NodeType)
             .AddMeshDataSource(source => source
                 .WithContentType<GroupMembership>())
     };

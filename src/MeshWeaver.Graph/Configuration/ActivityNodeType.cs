@@ -57,7 +57,7 @@ public static class ActivityNodeType
         // Replaces the legacy `kernel/*` standalone hub addressing — replies route
         // through the standard MeshNode path instead of three special routing rules.
         HubConfiguration = config => config
-            .AddActivityViews()
+            .ApplyNodeHubContributions(NodeType)
             .AddMeshDataSource(source => source
                 .WithContentType<ActivityLog>())
             .AddKernelSubHubHandlers()
