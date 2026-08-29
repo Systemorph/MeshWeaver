@@ -40,13 +40,38 @@ public static class FrameworkVersionResolver
         if (!string.Equals(requested, Latest, StringComparison.OrdinalIgnoreCase))
             return requested;
 
-        var candidates = sources
-            .SelectMany(source => VersionsFrom(source, http))
-            .ToList();
+        // 🚨 The floor is the newest version at which EVERY referenced package is published —
+        // not the newest MeshWeaver.Graph. Every emitted project references all of
+        // CompilationEnvironment.PackageIds, so a version where one of them has no build is not a
+        // floor any plugin can honestly claim: NuGet resolves the missing one to whatever else it
+        // can find and the restore dies with an NU1605 downgrade before compiling anything.
+        //
+        // This is not hypothetical. When MeshWeaver.AI's source moved out of the platform repo,
+        // the platform stopped publishing it. The framework released 3.0.0-rc8, MeshWeaver.AI
+        // stopped at 3.0.0-rc7, and 33 of 33 code-bearing packages failed to pack.
+        //
+        // Intersecting rather than pinning each package separately is deliberate: a mixed floor
+        // resolves rc7-era transitives alongside rc8 ones, and a type that moved between
+        // assemblies then exists in both — CS0433, reported against innocent plugin source.
+        var candidates = CompilationEnvironment.PackageIds
+            .Select(package => sources
+                .SelectMany(source => VersionsFrom(package, source, http))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase))
+            // A package no source can answer for constrains nothing — the alternative is that one
+            // unreachable feed empties the intersection and resolves nothing at all.
+            .Where(versions => versions.Count > 0)
+            .Aggregate(
+                (IEnumerable<string>?)null,
+                (intersection, versions) => intersection is null
+                    ? versions
+                    : intersection.Intersect(versions, StringComparer.OrdinalIgnoreCase))
+            ?.ToList()
+            ?? [];
 
         if (candidates.Count == 0)
             throw new InvalidOperationException(
-                $"--framework-version {Latest} could not find any {FrameworkPackage} version in: "
+                $"--framework-version {Latest} could not find a version published for ALL of "
+                + string.Join(", ", CompilationEnvironment.PackageIds) + " in: "
                 + string.Join(", ", sources)
                 + ". Resolving nothing must not silently fall back to a hard-coded version — that "
                 + "is how every plugin ends up compiled against a framework nobody runs.");
@@ -54,16 +79,17 @@ public static class FrameworkVersionResolver
         return candidates.OrderBy(v => v, NuGetVersionComparer.Instance).Last();
     }
 
-    private static IEnumerable<string> VersionsFrom(string source, HttpClient http)
+
+    private static IEnumerable<string> VersionsFrom(string packageId, string source, HttpClient http)
     {
         if (Directory.Exists(source))
             return Directory
-                .EnumerateFiles(source, $"{FrameworkPackage}.*.nupkg")
-                .Select(f => Path.GetFileNameWithoutExtension(f)[(FrameworkPackage.Length + 1)..]);
+                .EnumerateFiles(source, $"{packageId}.*.nupkg")
+                .Select(f => Path.GetFileNameWithoutExtension(f)[(packageId.Length + 1)..]);
 
         try
         {
-            return FeedVersions(source, http);
+            return FeedVersions(packageId, source, http);
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
         {
@@ -80,7 +106,7 @@ public static class FrameworkVersionResolver
     /// container lives on a different host per feed (nuget.org serves it from
     /// <c>v3-flatcontainer</c>, GitHub Packages from its own).
     /// </summary>
-    private static IEnumerable<string> FeedVersions(string serviceIndexUrl, HttpClient http)
+    private static IEnumerable<string> FeedVersions(string packageId, string serviceIndexUrl, HttpClient http)
     {
         using var indexResponse = http.Send(new HttpRequestMessage(HttpMethod.Get, serviceIndexUrl));
         indexResponse.EnsureSuccessStatusCode();
@@ -98,7 +124,7 @@ public static class FrameworkVersionResolver
             return [];
 
         var versionsUrl = baseAddress.TrimEnd('/')
-                          + "/" + FrameworkPackage.ToLowerInvariant() + "/index.json";
+                          + "/" + packageId.ToLowerInvariant() + "/index.json";
         using var versionsResponse = http.Send(new HttpRequestMessage(HttpMethod.Get, versionsUrl));
         if (!versionsResponse.IsSuccessStatusCode)
             return [];
