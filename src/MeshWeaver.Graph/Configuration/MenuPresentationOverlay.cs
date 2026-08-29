@@ -23,6 +23,39 @@ namespace MeshWeaver.Graph.Configuration;
 internal static class MenuPresentationOverlay
 {
     /// <summary>
+    /// The projection a catalog read needs. <c>content</c> is named deliberately: a <c>select:</c>
+    /// that omits it yields a node whose <c>Content</c> is silently null, which would read as
+    /// "no catalog" for a catalog that exists.
+    /// </summary>
+    internal const string CatalogProjection = "select:path,id,namespace,name,nodeType,content";
+
+    /// <summary>
+    /// The synced-query id for <paramref name="context"/>'s catalog — <c>{type}|{path}</c>, the same
+    /// convention <c>UpdatePolicyNodeType</c> and <c>NotificationSettingsNodeType</c> register under,
+    /// so a future seeding path can share this registration instead of opening a second synced query
+    /// for the same node. Stable per context and never composed per call, so the process-wide query
+    /// cache holds ONE upstream per menu context for the life of the process — see
+    /// <see cref="CatalogQuery"/> for why that matters here.
+    /// </summary>
+    internal static string CatalogQueryId(string context)
+        => $"{nameof(MenuPresentation)}|{MenuPresentation.PathFor(context)}";
+
+    /// <summary>
+    /// The catalog read for <paramref name="context"/>: an EXACT, partition-anchored read of the one
+    /// node at <see cref="MenuPresentation.PathFor"/>.
+    ///
+    /// <para>Anchored by construction — <c>path:Admin/Menu/{context}</c> carries a concrete first
+    /// segment, so every backend routes it to the <c>admin</c> partition alone rather than fanning
+    /// out. (A <c>namespace:Admin</c>-shaped read could not: <c>admin</c> is deliberately excluded
+    /// from cross-schema search, so a path is the only way in.) It is deliberately NOT filtered by
+    /// <c>nodeType:</c> — <c>MenuPresentation</c> is a registered CONTENT type, not a NodeType, so
+    /// the node's own <c>nodeType</c> is whatever its author chose; the path is already unique and
+    /// <c>ContentAs&lt;MenuPresentation&gt;</c> is what decides whether it is a catalog.</para>
+    /// </summary>
+    internal static string CatalogQuery(string context)
+        => $"path:{MenuPresentation.PathFor(context)} {CatalogProjection}";
+
+    /// <summary>
     /// The catalog for <paramref name="context"/> as a live stream, or a stream of <c>null</c> when
     /// there is none. Fail-safe in every direction: a missing node, an unreadable partition, a
     /// deserialization fault or a hub without a mesh data source all degrade to "no catalog", which
@@ -42,11 +75,44 @@ internal static class MenuPresentationOverlay
         var path = MenuPresentation.PathFor(context);
         try
         {
-            return workspace.GetMeshNodeStream(path)
+            // 🚨 A synced QUERY (empty-on-absent), never a GetMeshNodeStream point-read — and the
+            // reason is the sentence three paragraphs up: there is deliberately no seeded catalog,
+            // so ABSENT IS THE NORMAL STATE for every context on almost every mesh. A point-read of
+            // a node that does not exist is not free and not quiet: it resolves through the router,
+            // finds nothing, and answers NotFound — one `[ROUTE] NotFound: No node found at
+            // 'Admin/Menu/{context}'` warning plus a DeliveryFailure NACK per probe, damped only by
+            // the stream cache's negative-cache window, which expires and re-probes forever.
+            //
+            // And the probe rate is not once per circuit. RenderMenus is a GLOBAL predicate
+            // renderer (`WithRenderer(_ => true, …)`), so it runs on EVERY area render, and it
+            // installs this stream with ReplaceDisposable — dispose the old subscription, open a
+            // new one — once per menu CONTEXT per render. Contexts are data-driven
+            // (UiContributionCatalog), so installing a plugin that declares a TopBar menu adds one
+            // more permanently-missing routed lookup to every area render on the mesh. Issue #2640
+            // names these misses directly.
+            //
+            // This is not a new rule, it is an existing one applied where it was missed.
+            // PlatformUpdateStatus.Observe states it outright: "Absence is detected with the
+            // storm-safe existence GetQuery (empty-on-absent) — NEVER a point GetMeshNodeStream
+            // probe of a maybe-absent path, which NotFound-resubscribe-storms". That surface reads
+            // its maybe-absent node at most a few times a day; this one read its maybe-absent node
+            // once per context per area render.
+            //
+            // A query answers "no rows" for an absent node — no NotFound, no NACK, no negative
+            // cache — and `GetQuery` caches its upstream process-wide under a stable id with
+            // Replay(1)+AutoConnect(1), so the per-render re-subscribe lands on a warm replay
+            // instead of re-probing. Liveness is unchanged, which is the point: it is still a
+            // synced query fed by the change feed, so an admin creating Admin/Menu/Node updates
+            // every open menu with no recycle — the "seconds, no build, no rollout" contract in
+            // Doc/Architecture/MenuAsData. Same substitution, and the same rationale, as
+            // NotificationService.ReadSettings and NotificationSettingsNodeType.EnsureExists.
+            return workspace.GetQuery(CatalogQueryId(context), CatalogQuery(context))
                 // ContentAs is the bad-data-tolerant read: a stale/unknown $type degrades to a raw
                 // JsonElement and is recovered here, and an unrecoverable one logs LOUD and returns
                 // null — so a corrupt catalog names itself in the log and the menu keeps rendering.
-                .Select(node => node.ContentAs<MenuPresentation>(options, logger))
+                .Select(nodes => nodes
+                    .Select(node => node.ContentAs<MenuPresentation>(options, logger))
+                    .FirstOrDefault(catalog => catalog is not null))
                 .Catch<MenuPresentation?, Exception>(ex =>
                 {
                     logger?.LogDebug(ex,
@@ -58,8 +124,9 @@ internal static class MenuPresentationOverlay
         }
         catch (Exception ex)
         {
-            // GetMeshNodeStream throws synchronously on hubs with no MeshDataSource (scratch hubs,
-            // startup, mid-dispose) — same guard the default provider uses.
+            // GetQuery resolves IMeshNodeStreamCache eagerly and throws synchronously on hubs that
+            // have none (scratch hubs, startup, mid-dispose) — the same guard the point-read needed
+            // for the same class of caller, and the same one the default provider uses.
             logger?.LogDebug(ex, "Menu catalog unavailable for context '{Context}'", context);
             return Observable.Return<MenuPresentation?>(null);
         }
