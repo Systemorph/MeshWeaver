@@ -24,6 +24,22 @@ name: Notify dependent repos
 # error here — the one shape this whole file exists to prevent.
 
 on:
+  # 🚨 RUNNABLE BY HAND, AND DRY BY DEFAULT — because "is the App installed on every plugin repo?"
+  # must be answerable NOW, not at the next release. The whole reason this lane exists is that its
+  # predecessor reported success while notifying nobody for its entire life; a fan-out you cannot
+  # test until it matters is the same bet with extra steps.
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'List the subscribers WITHOUT dispatching (default: true)'
+        required: false
+        default: true
+        type: boolean
+      version:
+        description: 'Version to announce (dry-run ignores it)'
+        required: false
+        default: '0.0.0-dispatch-check'
+        type: string
   workflow_call:
     inputs:
       version:
@@ -80,7 +96,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           VERSION: ${{ inputs.version }}
-          REASON: ${{ inputs.reason }}
+          REASON: ${{ inputs.reason || 'manual-check' }}
+          DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -euo pipefail
 
@@ -97,6 +114,14 @@ jobs:
 
           echo "Subscribers ($(echo "$repos" | wc -l | tr -d ' ')):"
           echo "$repos" | sed 's/^/  /'
+
+          # The dry run answers the only question that matters before a real release: does this
+          # App reach every repo that must rebuild? It dispatches nothing, so it is safe to run at
+          # any time and proves the wiring without waiting for a release to test it.
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "dry-run: no dispatches sent. The list above is who WOULD be notified."
+            exit 0
+          fi
 
           # 🚨 Every failure is COLLECTED, never fatal on the first one. A wave that stops at the
           # first unreachable repo leaves the rest of the fleet stale for an interval, and the
