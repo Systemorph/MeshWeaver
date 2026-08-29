@@ -167,6 +167,15 @@ on:
       acr-password:
         description: Pull credential for platform-image's registry. Required when platform-image-digest is set.
         required: false
+      content-app-id:
+        description: >-
+          App id of a GitHub App with Contents: Read on content-repository. Required whenever
+          content-repository is set (the caller's GITHUB_TOKEN cannot read another repository);
+          asserted RED before the checkout, never skipped.
+        required: false
+      content-app-private-key:
+        description: Private key (PEM) of that App.
+        required: false
 
 jobs:
   # ─────────────────────── WHICH BUNDLES THIS DIFF CAN REACH ───────────────────────
@@ -187,10 +196,40 @@ jobs:
       # selector is one `index.json` away from treating the framework as a plugin of this repo.
       # gen-manifests.py already carries "meshweaver" in its SKIP set for exactly this reason;
       # keeping the two trees apart is the version that cannot rot.
+      # 🚨 A content checkout from ANOTHER repository needs a token that can read it. The caller's
+      # GITHUB_TOKEN is scoped to the calling repository alone, so `repository:
+      # Systemorph/MeshWeaver.Plugins` (private) answers 404 under it — the platform's first release
+      # wave died on exactly that (main-cd run 33276813173, 2026-08-29). When content-repository is
+      # set, the App credential is ASSERTED red, never fallen back on: a fallback to github.token
+      # would 404 anyway, one step later and blaming the checkout.
+      - name: Resolve the content repository's credential
+        id: content-repo
+        if: inputs.content-repository != ''
+        env:
+          REPO: ${{ inputs.content-repository }}
+          APP_ID: ${{ secrets.content-app-id }}
+          APP_KEY: ${{ secrets.content-app-private-key }}
+        run: |
+          set -euo pipefail
+          [ -n "$APP_ID" ]  || { echo "::error::content-repository is '$REPO' but secrets.content-app-id is empty — the caller's GITHUB_TOKEN cannot read another repository, so the checkout would 404. Pass a GitHub App installed on '$REPO' with Contents: Read."; exit 1; }
+          [ -n "$APP_KEY" ] || { echo "::error::content-repository is '$REPO' but secrets.content-app-private-key is empty — see content-app-id."; exit 1; }
+          echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${REPO#*/}"   >> "$GITHUB_OUTPUT"
+      - name: Mint a read token for the content repository
+        id: content-token
+        if: inputs.content-repository != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.content-app-id }}
+          private-key: ${{ secrets.content-app-private-key }}
+          owner: ${{ steps.content-repo.outputs.owner }}
+          repositories: ${{ steps.content-repo.outputs.name }}
+          permission-contents: read
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
+          token: ${{ steps.content-token.outputs.token || github.token }}
           path: repo
           # 🚨 The diff is taken against the PR base, so the base commits must be present. A
           # shallow clone would make every range unresolvable — which the scope script turns into
@@ -260,10 +299,40 @@ jobs:
       matrix:
         entry: ${{ fromJson(needs.select.outputs.modules) }}
     steps:
+      # 🚨 A content checkout from ANOTHER repository needs a token that can read it. The caller's
+      # GITHUB_TOKEN is scoped to the calling repository alone, so `repository:
+      # Systemorph/MeshWeaver.Plugins` (private) answers 404 under it — the platform's first release
+      # wave died on exactly that (main-cd run 33276813173, 2026-08-29). When content-repository is
+      # set, the App credential is ASSERTED red, never fallen back on: a fallback to github.token
+      # would 404 anyway, one step later and blaming the checkout.
+      - name: Resolve the content repository's credential
+        id: content-repo
+        if: inputs.content-repository != ''
+        env:
+          REPO: ${{ inputs.content-repository }}
+          APP_ID: ${{ secrets.content-app-id }}
+          APP_KEY: ${{ secrets.content-app-private-key }}
+        run: |
+          set -euo pipefail
+          [ -n "$APP_ID" ]  || { echo "::error::content-repository is '$REPO' but secrets.content-app-id is empty — the caller's GITHUB_TOKEN cannot read another repository, so the checkout would 404. Pass a GitHub App installed on '$REPO' with Contents: Read."; exit 1; }
+          [ -n "$APP_KEY" ] || { echo "::error::content-repository is '$REPO' but secrets.content-app-private-key is empty — see content-app-id."; exit 1; }
+          echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${REPO#*/}"   >> "$GITHUB_OUTPUT"
+      - name: Mint a read token for the content repository
+        id: content-token
+        if: inputs.content-repository != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.content-app-id }}
+          private-key: ${{ secrets.content-app-private-key }}
+          owner: ${{ steps.content-repo.outputs.owner }}
+          repositories: ${{ steps.content-repo.outputs.name }}
+          permission-contents: read
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
+          token: ${{ steps.content-token.outputs.token || github.token }}
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
         with:

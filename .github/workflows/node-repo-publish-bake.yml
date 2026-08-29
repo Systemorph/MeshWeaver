@@ -322,6 +322,15 @@ on:
       dispatch-app-private-key:
         description: Private key (PEM) of that App.
         required: false
+      content-app-id:
+        description: >-
+          App id of a GitHub App with Contents: Read on content-repository. Required whenever
+          content-repository is set (the caller's GITHUB_TOKEN cannot read another repository);
+          asserted RED before the checkout, never skipped.
+        required: false
+      content-app-private-key:
+        description: Private key (PEM) of that App.
+        required: false
 
 jobs:
   publish-bake:
@@ -417,12 +426,42 @@ jobs:
       # resolve it. bake-scope.sh falls back to a full bake rather than guessing when it cannot —
       # correct, but it would narrow NOTHING, ever. The string forms are deliberate: GitHub
       # expressions treat the NUMBER 0 as falsy, so `inputs.x && 0 || 1` yields 1 in both branches.
+      # 🚨 A content checkout from ANOTHER repository needs a token that can read it. The caller's
+      # GITHUB_TOKEN is scoped to the calling repository alone, so `repository:
+      # Systemorph/MeshWeaver.Plugins` (private) answers 404 under it — the platform's first release
+      # wave died on exactly that (main-cd run 33276813173, 2026-08-29). When content-repository is
+      # set, the App credential is ASSERTED red, never fallen back on: a fallback to github.token
+      # would 404 anyway, one step later and blaming the checkout.
+      - name: Resolve the content repository's credential
+        id: content-repo
+        if: inputs.content-repository != ''
+        env:
+          REPO: ${{ inputs.content-repository }}
+          APP_ID: ${{ secrets.content-app-id }}
+          APP_KEY: ${{ secrets.content-app-private-key }}
+        run: |
+          set -euo pipefail
+          [ -n "$APP_ID" ]  || { echo "::error::content-repository is '$REPO' but secrets.content-app-id is empty — the caller's GITHUB_TOKEN cannot read another repository, so the checkout would 404. Pass a GitHub App installed on '$REPO' with Contents: Read."; exit 1; }
+          [ -n "$APP_KEY" ] || { echo "::error::content-repository is '$REPO' but secrets.content-app-private-key is empty — see content-app-id."; exit 1; }
+          echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${REPO#*/}"   >> "$GITHUB_OUTPUT"
+      - name: Mint a read token for the content repository
+        id: content-token
+        if: inputs.content-repository != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.content-app-id }}
+          private-key: ${{ secrets.content-app-private-key }}
+          owner: ${{ steps.content-repo.outputs.owner }}
+          repositories: ${{ steps.content-repo.outputs.name }}
+          permission-contents: read
       - uses: actions/checkout@v7
         with:
           # Empty inputs fall through to the caller's own repo + commit — byte-identical to the
           # default checkout for every node repo; only the platform's CD points these elsewhere.
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
+          token: ${{ steps.content-token.outputs.token || github.token }}
           fetch-depth: ${{ inputs.narrow-by-affected && '0' || '1' }}
       # 🚨 The CONTENT commit, not $GITHUB_SHA. They differ exactly when content-repository is set
       # (the platform baking Plugins), and the publication records the content's commit — the
