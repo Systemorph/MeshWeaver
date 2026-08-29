@@ -124,7 +124,11 @@ on:
         required: false
         default: ''
       platform-image-digest:
-        description: The digest (sha256:…) of platform-image to compile against. Empty = build from source.
+        description: >
+          The digest (sha256:…) of platform-image to compile against — the promoted set's MULTI-ARCH
+          manifest-list digest (immutable, never re-tagged), pulled as linux/amd64 below. Record the
+          x64 framework identity beside the pin in the caller (mw-plugin-test --print-framework-identity
+          on the linux-x64 member) so a mismatch is diagnosable by eye. Empty = build from source.
         type: string
         required: false
         default: ''
@@ -295,7 +299,11 @@ jobs:
           [ -n "$IMAGE" ] || { echo "::error::platform-image-digest is set but platform-image is empty — name the image the digest belongs to"; exit 1; }
           [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but the acr-username/acr-password secrets are not passed — the image cannot be pulled"; exit 1; }
           echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
-          cid=$(docker create "${IMAGE%%:*}@${DIGEST}")
+          # 🚨 --platform linux/amd64 ALWAYS: framework identities are per-architecture build (the
+          # ci.6469 manifest list resolves to s770d75c… on x64 and sfe27877f… on arm64), and the
+          # bundles are sealed under the x64 identity the portals run. A multi-arch digest pulled on
+          # an arm64 runner would compile against a platform the gates never test.
+          cid=$(docker create --platform linux/amd64 "${IMAGE%%:*}@${DIGEST}")
           mkdir -p "$RUNNER_TEMP/platform-refs"
           docker cp "$cid:/app/." "$RUNNER_TEMP/platform-refs/"
           docker rm "$cid" >/dev/null
