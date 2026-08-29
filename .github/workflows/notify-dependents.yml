@@ -1,0 +1,125 @@
+name: Notify dependent repos
+
+# 🚨 THE RELEASE WAVE IS PUSHED, NOT POLLED.
+#
+# A package is built against a PINNED platform, so when the platform releases, every plugin repo
+# must rebuild and republish or its portals read `FrameworkDeclined (built against <old>, live
+# <new>)` and adopt nothing. Until now that wave was only PULLED: each repo's `schedule` run noticed
+# the release at its next poll, up to an interval late, and `main-cd.yml` said in prose that a
+# GitHub→GitHub dispatch "never will be" added here.
+#
+# Both reasons that gave are now stale:
+#   • "no credential in the release path" — `DEPENDENT_DISPATCH_APP_ID` / `_PRIVATE_KEY` were
+#     provisioned on 2026-08-19 and, until this workflow, were referenced by NOTHING.
+#   • "no hand-maintained list here" — there is none. The subscriber set is the set of repositories
+#     the App is INSTALLED on, read at run time from `GET /installation/repositories`. Adding a repo
+#     to the wave is installing the App on it; there is no list in this file to drift.
+#
+# The `schedule` poll in each repo stays as the fallback, so a lost dispatch costs one delayed wave
+# rather than a missed one. What changes is that the normal case is now seconds, not an interval.
+#
+# 🚨 THIS JOB FAILS RED WHEN IT NOTIFIES NOBODY. Its predecessor printed "NOT CONFIGURED" and went
+# green for its entire life, which is why nothing was ever notified and nobody noticed. A fan-out
+# that reaches zero repositories is indistinguishable from a fan-out that never ran, so it is an
+# error here — the one shape this whole file exists to prevent.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'The released version, passed to each subscriber as client_payload.version'
+        required: true
+        type: string
+      reason:
+        description: 'What released — "platform" (images) or "packages" (NuGet)'
+        required: true
+        type: string
+    secrets:
+      app-id:
+        required: true
+      private-key:
+        required: true
+
+jobs:
+  notify:
+    name: Notify dependent repos
+    runs-on: ubuntu-latest
+    steps:
+      # Invariant #2: assert the inputs and fail RED naming what is missing, rather than skipping.
+      - name: Assert the dispatch credential is configured
+        env:
+          APP_ID: ${{ secrets.app-id }}
+          PRIVATE_KEY: ${{ secrets.private-key }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "$APP_ID" ]      || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID")
+          [ -n "$PRIVATE_KEY" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY")
+          # 🚨 `needs.<skipped-job>.outputs.*` is the EMPTY STRING, not an error. A CD run once
+          # published and then died on exactly that (#2496). An empty version here would fan a
+          # release event carrying no version out to the whole fleet, so refuse instead.
+          [ -n "$VERSION" ]     || missing+=("inputs.version (empty — did the job producing it skip?)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '::error::%s is not set — the release wave cannot be pushed and every plugin repo would wait for its next schedule poll.\n' "${missing[@]}"
+            exit 1
+          fi
+
+      - name: Mint an installation token for the subscriber repos
+        id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.private-key }}
+          owner: Systemorph
+          # No `repositories:` — the token spans every repo the App is installed on, which IS the
+          # subscriber set. `contents: read` is not enough: repository_dispatch needs write.
+          permission-contents: write
+
+      - name: Fan the release out to every subscriber
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          VERSION: ${{ inputs.version }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+
+          # The subscriber set, read at run time. Not a variable, not a literal in this file.
+          repos=$(gh api --paginate /installation/repositories \
+                    --jq '.repositories[].full_name' | sort -u)
+
+          if [ -z "$repos" ]; then
+            echo "::error::the dispatch App is installed on NO repositories, so this release"
+            echo "::error::notified nobody. Install it on the plugin repos — a fan-out that reaches"
+            echo "::error::zero subscribers is exactly the silent no-op this job replaced."
+            exit 1
+          fi
+
+          echo "Subscribers ($(echo "$repos" | wc -l | tr -d ' ')):"
+          echo "$repos" | sed 's/^/  /'
+
+          # 🚨 Every failure is COLLECTED, never fatal on the first one. A wave that stops at the
+          # first unreachable repo leaves the rest of the fleet stale for an interval, and the
+          # partial state is invisible. Notify everyone, then report.
+          failed=""
+          for repo in $repos; do
+            if gh api -X POST "/repos/$repo/dispatches" \
+                 -f "event_type=meshweaver-framework-released" \
+                 -F "client_payload[version]=$VERSION" \
+                 -F "client_payload[reason]=$REASON" 2>dispatch.err; then
+              echo "  dispatched → $repo"
+            else
+              # A repo with no `repository_dispatch:` receiver still ACCEPTS the POST (204) and
+              # simply runs nothing, so a failure here is a real problem — permissions, or the repo
+              # is gone — and must be named rather than counted.
+              echo "::warning::dispatch FAILED → $repo: $(tr -d '\n' < dispatch.err)"
+              failed="$failed $repo"
+            fi
+          done
+
+          if [ -n "$failed" ]; then
+            echo "::error::the release wave did not reach:$failed"
+            echo "::error::Those repos will rebuild at their next schedule poll instead of now."
+            exit 1
+          fi
+          echo "release $VERSION ($REASON) pushed to every subscriber"
