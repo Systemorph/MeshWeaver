@@ -986,52 +986,53 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     internal Func<int, TimeSpan> AttachBackoff { get; set; } = SubscribeAttachBackoff;
 
     /// <summary>
-    /// Runs <paramref name="attach"/>, re-attempting it while it fails TRANSIENTLY and the budget
-    /// holds — the retry-with-fresh-resolve shape <c>RoutingGrain.DeliverToGrainObservable</c>
-    /// already applies to the DELIVERY leg, applied here to the SUBSCRIBE leg (issue #2633).
+    /// The attach, re-attempted while it fails TRANSIENTLY and the budget holds (issue #2633).
     ///
-    /// <para>🚨 <b>What this must not become.</b> It is bounded (<paramref name="maxRetries"/>), it
-    /// is loud (<paramref name="onTransientRetry"/> fires on every re-attempt), it never swallows
-    /// the terminal exception — the last one is rethrown to the caller's own failure branch — and it
-    /// never retries a cancellation. A permanent failure is still permanent.</para>
+    /// <para>Deliberately the SAME reactive shape as <see cref="AttachPodHub"/> forty lines below
+    /// and as <c>RoutingGrain.DeliverToGrainObservable</c> — <c>Defer</c> keeps
+    /// <paramref name="attach"/> COLD, so every <c>RetryWhen</c> re-subscribe re-invokes it from
+    /// scratch (a fresh <c>GetStream</c> and a fresh <c>SubscribeAsync</c>, hence a fresh grain
+    /// resolution rather than a reference minted while the directory was mid-handoff). One
+    /// retry-with-fresh-resolve idiom for the subscribe leg and the delivery leg, so a transient
+    /// rejection is handled identically whichever leg meets it.</para>
     ///
-    /// <para><paramref name="backoff"/> is a seam so the policy is testable with no wall clock.</para>
+    /// <para>🚨 <b>What this must not become.</b> Bounded (<paramref name="maxRetries"/>), loud
+    /// (<paramref name="onTransientRetry"/> fires on every re-attempt), and never swallowing: the
+    /// last exception is rethrown to the caller's own failure branch. A permanent failure is still
+    /// permanent, and anything <paramref name="isTransient"/> rejects gives up on the FIRST
+    /// attempt.</para>
+    ///
+    /// <para><paramref name="backoff"/> and <paramref name="scheduler"/> are seams so the policy is
+    /// testable with no wall clock.</para>
     /// </summary>
     /// <typeparam name="T">The attach result (the Orleans subscription handle).</typeparam>
     /// <param name="attach">The attach attempt; re-invoked from scratch on every retry.</param>
     /// <param name="isTransient">Predicate deciding whether another attempt is worth making.</param>
     /// <param name="onTransientRetry">Called with the failure, the 1-based attempt number and the wait.</param>
-    /// <param name="ct">Cancels the wait and stops the budget.</param>
     /// <param name="maxRetries">Number of RE-attempts after the first (so attempts = this + 1).</param>
     /// <param name="backoff">Wait before the attempt following a zero-based failed attempt index.</param>
-    /// <returns>The attach result, or the last exception rethrown once the budget is exhausted.</returns>
-    internal static async Task<T> AttachWithBoundedRetryAsync<T>(
+    /// <param name="scheduler">Scheduler for the backoff timer.</param>
+    /// <returns>A cold observable emitting the attach result, or erroring with the last exception.</returns>
+    internal static IObservable<T> AttachWithBoundedRetry<T>(
         Func<Task<T>> attach,
         Func<Exception, bool> isTransient,
         Action<Exception, int, TimeSpan> onTransientRetry,
-        CancellationToken ct,
         int maxRetries = SubscribeAttachRetries,
-        Func<int, TimeSpan>? backoff = null)
+        Func<int, TimeSpan>? backoff = null,
+        IScheduler? scheduler = null)
     {
         var delay = backoff ?? SubscribeAttachBackoff;
-        for (var attempt = 0; ; attempt++)
-        {
-            TimeSpan wait;
-            try
-            {
-                return await attach().ConfigureAwait(false);
-            }
-            catch (Exception ex) when (
-                attempt < maxRetries
-                && !ct.IsCancellationRequested
-                && ex is not OperationCanceledException
-                && isTransient(ex))
-            {
-                wait = delay(attempt);
-                onTransientRetry(ex, attempt + 1, wait);
-            }
-            await Task.Delay(wait, ct).ConfigureAwait(false);
-        }
+        return Observable.Defer(() => attach().ToObservable())
+            .RetryWhen(errors => errors
+                .Select((ex, i) => (Exception: ex, Attempt: i))
+                .SelectMany(t =>
+                {
+                    if (t.Attempt >= maxRetries || !isTransient(t.Exception))
+                        return Observable.Throw<long>(t.Exception);
+                    var wait = delay(t.Attempt);
+                    onTransientRetry(t.Exception, t.Attempt + 1, wait);
+                    return Observable.Timer(wait, scheduler ?? Scheduler.Default);
+                }));
     }
 
     // Attaches the Orleans memory-stream subscription for <paramref name="address"/> once the
@@ -1073,7 +1074,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // inconsistency between the two legs was the whole defect.
             //
             // Bounded, loud, and still terminal: see AttachWithBoundedRetryAsync.
-            var handle = await AttachWithBoundedRetryAsync(
+            var handle = await AttachWithBoundedRetry(
                 AttachSubscriptionAsync,
                 IsTransientFailure,
                 (ex, attempt, wait) =>
@@ -1089,8 +1090,13 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         + "the grain directory is unstable, which every rolling deploy produces; retrying in {Delay}ms",
                         StreamProviders.Memory, address, attempt, SubscribeAttachRetries + 1, wait.TotalMilliseconds);
                 },
-                ct,
-                backoff: AttachBackoff).ConfigureAwait(false);
+                backoff: AttachBackoff)
+                // The enclosing method is async by construction — RegisterStream stores the Task so
+                // teardown can await the handle it produced and unsubscribe it. ToTask(ct) is the one
+                // bridge, and it is where cancellation lands: a teardown that cancels mid-budget
+                // surfaces as OperationCanceledException into the catch below, exactly as the
+                // pre-#2633 single attempt did.
+                .ToTask(ct).ConfigureAwait(false);
 
             OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync OK addr={address}");
             logger.LogDebug("Orleans '{Provider}' stream subscription attached for {Address}",
