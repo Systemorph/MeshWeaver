@@ -303,7 +303,10 @@ jobs:
           # ci.6469 manifest list resolves to s770d75c… on x64 and sfe27877f… on arm64), and the
           # bundles are sealed under the x64 identity the portals run. A multi-arch digest pulled on
           # an arm64 runner would compile against a platform the gates never test.
-          cid=$(docker create --platform linux/amd64 "${IMAGE%%:*}@${DIGEST}")
+          # Strip a TAG only — a colon after the last slash. `${IMAGE%%:*}` would also eat a registry
+          # port (registry:5000/repo) and `${IMAGE%:*}` would eat the path when there is no tag.
+          case "${IMAGE##*/}" in *:*) IMAGE_NOTAG="${IMAGE%:*}" ;; *) IMAGE_NOTAG="$IMAGE" ;; esac
+          cid=$(docker create --platform linux/amd64 "${IMAGE_NOTAG}@${DIGEST}")
           mkdir -p "$RUNNER_TEMP/platform-refs"
           docker cp "$cid:/app/." "$RUNNER_TEMP/platform-refs/"
           docker rm "$cid" >/dev/null
@@ -311,7 +314,7 @@ jobs:
           dlls=("$RUNNER_TEMP"/platform-refs/*.dll)
           n=${#dlls[@]}
           [ "$n" -gt 50 ] || { echo "::error::the image's /app yielded $n assemblies — not a platform image"; exit 1; }
-          echo "platform refs: $n assemblies from ${IMAGE%%:*}@${DIGEST}"
+          echo "platform refs: $n assemblies from ${IMAGE_NOTAG}@${DIGEST}"
       - name: Build the module (Release, warnings-as-errors)
         env:
           REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
