@@ -200,7 +200,15 @@ def node_packages(root: Path) -> set[str]:
 
 
 def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
-    proc = subprocess.run(["git", "diff", "--name-only", diff_range],
+    """The changed paths, with renames DECOMPOSED into a delete and an add.
+
+    🚨 `--no-renames` is selection logic, not a formatting flag. Git detects renames by default and
+    `--name-only` then prints only the DESTINATION — so a file moved from one module (or one
+    csproj) to another names only the module it arrived in, and the one it LEFT is never selected,
+    even though its build changed. Under-selection is the failure mode this whole script is biased
+    against; decomposing the rename makes both ends appear.
+    """
+    proc = subprocess.run(["git", "diff", "--no-renames", "--name-only", diff_range],
                           cwd=root, capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:
         say("    " + proc.stderr.strip()[-2000:])
@@ -355,7 +363,10 @@ _STUB_PROJECTS = (
     "CLOSURE={'src/Acme.Alpha/Acme.Alpha.csproj':"
     "{'src/Acme.Alpha','src/Acme.Shared','src/Acme.Alpha.Test','src/Acme.Kit'},"
     "'src/Acme.Beta/Acme.Beta.csproj':{'src/Acme.Beta'}}\n"
-    "KNOWN={p for c in CLOSURE.values() for p in c}\n"
+    # Acme.Other is a KNOWN project in NO entry's closure — so a path in it is classified (not
+    # `unclassified`, which would force a full run) and yet selects nothing. That is what makes
+    # the rename case able to tell "both ends" from "destination only".
+    "KNOWN={p for c in CLOSURE.values() for p in c}|{'src/Acme.Other'}\n"
     "a=sys.argv\n"
     "entries=[a[i+1] for i,v in enumerate(a) if v=='--entry']\n"
     "paths=[l for l in open(a[a.index('--changed')+1]).read().splitlines() if l]\n"
@@ -395,7 +406,10 @@ def _fixture(root: Path) -> None:
             ("Acme.Alpha", ["../Acme.Shared/Acme.Shared.csproj"]),
             ("Acme.Alpha.Test", ["../Acme.Alpha/Acme.Alpha.csproj",
                                  "../Acme.Kit/Acme.Kit.csproj"]),
-            ("Acme.Beta", []), ("Acme.Shared", []), ("Acme.Kit", [])):
+            ("Acme.Beta", []), ("Acme.Shared", []), ("Acme.Kit", []),
+            # referenced by NO matrix entry — the destination of the rename case below, chosen so
+            # that "both ends" and "destination only" give DIFFERENT answers.
+            ("Acme.Other", [])):
         d = root / "src" / name
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{name}.csproj").write_text(_csproj(refs), encoding="utf-8")
@@ -496,6 +510,43 @@ def self_test() -> int:
                   got["scope"] == "narrowed" and got["count"] == 0 and got["skipped"],
                   f"scope={got['scope']} count={got['count']}")
 
+        print("renames are DECOMPOSED — the module a file LEFT is selected too:")
+        # A real git fixture, because this case is about what `git diff` prints: with git's
+        # default rename detection `--name-only` names only the destination, and the source
+        # project silently drops out of the selection.
+        import subprocess as sp
+        git = lambda *a: sp.run(["git", *a], cwd=root, capture_output=True, text=True)
+        # 🚨 Three things make this assertion non-vacuous, and each was needed:
+        #   * the moved file exists ON THE BASE — otherwise the diff is a plain add and rename
+        #     detection has nothing to collapse;
+        #   * it moves OUT of a project a matrix entry builds INTO one no entry references, so
+        #     "both ends" (['Acme.Beta']) and "destination only" ([]) differ;
+        #   * a real `origin` remote, because the range this script takes is origin/<base>...HEAD.
+        # Verified by reverting --no-renames: this case then reports [] and goes red.
+        (root / "src" / "Acme.Beta" / "Moved.cs").write_text(
+            "// long enough that git is certain it is the same file\n" * 8, encoding="utf-8")
+        git("init", "-q", ".")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        git("branch", "-M", "main")
+        git("remote", "add", "origin", str(root))
+        git("fetch", "-q", "origin")
+        git("checkout", "-q", "-b", "move")
+        (root / "src" / "Acme.Beta" / "Moved.cs").rename(
+            root / "src" / "Acme.Other" / "Moved.cs")
+        git("add", "-A")
+        git("commit", "-qm", "move it")
+        proc = sp.run([sys.executable, str(Path(__file__).resolve()), "--for", "modules",
+                       "--root", str(root), "--event", "pull_request", "--base-ref", "main",
+                       "--modules", json.dumps(_MATRIX)], capture_output=True, text=True)
+        got = (json.loads(proc.stdout) if proc.returncode == 0
+               else {"scope": f"<exit {proc.returncode}>", "selected": []})
+        check("a file moved between projects selects the module it LEFT, not only the destination",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"],
+              f"scope={got['scope']} selected={got['selected']}")
+
         print("the caller's graphs are load-bearing — every failure of theirs is a FULL run:")
         selector = root / "scripts" / "affected-modules.py"
         for label, body in (
@@ -521,8 +572,9 @@ def self_test() -> int:
               "script decides what is NOT rebuilt; a fallback that stops falling back is a stale "
               "assembly the registry keeps serving, or an in-mesh compile break that reaches main.")
         return 1
-    print("\n✓ node-repo-scope self-test: 23 full-run fallbacks, 8 narrowing assertions, "
-          "2 explicit-empty answers, 5 caller-graph refusals — all green.")
+    print("\n✓ node-repo-scope self-test: 23 full-run fallbacks, 9 narrowing assertions (the "
+          "last over a REAL git range — a rename must select the end it LEFT), 2 explicit-empty "
+          "answers, 5 caller-graph refusals — all green.")
     return 0
 
 
