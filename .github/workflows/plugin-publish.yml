@@ -151,8 +151,12 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
+          QUEUE_BASE_REF: ${{ github.event.merge_group.base_ref }}
         run: |
           set -euo pipefail
+          if [ -z "${BASE_REF:-}" ] && [ -n "${QUEUE_BASE_REF:-}" ]; then
+            BASE_REF="${QUEUE_BASE_REF#refs/heads/}"
+          fi
           if [ -n "${BASE_REF:-}" ]; then
             git -C plugins fetch --no-tags origin \
               "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"

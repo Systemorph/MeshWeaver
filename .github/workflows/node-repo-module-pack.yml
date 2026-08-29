@@ -163,9 +163,16 @@ jobs:
           MODULES: ${{ inputs.modules }}
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
+          # A merge_group run carries no `base_ref`; its base is on the event payload. Dormant
+          # today (no repo here has a queue) and kept correct so enabling one narrows rather than
+          # silently falling back to the full set.
+          QUEUE_BASE_REF: ${{ github.event.merge_group.base_ref }}
         run: |
           set -euo pipefail
           printf '%s' "$MODULES" > "$RUNNER_TEMP/matrix.json"
+          if [ -z "${BASE_REF:-}" ] && [ -n "${QUEUE_BASE_REF:-}" ]; then
+            BASE_REF="${QUEUE_BASE_REF#refs/heads/}"
+          fi
           if [ -n "${BASE_REF:-}" ]; then
             git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           fi
@@ -182,7 +189,10 @@ jobs:
     # run". What makes it safe is that `verify` below runs UNCONDITIONALLY and asserts the pairing
     # — a zero count with receipts, or a non-zero count with a skipped pack job, is RED. Never
     # replace it with a condition that asks whether an input or a secret happens to be set.
-    if: needs.select.outputs.count != '0'
+    # (`select.result` too, not just the count: a FAILED select emits no count at all, and
+    # `'' != '0'` is true — the matrix would then fail to evaluate instead of the verify job
+    # naming the real cause.)
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0'
     strategy:
       # One module's failure must not hide the rest — a sweep wants every verdict in one run.
       fail-fast: false
