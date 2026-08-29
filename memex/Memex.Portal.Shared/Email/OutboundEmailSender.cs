@@ -165,20 +165,36 @@ public sealed class OutboundEmailSender(
     /// left the building as <c>Re: Fwd: Quote for 200 seats</c>, which tells the recipient the
     /// opposite of what happened.</para>
     ///
-    /// <para>The markers are the same set <c>EmailInboundProcessor.ThreadKey</c> strips when it
-    /// normalises a subject into a conversation key — the two ends of the same conversation should
-    /// agree about what a reply/forward prefix looks like. Only the LEADING marker matters: this
-    /// decides whether to add one, not what the subject means.</para>
+    /// <para>Only the LEADING marker matters: this decides whether to ADD one, not what the subject
+    /// means. "Question about the RE: header" is not a reply.</para>
+    ///
+    /// <para>🚨 <b>The marker set is a deliberate SECOND COPY of the one
+    /// <c>EmailInboundProcessor.ThreadKey</c> strips</b>, and the duplication cannot be removed from
+    /// here today. That processor is in the <c>MeshWeaver.Mail.MicrosoftGraph</c> MODULE, in the
+    /// plugins repository, which depends on this one — the reference cannot run the other way, so a
+    /// shared constant would have to live in the mesh CONTRACT. Putting it there is a new framework
+    /// API, and a module may not call an API newer than the newest RELEASED framework without
+    /// raising its <c>minMeshVersion</c> floor; so "de-duplicate it" today means shipping a floor
+    /// bump for a list of natural-language prefixes that changes about never. The copies are
+    /// therefore left standing and each NAMES the other, so whoever edits one is told where the twin
+    /// is. Fold them into the contract when a floor bump is being paid for anyway.</para>
     /// </summary>
-    /// <param name="subject">The subject as queued.</param>
+    /// <param name="subject">The subject as queued; null is treated as empty.</param>
     /// <returns>The subject to send.</returns>
     internal static string OutboundSubject(string? subject)
     {
-        var trimmed = (subject ?? "").TrimStart();
-        return ReplyOrForwardPrefix.IsMatch(trimmed) ? subject! : $"Re: {subject}";
+        // One normalisation, not two: the pattern's own `^\s*` handles the leading whitespace, so
+        // trimming here as well would be a second answer to the same question — and returning the
+        // TRIMMED string would silently rewrite a subject this method was only asked to classify.
+        var queued = subject ?? "";
+        return ReplyOrForwardPrefix.IsMatch(queued) ? queued : $"Re: {queued}";
     }
 
-    /// <summary>Leading reply/forward markers, several languages — the set <c>ThreadKey</c> strips.</summary>
+    /// <summary>
+    /// Leading reply/forward markers, several languages. 🚨 Twin of the pattern in
+    /// <c>EmailInboundProcessor.ThreadKey</c> (plugins repo) — change both; see
+    /// <see cref="OutboundSubject"/> for why they cannot be one.
+    /// </summary>
     private static readonly Regex ReplyOrForwardPrefix = new(
         @"^\s*(re|fwd|fw|aw|wg|tr|rv|sv|vs|antw|antwort|rif)(\s*\[\d+\])?\s*:",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);

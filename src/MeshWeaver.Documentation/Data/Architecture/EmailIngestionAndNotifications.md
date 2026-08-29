@@ -63,7 +63,7 @@ whether the agent acts on the sender's behalf.
 
 Key properties:
 
-- **At most once, because Graph delivers at least once.** A `created` change notification is
+- **Processed once, because Graph delivers at least once.** Delivery stays at-least-once — that is the transport's contract and nothing here changes it; what the lane guarantees is that the second and later deliveries of one message have no EFFECT. A `created` change notification is
   re-delivered after a retry, after a duplicate subscription, and after a portal restart that raced
   the 202. Two claims make that harmless, and they land *before* any thread is created:
   the Email node's **id is derived from the message id**, so the create-only
