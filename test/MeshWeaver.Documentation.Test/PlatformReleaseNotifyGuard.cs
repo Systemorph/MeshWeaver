@@ -150,21 +150,42 @@ public class PlatformReleaseNotifyGuard
     }
 
     /// <summary>
-    /// 🚨 No hand-maintained subscriber list, and no satellite write credential, may creep back
-    /// into the release path. The subscriber set lives in the Hosting fleet registry on the control
-    /// instance; the platform holds no write access to any node repo and signs one POST instead.
-    /// `BAKE_SUBSCRIBER_REPOS` was the previous attempt — it was never provisioned, printed
-    /// "NOT CONFIGURED" for its whole life, and survived as a repo variable holding one stale repo
-    /// name long after the design moved on.
+    /// 🚨 The dependents ARE dispatched from here (maintainer, 2026-08-29: "it should be github actions
+    /// trigger — no in mesh baking — on platform update ⇒ update all"), and the way it is done is
+    /// what this guard pins, because both previous designs failed in the same silent shape:
+    /// <c>BAKE_SUBSCRIBER_REPOS</c> + a stored PAT printed "NOT CONFIGURED" for its whole life, and
+    /// the mesh broadcast that replaced it dispatched to an empty subscriber set on every deploy
+    /// (#2235). So: no hand-maintained list (the set is the dispatch App's installation, read at
+    /// run time), no stored token (an App installation token minted per run), the credential asserted
+    /// RED in preflight, and the job itself a delivery leg the verdict requires — never a skip.
     /// </summary>
     [Fact]
-    public void TheReleasePathHoldsNoSubscriberListAndNoSatelliteCredential()
+    public void TheDispatchIsDiscoveredAppCredentialedAndAssertedRed()
     {
         var body = Body();
-
         Assert.DoesNotContain("BAKE_SUBSCRIBER_REPOS", body, StringComparison.Ordinal);
         Assert.DoesNotContain("DEPENDENT_DISPATCH_TOKEN", body, StringComparison.Ordinal);
-        Assert.DoesNotContain("/dispatches", body, StringComparison.Ordinal);
+
+        var job = JobBlock(body, "dispatch-dependents:");
+        Assert.Contains("actions/create-github-app-token", job, StringComparison.Ordinal);
+        Assert.Contains("secrets.DEPENDENT_DISPATCH_APP_ID", job, StringComparison.Ordinal);
+        Assert.Contains("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY", job, StringComparison.Ordinal);
+        Assert.Contains("/installation/repositories", job, StringComparison.Ordinal);
+        Assert.Contains("meshweaver-framework-released", job, StringComparison.Ordinal);
+        Assert.DoesNotContain("continue-on-error", job, StringComparison.Ordinal);
+        Assert.DoesNotContain("::warning", job, StringComparison.Ordinal);
+        Assert.Contains("exit 1", job, StringComparison.Ordinal);
+        // Plugins is built WITH the platform (plugins-bake), never told to rebuild — and the wave
+        // fires only after that publication is sealed.
+        Assert.Contains("needs.plugins-bake.result == 'success'", job, StringComparison.Ordinal);
+
+        var preflight = SectionAfter(JobBlock(body, "preflight:"), "missing=()");
+        Assert.Contains("DEPENDENT_DISPATCH_APP_ID", preflight, StringComparison.Ordinal);
+        Assert.Contains("DEPENDENT_DISPATCH_APP_PRIVATE_KEY", preflight, StringComparison.Ordinal);
+
+        var legs = SectionAfter(JobBlock(body, "delivery-verdict:"), "LEGS: >-");
+        Assert.Contains("dispatch-dependents=", legs, StringComparison.Ordinal);
+        Assert.Contains("plugins-bake=", legs, StringComparison.Ordinal);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
