@@ -213,7 +213,9 @@ public static class MeshNodeLayoutAreas
             // registers on every per-node hub) — delisting it drops the server-side external
             // URL-fetch surface.
             .WithView(MarkdownOverviewLayoutArea.SuppliedNavArea, MarkdownOverviewLayoutArea.SuppliedNavigationMenu)
-            .WithView(StopSyncLayoutArea.StopSyncArea, StopSyncLayoutArea.StopSync)
+            // StopSync's VIEW rides the MeshWeaver.Graph.Views MODULE, registered on every
+            // per-node hub exactly as OgCard above — the platform keeps the area name and the menu
+            // descriptor (StopSyncLayoutArea), which is what the node menu is assembled from.
             // UCR special areas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
