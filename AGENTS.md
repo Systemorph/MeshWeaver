@@ -123,6 +123,8 @@ All docs are embedded in `src/MeshWeaver.Documentation/` and served under `Doc/`
 
 **Hub-handler test hangs or a message disappears:** read [DebuggingMessageFlow.md](src/MeshWeaver.Documentation/Data/Architecture/DebuggingMessageFlow.md) first — never rerun a hung test "to see". **`type 'X' is not registered in this hub's TypeRegistry`:** the fix is `WithType(typeof(X), nameof(X))` on the receiving hub. **Use `hub.Observe(...)`, not `RegisterCallback`/`AwaitResponse`** — those overloads are `[Obsolete]` and deadlock.
 
+📘 **The full manual — what you author, what the build derives, the `src/` blind spot, and the closure boundary — is [Module Versioning](src/MeshWeaver.Documentation/Data/Architecture/ModuleVersioning.md) (`get Doc/Architecture/ModuleVersioning`). Read it before bumping anything.**
+
 ## 🌍🌍🌍 ALWAYS think about internationalization — every user-visible string, every time
 
 **Before you write ANY text a user will read, stop and ask: "how does this render for a German viewer?"** This is part of writing the feature, not a follow-up ticket. The portal ships English + German; **a hard-coded UI string is a bug** — buttons, labels, tooltips, `aria-label`s, placeholders, page titles, empty states, validation messages, toasts, dialog copy, menu entries, settings tabs, notification text and errors alike.
