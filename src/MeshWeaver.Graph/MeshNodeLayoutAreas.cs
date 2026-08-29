@@ -62,6 +62,19 @@ public static class MeshNodeLayoutAreas
     public const string SettingsArea = "Settings";
     /// <summary>Area name for the node Comments layout area.</summary>
     public const string CommentsArea = "Comments";
+
+    /// <summary>
+    /// The inline comments section: the node's own <see cref="CommentsArea"/> embedded as a layout
+    /// area. Pure composition — the platform never calls into the collaboration module, it only
+    /// names the area the module registers, which is what lets the module ship separately.
+    /// </summary>
+    /// <param name="host">The layout area host whose node the comments belong to.</param>
+    /// <returns>The section control.</returns>
+    public static UiControl BuildInlineCommentsSection(LayoutAreaHost host)
+        => Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("margin-top: 32px; border-top: 1px solid var(--neutral-stroke-rest); padding-top: 16px;")
+            .WithView(Controls.LayoutArea(host.Hub.Address, CommentsArea).WithShowProgress(false));
     /// <summary>Area name for the node Search layout area.</summary>
     public const string SearchArea = "Search";
     /// <summary>Area name for the node Files layout area.</summary>
@@ -360,14 +373,16 @@ public static class MeshNodeLayoutAreas
         // on any page that already listed them inline (the Space/Doc double-content). Browsing child
         // nodes is still available via the Catalog / Search areas.
 
-        // Comments — back in constrained width
+        // Comments — back in constrained width. The section is an EMBEDDED AREA, not a compiled
+        // call: the platform knows the area's name and nothing else, and the collaboration module
+        // serves it. Without the module HasComments() is false and no section is emitted.
         if (host.Hub.Configuration.HasComments())
         {
             outer = outer.WithView(
                 Controls.Stack
                     .WithWidth("100%")
                     .WithStyle(GetContainerStyle(host, typeDef) + " margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
-                    .WithView(CommentsView.BuildInlineCommentsSection(host)));
+                    .WithView(BuildInlineCommentsSection(host)));
         }
 
         return outer;

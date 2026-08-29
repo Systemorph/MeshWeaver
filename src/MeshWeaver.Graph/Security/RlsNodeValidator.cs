@@ -316,7 +316,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
     /// </summary>
     private static Permission GetCreatePermission(MeshNode node) => node.NodeType switch
     {
-        CommentNodeType.NodeType => Permission.Comment,
+        CommentsGate.CommentNodeTypeName => Permission.Comment,
         _ => Permission.Create
     };
 

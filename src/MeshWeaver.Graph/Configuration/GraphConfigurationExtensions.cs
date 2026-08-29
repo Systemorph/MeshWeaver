@@ -5,6 +5,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Services.LanguageServer;
@@ -43,10 +44,15 @@ public static class GraphConfigurationExtensions
                 // SlideNodeType/DeckNodeType consts + Matches (persistence parser, export gates),
                 // the content records (MarkdownFileParser), DeckSlidesCache (export templates),
                 // and SlideShowControl with its Blazor view (the pack emits the control).
-                .AddCommentType()
+                // Comment / TrackedChange are NOT built-in any more: the MeshWeaver.Collaboration
+                // MODULE owns both node types and the inline comment registration (Modules:Assemblies
+                // / AddCollaboration()). The compiled residue that stays platform-level is what keeps
+                // existing _Comment / _Tracking satellites readable and permission-delegating on a
+                // mesh without the module: the Comment/TrackedChange records in MeshWeaver.Mesh.Contract,
+                // their WithGraphTypes entries, the SatelliteAccessRule registrations below, and the
+                // annotations table routing further down.
                 .AddRedirectType()
                 .AddWhatsNewType()
-                .AddTrackedChangeType()
                 .AddAccessAssignmentType()
                 .AddPartitionAccessPolicyType()
                 .AddUserType()
@@ -97,6 +103,22 @@ public static class GraphConfigurationExtensions
             // The installed-module fingerprint (#1644): resolves the mesh's InstalledModuleAssembly
             // set (empty when no modules) — stamped by compile write-backs as CompiledModulesHash.
             builder.ConfigureServices(s => s.AddSingleton<InstalledModulesFingerprint>());
+
+            // Satellite permission delegation for the annotation satellites. Registered HERE and not
+            // with their node types, for the same reason the key protector below is: the node types
+            // are optional (they ride the MeshWeaver.Collaboration module) and the access rule is
+            // NOT. A _Comment / _Tracking row written before the module was delisted must keep
+            // delegating its permissions to its MainNode; drop the rule with the node type and those
+            // satellites fall through to the default rule instead — a silent access-control change
+            // on data that is still there.
+            builder.ConfigureServices(services =>
+            {
+                services.AddSingleton<INodeTypeAccessRule>(sp =>
+                    new SatelliteAccessRule(CommentsGate.CommentNodeTypeName, sp.GetRequiredService<IMessageHub>()));
+                services.AddSingleton<INodeTypeAccessRule>(sp =>
+                    new SatelliteAccessRule(CommentsGate.TrackedChangeNodeTypeName, sp.GetRequiredService<IMessageHub>()));
+                return services;
+            });
 
             // Encryption-at-rest for stored credentials: a model provider's ApiKey, a GitHub PAT,
             // the Entra EA credential, the plugin catalog's sync-token signing key. Registered

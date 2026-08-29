@@ -36,7 +36,7 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         new SatelliteTableMapping("_Access", "access", "AccessAssignment"),
         // LEGACY read-only: nothing writes _Tracking satellites any more (tracked changes are
         // projected from the version history). Mapped so rows written by older builds stay readable
-        // for the deprecation window — see MeshWeaver.Graph.AnnotationExtensions.
+        // for the deprecation window — see AnnotationExtensions in the MeshWeaver.Collaboration module.
         new SatelliteTableMapping("_Tracking", "annotations", "TrackedChange"),
         // "Approval" is the RETIRED platform type; "Approvals/Approval" is the node-native
         // package type that replaced it. Both are listed so a nodeType-filtered query finds

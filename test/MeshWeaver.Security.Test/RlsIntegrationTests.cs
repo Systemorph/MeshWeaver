@@ -527,7 +527,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var commentNode = new MeshNode("Comment1", parentPath)
         {
             Name = "Test Comment",
-            NodeType = CommentNodeType.NodeType,
+            NodeType = CommentsGate.CommentNodeTypeName,
             Content = new Comment { Text = "Hello", Author = commenterId }
         };
         var commentResponse = await client.Observe(new CreateNodeRequest(commentNode) { CreatedBy = commenterId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
@@ -536,7 +536,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var viewerComment = new MeshNode("Comment2", parentPath)
         {
             Name = "Viewer Comment",
-            NodeType = CommentNodeType.NodeType,
+            NodeType = CommentsGate.CommentNodeTypeName,
             Content = new Comment { Text = "Denied", Author = viewerId }
         };
         var viewerResponse = await client.Observe(new CreateNodeRequest(viewerComment) { CreatedBy = viewerId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
@@ -592,7 +592,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var commentNode = new MeshNode("Comment1", parentPath)
         {
             Name = "Editor Comment",
-            NodeType = CommentNodeType.NodeType,
+            NodeType = CommentsGate.CommentNodeTypeName,
             Content = new Comment { Text = "Editor can comment", Author = editorId }
         };
         var response = await client.Observe(new CreateNodeRequest(commentNode) { CreatedBy = editorId }, o => o.WithTarget(Mesh.Address)).Should().Emit();

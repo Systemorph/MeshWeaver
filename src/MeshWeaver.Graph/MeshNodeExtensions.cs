@@ -417,6 +417,10 @@ public static class MeshNodeExtensions
         // resolves it typed rather than as an untyped JsonElement.
         typeRegistry.WithType(typeof(NodeTypeCompileState), nameof(NodeTypeCompileState));
         typeRegistry.WithType(typeof(Comment), nameof(Comment));
+        // Registered beside Comment, not with the collaboration module: Comment.Status is a
+        // CommentStatus, so a _Comment satellite read on a mesh without the module would resolve
+        // the record but degrade its Status to an untyped JsonElement — the silent-null class.
+        typeRegistry.WithType(typeof(CommentStatus), nameof(CommentStatus));
         // Moved-node redirect declarations. MUST be registered: the redirect node is read on the
         // hub that resolves the navigation, NOT on its own hub, so without the $type the content
         // degrades to an untyped JsonElement and the declaration silently reads as absent — the

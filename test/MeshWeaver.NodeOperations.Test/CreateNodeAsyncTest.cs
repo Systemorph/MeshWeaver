@@ -94,7 +94,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         var node = new MeshNode(commentId, parentPath)
         {
             Name = $"Comment by TestUser",
-            NodeType = CommentNodeType.NodeType,
+            NodeType = CommentsGate.CommentNodeTypeName,
             Content = comment
         };
 
@@ -105,7 +105,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         createdNode.Should().NotBeNull();
         createdNode.Path.Should().Be(commentPath);
         createdNode.State.Should().Be(MeshNodeState.Active);
-        createdNode.NodeType.Should().Be(CommentNodeType.NodeType);
+        createdNode.NodeType.Should().Be(CommentsGate.CommentNodeTypeName);
 
         var createdComment = createdNode.Content.Should().BeOfType<Comment>().Subject;
         createdComment.Id.Should().Be(commentId);
@@ -146,7 +146,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         var parentNode = new MeshNode(parentCommentId, parentPath)
         {
             Name = "Comment by Alice",
-            NodeType = CommentNodeType.NodeType,
+            NodeType = CommentsGate.CommentNodeTypeName,
             Content = parentComment
         };
         await NodeFactory.CreateNode(parentNode).Should().Emit();
@@ -166,7 +166,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         var replyNode = new MeshNode(replyId, parentCommentPath)
         {
             Name = "Comment by Bob",
-            NodeType = CommentNodeType.NodeType,
+            NodeType = CommentsGate.CommentNodeTypeName,
             Content = replyComment
         };
 
