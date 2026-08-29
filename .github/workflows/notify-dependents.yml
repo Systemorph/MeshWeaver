@@ -64,8 +64,13 @@ jobs:
       # Invariant #2: assert the inputs and fail RED naming what is missing, rather than skipping.
       - name: Assert the dispatch credential is configured
         env:
-          APP_ID: ${{ secrets.app-id }}
-          PRIVATE_KEY: ${{ secrets.private-key }}
+          # 🚨 `secrets.app-id` is a workflow_call secret: on a manual workflow_dispatch there is
+          # no caller passing it, so it resolves to the EMPTY STRING and the assertion below
+          # correctly refuses. Fall back to the repo secret for the dispatch path — without this
+          # the dry run can never run, which would make the one tool for checking the fan-out
+          # untestable itself.
+          APP_ID: ${{ secrets.app-id || secrets.DEPENDENT_DISPATCH_APP_ID }}
+          PRIVATE_KEY: ${{ secrets.private-key || secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
@@ -85,8 +90,8 @@ jobs:
         id: token
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ secrets.app-id }}
-          private-key: ${{ secrets.private-key }}
+          app-id: ${{ secrets.app-id || secrets.DEPENDENT_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.private-key || secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
           owner: Systemorph
           # No `repositories:` — the token spans every repo the App is installed on, which IS the
           # subscriber set. `contents: read` is not enough: repository_dispatch needs write.
