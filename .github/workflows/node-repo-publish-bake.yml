@@ -1026,9 +1026,16 @@ jobs:
           dispatched=(); skipped=(); failed=()
           for repo in $repos; do
             if [ "$repo" = "$SELF" ]; then continue; fi
-            ci=$(gh api "repos/$repo/contents/.github/workflows/ci.yml" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || true)
-            if [ -z "$ci" ]; then skipped+=("$repo (no .github/workflows/ci.yml)"); continue; fi
-            own=$(printf '%s\n' "$ci" | grep -E '^[[:space:]]*bake-source:' | head -1 | sed -E 's/^[[:space:]]*bake-source:[[:space:]]*//; s/["'"'"']//g; s/[[:space:]]+$//')
+            # A missing ci.yml is a designed skip (404, said so); ANY other failure to read it is
+            # RED — a transient API error must never read as "this repo has no CI", because that
+            # is exactly a dependent silently left out of the wave.
+            err="$RUNNER_TEMP/ci-read.err"
+            if ! resp=$(gh api "repos/$repo/contents/.github/workflows/ci.yml" 2>"$err"); then
+              if grep -q "HTTP 404" "$err"; then skipped+=("$repo (no .github/workflows/ci.yml)"); continue; fi
+              failed+=("$repo (could not read its ci.yml: $(tr '\n' ' ' <"$err" | head -c 200))"); continue
+            fi
+            ci=$(jq -r '.content' <<<"$resp" | base64 -d)
+            own=$(printf '%s\n' "$ci" | sed -nE 's/^[[:space:]]*bake-source:[[:space:]]*//p' | head -1 | sed -E 's/["'"'"']//g; s/[[:space:]]+$//')
             if [ -n "$own" ] && jq -e --arg o "$own" 'index($o) != null' <<<"$chain" >/dev/null; then
               skipped+=("$repo (its source '$own' is already in the chain — cycle guard)"); continue
             fi
