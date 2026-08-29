@@ -63,7 +63,7 @@ public static class MarkdownExtensions
             // emoji still work via unambiguous `:shortcode:` (`:smile:`, `:warning:`). Issue #402.
             .UseEmojiAndSmiley(enableSmileys: false)
             .UseYamlFrontMatter()
-            .Use(new ImgPathMarkdownExtension(path => ToContentHref(path, collection)))
+            .Use(new ImgPathMarkdownExtension(path => ResolveImageHref(path, collection)))
             .Use(new LinkUrlCleanupExtension(currentNodePath))
             .Use(new LayoutAreaMarkdownExtension(currentNodePath))
             .Use(new ExecutableCodeBlockExtension())
@@ -84,6 +84,29 @@ public static class MarkdownExtensions
     /// <returns>The content href string.</returns>
     public static string ToContentHref(string path, object? collection)
         => $"{ContentRoutePrefix}/{collection}/{path}";
+
+    /// <summary>
+    /// The href a markdown image renders with: a COLLECTION-RELATIVE path goes through the
+    /// access-controlled content route (<see cref="ToContentHref"/>); an ABSOLUTE URL
+    /// (<c>https://…</c>, <c>data:</c>, protocol-relative <c>//…</c>) or a SITE-ROOTED path
+    /// (<c>/api/og/…</c>, <c>/static/…</c>) is already an address and is left alone. Prefixing
+    /// those produced <c>api/content/{node}/https://media.licdn.com/…</c> for a LinkedIn profile
+    /// photo and <c>api/content/{node}//api/og/…</c> for an OG image — both 404, on every page that
+    /// embedded an external or portal-served picture (2026-08-29). Pure.
+    /// </summary>
+    public static string ResolveImageHref(string path, object? collection)
+        => IsAddressedAlready(path) ? path : ToContentHref(path, collection);
+
+    /// <summary>True for a URL that must not be rebased onto the content route: absolute
+    /// (scheme-qualified), protocol-relative, or rooted at the site. Pure.</summary>
+    public static bool IsAddressedAlready(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return false;
+        var trimmed = url.TrimStart();
+        return trimmed.StartsWith('/')
+            || Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.Scheme);
+    }
 
     /// <summary>
     /// The site-relative content route markdown images are rewritten onto. Mirrors
