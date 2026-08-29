@@ -213,6 +213,8 @@
   "chat.modelProviderError": "Das Sprachmodell „{0}“ konnte diese Runde nicht bedienen: Der Provider hat einen Fehler zurückgegeben (HTTP {1}). Bitte später erneut senden oder ein anderes Modell wählen.",
   "chat.modelQuotaExhausted": "Das Sprachmodell „{0}“ konnte diese Runde nicht bedienen: Der Provider hat sie mangels Guthaben oder Budget abgewiesen (HTTP 402). Bitte das Provider-Konto aufladen oder ein Modell eines Providers mit Budget wählen.",
   "chat.modelNotFound": "Das Sprachmodell „{0}“ existiert am konfigurierten Provider-Endpunkt nicht (HTTP 404). Bitte die Modell-ID unter Einstellungen → Sprachmodelle prüfen oder ein anderes Modell wählen.",
+  "chat.modelStreamStalled": "Das Sprachmodell „{0}“ hat aufgehört zu antworten: Die Verbindung blieb offen, es kamen aber keine weiteren Daten an, daher wurde die Runde abgebrochen. Das ist eine Störung beim Modell-Endpunkt und kein Problem der Anfrage — bitte erneut senden oder ein anderes Modell wählen.",
+  "chat.modelStreamFaulted": "Das Sprachmodell „{0}“ hat seine Antwort mit einem Provider-Fehler beendet. Das ist eine Störung beim vorgelagerten Modell-Provider und kein Problem der Anfrage — bitte erneut senden oder ein anderes Modell wählen.",
   "chat.historyLoadFailed": "Die früheren Nachrichten in diesem Thread konnten nicht geladen werden. Die Runde wurde daher abgebrochen, statt ohne diesen Kontext zu antworten. Bitte erneut senden.",
   "chat.modelSubstitutionNote": "Diese Runde lief nicht auf dem ausgewählten Modell: „{0}“ hat keine nutzbaren Zugangsdaten, daher wurde stattdessen „{1}“ verwendet.",
   "chat.roundToolCallUnfinished": "Diese Runde endete mit {0} noch nicht abgeschlossenen Toolaufruf(en) ({1}). Die Antwort oben beschreibt möglicherweise Arbeiten, die nie ausgeführt wurden — bitte erneut senden.",
@@ -554,6 +556,7 @@
   "ui.connectOAuth": "Mit dem Login der Gegenstelle verbinden (OAuth)",
   "ui.applyUpdateNow": "Verfügbares Update jetzt anwenden",
   "ui.updateNoNewerVersion": "_Noch keine neuere Version erkannt._",
+  "ui.updateNeverChecked": "_Diese Installation hat noch keine Update-Prüfung abgeschlossen — diese Anzeige besagt also nicht, dass es keine neuere Version gibt. Bleibt das so, läuft die Update-Prüfung nicht._",
   "ui.updateLatestAvailable": "**Neueste verfügbare Version:** `{0}`",
   "ui.updateCheckedAt": "_(geprüft {0})_",
   "ui.updateVerifiedGreen": "✅ Gegen die Module dieser Instanz verifiziert: alle {0} Modul(e) kompilieren und testen grün gegen diesen Build.",
@@ -634,6 +637,7 @@
   "ui.mdNodeToUpdateMissing": "**Fehler:** Zu aktualisierender MeshNode nicht gefunden.",
   "ui.mdRecyclingHub": "**Hub wird recycelt…** Weiterleitung folgt gleich.",
   "ui.mdStaleBuildAvailable": "**F\u00fcr diesen Typ liegt ein neuerer Build vor.** Diese Seite f\u00fchrt noch den zuvor kompilierten aus.",
+  "ui.mdServedBuildIsNotPublished": "**Diese Seite f\u00fchrt nicht den Build aus, den dieser Typ ver\u00f6ffentlicht hat.** Der Knoten meldet einen kompilierten Build, dessen Bytes von den ausgef\u00fchrten abweichen; sein Status sagt daher nichts \u00fcber das Sichtbare aus. Ein Recycle bindet dieselbe lokale Kopie erneut und \u00e4ndert nichts \u2014 bitte melden.",
   "ui.recycleConfirmTitle": "Diesen Hub neu starten?",
   "ui.recycleConfirmBody": "Der Hub des Knotens wird beendet und beim n\u00e4chsten Aufruf neu aufgebaut \u2014 dabei \u00fcbernimmt er den zuletzt kompilierten Build. Es wird nichts gel\u00f6scht und kein Inhalt ge\u00e4ndert.",
   "ui.recycleFailed": "Der Hub unter '{0}' hat nach dem angeforderten Neustart noch nicht wieder geantwortet: {1}",
@@ -1040,5 +1044,7 @@
   "presentation.unmarkedTitle": "Wieder sichtbar",
   "presentation.unmarkedBody": "Das wird im Präsentationsmodus nicht mehr ausgeblendet.",
   "presentation.signInRequiredTitle": "Anmeldung erforderlich",
-  "presentation.signInRequiredBody": "Der Präsentationsmodus ist eine persönliche Einstellung — dafür musst du angemeldet sein."
+  "presentation.signInRequiredBody": "Der Präsentationsmodus ist eine persönliche Einstellung — dafür musst du angemeldet sein.",
+  "chat.modelStreamStalled": "Das Sprachmodell \u201e{0}\u201c hat aufgeh\u00f6rt zu antworten: Die Verbindung blieb offen, es kamen aber keine weiteren Daten an, daher wurde die Runde abgebrochen. Das ist eine St\u00f6rung beim Modell-Endpunkt und kein Problem der Anfrage \u2014 bitte erneut senden oder ein anderes Modell w\u00e4hlen.",
+  "chat.modelStreamFaulted": "Das Sprachmodell \u201e{0}\u201c hat seine Antwort mit einem Provider-Fehler beendet. Das ist eine St\u00f6rung beim vorgelagerten Modell-Provider und kein Problem der Anfrage \u2014 bitte erneut senden oder ein anderes Modell w\u00e4hlen."
 }

@@ -1236,7 +1236,24 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         });
     }
 
-    private void DisposeTestClients(string testName, Stopwatch sw)
+    /// <summary>
+    /// Disposes every client hub this test created AND JOINS each one's teardown before returning.
+    ///
+    /// <para>🚨 The join is not tidiness. On the <see cref="SharesMeshAcrossTests"/> path this method
+    /// is the LAST thing that touches the mesh — <c>DisposeAsync</c> returns straight after it and
+    /// the next <c>[Fact]</c> begins — so a bare <c>Dispose()</c> here starts the client's teardown
+    /// (action-block drain, sync-stream unregistration, registrant callbacks) and then hands the
+    /// mesh to the next test while all of that is still running on other threads. The observed
+    /// result is a burst of <c>[SYNC_STREAM] Not setting … — stream is disposed</c> followed by a
+    /// use-after-dispose that takes the host down with exit 139, naming no test. On the non-shared
+    /// path the very next statements stop the hosted services and dispose the Mesh, which is the
+    /// same race one level up.</para>
+    ///
+    /// <para>Bounded per client and LOUD on expiry: a wedged client must fail visibly, not hang the
+    /// suite. The waits are sequential on purpose — a client that will not finish is named
+    /// individually, which is what the trace file needs to be attributable.</para>
+    /// </summary>
+    private async Task DisposeTestClientsAsync(string testName, Stopwatch sw)
     {
         lock (_requestHubLock) _requestHub = null;
         IMessageHub[] snapshot;
@@ -1250,12 +1267,9 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         TestPhaseTrace(testName, "DISPOSE_CLIENTS_START", sw.ElapsedMilliseconds, $"count={snapshot.Length}");
         foreach (var client in snapshot)
         {
-            try { client.Dispose(); }
-            catch (Exception ex)
-            {
-                FileOutput.WriteLine(
-                    $"[DISPOSE] {testName}: client {client.Address} dispose failed: {ex.GetType().Name}: {ex.Message}");
-            }
+            await client.DisposeAndJoinAsync(
+                message => FileOutput.WriteLine($"[DISPOSE] {testName}: {message}"),
+                DisposeTimeout);
         }
         TestPhaseTrace(testName, "DISPOSE_CLIENTS_DONE", sw.ElapsedMilliseconds);
     }
@@ -1385,7 +1399,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // intermediate tests were already slow from the action-block
             // congestion). See ConcurrentRequests deadlock (commit 02dd88f37)
             // and the AI/Threading suite 6-min CI timeout.
-            DisposeTestClients(testName, sw);
+            await DisposeTestClientsAsync(testName, sw);
             TestPhaseTrace(testName, "DISPOSE_SHARED_SKIP", sw.ElapsedMilliseconds);
             try { await base.DisposeAsync(); }
             catch (Exception ex)
@@ -1402,7 +1416,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // Non-shared path also benefits — Mesh.Dispose disposes all hosted hubs
         // including clients, but doing it via the tracked list is faster and
         // more deterministic (no race against the Mesh's own dispose).
-        DisposeTestClients(testName, sw);
+        await DisposeTestClientsAsync(testName, sw);
 
         try
         {
@@ -1463,9 +1477,19 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // unload (the teardown use-after-unload SIGSEGV). A live change-feed leaf never
             // completes on its own, so a WAIT-only drain would time out and let the scope
             // dispose under it; DrainAll() cancels the leaf so it stops, then joins.
-            var leakedIoLeaves = ioPools?.DrainAll() ?? 0;
+            // 🚨 The residual must NAME ITS POOL, and it must do so through TestPhaseTrace rather
+            // than an ILogger. IoPoolRegistry.DrainAll already logs a warning naming the pool, and
+            // that warning is structurally invisible here: the mesh's log sink stops capturing at
+            // Mesh.Dispose(), so of 294 dispose windows in the #2616 shard-2 trx, ZERO carry an
+            // ILogger line at any level. TestPhaseTrace writes the file CI keeps and is the only
+            // thing that survives both dispose and an exit=124 host kill. Without the name a
+            // residual reads as an anonymous "1" — which is how #2578 and #2616 both ended with
+            // nothing to act on. (Query=1 and Compile=1 are different bugs.)
+            IReadOnlyList<IoPoolRegistry.PoolResidual> residualByPool = [];
+            var leakedIoLeaves = ioPools is null ? 0 : ioPools.DrainAll(out residualByPool);
             TestPhaseTrace(testName, "DISPOSE_IOPOOL_DRAIN_DONE", sw.ElapsedMilliseconds,
-                $"leakedIoLeaves={leakedIoLeaves}");
+                $"leakedIoLeaves={leakedIoLeaves}"
+                + (residualByPool.Count > 0 ? $" pools=[{string.Join(", ", residualByPool)}]" : ""));
             // After all the sync stuff is disposed (and everyone has enqueued their async
             // cleanup), quiesce the async dispose queue before the scope closes below.
             var asyncDisposeClean = asyncDisposeQueue is null

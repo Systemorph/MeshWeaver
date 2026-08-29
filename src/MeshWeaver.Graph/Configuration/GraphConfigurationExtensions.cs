@@ -44,13 +44,17 @@ public static class GraphConfigurationExtensions
                 // SlideNodeType/DeckNodeType consts + Matches (persistence parser, export gates),
                 // the content records (MarkdownFileParser), DeckSlidesCache (export templates),
                 // and SlideShowControl with its Blazor view (the pack emits the control).
-                // Comment / TrackedChange are NOT built-in any more: the MeshWeaver.Markdown.Collaboration
-                // MODULE owns both node types and the inline comment registration (Modules:Assemblies
-                // / AddCollaboration()). The compiled residue that stays platform-level is what keeps
-                // existing _Comment / _Tracking satellites readable and permission-delegating on a
-                // mesh without the module: the Comment/TrackedChange records in MeshWeaver.Mesh.Contract,
+                // Comment / TrackedChange stay DECLARED here while the MeshWeaver.Markdown.Collaboration
+                // MODULE owns every view and handler. The declaration cannot ride the module: this
+                // repository ships _Comment content of its OWN (samples/Graph/Data/FutuRe/…,
+                // Doc/DataMesh/CollaborativeEditing/…) and the content gate installs it on a host that
+                // cannot reference a plugins-repo module — undeclared, the platform could not install
+                // its own content ("NodeType 'Comment' is not registered"). CI caught that; review did
+                // not. The rest of the platform-level residue: the records in MeshWeaver.Mesh.Contract,
                 // their WithGraphTypes entries, the SatelliteAccessRule registrations below, and the
-                // annotations table routing further down.
+                // annotations table routing further down. See CommentNodeType.
+                .AddCommentType()
+                .AddTrackedChangeType()
                 .AddRedirectType()
                 .AddWhatsNewType()
                 .AddAccessAssignmentType()

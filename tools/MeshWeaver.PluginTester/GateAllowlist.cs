@@ -153,7 +153,27 @@ public sealed record AllowEntry(string Scope, string Check)
 }
 
 /// <summary>One observed failure: where, which check, and the detail text.</summary>
-public sealed record GateFailure(string Scope, string Check, string Detail);
+/// <param name="Scope">The package id or NodeType path the failure is on.</param>
+/// <param name="Check">The check name — install / idempotence / compile / render / tests. This is
+/// the RATCHET key: an allow entry names this, so it must stay the bare check name whatever kind
+/// of not-passing <see cref="GateFailure.Outcome"/> is (a listed debt is tolerated whether the
+/// check failed or produced no verdict).</param>
+/// <param name="Detail">The failure detail text.</param>
+public sealed record GateFailure(string Scope, string Check, string Detail)
+{
+    /// <summary>
+    /// WHICH KIND of not-passing this is — a negative verdict, no verdict at all, or a lost
+    /// record. It steers the HEADLINE only; the ratchet keys on <see cref="Check"/>.
+    ///
+    /// <para>🚨 An init-only PROPERTY, not a primary-constructor parameter: adding a defaulted
+    /// parameter to a public record's primary ctor is a binary-breaking change that
+    /// <c>scripts/check-record-signatures.py</c> refuses (the same rule
+    /// <see cref="AllowEntry.Intermittent"/> records). Defaults to
+    /// <see cref="CheckOutcome.Failed"/> so an existing construction keeps meaning exactly what it
+    /// meant.</para>
+    /// </summary>
+    public CheckOutcome Outcome { get; init; } = CheckOutcome.Failed;
+}
 
 /// <summary>
 /// The run's verdict once the allowlist is applied: which failures are NEW (fail the run), which
@@ -237,15 +257,26 @@ public sealed record GateVerdict(
         var failures = verdict is not null
             ? verdict.NewFailures
             : Failures(report).ToList();
+        // 🚨 Grouped by (check, KIND OF NOT-PASSING), never by check alone. This is the whole of
+        // #2454/#2463 in one loop: `compile: RolePlay/Story` for a 300s timeout, and for a compile
+        // whose bytes the same run had already baked, is a sentence that sends every reader to
+        // diff plugin source and framework signatures that are fine. The three states get three
+        // labels, and each non-verdict carries the clause that says where to look instead.
         foreach (var check in CheckOrder)
+        foreach (var outcome in OutcomeOrder)
         {
             var scopes = failures
-                .Where(f => string.Equals(f.Check, check, StringComparison.OrdinalIgnoreCase))
+                .Where(f => string.Equals(f.Check, check, StringComparison.OrdinalIgnoreCase)
+                            && f.Outcome == outcome)
                 .Select(f => f.Scope)
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
-            if (scopes.Count > 0)
-                parts.Add($"{check}: {string.Join(", ", scopes)}");
+            if (scopes.Count == 0)
+                continue;
+            var part = $"{CheckOutcomes.Label(check, outcome)}: {string.Join(", ", scopes)}";
+            parts.Add(CheckOutcomes.Guidance(outcome) is { } guidance
+                ? $"{part} ({guidance})"
+                : part);
         }
 
         if (verdict is { Stale.Count: > 0 })
@@ -260,6 +291,13 @@ public sealed record GateVerdict(
     private static readonly string[] CheckOrder =
         ["install", "idempotence", "compile", "render", "tests"];
 
+    /// <summary>
+    /// The not-passing kinds, most-conclusive first — so a run carrying a REAL compile error and a
+    /// separate timeout leads with the error, which is the one the reader can act on directly.
+    /// </summary>
+    private static readonly CheckOutcome[] OutcomeOrder =
+        [CheckOutcome.Failed, CheckOutcome.Unrecorded, CheckOutcome.Inconclusive];
+
     private static string FirstLine(string text) =>
         text.ReplaceLineEndings("\n").Split('\n')[0];
 
@@ -273,12 +311,21 @@ public sealed record GateVerdict(
                 yield return new GateFailure(package.Id, "idempotence", package.IdempotenceError);
             foreach (var type in package.NodeTypes)
             {
-                if (type.Compile == CheckOutcome.Failed)
-                    yield return new GateFailure(type.Path, "compile", type.CompileDetail ?? "");
-                if (type.Render == CheckOutcome.Failed)
-                    yield return new GateFailure(type.Path, "render", type.RenderDetail ?? "");
-                if (type.Tests == CheckOutcome.Failed)
-                    yield return new GateFailure(type.Path, "tests", type.TestsDetail ?? "");
+                // 🚨 .Fails(), never `== Failed`. An equality test here would have DROPPED every
+                // Inconclusive / Unrecorded outcome from the failure set — so the run would exit
+                // non-zero (NodeTypeResult.Success is false) while Headline reported "no failing
+                // check was recorded", and the allowlist would call every listed entry stale. A
+                // gate whose two halves disagree about what failed is worse than one that names
+                // the wrong cause.
+                if (type.Compile.Fails())
+                    yield return new GateFailure(type.Path, "compile", type.CompileDetail ?? "")
+                        { Outcome = type.Compile };
+                if (type.Render.Fails())
+                    yield return new GateFailure(type.Path, "render", type.RenderDetail ?? "")
+                        { Outcome = type.Render };
+                if (type.Tests.Fails())
+                    yield return new GateFailure(type.Path, "tests", type.TestsDetail ?? "")
+                        { Outcome = type.Tests };
             }
         }
     }

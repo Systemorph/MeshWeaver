@@ -65,6 +65,33 @@ public record SelfUpdateOptions
     public TimeSpan MinRollInterval { get; init; } = TimeSpan.FromHours(1);
 
     /// <summary>
+    /// 🚨 The SAFETY NET: the longest this install may go without ASKING whether a newer release
+    /// exists. Zero or negative disables it.
+    ///
+    /// <para>The check is event-driven, and that is still the design: a build completion wakes it in
+    /// seconds, which no interval can match. What the event-only shape got wrong is its failure
+    /// mode. Every event reaches this install over a chain of configuration nobody re-verifies — a
+    /// GitHub webhook, a <c>WebhookInbox</c> allowlist slot, an HMAC secret that must be
+    /// byte-identical on both sides — and EVERY joint of that chain fails SILENTLY. An install
+    /// whose event channel is dead is byte-identical, from outside and from its own logs, to an
+    /// install that is perfectly up to date: healthy pods, no errors, and a check that simply never
+    /// runs. memex sat three builds behind for 7 h in exactly that state (#2494, #2553), and
+    /// nothing in the product could have told anyone.</para>
+    ///
+    /// <para>🚨 So this is NOT the recurring poll this service deliberately removed, and the
+    /// distinction is the whole point: a poll DRIVES the update, a safety net BOUNDS how long a
+    /// broken driver can hide. Events stay the fast path and decide the latency; this decides the
+    /// worst case. It is also, by construction, unable to change the ROLL cadence — a safety-net
+    /// check is gated by <see cref="MinRollInterval"/> exactly like an event-driven one, so it can
+    /// only ever discover a release sooner, never roll more often.</para>
+    ///
+    /// <para>Default one hour: the same value as <see cref="MinRollInterval"/>, so the safety net
+    /// can never propose a roll the floor would refuse anyway, and the same cadence as CD's own
+    /// reconcile tick. The cost is one ACR tag list per hour per install.</para>
+    /// </summary>
+    public TimeSpan SafetyNetCheckInterval { get; init; } = TimeSpan.FromHours(1);
+
+    /// <summary>
     /// How long a burst of build-completion events is coalesced before one check runs.
     ///
     /// <para>Several repositories publishing at once (a platform release plus its satellites

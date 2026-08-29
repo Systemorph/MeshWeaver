@@ -96,6 +96,59 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string MainNode { get; init; } = string.IsNullOrEmpty(Namespace) ? Id : $"{Namespace}/{Id}";
 
     /// <summary>
+    /// This node names a <see cref="MainNode"/> the writer chose DELIBERATELY — i.e. one that is
+    /// not simply the node's own <see cref="Path"/>. THE definition of "the caller meant this", so
+    /// every merge that has to decide whether to move a stored MainNode asks it here rather than
+    /// re-deriving a subtly different rule.
+    ///
+    /// <para>🚨 <b>Why the question needs asking at all.</b> <see cref="MainNode"/> is NOT nullable:
+    /// it is initialised to this node's own path, so on the wire "the writer never touched it" and
+    /// "the writer set it to this node itself" are the SAME value. A full-instance upsert therefore
+    /// cannot use the null-keeps-state idiom every other field uses — a plain
+    /// <c>source.MainNode ?? stored.MainNode</c> would copy a self-pointing default over every
+    /// stored value, and <c>MainNode == Path</c> is exactly what makes a node a MAIN node
+    /// (<c>is:main</c> is SQL <c>n.main_node = n.path</c>; <see cref="Satellite"/> points it at the
+    /// primary). Every satellite an upsert touched would be silently promoted to a main node,
+    /// dropping it out of its owner's listings and re-scoping its grants, which project at
+    /// <c>COALESCE(main_node, namespace)</c>. That is why the field was simply LEFT OUT of the
+    /// upsert merge — a fix whose cure was worse than the disease (#2631).</para>
+    ///
+    /// <para><b>The residual limitation, stated plainly:</b> a full-instance write can move a
+    /// MainNode anywhere EXCEPT back onto the node's own path — it cannot turn a satellite back
+    /// INTO a main node, because that intent is indistinguishable from the untouched default.
+    /// Nothing needs it today: every writer that assigns a self-path (<c>PackageInstaller</c>'s
+    /// partition rebase, <c>GitHubSyncService</c>'s import rebase) is restating the default for a
+    /// node that already holds it. A caller that genuinely means it uses
+    /// <c>GetMeshNodeStream(path).Update(n =&gt; n with { MainNode = n.Path })</c> — which is also
+    /// what the <c>patch</c> verb does, since it can see the key was PRESENT
+    /// (<c>jsonObj.ContainsKey("mainNode")</c>), a signal a full instance does not carry.</para>
+    ///
+    /// <para>Allocation-free: <see cref="Path"/> is a computed interpolation, so it is compared
+    /// segment-wise rather than materialised — this runs on every upsert in the mesh.</para>
+    /// </summary>
+    [JsonIgnore, NotMapped]
+    public bool HasExplicitMainNode
+    {
+        get
+        {
+            var mainNode = MainNode;
+            // Defensive: MainNode is declared non-nullable, but a deserialized `"mainNode": null`
+            // arrives as null. Unset → keep the stored value, exactly like the other fields.
+            if (mainNode is null)
+                return false;
+            var ns = Namespace;
+            if (string.IsNullOrEmpty(ns))
+                return !string.Equals(mainNode, Id, StringComparison.Ordinal);
+            // "{ns}/{Id}" without building it. The length test runs FIRST, so the indexer below is
+            // in range by construction.
+            return mainNode.Length != ns.Length + 1 + Id.Length
+                   || mainNode[ns.Length] != '/'
+                   || !mainNode.AsSpan(0, ns.Length).SequenceEqual(ns.AsSpan())
+                   || !mainNode.AsSpan(ns.Length + 1).SequenceEqual(Id.AsSpan());
+        }
+    }
+
+    /// <summary>
     /// A SATELLITE of the node at <paramref name="mainNode"/>: created with <see cref="MainNode"/>
     /// already pointing at its primary, which is what the doc on <see cref="MainNode"/> promises and
     /// what every listing relies on to keep satellites out of a node's contents (the catalog's

@@ -1107,10 +1107,14 @@ workspace.GetMeshNodeStream(path)
   enforces `Permission.Update` via the `[RequiresPermission(Update)]` pipeline (a denial posts
   a `DeliveryFailure(Unauthorized)`), merges the diff against its OWN current state, **stamps
   auditing** (`LastModified`/`LastModifiedBy`), **persists durably**, and acks. `UpdateRemote`
-  drives the caller's terminal emission off that owner response (a 30 s optimistic fallback
-  covers a slow/cold owner), so a subsequent read-after-write sees the commit. An RLS denial
-  surfaces as `UnauthorizedAccessException`; a deserialization/validation rejection surfaces as
-  `MeshNodeStreamException`. (App-integrity `INodeValidator`s for Update — version, name — run
+  drives the caller's terminal emission off that owner response, so a subsequent read-after-write
+  sees the commit. An RLS denial surfaces as `UnauthorizedAccessException`; a
+  deserialization/validation rejection surfaces as `MeshNodeStreamException`. 🚨 **The terminal is
+  the owner's verdict and nothing weaker (#2661)** — a bound expiring is not a commit, so a busy
+  owner makes the caller *wait* rather than be told "saved" optimistically; a verdict arriving after
+  the short response bound is delivered through `LatePatchResponseRegistry` (which watches
+  `DeliveryFailure` as well as `PatchDataResponse`), and an owner that produces no terminal at all
+  within `LateResponseWatchBound` faults the write as unconfirmed. (App-integrity `INodeValidator`s for Update — version, name — run
   client-side in `IMeshService.UpdateNode`; the owner-enforced RLS/partition validators are
   marked `IOwnerEnforcedNodeValidator` and skipped there.)
 

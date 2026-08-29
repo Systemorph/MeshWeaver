@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using System.IO;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -218,5 +219,131 @@ public class MenuPresentationOverlayTest
         Assert.Equal("Admin/Menu/Mesh", MenuPresentation.PathFor("Mesh"));
         // The unnamed root $Menu slot must not silently share the Node dropdown's catalog.
         Assert.Equal("Admin/Menu/Default", MenuPresentation.PathFor(""));
+    }
+
+    // ── The catalog READ: storm-safe and anchored (#2640) ────────────────────────────────────────
+
+    /// <summary>
+    /// 🚨 The catalog read must be a <c>path:</c> QUERY, not a point read.
+    ///
+    /// <para>There is deliberately no seeded catalog, so ABSENT is the normal state for every
+    /// context on almost every mesh — and <c>RenderMenus</c> is a global predicate renderer
+    /// (<c>WithRenderer(_ =&gt; true, …)</c>) that reinstalls this stream once per context on EVERY
+    /// area render. A point <c>GetMeshNodeStream</c> probe of a maybe-absent path answers NotFound:
+    /// one <c>[ROUTE] NotFound</c> warning plus a DeliveryFailure NACK per probe, damped only by a
+    /// negative-cache window that expires and re-probes forever. <c>PlatformUpdateStatus.Observe</c>
+    /// states the rule outright — "storm-safe existence GetQuery (empty-on-absent) — NEVER a point
+    /// GetMeshNodeStream probe of a maybe-absent path".</para>
+    ///
+    /// <para>This asserts the QUERY STRING because that is the part a caller can get wrong silently:
+    /// the shape decides both the storm behaviour and the partition routing.</para>
+    /// </summary>
+    [Fact]
+    public void CatalogQuery_IsAnExactPathRead_SoAnAbsentCatalogIsNoRowsRatherThanNotFound()
+    {
+        var query = MenuPresentationOverlay.CatalogQuery("Node");
+
+        Assert.StartsWith("path:Admin/Menu/Node", query);
+        // Default scope for a `path:` query is Exact — no scope token means the one node, which is
+        // what an existence check wants. An explicit widening here would read siblings too.
+        Assert.DoesNotContain("scope:", query);
+    }
+
+    /// <summary>
+    /// The read must stay ANCHORED to the Admin partition. It is anchored by its first path segment,
+    /// which is the ONLY way in: <c>admin</c> is deliberately excluded from cross-schema search, so a
+    /// <c>namespace:</c>-shaped read would fan out over every partition AND still miss the catalog.
+    /// </summary>
+    [Fact]
+    public void CatalogQuery_IsAnchoredToTheAdminPartition_ByPathNotNamespace()
+    {
+        foreach (var context in new[] { "Node", "Mesh", "AI", "" })
+        {
+            var query = MenuPresentationOverlay.CatalogQuery(context);
+            var firstSegment = query["path:".Length..].Split(' ')[0].Split('/')[0];
+            Assert.Equal(MenuPresentation.CatalogPartition, firstSegment);
+            Assert.DoesNotContain("namespace:", query);
+        }
+    }
+
+    /// <summary>
+    /// The projection must NAME <c>content</c>. A <c>select:</c> that omits it yields a node whose
+    /// <c>Content</c> is silently null, so a catalog that exists would read as "no catalog" and the
+    /// overlay would quietly stop applying — the failure this whole class exists to make visible.
+    /// </summary>
+    [Fact]
+    public void CatalogQuery_ProjectsContent_OrAnExistingCatalogReadsAsAbsent()
+    {
+        Assert.Contains("select:", MenuPresentationOverlay.CatalogQuery("Node"));
+        Assert.Contains("content", MenuPresentationOverlay.CatalogProjection);
+    }
+
+    /// <summary>
+    /// The synced-query id is STABLE per context and distinct across contexts. Both halves matter:
+    /// an id composed per call would open a new upstream on every area render (defeating the cache
+    /// that makes the per-render re-subscribe cheap), and a shared id would serve the Node
+    /// dropdown's catalog to the Mesh dropdown.
+    /// </summary>
+    [Fact]
+    public void CatalogQueryId_IsStablePerContext_AndDistinctAcrossContexts()
+    {
+        Assert.Equal(MenuPresentationOverlay.CatalogQueryId("Node"), MenuPresentationOverlay.CatalogQueryId("Node"));
+        Assert.NotEqual(MenuPresentationOverlay.CatalogQueryId("Node"), MenuPresentationOverlay.CatalogQueryId("Mesh"));
+        // The unnamed context resolves through PathFor, so it cannot collide with "Node" either.
+        Assert.NotEqual(MenuPresentationOverlay.CatalogQueryId(""), MenuPresentationOverlay.CatalogQueryId("Node"));
+    }
+
+    /// <summary>
+    /// 🚨 The guard that pins the PRIMITIVE, because the string tests above cannot see it: a
+    /// point read and a query produce the same catalog when the node exists, and differ only when
+    /// it does NOT — which here is the normal state.
+    ///
+    /// <para>The rule is already written down, in <c>PlatformUpdateStatus.Observe</c>: "Absence is
+    /// detected with the storm-safe existence <c>GetQuery</c> (empty-on-absent) — NEVER a point
+    /// <c>GetMeshNodeStream</c> probe of a maybe-absent path, which NotFound-resubscribe-storms."
+    /// This overlay broke it on a far hotter path than the one that rule was written for:
+    /// <c>RenderMenus</c> is a global predicate renderer, so it reinstalled the probe once per menu
+    /// context on EVERY area render, and each probe of the deliberately-absent catalog cost a
+    /// <c>[ROUTE] NotFound</c> warning and a DeliveryFailure NACK.</para>
+    ///
+    /// <para>A source guard rather than a behavioural assertion is deliberate: reproducing the
+    /// difference needs a live hub, a routing grain and an absent node, and a test that heavy would
+    /// be the first one silenced. This one fails the moment the primitive is swapped back, which is
+    /// the only regression that matters. If the file is restructured, re-point it — do not delete
+    /// it because it went red.</para>
+    /// </summary>
+    [Fact]
+    public void CatalogStream_UsesTheStormSafeExistenceQuery_NeverAPointReadOfAMaybeAbsentPath()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindRepoRoot(), "src", "MeshWeaver.Graph", "Configuration", "MenuPresentationOverlay.cs"));
+
+        // The body must reach the catalog through the synced query surface…
+        Assert.Contains("GetQuery(CatalogQueryId(context), CatalogQuery(context))", source);
+
+        // …and must not point-probe it. Mentions inside comments are how the rule explains itself,
+        // so only CODE lines are considered.
+        var pointReads = source
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => !line.StartsWith("//") && !line.StartsWith("///") && !line.StartsWith("*"))
+            .Where(line => line.Contains("GetMeshNodeStream"))
+            .ToList();
+
+        Assert.True(pointReads.Count == 0,
+            "MenuPresentationOverlay must not point-read Admin/Menu/{context}: the catalog is absent "
+            + "by design and RenderMenus reinstalls this stream on every area render, so a point read "
+            + "is a permanent NotFound-resubscribe storm (#2640). Found: "
+            + string.Join(" | ", pointReads));
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
+            dir = dir.Parent;
+        return dir?.FullName
+            ?? throw new InvalidOperationException(
+                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
     }
 }

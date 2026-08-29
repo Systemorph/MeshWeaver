@@ -177,7 +177,8 @@ public static class EmitPipeline
     ///
     /// <para><b>Leg 2 — pristine references.</b> Run only when leg 1 fails: the SAME source
     /// against a freshly created, minimal reference set that has never been handed to Roslyn
-    /// before and is shared with nothing. This is the discriminator, and it exists because
+    /// before and is shared with nothing — see the mapping note below for what "nothing" had to
+    /// be widened to mean. This is the discriminator, and it exists because
     /// Roslyn's own source settles who can supply the null. The NRE's guard
     /// (<c>NamedTypeSymbolAdapter.AsNestedTypeDefinitionImpl</c>) admits a type only when
     /// <c>ContainingModule == moduleBeingBuilt.SourceModule</c> — so the symbol whose
@@ -191,8 +192,9 @@ public static class EmitPipeline
     ///   <item><c>canary=DIVERGENT</c> — neither emits, but they died in DIFFERENT frames. The
     ///     two legs run identical source, so two different faults are not evidence of one
     ///     process-wide fault; both sites are named and the below-Roslyn claim is withheld.</item>
-    ///   <item><c>canary=BELOW-ROSLYN</c> — neither emits, IN THE SAME FRAME: brand-new references and freshly
-    ///     parsed source still cannot emit, so nothing about the reference set explains it. The
+    ///   <item><c>canary=BELOW-ROSLYN</c> — neither emits, IN THE SAME FRAME: freshly parsed source
+    ///     and an IMAGE-BACKED CoreLib (sharing neither the reference instances nor their file
+    ///     mappings) still cannot emit, so nothing about the reference set explains it. The
     ///     broken state is under Roslyn (CLR heap / JIT / GC) and no reference-set change can fix
     ///     it. Roslyn keeps no cross-emit state — the metadata writer's indices are per-emit, its
     ///     object pools hold only scratch buffers, and <c>AssemblyMetadata.CachedSymbols</c> is a
@@ -202,6 +204,25 @@ public static class EmitPipeline
     ///     folded into BELOW-ROSLYN: a probe that answers its scariest branch on its own
     ///     inability would send triage after a CLR heap bug nothing observed.</item>
     /// </list></para>
+    ///
+    /// <para>🚨 <b>The control must not share the one file both sets must map.</b> Leg 2 built its
+    /// CoreLib with <c>MetadataReference.CreateFromFile(typeof(object).Assembly.Location)</c> —
+    /// and <see cref="CompileReferences"/> maps <b>that same path</b>, both from
+    /// <c>TRUSTED_PLATFORM_ASSEMBLIES</c> and again as an explicit
+    /// <c>typeof(object).Assembly</c> addition. Distinct <c>PortableExecutableReference</c>
+    /// instances, yes — but the same on-disk image, hence the same mmap and the same OS page-cache
+    /// pages. Every compilation must reference CoreLib, so that overlap is unavoidable *by
+    /// construction*: the "pristine" leg shared with the poisoned set precisely the one input no
+    /// compile can omit. A fault in those mapped metadata pages (a torn or evicted page on the
+    /// runner's overlayfs, a bad mapping) therefore killed BOTH legs in the SAME frame and was
+    /// reported as <c>BELOW-ROSLYN</c> — *"nothing about the reference set explains this … capture
+    /// a core dump"* — which is the most expensive answer this probe can give, handed out on
+    /// evidence that never excluded the mapping. Nine CI occurrences (2026-08-23 → 08-28) all
+    /// returned that verdict unanimously, and it steered #890's triage away from the reference set
+    /// on a distinction the probe had not actually drawn. Leg 2 now uses
+    /// <c>CreateFromImage(File.ReadAllBytes(...))</c>: fresh managed bytes, no mapping shared with
+    /// anything. This is the same defect as the message-vs-site one below, one layer down — a
+    /// control is only a control for what it does not share.</para>
     ///
     /// <para>🚨 It cannot fail into the fault path it is diagnosing: every outcome — including
     /// the canary throwing — returns a STRING. A diagnostic that throws while diagnosing would
@@ -231,20 +252,7 @@ public static class EmitPipeline
         // branch on its own inability, sending triage after a CLR heap bug that nothing observed.
         // A diagnostic that cannot report "I could not run" is the same defect as a gate that
         // passes when its input is missing.
-        string? pristineUnavailable = null;
-        IReadOnlyList<MetadataReference> pristineRefs = [];
-        try
-        {
-            var coreLib = typeof(object).Assembly.Location;
-            if (string.IsNullOrEmpty(coreLib) || !File.Exists(coreLib))
-                pristineUnavailable = "no on-disk System.Private.CoreLib to reference";
-            else
-                pristineRefs = [MetadataReference.CreateFromFile(coreLib)];
-        }
-        catch (Exception buildError)
-        {
-            pristineUnavailable = $"{buildError.GetType().Name}: {buildError.Message}";
-        }
+        var pristineRefs = TryBuildPristineControl(out var pristineUnavailable);
 
         if (pristineUnavailable is not null)
             return $"canary=INCONCLUSIVE shared:{shared} pristine:UNAVAILABLE({pristineUnavailable}) "
@@ -252,6 +260,54 @@ public static class EmitPipeline
                 + "BUILT, so this says nothing about whether the reference set is the cause";
 
         return Verdict(shared, EmitCanary(() => pristineRefs));
+    }
+
+    /// <summary>
+    /// Test seam: run ONE canary leg against a given reference set and return its outcome token.
+    /// Lets <c>EmitCanaryControlTest</c> assert that the control can still emit — a control that
+    /// cannot compile would retire the discriminator silently, turning every occurrence into
+    /// INCONCLUSIVE with nothing going red.
+    /// </summary>
+    internal static string EmitCanaryForTest(IReadOnlyList<MetadataReference> references)
+        => EmitCanary(() => references);
+
+    /// <summary>
+    /// Builds leg 2's control reference set: CoreLib, and nothing else.
+    ///
+    /// <para>🚨 <b>Image-backed, never file-backed</b> — the whole point of the control is that it
+    /// shares nothing with the reference set under suspicion, and
+    /// <c>CreateFromFile(typeof(object).Assembly.Location)</c> shared the single file
+    /// <see cref="CompileReferences.Default"/> is guaranteed to map. Reading the bytes and using
+    /// <c>CreateFromImage</c> gives a reference backed by a fresh managed array: no mmap, no
+    /// shared page-cache pages, no shared <c>AssemblyMetadata</c>. Extracted so the invariant is
+    /// assertable — <c>EmitCanaryControlTest</c> pins that the control carries no
+    /// <c>FilePath</c> while the shared set does map that same file, which is exactly the overlap
+    /// that made <c>BELOW-ROSLYN</c> unearned.</para>
+    ///
+    /// <para>Never throws: a failure to build the control is a SEPARATE verdict
+    /// (<c>INCONCLUSIVE</c>), never folded into <c>BELOW-ROSLYN</c>. Cost is one ~15 MB read, only
+    /// ever on an already-failing path.</para>
+    /// </summary>
+    /// <param name="unavailable">Why the control could not be built, or <c>null</c> on success.</param>
+    internal static IReadOnlyList<MetadataReference> TryBuildPristineControl(out string? unavailable)
+    {
+        unavailable = null;
+        try
+        {
+            var coreLib = typeof(object).Assembly.Location;
+            if (string.IsNullOrEmpty(coreLib) || !File.Exists(coreLib))
+            {
+                unavailable = "no on-disk System.Private.CoreLib to reference";
+                return [];
+            }
+
+            return [MetadataReference.CreateFromImage(File.ReadAllBytes(coreLib))];
+        }
+        catch (Exception buildError)
+        {
+            unavailable = $"{buildError.GetType().Name}: {buildError.Message}";
+            return [];
+        }
     }
 
     /// <summary>
@@ -277,9 +333,12 @@ public static class EmitPipeline
     {
         if (pristine.StartsWith("OK", StringComparison.Ordinal))
             return $"canary=REFERENCES shared:{shared} pristine:{pristine} — the same source emits fine "
-                + "against BRAND-NEW references but fails against the shared set ⇒ the poison "
-                + "travels with the MetadataReference instances / the Roslyn symbols cached on "
-                + "them (reference-set scoping is the right axis)";
+                + "against an IMAGE-BACKED CoreLib but fails against the shared set ⇒ the poison "
+                + "travels with the shared reference state: either the MetadataReference instances "
+                + "and the Roslyn symbols cached on them, or the mmap'd on-disk images they map "
+                + "(the control shares neither). Scope the reference set per mesh to separate the "
+                + "two — and if the shared set's CoreLib is implicated, suspect the file mapping, "
+                + "not the instance";
 
         var sharedSite = SiteOf(shared);
         var pristineSite = SiteOf(pristine);
@@ -295,11 +354,14 @@ public static class EmitPipeline
                 + "whichever site is not the emit itself";
 
         return $"canary=BELOW-ROSLYN shared:{shared} pristine:{pristine} — a trivial compilation "
-            + "with BRAND-NEW references and freshly parsed source cannot emit either, and BOTH "
-            + $"legs died in the same frame ({sharedSite}) ⇒ nothing about the reference set "
-            + "explains this; the broken state is below Roslyn (CLR heap / JIT / GC), so no "
-            + "reference-set change can fix it — capture a core dump and re-run with tiering "
-            + "disabled";
+            + "with freshly parsed source and an IMAGE-BACKED CoreLib (fresh managed bytes, "
+            + "sharing neither the MetadataReference instances nor the mmap'd images of the "
+            + $"shared set) cannot emit either, and BOTH legs died in the same frame ({sharedSite}) "
+            + "⇒ nothing about the reference set OR its file mappings explains this; the "
+            + "broken state is below Roslyn (CLR heap / JIT / GC), so no reference-set change can "
+            + "fix it — capture a core dump and re-run with tiering disabled. RESIDUAL: both legs "
+            + "still run on the one CLR, so this does not separate a corrupted heap from a "
+            + "miscompiled Roslyn method — compare the dump's faulting address against #613";
     }
 
     /// <summary>

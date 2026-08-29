@@ -31,8 +31,11 @@ the branch, and it compiled cleanly — the module's source carries `using` dire
 namespaces, so SOURCE compatibility survived a break that BINARY compatibility did not. The same
 blind spot is structural in CI:
 
-  * `landed-modules-gate` compiles the plugins repo's module SOURCE against the PR. It answers
-    "will the module still COMPILE", never "will the module ALREADY PUBLISHED still BIND".
+  * `landed-modules-gate` used to compile the plugins repo's module SOURCE against the PR. It
+    answered "will the module still COMPILE", never "will the module ALREADY PUBLISHED still
+    BIND" — and it is GONE besides (see the note above `clients-gate` in dotnet-test.yml: core
+    builds the image and runs its own tests; plugins are built by the repo that owns them). So
+    nothing in this workflow compiles a single line of module source any more.
   * `check-record-signatures.py` (#2298) covers the other half of the same class — a public
     record's primary constructor — and stops at constructors.
   * The semver floor cannot see a type at all.
@@ -54,13 +57,52 @@ A forwarder CANNOT rename, so a move that also changes the namespace fails until
 full name is restored in the new assembly (which is exactly the #2370 fix: the moved types keep
 `namespace MeshWeaver.AI` inside MeshWeaver.Mesh.Operations, and MeshWeaver.AI forwards).
 
-WHAT IT DELIBERATELY DOES NOT CHECK
------------------------------------
-A public type that disappears from `src/` ENTIRELY is out of scope, and that is a scoping
-decision rather than an oversight. An assembly that leaves this repo for a node repo (#2276)
-keeps its assembly name and keeps serving its consumers, so every one of its types would be a
-false positive; and a genuine deletion reads AS a deletion in review, whereas a move reads as a
-refactor and reviews as one. The silent shape is the one gated here.
+…AND THE DEPARTURES, WHICH USED TO BE A SILENT `continue` (#2398)
+-----------------------------------------------------------------
+A type can also leave an assembly WITHOUT landing anywhere in this repo. The original scoping
+decision waved that through — "a genuine deletion reads AS a deletion in review, whereas a move
+reads as a refactor" — and #2276 destroyed the premise. Since the module assemblies moved to
+MeshWeaver.Plugins, a public type that moves from a core assembly INTO one of them deletes files
+from core and adds none, so in core it reads EXACTLY like a deletion, to this gate and to a
+reviewer alike. Measured on 2026-08-29:
+
+    check-type-forwards.py --base v3.0.0-rc7 --head origin/main   ->  "OK"
+
+...while that window contains the seven #2398 types (`MeshWeaver.GitSync.AiContentSyncArea` and
+friends) that left GitSync/Hosting for `MeshWeaver.AI`, which is now built in MeshWeaver.Plugins.
+The gate reported green on the exact class it exists for, and could not have reported anything
+else: `MeshWeaver.AI` is not in this repo's `src/`, so there was no landing site to find.
+
+So a DEPARTURE — the type is gone from `src/` while the assembly it left is STILL BUILT HERE — is
+now its own reported, counted category, and it FAILS. A module holding
+`OldAssembly!Namespace.Type` throws the identical `TypeLoadException` whether the type moved to a
+sibling repo or was deleted outright, so failing on both is the conservative reading of the same
+contract; deletions cost nothing in practice (MEASURED: zero departures across `main~5`, `~10`,
+`~25`, `~50` and `~100` -> `main`, versus eight across `~400`).
+
+If the OLD assembly itself left this repo, that is a different thing and is still skipped — there
+is nowhere here to put a forwarder, the assembly keeps its name and its consumers wherever it is
+built now, and 537 of its types would otherwise be reported at once.
+
+RESOLVING A DEPARTURE: `--sibling <checkout>`
+--------------------------------------------
+Nothing inside this repo can tell a cross-repo move from a deletion — both are "the file is
+gone". Point the gate at a sibling checkout (repeatable) and it can:
+
+    check-type-forwards.py --base v3.0.0-rc7 --head origin/main --sibling ~/code/MeshWeaver.Plugins
+
+A departed type found in a sibling's `src/` is named as a PROVEN CROSS-REPO MOVE, with the repo
+and assembly it landed in. One found in NO sibling given is a PROVEN DELETION, reported but not
+failed — which restores the original scoping decision on the one footing that can carry it,
+evidence. `--sibling` therefore only ever RELAXES the verdict, so it cannot manufacture a red,
+and omitting it is the conservative mode.
+
+CI does NOT pass `--sibling`, deliberately. This repo is PUBLIC and MeshWeaver.Plugins is PRIVATE,
+so the checkout would need a secret on a `pull_request` gate — in a workflow that today has no
+secret and no preflight job at all (both deliberate; see the "No preflight job right now" note in
+dotnet-test.yml) — and it would make a required gate's verdict depend on ANOTHER repo's moving
+HEAD. A binary-compatibility gate whose answer changes without its own diff changing is one people
+stop believing.
 
 THE ESCAPE HATCH
 ----------------
@@ -248,6 +290,27 @@ def read_work_tree(root: Path) -> tuple[dict[str, Decl], set[str], set[str]]:
     return decls, forwards, assemblies
 
 
+def read_sibling_tree(path: Path) -> dict[str, list[Decl]]:
+    """Public top-level types declared under `<sibling>/src/`, indexed by SIMPLE NAME.
+
+    Matching is by simple name — never full name — for the same reason `find_moves` uses it in
+    this repo: a move that also renames the namespace is precisely the case that CANNOT be
+    forwarded, so keying on the full name would hide the worst one. The destination's full name is
+    printed instead, which makes the rename visible."""
+    by_simple_name: dict[str, list[Decl]] = {}
+    src = path / "src"
+    if not src.is_dir():
+        return by_simple_name
+    for file in sorted(src.rglob("*.cs")):
+        rel = file.relative_to(path).as_posix()
+        if not _is_scanned(rel):
+            continue
+        text = file.read_text(encoding="utf-8", errors="replace")
+        for d in parse_declarations(rel, text):
+            by_simple_name.setdefault(d.name, []).append(d)
+    return by_simple_name
+
+
 def read_allow(root: Path) -> dict[str, str]:
     file = root / ALLOW_FILE
     if not file.exists():
@@ -265,13 +328,61 @@ def read_allow(root: Path) -> dict[str, str]:
 # ─────────────────────────────── the check ───────────────────────────────
 
 
+def _departure(
+    key: str, old: Decl, siblings: dict[str, dict[str, list[Decl]]] | None
+) -> tuple[str, str, bool]:
+    """One departed type, resolved against the sibling checkouts if any were given."""
+    elsewhere = [
+        f"{label}/src/{d.assembly} ({d.full_name})"
+        for label, index in sorted((siblings or {}).items())
+        for d in index.get(old.name, [])
+    ]
+    if elsewhere:
+        return (
+            key,
+            f"  {old.full_name}\n"
+            f"      left     {old.assembly}  (still built here — so a module binds "
+            f"{old.assembly}!{old.full_name})\n"
+            f"      now in   {', '.join(sorted(elsewhere))}\n"
+            f"      CROSS-REPO MOVE. A forwarder is usually impossible: it would have to live in\n"
+            f"      src/{old.assembly} and reference an assembly this repo does not build.",
+            False,
+        )
+    if siblings:
+        return (
+            key,
+            f"  {old.full_name}\n"
+            f"      left     {old.assembly}  (still built here — so a module binds "
+            f"{old.assembly}!{old.full_name})\n"
+            f"      in none of {', '.join(sorted(siblings))} — a PROVEN DELETION.",
+            True,
+        )
+    return (
+        key,
+        f"  {old.full_name}\n"
+        f"      left     {old.assembly}  (still built here — so a module binds "
+        f"{old.assembly}!{old.full_name})\n"
+        f"      now in   nothing under this repo's src/",
+        False,
+    )
+
+
 def find_moves(
     before: dict[str, Decl],
     after: dict[str, Decl],
     forwards: set[str],
     head_assemblies: set[str] | None = None,
-) -> tuple[list[tuple[str, str]], set[str]]:
-    """Returns ([(key, message)] failures, keys that legitimately moved).
+    siblings: dict[str, dict[str, list[Decl]]] | None = None,
+) -> tuple[list[tuple[str, str]], set[str], list[tuple[str, str, bool]]]:
+    """Returns ([(key, message)] failures, keys accounted for, [(key, message, is_deletion)]).
+
+    The third list is the DEPARTURES (#2398): the type is gone from this repo's `src/` while the
+    assembly it left is still built here. `is_deletion` is True only when `siblings` was supplied
+    and the type is in none of them — i.e. the deletion is PROVEN rather than merely assumed.
+
+    `siblings` maps a checkout label to that checkout's declarations by simple name; it is the ONLY
+    thing that can tell a cross-repo move from a deletion, since inside this repo both are "the
+    file is gone".
 
     The key is what `scripts/type-forwards.allow` names, so `check` can match an allow entry
     EXACTLY — a substring match on the message would let one entry silence a same-named type in a
@@ -282,6 +393,7 @@ def find_moves(
 
     failures: list[tuple[str, str]] = []
     moved: set[str] = set()
+    departed: list[tuple[str, str, bool]] = []
     for key, old in sorted(before.items()):
         if key in after:
             continue
@@ -294,7 +406,14 @@ def find_moves(
             continue
         landed = [d for d in by_simple_name.get(old.name, []) if d.assembly != old.assembly]
         if not landed:
-            continue  # gone from src/ entirely — out of scope, see the module docstring
+            # 🚨 #2398: this used to be a silent `continue`, and that is how the gate went green on
+            # the seven types that left GitSync/Hosting for MeshWeaver.AI. Post-#2276, MeshWeaver.AI
+            # is built in MeshWeaver.Plugins, so the move left NO landing site here and read as a
+            # deletion — the one shape the gate treated as out of scope. It is reported now.
+            departed.append(_departure(key, old, siblings))
+            if not departed[-1][2]:
+                moved.add(key)  # allow-listable, and the entry stays honest via the stale ratchet
+            continue
         moved.add(key)
         # The old assembly forwards the ORIGINAL full name: binary-compatible. Accept the
         # unqualified `typeof(Foo)` spelling too — C# resolves it against that file's usings, and a
@@ -321,22 +440,42 @@ def find_moves(
             f"      against the old platform binds a TypeRef that no longer resolves (#2370).\n"
             f"{remedy}",
         ))
-    return failures, moved
+    return failures, moved, departed
 
 
-def check(root: Path, base: str, head: str | None = None) -> int:
+def check(
+    root: Path, base: str, head: str | None = None, sibling_paths: list[str] | None = None
+) -> int:
     before, _, _ = read_base_tree(base)
     after, forwards, head_assemblies = (
         read_base_tree(head) if head else read_work_tree(root)
     )
     allow = read_allow(root)
+    siblings = {Path(p).resolve().name: read_sibling_tree(Path(p)) for p in (sibling_paths or [])}
+    for label, index in siblings.items():
+        print(f"Sibling checkout {label}: {sum(len(v) for v in index.values())} public types.")
 
-    failures, moved = find_moves(before, after, forwards, head_assemblies)
+    failures, moved, departed = find_moves(
+        before, after, forwards, head_assemblies, siblings or None
+    )
 
     unmatched = [key for key in allow if key not in moved]
     remaining = [message for key, message in failures if key not in allow]
+    # A PROVEN deletion is reported and passes; anything else in this category fails, and the
+    # allow file is the same escape hatch it is for a move.
+    departures_failing = [
+        (key, message) for key, message, is_deletion in departed if not is_deletion and key not in allow
+    ]
+    deletions = [message for _, message, is_deletion in departed if is_deletion]
 
-    if not remaining and not unmatched:
+    if deletions:
+        print(
+            f"\n{len(deletions)} public type(s) left src/ with no forwarder and were found in NONE of "
+            f"the sibling checkouts given — a proven deletion, reported but not failed:\n"
+        )
+        print("\n\n".join(deletions))
+
+    if not remaining and not unmatched and not departures_failing:
         print(f"OK — no unguarded public-type move against {base}.")
         return 0
 
@@ -348,6 +487,20 @@ def check(root: Path, base: str, head: str | None = None) -> int:
         print("\n\n".join(remaining))
         print(
             f"\nIf no shipped module can hold this TypeRef, record that in {ALLOW_FILE} with a reason.\n"
+        )
+    if departures_failing:
+        print(
+            f"\n{len(departures_failing)} PUBLIC TYPE(S) LEFT src/ WITH NO FORWARDER AND NO LANDING SITE\n"
+            f"IN THIS REPO — verify they did not move to a sibling repo (#2398). Post-#2276 the\n"
+            f"module assemblies are built in MeshWeaver.Plugins, so a move into one of them deletes\n"
+            f"files here and adds none: indistinguishable from a deletion, and binary-breaking\n"
+            f"either way for a module compiled against an earlier platform (#2370).\n"
+        )
+        print("\n\n".join(message for _, message in departures_failing))
+        print(
+            f"\nRe-run with --sibling <checkout> (e.g. ../MeshWeaver.Plugins) to say which of these\n"
+            f"moved and which were deleted — a proven deletion is reported and passes. If no shipped\n"
+            f"module can hold the TypeRef, record that in {ALLOW_FILE} with a reason.\n"
         )
     for key in sorted(unmatched):
         print(
@@ -382,8 +535,15 @@ ASPNET_PORTAL_APP = "namespace MeshWeaver.Hosting.AspNetCore.Portal;\npublic cla
 ASPNET_KEEP = "namespace MeshWeaver.Hosting.AspNetCore;\npublic class Other\n{\n}\n"
 ENUM_E = "namespace N;\npublic enum E\n{\n    A,\n}\n"
 DELEGATE_D = "namespace N;\npublic delegate void D(int x);\n"
+# The #2398 seven, in miniature: the type keeps its simple name and CHANGES namespace, which is
+# why the sibling lookup keys on the simple name and prints the destination's full name.
+GITSYNC_SYNC_AREA = "namespace MeshWeaver.GitSync;\npublic static class AiContentSyncArea\n{\n}\n"
+GITSYNC_KEEP = "namespace MeshWeaver.GitSync;\npublic class GitSyncPlugin\n{\n}\n"
+AI_SYNC_AREA = "namespace MeshWeaver.AI;\npublic static class AiContentSyncArea\n{\n}\n"
 
-SELF_TESTS: list[tuple[str, dict[str, str], dict[str, str], bool]] = [
+# (label, base files, head files, should_pass[, sibling checkouts][, substrings the output must
+# contain]). The last two are optional so the rows that predate --sibling stay as they were.
+SELF_TESTS: list[tuple] = [
     (
         "the #2370 move: assembly AND namespace changed, no forwarder",
         {
@@ -491,9 +651,65 @@ SELF_TESTS: list[tuple[str, dict[str, str], dict[str, str], bool]] = [
         False,
     ),
     (
-        "type deleted outright — out of scope, must not fire",
+        # 🚨 POLICY CHANGE (#2398). This row used to assert `True` — "a deletion reads AS a
+        # deletion in review". Post-#2276 it does not: a type moving into an assembly built in
+        # MeshWeaver.Plugins deletes files here and adds none, so a cross-repo move and a deletion
+        # are the SAME diff in this repo. The gate reports both and lets --sibling separate them.
+        "a type gone from src/ while its assembly is still here is a DEPARTURE, not silence",
         {"src/A/Foo.cs": FOO_N, "src/A/Keep.cs": KEEP_A},
         {"src/A/Keep.cs": KEEP_A},
+        False,
+    ),
+    (
+        # THE #2398 SHAPE, exactly: MeshWeaver.GitSync stays in core, AiContentSyncArea leaves it
+        # for MeshWeaver.AI — which is built in MeshWeaver.Plugins, so there is no landing site
+        # here. Before this change the gate hit `if not landed: continue` and printed OK.
+        "the #2398 shape: a type leaves a core assembly for one built in a SIBLING repo",
+        {
+            "src/MeshWeaver.GitSync/AiContentSyncArea.cs": GITSYNC_SYNC_AREA,
+            "src/MeshWeaver.GitSync/Keep.cs": GITSYNC_KEEP,
+        },
+        {"src/MeshWeaver.GitSync/Keep.cs": GITSYNC_KEEP},
+        False,
+    ),
+    (
+        "…and with --sibling it is named as a CROSS-REPO MOVE, with repo, assembly and new name",
+        {
+            "src/MeshWeaver.GitSync/AiContentSyncArea.cs": GITSYNC_SYNC_AREA,
+            "src/MeshWeaver.GitSync/Keep.cs": GITSYNC_KEEP,
+        },
+        {"src/MeshWeaver.GitSync/Keep.cs": GITSYNC_KEEP},
+        False,
+        {"MeshWeaver.Plugins": {"src/MeshWeaver.AI/AiContentSyncArea.cs": AI_SYNC_AREA}},
+        ("CROSS-REPO MOVE", "MeshWeaver.Plugins/src/MeshWeaver.AI", "MeshWeaver.AI.AiContentSyncArea"),
+    ),
+    (
+        # The other half, and the reason --sibling can only RELAX: with the sibling in hand the
+        # deletion is PROVEN, so the original scoping decision is restored — on evidence this time.
+        "…while a departed type in NO sibling given is a proven deletion and passes",
+        {"src/A/Foo.cs": FOO_N, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Keep.cs": KEEP_A},
+        True,
+        {"MeshWeaver.Plugins": {"src/MeshWeaver.AI/Unrelated.cs": "namespace Q;\npublic class Unrelated\n{\n}\n"}},
+    ),
+    (
+        # A sibling can only answer for types it declares. A same-named type in a sibling's OWN
+        # source is what makes the move provable; one in its bin/obj output is not source at all.
+        "a sibling's bin/obj output is not a landing site",
+        {"src/A/Foo.cs": FOO_N, "src/A/Keep.cs": KEEP_A},
+        {"src/A/Keep.cs": KEEP_A},
+        True,
+        {"MeshWeaver.Plugins": {"src/B/obj/Generated/Foo.cs": FOO_N}},
+    ),
+    (
+        # The whole-assembly-left skip still wins over the departure report: the assembly is not
+        # built here any more, so there is no forwarder to demand and no departure to report.
+        "an assembly that LEFT the repo produces no departures either",
+        {
+            "src/MeshWeaver.Blazor/Infrastructure/PortalApplication.cs": BLAZOR_PORTAL_APP,
+            "src/MeshWeaver.Hosting.AspNetCore/Other.cs": ASPNET_KEEP,
+        },
+        {"src/MeshWeaver.Hosting.AspNetCore/Other.cs": ASPNET_KEEP},
         True,
     ),
     (
@@ -504,7 +720,13 @@ SELF_TESTS: list[tuple[str, dict[str, str], dict[str, str], bool]] = [
             "src/MeshWeaver.Blazor/Infrastructure/PortalApplication.cs": BLAZOR_PORTAL_APP,
             "src/MeshWeaver.Hosting.AspNetCore/Other.cs": ASPNET_KEEP,
         },
-        {"src/MeshWeaver.Hosting.AspNetCore/Portal/PortalApplication.cs": ASPNET_PORTAL_APP},
+        {
+            "src/MeshWeaver.Hosting.AspNetCore/Portal/PortalApplication.cs": ASPNET_PORTAL_APP,
+            # Kept at HEAD so the row tests ONLY the whole-assembly-left rule. Dropping it made
+            # `Other` depart from an assembly that is still here, which the departure report
+            # (#2398) correctly fires on — a second finding that has nothing to do with Blazor.
+            "src/MeshWeaver.Hosting.AspNetCore/Other.cs": ASPNET_KEEP,
+        },
         True,
     ),
     (
@@ -604,7 +826,10 @@ SELF_TESTS: list[tuple[str, dict[str, str], dict[str, str], bool]] = [
 
 def self_test() -> int:
     failed = 0
-    for label, base_files, head_files, should_pass in SELF_TESTS:
+    for entry in SELF_TESTS:
+        label, base_files, head_files, should_pass = entry[:4]
+        sibling_files: dict[str, dict[str, str]] = entry[4] if len(entry) > 4 else {}
+        expected_substrings: tuple[str, ...] = entry[5] if len(entry) > 5 else ()
         before: dict[str, Decl] = {}
         for path, text in base_files.items():
             if _is_scanned(path):
@@ -620,13 +845,34 @@ def self_test() -> int:
             for d in parse_declarations(path, text):
                 after[d.key] = d
             forwards |= {f"{_assembly_of(path)}:{t}" for t in parse_forwards(text)}
-        failures, _ = find_moves(before, after, forwards, head_assemblies)
-        passed = not failures
-        if passed != should_pass:
+        siblings: dict[str, dict[str, list[Decl]]] = {}
+        for sibling_label, files in sibling_files.items():
+            index: dict[str, list[Decl]] = {}
+            for path, text in files.items():
+                if not _is_scanned(path):
+                    continue
+                for d in parse_declarations(path, text):
+                    index.setdefault(d.name, []).append(d)
+            siblings[sibling_label] = index
+        failures, _, departed = find_moves(
+            before, after, forwards, head_assemblies, siblings or None
+        )
+        # A departure that is not a PROVEN deletion is a failure of the run, exactly as `check`
+        # treats it — so `should_pass` means the same thing for both categories.
+        reported = [m for _, m in failures] + [m for _, m, deleted in departed if not deleted]
+        passed = not reported
+        missing = [s for s in expected_substrings if not any(s in m for m in reported)]
+        if passed != should_pass or missing:
             failed += 1
             print(f"SELF-TEST FAILED: {label}")
-            print(f"  expected {'pass' if should_pass else 'FAIL'}, got {'pass' if passed else 'FAIL'}")
-            for _, message in failures:
+            if passed != should_pass:
+                print(
+                    f"  expected {'pass' if should_pass else 'FAIL'}, "
+                    f"got {'pass' if passed else 'FAIL'}"
+                )
+            for s in missing:
+                print(f"  output never mentioned {s!r}")
+            for message in reported:
                 print(message)
         else:
             print(f"ok: {label}")
@@ -645,6 +891,17 @@ def main() -> int:
         help="commit-ish to check INSTEAD of the working tree — for replaying real history "
         "(e.g. --base b53aed0aa^1 --head b53aed0aa reproduces the #2370 break)",
     )
+    ap.add_argument(
+        "--sibling",
+        action="append",
+        default=[],
+        metavar="CHECKOUT",
+        help="path to a sibling repo checkout that builds platform assemblies (repeatable, e.g. "
+        "../MeshWeaver.Plugins). Resolves a DEPARTED type — gone from this repo's src/ while the "
+        "assembly it left is still built here — into a proven CROSS-REPO MOVE or a proven "
+        "DELETION. It only ever relaxes the verdict, so omitting it is the conservative mode; CI "
+        "omits it deliberately (see the module docstring).",
+    )
     ap.add_argument("--self-test", action="store_true", help="prove the matcher is not vacuous")
     args = ap.parse_args()
 
@@ -658,7 +915,12 @@ def main() -> int:
             ["git", "rev-parse", "--show-toplevel"], check=True, capture_output=True, text=True
         ).stdout.strip()
     )
-    return check(root, args.base, args.head)
+    for path in args.sibling:
+        if not (Path(path) / "src").is_dir():
+            # A typo'd sibling path would silently turn every cross-repo move into a "proven
+            # deletion" — the flag's one dangerous failure mode, since it RELAXES the verdict.
+            ap.error(f"--sibling {path}: no src/ directory there")
+    return check(root, args.base, args.head, args.sibling)
 
 
 if __name__ == "__main__":

@@ -93,6 +93,28 @@ internal class RoutingGrain(
     private readonly DeadTargetRefusalLog nackLog = new(DeadTargetRefusalLog.DefaultWindow);
 
     /// <summary>
+    /// Probes whether this process's DI container still resolves — the positive half of
+    /// <see cref="IsScopeTeardown"/> (issue #2638). On a live container this is a cheap lookup of an
+    /// already-materialised singleton with no side effects; once the host has disposed its root
+    /// <c>LifetimeScope</c> it throws, which is the signal.
+    ///
+    /// <para>Mirrors <c>MessageHub.IsServiceScopeDisposed</c> deliberately: one shape, one meaning,
+    /// so a routing turn and a hub init classify the same teardown the same way.</para>
+    /// </summary>
+    private bool IsServiceScopeDisposed()
+    {
+        try
+        {
+            meshHub.ServiceProvider.GetService(typeof(IMessageHub));
+            return false;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Routes dispatched but not yet terminated. This is the back-pressure signal that used to be
     /// INVISIBLE: before #1028 the only evidence a route had stopped making progress was Orleans'
     /// own <c>NonReentrancyQueueSize</c> growing into the hundreds inside a "Response did not
@@ -450,8 +472,13 @@ internal class RoutingGrain(
             // 🚨 CLASSIFY — this line read ErrorType.Failed unconditionally. See
             // ClassifyDeliveryException: a silo leaving mid-roll and a directory mid-handoff are
             // TRANSIENT, and telling the sender otherwise tears down mirrors that would have resumed.
-            var errorType = ClassifyDeliveryException(ex);
-            logger.LogError(ex,
+            var errorType = ClassifyDeliveryException(ex, IsServiceScopeDisposed);
+            // 🚨 A container that is already gone is not an incident to page on — it is this process
+            // exiting, and the delivery it could not carry is being retried against a live pod by a
+            // sender that now (correctly) reads ShuttingDown. Error there filed #2638 for a pod that
+            // was merely finishing; the failure is still reported, at the level it deserves.
+            var level = errorType == ErrorType.ShuttingDown ? LogLevel.Information : LogLevel.Error;
+            logger.Log(level, ex,
                 "[ROUTE] Directed delivery to pod hub {Address} failed — surfacing {ErrorType} DeliveryFailure to sender {Sender}",
                 addressPath, errorType, delivery.Sender);
             PostFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", errorType);
@@ -700,7 +727,12 @@ internal class RoutingGrain(
                         grainKey, addressPath, delivery.Id, PostFailureToSender, logger,
                         resolveActivationError: activationFailures is null
                             ? null
-                            : activationFailures.TryGet);
+                            : activationFailures.TryGet,
+                        // Issue #2638: a grain call whose PROXY could not be built because this
+                        // process's container is already disposed is a lifecycle transition, not a
+                        // terminal defect. Without the probe it NACK'd the sender as permanently
+                        // Failed and tore down its recovery machinery.
+                        scopeDisposed: IsServiceScopeDisposed);
                     return Unit.Default;
                 })
                 .Catch<Unit, Exception>(ex =>
@@ -883,6 +915,17 @@ internal class RoutingGrain(
                 RoutingGrainTrace.Write(IsPodHubNotHere(ex)
                     ? $"RoutingGrain.RouteMessage FAILURE_POD_HUB_NOT_HERE id={delivery.Id} sender={delivery.Sender}"
                     : $"RoutingGrain.RouteMessage FAILURE_POD_HUB_FAULT id={delivery.Id} sender={delivery.Sender} ex={ex.Message}");
+                // 🚨 ONE DEAD CONTAINER, NOT TWO FAILED TRANSPORTS — issue #2638. The stream publish
+                // resolves its own services through the SAME disposed root scope the directed call
+                // just died on, so attempting it can only produce the identical
+                // ObjectDisposedException and an AggregateException that names one fault twice.
+                // Prod logged exactly that, at Error, for a pod that was merely exiting. Fail clean
+                // instead: say once, at Information, that the NACK could not be carried because this
+                // process is gone. The sender still waits out its budget — nothing running inside a
+                // dead container can prevent that — but it is a bounded wait against a stated cause
+                // rather than an incident.
+                if (IsScopeTeardown(ex, IsServiceScopeDisposed))
+                    return LogUndeliverableNackAfterTeardown(ex);
                 return PublishFailureOverStream()
                     .Catch<Unit, Exception>(streamEx => LogUndeliverableNack(
                         new AggregateException(
@@ -939,6 +982,10 @@ internal class RoutingGrain(
                         {
                             RoutingGrainTrace.Write(
                                 $"RoutingGrain.RouteMessage FAILURE_DELIVER_GRAIN_FAULT id={delivery.Id} sender={delivery.Sender} ex={grainEx.Message}");
+                            // Same as the pod-hub arm above (#2638): a disposed container is one
+                            // cause, and the stream publish would only restate it.
+                            if (IsScopeTeardown(grainEx, IsServiceScopeDisposed))
+                                return LogUndeliverableNackAfterTeardown(grainEx);
                             return PublishFailureOverStream()
                                 .Catch<Unit, Exception>(streamEx => LogUndeliverableNack(
                                     new AggregateException(
@@ -993,6 +1040,32 @@ internal class RoutingGrain(
                     RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_OK_UNCONFIRMED id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
                     return Unit.Default;
                 });
+        }
+
+        // This process's DI container is already disposed (issue #2638), so NO transport in it can
+        // carry anything — the second one would fail identically and the AggregateException would
+        // name one cause twice. Say it once, name the cause, and stop: Information, because a
+        // process finishing its shutdown is not a defect, and the windowing is shared with the two
+        // Error shapes below so one dead sender still earns one line per window across all three.
+        IObservable<Unit> LogUndeliverableNackAfterTeardown(Exception ex)
+        {
+            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_AFTER_TEARDOWN id={delivery.Id} ex={ex.Message}");
+            if (nackLog.ShouldReport(senderPath, out var suppressedNacks))
+                logger.LogInformation(ex,
+                    "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender}: "
+                    + "this process's service container is already disposed, so neither transport can be "
+                    + "constructed — the stream publish was NOT attempted, because it resolves through the "
+                    + "same disposed scope. The sender will wait out its own request budget — the original "
+                    + "failure was: {FailureMessage}. {Suppressed} earlier undeliverable NACK(s) to this "
+                    + "sender since the last such line were logged at Debug.",
+                    errorType, delivery.Id, delivery.Sender, failureMessage, suppressedNacks);
+            else
+                logger.LogDebug(ex,
+                    "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender} "
+                    + "(container disposed); windowed — see the Information line for this sender. "
+                    + "Original failure: {FailureMessage}",
+                    errorType, delivery.Id, delivery.Sender, failureMessage);
+            return Observable.Return(Unit.Default);
         }
 
         // The owning silo threw, went away mid-call, or the placement could not be made. There is
@@ -1103,25 +1176,62 @@ internal class RoutingGrain(
         TimeSpan timeout,
         IScheduler? scheduler)
         => Observable.Defer(() => post().ToObservable())
-            .Timeout(timeout, scheduler ?? Scheduler.Default)
+            // 🚨 THE GUARD MUST BE DISTINGUISHABLE FROM WHAT IT GUARDS — issue #2322.
+            //
+            // The bare `.Timeout(timeout, scheduler)` overload raises a plain TimeoutException, and
+            // so does the thing it is bounding: the post's only await is a grain call to
+            // IMemoryStreamQueueGrain.Enqueue, which Orleans bounds at its own 30 s ResponseTimeout.
+            // Two different facts, one type — so the Catch below could not tell them apart and
+            // printed the GUARD's value for both. Prod therefore said "did not complete within
+            // 00:01:00" about a leg that had died, and reported promptly, at ~30 s, naming the
+            // wedged queue-grain activation. That wrong number sent a triage looking for a double
+            // publish and 30 s of avoidable latency; there is neither.
+            //
+            // The `other` overload lets the guard raise its OWN exception, so the two are
+            // distinguishable by type instead of by hope. It still derives from TimeoutException, so
+            // every classifier above this line (IsTransientFailure, ClassifyDeliveryException) reads
+            // it exactly as before.
+            .Timeout(timeout,
+                Observable.Throw<Unit>(new StreamPostGuardTimeoutException(addressPath, timeout)),
+                scheduler ?? Scheduler.Default)
             .Do(_ => RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM_OK id={deliveryId}"))
             .Catch<Unit, Exception>(ex =>
             {
                 RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM_FAULT id={deliveryId} ex={ex.Message}");
-                if (ex is TimeoutException)
-                    // The post never completed. Its ONLY await is a grain call Orleans already bounds
-                    // at 30 s, so this is not slowness — the leg is dead. Loud, because a delivery that
-                    // neither lands nor reports is exactly the silent hang #1028 was made of.
+                string reason;
+                if (ex is StreamPostGuardTimeoutException)
+                {
+                    // OUR bound fired: the post never completed AND never faulted. Its only await is
+                    // a grain call Orleans already bounds at 30 s, so reaching this is not slowness —
+                    // the leg is dead somewhere the transport's own bound cannot see. Loud, because a
+                    // delivery that neither lands nor reports is exactly the silent hang #1028 was
+                    // made of.
                     logger.LogError(ex,
-                        "[ROUTE] Stream-routed forward to {Address} did not complete within {Timeout} — the post is not going to land; surfacing DeliveryFailure to sender {Sender}",
+                        "[ROUTE] Stream-routed forward to {Address} did not complete within {Timeout} and never "
+                        + "faulted — the post is not going to land; surfacing DeliveryFailure to sender {Sender}",
                         addressPath, timeout, sender);
+                    reason = $"the post did not complete within {timeout}";
+                }
+                else if (ex is TimeoutException)
+                {
+                    // The TRANSPORT's own bound fired, INSIDE our guard — Orleans' 30 s response
+                    // timeout on IMemoryStreamQueueGrain.Enqueue. Its message names the real budget,
+                    // the queue-grain activation and the correlation id, which is the whole
+                    // diagnostic; the guard's value would say nothing true about it. Error, not
+                    // Warning: an unresponsive queue grain is not self-limiting (#2322).
+                    logger.LogError(ex,
+                        "[ROUTE] Stream-routed forward to {Address} faulted on the transport's OWN timeout, "
+                        + "inside this router's {Timeout} guard — surfacing DeliveryFailure to sender {Sender}: {Detail}",
+                        addressPath, timeout, sender, ex.Message);
+                    reason = ex.Message;
+                }
                 else
+                {
                     logger.LogWarning(ex,
                         "[ROUTE] Stream-routed forward to {Address} faulted — surfacing DeliveryFailure to sender {Sender}",
                         addressPath, sender);
-                var reason = ex is TimeoutException
-                    ? $"the post did not complete within {timeout}"
-                    : ex.Message;
+                    reason = ex.Message;
+                }
                 postFailureToSender($"Stream-routed delivery to '{addressPath}' failed: {reason}", ErrorType.Failed);
                 return Observable.Return(Unit.Default);
             });
@@ -1164,7 +1274,8 @@ internal class RoutingGrain(
         int maxRetries = 6,
         Func<int, TimeSpan>? backoff = null,
         IScheduler? scheduler = null,
-        Func<string, string?>? resolveActivationError = null)
+        Func<string, string?>? resolveActivationError = null,
+        Func<bool>? scopeDisposed = null)
     {
         return DeliverToGrainObservable(grainCall, grainKey, deliveryId, logger, maxRetries, backoff, scheduler)
             .Subscribe(
@@ -1242,7 +1353,7 @@ internal class RoutingGrain(
                     var detail = string.IsNullOrEmpty(activationError) ? ex.Message : activationError;
                     // 🚨 CLASSIFY — this line read ErrorType.Failed unconditionally, which is the same
                     // defect #2346/#2451 removed from the result arm above and left standing here.
-                    var errorType = ClassifyDeliveryException(ex);
+                    var errorType = ClassifyDeliveryException(ex, scopeDisposed);
                     logger.LogWarning(ex,
                         "[ROUTE] Grain {GrainKey} delivery failed after transient retries (or a non-transient fault) → NACK sender as {ErrorType}: {Detail}",
                         grainKey, errorType, detail);
@@ -1342,10 +1453,51 @@ internal class RoutingGrain(
     /// </summary>
     /// <param name="ex">The exception the delivery attempt faulted with.</param>
     /// <returns>The <see cref="ErrorType"/> the sender's NACK should carry.</returns>
-    internal static ErrorType ClassifyDeliveryException(Exception ex) =>
-        OrleansRoutingService.IsDirectoryUnstable(ex) || IsShutdownShaped(ex)
+    /// <param name="scopeDisposed">Probe for "this process's DI container is gone" — see
+    /// <see cref="IsScopeTeardown"/>. Null (the default) keeps the pre-#2638 answer for callers that
+    /// have no container to probe, such as a pure classification test.</param>
+    internal static ErrorType ClassifyDeliveryException(Exception ex, Func<bool>? scopeDisposed = null) =>
+        OrleansRoutingService.IsDirectoryUnstable(ex)
+        || IsShutdownShaped(ex)
+        || IsScopeTeardown(ex, scopeDisposed)
             ? ErrorType.ShuttingDown
             : ErrorType.Failed;
+
+    /// <summary>
+    /// 🚨 <b>The routing turn is executing after the process's DI container was disposed — issue
+    /// #2638.</b> Orleans builds a grain proxy by resolving its codec provider from the container
+    /// (<c>OrleansGeneratedCodeHelper.GetService</c> → <c>AutofacServiceProvider.GetService</c>), so
+    /// once the silo host has disposed its root <c>LifetimeScope</c> every remaining delivery — and
+    /// every NACK about one — faults with Autofac's <c>ObjectDisposedException</c> before it reaches
+    /// a transport at all.
+    ///
+    /// <para><b>Why this must not stay terminal.</b> It is a lifecycle transition by construction —
+    /// the container is disposed exactly once, at the end of host shutdown, and the target hub comes
+    /// back on the surviving pod seconds later. Reported as <see cref="ErrorType.Failed"/> it tears
+    /// down every consumer with recovery machinery of its own (<c>SynchronizationStream</c>'s
+    /// resubscribe latch, <c>MeshNodeStreamCache</c>'s transient-owner rule), which is exactly the
+    /// damage #2346/#2357 removed for the directory-unstable and silo-departing shapes and left
+    /// standing for this one. Prod (memex, 2026-08-29) NACK'd a live <c>Planning</c> delivery as
+    /// terminal for it.</para>
+    ///
+    /// <para>🚨 <b>The type test alone is NOT the signal, and that is deliberate</b> — the same
+    /// argument <c>MessageHub.IsTerminatedByScopeTeardown</c> makes for #2444. An unrelated disposed
+    /// dependency also throws <see cref="ObjectDisposedException"/> and IS a genuine defect; only a
+    /// probe that finds the CONTAINER itself no longer resolving turns the type test into a positive
+    /// statement about teardown. Without a probe this answers <c>false</c> and nothing changes.</para>
+    ///
+    /// <para>The walk is <see cref="ExceptionChain"/>'s — the exception GRAPH, not the
+    /// <c>InnerException</c> line — because this arrives through Rx <c>Catch</c> arms and
+    /// <c>PostFailure</c>'s two-transport <see cref="AggregateException"/>, where which fault sits at
+    /// index 0 is a race.</para>
+    /// </summary>
+    /// <param name="ex">The exception the delivery (or its NACK) faulted with.</param>
+    /// <param name="scopeDisposed">Probe: does this process's DI container still resolve?</param>
+    /// <returns><c>true</c> when the fault is the process's container going away.</returns>
+    internal static bool IsScopeTeardown(Exception ex, Func<bool>? scopeDisposed) =>
+        scopeDisposed is not null
+        && ExceptionChain.Contains<ObjectDisposedException>(ex)
+        && scopeDisposed();
 
     /// <summary>
     /// The silo hosting the target is going away — an expected lifecycle event during every roll,

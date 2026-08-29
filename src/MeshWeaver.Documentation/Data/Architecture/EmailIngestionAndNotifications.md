@@ -44,39 +44,60 @@ inbound mail ──▶ Graph subscription ──▶ POST /api/email (webhook)
                                    EmailInboundProcessor.Route
                                               │
                   ┌───────────────────────────┴───────────────────────────┐
-            sender is a known Memex user                        sender is NOT a user
+            sender is a known Memex user                        sender is anyone else
                   │                                                        │
-   create Email node {recipient}/_Email/{id}                 create Email node Admin/Inbox/{id}
-   find-or-create conversation thread                        notify admins (in-app)
-   append "process this email" (references the              (surfaced in the Admin ▸ Inbox menu)
-   Email by PATH — body is not duplicated)
-   the Email Router agent runs as that user,
-   does the work, emits an Outbound Email reply
+   Email node {recipient}/_Email/{id}                         Email node Admin/Inbox/{id}
+                  └───────────────────────────┬───────────────────────────┘
+                                              ▼
+                        claim ▸ find-or-start a thread ON the Email node
+                            ({emailPath}/_Thread/{id}, Email as MainNode)
+                                              ▼
+                        the Email Router agent works it, and either replies
+                        (an Outbound Email node) or forwards it to info@
 ```
+
+**This is the mail instance of one pattern the platform runs three times** — a red log becomes a
+`LogIncident` and a triage thread, a ticket becomes a thread, a delivered message becomes a thread.
+Both mail lanes are the same code; the difference is only *whose* partition the mail lands in and
+whether the agent acts on the sender's behalf.
 
 Key properties:
 
-- **One conversation = one thread.** Each inbound email is matched to its conversation by *normalized
-  subject* (strip `Re:/Fwd:/AW:/WG:/…` repeatedly → a stable `ThreadKey`) using the **vector index** over
-  the sender's `_Email` namespace, confirmed by `ThreadKey` equality. Match → append to the existing
-  thread; no match → start a new one. Replies with accumulating `Re:`/`Fwd:` land in the same thread.
-- **The agent acts on the sender's behalf** (runs with their identity), treats the first line as the
-  likely instruction, infers intent with `Search` if absent, and **cuts slop** (forwarding banners, quoted
-  history, signatures). See the [Email Router agent](/Agent/EmailRouter).
+- **Processed once, because Graph delivers at least once.** Delivery stays at-least-once — that is the transport's contract and nothing here changes it; what the lane guarantees is that the second and later deliveries of one message have no EFFECT. A `created` change notification is
+  re-delivered after a retry, after a duplicate subscription, and after a portal restart that raced
+  the 202. Two claims make that harmless, and they land *before* any thread is created:
+  the Email node's **id is derived from the message id**, so the create-only
+  `CreateNodeRequest` — answered from persistence — refuses a redelivery; and the artefact is flipped
+  **`New → Read` inside the update lambda**, on the node's serialised write queue, so of two workers
+  racing one artefact exactly one proceeds. A failed round puts the mail back to `New` and leaves it
+  UNREAD in the mailbox, which is the signal a person actually sees.
+- **One conversation = one thread.** Candidates come from an exact query on the stored `ThreadKey` —
+  the normalized subject with any number of `Re:/Fwd:/AW:/WG:/…` layers stripped — and among them
+  Graph's **`ConversationId` decides**, so two mails that merely share a subject are never merged.
+- **The agent acts on the sender's behalf ONLY in the user lane** (it runs with their identity). On
+  `Admin/Inbox` the sender has no account and no authority: the job there is triage. See the
+  [Email Router agent](/Agent/EmailRouter).
 - **The reply is emailed back** by creating an **Outbound `Email`** node (see §4) — the agent never sends
-  mail directly.
+  mail directly. **Forwarding** to the team's `info@` (`Email:Inbound:ForwardAddress`) writes the same
+  kind of node, with an id derived from the mail being forwarded, so asking twice forwards once.
 - **Everything is a MeshNode.** Every inbound and outbound mail is persisted as an `Email` node, so the
   whole exchange is queryable, access-controlled, and visible in the UI.
 
 ### Moving parts (code)
 
+Everything inbound rides the **`MeshWeaver.Mail.MicrosoftGraph` module** (Systemorph/MeshWeaver.Plugins
+`src/`), because the Graph SDK is 43 MB a deployment that sends no mail should not carry. Only the
+outbound drain and the no-op fallback are compiled into the portal.
+
 | Concern | Type |
 |---|---|
-| Reactive Graph client (read message, mark read, manage subscription) | `Memex.Portal.Shared.Email.GraphMail` |
-| Webhook endpoint (`/api/email`) — validation echo + notification batch | `EmailWebhookController` |
-| Keeps the Graph subscription alive (create on `ApplicationStarted`, renew every 24 h) | `GraphSubscriptionService` |
-| Sender → user match, find-or-create thread, slop-free seed message | `EmailInboundProcessor` |
-| Outbound: drains `Email` nodes with `Direction=Outbound, Status=New` and sends them | `OutboundEmailSender` |
+| Reactive Graph client (read message, mark read, manage subscription) | `GraphMail` *(module)* |
+| Webhook endpoint (`/api/email`) — validation echo + notification batch | `EmailWebhookEndpoints` *(module)* |
+| Keeps the Graph subscription alive (create on `ApplicationStarted`, renew every 24 h) | `GraphSubscriptionService` *(module)* |
+| Claim, route, find-or-start the thread, notify | `EmailInboundProcessor` *(module)* |
+| The deterministic ids the claims rest on | `InboundMailIdentity` *(module)* |
+| Forward a shared-inbox mail to `info@` | `InboxForward` / the `MemexInbox` agent tool *(module)* |
+| Outbound: drains `Email` nodes with `Direction=Outbound, Status=New` and sends them | `OutboundEmailSender` *(portal)* |
 
 > **Startup ordering matters.** Both hosted services defer their work to
 > `IHostApplicationLifetime.ApplicationStarted`: the Graph subscription can only be created once Kestrel

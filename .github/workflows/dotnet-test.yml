@@ -263,9 +263,19 @@ jobs:
         echo "Comparing against merge base $base"
         python3 scripts/check-record-signatures.py --base "$base"
     # The OTHER half of the same class (#2370): a public TYPE moving assemblies, which no repo-local
-    # build can see. `landed-modules-gate` compiles the plugins repo's module SOURCE against this PR
-    # and therefore goes GREEN on exactly this break — the module that is already published binds a
-    # TypeRef, not a `using`.
+    # build can see. `landed-modules-gate` used to compile the plugins repo's module SOURCE against
+    # this PR and went GREEN on exactly this break — the module that is already published binds a
+    # TypeRef, not a `using` — and it is gone besides (see the note above `clients-gate`).
+    #
+    # 🚨 NO `--sibling` HERE, DELIBERATELY (#2398). The script can resolve a type that left this
+    # repo entirely into "moved to MeshWeaver.Plugins" vs "deleted" when handed a sibling checkout,
+    # and that is a maintainer/local affordance, not a CI one: this repo is PUBLIC and
+    # MeshWeaver.Plugins is PRIVATE, so the checkout needs a secret on a `pull_request` gate — in a
+    # workflow that today has NO secret and NO preflight job (both deliberate; see "No preflight job
+    # right now" above), and reinstating the input means reinstating preflight. It would also make
+    # this gate's verdict depend on ANOTHER repo's moving HEAD, so the same diff could go red or
+    # green with no change of its own. Without the flag the gate is the CONSERVATIVE one: it reports
+    # every departure and fails, and the flag can only ever relax that.
     - name: "Prove the type-move gate is not vacuous"
       run: python3 scripts/check-type-forwards.py --self-test
     - name: "Refuse a public type moving assemblies without a forwarder"
@@ -324,7 +334,7 @@ jobs:
         #
         # Marker leaf is `<epoch>` (legacy) or `<epoch>-<run_id>` (carries provenance,
         # #1491). Both are accepted; sorting is on the epoch field only.
-        newest=$(git ls-remote origin "refs/ci-green/$tree/*" 2>/dev/null \
+        newest=$(git ls-remote origin "refs/ci-green/$tree/*" \
                  | awk '{print $2}' \
                  | grep -E "^refs/ci-green/$tree/[0-9]+(-[0-9]+)?$" \
                  | sed 's|.*/||' | sort -t- -k1,1n | tail -1 || true)
@@ -1529,7 +1539,7 @@ jobs:
         status=0
         bash .github/scripts/bake-then-gate.sh "$TESTER" "$STAGE" "$BAKE/doc" \
           .github/doc-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/doc-gate" || status=$?
-        verdict="$(grep -m1 -- '^GATE FAILED' "$log" 2>/dev/null || true)"
+        verdict="$(grep -m1 -- '^GATE FAILED' "$log" || true)"
         # ── Second stage: the samples trees — the "12k lines of C# no build ever type-checks"
         # from AGENTS.md. Same tester, same mechanics; .github/samples-gate.allow is its own
         # one-way debt ratchet (a listed entry that starts passing fails the run until removed).
@@ -1539,7 +1549,7 @@ jobs:
         sstatus=0
         bash .github/scripts/bake-then-gate.sh "$TESTER" "$SSTAGE" "$BAKE/samples" \
           .github/samples-gate.allow "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/samples-gate" || sstatus=$?
-        sverdict="$(grep -m1 -- '^GATE FAILED' "$slog" 2>/dev/null || true)"
+        sverdict="$(grep -m1 -- '^GATE FAILED' "$slog" || true)"
         combined="$(printf '%s\n%s' "$verdict" "$sverdict" | grep . | head -1 || true)"
         {
           echo "failure<<GATE_EOF"
@@ -1631,6 +1641,75 @@ jobs:
     - name: Check dependency licences
       run: python3 .github/scripts/check-licenses.py --report
 
+  workflow-shell:
+    name: "CI's own shell"
+    # 🚨 THE GAP THIS CLOSES: `main-cd.yml` is 2000 lines of shell that decides what is built,
+    # published and rolled to the fleet — and NOTHING opened it. It fires on `workflow_run`,
+    # `schedule` and `workflow_dispatch`; never on `pull_request`. So an edit to it merged on the
+    # strength of being valid YAML, and its first execution was in production, on a cron.
+    #
+    # What that cost, measured (#2642, trap written up in #2643): a bake-only reconcile carried
+    #
+    #     tags=$(az acr manifest list-metadata … \
+    #              --query "[?contains(tags, '${SHORT_SHA}')].tags[]" -o tsv 2>/dev/null || true)
+    #
+    # `contains(null, …)` THROWS on the 16 untagged manifests in that repository, jmespath aborts
+    # the whole query, az exits non-zero, `2>/dev/null || true` swallows it — and the step then
+    # accused a HEALTHY component: "promote's Phase C never armed a release for this sha".
+    # NINE consecutive scheduled runs, ~33 hours, and the step had never once succeeded in its
+    # life. An error that names the wrong culprit is worse than a silent failure; it is a silent
+    # failure with directions attached.
+    #
+    # 🛡️ NO SKIP-TRAPDOOR. Every input is in this repository — no secret, no cluster, no registry
+    # — so there is no condition under which this may decline to run and still render a tick:
+    #   * no `needs:`, so nothing upstream can skip it (not even the green-tree reuse path — this
+    #     job is seconds, and the reuse optimisation exists for a 70-runner-minute suite);
+    #   * no input-shaped `if:`, because GitHub renders a skipped job with the same tick as a
+    #     passed one;
+    #   * no path filter, which is that same defect from the other side (an unrelated PR would
+    #     "pass" by not running);
+    #   * no `continue-on-error`;
+    #   * the tools it needs are ASSERTED, and a missing one fails RED rather than quietly
+    #     reducing the gate to the checks it happened to be able to run.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+
+    # jmespath is PINNED, and the pin is the fidelity claim: it is the engine the azure-cli
+    # itself evaluates `--query` with, so "this query throws on a null field" is reproduced here
+    # rather than asserted about. A venv keeps it off the runner's externally-managed python.
+    - name: Assert the tools this gate needs
+      run: |
+        set -euo pipefail
+        command -v shellcheck >/dev/null || { echo "::error::shellcheck is not on this runner"; exit 1; }
+        shellcheck --version | head -2
+        python3 -m venv "$RUNNER_TEMP/wfshell"
+        "$RUNNER_TEMP/wfshell/bin/pip" install --quiet --disable-pip-version-check \
+          'jmespath==1.0.1' 'PyYAML==6.0.2'
+        echo "$RUNNER_TEMP/wfshell/bin" >> "$GITHUB_PATH"
+
+    # 🚨 Run the self-test FIRST, and let it fail the job. An unproven gate is no gate: every
+    # check below must be shown to FIRE on its defect and stay SILENT on its fix before its
+    # verdict on the real tree means anything. (Same posture as `affected-modules.py --self-test`
+    # in MeshWeaver.Plugins.)
+    - name: "Prove the gate is non-vacuous (self-test)"
+      run: python3 .github/scripts/check-workflow-shell.py --self-test
+
+    - name: "Gate the shell CI itself runs"
+      run: python3 .github/scripts/check-workflow-shell.py
+
+    # Deliverable that needs no credential: EXECUTE main-cd's release-version recovery — the step
+    # that never once succeeded — against a fixture shaped like the live registry (2101 manifests,
+    # 16 of them untagged). The step is EXTRACTED from main-cd.yml by its `id:`, never copied, and
+    # the harness fails red if it cannot find it or if the step stopped making the call being
+    # stubbed. A copy passes while the real thing rots.
+    - name: "Execute main-cd's decision steps against fixtures"
+      run: python3 .github/scripts/test-cd-steps.py
+      env:
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+
   collect-results:
     name: "Consolidate test results"
     # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
@@ -1641,6 +1720,11 @@ jobs:
     # clients-gate is a NEEDS on the same principle as plugin-gate/doc-gate/licence-gate: a red
     # Clients workflow can stop ALL image publication (#1568), so it must be able to fail the
     # repo's only required status check.
+    # workflow-shell is a NEEDS on the same principle, applied to CI's own shell: main-cd.yml is
+    # not exercised by ANY pull-request check, so until #2642 an edit to the pipeline that decides
+    # what ships merged on YAML validity alone — and one such edit spent nine scheduled runs and
+    # ~33 hours blaming a healthy component for its own swallowed crash. A gate on that shell that
+    # could go red while the PR merged anyway would be decorative in exactly the same way.
     # record-signatures is a NEEDS on the same principle, and it is the one that had been
     # missing: it carries BOTH binary-compatibility gates (public record primary constructors,
     # and public types moving assembly without a TypeForwardedTo). #2283 moved four public types
@@ -1648,7 +1732,7 @@ jobs:
     # (#2370) — a module's IL binds a NAME, so no source build can see it. The gate for exactly
     # that now exists and is proven live, but until this line it could go RED while the PR merged
     # anyway. A gate whose verdict nothing reads is decorative.
-    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures]
+    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1903,7 +1987,7 @@ jobs:
           if [ $(( now - epoch )) -gt "${CI_GREEN_PRUNE_SECONDS}" ]; then
             refspecs+=(":$ref")
           fi
-        done < <(git ls-remote origin 'refs/ci-green/*' 'refs/ci-executed/*' 2>/dev/null || true)
+        done < <(git ls-remote origin 'refs/ci-green/*' 'refs/ci-executed/*' || true)
         if [ "${#refspecs[@]}" -eq 0 ]; then
           echo "No stale markers to prune."
           exit 0
@@ -1956,6 +2040,14 @@ jobs:
     # 🚨 `needs:` alone is NOT enough under `if: always()` — same lesson as the steps above.
     # This is the merge gate #1555 did not have: its Portal-next job was red, naming the exact
     # build main-cd would later run, and it was advisory.
+    - name: Fail if CI's own shell gate failed
+      # `!= 'success'` rather than `== 'failure'`: a gate that was skipped or cancelled has
+      # produced no verdict, and "no verdict" must never read as "passed".
+      if: needs.workflow-shell.result != 'success'
+      run: |
+        echo "::error::The 'CI's own shell' gate concluded '${{ needs.workflow-shell.result }}' — see that job. It shellchecks every workflow \`run:\` block, refuses a captured command substitution that swallows BOTH stderr and its exit status (the #2642 shape: a failed call becomes an empty answer that is then read as authoritative), refuses an az \`--query\` that throws on a null field, and EXECUTES main-cd's release-version recovery against a fixture. main-cd.yml is exercised by no other check on this PR."
+        exit 1
+
     - name: Fail if the clients gate failed
       if: needs.clients-gate.result != 'success'
       run: |
@@ -1977,7 +2069,7 @@ jobs:
       continue-on-error: true
       run: |
         set -uo pipefail
-        last=$(git ls-remote origin 'refs/ci-executed/main/*' 2>/dev/null \
+        last=$(git ls-remote origin 'refs/ci-executed/main/*' \
                | sed -E 's|^([0-9a-f]+)[[:space:]]+refs/ci-executed/main/([0-9]+)(-([0-9]+))?$|\2 \1 \4|' \
                | grep -E '^[0-9]+ ' | sort -n | tail -1 || true)
         {

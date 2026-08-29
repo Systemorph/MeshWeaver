@@ -334,6 +334,243 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
             "an operational member ABSENT on the live node stays absent — the writer's value never seeds it");
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    //  MainNode — issue #2631
+    //
+    //  MeshNode.MainNode is NOT nullable: it defaults to the node's own path, so "unset" and "set
+    //  to self" are the same value on the wire. That is why the merge simply LEFT IT OUT — and why
+    //  an upsert could never move one, while `GetMeshNodeStream(path).Update` could. The rule is
+    //  MeshNode.HasExplicitMainNode: apply the source's MainNode only when it names something
+    //  other than the node itself. The two directions are pinned separately below, because the
+    //  naive fix (`source.MainNode ?? state.MainNode`) passes the first and DEMOTES EVERY
+    //  SATELLITE on the second.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 🚨 #2631 — the bug. An upsert whose ONLY difference from the stored node is MainNode was
+    /// skipped as a no-op (<c>IsNoOpUpsert</c> never compared the field) and, had it taken the
+    /// write path, dropped anyway (<c>UpdateAccordingToSourceNode</c> kept the stored value). The
+    /// caller got <c>Success = true</c> and nothing moved: MeshWeaver.Plugins #839's
+    /// <c>RefreshAppTiles</c> sweep reported "1390 of 1443 record(s) refreshed" on memex with not
+    /// one <c>mainNode</c> changed.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Upsert_ChangingOnlyMainNode_IsApplied_NotSkippedAsANoOp()
+    {
+        var id = $"upsert-mainnode-move-{Guid.NewGuid():N}";
+        var path = $"{TestPartition}/{id}";
+        var target = $"{TestPartition}/click-target-{Guid.NewGuid():N}";
+
+        // A perfectly ordinary MAIN node — MainNode defaults to its own path.
+        await NodeFactory.CreateNode(new MeshNode(id, TestPartition)
+        {
+            Name = "Tile",
+            NodeType = "Markdown",
+            Content = new MarkdownContent { Content = "# tile" },
+            State = MeshNodeState.Active,
+        }).Should().Emit();
+
+        // Everything identical EXCEPT MainNode: the whole point of the test.
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(
+                new MeshNode(id, TestPartition)
+                {
+                    Name = "Tile",
+                    NodeType = "Markdown",
+                    Content = new MarkdownContent { Content = "# tile" },
+                    State = MeshNodeState.Active,
+                    MainNode = target,
+                }))
+            .Select(d => d.Message)
+            .Should().Emit();
+
+        resp.Success.Should().BeTrue(resp.Error ?? "");
+        resp.Log!.Messages.Any(m => m.Message.Contains("no-op", StringComparison.OrdinalIgnoreCase))
+            .Should().BeFalse(
+                "MainNode is a real change — reporting it as a skipped no-op is exactly #2631");
+
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var after = await ReadStable(storage, path, n => n.MainNode == target);
+        after.MainNode.Should().Be(target,
+            "an upsert that names a different MainNode must move it — the sweep in "
+            + "MeshWeaver.Plugins #839 reported success and moved nothing");
+    }
+
+    /// <summary>
+    /// 🚨 THE REGRESSION GUARD, and the reason the fix is not <c>source.MainNode ?? state.MainNode</c>.
+    /// MainNode is non-nullable and defaults to the node's OWN path, so a writer that never touched
+    /// it still sends a self-pointing value. Copying that blindly turns every SATELLITE the upsert
+    /// touches into a main node (<c>is:main</c> is SQL <c>n.main_node = n.path</c>) — dropping it
+    /// out of its owner's listings and re-scoping its grants, which project at
+    /// <c>COALESCE(main_node, namespace)</c>. Here the upsert carries a genuine change (Name), so
+    /// it takes the WRITE path: the merge itself must preserve the stored MainNode.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Upsert_WithDefaultSelfMainNode_PreservesAStoredSatelliteMainNode()
+    {
+        var id = $"upsert-satellite-{Guid.NewGuid():N}";
+        var path = $"{TestPartition}/{id}";
+        var owner = $"{TestPartition}/owner-{Guid.NewGuid():N}";
+
+        // A satellite: MainNode points at its primary, not at itself.
+        await NodeFactory.CreateNode(new MeshNode(id, TestPartition)
+        {
+            Name = "Before",
+            NodeType = "Markdown",
+            Content = new MarkdownContent { Content = "# satellite" },
+            State = MeshNodeState.Active,
+            MainNode = owner,
+        }).Should().Emit();
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        (await ReadStable(storage, path)).MainNode.Should().Be(owner, "seed precondition");
+
+        // A writer that never thought about MainNode — so the source carries the SELF-PATH default.
+        var source = new MeshNode(id, TestPartition)
+        {
+            Name = "After",
+            NodeType = "Markdown",
+            Content = new MarkdownContent { Content = "# satellite" },
+            State = MeshNodeState.Active,
+        };
+        source.MainNode.Should().Be(path, "precondition: an untouched MainNode IS the node's path");
+        source.HasExplicitMainNode.Should().BeFalse(
+            "the self-path default must never read as a deliberate re-parenting");
+
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(source))
+            .Select(d => d.Message)
+            .Should().Emit();
+        resp.Success.Should().BeTrue(resp.Error ?? "");
+
+        var after = await ReadStable(storage, path, n => n.Name == "After");
+        after.Name.Should().Be("After", "the real change must still land");
+        after.MainNode.Should().Be(owner,
+            "an untouched MainNode must NOT demote a satellite to a main node — a `?? state` "
+            + "merge would silently do exactly that on every upsert");
+    }
+
+    /// <summary>
+    /// The same guard on the COMPARE side: with nothing else changed either, the self-path default
+    /// must not read as a change, so the whole upsert is still skipped — no Version mint, no
+    /// LastModified re-stamp — and the satellite's MainNode is untouched.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Upsert_WithDefaultSelfMainNode_OnASatellite_IsStillANoOp()
+    {
+        var id = $"upsert-satellite-noop-{Guid.NewGuid():N}";
+        var path = $"{TestPartition}/{id}";
+        var owner = $"{TestPartition}/owner-{Guid.NewGuid():N}";
+
+        MeshNode Node(string? mainNode) => mainNode is null
+            ? new MeshNode(id, TestPartition)
+            {
+                Name = "Same",
+                NodeType = "Markdown",
+                Content = new MarkdownContent { Content = "# same" },
+                State = MeshNodeState.Active,
+            }
+            : new MeshNode(id, TestPartition)
+            {
+                Name = "Same",
+                NodeType = "Markdown",
+                Content = new MarkdownContent { Content = "# same" },
+                State = MeshNodeState.Active,
+                MainNode = mainNode,
+            };
+
+        await NodeFactory.CreateNode(Node(owner)).Should().Emit();
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var before = await ReadStable(storage, path);
+        before.MainNode.Should().Be(owner, "seed precondition");
+
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(Node(null)))
+            .Select(d => d.Message)
+            .Should().Emit();
+        resp.Success.Should().BeTrue(resp.Error ?? "");
+        resp.Log!.Messages.Any(m => m.Message.Contains("no-op", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue(
+                "the self-path default is not a change — comparing it raw would make EVERY "
+                + "re-import of every satellite take the write path");
+
+        var after = await ReadStable(storage, path);
+        after.Version.Should().Be(before.Version, "no change → no Version mint");
+        after.LastModified.Should().Be(before.LastModified, "no change → no LastModified re-stamp");
+        after.MainNode.Should().Be(owner, "and the satellite is still a satellite");
+    }
+
+    /// <summary>
+    /// The no-op guard must keep holding once MainNode is part of the comparison: an upsert that
+    /// restates the SAME explicit MainNode changes nothing and must not churn the node.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Upsert_RestatingTheSameExplicitMainNode_IsStillANoOp()
+    {
+        var id = $"upsert-mainnode-noop-{Guid.NewGuid():N}";
+        var path = $"{TestPartition}/{id}";
+        var owner = $"{TestPartition}/owner-{Guid.NewGuid():N}";
+
+        MeshNode Node() => new(id, TestPartition)
+        {
+            Name = "Same",
+            NodeType = "Markdown",
+            Content = new MarkdownContent { Content = "# identical" },
+            State = MeshNodeState.Active,
+            MainNode = owner,
+        };
+
+        await NodeFactory.CreateNode(Node()).Should().Emit();
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var before = await ReadStable(storage, path);
+
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(Node()))
+            .Select(d => d.Message)
+            .Should().Emit();
+        resp.Success.Should().BeTrue(resp.Error ?? "");
+        resp.Log!.Messages.Any(m => m.Message.Contains("no-op", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("an identical upsert must still be skipped");
+
+        var after = await ReadStable(storage, path);
+        after.Version.Should().Be(before.Version, "an identical upsert must not mint a Version");
+        after.LastModified.Should().Be(before.LastModified,
+            "an identical upsert must not re-stamp LastModified");
+        after.MainNode.Should().Be(owner);
+    }
+
+    /// <summary>
+    /// A MAIN node stays a main node across an ordinary upsert: <c>MainNode == Path</c> is what
+    /// <c>is:main</c> filters on, so a merge that got this wrong would drop the node out of its
+    /// partition's own listings.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Upsert_OnAMainNode_KeepsItAMainNode()
+    {
+        var id = $"upsert-mainnode-stable-{Guid.NewGuid():N}";
+        var path = $"{TestPartition}/{id}";
+
+        await NodeFactory.CreateNode(new MeshNode(id, TestPartition)
+        {
+            Name = "Before",
+            NodeType = "Markdown",
+            Content = new MarkdownContent { Content = "# main" },
+            State = MeshNodeState.Active,
+        }).Should().Emit();
+
+        var resp = await ObserveNodeOperation(new CreateOrUpdateNodeRequest(
+                new MeshNode(id, TestPartition)
+                {
+                    Name = "After",
+                    NodeType = "Markdown",
+                    Content = new MarkdownContent { Content = "# main" },
+                    State = MeshNodeState.Active,
+                }))
+            .Select(d => d.Message)
+            .Should().Emit();
+        resp.Success.Should().BeTrue(resp.Error ?? "");
+
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var after = await ReadStable(storage, path, n => n.Name == "After");
+        after.MainNode.Should().Be(path, "MainNode == Path is what makes this a MAIN node");
+        after.MainNode.Should().Be(after.Path);
+    }
+
     // Reads until the persisted node satisfies the predicate AND its Version is unchanged across
     // 4 consecutive samples (~1.2s quiet — past the 200ms persist debounce), so enrichment/debounce
     // trails can't masquerade as churn.

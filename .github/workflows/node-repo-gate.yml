@@ -601,14 +601,11 @@ jobs:
           # Step 2 of the plugin build contract: hand the tester the upstream seed, mounted
           # read-only. The tester checks it BEFORE the mesh boots (BakeSeed.Read — a seed it
           # cannot consume is a usage error, exit 2, never a green gate) and REFUSES a run that
-          # compiled a type the seed declared (BakeSeedConsumer.Shortfall).
-          SEED_ARGS=()
-          if [ -n "${SEED_DIR:-}" ]; then
-            SEED_MOUNT=(-v "$SEED_DIR:/seed:ro")
-            SEED_ARGS=(--seed /seed)
-          else
-            SEED_MOUNT=()
-          fi
+          # compiled a type the seed declared (BakeSeedConsumer.Shortfall). That mount happens on
+          # the GATE call below, not here: `compile` takes no --seed, and the gate is given
+          # $OWN_BAKE — into which the upstream zips are copied — as /seed.
+          # (SEED_ARGS/SEED_MOUNT arrays used to be built at this point and passed to neither
+          # docker run. shellcheck's SC2034 on them is what surfaced the leftover.)
           # ── BUILD ONCE, TEST WHAT WAS BUILT (Doc/Architecture/PluginBuildContract, step 3 → 4).
           # The gate used to compile in-mesh and DISCARD the result; publish-bake then compiled the
           # identical source again on merge. Now: `compile` (mesh-free, the producer) writes this

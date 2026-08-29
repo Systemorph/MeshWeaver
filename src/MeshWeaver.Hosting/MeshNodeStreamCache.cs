@@ -227,7 +227,49 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // Lazy<T>(ThreadSafety.ExecutionAndPublication) guarantees the factory
     // runs at most once per key, even when multiple GetOrAdd calls race.
     private readonly ConcurrentDictionary<string, Lazy<Entry>> _streams = new();
-    private readonly ConcurrentDictionary<(string Path, string UserId), AccessEntry> _access = new();
+    private readonly ConcurrentDictionary<AccessCacheKey, AccessEntry> _access = new();
+
+    /// <summary>
+    /// The key of the permission-probe cache below.
+    ///
+    /// <para>🚨 <b>It carries every <see cref="AccessContext"/> dimension the evaluation READS,
+    /// not just the identity.</b> <c>PermissionEvaluator.GetEffectivePermissions</c> is not a
+    /// function of <c>(path, userId)</c> alone: it also reads <see cref="AccessContext.IsApiToken"/>
+    /// and the token's claim roles (the API-token capability clamp, which zeroes the WHOLE
+    /// permission set when a bearer context lacks <c>Api</c>), and <see cref="AccessContext.IsHub"/>
+    /// (the hub-credential early return). Keying on <c>(path, userId)</c> alone made two contexts
+    /// for the SAME person share one verdict, and the cache is a process-wide singleton, so the
+    /// two surfaces really do meet in it:</para>
+    ///
+    /// <list type="bullet">
+    /// <item><b>Too permissive (a capability bypass).</b> A portal read caches the unclamped
+    /// permissions; an MCP/bearer read of the same node within the TTL takes that entry and
+    /// never runs the API-token clamp at all — the token is admitted to the API surface the
+    /// clamp exists to keep it off.</item>
+    /// <item><b>Too restrictive (the reported symptom).</b> A bearer read the clamp zeroed caches
+    /// <c>Permission.None</c>; the same user's PORTAL read within the TTL then fails with
+    /// "lacks Read permission", on a node they are plainly granted.</item>
+    /// </list>
+    ///
+    /// <para>Both directions are wrong ANSWERS rather than errors, which is why nothing logged
+    /// and neither surface could be trusted to reproduce the other's result.</para>
+    /// </summary>
+    internal readonly record struct AccessCacheKey(
+        string Path, string UserId, bool IsApiToken, bool IsHub, string ClaimRoles);
+
+    /// <summary>
+    /// Builds the probe key for a context. <paramref name="context"/>'s claim roles are folded in
+    /// ORDER-INDEPENDENTLY (they are a set) so two equivalent tokens still share an entry, while
+    /// two tokens whose claims genuinely differ — one carrying <c>Api</c>, one not — never do.
+    /// </summary>
+    internal static AccessCacheKey BuildAccessCacheKey(string path, AccessContext context) =>
+        new(path,
+            context.ObjectId,
+            context.IsApiToken,
+            context.IsHub,
+            context.Roles is null || context.Roles.Count == 0
+                ? string.Empty
+                : string.Join('\u001f', context.Roles.OrderBy(r => r, StringComparer.Ordinal)));
 
     // 🚨 Idle release of read entries — the read-side counterpart of the write
     // cache's (_updateQueues) sliding expiration. Window/interval come from
@@ -522,6 +564,24 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             ?.Dispatch(requestId, delivery.Message);
                     return delivery.Processed();
                 })
+                // 🚨 The OTHER half of the late seam — issue #2661. A NACK is not always a
+                // PatchDataResponse: the owner's RLS refusal is a DeliveryFailure{Unauthorized}
+                // posted by AccessControlPipeline ahead of the owner's action block, correlated to
+                // the SAME request id. With only the handler above, such a failure arriving after
+                // UpdateRemote's bounded wait closed reached nobody — HandleCallbacks found no live
+                // subject, logged "No subject found for response message", and marked it processed
+                // — so the caller kept an optimistic SUCCESS for a write the owner had refused.
+                // HandleCallbacks still runs first, so a TIMELY failure errors the caller's pending
+                // callback and that callback disarms the registry entry synchronously; the dispatch
+                // here is then a no-op, exactly as for PatchDataResponse.
+                .WithHandler<DeliveryFailure>((hub, delivery) =>
+                {
+                    if (delivery.Properties.TryGetValue(PostOptions.RequestId, out var rid)
+                        && rid?.ToString() is { Length: > 0 } requestId)
+                        hub.ServiceProvider.GetService<LatePatchResponseRegistry>()
+                            ?.DispatchFailure(requestId, delivery.Message);
+                    return delivery.Processed();
+                })
                 .WithInitialization(hub =>
                     hub.RegisterForDisposal(routingService.RegisterStream(hub))),
             HostedHubCreation.Always)!;
@@ -722,7 +782,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             logger.LogDebug(ex, "MeshNodeStreamCache: error disposing update-queue cache");
         }
 
-        // 3. Permission probe cache — drop the cached (path,user)⇒Permission
+        // 3. Permission probe cache — drop the cached (path,user,context)⇒Permission
         //    entries so nothing roots the disposed mesh's identities.
         _access.Clear();
 
@@ -1536,7 +1596,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// </summary>
     private IObservable<Permission> ProbeEffectivePermissions(string path, AccessContext captured)
     {
-        var key = (Path: path, UserId: captured.ObjectId);
+        var key = BuildAccessCacheKey(path, captured);
         return Observable.Defer(() =>
         {
             // TTL cache hit ⇒ short-circuit the evaluation.
@@ -2024,13 +2084,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
         // RLS on the write is enforced authoritatively by the OWNER: the
         // [RequiresPermission(Permission.Update)] gate on PatchDataRequest posts
-        // DeliveryFailure(Unauthorized) on denial, which UpdateRemote surfaces fail-fast
-        // as UnauthorizedAccessException on the caller's Rx OnError (the denial is posted
-        // by the pipeline gate ahead of the owner's action block, so it returns within
-        // UpdateRemote's short response bound even while a round is running). The previous
-        // cache-only client gate here was a stopgap for when UpdateRemote emitted purely
-        // optimistically and swallowed the denial — redundant now that UpdateRemote bounds
-        // (not eliminates) its wait and re-surfaces the denial.
+        // DeliveryFailure(Unauthorized) on denial, which UpdateRemote surfaces as
+        // UnauthorizedAccessException on the caller's Rx OnError. The previous cache-only
+        // client gate here was a stopgap for when UpdateRemote emitted purely optimistically
+        // and swallowed the denial.
+        //
+        // 🚨 This used to add "the denial is posted by the pipeline gate ahead of the owner's
+        // action block, so it returns within UpdateRemote's short response bound even while a
+        // round is running". That was an ASSUMPTION, not a guarantee — the bound also covers
+        // owner-hub activation and the pipeline's own permission fold, either of which can
+        // dominate under load — and the whole of #2661 hung off it: when the denial lost that
+        // race, UpdateRemote had already completed the caller as a success and nothing anywhere
+        // observed the refusal. Correctness no longer depends on the denial being fast:
+        // UpdateRemote settles the caller on the owner's verdict wherever it arrives, early or
+        // late (LatePatchResponseRegistry now watches DeliveryFailure as well as
+        // PatchDataResponse), and never on a bound expiring.
         return UpdateRaw(path, wrapped);
     }
 

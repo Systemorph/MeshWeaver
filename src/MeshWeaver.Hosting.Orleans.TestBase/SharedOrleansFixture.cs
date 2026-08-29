@@ -290,10 +290,24 @@ public class SharedOrleansFixture : IAsyncLifetime
 
             foreach (var hub in hosted.Hubs.ToArray())
             {
-                if (hub.Address.ToString().StartsWith(pathPrefix, StringComparison.Ordinal))
-                {
-                    try { hub.Dispose(); } catch { /* swallow */ }
-                }
+                if (!hub.Address.ToString().StartsWith(pathPrefix, StringComparison.Ordinal))
+                    continue;
+                // 🚨 JOIN, don't just start it. This method's whole purpose is that the NEXT test
+                // does not inherit these hubs' state — and a bare Dispose() gives it exactly that,
+                // because disposal is a state machine that returns immediately and drains
+                // afterwards. Worse, these are SILO-SIDE hubs: their teardown deactivates the owning
+                // grain (MessageHubGrain), so returning early lets the next test's grain calls race
+                // a deactivation in flight on a hub it can still address. The wait is a synchronous
+                // block-join because this method has no async caller to suspend (it is invoked from
+                // synchronous per-test cleanup); it is bounded, and an expiry is written to the
+                // fixture's logger rather than swallowed the way `catch { }` used to swallow both a
+                // dispose fault and a hung teardown as one silence.
+                // Captured while the hub's scope is still alive — never resolve DI once disposal
+                // has begun (the same rule CleanupClientAsync above states).
+                var logger = SafeLogger(hub);
+                hub.DisposeAndJoin(
+                    message => logger?.LogError("Silo hub cleanup: {Message}", message),
+                    TimeSpan.FromSeconds(10));
             }
         }
     }

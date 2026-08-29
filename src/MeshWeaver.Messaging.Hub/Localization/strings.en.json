@@ -213,6 +213,8 @@
   "chat.modelProviderError": "The language model '{0}' could not serve this round: the provider returned an error (HTTP {1}). Submit again later, or pick a different model.",
   "chat.modelQuotaExhausted": "The language model '{0}' could not serve this round: the provider refused it for lack of credit or budget (HTTP 402). Top up the provider account, or pick a model on a provider that still has budget.",
   "chat.modelNotFound": "The language model '{0}' does not exist at the configured provider endpoint (HTTP 404). Check the model id in Settings → Language Models, or pick a different model.",
+  "chat.modelStreamStalled": "The language model '{0}' stopped responding: the connection stayed open but no further data arrived, so the round was aborted. This is an upstream stall at the model endpoint, not a problem with your request — submit again to retry, or pick a different model.",
+  "chat.modelStreamFaulted": "The language model '{0}' ended its response with a provider error. This is a fault at the upstream model provider, not a problem with your request — submit again to retry, or pick a different model.",
   "chat.historyLoadFailed": "The earlier messages in this thread could not be loaded, so this round was stopped instead of answering without them. Submit again to retry.",
   "chat.modelSubstitutionNote": "This round did not run on the model you selected: '{0}' has no usable credentials, so '{1}' was used instead.",
   "chat.roundToolCallUnfinished": "This round ended with {0} tool call(s) still unfinished ({1}). The response above may describe work that was never carried out — submit again to retry.",
@@ -554,6 +556,7 @@
   "ui.connectOAuth": "Connect with the remote's login (OAuth)",
   "ui.applyUpdateNow": "Apply available update now",
   "ui.updateNoNewerVersion": "_No newer version detected yet._",
+  "ui.updateNeverChecked": "_This install has not completed an update check yet — so nothing here says a newer version does not exist. If this persists, the update checker is not running._",
   "ui.updateLatestAvailable": "**Latest available:** `{0}`",
   "ui.updateCheckedAt": "_(checked {0})_",
   "ui.updateVerifiedGreen": "✅ Verified against this instance's modules: all {0} module(s) compile and test green against this build.",
@@ -634,6 +637,7 @@
   "ui.mdNodeToUpdateMissing": "**Error:** Could not find MeshNode to update.",
   "ui.mdRecyclingHub": "**Recycling hub…** redirecting in a moment.",
   "ui.mdStaleBuildAvailable": "**A newer build of this type is available.** This page is still running the previously compiled one.",
+  "ui.mdServedBuildIsNotPublished": "**This page is NOT running the build this type published.** The node reports a compiled build whose bytes differ from the ones this page is executing, so its status says nothing about what you are seeing. A recycle re-binds the same local copy and will not change it \u2014 report this.",
   "ui.recycleConfirmTitle": "Recycle this hub?",
   "ui.recycleConfirmBody": "The node's hub is torn down and rebuilt on the next visit, picking up the latest compiled build. Nothing is deleted and no content changes.",
   "ui.recycleFailed": "The hub at '{0}' has not answered again yet after the recycle was requested: {1}",
@@ -1040,5 +1044,7 @@
   "presentation.unmarkedTitle": "Shown again",
   "presentation.unmarkedBody": "This is no longer hidden while presentation mode is on.",
   "presentation.signInRequiredTitle": "Sign-in required",
-  "presentation.signInRequiredBody": "Presentation mode is a personal setting, so you have to be signed in to use it."
+  "presentation.signInRequiredBody": "Presentation mode is a personal setting, so you have to be signed in to use it.",
+  "chat.modelStreamStalled": "The language model '{0}' stopped responding: the connection stayed open but no further data arrived, so the round was aborted. This is an upstream stall at the model endpoint, not a problem with your request \u2014 submit again to retry, or pick a different model.",
+  "chat.modelStreamFaulted": "The language model '{0}' ended its response with a provider error. This is a fault at the upstream model provider, not a problem with your request \u2014 submit again to retry, or pick a different model."
 }
