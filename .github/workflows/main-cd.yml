@@ -516,8 +516,13 @@ jobs:
           # instead of "healing" it back into a build every tick.
           IRRELEVANT='^clients/(react-native|voice-gateway)/'
           relevant=true
+          # `--detail` is load-bearing: WITHOUT it show-tags returns an array of plain STRINGS,
+          # so `[].name` matches nothing and newest_short is ALWAYS empty. Every gate log has read
+          # `Newest published set: <none>` for as long as this step has existed. It fails open
+          # (relevant stays true), so it never turned CD red — it only meant the image-irrelevant
+          # skip below could never fire. The batching probe above already passes --detail.
           newest_short=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
-            --orderby time_desc --top 60 --query "[].name" -o tsv 2>/dev/null \
+            --orderby time_desc --detail --top 60 --query "[].name" -o tsv 2>/dev/null \
             | grep -E '^[0-9a-f]{7}$' | head -1 || true)
           if [ -n "$newest_short" ] && [ "$newest_short" != "$(printf '%s' "$SHA" | cut -c1-7)" ]; then
             base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$newest_short" --jq .sha 2>/dev/null || true)
@@ -1522,8 +1527,24 @@ jobs:
             echo "::error::portal-image produced no version and this is not a bake-only run — refusing to publish under an unknown release."
             exit 1
           fi
+          # 🚨 Two failure shapes live in this one read, and the second cost nine hours.
+          #
+          # `tags` is NULL on an untagged manifest — the orphaned per-platform children an index
+          # push leaves behind (16 of memex-portal-ai's 2101 manifests on 2026-08-29). jmespath's
+          # contains() THROWS on null instead of returning false, and the throw aborts the WHOLE
+          # query, so ONE orphan makes this unable to find any tag at all. `tags &&` short-circuits
+          # those rows out before contains() ever sees them.
+          #
+          # And do NOT swallow az's stderr. This read used to end `2>/dev/null || true`, which
+          # turned "the query crashed with an invalid-jmespath error" into "there is no version
+          # tag" — so the error below blamed promote, which was working perfectly: it had armed
+          # memex-portal-ai:<sha> → <version> on one digest, exactly as designed. Nine scheduled
+          # reconciles (2026-08-28 22:12Z → 08-29 05:26Z) died pointing at the healthy half of CD.
+          # An error that names a HEALTHY component as the culprit is worse than a silent failure;
+          # it is a silent failure with directions attached. Let az fail the step with its own
+          # message, so the next reader debugs the query and not promote.
           tags=$(az acr manifest list-metadata --registry meshweaver --name memex-portal-ai \
-                   --query "[?contains(tags, '${SHORT_SHA}')].tags[]" -o tsv 2>/dev/null || true)
+                   --query "[?tags && contains(tags, '${SHORT_SHA}')].tags[]" -o tsv)
           version=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+' <<<"$tags" | grep -vx "$SHORT_SHA" | head -1 || true)
           if [ -z "$version" ]; then
             echo "::error::memex-portal-ai:${SHORT_SHA} carries no version tag (tags on that digest: $(tr '\n' ' ' <<<"$tags")) — promote's Phase C never armed a release for this sha, so there is no release to make available. Fix promote; do not publish a marker for an invented version."
