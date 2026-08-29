@@ -8,6 +8,9 @@ name: Plugin Publish
 # See Doc/Architecture/PluginPackaging.
 #
 # ═══════════════════ WHY EVERY PLUGIN, EVERY MERGE ═══════════════════
+# 🚨 Read this heading literally: EVERY MERGE. A `pull_request` run narrows (see the next block);
+# a push, a dispatch and a schedule do not, and the paragraph below is the reason.
+#
 # There is no changed-plugin detection here, and that is deliberate rather than lazy. A module's
 # PATCH is DERIVED by gen-manifests.py from its content hash: the version changes when, and only
 # when, the tree changes. So publishing every plugin with `--skip-duplicate` publishes exactly the
@@ -18,6 +21,32 @@ name: Plugin Publish
 # mode is silent: a plugin the diff misses simply never ships, at a version nobody notices is
 # absent until an install resolves the old content.
 #
+# ═════════════════ …AND WHY A PULL REQUEST IS DIFFERENT ═════════════════
+# "all plugins should only re-build what changed."
+#
+# The argument above is about PUBLISHING: a diff that misses a plugin means that plugin silently
+# never ships. On a `pull_request` NOTHING is published — for MeshWeaver.Plugins the whole lane is
+# `dry-run: true` by design — so the failure mode the version-as-change-detector protects against
+# cannot occur. What a PR run buys is the COMPILE GATE: it is the only thing that type-checks
+# in-mesh NodeType C# against the newest RELEASED framework, which is a different compiler input
+# from `compile-check.py --image`.
+#
+# That gate still has to be exhaustive against a MOVING FLOOR — a package that did not change can
+# stop compiling when the published framework advances. But the floor moves relative to the trunk,
+# not relative to a PR base, and the unnarrowed `push` re-packs every plugin on every merge. So:
+#
+#   pull_request / merge_group → the affected closure (changed plugins + every dependent)
+#   push, dispatch, schedule   → EVERY plugin, exhaustively
+#
+# …which is the same rule the module lane runs (node-repo-module-pack.yml), computed by the same
+# script (.github/scripts/node-repo-scope.py), whose every uncertainty resolves to the full set and
+# says which fallback it took. Measured on MeshWeaver.Plugins: 53 packages packed per run, `Store`
+# alone 17 compilation units; a PR touching one plugin now packs one.
+#
+# 🚨 The count is ASSERTED, not assumed: the loop below counts what it actually packed and fails if
+# that is not exactly what the selection named. A pack loop that silently iterated an empty list
+# would otherwise be a green tick over a gate that ran on nothing.
+
 # ══════════════════ WHAT THE PACK-THEN-PUSH ORDER BUYS ══════════════════
 # Every plugin is PACKED before any is PUSHED, so a BUILD failure ships nothing. That is the whole
 # guarantee, and it is worth being precise about, because it is weaker than the image pipeline's.
@@ -89,6 +118,10 @@ jobs:
         uses: actions/checkout@v7
         with:
           path: plugins
+          # 🚨 The affected closure diffs against the PR base — a shallow clone makes that range
+          # unresolvable, which the scope script turns into a full pack rather than an empty one,
+          # but paying for 53 packs silently is not the plan.
+          fetch-depth: 0
 
       - name: Checkout MeshWeaver (for the plugin-build tool)
         uses: actions/checkout@v7
@@ -102,18 +135,59 @@ jobs:
         with:
           dotnet-version: '10.x'
 
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # ─────────────────── WHICH PLUGINS THIS RUN MUST PACK ───────────────────
+      # One script, shared with the module lane, biased to FULL: a push/dispatch/schedule, a
+      # tooling change, a refusal from the caller's own selector, or an empty diff all resolve to
+      # every plugin, naming which fallback was taken in the log and the job summary.
+      - name: The selection can say no (self-test)
+        run: python3 meshweaver/.github/scripts/node-repo-scope.py --self-test
+
+      - name: Decide which plugins this run must pack
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_REF:-}" ]; then
+            git -C plugins fetch --no-tags origin \
+              "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          fi
+          python3 meshweaver/.github/scripts/node-repo-scope.py \
+            --for packages --root plugins \
+            --event "$EVENT" --base-ref "${BASE_REF:-}" > "$RUNNER_TEMP/scope.json"
+
       - name: Build the tool
         run: dotnet build meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release
 
-      - name: Pack every plugin
+      - name: Pack the selected plugins
+        env:
+          SELECTED: ${{ steps.scope.outputs.packages }}
+          EXPECTED: ${{ steps.scope.outputs.count }}
+          SCOPE: ${{ steps.scope.outputs.scope }}
         run: |
           set -uo pipefail
           mkdir -p "$RUNNER_TEMP/nupkgs"
           failed=()
           packed=0
-          for plugin in plugins/*/; do
-            [ -f "$plugin/index.json" ] || continue
-            name=$(basename "$plugin")
+          attempted=0
+          echo "scope=$SCOPE — the selection names $EXPECTED plugin(s)"
+          for name in $SELECTED; do
+            plugin="plugins/$name"
+            # 🚨 NOT `|| continue`. The old loop globbed the tree and skipped anything without an
+            # index.json, which is correct for a glob and wrong for a selection: a named plugin
+            # that cannot be packed must be a failure, or the count below would silently agree
+            # with a shorter run.
+            if [ ! -f "$plugin/index.json" ]; then
+              echo "::error::the selection named '$name' but $plugin/index.json does not exist"
+              failed+=("$name")
+              continue
+            fi
+            attempted=$((attempted + 1))
             echo "::group::$name"
             if dotnet run --project meshweaver/src/MeshWeaver.Plugin.Build -c Release --no-build -- \
                  "$plugin" \
@@ -127,11 +201,30 @@ jobs:
             fi
             echo "::endgroup::"
           done
-          echo "packed $packed plugin(s)"
+          echo "packed $packed plugin(s) of $EXPECTED selected"
+          # ══════════════ THE COUNT GATE ══════════════
+          # 🚨 "we can estimate the required count and validate it." A loop over a list that came
+          # out empty, short, or mis-parsed packs less than it should and exits 0 — a green tick
+          # over a compile gate that compiled nothing. The estimate is the selection; this is the
+          # validation, and it runs before the failure report so a miscount is never masked by a
+          # genuine build failure.
+          seen=$((packed + ${#failed[@]}))
+          if [ "$seen" != "$EXPECTED" ]; then
+            echo "::error title=Pack count does not match the selection::the selection named \
+          $EXPECTED plugin(s) and this loop reached $seen. Nothing here may silently pack less \
+          than was selected — a compile gate that ran on fewer packages than it reported is the \
+          failure this check exists for. Selected: $SELECTED"
+            exit 1
+          fi
           if [ ${#failed[@]} -gt 0 ]; then
             echo "::error::packing failed for: ${failed[*]} — nothing was pushed"
             exit 1
           fi
+          {
+            echo "### 📦 Packed $packed of $EXPECTED selected plugin(s) — scope \`$SCOPE\`"
+            echo ""
+            echo "\`$SELECTED\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Reached only when EVERY plugin packed. A content-only plugin produces no package and that
       # is a success, so an empty directory is not an error — but it must be SAID, or "published
