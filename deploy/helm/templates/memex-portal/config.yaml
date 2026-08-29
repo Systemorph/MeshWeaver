@@ -660,3 +660,8 @@ data:
   Email__InboundEnabled: "{{ .Values.config.memex_portal.Email__InboundEnabled | default "false" }}"
   Email__WebhookBaseUrl: "{{ .Values.config.memex_portal.Email__WebhookBaseUrl | default "" }}"
   Email__SubscriptionClientState: "{{ .Values.config.memex_portal.Email__SubscriptionClientState | default "" }}"
+  # Where the inbound triage lane's Forward action sends a mail (MeshWeaver #2656). Binds
+  # InboundMailOptions.ForwardAddress (Email:Inbound:ForwardAddress). Empty is the default and
+  # makes the action report itself UNAVAILABLE rather than silently drop a message — so this
+  # key is what turns Forward on, and an untemplated key here would ship the feature inert.
+  Email__Inbound__ForwardAddress: "{{ .Values.config.memex_portal.Email__Inbound__ForwardAddress | default "" }}"
