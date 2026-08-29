@@ -1176,25 +1176,62 @@ internal class RoutingGrain(
         TimeSpan timeout,
         IScheduler? scheduler)
         => Observable.Defer(() => post().ToObservable())
-            .Timeout(timeout, scheduler ?? Scheduler.Default)
+            // 🚨 THE GUARD MUST BE DISTINGUISHABLE FROM WHAT IT GUARDS — issue #2322.
+            //
+            // The bare `.Timeout(timeout, scheduler)` overload raises a plain TimeoutException, and
+            // so does the thing it is bounding: the post's only await is a grain call to
+            // IMemoryStreamQueueGrain.Enqueue, which Orleans bounds at its own 30 s ResponseTimeout.
+            // Two different facts, one type — so the Catch below could not tell them apart and
+            // printed the GUARD's value for both. Prod therefore said "did not complete within
+            // 00:01:00" about a leg that had died, and reported promptly, at ~30 s, naming the
+            // wedged queue-grain activation. That wrong number sent a triage looking for a double
+            // publish and 30 s of avoidable latency; there is neither.
+            //
+            // The `other` overload lets the guard raise its OWN exception, so the two are
+            // distinguishable by type instead of by hope. It still derives from TimeoutException, so
+            // every classifier above this line (IsTransientFailure, ClassifyDeliveryException) reads
+            // it exactly as before.
+            .Timeout(timeout,
+                Observable.Throw<Unit>(new StreamPostGuardTimeoutException(addressPath, timeout)),
+                scheduler ?? Scheduler.Default)
             .Do(_ => RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM_OK id={deliveryId}"))
             .Catch<Unit, Exception>(ex =>
             {
                 RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM_FAULT id={deliveryId} ex={ex.Message}");
-                if (ex is TimeoutException)
-                    // The post never completed. Its ONLY await is a grain call Orleans already bounds
-                    // at 30 s, so this is not slowness — the leg is dead. Loud, because a delivery that
-                    // neither lands nor reports is exactly the silent hang #1028 was made of.
+                string reason;
+                if (ex is StreamPostGuardTimeoutException)
+                {
+                    // OUR bound fired: the post never completed AND never faulted. Its only await is
+                    // a grain call Orleans already bounds at 30 s, so reaching this is not slowness —
+                    // the leg is dead somewhere the transport's own bound cannot see. Loud, because a
+                    // delivery that neither lands nor reports is exactly the silent hang #1028 was
+                    // made of.
                     logger.LogError(ex,
-                        "[ROUTE] Stream-routed forward to {Address} did not complete within {Timeout} — the post is not going to land; surfacing DeliveryFailure to sender {Sender}",
+                        "[ROUTE] Stream-routed forward to {Address} did not complete within {Timeout} and never "
+                        + "faulted — the post is not going to land; surfacing DeliveryFailure to sender {Sender}",
                         addressPath, timeout, sender);
+                    reason = $"the post did not complete within {timeout}";
+                }
+                else if (ex is TimeoutException)
+                {
+                    // The TRANSPORT's own bound fired, INSIDE our guard — Orleans' 30 s response
+                    // timeout on IMemoryStreamQueueGrain.Enqueue. Its message names the real budget,
+                    // the queue-grain activation and the correlation id, which is the whole
+                    // diagnostic; the guard's value would say nothing true about it. Error, not
+                    // Warning: an unresponsive queue grain is not self-limiting (#2322).
+                    logger.LogError(ex,
+                        "[ROUTE] Stream-routed forward to {Address} faulted on the transport's OWN timeout, "
+                        + "inside this router's {Timeout} guard — surfacing DeliveryFailure to sender {Sender}: {Detail}",
+                        addressPath, timeout, sender, ex.Message);
+                    reason = ex.Message;
+                }
                 else
+                {
                     logger.LogWarning(ex,
                         "[ROUTE] Stream-routed forward to {Address} faulted — surfacing DeliveryFailure to sender {Sender}",
                         addressPath, sender);
-                var reason = ex is TimeoutException
-                    ? $"the post did not complete within {timeout}"
-                    : ex.Message;
+                    reason = ex.Message;
+                }
                 postFailureToSender($"Stream-routed delivery to '{addressPath}' failed: {reason}", ErrorType.Failed);
                 return Observable.Return(Unit.Default);
             });
