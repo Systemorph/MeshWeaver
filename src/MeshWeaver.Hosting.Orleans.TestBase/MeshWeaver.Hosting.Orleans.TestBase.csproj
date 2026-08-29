@@ -28,6 +28,9 @@
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
     <InternalsVisibleTo Include="MeshWeaver.AI.Orleans.Test" />
     <InternalsVisibleTo Include="MeshWeaver.AI.Orleans.TestBase" />
+    <!-- The collaboration module's Orleans suite, in MeshWeaver.Plugins — same shape as the AI
+         entries above: the rig stays here, the suite that drives it travels with its feature. -->
+    <InternalsVisibleTo Include="MeshWeaver.Markdown.Collaboration.Orleans.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.PostgreSql.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Grpc.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Cosmos.Test" />

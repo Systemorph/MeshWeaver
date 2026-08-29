@@ -264,7 +264,7 @@ public static class MarkdownOverviewLayoutArea
         // Standard inline comments section (if comments enabled)
         if (!hideHeader && host.Hub.Configuration.HasComments())
         {
-            container = container.WithView(CommentsView.BuildInlineCommentsSection(host));
+            container = container.WithView(MeshNodeLayoutAreas.BuildInlineCommentsSection(host));
         }
 
         return container;
