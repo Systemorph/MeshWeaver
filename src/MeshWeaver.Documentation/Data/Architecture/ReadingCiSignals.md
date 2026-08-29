@@ -130,5 +130,5 @@ failure hides in.
 
 ## Related
 
-[Module Versioning](ModuleVersioning) · [Modules](Modules) ·
-[Deploying Plugin Changes](DeployingPluginChanges)
+[Module Versioning](/Doc/Architecture/ModuleVersioning) · [Modules](/Doc/Architecture/Modules) ·
+[Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges)

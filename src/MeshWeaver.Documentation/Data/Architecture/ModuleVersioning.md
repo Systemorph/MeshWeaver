@@ -12,8 +12,8 @@ built reaches a portal that already has an older copy.** Get it wrong and the pi
 the bytes reach the shelf, and no installation ever asks for them.
 
 This page is the authoring reference for that number. For the *node* revision counter — a different
-number entirely — see [MeshNode Versioning](MeshNodeVersioning). For what a module IS and how a
-deployment activates one, see [Modules](Modules).
+number entirely — see [MeshNode Versioning](/Doc/Architecture/MeshNodeVersioning). For what a module IS and how a
+deployment activates one, see [Modules](/Doc/Architecture/Modules).
 
 ## The three numbers, and who owns each
 
@@ -51,7 +51,7 @@ version, and neither looks at the bytes:
 CI still rebuilds the assembly and POSTs it to `bundles/<Package>?version=<unchanged>`. The shelf is
 correct. Nobody requests it. **A fresh install gets the new code; every existing portal keeps the old
 one forever** — and the repo, CI and the registry all look green. This is
-[MERGED is not delivered](DeployingPluginChanges) one layer down.
+[MERGED is not delivered](/Doc/Architecture/DeployingPluginChanges) one layer down.
 
 ## 🚨 The blind spot: `src/` and mixed packages
 
@@ -146,6 +146,6 @@ python3 scripts/gen-manifests.py --check   # what CI runs on your branch
 
 ## Related
 
-[Modules](Modules) · [MeshNode Versioning](MeshNodeVersioning) ·
-[Plugin Packaging](PluginPackaging) · [Deploying Plugin Changes](DeployingPluginChanges) ·
-[Plugin Registry](PluginRegistry) · [Plugin Update on Green Build](PluginUpdateOnGreenBuild)
+[Modules](/Doc/Architecture/Modules) · [MeshNode Versioning](/Doc/Architecture/MeshNodeVersioning) ·
+[Plugin Packaging](/Doc/Architecture/PluginPackaging) · [Deploying Plugin Changes](/Doc/Architecture/DeployingPluginChanges) ·
+[Plugin Registry](/Doc/Architecture/PluginRegistry) · [Plugin Update on Green Build](/Doc/Architecture/PluginUpdateOnGreenBuild)
