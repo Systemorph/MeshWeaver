@@ -4220,8 +4220,11 @@ public static class MeshExtensions
     /// True when applying <paramref name="sourceNode"/> onto <paramref name="existing"/> via
     /// <see cref="UpdateAccordingToSourceNode"/> would change nothing but the churn stamps
     /// (LastModified/Version) — the write can then be skipped entirely. MUST mirror that merge
-    /// field-for-field (same null-keeps-state convention); a field added there without a compare
-    /// here would silently stop landing on unchanged-otherwise nodes. Content compares
+    /// field-for-field (same null-keeps-state convention, except <see cref="MeshNode.MainNode"/>,
+    /// whose "was it set?" test is <see cref="MeshNode.HasExplicitMainNode"/> because it is
+    /// non-nullable);
+    /// a field added there without a compare here would silently stop landing on
+    /// unchanged-otherwise nodes — which is precisely what #2631 was. Content compares
     /// structurally through the hub's serializer (bridging typed content against the persisted
     /// <see cref="JsonElement"/> representation); any doubt — a serialization failure, a mixed
     /// shape — reports "changed", which merely takes today's write path. Conservative by
@@ -4243,7 +4246,15 @@ public static class MeshExtensions
             || (sourceNode.Description ?? existing.Description) != existing.Description
             || (sourceNode.Order ?? existing.Order) != existing.Order
             || (sourceNode.State == default ? existing.State : sourceNode.State) != existing.State
-            || (sourceNode.PreRenderedHtml ?? existing.PreRenderedHtml) != existing.PreRenderedHtml)
+            || (sourceNode.PreRenderedHtml ?? existing.PreRenderedHtml) != existing.PreRenderedHtml
+            // 🚨 MainNode's "was it set?" test is MeshNode.HasExplicitMainNode, NOT a null check
+            // — the field is non-nullable and defaults to the node's own path, so read that
+            // property's remarks before touching this line. Missing entirely until #2631: an
+            // upsert whose only change was MainNode was reported as a successful no-op and moved
+            // nothing (MeshWeaver.Plugins #839's RefreshAppTiles sweep: "1390 of 1443 record(s)
+            // refreshed" with not one mainNode changed).
+            || (sourceNode.HasExplicitMainNode ? sourceNode.MainNode : existing.MainNode)
+                != existing.MainNode)
             return false;
         var excludeApplied = sourceNode.ExcludeFromContext ?? existing.ExcludeFromContext;
         if (!ReferenceEquals(excludeApplied, existing.ExcludeFromContext)
@@ -4272,7 +4283,9 @@ public static class MeshExtensions
     /// upsert. Copies every writable field from <paramref name="sourceNode"/>
     /// onto <paramref name="state"/>; preserves <paramref name="state"/>'s
     /// identity (Id, Path, CreatedDate, CreatedBy, Version) and stamps a
-    /// fresh LastModified. Falls back to <paramref name="sourceNode"/> when
+    /// fresh LastModified. <see cref="MeshNode.MainNode"/> is writable too, but
+    /// only when the source names one other than its own path — see
+    /// <see cref="MeshNode.HasExplicitMainNode"/>. Falls back to <paramref name="sourceNode"/> when
     /// <paramref name="state"/> is null (defensive — the create path
     /// dispatches CreateNodeRequest before reaching this lambda, so state
     /// should always be non-null here).
@@ -4299,6 +4312,14 @@ public static class MeshExtensions
             Content = sourceNode.Content ?? state.Content,
             State = sourceNode.State == default ? state.State : sourceNode.State,
             PreRenderedHtml = sourceNode.PreRenderedHtml ?? state.PreRenderedHtml,
+            // 🚨 NOT the null-keeps-state idiom: MainNode is non-nullable and defaults to the
+            // node's OWN path, so an untouched source is indistinguishable from one deliberately
+            // set to self, and copying it blindly would demote every satellite an upsert touches
+            // to a main node. MeshNode.HasExplicitMainNode carries the rule and its one
+            // limitation. (NormalizeSatelliteMainNode and the AccessAssignment scope guard both
+            // run on the incoming node BEFORE this merge, so what arrives here is already
+            // normalised and validated — until #2631 that validated value was then thrown away.)
+            MainNode = sourceNode.HasExplicitMainNode ? sourceNode.MainNode : state.MainNode,
             LastModified = DateTimeOffset.UtcNow,
         };
     }
