@@ -808,13 +808,16 @@ jobs:
             # 🚨 The bytes this bake composes are the bytes its publication SEALS (modules/<pkg>.module.nupkg,
             # MeshWeaver#2698): a consumer pinned to this identity composes exactly these, never the
             # registry's. Keyed by PACKAGE id, which is what a consumer asks for (registry-modules).
+            # The package id is the manifest's `plugin` (ModulePackCommand writes it); the file name
+            # is only the fallback for a hand-built bundle, and then the VERSION is stripped from the
+            # right so a package id that itself contains dots (Markdown.Collaboration) survives.
             pkg=""
-            case "$(basename "$b")" in
-              MeshWeaver.Plugin.*.module.nupkg) pkg=$(basename "$b" | sed -E 's/^MeshWeaver\.Plugin\.([^.]+)\..*$/\1/') ;;   # this run's module-pack artifact
-              *.bundle.zip)                     pkg=$(basename "$b" .bundle.zip) ;;                                        # the registry's package endpoint
-              *.module.nupkg)                   pkg=$(basename "$b" .module.nupkg) ;;                                      # an upstream's sealed module set
-            esac
-            [ -n "$pkg" ] || { echo "::error::$(basename "$b"): cannot derive the package id this bundle seals under — expected MeshWeaver.Plugin.<pkg>.<version>.module.nupkg, <pkg>.bundle.zip or <pkg>.module.nupkg"; exit 1; }
+            [ -f "$u/meshweaver/manifest.json" ] && pkg=$(jq -r '.plugin // empty' "$u/meshweaver/manifest.json")
+            if [ -z "$pkg" ]; then
+              stem="$(basename "$b")"; stem="${stem%.module.nupkg}"; stem="${stem%.bundle.zip}"; stem="${stem#MeshWeaver.Plugin.}"
+              pkg=$(printf '%s' "$stem" | sed -E 's/\.[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.+-]*)?$//')
+            fi
+            [ -n "$pkg" ] || { echo "::error::$(basename "$b"): cannot derive the package id this bundle seals under — no manifest plugin id, and the file name is not MeshWeaver.Plugin.<pkg>.<version>.module.nupkg / <pkg>.bundle.zip / <pkg>.module.nupkg"; exit 1; }
             SEAL="${RUNNER_TEMP:-/tmp}/seal-modules"; mkdir -p "$SEAL"
             cp "$b" "$SEAL/$(printf '%s' "$pkg" | tr '[:upper:]' '[:lower:]').module.nupkg"
             echo "sealing $name as module package '$pkg'"
