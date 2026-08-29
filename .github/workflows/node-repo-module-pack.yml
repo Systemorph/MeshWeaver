@@ -307,7 +307,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/platform-refs"
           docker cp "$cid:/app/." "$RUNNER_TEMP/platform-refs/"
           docker rm "$cid" >/dev/null
-          n=$(ls "$RUNNER_TEMP/platform-refs" | grep -c '\.dll$' || true)
+          shopt -s nullglob
+          dlls=("$RUNNER_TEMP"/platform-refs/*.dll)
+          n=${#dlls[@]}
           [ "$n" -gt 50 ] || { echo "::error::the image's /app yielded $n assemblies — not a platform image"; exit 1; }
           echo "platform refs: $n assemblies from ${IMAGE%%:*}@${DIGEST}"
       - name: Build the module (Release, warnings-as-errors)
