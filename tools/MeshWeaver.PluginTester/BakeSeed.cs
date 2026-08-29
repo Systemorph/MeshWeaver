@@ -124,7 +124,7 @@ public sealed record BakeSeed(
 /// The gate's <see cref="IPrebuiltAssemblyConsumer"/>: adoption restricted to ONE bake directory,
 /// with the accounting the gate's postcondition needs.
 ///
-/// <para>🚨 It delegates to <see cref="ShippedPrebuiltBundles.SeedForTypes"/> — the SAME consumption
+/// <para>🚨 It delegates to <see cref="ShippedPrebuiltBundles.SeedForTypes(MeshWeaver.Messaging.IMessageHub, System.Collections.Generic.IReadOnlyCollection{string}, Microsoft.Extensions.Logging.ILogger, string, string)"/> — the SAME consumption
 /// implementation a portal runs — rather than re-reading the bundles itself. A gate that proved a
 /// bake adoptable through a second, gate-only reader would prove nothing about the reader that
 /// actually runs in production; the framework gate, the per-type dependency-record gate and the
@@ -258,8 +258,9 @@ public sealed class BakeSeedConsumer(
             + "not judge the bytes the bake shipped for them. DECLINED: "
             + $"{string.Join(", ", missing.Take(20))}"
             + (missing.Count > 20 ? ", …" : "")
-            + ". The per-assembly reason is logged by PrebuiltAssemblySeeder at Information "
-            + "(framework identity, or the per-type dependency record); the gate logs at Warning, "
-            + "so raise its level to read it.";
+            + ". The per-assembly reason (framework identity, the per-type dependency record, or a "
+            + $"payload the bundle's manifest names but does not carry) is logged above under the "
+            + $"'{LogCategory}' category, which the gate raises to Information whenever it consumes "
+            + "a bake; outside the gate, enable that category to read it.";
     }
 }

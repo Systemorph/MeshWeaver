@@ -195,8 +195,32 @@ public static class ShippedPrebuiltBundles
     /// </summary>
     public static IObservable<int> SeedForTypes(
         IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
-        string? imageDirectory = null, string? publishedRoot = null,
-        Action<string>? onCovered = null)
+        string? imageDirectory = null, string? publishedRoot = null)
+        => SeedForTypes(mesh, typePaths, logger, imageDirectory, publishedRoot, onCovered: null);
+
+    /// <summary>
+    /// <see cref="SeedForTypes(IMessageHub, IReadOnlyCollection{string}, ILogger, string, string)"/>
+    /// with a per-path witness: <paramref name="onCovered"/> is invoked once for every NodeType
+    /// path this pass BACKED — adopted now, or already current — from the seeder's own pool
+    /// threads, so an implementation must be thread-safe.
+    ///
+    /// <para>🚨 A separate overload rather than one more optional parameter, and every argument
+    /// here is REQUIRED. C# bakes a call's full argument list into the CALL SITE, so widening the
+    /// shipped signature with an optional parameter is a BINARY break: an assembly compiled
+    /// against the old surface still calls the 5-argument form and would fail with
+    /// <c>MissingMethodException</c> at runtime — which in this framework means a prebuilt bundle
+    /// adopted from an earlier build, exactly the artifact this method exists to serve. Leaving
+    /// the overlapping parameters required is what keeps <c>SeedForTypes(mesh, paths, logger)</c>
+    /// from becoming ambiguous between the two.</para>
+    ///
+    /// <para>The count it emits is unchanged and still authoritative; the witness only says WHICH
+    /// paths are behind that count, which is the question a bake shortfall raises
+    /// (<c>BakeSeedConsumer.Shortfall</c>).</para>
+    /// </summary>
+    public static IObservable<int> SeedForTypes(
+        IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
+        string? imageDirectory, string? publishedRoot,
+        Action<string>? onCovered)
         => Observable.Defer(() =>
         {
             if (typePaths.Count == 0)
@@ -264,7 +288,7 @@ public static class ShippedPrebuiltBundles
     ///
     /// <para>An EMPTY <see cref="Nodes"/> map means "no record snapshot available", and the
     /// deviation check then answers "deviates" for everything — the install/push caller
-    /// (<see cref="SeedForTypes"/>) supplies paths rather than a query, and it is called precisely
+    /// (<see cref="SeedForTypes(IMessageHub, System.Collections.Generic.IReadOnlyCollection{string}, Microsoft.Extensions.Logging.ILogger, string, string)"/>) supplies paths rather than a query, and it is called precisely
     /// when content just changed, so re-adopting is the right answer there anyway.</para>
     /// </summary>
     private sealed record TypeSnapshot(
