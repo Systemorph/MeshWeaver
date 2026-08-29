@@ -632,8 +632,12 @@ jobs:
           job; nothing below can be trusted."
             exit 1
           fi
+          # 🚨 `--declared`: artifacts are RUN-wide, so when a repo calls this workflow twice in
+          # one run (Plugins #932: a floor call the gates compose, and the rest) each verifier
+          # downloads the OTHER call's receipts too. Only modules in THIS call's matrix count.
           python3 meshweaver/.github/scripts/node-repo-pack-verify.py \
             --expected "$EXPECTED" \
             --receipts "$RUNNER_TEMP/receipts" \
             --pack-result "$PACK_RESULT" \
-            --scope "$SCOPE"
+            --scope "$SCOPE" \
+            --declared "$DECLARED"

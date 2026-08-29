@@ -26,6 +26,14 @@ identical on the checks wall. A receipt is positive evidence; its absence is the
 EXIT 0 only when: every expected module has a well-formed receipt, no unexpected receipt exists,
 and the pack job's own result agrees with the expectation (an empty selection is the ONLY case in
 which the pack job may be `skipped`).
+
+🚨 ARTIFACTS ARE RUN-WIDE, RECEIPTS ARE PER CALL. A repo may call the module-pack workflow TWICE in
+one run (Plugins #932 splits its 31 bundles into the floor the gates compose and the rest), and
+both calls' receipts land under the same `module-pack-receipt-*` pattern — so each verifier sees
+the other call's receipts and reads them as "built but never selected". `--declared` is the
+caller's own matrix (`inputs.modules`): a receipt for a module this call did not declare belongs
+to a sibling call and is set aside, NAMED, and never counted. Within the declared set the
+accounting is exactly as strict as before.
 """
 from __future__ import annotations
 
@@ -61,14 +69,40 @@ def read_receipts(directory: Path) -> tuple[dict[str, dict], list[str]]:
     return found, broken
 
 
+def _receipt_stem(broken_entry: str) -> str:
+    """The module a broken-receipt entry is FOR — `X.json` or `X.json (claims module 'Y')` ⇒ X."""
+    return broken_entry.split(".json", 1)[0]
+
+
 def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
            pack_result: str, receipts_dir_exists: bool,
-           scope: str = "") -> tuple[int, list[str], list[str]]:
-    """(exit code, error lines, note lines)."""
+           scope: str = "", declared: set[str] | None = None) -> tuple[int, list[str], list[str]]:
+    """(exit code, error lines, note lines). `declared` is the caller's own matrix; when given,
+    receipts for modules outside it are a SIBLING call's (artifacts are run-wide) and are set
+    aside rather than counted. `None` keeps the pre-#932 behaviour: every receipt is this call's."""
     errors: list[str] = []
     notes: list[str] = []
-    got = set(receipts)
     want = set(expected)
+
+    if declared is not None:
+        # 🚨 The selection is computed FROM the declared matrix, so a selected module the caller
+        # never declared is not a sibling's — it is the selector and the matrix disagreeing.
+        undeclared = sorted(want - declared)
+        if undeclared:
+            return 1, [f"{len(undeclared)} selected module(s) are not in the caller's own "
+                       f"`modules:` list — the selection and the matrix disagree: "
+                       + ", ".join(undeclared)], []
+        # A sibling's receipt is set aside whether it parsed or not: a corrupt receipt for a module
+        # this call never declared is the sibling's finding, not this call's.
+        sibling = sorted(m for m in receipts if m not in declared)
+        sibling_broken = sorted(b for b in broken if _receipt_stem(b) not in declared)
+        if sibling or sibling_broken:
+            receipts = {m: r for m, r in receipts.items() if m in declared}
+            broken = [b for b in broken if _receipt_stem(b) in declared]
+            notes.append(f"{len(sibling) + len(sibling_broken)} receipt(s) belong to a sibling "
+                         f"module-pack call in this run (artifacts are run-wide) and are not this "
+                         f"call's to count: " + ", ".join(sibling + sibling_broken))
+    got = set(receipts)
 
     if broken:
         errors.append(f"{len(broken)} receipt file(s) could not be read as a receipt: "
@@ -131,6 +165,27 @@ def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
     return (1 if errors else 0), errors, notes
 
 
+def parse_declared(text: str) -> set[str] | None:
+    """The caller's `modules:` input as it reaches the workflow — a JSON list of entries carrying
+    `module`, a JSON list of names, or a whitespace-separated list. Empty ⇒ None (no filter)."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError:
+        return {m for m in text.split() if m}
+    if isinstance(doc, list):
+        out: set[str] = set()
+        for entry in doc:
+            if isinstance(entry, dict) and isinstance(entry.get("module"), str):
+                out.add(entry["module"])
+            elif isinstance(entry, str) and entry:
+                out.add(entry)
+        return out
+    return None
+
+
 # ── self-test ────────────────────────────────────────────────────────────────────────────────
 # 🚨 A COUNT GATE THAT CANNOT FAIL IS A TICK, NOT A GATE. Every case below is a MUTATION of a
 # green run — remove a receipt, add one, skip the job, corrupt a file — and each must turn red and
@@ -146,9 +201,10 @@ def self_test() -> int:
         if not ok:
             failures.append(name)
 
-    def run(directory: Path, expected: list[str], result: str = "success", scope: str = ""):
+    def run(directory: Path, expected: list[str], result: str = "success", scope: str = "",
+            declared: set[str] | None = None):
         receipts, broken = read_receipts(directory)
-        return verify(expected, receipts, broken, result, directory.is_dir(), scope)
+        return verify(expected, receipts, broken, result, directory.is_dir(), scope, declared)
 
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp) / "receipts"
@@ -180,7 +236,36 @@ def self_test() -> int:
         check("a bundle built that the selection did NOT name fails, naming it",
               code == 1 and any("MeshWeaver.Ghost" in e and "did not name" in e for e in errors),
               f"{errors}")
+        # 🚨 Two module-pack calls in ONE run share the artifact namespace (Plugins #932), so the
+        # same stray receipt is a SIBLING's when this call never declared the module — set aside
+        # and named, never counted…
+        code, errors, notes = run(d, three, declared=set(three))
+        check("…but a receipt for a module this call did NOT declare is a sibling call's ⇒ pass, named",
+              code == 0 and any("sibling" in n and "MeshWeaver.Ghost" in n for n in notes),
+              f"{errors} {notes}")
+        # …while a DECLARED module that was built without being selected stays red.
+        code, errors, _ = run(d, three, declared=set(three) | {"MeshWeaver.Ghost"})
+        check("a declared module built without being selected is still the matrix disagreeing",
+              code == 1 and any("MeshWeaver.Ghost" in e and "did not name" in e for e in errors),
+              f"{errors}")
+        code, errors, _ = run(d, three + ["MeshWeaver.Ghost"], declared=set(three))
+        check("a SELECTED module the caller never declared is refused (selector ≠ matrix)",
+              code == 1 and any("not in the caller" in e and "MeshWeaver.Ghost" in e for e in errors),
+              f"{errors}")
+        (d / "MeshWeaver.Ghost.json").write_text("{ not json", encoding="utf-8")
+        code, errors, notes = run(d, three, declared=set(three))
+        check("a CORRUPT receipt of a sibling call is the sibling's finding ⇒ pass, named",
+              code == 0 and any("sibling" in n and "MeshWeaver.Ghost" in n for n in notes),
+              f"{errors} {notes}")
+        code, errors, _ = run(d, three, declared=set(three) | {"MeshWeaver.Ghost"})
+        check("…while a corrupt receipt of a DECLARED module still fails",
+              code == 1 and any("could not be read" in e for e in errors), f"{errors}")
         (d / "MeshWeaver.Ghost.json").unlink()
+        check("--declared accepts the workflow's JSON entries, plain names, and nothing",
+              parse_declared('[{"package": "AI", "module": "MeshWeaver.AI"}, "MeshWeaver.Mcp"]')
+              == {"MeshWeaver.AI", "MeshWeaver.Mcp"}
+              and parse_declared("MeshWeaver.AI MeshWeaver.Mcp") == {"MeshWeaver.AI", "MeshWeaver.Mcp"}
+              and parse_declared("  ") is None)
 
         code, errors, _ = run(d, three, "skipped")
         check("a NON-EMPTY selection whose pack job never ran fails loudly",
@@ -234,9 +319,9 @@ def self_test() -> int:
               "this gate is the only thing standing between a narrowed matrix and a silently "
               "skipped module bundle.")
         return 1
-    print("\n✓ node-repo-pack-verify self-test: 2 green-run assertions, 7 mutations that must go "
-          "red, and 5 empty-selection cases including the scope=full contradiction lock — all "
-          "green.")
+    print("\n✓ node-repo-pack-verify self-test: 2 green-run assertions, 10 mutations that must go "
+          "red, the two sibling-call receipts (well-formed and corrupt) that must NOT, and 5 empty-selection cases including the "
+          "scope=full contradiction lock — all green.")
     return 0
 
 
@@ -250,6 +335,10 @@ def main() -> int:
     p.add_argument("--scope", default="",
                    help="the selection's own scope (full|narrowed). A 'full' scope with an empty "
                         "selection is a contradiction and is refused.")
+    p.add_argument("--declared", default="",
+                   help="the caller's own `modules:` input (JSON entries or names). Receipts for "
+                        "modules outside it belong to a sibling call in the same run and are set "
+                        "aside, not counted. Empty ⇒ every receipt is this call's.")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     args = p.parse_args()
     if args.self_test:
@@ -261,7 +350,7 @@ def main() -> int:
     expected = [m for m in args.expected.split() if m]
     receipts, broken = read_receipts(directory)
     code, errors, notes = verify(expected, receipts, broken, args.pack_result,
-                                 directory.is_dir(), args.scope)
+                                 directory.is_dir(), args.scope, parse_declared(args.declared))
 
     for note in notes:
         print(f"✓ {note}")
