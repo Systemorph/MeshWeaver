@@ -1054,11 +1054,11 @@ public static class MeshDataSourceExtensions
     ///   recycled). Nothing else is going to tell us it is safe and the mesh may run for months, so
     ///   unload NOW — deferring would leak this ALC for the process lifetime, which is exactly the
     ///   late-project CI OOM / GC-stall this hook was added to fix. No mesh-wide teardown is in
-    ///   progress, so no <see cref="IoPoolRegistry.DrainAll"/> is pending behind us.</item>
+    ///   progress, so no <see cref="IoPoolRegistry.DrainAll()"/> is pending behind us.</item>
     /// <item><b>The mesh is tearing down.</b> This callback runs from <c>MessageHub.DisposeImpl</c>,
     ///   i.e. STRICTLY BEFORE <see cref="IMessageHub.DisposalCompleted"/> — but the pooled
     ///   layout-render leaves that execute this node's compiled types are cancelled and JOINED only
-    ///   by <see cref="IoPoolRegistry.DrainAll"/>, which every teardown orchestrator runs AFTER
+    ///   by <see cref="IoPoolRegistry.DrainAll()"/>, which every teardown orchestrator runs AFTER
     ///   <c>DisposalCompleted</c> (<c>MeshTeardownExtensions.WaitForDisposalAndIoDrainAsync</c>,
     ///   <c>MonolithMeshTestBase</c>, <c>HubTestBase</c>). Unloading here therefore frees the
     ///   LoaderAllocator out from under a leaf still inside <c>IoPool.SubscribeThroughPool</c>, and
@@ -1097,7 +1097,7 @@ public static class MeshDataSourceExtensions
     /// <see cref="UnloadNodeAssemblyContexts"/>, and for the same reason: releasing the last lease
     /// is what runs the deferred <c>Unload</c>, so doing it inline from
     /// <c>MessageHub.DisposeImpl</c> would free the LoaderAllocator before
-    /// <see cref="IoPoolRegistry.DrainAll"/> has joined the pooled leaves still running that
+    /// <see cref="IoPoolRegistry.DrainAll()"/> has joined the pooled leaves still running that
     /// assembly's code (issue #613 — AccessViolation → SIGABRT). Mesh alive ⇒ release now, so a
     /// long-lived process reclaims the ALC as soon as its last user is gone. Mesh tearing down ⇒
     /// hand it to <see cref="MeshTeardownSignal"/>, which fires after every drain phase.
