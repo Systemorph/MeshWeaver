@@ -3811,7 +3811,10 @@ public class MeshOperations
                 : null,
             startedAt: status == CompilationStatus.Compiling ? def.LastCompileStartedAt : null,
             lastCompiledAt: status == CompilationStatus.Ok ? def.LastCompileSucceededAt : null,
-            hub.JsonSerializerOptions);
+            hub.JsonSerializerOptions,
+            // WHICH build the Ok is about (#2471) — the identity a caller can compare against the
+            // bytes an instance is actually serving.
+            def.LatestAssemblyMvid);
     }
 
     /// <summary>
@@ -4205,7 +4208,7 @@ public class MeshOperations
 
     /// <summary>
     /// Pure JSON formatter for <see cref="Compile"/>'s ALREADY-IN-FLIGHT answer (#576).
-    /// Lives on its own — like <see cref="FormatDiagnostics"/> — so a unit test can lock in
+    /// Lives on its own — like <c>FormatDiagnostics</c> — so a unit test can lock in
     /// the exact wording, because the wording is the whole point: the caller must learn
     /// (a) that a compile IS running, (b) that this call did NOT start a second one, and
     /// (c) WHERE to watch the running one. The previous answer (a 60s wait then
@@ -4255,6 +4258,32 @@ public class MeshOperations
         DateTimeOffset? startedAt,
         DateTimeOffset? lastCompiledAt,
         JsonSerializerOptions options)
+        => FormatDiagnostics(
+            status, nodeTypePath, error, startedAt, lastCompiledAt, options,
+            publishedAssemblyMvid: null);
+
+    /// <summary>
+    /// 🚨 <b>The overload that reports WHICH BUILD the status is about</b> (#2471).
+    ///
+    /// <para>An OVERLOAD, never an added optional parameter: a defaulted parameter replaces the
+    /// signature, so a module compiled against the old arity calls a method the new assembly does
+    /// not have — the abort this repo's <c>check-record-signatures.py</c> exists to refuse, in a
+    /// method rather than a record.</para>
+    /// </summary>
+    /// <param name="publishedAssemblyMvid">
+    /// <see cref="Graph.Configuration.NodeTypeDefinition.LatestAssemblyMvid"/> — the identity of
+    /// the bytes the last successful build produced. Null when unknown (a node stamped before the
+    /// field existed, or a producer with no readable assembly), in which case the reply is
+    /// unchanged.
+    /// </param>
+    public static string FormatDiagnostics(
+        CompilationStatus status,
+        string nodeTypePath,
+        string? error,
+        DateTimeOffset? startedAt,
+        DateTimeOffset? lastCompiledAt,
+        JsonSerializerOptions options,
+        string? publishedAssemblyMvid)
     {
         switch (status)
         {
@@ -4286,14 +4315,36 @@ public class MeshOperations
                     },
                     options);
             case CompilationStatus.Ok:
+                // 🚨 THIS REPLY USED TO OVERCLAIM, and the overclaim is #2471. "…and is loaded"
+                // asserts something this formatter has no evidence for: it reads the NODE's record,
+                // and a portal can serve a DIFFERENT build than the one that record describes — a
+                // path is a store key each pod resolves through its own local cache. On memex
+                // 2026-08-26 this said Ok while the page rendered the previous build, through two
+                // NodeType recycles, four instance recycles and a forced compile. A claim of Ok
+                // that is not backed by the bytes being served is a lie with a green tick, which
+                // is strictly worse than an error.
+                //
+                // So the reply now says exactly what it knows (the compile succeeded), NAMES the
+                // build it is about (mvid), and points at the one check that is actually about the
+                // served bytes. Do not restore the "is loaded" clause.
                 return JsonSerializer.Serialize(
                     new
                     {
                         status = "Ok",
                         nodeTypePath,
                         lastCompiledAt,
+                        mvid = publishedAssemblyMvid,
                         message = "Compile SUCCEEDED at " + lastCompiledAt?.ToString("u")
-                            + ". The NodeType assembly was built without errors and is loaded."
+                            + ". The NodeType assembly was built without errors"
+                            + (publishedAssemblyMvid is null
+                                ? "."
+                                : " (mvid " + publishedAssemblyMvid + ").")
+                            + " 🚨 This describes the BUILD, not what any hub is currently "
+                            + "executing: an instance can serve an older assembly at the same "
+                            + "store key. If a change is missing from a rendered page, the "
+                            + "$Banner adornment on that instance is the check (it fires when the "
+                            + "served build's mvid differs from this one) — a green status here is "
+                            + "not evidence."
                     },
                     options);
             case CompilationStatus.Unavailable:

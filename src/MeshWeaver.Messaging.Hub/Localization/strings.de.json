@@ -636,6 +636,7 @@
   "ui.mdNodeToUpdateMissing": "**Fehler:** Zu aktualisierender MeshNode nicht gefunden.",
   "ui.mdRecyclingHub": "**Hub wird recycelt…** Weiterleitung folgt gleich.",
   "ui.mdStaleBuildAvailable": "**F\u00fcr diesen Typ liegt ein neuerer Build vor.** Diese Seite f\u00fchrt noch den zuvor kompilierten aus.",
+  "ui.mdServedBuildIsNotPublished": "**Diese Seite f\u00fchrt nicht den Build aus, den dieser Typ ver\u00f6ffentlicht hat.** Der Knoten meldet einen kompilierten Build, dessen Bytes von den ausgef\u00fchrten abweichen; sein Status sagt daher nichts \u00fcber das Sichtbare aus. Ein Recycle bindet dieselbe lokale Kopie erneut und \u00e4ndert nichts \u2014 bitte melden.",
   "ui.recycleConfirmTitle": "Diesen Hub neu starten?",
   "ui.recycleConfirmBody": "Der Hub des Knotens wird beendet und beim n\u00e4chsten Aufruf neu aufgebaut \u2014 dabei \u00fcbernimmt er den zuletzt kompilierten Build. Es wird nichts gel\u00f6scht und kein Inhalt ge\u00e4ndert.",
   "ui.recycleFailed": "Der Hub unter '{0}' hat nach dem angeforderten Neustart noch nicht wieder geantwortet: {1}",

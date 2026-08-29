@@ -244,6 +244,14 @@ internal static class NodeTypeContractHandler
                                     // populate them (Null store).
                                     LatestAssemblyCollection = response.Collection ?? def.LatestAssemblyCollection,
                                     LatestAssemblyPath = response.ContentPath ?? def.LatestAssemblyPath,
+                                    // The bytes' identity beside their address (#2471). This
+                                    // handler RACES ApplyCompileSuccess (see the LastCompiledVersion
+                                    // note below), so it has to stamp the same shape — a success
+                                    // write that omitted the MVID would leave whichever writer won
+                                    // deciding whether the served build is checkable at all.
+                                    LatestAssemblyMvid =
+                                        ServedBuildIdentity.OfFile(response.AssemblyLocation)
+                                        ?? def.LatestAssemblyMvid,
                                     // 🚨 The version the BYTES are stored under — never curr.Version.
                                     // LastCompiledVersion is one half of the IAssemblyStore key
                                     // (nodeTypePath, version); the response echoes that key's version

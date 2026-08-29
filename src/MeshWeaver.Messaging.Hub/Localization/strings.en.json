@@ -636,6 +636,7 @@
   "ui.mdNodeToUpdateMissing": "**Error:** Could not find MeshNode to update.",
   "ui.mdRecyclingHub": "**Recycling hub…** redirecting in a moment.",
   "ui.mdStaleBuildAvailable": "**A newer build of this type is available.** This page is still running the previously compiled one.",
+  "ui.mdServedBuildIsNotPublished": "**This page is NOT running the build this type published.** The node reports a compiled build whose bytes differ from the ones this page is executing, so its status says nothing about what you are seeing. A recycle re-binds the same local copy and will not change it \u2014 report this.",
   "ui.recycleConfirmTitle": "Recycle this hub?",
   "ui.recycleConfirmBody": "The node's hub is torn down and rebuilt on the next visit, picking up the latest compiled build. Nothing is deleted and no content changes.",
   "ui.recycleFailed": "The hub at '{0}' has not answered again yet after the recycle was requested: {1}",
