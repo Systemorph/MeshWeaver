@@ -175,8 +175,8 @@ hostingOperator:
   #   AZ_OIDC_ISSUER:        <az aks show --query oidcIssuerProfile.issuerURL -o tsv>
   #   INGRESS_IP:            <the ingress controller's public IP>
   #   PAYWALL_URL:           https://<control instance>/suspended
-  #   VALUES_FILE:           /opt/hosting/values/fleet-template.yaml
   #   CATALOG_CONFIG:        /tmp/hosting-catalog-config
+  #   HOSTING_VALUES_FILE:   /tmp/hosting-values.yaml   (where run.sh materialises the RECORD-rendered values)
 # ---- Fixed replica count (portal) ------------------------------------------
 # Read ONLY when keda.enabled is false — with KEDA on, the HPA owns spec.replicas and the chart
 # deliberately renders no such field (see templates/memex-portal/deployment.yaml).
