@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using System.Reactive.Disposables;
+using System.Threading;
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
@@ -44,6 +45,15 @@ public class SelfUpdateHostedService : IHostedService
     private readonly IIoPool _http;
     private IDisposable? _subscription;
 
+    /// <summary>
+    /// How many build-completion events this process has observed. The ONLY evidence that the event
+    /// channel is alive, and it exists solely to make the dead-channel report in
+    /// <see cref="ReportCheck"/> possible — nothing else can distinguish "nothing published" from
+    /// "something published and nothing told us". Mutable instance state, read with
+    /// <see cref="Volatile"/> because the watch and the check run on different pool threads.
+    /// </summary>
+    private int _buildEventsSeen;
+
     public SelfUpdateHostedService(
         IMessageHub hub,
         IAcrTagLister acr,
@@ -65,66 +75,88 @@ public class SelfUpdateHostedService : IHostedService
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _logger?.LogInformation(
-            "[SelfUpdate] starting (event-driven; one startup pass, then a check per build-completion event); version={Version}, registry={Registry}/{Repo}, canPatch={CanPatch}, retryInterval={Interval}.",
+            "[SelfUpdate] starting (event-driven, with a {SafetyNet} safety net); version={Version}, "
+            + "registry={Registry}/{Repo}, canPatch={CanPatch}, retryInterval={Interval}.",
+            _options.SafetyNetCheckInterval > TimeSpan.Zero
+                ? _options.SafetyNetCheckInterval.ToString()
+                : "disabled",
             ShippedReleaseSeed.InstalledPlatformVersion, _options.Registry, _options.PortalRepository,
             _updater.CanPatch, _options.RetryInterval);
 
-        // 🚨 EVENT-DRIVEN, and the event source is deliberately OUTSIDE the policy stream.
+        // 🚨 EVENT-DRIVEN WITH A SAFETY NET, and the event source is deliberately OUTSIDE the
+        // policy stream.
         //
-        // Exactly ONE pass at startup — to catch publications missed while this install was down —
-        // and after that a check per build completion, of the platform OR of any module the
-        // environment deploys. There is no recurring interval: a timer that re-asks a question
-        // nothing has answered is the shape this codebase treats as a band-aid, and the
-        // availability gate already defers a roll whose artifacts are not ready. What makes
-        // deferral safe without a timer is that the NEXT publication is itself an event, so a
-        // deferred roll is re-decided the moment its missing artifact appears.
+        // The fast path is unchanged and is still the design: one pass at startup (to catch
+        // publications missed while this install was down), then a check per build completion of
+        // the platform OR of any module the environment deploys. Nothing beats an event for
+        // latency, and a timer that re-asks a question nothing has answered is a band-aid.
+        //
+        // 🚨 What the event-ONLY shape got wrong is its failure mode, and it cost a week of prod
+        // (#2494/#2553). Every event reaches this install across a chain of configuration that
+        // nothing re-verifies — a GitHub webhook registration, a `WebhookInbox` allowlist slot, an
+        // HMAC secret that must be byte-identical on both ends — and every joint of it fails
+        // SILENTLY: an unlisted inbox target answers 404 exactly like a wrong URL, a mismatched
+        // secret still answers 2xx and drops the delivery. An install whose event channel is dead
+        // therefore looks EXACTLY like an install that is up to date: healthy pods, no errors, and
+        // a check that simply never runs. memex sat three builds behind for 7 h in that state with
+        // nothing in the product able to say so.
+        //
+        // So the safety net is not the removed poll returning. A poll DRIVES the update; this
+        // BOUNDS how long a broken driver can hide, and it cannot change the roll cadence at all —
+        // a safety-net check passes through MinRollInterval like any other. See
+        // SelfUpdateOptions.SafetyNetCheckInterval.
         //
         // 🚨 The policy is STATE, not a driver — WithLatestFrom, never Switch. Under Switch every
         // policy emission re-subscribed the watch, which RE-BASELINED it: a publication landing in
         // that window was read as "current state" rather than as a new build and silently swallowed.
-        // The recurring interval used to cover that; with the interval gone it would be a lost
-        // update with nothing to recover it. One long-lived watch, the latest policy read at
-        // decision time, is what closes it. (CreatePolicySource emits the default exactly once
-        // before the first live read, so the startup pass always has a policy to run under.)
+        // One long-lived watch, the latest policy read at decision time, is what closes it.
+        // (CreatePolicySource emits the default exactly once before the first live read, so the
+        // startup pass always has a policy to run under.)
         // The policy is shared STATE with a replayed latest value, connected for the lifetime of the
         // service. Replay(1)+Connect rather than RefCount: a RefCount would drop to zero between the
-        // Take(1) below and the WithLatestFrom re-subscribe, re-running the seed and re-baselining
-        // everything downstream — the very class of bug this restructure exists to remove.
+        // Take(1) below and the re-subscribe, re-running the seed and re-baselining everything
+        // downstream — the very class of bug this restructure exists to remove.
         var policy = CreatePolicySource().Replay(1);
 
         // 🚨 The first check waits for a policy to exist. CreatePolicySource emits the default only
         // AFTER its async seed, so a startup pass composed with WithLatestFrom alone fires before
         // any policy is available and is silently dropped — no first check at all. Take(1) gates the
-        // trigger stream on that first emission; every LATER policy change is picked up by
-        // WithLatestFrom without re-subscribing the watch.
-        // Three trigger sources, no timer among them:
+        // trigger stream on that first emission; every LATER policy change is picked up without
+        // re-subscribing the watch.
+        // Four trigger sources:
         //   • the one startup pass,
         //   • a build completion from the platform or ANY module the environment deploys,
         //   • an admin CHANGING the policy — enabling updates must not wait for the next
         //     publication, which could be weeks away. DistinctUntilChanged so a re-emission of the
         //     same policy is not a trigger, and Skip(1) so the replayed CURRENT policy is not one
-        //     either (the startup pass already covers it).
+        //     either (the startup pass already covers it),
+        //   • the safety net, so a dead event channel is bounded rather than permanent.
         var checks = policy
             .Take(1)
             .SelectMany(_ => Observable.Merge(
-                Observable.Return(-1L),
-                BuildCompletionTicks(),
-                policy.DistinctUntilChanged(content => content.Policy).Skip(1).Select(_ => -3L)))
+                Observable.Return(SelfUpdateTrigger.Startup),
+                BuildCompletionTicks().Do(_ => Interlocked.Increment(ref _buildEventsSeen)),
+                SafetyNetTicks(),
+                policy.DistinctUntilChanged(content => content.Policy).Skip(1)
+                    .Select(_ => SelfUpdateTrigger.PolicyChange)))
             // 🚨 Read the CURRENT policy at decision time — never WithLatestFrom. That operator only
             // pairs once its secondary has produced, and the startup trigger fires synchronously on
             // subscribe, so whether the first check survives came down to Rx's internal subscribe
             // ordering: it silently dropped the startup pass. policy is Replay(1), so Take(1) yields
             // the latest value immediately and deterministically.
-            .SelectMany(_ => policy.Take(1))
-            .Where(content => content.Policy != UpdatePolicyKind.None)   // None => never update
-            .SelectMany(content => RunOnce(content)
-                .Catch((Exception ex) =>
-                {
-                    // wedges-to-zero: a check error (ACR outage, k8s 403) logs and the watch stays
-                    // live. No outer .Retry — that would be a resubscribe storm.
-                    _logger?.LogWarning(ex, "[SelfUpdate] check failed (policy={Policy}).", content.Policy);
-                    return Observable.Empty<Unit>();
-                }))
+            .SelectMany(trigger => policy.Take(1).Select(content => (trigger, content)))
+            .SelectMany(check => RunOnce(check.content)
+                // wedges-to-zero: a check error (ACR outage, k8s 403) is a VERDICT, not a silence,
+                // and the watch stays live. No outer .Retry — that would be a resubscribe storm.
+                .Catch((Exception ex) => Observable.Return(SelfUpdateVerdict.CheckFailed(ex)))
+                // 🚨 THE POSTCONDITION, asserted rather than hoped for. Every branch of RunOnce
+                // names its outcome, so this should be unreachable — and that is exactly why it is
+                // here. The defect this whole restructure fixes was two bare `Where` clauses that
+                // dropped a check on the floor, and the only thing that stops a third one being
+                // added is making "produced nothing" itself an outcome that gets reported.
+                .DefaultIfEmpty(SelfUpdateVerdict.NoOutcome())
+                .Take(1)
+                .SelectMany(verdict => ReportCheck(check.trigger, verdict)))
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 _ => { },
@@ -133,6 +165,83 @@ public class SelfUpdateHostedService : IHostedService
         _subscription = new CompositeDisposable(checks, policy.Connect());
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// The safety net (#2494): a bounded liveness floor on the CHECK, never on the roll.
+    ///
+    /// <para>Off entirely when <see cref="SelfUpdateOptions.SafetyNetCheckInterval"/> is zero or
+    /// negative, which is the shape a deployment that genuinely wants event-only can opt into
+    /// — deliberately, in configuration, where it is visible.</para>
+    ///
+    /// <para>Virtual for the same reason the other three seams are: a test must be able to drive
+    /// the safety-net path without waiting out an hour.</para>
+    /// </summary>
+    protected virtual IObservable<SelfUpdateTrigger> SafetyNetTicks() =>
+        _options.SafetyNetCheckInterval <= TimeSpan.Zero
+            ? Observable.Never<SelfUpdateTrigger>()
+            : Observable.Interval(_options.SafetyNetCheckInterval)
+                .Select(_ => SelfUpdateTrigger.SafetyNet);
+
+    /// <summary>
+    /// 🚨 Reports the outcome of ONE check — the single reporting site, and the thing whose absence
+    /// #2553 measured as "ZERO SelfUpdate log lines in 6.7 h while three builds behind".
+    ///
+    /// <para>It reports TWICE, to two audiences with different failure modes:</para>
+    /// <list type="number">
+    /// <item>a LOG line, one per check, naming the trigger and the verdict; and</item>
+    /// <item>a durable stamp on <c>Admin/UpdatePolicy</c>
+    /// (<see cref="UpdatePolicyContent.LastCheckedAt"/> / <c>LastCheckVerdict</c> /
+    /// <c>LastCheckTrigger</c>).</item>
+    /// </list>
+    ///
+    /// <para>Both, because the log alone was not enough and the reason is instructive: every line
+    /// this service had to say was <c>LogInformation</c>, the portal image caps its whole logger
+    /// prefix at <c>Warning</c>, and no deployment had added the category. So the mechanism was
+    /// working exactly as designed and reporting into a void — the one thing an operator could
+    /// read, the Updates tab, showed "No newer version detected yet" because that is what an
+    /// install that has never checked and an install that checked and found nothing both look
+    /// like. A node write does not depend on a log level anyone remembered to set.</para>
+    ///
+    /// <para>🚨 THE DEAD-EVENT-CHANNEL REPORT is the one line that goes to Warning: a check woken
+    /// by the SAFETY NET, on an install that has seen no build-completion event at all, that
+    /// nevertheless FOUND a newer release. Each clause matters. "No events yet" alone is not
+    /// alarming — an install whose modules rarely build legitimately sees none for days — and
+    /// warning on it would train people to ignore the line. "A release was waiting and nothing
+    /// told us" is the #2494 symptom exactly, and it is only ever observable from here.</para>
+    ///
+    /// <para>Bookkeeping, never a gate (#1020): the stamp is best-effort and a failed write is a
+    /// warning that names itself, never something that can abort a check or hold a roll.</para>
+    /// </summary>
+    private IObservable<Unit> ReportCheck(SelfUpdateTrigger trigger, SelfUpdateVerdict verdict) =>
+        Observable.Defer(() =>
+        {
+            var eventChannelSilent = trigger == SelfUpdateTrigger.SafetyNet
+                && Volatile.Read(ref _buildEventsSeen) == 0
+                && verdict.FoundNewerRelease;
+
+            if (eventChannelSilent)
+                _logger?.LogWarning(
+                    "[SelfUpdate] check ({Trigger}): {Verdict} 🚨 This install has received NO "
+                    + "build-completion event since it started, yet a newer release was waiting — "
+                    + "only the safety net found it. The event channel (GitHub webhook → "
+                    + "WebhookInbox target → Admin/_Build) is not reaching this instance; every "
+                    + "joint of it fails silently, so check them rather than this service.",
+                    trigger, verdict.Message);
+            else if (verdict.Outcome is SelfUpdateOutcome.NoOutcome
+                     or SelfUpdateOutcome.CheckFailed)
+                _logger?.LogWarning("[SelfUpdate] check ({Trigger}): {Verdict}", trigger, verdict.Message);
+            else
+                _logger?.LogInformation("[SelfUpdate] check ({Trigger}): {Verdict}", trigger, verdict.Message);
+
+            return RecordCheck(trigger, verdict)
+                .Catch((Exception ex) =>
+                {
+                    _logger?.LogWarning(ex,
+                        "[SelfUpdate] could not record the check verdict on {Node}; the check itself "
+                        + "still ran and its verdict is above.", UpdatePolicyNodeType.NodePath);
+                    return Observable.Return(Unit.Default);
+                });
+        });
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
@@ -197,7 +306,7 @@ public class SelfUpdateHostedService : IHostedService
     /// and <see cref="RunOnce"/> still lists ACR itself, so a spurious tick costs one cheap tag
     /// list and can never cause a wrong roll.
     /// </summary>
-    protected virtual IObservable<long> BuildCompletionTicks() =>
+    protected virtual IObservable<SelfUpdateTrigger> BuildCompletionTicks() =>
         Observable
             .Defer(() => NewBuildEventsAcross(_hub
                 .GetQuery($"SelfUpdate.BuildTrigger:{_hub.Address}",
@@ -209,7 +318,7 @@ public class SelfUpdateHostedService : IHostedService
                     // GitHubSyncConfig satellites in ordinary partitions ARE returned unscoped.)
                     BuildCompletion.WatchQuery)))
             .Throttle(_options.EventCoalesceWindow)
-            .Select(_ => -2L)
+            .Select(_ => SelfUpdateTrigger.BuildCompletion)
             .RetryWhen(ResubscribeAfterRetryInterval("build-completion watch"));
 
     /// <summary>
@@ -276,9 +385,25 @@ public class SelfUpdateHostedService : IHostedService
         });
 
     /// <summary>One evaluation: list tags → pick target per policy → gate target &gt; current →
-    /// record availability → (if armed) patch the workloads.</summary>
-    private IObservable<Unit> RunOnce(UpdatePolicyContent policy) =>
-        _http.Invoke(ct => _acr.ListTagsAsync(_options.PortalRepository, ct))
+    /// record availability → (if armed) patch the workloads.
+    ///
+    /// <para>🚨 Returns a <see cref="SelfUpdateVerdict"/>, not <c>Unit</c>, and that is the whole
+    /// #2553 fix rather than a style change. As <c>IObservable&lt;Unit&gt;</c> this method had two
+    /// ways to complete having said NOTHING — a policy of <c>None</c> and "no candidate is newer"
+    /// were both bare Rx <c>Where</c> clauses upstream — and an empty completion is
+    /// indistinguishable from a check that never ran. Every exit now names its outcome, so the
+    /// caller has something to log and something to record.</para></summary>
+    private IObservable<SelfUpdateVerdict> RunOnce(UpdatePolicyContent policy)
+    {
+        // 🚨 `None` means never update, and it used to be a `Where` in the trigger pipeline: the
+        // single most silent path in the service. An install deliberately pinned by an
+        // administrator and an install whose updater is broken produced byte-identical evidence
+        // (none), which is the exact confusion #2553 was filed about. It is a DECISION, so it says
+        // so — and it still costs no ACR call.
+        if (policy.Policy == UpdatePolicyKind.None)
+            return Observable.Return(SelfUpdateVerdict.UpdatesDisabled());
+
+        return _http.Invoke(ct => _acr.ListTagsAsync(_options.PortalRepository, ct))
             // 🚨 The BEST ROLLABLE release, not merely the newest one. A target is only rollable if a
             // sealed content bake exists for the identity that exact image resolves to, and picking
             // the newest tag and stopping means one unbaked release freezes the instance FOREVER:
@@ -291,32 +416,46 @@ public class SelfUpdateHostedService : IHostedService
             // never backwards (IsNewer), still never into a boot storm (unsealed candidates are
             // SKIPPED, not forced) — but a not-yet-baked head no longer blocks the releases behind
             // it, and an instance always advances to the best release that can actually serve.
-            .Select(tags => VersionSelect
-                .PickTargets(tags, policy.Policy, policy.RequireCiGreen)
-                .Where(tag => VersionSelect.IsNewer(tag, ShippedReleaseSeed.InstalledPlatformVersion))
-                .ToArray())
-            .SelectMany(FirstRollable)
-            .Where(target => !string.IsNullOrEmpty(target))
-            .SelectMany(target => RecordAvailable(target!)
-                // 🚨 BOOKKEEPING, NOT A GATE (#1020). RecordAvailable writes two cosmetic fields
-                // (LatestAvailableTag / CheckedAt) that drive the admin tab; the ROLL-FORWARD does not
-                // depend on them. Chaining Apply after it with .SelectMany made a failed status write
-                // abort the update: in production the Admin/UpdatePolicy node hub was unreachable (its
-                // SubscribeRequest never answered — the silo's routing was wedged), every 6 h tick
-                // timed out after 30 s in this write, and the portal sat 37 h on a stale image while
-                // the poller kept ticking and the ACR check kept succeeding. The update it would not
-                // apply is exactly what recovers a degraded pod, so the write must never gate it:
-                // surface the fault (never swallow it — the warning names the tag and the node) and
-                // carry on to Apply, which touches only ACR + the k8s API and works while the mesh
-                // is degraded. Concat, not Merge — the record still lands FIRST when it succeeds.
-                .Catch((Exception ex) =>
-                {
-                    _logger?.LogWarning(ex,
-                        "[SelfUpdate] could not record available tag {Tag} on {Node}; applying the update anyway.",
-                        target, UpdatePolicyNodeType.NodePath);
-                    return Observable.Return(Unit.Default);
-                })
-                .Concat(GateThenApply(target!)));
+            .Select(tags => (
+                Listed: tags.Count,
+                Candidates: VersionSelect
+                    .PickTargets(tags, policy.Policy, policy.RequireCiGreen)
+                    .Where(tag => VersionSelect.IsNewer(tag, ShippedReleaseSeed.InstalledPlatformVersion))
+                    .ToArray()))
+            .SelectMany(listing => listing.Candidates.Length == 0
+                // 🚨 "We asked and the answer was no" — the OTHER formerly-silent exit, and the one
+                // that made a stalled install unfalsifiable from outside. This is the normal, happy
+                // outcome of most checks, and it has to be SAID: it is the only thing that
+                // distinguishes a healthy up-to-date install from one whose checker is dead.
+                ? Observable.Return(SelfUpdateVerdict.NoNewerRelease(
+                    listing.Listed, ShippedReleaseSeed.InstalledPlatformVersion))
+                : FirstRollable(listing.Candidates)
+                    .SelectMany(target => RecordAvailable(target!)
+                        // 🚨 BOOKKEEPING, NOT A GATE (#1020). RecordAvailable writes two cosmetic fields
+                        // (LatestAvailableTag / CheckedAt) that drive the admin tab; the ROLL-FORWARD does not
+                        // depend on them. Chaining Apply after it with .SelectMany made a failed status write
+                        // abort the update: in production the Admin/UpdatePolicy node hub was unreachable (its
+                        // SubscribeRequest never answered — the silo's routing was wedged), every 6 h tick
+                        // timed out after 30 s in this write, and the portal sat 37 h on a stale image while
+                        // the poller kept ticking and the ACR check kept succeeding. The update it would not
+                        // apply is exactly what recovers a degraded pod, so the write must never gate it:
+                        // surface the fault (never swallow it — the warning names the tag and the node) and
+                        // carry on to Apply, which touches only ACR + the k8s API and works while the mesh
+                        // is degraded. Concat, not Merge — the record still lands FIRST when it succeeds.
+                        .Catch((Exception ex) =>
+                        {
+                            _logger?.LogWarning(ex,
+                                "[SelfUpdate] could not record available tag {Tag} on {Node}; applying the update anyway.",
+                                target, UpdatePolicyNodeType.NodePath);
+                            return Observable.Return(Unit.Default);
+                        })
+                        // IgnoreElements keeps the record's own emissions out of the verdict
+                        // stream while preserving Concat's ordering — the record still lands FIRST,
+                        // and the Select below is unreachable by construction.
+                        .IgnoreElements()
+                        .Select(_ => SelfUpdateVerdict.NoOutcome())
+                        .Concat(GateThenApply(target!))));
+    }
 
     /// <summary>
     /// 🚨 <b>The release-availability gate (#1754), the last thing between a newer tag and a roll.</b>
@@ -377,7 +516,7 @@ public class SelfUpdateHostedService : IHostedService
             .Catch((Exception _) => Observable.Return<string?>(candidates[0]));
     }
 
-    private IObservable<Unit> GateThenApply(string target) =>
+    private IObservable<SelfUpdateVerdict> GateThenApply(string target) =>
         Observable.Defer(() =>
         {
             var gate = ResolveAvailabilityGate();
@@ -396,13 +535,16 @@ public class SelfUpdateHostedService : IHostedService
                         // Clearing is unconditional: a previous hold that no longer applies must
                         // disappear from the admin tab the moment it is resolved.
                         return RecordHold(target, null).Catch(HoldWriteFailed(target))
+                            .IgnoreElements()
+                            .Select(_ => SelfUpdateVerdict.NoOutcome())
                             .Concat(Apply(target));
                     }
 
-                    _logger?.LogInformation(
-                        "[SelfUpdate] HOLDING update to {Tag} (staying on {Current}) — {Reason}",
-                        target, ShippedReleaseSeed.InstalledPlatformVersion, verdict.HoldReason);
-                    return RecordHold(target, verdict).Catch(HoldWriteFailed(target));
+                    return RecordHold(target, verdict).Catch(HoldWriteFailed(target))
+                        .IgnoreElements()
+                        .Select(_ => SelfUpdateVerdict.NoOutcome())
+                        .Concat(Observable.Return(
+                            SelfUpdateVerdict.Held(target, verdict.HoldReason)));
                 });
         });
 
@@ -434,7 +576,7 @@ public class SelfUpdateHostedService : IHostedService
     /// set it in configuration, where it is visible, and the roll proceeds while saying so at
     /// Warning on every tick. It can never waive a gate that DID run.</para>
     /// </summary>
-    private IObservable<Unit> GateNotWired(string target) =>
+    private IObservable<SelfUpdateVerdict> GateNotWired(string target) =>
         Observable.Defer(() =>
         {
             // 🚨 "CANNOT VERIFY" AND "VERIFIED AS NOTHING TO VERIFY" ARE DIFFERENT STATES, and only
@@ -458,7 +600,10 @@ public class SelfUpdateHostedService : IHostedService
                     target, notApplicable);
                 // Clearing is unconditional, exactly as on the verdict path: a previous hold that
                 // no longer applies must disappear from the admin tab the moment it is resolved.
-                return RecordHold(target, null).Catch(HoldWriteFailed(target)).Concat(Apply(target));
+                return RecordHold(target, null).Catch(HoldWriteFailed(target))
+                    .IgnoreElements()
+                    .Select(_ => SelfUpdateVerdict.NoOutcome())
+                    .Concat(Apply(target));
             }
 
             if (_options.AllowUnverifiedRoll)
@@ -484,7 +629,10 @@ public class SelfUpdateHostedService : IHostedService
                 "[SelfUpdate] HOLDING update to {Tag} (staying on {Current}) — {Reason}",
                 target, ShippedReleaseSeed.InstalledPlatformVersion, verdict.HoldReason);
 
-            return RecordHold(target, verdict).Catch(HoldWriteFailed(target));
+            return RecordHold(target, verdict).Catch(HoldWriteFailed(target))
+                .IgnoreElements()
+                .Select(_ => SelfUpdateVerdict.NoOutcome())
+                .Concat(Observable.Return(SelfUpdateVerdict.Held(target, verdict.HoldReason)));
         });
 
     /// <summary>
@@ -562,16 +710,11 @@ public class SelfUpdateHostedService : IHostedService
     /// ONLY trace a stalled install left — it read like a registry problem while the registry was
     /// fine. Deferred so the announcement runs per subscription (per tick), not at composition.
     /// </summary>
-    private IObservable<Unit> Apply(string target) =>
+    private IObservable<SelfUpdateVerdict> Apply(string target) =>
         Observable.Defer(() =>
         {
             if (!_updater.CanPatch)
-            {
-                _logger?.LogInformation(
-                    "[SelfUpdate] update available: {Tag} (detect-and-notify — this install does not self-patch).",
-                    target);
-                return Observable.Return(Unit.Default);
-            }
+                return Observable.Return(SelfUpdateVerdict.DetectOnly(target));
 
             // 🚨 The pacing floor. A roll is a POD RESTART, so without it publication frequency is
             // restart frequency and every restart drops the live circuits of everyone using the
@@ -585,33 +728,58 @@ public class SelfUpdateHostedService : IHostedService
             // in the AKS implementation, and its answer cannot change the decision when the floor is
             // zero. Skipping it removes an API call and a failure point from the happy path.
             if (_options.MinRollInterval <= TimeSpan.Zero)
-            {
-                _logger?.LogInformation(
-                    "[SelfUpdate] applying update {Tag} (was {Current}; no roll floor configured).",
-                    target, ShippedReleaseSeed.InstalledPlatformVersion);
-                return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct));
-            }
+                return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct))
+                    .Select(_ => SelfUpdateVerdict.Applied(
+                        target, ShippedReleaseSeed.InstalledPlatformVersion, null));
 
             return _http.Invoke(ct => _updater.LastRolledAtAsync(ct)).SelectMany(lastRolledAt =>
             {
                 var since = lastRolledAt is null ? (TimeSpan?)null : DateTimeOffset.UtcNow - lastRolledAt.Value;
                 if (since is { } elapsed && elapsed < _options.MinRollInterval)
-                {
-                    _logger?.LogInformation(
-                        "[SelfUpdate] {Tag} is available but this install rolled {Elapsed} ago, inside the "
-                        + "{Floor} floor — deferring. The next publication re-decides it; "
-                        + "`kubectl rollout restart` applies it now.",
-                        target, elapsed, _options.MinRollInterval);
-                    return Observable.Return(Unit.Default);
-                }
+                    return Observable.Return(
+                        SelfUpdateVerdict.Deferred(target, elapsed, _options.MinRollInterval));
 
-                _logger?.LogInformation(
-                    "[SelfUpdate] applying update {Tag} (was {Current}; last rolled {Last}).",
-                    target, ShippedReleaseSeed.InstalledPlatformVersion,
-                    lastRolledAt?.ToString("O") ?? "never");
-                return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct));
+                return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct))
+                    .Select(_ => SelfUpdateVerdict.Applied(
+                        target, ShippedReleaseSeed.InstalledPlatformVersion, lastRolledAt));
             });
         });
+
+    /// <summary>
+    /// Stamps the outcome of one check on the policy node, as System — the durable half of
+    /// <see cref="ReportCheck"/>, and the one that survives a deployment forgetting to set a log
+    /// level. Virtual so a test can fault it and prove the check itself is unaffected.
+    ///
+    /// <para>🚨 It cannot feed itself. The check trigger reads
+    /// <c>policy.DistinctUntilChanged(c =&gt; c.Policy)</c> and the policy source itself is
+    /// <c>DistinctUntilChanged((Policy, RequireCiGreen))</c>, so a write that touches only these
+    /// three bookkeeping fields emits nothing downstream and can never schedule another check —
+    /// the reconcile-feeds-itself write storm (#223) is structurally excluded rather than avoided
+    /// by convention.</para>
+    /// </summary>
+    protected virtual IObservable<Unit> RecordCheck(SelfUpdateTrigger trigger, SelfUpdateVerdict verdict)
+    {
+        var accessService = _hub.ServiceProvider.GetService<AccessService>();
+        var jsonOptions = _hub.JsonSerializerOptions;
+        // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see
+        // RecordHold below (#1444/#1790).
+        return accessService.RunAsSystem(
+            () => _hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                .Update(node =>
+                {
+                    var cur = UpdatePolicyNodeType.ParseContent(node.Content, jsonOptions);
+                    return node with
+                    {
+                        Content = cur with
+                        {
+                            LastCheckedAt = DateTimeOffset.UtcNow,
+                            LastCheckVerdict = verdict.Message,
+                            LastCheckTrigger = trigger.ToString(),
+                        },
+                    };
+                })
+                .Select(_ => Unit.Default));
+    }
 
     /// <summary>Record the newest available tag on the policy node (as System). Drives the admin tab
     /// and the detect-and-notify path. Touches only the bookkeeping fields; preserves Policy.

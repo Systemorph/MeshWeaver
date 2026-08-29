@@ -1795,7 +1795,7 @@ jobs:
           issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
             --limit 1 --json number --jq '.[0].number // empty')
           [ -n "$issue" ] || exit 0
-          gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "✅ **Healed \`${{ needs.gate.outputs.short_sha }}\`** ([run]($RUN_URL)) — main's HEAD now has the complete image set (portal \`${{ needs.portal-image.outputs.version }}\`), verified against ACR. Installs pick it up on their next 6 h self-update poll. Close this issue if nothing else is outstanding."
+          gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "✅ **Healed \`${{ needs.gate.outputs.short_sha }}\`** ([run]($RUN_URL)) — main's HEAD now has the complete image set (portal \`${{ needs.portal-image.outputs.version }}\`), verified against ACR. Installs pick it up on the build-completion event, or within one safety-net check interval if that event never reaches them (#2494). Close this issue if nothing else is outstanding."
 
   # ───────────────────────────── FAILURE ALERTING ────────────────────────────
   # A red CD after a green merge is otherwise INVISIBLE (nobody watches the Actions tab), and the

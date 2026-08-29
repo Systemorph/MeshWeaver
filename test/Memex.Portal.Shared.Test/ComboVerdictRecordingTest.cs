@@ -225,11 +225,36 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
         markdown.Should().NotContain("ui.updateBlocked");
     }
 
+    /// <summary>
+    /// 🚨 #2553. This test used to assert that an empty <c>LatestAvailableTag</c> renders "no newer
+    /// version detected" — pinning a CLAIM the surface has no evidence for. An install that checked
+    /// and found nothing and an install whose checker never ran both reach this branch, and the
+    /// second is the one that matters: it is how memex sat three builds behind for 7 h while this
+    /// line reassured whoever read it. Without a completed check there is nothing to report but the
+    /// absence of a check.
+    /// </summary>
     [Fact]
-    public void StatusMarkdown_NoTagAtAll_SaysNothingDetected()
+    public void StatusMarkdown_NoTagAndNoCheckEverCompleted_SaysNoCheckHasRun()
     {
         UpdatePolicySettingsTab.StatusMarkdown(new UpdatePolicyContent(), EchoLocalizer)
-            .Should().Be("ui.updateNoNewerVersion[]");
+            .Should().Be("ui.updateNeverChecked[]");
+    }
+
+    /// <summary>The other half of the same branch, and the reason it may not be collapsed back into
+    /// one sentence: a check that RAN and found nothing is genuine good news, and it says when.</summary>
+    [Fact]
+    public void StatusMarkdown_NoTagButACheckDidRun_SaysNothingNewerAndWhen()
+    {
+        var content = new UpdatePolicyContent
+        {
+            LastCheckedAt = new DateTimeOffset(2026, 8, 29, 7, 30, 0, TimeSpan.Zero),
+            LastCheckVerdict = "no newer release: 12 tag(s) listed, none newer than the installed 3.0.0.",
+        };
+
+        var markdown = UpdatePolicySettingsTab.StatusMarkdown(content, EchoLocalizer);
+
+        markdown.Should().Contain("ui.updateNoNewerVersion[]");
+        markdown.Should().Contain("ui.updateCheckedAt[2026-08-29 07:30]");
     }
 
     // ── helpers ──

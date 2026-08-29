@@ -168,8 +168,19 @@ public static class UpdatePolicySettingsTab
     internal static string StatusMarkdown(
         UpdatePolicyContent content, Func<string, object?[], string> localize, string? zoneId = null)
     {
+        // 🚨 "No newer version detected yet" is a CLAIM, and until #2553 this surface made it
+        // without evidence. An install that has checked hourly and found nothing and an install
+        // whose checker has not run since the pod started produce the identical empty
+        // LatestAvailableTag — and the second is the one that matters, because it is how memex sat
+        // three builds behind for 7 h while this line reassured whoever read it. The two are now
+        // different sentences, and the honest one comes first: without a completed check there is
+        // nothing to report but the absence of a check.
         if (string.IsNullOrEmpty(content.LatestAvailableTag))
-            return localize("ui.updateNoNewerVersion", []);
+            return content.LastCheckedAt is { } checkedAt
+                ? localize("ui.updateNoNewerVersion", [])
+                    + " " + localize("ui.updateCheckedAt",
+                        [DisplayTimeExtensions.ToDisplayTime(checkedAt, zoneId).ToString("yyyy-MM-dd HH:mm")])
+                : localize("ui.updateNeverChecked", []);
 
         var tag = content.LatestAvailableTag!;
         var available = localize("ui.updateLatestAvailable", [tag])

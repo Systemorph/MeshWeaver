@@ -316,6 +316,9 @@ data:
   # exactly how the 2026-08-23 memex operator-enablement deploy wedged. A typed key needs a real
   # default; "empty = inert" is only true for strings.
   SelfUpdate__MinRollInterval: "{{ .Values.config.memex_portal.SelfUpdate__MinRollInterval | default "01:00:00" }}"
+  # #2494's safety net. Same typed-key rule as the line above: a real default, never "" — this
+  # binds to a TimeSpan and an empty string aborts the host in the configuration binder.
+  SelfUpdate__SafetyNetCheckInterval: "{{ .Values.config.memex_portal.SelfUpdate__SafetyNetCheckInterval | default "01:00:00" }}"
   WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 | default "" }}"
   # 🚨 #2235: a SECOND slot, because index 0 is not this template's alone to give. memex-cloud
   # hand-set WebhookInbox__Targets__0=Store/Payments directly on the Deployment (kubectl set env,
