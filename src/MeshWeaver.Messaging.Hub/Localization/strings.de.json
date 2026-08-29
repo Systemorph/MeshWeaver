@@ -1040,5 +1040,7 @@
   "presentation.unmarkedTitle": "Wieder sichtbar",
   "presentation.unmarkedBody": "Das wird im Präsentationsmodus nicht mehr ausgeblendet.",
   "presentation.signInRequiredTitle": "Anmeldung erforderlich",
-  "presentation.signInRequiredBody": "Der Präsentationsmodus ist eine persönliche Einstellung — dafür musst du angemeldet sein."
+  "presentation.signInRequiredBody": "Der Präsentationsmodus ist eine persönliche Einstellung — dafür musst du angemeldet sein.",
+  "chat.modelStreamStalled": "Das Sprachmodell \u201e{0}\u201c hat aufgeh\u00f6rt zu antworten: Die Verbindung blieb offen, es kamen aber keine weiteren Daten an, daher wurde die Runde abgebrochen. Das ist eine St\u00f6rung beim Modell-Endpunkt und kein Problem der Anfrage \u2014 bitte erneut senden oder ein anderes Modell w\u00e4hlen.",
+  "chat.modelStreamFaulted": "Das Sprachmodell \u201e{0}\u201c hat seine Antwort mit einem Provider-Fehler beendet. Das ist eine St\u00f6rung beim vorgelagerten Modell-Provider und kein Problem der Anfrage \u2014 bitte erneut senden oder ein anderes Modell w\u00e4hlen."
 }
