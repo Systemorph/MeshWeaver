@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# hosting-pv-purge --namespace <ns> [--expect <n>]
+#
+# Delete the PersistentVolumes an instance left behind, AND the Azure Files shares behind them.
+#
+# 🚨 WHY THIS EXISTS: deleting the namespace does NOT delete the storage. The fleet's PVs are
+# provisioned `reclaimPolicy: Retain`, so `kubectl delete namespace` deletes the PVCs and leaves
+# every PV `Released` with its Azure Files share fully intact and fully billed. Teardown therefore
+# LOOKED complete while the instance's entire file content survived — 128Gi across four shares in
+# the atioz case (2026-08-29), found only by listing PVs after the namespace was already gone.
+# "The namespace is deleted" is not "the data is deleted", and Retain is the reason.
+#
+# 🚨 THE RETAIN POLICY IS DELIBERATE AND STAYS. It is what makes a mistaken teardown recoverable
+# up to this point. This command is the ONE place allowed to convert that retention into deletion,
+# which is why every guard below is here rather than in the caller.
+#
+# 🚨 IT REFUSES A BOUND VOLUME. A `Bound` PV means something is still using it — the namespace was
+# not deleted, or the volume is shared with another instance. Deleting the share under a running
+# pod corrupts it silently rather than failing. Only `Released`/`Available`/`Failed` are purged.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-pv-purge"
+
+namespace="" expect=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace) namespace="${2:-}"; shift 2 ;;
+    --expect)    expect="${2:-}";    shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+# 🚨 An empty or wildcard namespace would select EVERY PV in the cluster — every instance's
+# storage, plus the control instance's. Same class of typo as an empty --prefix in
+# hosting-kv-purge, with a worse blast radius because there is no soft-delete behind it.
+hosting::safe_name namespace "$namespace"
+
+# Claimed-by-namespace is the ONLY selector. Not a name prefix: PV names are provisioner-generated
+# GUIDs (`pvc-<uuid>`) that carry no instance identity at all, so a name-based match would either
+# miss everything or match another instance's volume by accident.
+pvs="$(hosting::read kubectl get pv \
+  -o jsonpath="{range .items[?(@.spec.claimRef.namespace=='${namespace}')]}{.metadata.name}{'\n'}{end}" \
+  2>/dev/null)" || hosting::die "could not list PersistentVolumes — is the operator's ClusterRole missing 'persistentvolumes'?"
+
+pvs="$(printf '%s\n' "$pvs" | grep -v '^[[:space:]]*$' || true)"
+
+if [ -z "$pvs" ]; then
+  # Not an error: a teardown re-run, or an instance whose volumes were already removed. Saying so
+  # explicitly matters because "found nothing" and "did nothing" must not look identical in the log.
+  hosting::log "no PersistentVolume is claimed by namespace ${namespace} — nothing to purge"
+  hosting::say pv_deleted 0
+  hosting::say shares_deleted 0
+  exit 0
+fi
+
+count="$(printf '%s\n' "$pvs" | wc -l | tr -d ' ')"
+hosting::log "namespace ${namespace}: ${count} PersistentVolume(s) to purge"
+
+# An expectation is optional, but when the caller states one a mismatch stops the run: purging
+# fewer volumes than the record describes means the selector is wrong, and the ones it did not
+# match are exactly the ones that would be left behind again.
+if [ -n "$expect" ]; then
+  [ "$count" = "$expect" ] \
+    || hosting::die "expected ${expect} volume(s) for namespace ${namespace} but found ${count} — refusing to purge a set that does not match the deployment record. Reconcile the record or the cluster before retrying."
+fi
+
+pv_deleted=0 shares_deleted=0
+for pv in $pvs; do
+  phase="$(hosting::read kubectl get pv "$pv" -o jsonpath='{.status.phase}' 2>/dev/null)"
+  case "$phase" in
+    Released|Available|Failed) ;;
+    Bound) hosting::die "PersistentVolume ${pv} is still Bound (namespace ${namespace}) — something is still using it. Delete the namespace first; refusing to delete storage out from under a running pod." ;;
+    *)     hosting::die "PersistentVolume ${pv} is in unexpected phase '${phase}' — refusing." ;;
+  esac
+
+  policy="$(hosting::read kubectl get pv "$pv" -o jsonpath='{.spec.persistentVolumeReclaimPolicy}' 2>/dev/null)"
+  size="$(hosting::read kubectl get pv "$pv" -o jsonpath='{.spec.capacity.storage}' 2>/dev/null)"
+
+  # Prefer the explicit attributes; fall back to the volumeHandle, whose shape the Azure Files CSI
+  # driver defines as <resourceGroup>#<storageAccount>#<shareName>###<namespace>.
+  share="$(hosting::read kubectl get pv "$pv" -o jsonpath='{.spec.csi.volumeAttributes.shareName}' 2>/dev/null)"
+  account="$(hosting::read kubectl get pv "$pv" -o jsonpath='{.spec.csi.volumeAttributes.storageAccount}' 2>/dev/null)"
+  handle="$(hosting::read kubectl get pv "$pv" -o jsonpath='{.spec.csi.volumeHandle}' 2>/dev/null)"
+  handle_rg="$(printf '%s' "$handle" | cut -d'#' -f1)"
+  [ -n "$account" ] || account="$(printf '%s' "$handle" | cut -d'#' -f2)"
+  [ -n "$share" ]   || share="$(printf '%s' "$handle" | cut -d'#' -f3)"
+
+  if [ -z "$share" ] || [ -z "$account" ]; then
+    # A PV this command cannot resolve to a share is NOT skipped quietly: leaving it is the very
+    # bug this exists to fix, and deleting the PV object alone would strand the share invisibly.
+    hosting::die "cannot resolve the Azure Files share for ${pv} (volumeHandle='${handle}') — refusing to delete the PV object, which would strand its share with no remaining reference to find it by."
+  fi
+
+  hosting::log "purge   ${pv}  ${size}  share=${share}  account=${account}  (reclaim=${policy}, phase=${phase})"
+
+  # The share first, then the PV object. This order is deliberate: the PV is the only record that
+  # ties a GUID-named share to the instance that owned it, so deleting it first would turn a
+  # failure here into an orphan nobody can attribute.
+  hosting::do az storage share-rm delete \
+      --storage-account "$account" --name "$share" \
+      ${handle_rg:+--resource-group "$handle_rg"} --yes --output none \
+    || hosting::die "could not delete Azure Files share ${share} on ${account}"
+  shares_deleted=$((shares_deleted + 1))
+
+  hosting::do kubectl delete pv "$pv" --wait=true \
+    || hosting::die "deleted share ${share} but could not delete PersistentVolume ${pv} — the object is now dangling and must be removed by hand"
+  pv_deleted=$((pv_deleted + 1))
+done
+
+hosting::log "namespace ${namespace}: ${pv_deleted} volume(s) and ${shares_deleted} share(s) deleted"
+hosting::say pv_deleted "$pv_deleted"
+hosting::say shares_deleted "$shares_deleted"
