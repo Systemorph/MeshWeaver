@@ -415,6 +415,13 @@ public static class MemexConfiguration
             // with an empty/relative BasePath resolves against the ephemeral container CWD (/app),
             // so uploaded collection files vanish on the next pod restart / grain teardown.
             ValidateContentStorageDurability(contentStorageConfig, isDevelopment);
+            // 🚨 Fail fast on a Microsoft tenant that cannot form an OIDC authority (#2621). An
+            // env var cannot be null, only empty, so a blank key legitimately means "unset" and
+            // passes; a value that is not a single authority segment composes
+            // login.microsoftonline.com//... — a URL Entra never serves — and used to surface as an
+            // unhandled 500 on the FIRST sign-in, naming the URL instead of the key to fix. Named
+            // here at boot instead.
+            MicrosoftTenant.Validate(configuration[MicrosoftTenant.ConfigurationKey]);
             if (contentStorageConfig != null)
             {
                 // Resolve relative path to absolute
