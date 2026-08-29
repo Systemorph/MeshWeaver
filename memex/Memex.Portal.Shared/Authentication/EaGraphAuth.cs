@@ -41,15 +41,15 @@ public sealed class EaGraphAuth(
         "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send " +
         "https://graph.microsoft.com/Calendars.ReadWrite offline_access";
 
-    // Whitespace counts as unset: a configMap / env var cannot carry null, only "", and "" is not
-    // a tenant (it yields the authority `login.microsoftonline.com//oauth2/v2.0` — #2621).
-    private string TenantId =>
-        configuration["Authentication:Microsoft:TenantId"] is { } t && !string.IsNullOrWhiteSpace(t)
-            ? t.Trim()
-            : "common";
+    // The tenant and the authority are composed by MicrosoftTenant, which treats blank as UNSET and
+    // refuses a value that cannot form a single authority segment — a configMap / env var cannot
+    // carry null, only "", and "" is not a tenant (it yields `login.microsoftonline.com//oauth2/
+    // v2.0`, the URL every memex-cloud sign-in 500-ed on — #2621). The same value is validated at
+    // boot by MemexConfiguration, so a malformed one is named at startup rather than here.
     private string? ClientId => configuration["Authentication:Microsoft:ClientId"];
     private string? ClientSecret => configuration["Authentication:Microsoft:ClientSecret"];
-    private string Authority => $"https://login.microsoftonline.com/{TenantId}/oauth2/v2.0";
+    private string Authority =>
+        MicrosoftTenant.Authority(configuration[MicrosoftTenant.ConfigurationKey], "oauth2/v2.0");
 
     /// <summary>True when the sign-in app credentials needed for the delegated flow are configured.</summary>
     /// <inheritdoc />
