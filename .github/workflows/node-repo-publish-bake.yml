@@ -761,19 +761,33 @@ jobs:
           REGISTRY_MODULES: ${{ inputs.registry-modules }}
           REGISTRY_URL: ${{ inputs.registry-url }}
           REGISTRY_KEY: ${{ secrets.registry-key }}
+          SEAL_UPSTREAMS: ${{ inputs.upstream-sources }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
         run: |
           set -euo pipefail
           EXT="${RUNNER_TEMP:-/tmp}/ext-modules"; mkdir -p "$EXT"; chmod 777 "$EXT"
           BUNDLES="${RUNNER_TEMP:-/tmp}/ext-bundles"; mkdir -p "$BUNDLES"
-          for pkg in ${REGISTRY_MODULES:-}; do
-            idx=$(curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" "$REGISTRY_URL/api/plugins/bundles/index.json") \
-              || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
-            ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
-            [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key — check the key's grants, and that the upstream wave has published the bundle."; exit 1; }
-            curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
-              || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
-            echo "fetched $pkg@$ver from $REGISTRY_URL"
-          done
+          if [ -n "${REGISTRY_MODULES:-}" ]; then
+            if [ -n "${SEAL_UPSTREAMS:-}" ]; then
+              # 🚨 The publication is the unit of consistency (MeshWeaver#2698): module bytes come
+              # from the SEALED upstream publication for this identity, never the registry's
+              # package endpoint. No fallback — a missing seal or module set is RED in the script.
+              [ -n "${REGISTRY_URL:-}" ] || { echo "::error::upstream-sources is set but registry-url is empty — the bake reads sealed module sets from the registry."; exit 1; }
+              mw-platform-gate/.github/scripts/compose-sealed-modules.sh --identity "$IDENTITY" --packages "$REGISTRY_MODULES" \
+                --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" --registry-url "$REGISTRY_URL" --registry-key "$REGISTRY_KEY"
+            else
+              echo "::notice::composing registry-modules ($REGISTRY_MODULES) from the REGISTRY's package endpoint: this repo declares no upstream seed, so there is no sealed publication to take module bytes from. These bytes are whatever the module's own lane published last — a bake-consumption decline against a publication that composed different ones is expected, and is the reason to declare the upstream (upstream-seed / upstream-sources) instead."
+            for pkg in ${REGISTRY_MODULES:-}; do
+              idx=$(curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" "$REGISTRY_URL/api/plugins/bundles/index.json") \
+                || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
+              ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
+              [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key — check the key's grants, and that the upstream wave has published the bundle."; exit 1; }
+              curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
+                || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
+              echo "fetched $pkg@$ver from $REGISTRY_URL"
+            done
+            fi
+          fi
           shopt -s nullglob
           MODULE_ARGS=""
           for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
@@ -791,10 +805,24 @@ jobs:
             cp -R "$u"/meshweaver/modules/. "$EXT/$name/"
             MODULE_ARGS="$MODULE_ARGS --module /ext/$name/$name.dll"
             echo "external module composed: $name ($(basename "$b"))"
+            # 🚨 The bytes this bake composes are the bytes its publication SEALS (modules/<pkg>.module.nupkg,
+            # MeshWeaver#2698): a consumer pinned to this identity composes exactly these, never the
+            # registry's. Keyed by PACKAGE id, which is what a consumer asks for (registry-modules).
+            pkg=""
+            case "$(basename "$b")" in
+              MeshWeaver.Plugin.*.module.nupkg) pkg=$(basename "$b" | sed -E 's/^MeshWeaver\.Plugin\.([^.]+)\..*$/\1/') ;;   # this run's module-pack artifact
+              *.bundle.zip)                     pkg=$(basename "$b" .bundle.zip) ;;                                        # the registry's package endpoint
+              *.module.nupkg)                   pkg=$(basename "$b" .module.nupkg) ;;                                      # an upstream's sealed module set
+            esac
+            [ -n "$pkg" ] || { echo "::error::$(basename "$b"): cannot derive the package id this bundle seals under — expected MeshWeaver.Plugin.<pkg>.<version>.module.nupkg, <pkg>.bundle.zip or <pkg>.module.nupkg"; exit 1; }
+            SEAL="${RUNNER_TEMP:-/tmp}/seal-modules"; mkdir -p "$SEAL"
+            cp "$b" "$SEAL/$(printf '%s' "$pkg" | tr '[:upper:]' '[:lower:]').module.nupkg"
+            echo "sealing $name as module package '$pkg'"
           done
           [ -n "$MODULE_ARGS" ] || { echo "::error::external modules were requested but none were assembled — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
           echo "EXT_MODULES_DIR=$EXT" >> "$GITHUB_ENV"
           echo "EXT_MODULE_ARGS=$MODULE_ARGS" >> "$GITHUB_ENV"
+          echo "SEAL_MODULES_DIR=${RUNNER_TEMP:-/tmp}/seal-modules" >> "$GITHUB_ENV"
       - name: Bake (compiler --output), then gate a mesh against it (--seed)
         # scope=none means the decision above VERIFIED that this exact content is already sealed
         # for this framework identity at every target — a positive finding, logged with both
@@ -882,6 +910,14 @@ jobs:
             --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" /repo \
             "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
             --seed /bake
+          # The module set this bake composed travels WITH the publication (publish-bake-bundles.sh
+          # writes modules/_index from it). A bake that composed nothing seals an empty set — a
+          # consumer can tell "composed nothing" from "predates module sealing".
+          mkdir -p "$BAKE/modules"
+          if [ -n "${SEAL_MODULES_DIR:-}" ] && [ -d "$SEAL_MODULES_DIR" ]; then
+            cp "$SEAL_MODULES_DIR"/*.module.nupkg "$BAKE/modules/"
+            echo "module set to seal: $(ls "$BAKE/modules" | tr '\n' ' ')"
+          fi
           # Postcondition, not a hope: a green tester that wrote no identity is a bake-stage
           # regression (or an image predating --bake-output support).
           if [ ! -s "$BAKE/framework-mvid.txt" ]; then

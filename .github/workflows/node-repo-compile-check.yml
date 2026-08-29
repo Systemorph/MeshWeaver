@@ -84,6 +84,19 @@ on:
         required: false
         type: string
         default: ''
+      upstream-seed:
+        description: >-
+          The upstream source(s) whose SEALED publication for this image's framework identity
+          supplies the registry-modules bundles (e.g. `plugins`). 🚨 With this set, module bytes
+          come from the seal — the ones the upstream's NodeType assemblies were built against —
+          never from the registry's package endpoint (MeshWeaver#2698: the registry serves the
+          module's own lane's last build under an unmoved version, so a gate composing it judges
+          assemblies built against one MeshWeaver.AI while holding another). No fallback: an
+          upstream with no seal, or a seal without a module set, fails RED naming the identity.
+          Without it, registry-modules are taken from the registry and the log says so loudly.
+        required: false
+        type: string
+        default: ''
     secrets:
       acr-username:
         description: Registry user able to pull the image.
@@ -154,9 +167,11 @@ jobs:
           echo "::error::docker login to ${TEST_IMAGE%%/*} failed after 3 connection-level attempts."
           exit 1
       - name: Take the framework assemblies from the platform image
+        id: image
         env:
           TEST_IMAGE: ${{ inputs.test-image }}
           IMAGE_DIGEST: ${{ inputs.image-digest }}
+          UPSTREAM_SEED: ${{ inputs.upstream-seed }}
         # The image already CONTAINS the built framework — the same assemblies the mesh loads at
         # run time. Copying them out costs seconds, and checking Source against what actually
         # ships is the question this gate exists to answer.
@@ -177,6 +192,14 @@ jobs:
           docker cp "$id:/app/." refs/ >/dev/null
           docker rm -v "$id" >/dev/null
           echo "framework assemblies: $(find refs -name 'MeshWeaver.*.dll' | wc -l)"
+          # The identity that addresses an upstream's sealed publication — only when one is seeded.
+          if [ -n "${UPSTREAM_SEED:-}" ]; then
+            line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$IMAGE" --print-framework-identity)
+            identity="${line#*identity=}"; identity="${identity%% *}"
+            [ -n "$identity" ] || { echo "::error::could not resolve a framework identity from $IMAGE (got: '$line') — cannot address the upstream publication for upstream-seed."; exit 1; }
+            echo "identity=$identity" >> "$GITHUB_OUTPUT"
+            echo "this check resolves framework identity $identity; registry-modules come from the seal of: $UPSTREAM_SEED"
+          fi
       - name: Download this run's module-bundle artifacts
         if: inputs.module-artifacts != ''
         uses: actions/download-artifact@v7
@@ -193,18 +216,40 @@ jobs:
           REGISTRY_MODULES: ${{ inputs.registry-modules }}
           REGISTRY_URL: ${{ inputs.registry-url }}
           REGISTRY_KEY: ${{ secrets.registry-key }}
+          SEAL_UPSTREAMS: ${{ inputs.upstream-seed }}
+          IDENTITY: ${{ steps.image.outputs.identity }}
+          JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           BUNDLES="${RUNNER_TEMP:-/tmp}/ref-bundles"; mkdir -p "$BUNDLES"
-          for pkg in ${REGISTRY_MODULES:-}; do
-            idx=$(curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" "$REGISTRY_URL/api/plugins/bundles/index.json") \
-              || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
-            ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
-            [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key."; exit 1; }
-            curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
-              || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
-            echo "fetched $pkg@$ver from $REGISTRY_URL"
-          done
+          if [ -n "${REGISTRY_MODULES:-}" ]; then
+            if [ -n "${SEAL_UPSTREAMS:-}" ]; then
+              # 🚨 The publication is the unit of consistency (MeshWeaver#2698): module bytes come
+              # from the SEALED upstream publication for this identity, never the registry's
+              # package endpoint. No fallback — a missing seal or module set is RED in the script.
+              # The compose script at THIS workflow's own commit (github.job_workflow_sha) — never a floating
+              # ref, so a node repo pinned to a reusable sha gets the script that sha was written with.
+              SCRIPT="${RUNNER_TEMP:-/tmp}/compose-sealed-modules.sh"
+              gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-sealed-modules.sh?ref=${JOB_WORKFLOW_SHA}" --jq .content | base64 -d > "$SCRIPT" \
+                || { echo "::error::could not fetch compose-sealed-modules.sh at ${JOB_WORKFLOW_SHA} from Systemorph/MeshWeaver"; exit 1; }
+              chmod +x "$SCRIPT"
+              [ -n "${REGISTRY_URL:-}" ] || { echo "::error::upstream-seed is set but registry-url is empty — the compile check reads sealed module sets from the registry."; exit 1; }
+              "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" \
+                --registry-url "$REGISTRY_URL" --registry-key "$REGISTRY_KEY"
+            else
+              echo "::notice::composing registry-modules ($REGISTRY_MODULES) from the REGISTRY's package endpoint: this repo declares no upstream seed, so there is no sealed publication to take module bytes from. These bytes are whatever the module's own lane published last — a bake-consumption decline against a publication that composed different ones is expected, and is the reason to declare the upstream (upstream-seed / upstream-sources) instead."
+            for pkg in ${REGISTRY_MODULES:-}; do
+              idx=$(curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" "$REGISTRY_URL/api/plugins/bundles/index.json") \
+                || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
+              ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
+              [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key."; exit 1; }
+              curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
+                || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
+              echo "fetched $pkg@$ver from $REGISTRY_URL"
+            done
+            fi
+          fi
           shopt -s nullglob
           added=0
           for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do

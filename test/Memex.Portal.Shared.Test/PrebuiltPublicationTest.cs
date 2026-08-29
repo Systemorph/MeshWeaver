@@ -95,6 +95,83 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
         }
     }
 
+    /// <summary>
+    /// 🚨 MeshWeaver#2698: a gate pinned to an identity composes the module bytes the publication
+    /// was SEALED against, from the publication — never the registry's package endpoint, whose
+    /// bytes are the module's own lane's last build. The registry therefore serves a sealed
+    /// publication's module set beside its bundles: exactly the index's list (an unlisted file is
+    /// not part of the set), 404 with a reason for a publication that predates module sealing
+    /// (so a consumer fails RED naming the republish instead of composing something else), and an
+    /// EMPTY set for a bake that composed nothing — distinguishable from "predates".
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ServesTheSealedModuleSet_AndRefusesAPublicationThatPredatesIt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-prebuilt-modules-" + Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(root, Identity, Source);
+        var modules = Path.Combine(dir, PublishedBundleCatalogue.ModulesDirectoryName);
+        Directory.CreateDirectory(modules);
+        try
+        {
+            WriteBundle(Path.Combine(dir, "Store.zip"), "Store");
+            File.WriteAllText(Path.Combine(dir, ShippedPrebuiltBundles.CompletionSentinelFileName), "Store.zip\n");
+            WriteBundle(Path.Combine(modules, "ai.module.nupkg"), "AI");
+            WriteBundle(Path.Combine(modules, "orphan.module.nupkg"), "Orphan");     // on disk, NOT in the set
+            File.WriteAllText(Path.Combine(modules, PublishedBundleCatalogue.ModulesIndexFileName), "ai.module.nupkg\n");
+
+            var legacy = Path.Combine(root, Identity, "legacy");                       // sealed BEFORE module sealing
+            Directory.CreateDirectory(legacy);
+            WriteBundle(Path.Combine(legacy, "L.zip"), "L");
+            File.WriteAllText(Path.Combine(legacy, ShippedPrebuiltBundles.CompletionSentinelFileName), "L.zip\n");
+
+            var bare = Path.Combine(root, Identity, "bare");                           // sealed, composed nothing
+            Directory.CreateDirectory(Path.Combine(bare, PublishedBundleCatalogue.ModulesDirectoryName));
+            WriteBundle(Path.Combine(bare, "B.zip"), "B");
+            File.WriteAllText(Path.Combine(bare, ShippedPrebuiltBundles.CompletionSentinelFileName), "B.zip\n");
+            File.WriteAllText(Path.Combine(bare, PublishedBundleCatalogue.ModulesDirectoryName, PublishedBundleCatalogue.ModulesIndexFileName), "");
+
+            var key = await RegisterInstance("module-reader", $"{Source}/*", "legacy/*", "bare/*");
+            var ungrantedKey = await RegisterInstance("module-stranger");
+            await using var app = await StartHost(root);
+
+            // 1. the set is the index's list — the orphan on disk is not in it
+            var index = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}/modules", key);
+            Assert.Equal(HttpStatusCode.OK, index.StatusCode);
+            var body = await index.Content.ReadAsStringAsync();
+            Assert.Contains("ai.module.nupkg", body);
+            Assert.DoesNotContain("orphan", body);
+            var ai = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}/modules/ai.module.nupkg", key);
+            Assert.Equal(HttpStatusCode.OK, ai.StatusCode);
+            Assert.True((await ai.Content.ReadAsByteArrayAsync()).Length > 0);
+            var orphan = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}/modules/orphan.module.nupkg", key);
+            Assert.Equal(HttpStatusCode.NotFound, orphan.StatusCode);
+
+            // 2. the NodeType bundle index is untouched by the module set (and "modules" is not a bundle)
+            var bundles = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}", key);
+            Assert.Contains("Store.zip", await bundles.Content.ReadAsStringAsync());
+
+            // 3. a publication that predates module sealing → 404 that SAYS so, never an empty set
+            var predates = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/legacy/modules", key);
+            Assert.Equal(HttpStatusCode.NotFound, predates.StatusCode);
+            Assert.Contains("predates module sealing", await predates.Content.ReadAsStringAsync());
+
+            // 4. a bake that composed nothing → 200 with an EMPTY set
+            var empty = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/bare/modules", key);
+            Assert.Equal(HttpStatusCode.OK, empty.StatusCode);
+            Assert.Contains("\"modules\":[]", (await empty.Content.ReadAsStringAsync()).Replace(" ", ""));
+
+            // 5. no grant → 403; a walking name → refused before any disk read
+            var refused = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}/modules", ungrantedKey);
+            Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+            var walk = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}/modules/..%2FStore.zip", key);
+            Assert.NotEqual(HttpStatusCode.OK, walk.StatusCode);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
     private static void WriteBundle(string path, string plugin)
     {
         using var zip = ZipFile.Open(path, ZipArchiveMode.Create);

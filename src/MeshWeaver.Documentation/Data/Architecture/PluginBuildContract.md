@@ -238,7 +238,9 @@ between a GitHub secret and an Entra credential that no query can join.
 **The mechanism: the registry SERVES publications, so the gate never touches Azure.** The portal
 already mounts `/data/prebuilt-bundles`, and the bundle route already has a GET side (`FetchIndex`,
 `ModuleFetchCommand`). Add `GET /api/plugins/bundles/prebuilt/<framework-identity>/<source>/` under
-the same authenticator, requiring `fetch:<source>` on the presenting principal. `upstream-seed` then
+the same authenticator, requiring `fetch:<source>` on the presenting principal — and, beside it,
+`…/<source>/modules` (the module bundles that publication was sealed against, #2698) so a gate
+composes the bytes its upstream's assemblies were built with, never the package endpoint's. `upstream-seed` then
 presents its run's OIDC token — `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, available to any job with
 `id-token: write` — and receives the sealed publication. PR or push is a claim the rule reads, not
 a credential someone had to remember to create.
