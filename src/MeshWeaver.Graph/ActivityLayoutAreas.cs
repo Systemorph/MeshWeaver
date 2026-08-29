@@ -404,7 +404,11 @@ public static class ActivityLayoutAreas
 
     // Shared with the code cell's toolbar chip (CodeLayoutAreas.CellStatusChip) so the two
     // surfaces cannot disagree on what a status looks like.
-    internal static string StatusColor(ActivityStatus status) => status switch
+    /// <summary>
+    /// Status colour for an activity chip. Public because the code cell's toolbar chip in the
+    /// MeshWeaver.Graph.Views module renders the same chip and must not fork the palette.
+    /// </summary>
+    public static string StatusColor(ActivityStatus status) => status switch
     {
         ActivityStatus.Failed    => "var(--error)",
         ActivityStatus.Warning   => "var(--warning)",

@@ -61,7 +61,7 @@ public static class CodeNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<CodeConfiguration>())
             .AddDefaultLayoutAreas()
-            .AddCodeViews()
+            .ApplyNodeHubContributions(NodeType)
             .WithHandler<ExecuteScriptRequest>(HandleExecuteScript)
     };
 

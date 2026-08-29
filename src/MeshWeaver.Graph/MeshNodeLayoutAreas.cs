@@ -196,7 +196,7 @@ public static class MeshNodeLayoutAreas
             .WithView(CreateNodeArea, CreateNode)
             .WithView(EditArea, EditNode)
             .WithView(ContentDataArea, ContentData)
-            .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
+            // The import VIEW rides the MeshWeaver.Graph.Views MODULE; its menu descriptor stays.
             .WithView(ExportArea, ExportLayoutArea.Export)
             .WithView(RecycleArea, RecycleLayoutArea.Recycle)
             // The Versions and VersionDiff VIEWS ride the MeshWeaver.Graph.Views MODULE. The
