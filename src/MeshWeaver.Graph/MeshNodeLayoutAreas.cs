@@ -189,22 +189,21 @@ public static class MeshNodeLayoutAreas
             .WithView(ThreadsArea, Threads)
             .WithView(ChatArea, Chat)
             .WithView(NodeTypesArea, NodeTypes)
-            .WithView(AccessControlArea, AccessControl)
-            .WithView(GroupsArea, Groups)
+            // AccessControl and Groups VIEWS ride the MeshWeaver.Graph.Views MODULE. Their area
+            // names stay here (the node menu links them) and so do their base helpers —
+            // AccessControlLayoutArea's deserializer / delete / add-dialog, which UserNodeType
+            // calls, and GroupsLayoutArea's membership deserializer.
             .WithView(CreateNodeArea, CreateNode)
             .WithView(EditArea, EditNode)
             .WithView(ContentDataArea, ContentData)
-            .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
+            // The import VIEW rides the MeshWeaver.Graph.Views MODULE; its menu descriptor stays.
             .WithView(ExportArea, ExportLayoutArea.Export)
-            .WithView(CopyArea, CopyLayoutArea.Copy)
-            .WithView(MoveArea, MoveLayoutArea.Move)
             .WithView(RecycleArea, RecycleLayoutArea.Recycle)
-            .WithView(VersionsArea, VersionLayoutArea.Versions)
-            .WithView(VersionDiffArea, VersionLayoutArea.VersionDiff)
-            .WithView(DeleteArea, DeleteLayoutArea.Delete)
-            .WithView(PinLayoutArea.PinArea, PinLayoutArea.Pin)
-            .WithView(PinLayoutArea.UnpinArea, PinLayoutArea.Unpin)
-            .WithView(PinLayoutArea.PinnedThumbnailArea, PinLayoutArea.PinnedThumbnail)
+            // The Versions and VersionDiff VIEWS ride the MeshWeaver.Graph.Views MODULE. The
+            // ROLLBACK / UNDO handlers above stay here — they are message handlers, not views.
+            // Copy / Move / Pin / Unpin / PinnedThumbnail VIEWS ride the MeshWeaver.Graph.Views
+            // MODULE, registered on every per-node hub like OgCard below. Their area names and
+            // menu descriptors stay platform-side — the node menu is assembled here.
             // Presentation mode (#1803): the per-node mark lives beside Pin because it is the same
             // shape — a viewer-scoped list of paths on the viewer's OWN profile, never on the node.
             .WithView(PresentationLayoutArea.HideArea, PresentationLayoutArea.Hide)
@@ -213,7 +212,9 @@ public static class MeshNodeLayoutAreas
             // registers on every per-node hub) — delisting it drops the server-side external
             // URL-fetch surface.
             .WithView(MarkdownOverviewLayoutArea.SuppliedNavArea, MarkdownOverviewLayoutArea.SuppliedNavigationMenu)
-            .WithView(StopSyncLayoutArea.StopSyncArea, StopSyncLayoutArea.StopSync)
+            // StopSync's VIEW rides the MeshWeaver.Graph.Views MODULE, registered on every
+            // per-node hub exactly as OgCard above — the platform keeps the area name and the menu
+            // descriptor (StopSyncLayoutArea), which is what the node menu is assembled from.
             // UCR special areas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
@@ -289,7 +290,7 @@ public static class MeshNodeLayoutAreas
             { LabelKey = "menu.data" };
     }
 
-    internal static UiControl BuildAccessDenied(string nodePath, string? locale = null)
+    public static UiControl BuildAccessDenied(string nodePath, string? locale = null)
     {
         var nodeName = nodePath.Split('/').LastOrDefault() ?? nodePath;
         return Controls.Stack.WithWidth("100%").WithStyle("padding: 48px 24px; align-items: center; text-align: center;")
@@ -1747,21 +1748,7 @@ public static class MeshNodeLayoutAreas
 
     #region Access Control
 
-    /// <summary>
-    /// Renders the Access Control area for managing user roles and permissions on this node.
-    /// Delegates to AccessControlLayoutArea for the full management UI.
-    /// </summary>
-    [Browsable(false)]
-    public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext ctx)
-        => AccessControlLayoutArea.AccessControl(host, ctx);
 
-    /// <summary>
-    /// Renders the Groups area for managing group memberships on this node.
-    /// Delegates to GroupsLayoutArea for the full management UI.
-    /// </summary>
-    [Browsable(false)]
-    public static IObservable<UiControl?> Groups(LayoutAreaHost host, RenderingContext ctx)
-        => GroupsLayoutArea.Groups(host, ctx);
 
     #endregion
 

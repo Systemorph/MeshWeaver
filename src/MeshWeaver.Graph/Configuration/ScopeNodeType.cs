@@ -47,6 +47,6 @@ public static class ScopeNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<CodeConfiguration>())
             .AddDefaultLayoutAreas()
-            .AddCodeViews()
+            .ApplyNodeHubContributions(NodeType)
     };
 }

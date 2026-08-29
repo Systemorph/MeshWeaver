@@ -226,10 +226,9 @@ public static class SpaceNodeType
                 .WithContentType<Space>())
             .AddContentCollections()
             .AddDefaultLayoutAreas()
-            .AddLayout(layout => layout
-                .WithView(MeshNodeLayoutAreas.OverviewArea, SpaceLayoutAreas.Overview)
-                // Edit a Space = edit its main markdown body, not the generic property form.
-                .WithView(MeshNodeLayoutAreas.EditArea, SpaceLayoutAreas.Edit))
+            // The Space Overview and Edit VIEWS ride the MeshWeaver.Graph.Views module — including
+            // the rule that editing a Space edits its markdown body rather than a property form.
+            .ApplyNodeHubContributions(NodeType)
     };
 
     /// <summary>

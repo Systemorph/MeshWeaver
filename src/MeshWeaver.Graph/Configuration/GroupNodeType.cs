@@ -35,7 +35,7 @@ public static class GroupNodeType
         Name = "Group",
         Icon = "/static/NodeTypeIcons/people.svg",
         HubConfiguration = config => config
-            .AddGroupViews()
+            .ApplyNodeHubContributions(NodeType)
             .AddMeshDataSource(source => source
                 .WithContentType<AccessObject>())
     };

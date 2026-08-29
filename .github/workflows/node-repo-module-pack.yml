@@ -101,6 +101,16 @@ on:
           FrameworkDeclined (#2088). See the caller contract at the top of this file.
         type: boolean
         default: false
+      always-modules:
+        description: >
+          Comma-separated module names (entry assembly names from `modules`) that the caller's
+          gates COMPOSE on every run — the AI engine that registers Skill/Agent, a carved-out
+          module the content binds. A narrowed PR run keeps them in the selection regardless of
+          the diff, so the gate's inputs exist unconditionally; a name the matrix lacks makes the
+          selection fall back to the full set and say why.
+        type: string
+        required: false
+        default: ''
       registry-source:
         description: >
           The registry SOURCE these packages belong to ("Plugins", "Education", …) — it stamps the
@@ -168,6 +178,7 @@ jobs:
         id: scope
         env:
           MODULES: ${{ inputs.modules }}
+          ALWAYS: ${{ inputs.always-modules }}
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
           # A merge_group run carries no `base_ref`; its base is on the event payload. Dormant
@@ -186,7 +197,7 @@ jobs:
           fi
           python3 meshweaver/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
-            --event "$EVENT" --base-ref "${BASE_REF:-}" > "$RUNNER_TEMP/scope.json"
+            --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" > "$RUNNER_TEMP/scope.json"
 
   pack:
     name: Module bundle (${{ matrix.entry.module }})
@@ -242,7 +253,12 @@ jobs:
           -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
           -p:Version=${{ steps.identity.outputs.version }}
 
+      # 🚨 Only when THIS diff reaches the module (or on a full run): a floor-only entry — built
+      # because the caller's gates compose it — carries test=false from the selection, and its
+      # suite is skipped rather than answering a question nobody asked. The AI engine's suite
+      # (~13 min, 1,600 tests) ran on every PR that never touched AI until 2026-08-29.
       - name: Run the module's tests, when it ships any
+        if: ${{ matrix.entry.test != false }}
         env:
           PROJECT: ${{ matrix.entry.project }}
         run: |

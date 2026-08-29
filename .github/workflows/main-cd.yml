@@ -1694,6 +1694,29 @@ jobs:
   # the watcher drops every delivery as unverifiable and this job still goes green. That is the
   # residual #2235 tracks; its close condition is observing a `repository_dispatch` run on the
   # satellites plus the MW_IMAGE_DIGEST bump PRs — never a green tick here.
+  # ────────────────── PUSH THE RELEASE WAVE (repository_dispatch) ──────────────────
+  # 🚨 The block above says a dispatch job here "never will be" added, for two reasons that were
+  # true when it was written and are not now: there was no credential in the release path, and no
+  # subscriber list that would not drift. Both are answered:
+  #   • `DEPENDENT_DISPATCH_APP_ID` / `_PRIVATE_KEY` were provisioned 2026-08-19 and, until this,
+  #     were referenced by NOTHING in this repo.
+  #   • there is no list — the subscribers are the repos the App is INSTALLED on, read at run time.
+  #     Adding a repo to the wave is installing the App on it.
+  # memex's broadcast stays; this does not replace it. The two are independent paths to the same
+  # event, and the failure that motivated this is that a wave depending on ONE hop through a mesh
+  # is a wave that stops when that hop is unreachable — which is not observable from here.
+  notify-dependents:
+    name: "Push the release wave to dependent repos"
+    needs: [preflight, gate, portal-image, plugin-test-image, promote]
+    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    uses: ./.github/workflows/notify-dependents.yml
+    with:
+      version: ${{ needs.plugin-test-image.outputs.version }}
+      reason: platform
+    secrets:
+      app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+      private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+
   notify-platform-update:
     name: "Notify platform-update registry"
     # `preflight` is what guarantees URL + SECRET exist, so nothing in this job checks for them.

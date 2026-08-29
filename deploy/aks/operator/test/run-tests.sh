@@ -60,9 +60,23 @@ emits() {
   case "$out" in *"$line"*) ok "$what" ;; *) bad "$what" "no '${line}' in: ${out}" ;; esac
 }
 
+# Assert a command did NOT stop at a specific guard. It may still fail for want of az/kubectl —
+# what matters is that the named refusal is not the reason, i.e. execution got past that guard.
+not_refused_by_guard() {
+  local what="$1" phrase="$2"; shift 2
+  local out
+  out="$("$@" 2>&1)"
+  case "$out" in
+    *"$phrase"*) bad "$what" "stopped at the guard it should have passed: ${out}" ;;
+    *) ok "$what" ;;
+  esac
+}
+
 echo "── argument handling ─────────────────────────────────────────────"
 refuses "kv-ensure needs --vault"          "missing required flag --vault"      hosting-kv-ensure --namespace n
 refuses "kv-purge needs --vault"           "missing required flag --vault"      hosting-kv-purge --namespace n
+refuses "pv-purge needs --namespace"       "missing required flag --namespace"  hosting-pv-purge
+refuses "pv-purge rejects unknown flags"   "unknown argument"                   hosting-pv-purge --namespace n --nope 1
 refuses "dns needs a mode"                 "must be 'upsert' or 'delete'"       hosting-dns --zone z --host h
 refuses "redirect needs a mode"            "must be 'suspend' or 'restore'"     hosting-redirect --namespace n
 refuses "deploy needs --release"           "missing required flag --release"    hosting-deploy --namespace n --database d
@@ -73,6 +87,15 @@ echo
 echo "── the refusals that stand in front of something destructive ─────"
 refuses "kv-purge refuses an EMPTY prefix" "refusing to purge with an EMPTY --prefix" \
   hosting-kv-purge --vault V --prefix "" --namespace n
+# The ambiguity guard: one instance's prefix living UNDER another's means a teardown of the outer
+# one enumerates and deletes the inner one's secrets. Runs before any az call, so it is testable here.
+refuses "kv-purge refuses a sibling prefix under its own" "is a prefix of sibling instance prefix" \
+  hosting-kv-purge --vault V --prefix memex- --namespace n --sibling-prefix memex-dev-
+# A sibling that merely SHARES leading characters is not ambiguous and must NOT refuse — this is
+# today's real fleet (memex- vs memexcloud-), and a guard that refused it would block every
+# memex teardown. Reaches az, which is absent here, so assert only that it got PAST the guard.
+not_refused_by_guard "kv-purge allows memex- beside memexcloud-" "is a prefix of sibling" \
+  hosting-kv-purge --vault V --prefix memex- --namespace n --sibling-prefix memexcloud-
 refuses "dns refuses a host outside its zone" "is not inside zone" \
   env AZ_DNS_RESOURCE_GROUP=rg hosting-dns upsert --zone example.com --host evil.other.com --target 1.2.3.4
 refuses "dns refuses a non-IPv4 target"    "is not an IPv4 address" \
@@ -102,6 +125,8 @@ echo
 echo "── command injection cannot ride in on a name ────────────────────"
 refuses_hard "namespace with a shell metacharacter" "is not a plain name" \
   hosting-kv-ensure --vault V --namespace 'n; rm -rf /'
+refuses_hard "pv-purge namespace with a metacharacter" "is not a plain name" \
+  hosting-pv-purge --namespace 'n; kubectl delete pv --all'
 refuses_hard "database with a backtick"             "is not a plain name" \
   env HOSTING_DRY_RUN=true hosting-verify-restore --database 'd`whoami`' --server s
 refuses_hard "host with a space"                    "is not a hostname" \
