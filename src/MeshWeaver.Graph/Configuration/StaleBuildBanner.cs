@@ -9,9 +9,32 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
+/// <summary>What the banner is ABOUT — two states that look alike and need opposite advice.</summary>
+public enum StaleBuildKind
+{
+    /// <summary>
+    /// The type has PUBLISHED a newer build and this instance is still on the previous one. Fully
+    /// functional, and a recycle picks the new one up — so the banner is an offer.
+    /// </summary>
+    NewerBuildAvailable,
+
+    /// <summary>
+    /// 🚨 The bytes this instance is EXECUTING are not the bytes the type says it published — the
+    /// served assembly's MVID differs from <see cref="NodeTypeDefinition.LatestAssemblyMvid"/>.
+    ///
+    /// <para>This is NOT an offer, and the difference matters to the reader: the node's
+    /// <c>Ok</c> is not evidence about what is being served, and a recycle re-binds the same local
+    /// copy, so pressing the button changes nothing. Systemorph/MeshWeaver#2471 — measured on memex
+    /// 2026-08-26 across two NodeType recycles, four instance recycles and a forced compile, with
+    /// this very adornment empty throughout because a PATH comparison cannot see it.</para>
+    /// </summary>
+    ServedBuildIsNotPublished,
+}
+
 /// <summary>
 /// The OFFER a per-instance hub publishes when its NodeType has compiled a build newer than the
-/// assembly this instance actually bound. Held on the instance hub (see
+/// assembly this instance actually bound — or, since #2471, when the bytes it is EXECUTING are not
+/// the bytes the type claims to have published at all. Held on the instance hub (see
 /// <see cref="StaleBuildBanner"/>) and rendered as a banner ABOVE the instance's real content.
 /// </summary>
 /// <param name="NodeType">The NodeType path that published the newer build.</param>
@@ -20,7 +43,23 @@ namespace MeshWeaver.Graph.Configuration;
 public sealed record StaleBuildOffer(
     string NodeType,
     string? PublishedAssemblyPath,
-    string? BoundAssemblyPath);
+    string? BoundAssemblyPath)
+{
+    /// <summary>
+    /// Which of the two states this is. 🚨 An init-only PROPERTY, never a primary-constructor
+    /// parameter: adding a defaulted parameter to a public record's primary ctor is
+    /// binary-breaking and <c>scripts/check-record-signatures.py</c> refuses it. Defaults to
+    /// <see cref="StaleBuildKind.NewerBuildAvailable"/>, so an existing construction keeps meaning
+    /// exactly what it meant.
+    /// </summary>
+    public StaleBuildKind Kind { get; init; } = StaleBuildKind.NewerBuildAvailable;
+
+    /// <summary>The MVID the NodeType records for the build it published; null when unknown.</summary>
+    public string? PublishedAssemblyMvid { get; init; }
+
+    /// <summary>The MVID of the bytes this instance actually bound; null when unknown.</summary>
+    public string? BoundAssemblyMvid { get; init; }
+}
 
 /// <summary>
 /// Renders "a newer build of this type is available — recycle to pick it up" as an ADORNMENT above
@@ -123,6 +162,14 @@ public static class StaleBuildBanner
     {
         if (offer is null)
             return Controls.Stack;
+
+        // 🚨 A served-build MISMATCH gets NO recycle link, and that omission is the message
+        // (#2471). Recycling re-binds the same local copy of the same store key, so offering the
+        // button here would hand the viewer the exact remedy that was measured to report success
+        // and change nothing — six times over, on memex. The banner's job in that state is to say
+        // the status is not evidence, not to suggest a cure it does not have.
+        if (offer.Kind == StaleBuildKind.ServedBuildIsNotPublished)
+            return Controls.Markdown(host.Localize("ui.mdServedBuildIsNotPublished"));
 
         var recycleHref = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.RecycleArea);
         return Controls.Markdown(

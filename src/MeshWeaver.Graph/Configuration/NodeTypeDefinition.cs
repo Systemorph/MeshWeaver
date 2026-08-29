@@ -415,6 +415,32 @@ public record NodeTypeDefinition
     public string? LatestAssemblyPath { get; init; }
 
     /// <summary>
+    /// 🚨 <b>The MVID of the bytes the last successful build PRODUCED — the identity a served
+    /// assembly can be checked against.</b> Lower-case hex, no separators; null on a node stamped
+    /// before this field existed, or by a producer that had no bytes to read.
+    ///
+    /// <para><see cref="LatestAssemblyPath"/> is an ADDRESS, not an identity. The store key is
+    /// <c>(nodeTypePath, <see cref="LastCompiledVersion"/>)</c>, a recompile of an
+    /// already-<c>Ok</c> type does not rewrite this node, and each pod resolves those bytes through
+    /// its own local cache — so the path can match perfectly while the bytes behind it differ per
+    /// replica. Every staleness check that compared paths was therefore structurally unable to see
+    /// the state in Systemorph/MeshWeaver#2471: a portal serving stale compiled code while
+    /// reporting <c>Ok</c>, surviving two NodeType recycles, four instance recycles and a forced
+    /// compile, with the <c>$Banner</c> stale-build adornment empty throughout.</para>
+    ///
+    /// <para>An MVID is minted per emitted assembly, so it answers the question the path cannot:
+    /// <i>are these the bytes this node is talking about?</i> Written by every success stamp
+    /// (<c>NodeTypeCompilationHelpers.ApplyCompileSuccess</c>, the adoption path in
+    /// <c>PrebuiltAssemblySeeder</c>, and <c>NodeTypeContractHandler</c>'s write-back) and read at
+    /// bind time by <c>NodeTypeEnrichmentHelpers</c>; see <see cref="ServedBuildIdentity"/>.</para>
+    ///
+    /// <para>🚨 Null is "I do not know", never "mismatch" — see
+    /// <see cref="ServedBuildIdentity.Mismatch"/>. A detector that fired on every legacy node's
+    /// first boot would be turned off before it ever caught anything.</para>
+    /// </summary>
+    public string? LatestAssemblyMvid { get; init; }
+
+    /// <summary>
     /// Free-form release notes captured next to the "Create Release" button on
     /// the Configuration view. Auto-saved through the same form-debounce path
     /// every other editable field uses (no manual read-on-click). Surfaced on
