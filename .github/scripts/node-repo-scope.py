@@ -264,7 +264,7 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
 
     def full(reason: str) -> dict:
         return {"lane": lane, "scope": "full", "reason": reason,
-                "modules": entries if lane == "modules" else [],
+                "modules": [{**e, "test": True} for e in entries] if lane == "modules" else [],
                 "packages": all_packages if lane == "packages" else [],
                 "count": len(universe), "selected": sorted(universe), "skipped": [], "why": {}}
 
@@ -423,11 +423,17 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         if hits.get(e["project"]):
             reasons.append("compiled closure reaches " + ", ".join(f"`{p}`"
                                                                    for p in hits[e["project"]]))
+        floor_only = e["module"] in always and not reasons
         if e["module"] in always:
             reasons.append("always built: the caller's gates compose this bundle on every run")
         if reasons:
             why[e["module"]] = "; ".join(reasons)
-            selected.append(e)
+            # 🚨 A floor-only entry is BUILT (the gates compose it) but NOT TESTED: nothing in this
+            # diff can reach it, so its suite would answer a question nobody asked — the AI engine's
+            # 1,600 tests cost ~13 min per PR that never touched AI (maintainer, 2026-08-29: "the ai
+            # test suite should be executed once. obviously. And only when we touch AI"). A diff
+            # that reaches the entry keeps test=true, and a full run tests everything.
+            selected.append({**e, "test": not floor_only})
 
     chosen = {e["module"] for e in selected}
     return {"lane": lane, "scope": "narrowed",
@@ -606,6 +612,15 @@ def self_test() -> int:
         got = _run(root, "modules", "pull_request", ["Beta/Board.json"], extra=["--always", "Acme.Alpha"])
         check("[modules] the floor never shrinks a selection that already reaches it",
               got["selected"] == ["Acme.Alpha", "Acme.Beta"], f"{got['selected']}")
+        got = _run(root, "modules", "pull_request", ["docs/guide.md"], extra=["--always", "Acme.Alpha"])
+        check("[modules] a floor-only entry is built but NOT tested (test=false)",
+              got["modules"][0].get("test") is False, f"{got['modules']}")
+        got = _run(root, "modules", "pull_request", ["Alpha/index.json"], extra=["--always", "Acme.Alpha"])
+        check("[modules] an entry the diff reaches is tested even when it is also the floor",
+              got["modules"][0].get("test") is True, f"{got['modules']}")
+        got = _run(root, "modules", "push", None, extra=["--always", "Acme.Alpha"])
+        check("[modules] a full run tests every entry",
+              all(m.get("test") is True for m in got["modules"]), f"{got['modules']}")
         got = _run(root, "modules", "pull_request", ["docs/guide.md"], extra=["--always", "Acme.Nope"])
         check("[modules] a floor naming a module the matrix lacks is LOUD: full set, reason names it",
               got["scope"] == "full" and "Acme.Nope" in got["reason"], f"{got['scope']} {got['reason'][:80]}")
