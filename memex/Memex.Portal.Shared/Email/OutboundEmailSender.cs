@@ -1,5 +1,6 @@
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Graph.Configuration;
@@ -113,12 +114,7 @@ public sealed class OutboundEmailSender(
                     .Select(n => EmailOf(n, jsonOptions)),
                 writeStatus: (node, current, status) =>
                     SetStatus(node, current, status, meshService, accessService),
-                send: email =>
-                {
-                    var subject = email.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase)
-                        ? email.Subject : $"Re: {email.Subject}";
-                    return emailSender.SendEmail(email.To!, subject, email.Body);
-                },
+                send: email => emailSender.SendEmail(email.To!, OutboundSubject(email.Subject), email.Body),
                 logger: logger);
             subscriptions.Add(sendQueue);
 
@@ -156,6 +152,36 @@ public sealed class OutboundEmailSender(
             logger?.LogWarning(ex, "OutboundEmailSender: failed to start watching outbound mail");
         }
     }
+
+    /// <summary>
+    /// The subject an outbound mail is sent with: a reply marker is added only when the subject
+    /// does not already carry one.
+    ///
+    /// <para>🚨 <b>"Already carries one" is not just <c>Re:</c>.</b> The check used to be
+    /// <c>StartsWith("Re:")</c>, which is right for the case this lane was built for — the Email
+    /// Router's reply, whose subject the agent writes as <c>Re: &lt;original&gt;</c> anyway — and
+    /// wrong for every outbound mail that is not a reply. A FORWARD is the one that made it visible
+    /// (Systemorph/MeshWeaver#2656): the inbox lane queues <c>Fwd: Quote for 200 seats</c> and it
+    /// left the building as <c>Re: Fwd: Quote for 200 seats</c>, which tells the recipient the
+    /// opposite of what happened.</para>
+    ///
+    /// <para>The markers are the same set <c>EmailInboundProcessor.ThreadKey</c> strips when it
+    /// normalises a subject into a conversation key — the two ends of the same conversation should
+    /// agree about what a reply/forward prefix looks like. Only the LEADING marker matters: this
+    /// decides whether to add one, not what the subject means.</para>
+    /// </summary>
+    /// <param name="subject">The subject as queued.</param>
+    /// <returns>The subject to send.</returns>
+    internal static string OutboundSubject(string? subject)
+    {
+        var trimmed = (subject ?? "").TrimStart();
+        return ReplyOrForwardPrefix.IsMatch(trimmed) ? subject! : $"Re: {subject}";
+    }
+
+    /// <summary>Leading reply/forward markers, several languages — the set <c>ThreadKey</c> strips.</summary>
+    private static readonly Regex ReplyOrForwardPrefix = new(
+        @"^\s*(re|fwd|fw|aw|wg|tr|rv|sv|vs|antw|antwort|rif)(\s*\[\d+\])?\s*:",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static IObservable<MeshNode> SetStatus(
         MeshNode node, MeshWeaver.Mesh.Email current, EmailStatus to,
