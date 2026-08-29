@@ -48,7 +48,7 @@ no prebuilt assemblies adopted
 PHRASES
 
 # ── 3. The gate CONSUMED the bake ───────────────────────────────────────────────────────────────
-seed_line="$(grep -m1 -- '^seed: adopted ' "$GATE_LOG" 2>/dev/null || true)"
+seed_line="$(grep -m1 -- '^seed: adopted ' "$GATE_LOG" || true)"
 [ -n "$seed_line" ] \
   || fail "$LABEL: the gate ran green but printed no 'seed:' line — it was given no bake to consume, so it judged a private recompile instead of the bytes the bake shipped."
 
