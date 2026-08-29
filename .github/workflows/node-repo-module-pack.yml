@@ -48,6 +48,30 @@ name: node-repo module pack
 #             || github.event_name == 'schedule' }}
 #     secrets: { publish-token: ${{ secrets.PLUGIN_REGISTRY_PUBLISH_TOKEN }} }
 #
+# ─────────────────────────── Narrowing (the `select` job) ───────────────────────────
+# 🚨 "in plugins we only re-run concerned modules ⇒ we can estimate the required count and
+# validate it" · "all plugins should only re-build what changed" · "there is always a notion of
+# 'full rebuild' when the platform updates".
+#
+# The matrix is no longer the caller's literal list on every event: `select` runs
+# .github/scripts/node-repo-scope.py over the diff and hands `pack` the entries it can reach.
+# MeshWeaver.Plugins ran 29 module builds on every push of every PR, whichever file moved.
+#
+# 🚨 ONLY `pull_request` / `merge_group` NARROW. A push, a framework-release dispatch, the release
+# poll and a manual dispatch all pack the FULL set — a module is built against a platform pin, and
+# when that pin moves every bundle must be rebuilt and republished or every portal reads
+# FrameworkDeclined and adopts nothing (#2088). The scope script names which fallback it took, in
+# the log and in the job summary; every uncertainty resolves to FULL.
+#
+# 🚨 AND THE COUNT IS ASSERTED. A dynamic matrix cannot be a fixed list of required contexts — the
+# per-module contexts come and go with the diff — so the SELECTION is what gets checked instead:
+# every pack job drops a receipt, and `verify` (one stable context, present on every run) fails if
+# the receipts and the selection disagree. That is invariant #4 for a matrix allowed to change
+# size, and it is the only reason a narrowed matrix is safe to require.
+#
+# A caller that ships neither scripts/affected-modules.py nor scripts/project-closure.py is simply
+# not narrowable: the scope script says FULL and says why. Nothing to opt into, nothing to skip.
+#
 # Republishing is SAFE to repeat, which is why the schedule may simply publish rather than
 # first proving something changed: the registry is keyed by `{package}@{version}` from
 # `manifest.lock`, so a rebuild of an unchanged version overwrites the same slot with equivalent
@@ -95,14 +119,93 @@ on:
         required: false
 
 jobs:
+  # ─────────────────────── WHICH BUNDLES THIS DIFF CAN REACH ───────────────────────
+  # One place decides, out loud. It never skips a gate: its two answers are "pack these" and
+  # "pack everything", and it takes the second whenever it cannot be sure of the first.
+  select:
+    name: Select the affected bundles
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.scope.outputs.modules }}
+      count: ${{ steps.scope.outputs.count }}
+      selected: ${{ steps.scope.outputs.selected }}
+      scope: ${{ steps.scope.outputs.scope }}
+    steps:
+      # 🚨 The caller goes in its OWN directory, not the workspace root. Node packages are
+      # discovered as "top-level dirs carrying an index.json", and the platform checkout below
+      # lands INSIDE the workspace — clone core to the root beside the caller's content and the
+      # selector is one `index.json` away from treating the framework as a plugin of this repo.
+      # gen-manifests.py already carries "meshweaver" in its SKIP set for exactly this reason;
+      # keeping the two trees apart is the version that cannot rot.
+      - uses: actions/checkout@v7
+        with:
+          path: repo
+          # 🚨 The diff is taken against the PR base, so the base commits must be present. A
+          # shallow clone would make every range unresolvable — which the scope script turns into
+          # a FULL pack rather than an empty one, but silently paying for 29 jobs is not the plan.
+          fetch-depth: 0
+      # The scope script is the PLATFORM's (one implementation, every repo), read from the same
+      # checkout the pack jobs make at platform-ref — so a workflow newer than the checkout can
+      # never call a script the checkout does not have (run 33073476996's exact failure).
+      - name: Check out Systemorph/MeshWeaver at the pinned ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # 🚨 The selection logic owes its own proof that it can say no AND that every fallback still
+      # falls back. It runs here, on every run, next to the answer it produces — a selector whose
+      # self-test is only run by someone remembering to is a selector nobody checks.
+      - name: The selection can say no (self-test)
+        run: |
+          set -euo pipefail
+          python3 meshweaver/.github/scripts/node-repo-scope.py --self-test
+          python3 meshweaver/.github/scripts/node-repo-pack-verify.py --self-test
+      - name: Decide which module bundles this diff can reach
+        id: scope
+        env:
+          MODULES: ${{ inputs.modules }}
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          # A merge_group run carries no `base_ref`; its base is on the event payload. Dormant
+          # today (no repo here has a queue) and kept correct so enabling one narrows rather than
+          # silently falling back to the full set.
+          QUEUE_BASE_REF: ${{ github.event.merge_group.base_ref }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MODULES" > "$RUNNER_TEMP/matrix.json"
+          if [ -z "${BASE_REF:-}" ] && [ -n "${QUEUE_BASE_REF:-}" ]; then
+            BASE_REF="${QUEUE_BASE_REF#refs/heads/}"
+          fi
+          if [ -n "${BASE_REF:-}" ]; then
+            git -C repo fetch --no-tags origin \
+              "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          fi
+          python3 meshweaver/.github/scripts/node-repo-scope.py \
+            --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
+            --event "$EVENT" --base-ref "${BASE_REF:-}" > "$RUNNER_TEMP/scope.json"
+
   pack:
     name: Module bundle (${{ matrix.entry.module }})
+    needs: select
     runs-on: ubuntu-latest
+    # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
+    # a matrix with no vectors, so an empty selection has to express itself as "this job does not
+    # run". What makes it safe is that `verify` below runs UNCONDITIONALLY and asserts the pairing
+    # — a zero count with receipts, or a non-zero count with a skipped pack job, is RED. Never
+    # replace it with a condition that asks whether an input or a secret happens to be set.
+    # (`select.result` too, not just the count: a FAILED select emits no count at all, and
+    # `'' != '0'` is true — the matrix would then fail to evaluate instead of the verify job
+    # naming the real cause.)
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0'
     strategy:
       # One module's failure must not hide the rest — a sweep wants every verdict in one run.
       fail-fast: false
       matrix:
-        entry: ${{ fromJson(inputs.modules) }}
+        entry: ${{ fromJson(needs.select.outputs.modules) }}
     steps:
       - uses: actions/checkout@v7
       - name: Check out Systemorph/MeshWeaver at the pinned ref
@@ -266,3 +369,97 @@ jobs:
             2*) echo "$MODULE@$VERSION is now served by $REGISTRY" ;;
             *)  echo "::error::registry refused $MODULE@$VERSION (HTTP $code)"; exit 1 ;;
           esac
+
+      # ─────────────────────────── THE RECEIPT ───────────────────────────
+      # 🚨 POSITIVE EVIDENCE THAT THIS LEG RAN. A skipped matrix leg renders with the same tick as
+      # a passed one, so "this module was never packed" and "this module packed fine" are
+      # indistinguishable on the checks wall — and a matrix whose size depends on a diff makes
+      # that failure mode reachable rather than theoretical. `verify` counts these against the
+      # selection and names whatever is missing. It is the LAST step on purpose: a receipt means
+      # the whole leg, publish included, got here.
+      - name: Drop the receipt
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/receipts"
+          jq -n --arg p "${{ matrix.entry.package }}" --arg m "${{ matrix.entry.module }}" \
+                --arg v "${{ steps.identity.outputs.version }}" \
+                --argjson pub '${{ inputs.publish }}' \
+             '{package:$p, module:$m, version:$v, published:$pub}' \
+             > "$RUNNER_TEMP/receipts/${{ matrix.entry.module }}.json"
+          cat "$RUNNER_TEMP/receipts/${{ matrix.entry.module }}.json"
+      - name: Upload the receipt
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-pack-receipt-${{ matrix.entry.module }}
+          path: ${{ runner.temp }}/receipts/*.json
+          if-no-files-found: error
+
+  # ═══════════════ THE COUNT GATE — one STABLE context, on every run ═══════════════
+  # 🚨 A dynamic matrix cannot be a fixed list of required status checks: the per-module contexts
+  # appear and disappear with the diff, so requiring one means requiring a context that will
+  # legitimately never report — which is how a gate ends up not required at all and PRs merge past
+  # it. This job is the answer: it is present on EVERY run whatever the diff, so it is the one
+  # context a repo's protection should require for this lane, and it asserts that exactly the
+  # selected bundles were built.
+  #
+  # `if: always()` because the failure it exists to catch is a SKIP, and a job that skips when the
+  # thing it watches skipped watches nothing.
+  verify:
+    name: All selected bundles built
+    needs: [select, pack]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Systemorph/MeshWeaver at the pinned ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # Absent receipts are the finding, so a download that matches nothing must NOT fail here —
+      # it must reach the verifier, which says which module is missing. That is the whole point.
+      - name: Collect the receipts
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          pattern: module-pack-receipt-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/receipts
+      - name: Exactly the selected bundles were built
+        env:
+          EXPECTED: ${{ needs.select.outputs.selected }}
+          PACK_RESULT: ${{ needs.pack.result }}
+          SCOPE: ${{ needs.select.outputs.scope }}
+          COUNT: ${{ needs.select.outputs.count }}
+          DECLARED: ${{ inputs.modules }}
+        run: |
+          set -euo pipefail
+          echo "scope=$SCOPE, selection named $COUNT module bundle(s); pack job: $PACK_RESULT"
+          # 🚨 An INDEPENDENT recount, because the count and the selection come from the same
+          # call and therefore agree by construction — they cannot catch a selection that is
+          # simply wrong. This one has a second source: on a FULL scope the answer must be every
+          # entry the CALLER declared, counted here from `inputs.modules` rather than from
+          # anything `select` produced.
+          declared=$(jq 'length' <<< "$DECLARED")
+          if [ "$SCOPE" = "full" ] && [ "$COUNT" != "$declared" ]; then
+            echo "::error title=Module bundles incomplete::the scope is FULL, so every one of the \
+          $declared declared module(s) must be packed — but the selection named $COUNT. The \
+          selection and the caller's matrix disagree."
+            exit 1
+          fi
+          # 🚨 `select` itself failing must not read as "nothing was selected" — that would turn a
+          # broken selector into a green wall with an empty matrix behind it.
+          if [ "${{ needs.select.result }}" != "success" ]; then
+            echo "::error title=Module bundles incomplete::the selection job reported \
+          '${{ needs.select.result }}' — no module bundle was chosen, so none was built. Read that \
+          job; nothing below can be trusted."
+            exit 1
+          fi
+          python3 meshweaver/.github/scripts/node-repo-pack-verify.py \
+            --expected "$EXPECTED" \
+            --receipts "$RUNNER_TEMP/receipts" \
+            --pack-result "$PACK_RESULT" \
+            --scope "$SCOPE"
