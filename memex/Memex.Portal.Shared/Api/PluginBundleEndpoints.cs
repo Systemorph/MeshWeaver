@@ -184,6 +184,15 @@ public static class PluginBundleEndpoints
         group.MapGet($"/{PrebuiltSegment}/{{identity}}/{{source}}/{{bundle}}",
             (HttpContext http, string identity, string source, string bundle) =>
                 PrebuiltBundle(http, identity, source, bundle, Caller(http)));
+        // The module set a publication was sealed against (MeshWeaver#2698) — a consumer pinned to
+        // this identity composes THESE bytes, never the package endpoint's. The literal segment wins
+        // over {bundle} above, so a NodeType bundle named "modules" is not served here.
+        group.MapGet($"/{PrebuiltSegment}/{{identity}}/{{source}}/{PublishedBundleCatalogue.ModulesDirectoryName}",
+            (HttpContext http, string identity, string source) =>
+                PrebuiltModuleSet(http, identity, source, Caller(http)));
+        group.MapGet($"/{PrebuiltSegment}/{{identity}}/{{source}}/{PublishedBundleCatalogue.ModulesDirectoryName}/{{bundle}}",
+            (HttpContext http, string identity, string source, string bundle) =>
+                PrebuiltModule(http, identity, source, bundle, Caller(http)));
     }
 
     /// <summary>The sealed publication's bundle names, or 404 when none is sealed for that
@@ -214,6 +223,46 @@ public static class PluginBundleEndpoints
         if (sealed_ is null || !sealed_.Contains(bundle, StringComparer.OrdinalIgnoreCase))
             return NoSuchBundle();
         var path = Path.Combine(directory!, bundle);
+        return Results.File(path, "application/zip", fileDownloadName: bundle);
+    }
+
+    /// <summary>The module bundles the sealed publication composed — its NodeType assemblies'
+    /// dependency records point at exactly these bytes. 404 with the reason when the publication
+    /// is torn, or predates module sealing (republish it); an EMPTY list when the bake composed
+    /// nothing. Same grant as the bundle index: a whole-source grant on the source.</summary>
+    private static IResult PrebuiltModuleSet(
+        HttpContext http, string identity, string source, AuthenticatedInstance? caller)
+    {
+        if (PrebuiltDecision(http, identity, source, caller) is { } refused)
+            return refused;
+        var directory = PrebuiltDirectory(http, identity, source);
+        var reading = directory is null
+            ? new ModuleSetReading(null, "no sealed publication")
+            : PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));
+        if (reading.Modules is null)
+            return Results.Json(
+                new { error = $"{reading.Refusal} — source '{source}', framework identity '{identity}'" },
+                statusCode: StatusCodes.Status404NotFound);
+        return Results.Json(new { identity, source, modules = reading.Modules });
+    }
+
+    /// <summary>One sealed module bundle's bytes. A name the module index does not list is 404
+    /// even if the file exists — an unlisted file is not part of the sealed set.</summary>
+    private static IResult PrebuiltModule(
+        HttpContext http, string identity, string source, string bundle, AuthenticatedInstance? caller)
+    {
+        if (PrebuiltDecision(http, identity, source, caller) is { } refused)
+            return refused;
+        if (!IsBareName(bundle))
+            return Results.Json(new { error = "bundle must be a bare name" },
+                statusCode: StatusCodes.Status400BadRequest);
+        var directory = PrebuiltDirectory(http, identity, source);
+        var reading = directory is null
+            ? new ModuleSetReading(null, "no sealed publication")
+            : PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));
+        if (reading.Modules is null || !reading.Modules.Contains(bundle, StringComparer.OrdinalIgnoreCase))
+            return NoSuchBundle();
+        var path = Path.Combine(directory!, PublishedBundleCatalogue.ModulesDirectoryName, bundle);
         return Results.File(path, "application/zip", fileDownloadName: bundle);
     }
 

@@ -117,6 +117,40 @@ Two refusals guard it, because both failures are otherwise invisible:
   an adopted type renders and tests exactly like a compiled one — so "the consuming half silently
   stopped working" cannot be noticed unless it is a verdict.
 
+### 🚨 The seal carries the modules it composed — a gate composes from the seal, never the registry
+
+A bake composes external modules with `--module` (this run's module-pack artifacts, or an
+upstream's) and seals its NodeType assemblies against **those bytes**: every dependency record
+names the module's MVID. The registry's *package* endpoint (`/api/plugins/bundles/<pkg>/<version>`)
+serves something else — the module's own lane's last build, under a content version that does not
+move when a rebuild changes the bytes. A gate that seeded publication X but composed its modules from
+the registry therefore ran assemblies built against one `MeshWeaver.AI` while holding another, and
+the boot seeder rightly declined every one: `dependency record mismatch — built against mvid:…, live
+is mvid:…`. On 2026-08-29 that was every satellite, red at once, with no diff in any of them (#2698).
+
+**The publication is the unit of consistency.** Since #2707:
+
+- `publish-bake-bundles.sh` seals the composed bundles WITH the publication —
+  `prebuilt-bundles/<identity>/<source>/modules/<pkg>.module.nupkg`, listed in `modules/_index`,
+  written strictly before `_complete`. A bake that composed nothing seals an **empty** index, so a
+  reader can tell "composed nothing" from "predates module sealing"; a sealed publication with no
+  index is republished on the source's next bake even when its content is unchanged — that is what
+  converges the fleet without anyone re-baking by hand.
+- The registry serves the set: `GET …/prebuilt/<identity>/<source>/modules` (the index's list, 404
+  *saying* "predates module sealing" for an old seal) and `…/modules/<bundle>` (listed names only).
+- `compose-sealed-modules.sh` — called by `node-repo-gate.yml`, `node-repo-compile-check.yml` and
+  `node-repo-publish-bake.yml` whenever the repo declares an upstream (`upstream-seed` /
+  `upstream-sources`) — takes each `registry-modules` package from the first upstream whose seal
+  lists it. **No fallback**: an upstream with no seal for the identity, a seal without a module set,
+  or a package no upstream sealed is RED naming the identity. Falling back to the registry would
+  reproduce the decline under a green tick. A repo that declares **no** upstream still composes from
+  the registry, and the log says so in a `::notice::` — those bytes are the module lane's, and a
+  decline against a publication that composed different ones is the reason to declare the upstream.
+
+The registry's package endpoint remains the **runtime** surface — a portal installing `AI@1.2`
+gets whatever the module lane published — which is why the platform's own wave seals its module
+bundles without publishing them as packages.
+
 ### 🚨 An adoption used to lose a race with the first-build kickoff
 
 Adopting a prebuilt assembly writes the NodeType's node, and that write goes through the type's OWN

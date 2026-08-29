@@ -228,7 +228,71 @@ public static class PublishedBundleCatalogue
             .Select(d => Path.GetFileName(d)!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
+
+    /// <summary>The sub-directory of a sealed publication holding the module bundles its bake
+    /// composed, and the index that lists them. Mirrored in
+    /// <c>.github/scripts/publish-bake-bundles.sh</c> and <c>compose-sealed-modules.sh</c>.</summary>
+    public const string ModulesDirectoryName = "modules";
+
+    /// <summary>The module set's own listing — written strictly before the publication's
+    /// <c>_complete</c>, so a sealed publication either carries its module set or predates
+    /// module sealing altogether.</summary>
+    public const string ModulesIndexFileName = "_index";
+
+    /// <summary>
+    /// 🚨 The module bundles one source's SEALED publication composed — the exact bytes its
+    /// NodeType assemblies were built against (MeshWeaver#2698). A consumer pinned to this
+    /// identity must compose THESE; the registry's package endpoint serves the module's own
+    /// lane's last build under an unmoved version, and a gate that composed it judged assemblies
+    /// built against one <c>MeshWeaver.AI</c> while holding another — the boot seeder declined
+    /// every one ("dependency record mismatch"), fleet-wide, with no diff in any repo.
+    ///
+    /// <para><see cref="ModuleSetReading.Modules"/> is <c>null</c> with a
+    /// <see cref="ModuleSetReading.Refusal"/> when the publication is torn (no seal, or a listed
+    /// bundle absent — the same rule as <see cref="SealedBundlesOf"/>), when it PREDATES module
+    /// sealing (no <c>modules/_index</c>: republish the source, which
+    /// <c>publish-bake-bundles.sh</c> does on its next run), or when the index names a bundle
+    /// that is absent or not a bare name. It is EMPTY, not null, when the bake composed nothing —
+    /// a reader can tell "composed nothing" from "predates module sealing".</para>
+    /// </summary>
+    public static ModuleSetReading SealedModulesOf(string sourceDirectory, ILogger? logger = null)
+    {
+        if (CompleteBundlesOf(sourceDirectory, logger) is null)
+            return new(null, "no sealed publication");
+        var directory = Path.Combine(sourceDirectory, ModulesDirectoryName);
+        var index = Path.Combine(directory, ModulesIndexFileName);
+        if (!File.Exists(index))
+        {
+            logger?.LogInformation(
+                "ReleaseAvailability: {SourceDirectory} is sealed but carries no {Modules}/{Index} — "
+                + "it predates module sealing, so a consumer cannot compose from it until it is republished",
+                sourceDirectory, ModulesDirectoryName, ModulesIndexFileName);
+            return new(null,
+                $"the publication is sealed but carries no module set ({ModulesDirectoryName}/{ModulesIndexFileName}) — "
+                + "it predates module sealing; republish the source under a platform that seals module sets");
+        }
+        var listed = File.ReadAllLines(index)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+        var bad = listed.FirstOrDefault(name =>
+            name.IndexOfAny(['/', '\\', ':']) >= 0 || name == "." || name == ".."
+            || !File.Exists(Path.Combine(directory, name)));
+        if (bad is not null)
+        {
+            logger?.LogInformation(
+                "ReleaseAvailability: {SourceDirectory} lists module bundle '{Bundle}' that is absent "
+                + "or not a bare name — the module set is torn, so a consumer cannot compose from it",
+                sourceDirectory, bad);
+            return new(null, $"the module set is torn: '{bad}' is listed in {ModulesDirectoryName}/{ModulesIndexFileName} but absent (or not a bare name)");
+        }
+        return new(listed, null);
+    }
 }
+
+/// <summary>One reading of a sealed publication's module set: the listed bundle names, or
+/// <c>null</c> with the reason a consumer must not compose from it.</summary>
+public sealed record ModuleSetReading(IReadOnlyList<string>? Modules, string? Refusal);
 
 /// <summary>One reading of the catalogue: what the target release turned out to be, and what was
 /// published for it.</summary>
