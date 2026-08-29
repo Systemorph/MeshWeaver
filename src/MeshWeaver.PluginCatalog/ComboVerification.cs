@@ -199,11 +199,34 @@ public enum GateRunOutcome
     /// <summary>The check passed.</summary>
     Passed,
 
-    /// <summary>The check failed.</summary>
+    /// <summary>
+    /// The check produced a NEGATIVE verdict — a compiler diagnostic, an error control, a red
+    /// test. A CONTENT failure: the reader fixes the source.
+    /// </summary>
     Failed,
 
     /// <summary>The check does not apply (e.g. the type declares no Tests area).</summary>
     Skipped,
+
+    /// <summary>
+    /// NO VERDICT: the check never produced an answer within its budget (a timeout, a wedge). It
+    /// fails the run — an unjudged check is not a passing one — but it is NOT a diagnostic, and a
+    /// consumer must not report it as one.
+    ///
+    /// <para>🚨 Appended, never inserted: the members before it keep their ordinals, so a report
+    /// written by an older tester still deserializes correctly. Introduced with #2454/#2463, where
+    /// a 300s "no terminal compile status" timeout was reported as <see cref="Failed"/> and
+    /// annotated as a public-API break on a PR that contained no C# at all.</para>
+    /// </summary>
+    Inconclusive,
+
+    /// <summary>
+    /// The WORK SUCCEEDED and the mesh failed to RECORD it — the run consumed a bake that carries
+    /// this type's assembly, so the compile is proven by bytes, and only the mesh-side status
+    /// write was lost (a <c>MergeGuard</c> stale/reordered refusal, a hub disposed with the write
+    /// in flight). INFRASTRUCTURE, never content.
+    /// </summary>
+    Unrecorded,
 }
 
 /// <summary>
@@ -280,10 +303,18 @@ public sealed record GateRunNodeType
     /// <summary>The Tests verdict detail (the pass/fail summary, or the red rows).</summary>
     public string? TestsDetail { get; init; }
 
-    /// <summary>True when no check failed.</summary>
+    /// <summary>
+    /// True when no check failed. 🚨 Every non-passing, non-skipped outcome fails — never
+    /// <c>!= Failed</c>, which silently admits each member added after
+    /// <see cref="GateRunOutcome.Failed"/> and would have made a run that judged NOTHING report as
+    /// a clean pass to the combo verifier.
+    /// </summary>
     [JsonIgnore]
-    public bool Success =>
-        Compile != GateRunOutcome.Failed
-        && Render != GateRunOutcome.Failed
-        && Tests != GateRunOutcome.Failed;
+    public bool Success => !Fails(Compile) && !Fails(Render) && !Fails(Tests);
+
+    /// <summary>Whether <paramref name="outcome"/> fails the run.</summary>
+    private static bool Fails(GateRunOutcome outcome) =>
+        outcome is GateRunOutcome.Failed
+            or GateRunOutcome.Inconclusive
+            or GateRunOutcome.Unrecorded;
 }
