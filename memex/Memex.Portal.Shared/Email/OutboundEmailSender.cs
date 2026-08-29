@@ -1,5 +1,6 @@
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Graph.Configuration;
@@ -113,12 +114,7 @@ public sealed class OutboundEmailSender(
                     .Select(n => EmailOf(n, jsonOptions)),
                 writeStatus: (node, current, status) =>
                     SetStatus(node, current, status, meshService, accessService),
-                send: email =>
-                {
-                    var subject = email.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase)
-                        ? email.Subject : $"Re: {email.Subject}";
-                    return emailSender.SendEmail(email.To!, subject, email.Body);
-                },
+                send: email => emailSender.SendEmail(email.To!, OutboundSubject(email.Subject), email.Body),
                 logger: logger);
             subscriptions.Add(sendQueue);
 
@@ -156,6 +152,52 @@ public sealed class OutboundEmailSender(
             logger?.LogWarning(ex, "OutboundEmailSender: failed to start watching outbound mail");
         }
     }
+
+    /// <summary>
+    /// The subject an outbound mail is sent with: a reply marker is added only when the subject
+    /// does not already carry one.
+    ///
+    /// <para>🚨 <b>"Already carries one" is not just <c>Re:</c>.</b> The check used to be
+    /// <c>StartsWith("Re:")</c>, which is right for the case this lane was built for — the Email
+    /// Router's reply, whose subject the agent writes as <c>Re: &lt;original&gt;</c> anyway — and
+    /// wrong for every outbound mail that is not a reply. A FORWARD is the one that made it visible
+    /// (Systemorph/MeshWeaver#2656): the inbox lane queues <c>Fwd: Quote for 200 seats</c> and it
+    /// left the building as <c>Re: Fwd: Quote for 200 seats</c>, which tells the recipient the
+    /// opposite of what happened.</para>
+    ///
+    /// <para>Only the LEADING marker matters: this decides whether to ADD one, not what the subject
+    /// means. "Question about the RE: header" is not a reply.</para>
+    ///
+    /// <para>🚨 <b>The marker set is a deliberate SECOND COPY of the one
+    /// <c>EmailInboundProcessor.ThreadKey</c> strips</b>, and the duplication cannot be removed from
+    /// here today. That processor is in the <c>MeshWeaver.Mail.MicrosoftGraph</c> MODULE, in the
+    /// plugins repository, which depends on this one — the reference cannot run the other way, so a
+    /// shared constant would have to live in the mesh CONTRACT. Putting it there is a new framework
+    /// API, and a module may not call an API newer than the newest RELEASED framework without
+    /// raising its <c>minMeshVersion</c> floor; so "de-duplicate it" today means shipping a floor
+    /// bump for a list of natural-language prefixes that changes about never. The copies are
+    /// therefore left standing and each NAMES the other, so whoever edits one is told where the twin
+    /// is. Fold them into the contract when a floor bump is being paid for anyway.</para>
+    /// </summary>
+    /// <param name="subject">The subject as queued; null is treated as empty.</param>
+    /// <returns>The subject to send.</returns>
+    internal static string OutboundSubject(string? subject)
+    {
+        // One normalisation, not two: the pattern's own `^\s*` handles the leading whitespace, so
+        // trimming here as well would be a second answer to the same question — and returning the
+        // TRIMMED string would silently rewrite a subject this method was only asked to classify.
+        var queued = subject ?? "";
+        return ReplyOrForwardPrefix.IsMatch(queued) ? queued : $"Re: {queued}";
+    }
+
+    /// <summary>
+    /// Leading reply/forward markers, several languages. 🚨 Twin of the pattern in
+    /// <c>EmailInboundProcessor.ThreadKey</c> (plugins repo) — change both; see
+    /// <see cref="OutboundSubject"/> for why they cannot be one.
+    /// </summary>
+    private static readonly Regex ReplyOrForwardPrefix = new(
+        @"^\s*(re|fwd|fw|aw|wg|tr|rv|sv|vs|antw|antwort|rif)(\s*\[\d+\])?\s*:",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static IObservable<MeshNode> SetStatus(
         MeshNode node, MeshWeaver.Mesh.Email current, EmailStatus to,
