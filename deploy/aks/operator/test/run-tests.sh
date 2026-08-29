@@ -104,6 +104,20 @@ refuses "redirect refuses a relative target" "is not an absolute URL" \
   env HOSTING_DRY_RUN=true hosting-redirect suspend --namespace n --host h.example.com --target /paywall
 refuses "deploy refuses a missing values file" "does not exist" \
   env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace n --release r --database d --values /nope/values.yaml
+# The values file must be the RECORD-rendered one: an empty file and a hand-written file are both
+# refused, because either would fall through to chart defaults (ghcr :latest) and report success.
+_empty=$(mktemp); : > "$_empty"
+refuses "deploy refuses an EMPTY values file" "is EMPTY" \
+  env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace n --release r --database d --values "$_empty"
+_hand=$(mktemp); printf 'replicas:\n  portal: 1\n' > "$_hand"
+refuses "deploy refuses a hand-written values file" "does not carry the HelmValues header" \
+  env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace n --release r --database d --values "$_hand"
+_gen=$(mktemp); printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 1\n' > "$_gen"
+refuses "deploy refuses an unsafe --image" "is not a plain image reference" \
+  env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace n --release r --database d --values "$_gen" --image 'x;rm -rf /'
+refuses "deploy no longer takes --config-file (the catalog rides in the values)" "unknown argument" \
+  env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace n --release r --database d --values "$_gen" --config-file /tmp/x
+rm -f "$_empty" "$_hand" "$_gen"
 refuses "federate refuses without a resource group" "AZ_RESOURCE_GROUP" \
   env -u AZ_RESOURCE_GROUP hosting-federate --identity i --namespace n
 
