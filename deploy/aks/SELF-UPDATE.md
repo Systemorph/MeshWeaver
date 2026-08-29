@@ -10,11 +10,15 @@ merge to main ─▶ "Build and Test" (green) ─▶ images job builds+pushes  m
         ┌─────────────────────────────────────────────────────────────────────┼──────────────── … every install in the world
         ▼                                   ▼                                   ▼
    memex install                       prod install                      external install
-   SelfUpdateHostedService polls ACR (its OWN workload identity) every 6h, per its OWN Admin/UpdatePolicy,
+   SelfUpdateHostedService lists ACR (its OWN workload identity), per its OWN Admin/UpdatePolicy,
    and PATCHes its OWN portal+migration Deployments via its OWN in-cluster ServiceAccount token.
-   Where the GitHub webhook is wired, a green build of SelfUpdate:BuildTriggerRepository (default
-   Systemorph/MeshWeaver) additionally triggers ONE immediate check via the BuildCompletion node —
-   the poll stays as the fallback for installs without the webhook.
+   The check is EVENT-DRIVEN: one pass at startup, then one per BuildCompletion record written by
+   the GitHub webhook for the platform or ANY module this environment deploys.
+   🚨 …plus a SAFETY NET (SelfUpdate__SafetyNetCheckInterval, default 1h — #2494). Not the old
+   poll: it cannot roll anything MinRollInterval would refuse. It exists because every joint of
+   the event chain (webhook registration → WebhookInbox target → HMAC secret) fails SILENTLY, and
+   an install whose event channel is dead is otherwise indistinguishable from one that is up to
+   date — healthy pods, no errors, and a check that simply never runs.
 ```
 
 **Why** — prod must not know about the (potentially many) installs, and a central CI service principal
@@ -22,7 +26,12 @@ with per-cluster Azure RBAC cannot scale to clusters prod doesn't manage. (It wa
 break on 2026-06-29: the CD SP lacked `Microsoft.ContainerService/managedClusters/commandResults/read`,
 so every `az aks command invoke` deploy leg failed.) Pull-based removes that failure class entirely.
 
-Code: `memex/Memex.Portal.Shared/SelfUpdate/` — `SelfUpdateHostedService` (poller), `AcrTagLister`
+Every check reports exactly one verdict — logged, and stamped on `Admin/UpdatePolicy`
+(`LastCheckedAt`/`LastCheckVerdict`/`LastCheckTrigger`) so it survives a deployment that never set
+this service's log level. "Checked and found nothing" and "never checked" are different facts;
+until #2553 they produced identical evidence, which is how memex sat three builds behind for 7 h.
+
+Code: `memex/Memex.Portal.Shared/SelfUpdate/` — `SelfUpdateHostedService` (the checker), `AcrTagLister`
 (ACR via AAD→ACR token exchange), `VersionSelect` (which tag), `KubernetesDeploymentUpdater` (in-cluster
 PATCH). Wired by `AddSelfUpdate()` in `MemexConfiguration.cs`.
 

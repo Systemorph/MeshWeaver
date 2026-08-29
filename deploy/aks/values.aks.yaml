@@ -286,9 +286,19 @@ config:
     # ---- Platform self-update cadence --------------------------------------
     # The check is EVENT-DRIVEN (#1773): one pass at startup, then a check per
     # published build of the platform or of any module this environment deploys.
-    # There is no polling interval any more — SelfUpdate__PollInterval was renamed
-    # and this key sat here inert, reading like a live daily throttle while binding
-    # to nothing (#1778).
+    # SelfUpdate__PollInterval is gone — it was renamed and this key sat here inert,
+    # reading like a live daily throttle while binding to nothing (#1778).
+    #
+    # 🚨 There IS a SAFETY NET, and it is not the old poll (#2494). Every event
+    # reaches an install across a chain nothing re-verifies — a GitHub webhook, a
+    # WebhookInbox allowlist slot, an HMAC secret that must match byte-for-byte —
+    # and every joint of it fails SILENTLY. An install whose event channel is dead
+    # is indistinguishable from one that is up to date: healthy pods, no errors, a
+    # check that simply never runs. memex sat three builds behind for 7 h exactly
+    # so. SelfUpdate__SafetyNetCheckInterval (default 1h; empty or 0 disables)
+    # bounds how long that can hide. It cannot change the ROLL cadence — a
+    # safety-net check passes through the floor below like any other — so it only
+    # ever shortens DISCOVERY.
     #
     # What this number now sets is the floor between two AUTOMATIC rolls. It is a
     # RESTART budget, not a delivery speed: a roll restarts the pod and drops every
@@ -309,6 +319,13 @@ config:
     # newest image immediately (the startup pass), and `gh workflow run
     # main-cd.yml --ref main` bypasses the batch window.
     SelfUpdate__MinRollInterval: "01:00:00"
+    # The SAFETY NET (#2494): the longest this install may go without ASKING. It is
+    # not the old poll — it cannot roll anything the floor above would refuse; it
+    # only bounds how long a silently-broken event channel can keep an install
+    # behind while looking perfectly healthy. "00:00:00" disables it, which is a
+    # deliberate choice to make an install's freshness depend entirely on a chain
+    # of configuration that fails without saying so.
+    SelfUpdate__SafetyNetCheckInterval: "01:00:00"
     # Converge instances onto every newly published NodeType build (MeshWeaver#2192).
     # A prod portal's invariant is "after an update, everything serves the new build" —
     # leaving the banner default meant every publication wave stacked one more rooted
