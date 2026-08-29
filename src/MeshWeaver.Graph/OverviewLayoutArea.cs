@@ -133,7 +133,7 @@ public static class OverviewLayoutArea
 
     /// <summary>Removes a leading <c># {name}</c> ATX heading from markdown when it duplicates the node
     /// name (the header already shows it). Only a MATCHING leading H1 is stripped.</summary>
-    internal static string? StripLeadingTitleMarkdown(string? markdown, string name)
+    public static string? StripLeadingTitleMarkdown(string? markdown, string name)
     {
         if (string.IsNullOrEmpty(markdown))
             return markdown;
@@ -152,7 +152,7 @@ public static class OverviewLayoutArea
 
     /// <summary>Removes a leading <c>&lt;h1&gt;{name}&lt;/h1&gt;</c> from pre-rendered HTML when it
     /// duplicates the node name.</summary>
-    internal static string? StripLeadingTitleHtml(string? html, string name)
+    public static string? StripLeadingTitleHtml(string? html, string name)
     {
         if (string.IsNullOrEmpty(html))
             return html;

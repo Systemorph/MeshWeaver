@@ -291,7 +291,7 @@ public static class MeshNodeLayoutAreas
             { LabelKey = "menu.data" };
     }
 
-    internal static UiControl BuildAccessDenied(string nodePath, string? locale = null)
+    public static UiControl BuildAccessDenied(string nodePath, string? locale = null)
     {
         var nodeName = nodePath.Split('/').LastOrDefault() ?? nodePath;
         return Controls.Stack.WithWidth("100%").WithStyle("padding: 48px 24px; align-items: center; text-align: center;")
