@@ -139,6 +139,26 @@ workspace.GetMeshNodeStream(path)
 
 > **Never serialize manually.** Let the framework's polymorphic converter emit the `$type` discriminators; hand-rolled `JsonSerializer.SerializeToElement(...)` of a node's content produces a payload the deserializer can reject.
 
+### Moving a node's `MainNode`
+
+`MainNode` is what makes a node a satellite at all, so re-pointing it is re-parenting, not an ordinary field edit. It is writable through both mutation paths, with one asymmetry worth knowing:
+
+```csharp
+// Re-parent to another node — works through either path.
+workspace.GetMeshNodeStream(path).Update(n => n with { MainNode = newOwnerPath });
+hub.CreateOrUpdateNode(node with { MainNode = newOwnerPath });   // since #2631
+```
+
+🚨 **A full-instance upsert can move `MainNode` anywhere EXCEPT back onto the node's own path.** `MeshNode.MainNode` is not nullable — it is initialised to the node's own path — so "the writer never touched it" and "the writer set it to this node itself" are the *same value on the wire*. The upsert therefore applies it only when `MeshNode.HasExplicitMainNode` holds, i.e. when it names something other than the node itself; any other rule would silently promote every satellite an upsert touched into a main node (`is:main` is SQL `n.main_node = n.path`), dropping it out of its owner's listings and re-scoping its grants, which project at `COALESCE(main_node, namespace)`.
+
+To turn a satellite back INTO a main node, say so explicitly through the stream — that path carries the intent, and so does `patch`, which can see the key was present:
+
+```csharp
+workspace.GetMeshNodeStream(path).Update(n => n with { MainNode = n.Path });
+```
+
+Before #2631 an upsert could not move `MainNode` at all: `IsNoOpUpsert` did not compare it, so a write whose only change was `MainNode` was skipped and reported as a successful no-op.
+
 ---
 
 ## Thread + ThreadMessage Pattern
