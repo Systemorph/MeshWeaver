@@ -5,7 +5,7 @@ namespace MeshWeaver.Mesh.Threading;
 /// <summary>
 /// The <see cref="IPooledSubscribeScheduler"/> implementation: routes a subscribe through the
 /// mesh-scoped, teardown-drainable <see cref="IoPoolNames.Layout"/> pool so
-/// <see cref="IoPoolRegistry.DrainAll"/> cancel+joins it before the service scope disposes and any
+/// <see cref="IoPoolRegistry.DrainAll()"/> cancel+joins it before the service scope disposes and any
 /// collectible NodeType <c>AssemblyLoadContext</c> unloads. Registered as a mesh singleton in
 /// <c>AddIoPools</c>; resolved by <c>LayoutAreaHost</c> (which lives BELOW <c>MeshWeaver.Mesh.Contract</c>
 /// in the dependency graph and therefore cannot reference <see cref="IoPoolRegistry"/> directly — it

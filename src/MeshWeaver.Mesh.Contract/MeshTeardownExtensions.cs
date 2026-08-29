@@ -23,7 +23,7 @@ namespace MeshWeaver.Mesh;
 ///   <see cref="IMessageHub.DisposalCompleted"/> fires), and</item>
 /// <item>I/O offloaded onto the ThreadPool through <see cref="IIoPool"/> — which
 ///   runs independently of the action block and is NOT tracked by
-///   <see cref="IMessageHub.DisposalCompleted"/>. <see cref="IoPoolRegistry.DrainAll"/>
+///   <see cref="IMessageHub.DisposalCompleted"/>. <see cref="IoPoolRegistry.DrainAll()"/>
 ///   cancels + joins that I/O — a live change-feed leaf never completes on its own, so a
 ///   wait-without-cancel would time out and let the scope dispose under it.</item>
 /// </list>
@@ -127,7 +127,7 @@ public static class MeshTeardownExtensions
     ///   disposal: action blocks + message round-trips. Resources enqueue their async
     ///   cleanup onto the <see cref="AsyncDisposeQueue"/> during this phase.</item>
     /// <item>cancel + join the offloaded ThreadPool I/O the action block doesn't cover
-    ///   (<see cref="IoPoolRegistry.DrainAll"/>).</item>
+    ///   (<see cref="IoPoolRegistry.DrainAll()"/>).</item>
     /// <item>after all the sync stuff is disposed, give the
     ///   <see cref="AsyncDisposeQueue"/> a bounded quiesce budget to finish
     ///   (<see cref="AsyncDisposeQueue.DrainAsync"/>), then the caller closes the scope.</item>
@@ -221,7 +221,8 @@ public static class MeshTeardownExtensions
         //     leaf still runs → its ThreadPool thread dereferences a collectible node ALC's freed
         //     metadata after unload → native use-after-unload SIGSEGV. DrainAll() cancels every leaf
         //     so it stops, then joins — no ToTask, no wait-without-cancel.
-        var leakedIoLeaves = ioPools?.DrainAll() ?? 0;
+        IReadOnlyList<IoPoolRegistry.PoolResidual> residualByPool = [];
+        var leakedIoLeaves = ioPools is null ? 0 : ioPools.DrainAll(out residualByPool);
 
         // (3) After all the sync stuff is disposed (and everyone has enqueued their
         //     async cleanup), quiesce the async dispose queue before the scope closes.
@@ -234,6 +235,7 @@ public static class MeshTeardownExtensions
         //     tells it when that guarantee could NOT be kept.
         var report = new TeardownReport(leakedIoLeaves, asyncDisposeClean)
         {
+            ResidualByPool = residualByPool,
             DisposalFault = disposalFault,
             ActivitiesQuiesced = activitiesQuiesced
         };

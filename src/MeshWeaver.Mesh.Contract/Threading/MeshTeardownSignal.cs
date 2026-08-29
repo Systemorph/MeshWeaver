@@ -20,6 +20,17 @@ namespace MeshWeaver.Mesh.Threading;
 public sealed record TeardownReport(int LeakedIoLeaves, bool AsyncDisposeClean)
 {
     /// <summary>
+    /// WHICH pools did not finish, and by how much — empty on a clean drain.
+    ///
+    /// <para>🚨 <see cref="LeakedIoLeaves"/> alone is a bare count, and a bare count is not
+    /// actionable: <c>Query=1</c> and <c>Compile=1</c> are different bugs with different owners.
+    /// The registry already logs the name, but <c>DrainAll</c> runs after the mesh's log sink has
+    /// stopped capturing, so that warning cannot be read in the window it describes (#2616).
+    /// Carrying it on the report puts it somewhere a subscriber can still see.</para>
+    /// </summary>
+    public IReadOnlyList<IoPoolRegistry.PoolResidual> ResidualByPool { get; init; } = [];
+
+    /// <summary>
     /// The exception the hub's <c>DisposalCompleted</c> reported instead of a completion, or
     /// <c>null</c> when disposal finished normally.
     ///
