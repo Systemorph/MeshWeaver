@@ -189,8 +189,10 @@ public static class MeshNodeLayoutAreas
             .WithView(ThreadsArea, Threads)
             .WithView(ChatArea, Chat)
             .WithView(NodeTypesArea, NodeTypes)
-            .WithView(AccessControlArea, AccessControl)
-            .WithView(GroupsArea, Groups)
+            // AccessControl and Groups VIEWS ride the MeshWeaver.Graph.Views MODULE. Their area
+            // names stay here (the node menu links them) and so do their base helpers —
+            // AccessControlLayoutArea's deserializer / delete / add-dialog, which UserNodeType
+            // calls, and GroupsLayoutArea's membership deserializer.
             .WithView(CreateNodeArea, CreateNode)
             .WithView(EditArea, EditNode)
             .WithView(ContentDataArea, ContentData)
@@ -1747,21 +1749,7 @@ public static class MeshNodeLayoutAreas
 
     #region Access Control
 
-    /// <summary>
-    /// Renders the Access Control area for managing user roles and permissions on this node.
-    /// Delegates to AccessControlLayoutArea for the full management UI.
-    /// </summary>
-    [Browsable(false)]
-    public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext ctx)
-        => AccessControlLayoutArea.AccessControl(host, ctx);
 
-    /// <summary>
-    /// Renders the Groups area for managing group memberships on this node.
-    /// Delegates to GroupsLayoutArea for the full management UI.
-    /// </summary>
-    [Browsable(false)]
-    public static IObservable<UiControl?> Groups(LayoutAreaHost host, RenderingContext ctx)
-        => GroupsLayoutArea.Groups(host, ctx);
 
     #endregion
 

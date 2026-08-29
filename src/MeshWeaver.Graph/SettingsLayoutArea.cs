@@ -385,8 +385,12 @@ public static class SettingsLayoutArea
 
     internal static UiControl BuildAccessControlTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
+        // EMBEDDED AREA, not a compiled call: the AccessControl view rides the
+        // MeshWeaver.Graph.Views module now, so the settings tab names the area and lets whoever
+        // serves it render — the same shape the inline comments section uses.
         stack = stack.WithView(
-            (h, ctx) => MeshNodeLayoutAreas.AccessControl(h, ctx)!,
+            Controls.LayoutArea(host.Hub.Address, MeshNodeLayoutAreas.AccessControlArea)
+                .WithShowProgress(false),
             "AccessControlContent"
         );
         return stack;
