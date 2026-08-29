@@ -1,5 +1,6 @@
 #pragma warning disable CS1591
 
+using System;
 using Xunit;
 
 namespace MeshWeaver.PluginCatalog.Test;
@@ -33,11 +34,23 @@ public class ModuleUpdateDecisionTest
         Enabled = enabled,
     };
 
+    /// <summary>
+    /// 🚨 The presence probe (#2417). Production binds this to
+    /// <c>ModuleActivationBoot.LandedModuleDllExists</c>; here it is a constant, so every case
+    /// below has to STATE whether the bytes are on disk. That statement is the point: the
+    /// "already landed" rule was decided from a version string alone, and a version string is a
+    /// claim about the disk rather than the disk.
+    /// </summary>
+    private static bool BytesPresent(ModuleActivationEntry _) => true;
+
+    /// <summary>The state #2417 is about: the sidecar records the module, the assembly is gone.</summary>
+    private static bool BytesGone(ModuleActivationEntry _) => false;
+
     [Fact]
     public void ANewerBundleWhoseFloorIsSatisfied_Lands()
     {
         var verdict = ModuleUpdateDecision.Decide(
-            "1.3.0", "3.0.0", Gate, Landed("1.2.0"), policyDecline: null);
+            "1.3.0", "3.0.0", Gate, Landed("1.2.0"), policyDecline: null, BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
     }
@@ -50,7 +63,7 @@ public class ModuleUpdateDecisionTest
         // installs ex post as long as this platform satisfies its declared floor. Under MVID
         // equality this exact case — "install GRPC ex post through the Store" — was impossible.
         var verdict = ModuleUpdateDecision.Decide(
-            "1.3.0", "1.0.0", Gate, landed: null, policyDecline: null);
+            "1.3.0", "1.0.0", Gate, landed: null, policyDecline: null, BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
     }
@@ -59,7 +72,7 @@ public class ModuleUpdateDecisionTest
     public void ABundleWithNoDeclaredFloor_Lands_AbsenceIsNoConstraint()
     {
         var verdict = ModuleUpdateDecision.Decide(
-            "1.3.0", bundleMinMeshVersion: null, Gate, Landed("1.2.0"), policyDecline: null);
+            "1.3.0", bundleMinMeshVersion: null, Gate, Landed("1.2.0"), policyDecline: null, BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
     }
@@ -68,7 +81,7 @@ public class ModuleUpdateDecisionTest
     public void TheSameLandedVersion_SkipsWithoutAnyDownloadDecision()
     {
         var verdict = ModuleUpdateDecision.Decide(
-            "1.2.0", "3.0.0", Gate, Landed("1.2.0"), policyDecline: null);
+            "1.2.0", "3.0.0", Gate, Landed("1.2.0"), policyDecline: null, BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.SkipUpToDate, verdict.Action);
     }
@@ -80,9 +93,9 @@ public class ModuleUpdateDecisionTest
         // equality must go through the SAME comparer as the downgrade check — string equality
         // would read this as an update and re-land the module on every reconcile, forever.
         Assert.Equal(ModuleUpdateAction.SkipUpToDate,
-            ModuleUpdateDecision.Decide("1.2", "3.0.0", Gate, Landed("1.2.0"), null).Action);
+            ModuleUpdateDecision.Decide("1.2", "3.0.0", Gate, Landed("1.2.0"), null, BytesPresent).Action);
         Assert.Equal(ModuleUpdateAction.SkipUpToDate,
-            ModuleUpdateDecision.Decide("1.2.0", "3.0.0", Gate, Landed("1.2"), null).Action);
+            ModuleUpdateDecision.Decide("1.2.0", "3.0.0", Gate, Landed("1.2"), null, BytesPresent).Action);
     }
 
     [Fact]
@@ -93,7 +106,7 @@ public class ModuleUpdateDecisionTest
         // skip is silent-with-log, and the SAME reconcile lands the bundle once the platform has
         // moved past the floor.
         var verdict = ModuleUpdateDecision.Decide(
-            "1.3.0", "9.0.0", Gate, Landed("1.2.0"), policyDecline: null);
+            "1.3.0", "9.0.0", Gate, Landed("1.2.0"), policyDecline: null, BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.SkipPlatformBelowFloor, verdict.Action);
         Assert.Contains("9.0.0", verdict.Reason!);
@@ -106,7 +119,7 @@ public class ModuleUpdateDecisionTest
         // Covers the heal path too: a package installed before the module lane existed has content
         // but no landed module — the reconcile is what brings the binary half in.
         var verdict = ModuleUpdateDecision.Decide(
-            "1.2.0", "3.0.0", Gate, landed: null, policyDecline: null);
+            "1.2.0", "3.0.0", Gate, landed: null, policyDecline: null, BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
     }
@@ -115,7 +128,7 @@ public class ModuleUpdateDecisionTest
     public void AnOlderBundleThanWhatIsLanded_NeverRollsBackUnattended()
     {
         var verdict = ModuleUpdateDecision.Decide(
-            "1.1.0", "3.0.0", Gate, Landed("1.2.0"), policyDecline: null);
+            "1.1.0", "3.0.0", Gate, Landed("1.2.0"), policyDecline: null, BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.SkipOlder, verdict.Action);
     }
@@ -127,7 +140,7 @@ public class ModuleUpdateDecisionTest
         // registry version as a rollback and silently never update (the exact defect class
         // NuGetVersionComparer exists for).
         var verdict = ModuleUpdateDecision.Decide(
-            "1.10.0", "3.0.0", Gate, Landed("1.9.0"), policyDecline: null);
+            "1.10.0", "3.0.0", Gate, Landed("1.9.0"), policyDecline: null, BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
     }
@@ -140,7 +153,7 @@ public class ModuleUpdateDecisionTest
         // which every other test passes: auto-update is the DEFAULT, opting out is the choice.
         var verdict = ModuleUpdateDecision.Decide(
             "1.3.0", "3.0.0", Gate, Landed("1.2.0"),
-            policyDecline: "the deployment's update policy is Stable");
+            policyDecline: "the deployment's update policy is Stable", BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.SkipPolicy, verdict.Action);
         Assert.Contains("Stable", verdict.Reason!);
@@ -153,7 +166,7 @@ public class ModuleUpdateDecisionTest
         // policy is the LAST gate, so its skips always mean "an update was withheld".
         var verdict = ModuleUpdateDecision.Decide(
             "1.2.0", "3.0.0", Gate, Landed("1.2.0"),
-            policyDecline: "the deployment's update policy is Stable");
+            policyDecline: "the deployment's update policy is Stable", BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.SkipUpToDate, verdict.Action);
     }
@@ -166,7 +179,7 @@ public class ModuleUpdateDecisionTest
         // default-install config), and the module is part of what they asked for.
         var verdict = ModuleUpdateDecision.Decide(
             "1.2.0", "3.0.0", Gate, landed: null,
-            policyDecline: "the deployment's update policy is Stable");
+            policyDecline: "the deployment's update policy is Stable", BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
     }
@@ -175,7 +188,7 @@ public class ModuleUpdateDecisionTest
     public void AnUninstalledModule_IsNeverReinstalledByTheReconcile()
     {
         var verdict = ModuleUpdateDecision.Decide(
-            "1.3.0", "3.0.0", Gate, Landed("1.2.0", enabled: false), policyDecline: null);
+            "1.3.0", "3.0.0", Gate, Landed("1.2.0", enabled: false), policyDecline: null, BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.SkipUninstalled, verdict.Action);
     }
@@ -184,9 +197,96 @@ public class ModuleUpdateDecisionTest
     public void ARegistryListingNoBundle_SkipsQuietly()
     {
         var verdict = ModuleUpdateDecision.Decide(
-            bundleVersion: null, "3.0.0", Gate, Landed("1.2.0"), policyDecline: null);
+            bundleVersion: null, "3.0.0", Gate, Landed("1.2.0"), policyDecline: null, BytesPresent);
 
         Assert.Equal(ModuleUpdateAction.SkipNoBundle, verdict.Action);
+    }
+
+    /// <summary>
+    /// 🚨 <b>#2417 — the self-sealing state, and the whole reason this parameter exists.</b>
+    ///
+    /// <para>A record saying "module X at version V" with no assembly behind it answered
+    /// <c>SkipUpToDate</c> — forever, on every deployment, on every reconcile. Nothing else in the
+    /// system would ever look again: the version comparison is the only gate the healing lane has,
+    /// and it was satisfied. So every way a landed binary can go missing — a recreated
+    /// <c>Modules:Root</c> volume, a half-completed landing, a generation directory collected out
+    /// from under its entry — was PERMANENT and produced a cheerful "up to date" line.</para>
+    ///
+    /// <para>Fails on pre-fix code, which has no way to be told the bytes are gone and answers
+    /// <c>SkipUpToDate</c>.</para>
+    /// </summary>
+    [Fact]
+    public void ARecordedLandingWhoseAssemblyIsGone_Lands_NeverSkipsAsUpToDate()
+    {
+        var verdict = ModuleUpdateDecision.Decide(
+            "1.3.0", "3.0.0", Gate, Landed("1.3.0"), policyDecline: null, BytesGone);
+
+        Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
+        Assert.Contains("ABSENT", verdict.Reason, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The control, and it is not a formality: if a present assembly ever started re-landing, the
+    /// reconcile would re-download every module on every boot forever. "Up to date" must still be
+    /// reachable — the fix narrows the skip, it does not remove it.
+    /// </summary>
+    [Fact]
+    public void ARecordedLandingWhoseAssemblyIsThere_StillSkipsAsUpToDate()
+    {
+        var verdict = ModuleUpdateDecision.Decide(
+            "1.3.0", "3.0.0", Gate, Landed("1.3.0"), policyDecline: null, BytesPresent);
+
+        Assert.Equal(ModuleUpdateAction.SkipUpToDate, verdict.Action);
+    }
+
+    /// <summary>
+    /// 🚨 A DELIBERATE UNINSTALL IS NOT DAMAGE. A disabled entry has no assembly on disk by
+    /// construction, so the presence probe would say "gone" for every uninstalled module — and a
+    /// repair that re-installs what an operator removed is worse than the defect it fixes. The
+    /// uninstall check sits ABOVE the presence question for exactly this reason, and this test is
+    /// what stops a later reordering from turning the repair into a resurrection.
+    /// </summary>
+    [Fact]
+    public void AnUninstalledModuleWithNoAssembly_StaysUninstalled_TheProbeDoesNotResurrectIt()
+    {
+        var verdict = ModuleUpdateDecision.Decide(
+            "1.3.0", "3.0.0", Gate, Landed("1.3.0", enabled: false), policyDecline: null, BytesGone);
+
+        Assert.Equal(ModuleUpdateAction.SkipUninstalled, verdict.Action);
+    }
+
+    /// <summary>
+    /// A missing assembly is a REPAIR, not an upgrade, so the unattended-update policy must not
+    /// hold it — the same reasoning that already exempts a first landing: it completes an install
+    /// the operator's own surfaces sanctioned, and gating it ships a package whose binary half
+    /// never arrives. (The policy check runs after the version comparison, so a re-land decided
+    /// here never reaches it.)
+    /// </summary>
+    [Fact]
+    public void ARepairOfAMissingAssembly_IsNotHeldByTheUnattendedPolicy()
+    {
+        var verdict = ModuleUpdateDecision.Decide(
+            "1.3.0", "3.0.0", Gate, Landed("1.3.0"),
+            policyDecline: "this deployment declines unattended landings", BytesGone);
+
+        Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
+    }
+
+    /// <summary>
+    /// The probe must never be consulted for an entry that does not exist — there is nothing to
+    /// stat, and a caller binding it to a filesystem read would be handed a null. A never-landed
+    /// module lands on its own rule.
+    /// </summary>
+    [Fact]
+    public void ANeverLandedModule_DecidesWithoutAskingTheProbe()
+    {
+        var asked = false;
+        var verdict = ModuleUpdateDecision.Decide(
+            "1.3.0", "3.0.0", Gate, landed: null, policyDecline: null,
+            _ => { asked = true; return true; });
+
+        Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
+        Assert.False(asked, "there is no entry to probe, so nothing may be stat'd");
     }
 }
 
