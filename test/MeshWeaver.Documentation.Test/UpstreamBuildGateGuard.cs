@@ -97,24 +97,44 @@ public class UpstreamBuildGateGuard
     }
 
     /// <summary>
-    /// 🚨 The wave is PULLED, and no credential may creep back in.
-    ///
-    /// <para>This workflow used to POST <c>meshweaver-upstream-published</c> to a declared list of
-    /// dependent repos, using a token with write access to each. Both are gone: a publication is a
-    /// FACT about the registry, and a dependent repo's scheduled run reads memex for the released
-    /// image and rebuilds if it must.</para>
-    ///
-    /// <para>Pinned because the tempting fix, when a satellite is found a release behind, is to add
-    /// the token back — which reintroduces a cross-repo write credential AND a hand-maintained
-    /// second copy of a graph memex already holds, whose missing entry fails silently.</para>
+    /// 🚨 A package publish wakes ONLY the repos that depend on it — "otherwise only dependent
+    /// packages — then publish package built and cascade recursively" (maintainer, 2026-08-29) —
+    /// and the way it does so is pinned, because the previous version of this cascade POSTed to a
+    /// declared list with a stored token and was removed for exactly that: a hand-maintained second
+    /// copy of a graph whose missing entry fails silently. Now: opt-in (<c>dispatch-dependents</c>),
+    /// dependents DISCOVERED from the installed repos' own <c>upstream-sources</c>/<c>upstream-seed</c>
+    /// declarations, an App token minted per run (no stored PAT), the credential asserted RED, a
+    /// failed dispatch RED naming the repo, and the source chain carried so a cycle cannot loop.
     /// </summary>
     [Fact]
-    public void ThereIsNoDependentDispatch_AndNoCredentialForOne()
+    public void TheCascadeIsOptInDiscoveredAppCredentialedAndRed()
     {
         var body = Body();
-
         Assert.DoesNotContain("dependent-dispatch-token", body, StringComparison.Ordinal);
-        Assert.DoesNotContain("meshweaver-upstream-published", body, StringComparison.Ordinal);
-        Assert.DoesNotContain("/dispatches", body, StringComparison.Ordinal);
+
+        var job = JobBlock(body, "dispatch-dependents:");
+        Assert.Contains("inputs.dispatch-dependents", job, StringComparison.Ordinal);
+        Assert.Contains("needs.publish-bake.outputs.published == 'true'", job, StringComparison.Ordinal);
+        Assert.Contains("actions/create-github-app-token", job, StringComparison.Ordinal);
+        Assert.Contains("secrets.dispatch-app-id", job, StringComparison.Ordinal);
+        Assert.Contains("/installation/repositories", job, StringComparison.Ordinal);
+        Assert.Contains("upstream-sources|upstream-seed", job, StringComparison.Ordinal);
+        Assert.Contains("meshweaver-upstream-published", job, StringComparison.Ordinal);
+        Assert.Contains("chain", job, StringComparison.Ordinal);
+        Assert.DoesNotContain("continue-on-error", job, StringComparison.Ordinal);
+        Assert.DoesNotContain("::warning", job, StringComparison.Ordinal);
+        Assert.Contains("exit 1", job, StringComparison.Ordinal);
+    }
+
+    /// <summary>Everything from a job's key to the next job key at the same indent.</summary>
+    private static string JobBlock(string body, string jobKey)
+    {
+        var start = body.IndexOf("\n  " + jobKey, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"job '{jobKey}' is gone from {Workflow} — it has been removed or "
+                                + "renamed, which no other check would catch.");
+        var next = body.IndexOf("\n  ", start + jobKey.Length + 3, StringComparison.Ordinal);
+        while (next >= 0 && next + 3 < body.Length && body[next + 3] == ' ')
+            next = body.IndexOf("\n  ", next + 1, StringComparison.Ordinal);
+        return next < 0 ? body[start..] : body[start..next];
     }
 }

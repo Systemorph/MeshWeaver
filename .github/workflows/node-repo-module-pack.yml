@@ -123,6 +123,19 @@ on:
         description: The registry that will serve these bundles onward.
         type: string
         default: https://memex.meshweaver.cloud
+      content-repository:
+        description: >-
+          The repository whose packages are packed. Empty = the caller (today's behaviour). The
+          platform's CD sets it to Systemorph/MeshWeaver.Plugins: Plugins is built WITH the
+          platform, so its module bundles for a new framework identity come out of the same run.
+        required: false
+        type: string
+        default: ''
+      content-ref:
+        description: The ref of content-repository to pack. Empty = the caller's own commit.
+        required: false
+        type: string
+        default: ''
     secrets:
       publish-token:
         description: The registry's Plugins:Registry:PublishToken. Required when publish is true.
@@ -149,6 +162,8 @@ jobs:
       # keeping the two trees apart is the version that cannot rot.
       - uses: actions/checkout@v7
         with:
+          repository: ${{ inputs.content-repository || github.repository }}
+          ref: ${{ inputs.content-ref || github.sha }}
           path: repo
           # 🚨 The diff is taken against the PR base, so the base commits must be present. A
           # shallow clone would make every range unresolvable — which the scope script turns into
@@ -219,6 +234,9 @@ jobs:
         entry: ${{ fromJson(needs.select.outputs.modules) }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.content-repository || github.repository }}
+          ref: ${{ inputs.content-ref || github.sha }}
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
         with:
