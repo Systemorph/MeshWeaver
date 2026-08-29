@@ -67,7 +67,7 @@ public static class ApiTokenNodeType
         IsSatelliteType = false,
         ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
-            .AddApiTokenViews()
+            .ApplyNodeHubContributions(NodeType)
             .WithHandler<ValidateTokenRequest>(HandleValidateToken)
             .AddMeshDataSource(source => source
                 .WithContentType<ApiToken>()

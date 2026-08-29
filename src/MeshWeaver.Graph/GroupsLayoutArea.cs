@@ -72,7 +72,14 @@ public static class GroupsLayoutArea
                 });
     }
 
-    internal static GroupMembership? DeserializeMembership(MeshNode node)
+    /// <summary>
+    /// Deserializes a <see cref="GroupMembership"/> from a node's content. Public for the same
+    /// reason as <c>AccessControlLayoutArea.DeserializeAssignment</c>: the consuming view ships in
+    /// the MeshWeaver.Graph.Views module, the content helper stays platform-side.
+    /// </summary>
+    /// <param name="node">The membership node.</param>
+    /// <returns>The membership, or null when the content is absent or unreadable.</returns>
+    public static GroupMembership? DeserializeMembership(MeshNode node)
     {
         if (node.Content is GroupMembership gm)
             return gm;

@@ -80,7 +80,15 @@ public static class AccessControlLayoutArea
                 (UiControl?)BuildPage(host, nodeName: null, nodePath, isAdmin)));
     }
 
-    internal static AccessAssignment? DeserializeAssignment(MeshNode node)
+    /// <summary>
+    /// Deserializes an <see cref="AccessAssignment"/> from a node's content, tolerating the
+    /// untyped-JSON shape a cross-hub read produces. Public because the view that consumes it
+    /// ships in the MeshWeaver.Graph.Views MODULE while this content helper stays platform-side —
+    /// the deserialization is contract, the rendering is not.
+    /// </summary>
+    /// <param name="node">The assignment node.</param>
+    /// <returns>The assignment, or null when the content is absent or unreadable.</returns>
+    public static AccessAssignment? DeserializeAssignment(MeshNode node)
     {
         if (node.Content is AccessAssignment aa)
             return aa;
