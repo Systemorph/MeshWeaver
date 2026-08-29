@@ -253,6 +253,9 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           PLATFORM_WEBHOOK_URL: ${{ vars.PLATFORM_WEBHOOK_URL }}
           PLATFORM_WEBHOOK_SECRET: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
+          DEPENDENT_DISPATCH_APP_ID: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          DEPENDENT_DISPATCH_APP_PRIVATE_KEY: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
         run: |
           missing=()
           [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID           OIDC app registration for azure/login")
@@ -260,6 +263,9 @@ jobs:
           [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID     the subscription holding ACR meshweaver")
           [ -n "$PLATFORM_WEBHOOK_URL" ]  || missing+=("vars.PLATFORM_WEBHOOK_URL         the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds — WITHOUT it no release event ever reaches the mesh, so the framework-release broadcast to the node repos never fires and every satellite falls back to its schedule poll")
           [ -n "$PLATFORM_WEBHOOK_SECRET" ] || missing+=("secrets.PLATFORM_WEBHOOK_SECRET  the shared HMAC the inbox watcher verifies X-Hub-Signature-256 against. It must be BYTE-IDENTICAL to the control instance's Hosting:PlatformWebhookSecret (Key Vault -> Hosting-PlatformWebhookSecret, see deploy/aks/envs/example/secretproviderclass.yaml); a mismatch is INVISIBLE from here — the POST still answers 2xx and the watcher silently drops every delivery as unverifiable")
+          [ -n "$DEPENDENT_DISPATCH_APP_ID" ]          || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID          GitHub App installed on every node repo (Contents: Read + Write) — the release wave's sender")
+          [ -n "$DEPENDENT_DISPATCH_APP_PRIVATE_KEY" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY that App's private key, PEM")
+          [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares the Plugins publication is sealed to (<account>/<share>…)")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::CD cannot deliver a release event — provision the following, then re-run:"
             for m in "${missing[@]}"; do echo "  • $m"; done
@@ -1624,7 +1630,14 @@ jobs:
   # 🚨 Provisioning note (#1755): a subscriber whose own upstreams are not yet published EXITS
   # without building and is re-woken by its upstream's `meshweaver-upstream-published` event, so
   # ────────────────── NO DEPENDENT DISPATCH *FROM HERE*: memex broadcasts (2026-08-23) ──────────
-  # There is deliberately no job here that dispatches to the node repos, and there never will be —
+  # 🚨 SUPERSEDED 2026-08-29 — the paragraph below is kept as the record of a design that never
+  # delivered (#2235: the mesh broadcast's subscriber set was empty on every deploy, and #777: the
+  # inbox watcher that would have run the pin updater is armed on an on-demand hub). The maintainer's
+  # decision: "it should be github actions trigger — no in mesh baking — plugins is top level, built
+  # with platform — on platform update ⇒ update all". The dispatch now happens HERE, in the
+  # `dispatch-dependents` job below, after `plugins-bake` has sealed the Plugins publication for
+  # this run's identity; the mesh notify below stays for the portals' own self-update only.
+  # (Historical, superseded:) There is deliberately no job here that dispatches to the node repos —
   # but the wave is now BROADCAST, not only pulled. The broadcast happens ONE HOP AWAY, in memex,
   # and this workflow already feeds it: the `notify-platform-update` job below signs a POST telling
   # the registry mesh "a new platform build exists". memex, on that fact, fans a
@@ -1794,6 +1807,169 @@ jobs:
   #
   # The assertion itself lives in .github/scripts/check-image-set.sh because `gate` asks the SAME
   # question to decide whether HEAD needs reconciling; the two must never disagree.
+  # ────────────────── PLUGINS: BUILT WITH THE PLATFORM ──────────────────
+  # "plugins is top level — built with platform" (maintainer, 2026-08-29). Plugins is NOT a
+  # subscriber that gets told to rebuild: its module bundles and its NodeType publication for the
+  # identity this run mints are produced HERE, from the same plugins-repo commit the portal image
+  # was built from, and sealed to the portals' storage before any dependent is dispatched. That is
+  # what makes "downstream must check that all dependencies are present" satisfiable — when a
+  # satellite wakes, the upstream it consumes is already sealed for the identity it is told to
+  # bake against. Both legs are the platform's reusable workflows pointed at the Plugins checkout
+  # (content-repository); a node repo calling them with no content-repository behaves as before.
+  plugins-modules:
+    name: "Plugins: pack the module bundles the bake composes"
+    needs: [preflight, gate, promote]
+    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/node-repo-module-pack.yml
+    with:
+      content-repository: Systemorph/MeshWeaver.Plugins
+      content-ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+      platform-ref: ${{ needs.gate.outputs.sha }}
+      # The compose set the bake needs (the same two Plugins' own ci.yml passes as
+      # module-artifacts); the rest of the catalog is content, baked below.
+      modules: >-
+        [{"package": "AI", "module": "MeshWeaver.AI", "project": "src/MeshWeaver.AI/MeshWeaver.AI.csproj"},
+         {"package": "Essentials", "module": "MeshWeaver.Markdown.Collaboration", "project": "src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj"}]
+      # Registry module PACKAGES are content-versioned and published by Plugins' own lane when a
+      # package changes; a platform release changes no package content. The bundles packed here
+      # are the bake's inputs (artifacts), nothing more.
+      publish: false
+
+  plugins-bake-image:
+    name: "Plugins: resolve this run's tester image digest"
+    needs: [preflight, gate, plugin-test-image, promote]
+    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+      image: ${{ steps.digest.outputs.image }}
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: az acr login --name meshweaver
+      - name: Resolve the promoted tester image's digest
+        id: digest
+        env:
+          VERSION: ${{ needs.plugin-test-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ -n "${VERSION:-}" ] || { echo "::error::plugin-test-image produced no version — cannot name the image the Plugins bake must target"; exit 1; }
+          ref="meshweaver.azurecr.io/mw-plugin-test:${VERSION}"
+          digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          case "$digest" in sha256:*) ;; *) echo "::error::could not resolve a digest for $ref (got '$digest') — the promoted set is not readable"; exit 1 ;; esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "image=meshweaver.azurecr.io/mw-plugin-test@$digest" >> "$GITHUB_OUTPUT"
+          echo "plugins bake target: $ref = $digest"
+
+  plugins-bake:
+    name: "Plugins: bake + seal the publication for this identity"
+    needs: [preflight, gate, plugin-test-image, promote, plugins-modules, plugins-bake-image]
+    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/node-repo-publish-bake.yml
+    with:
+      content-repository: Systemorph/MeshWeaver.Plugins
+      content-ref: ${{ vars.MW_PLUGINS_REF || 'main' }}
+      bake-source: plugins
+      module-artifacts: module-bundle-MeshWeaver.{AI,Markdown.Collaboration}
+      test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.plugin-test-image.outputs.version }}
+      image-digest: ${{ needs.plugins-bake-image.outputs.digest }}
+      bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
+      platform-ref: ${{ needs.gate.outputs.sha }}
+      # Plugins is a ROOT: no upstream to wait for. And it does NOT dispatch its own dependents —
+      # on a platform release the job below wakes every repo once; a second, package-shaped wave
+      # from here would wake the same satellites twice for the same identity.
+      upstream-sources: ''
+      dispatch-dependents: false
+    secrets:
+      # No acr-* secrets: the platform holds none, and the reusable bake pulls the image through
+      # the same OIDC identity that publishes to storage (its 'oidc' registry mode).
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+  # ────────────────── DISPATCH DEPENDENTS: "on platform update ⇒ update all" ──────────────────
+  # Fires ONLY after the Plugins publication is sealed for this identity. Every repo the dispatch
+  # App is installed on, except this one and Plugins (built above, not a subscriber), receives
+  # `meshweaver-framework-released`; their CI already answers it by baking against the released
+  # image and refusing unless every upstream is sealed. Package-only publishes take the other
+  # path — the reusable bake's own `dispatch-dependents` job sends `meshweaver-upstream-published`
+  # to dependents only, and recurses.
+  #
+  # 🚨 No hand-maintained subscriber list and no skip-trapdoor: the set IS the App's installation
+  # (install the App on a repo = subscribe it), preflight asserts the credential RED, an empty set
+  # is RED, and a failed dispatch is RED naming the repo. A release that told nobody is not delivered.
+  dispatch-dependents:
+    name: "Dispatch meshweaver-framework-released to every dependent repo"
+    needs: [preflight, gate, plugin-test-image, promote, plugins-bake, plugins-bake-image]
+    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success' && needs.plugins-bake.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Mint an installation token for the dependents
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Dispatch to every installed repo (except the platform and Plugins)
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          VERSION: ${{ needs.plugin-test-image.outputs.version }}
+          IMAGE: ${{ needs.plugins-bake-image.outputs.image }}
+          DIGEST: ${{ needs.plugins-bake-image.outputs.digest }}
+          SELF: ${{ github.repository }}
+          PLUGINS: Systemorph/MeshWeaver.Plugins
+        run: |
+          set -euo pipefail
+          repos=$(gh api --paginate /installation/repositories --jq '.repositories[].full_name')
+          [ -n "$repos" ] || { echo "::error::the dispatch App is installed on NO repository — nobody is subscribed. Install DEPENDENT_DISPATCH's App on the node repos."; exit 1; }
+          payload=$(jq -cn --arg sha "$SHA" --arg v "$VERSION" --arg i "$IMAGE" --arg d "$DIGEST" \
+            '{sha:$sha, version:$v, image:$i, digest:$d, source:"platform", chain:["platform","plugins"]}')
+          dispatched=(); failed=()
+          for repo in $repos; do
+            case "$repo" in "$SELF"|"$PLUGINS") continue ;; esac
+            code=$(curl -sS -o /tmp/resp -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$repo/dispatches" \
+              -d "$(jq -cn --argjson p "$payload" '{event_type:"meshweaver-framework-released", client_payload:$p}')") || code=000
+            case "$code" in
+              2*) dispatched+=("$repo") ;;
+              *)  failed+=("$repo (HTTP $code: $(head -c 200 /tmp/resp | tr '\n' ' '))") ;;
+            esac
+          done
+          if [ ${#dispatched[@]} -eq 0 ] && [ ${#failed[@]} -eq 0 ]; then
+            echo "::error::the App is installed only on $SELF / $PLUGINS — no dependent to dispatch. Install it on the node repos."; exit 1
+          fi
+          {
+            echo "### 📣 Platform ${VERSION} (${SHA:0:9}) released — dependents dispatched"
+            echo "- image: \`$IMAGE\`"
+            for r in "${dispatched[@]}"; do echo "- ✅ $r"; done
+            for r in "${failed[@]}";     do echo "- ❌ $r"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+          for r in "${dispatched[@]}"; do echo "dispatched: $r"; done
+          if [ ${#failed[@]} -gt 0 ]; then
+            for r in "${failed[@]}"; do echo "::error::dispatch failed: $r"; done
+            exit 1
+          fi
+
   verify-images:
     name: "Verify every image shipped"
     needs: [gate, portal-image, migration-image, plugin-test-image, promote]
@@ -1869,7 +2045,8 @@ jobs:
     # 🚨 Every delivery leg is a NEED, not just [gate, promote]. The verdict cannot assert that a
     # publish actually happened while it can only see two of the nine jobs that make it happen.
     needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote,
-            publish-bake, notify-platform-update, verify-images]
+            publish-bake, notify-platform-update, verify-images,
+            plugins-modules, plugins-bake-image, plugins-bake, dispatch-dependents]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2006,6 +2183,10 @@ jobs:
             publish-bake=${{ needs.publish-bake.result }}
             notify-platform-update=${{ needs.notify-platform-update.result }}
             verify-images=${{ needs.verify-images.result }}
+            plugins-modules=${{ needs.plugins-modules.result }}
+            plugins-bake-image=${{ needs.plugins-bake-image.result }}
+            plugins-bake=${{ needs.plugins-bake.result }}
+            dispatch-dependents=${{ needs.dispatch-dependents.result }}
         run: |
           set -euo pipefail
           bad=""
