@@ -178,7 +178,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/nupkgs"
           failed=()
           packed=0
-          attempted=0
           echo "scope=$SCOPE — the selection names $EXPECTED plugin(s)"
           for name in $SELECTED; do
             plugin="plugins/$name"
@@ -191,7 +190,6 @@ jobs:
               failed+=("$name")
               continue
             fi
-            attempted=$((attempted + 1))
             echo "::group::$name"
             if dotnet run --project meshweaver/src/MeshWeaver.Plugin.Build -c Release --no-build -- \
                  "$plugin" \
