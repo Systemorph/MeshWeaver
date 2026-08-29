@@ -127,11 +127,17 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
             snapshot = _clientsCreated.ToArray();
             _clientsCreated.Clear();
         }
+        // 🚨 JOIN each client's teardown before the cluster goes down. A bare Dispose() only STARTS
+        // it: the action-block drain, the routing-stream unregistration and the registrant callbacks
+        // all run afterwards, on other threads — and the very next statement hands the cluster to
+        // OrleansClusterDisposal, which stops the silos those callbacks are still talking to. The
+        // outcome is a use-after-dispose (grain calls onto a stopping silo, continuations resolving
+        // from a torn-down scope) that kills the host mid-run rather than failing a test. The
+        // previous `catch { /* best-effort */ }` also discarded a disposal fault entirely; it is now
+        // written to the test output (via FileOutput, which is safe to call after the test has been
+        // reported — a raw ITestOutputHelper throws there).
         foreach (var client in snapshot)
-        {
-            try { client.Dispose(); }
-            catch { /* best-effort */ }
-        }
+            await client.DisposeAndJoinAsync(FileOutput.WriteLine);
 
         OrleansClusterDisposal.DisposeInBackground(host);
         await base.DisposeAsync();

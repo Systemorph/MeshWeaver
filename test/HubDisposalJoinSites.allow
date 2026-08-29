@@ -1,0 +1,62 @@
+# HubDisposalJoinSites.allow — the un-joined-disposal ratchet.
+#
+# 🚨 THIS FILE IS EMPTY AND MUST STAY EMPTY.
+#
+# Each line WOULD be a harness file (a test base, an xUnit fixture, a tool) that disposes a hub
+# without joining its teardown:
+#
+#     hub.Dispose();          // …and then the caller proceeds
+#
+# `IMessageHub.Dispose()` STARTS the disposal state machine and returns. The action blocks drain,
+# the hosted hubs tear down, the sync streams unregister and the registrants run afterwards, on
+# other threads. A harness that proceeds past that is running concurrently with it — and the next
+# thing a harness always does is one of the three that live teardown cannot survive: dispose the
+# service scope (a continuation resolves from a dead Autofac scope), unload a collectible node ALC
+# (a live thread dereferences freed metadata), or return to xUnit so the next test class starts on
+# top of the previous one's teardown.
+#
+# The failure is not a red test. It is a DEAD PROCESS: MeshWeaver.Plugins run 33236823482, job
+# 99060770662 — the plugin gate exited 139 mid-run while installing packages, right after a burst of
+# `[SYNC_STREAM] Not setting … — stream is disposed` and
+# `Stream …: resubscribe failed … TargetInvocationException`. The gate's FINAL teardown already
+# joined the mesh. What did not join was the render CLIENT, disposed two statements earlier — which
+# is why the file reads as disciplined right up until you check which hub the join names.
+#
+# TO FIX A SITE:  await hub.DisposeAndJoinAsync(report)   — an async teardown (DisposeAsync,
+#                     IAsyncLifetime). SUSPENDS the caller instead of parking its thread, so it
+#                     cannot self-deadlock against the hub's own scheduler.
+#                 hub.DisposeAndJoin(report)              — a genuinely synchronous run boundary
+#                     (a harness's IDisposable.Dispose, a tool's exit path). The sanctioned
+#                     block-join, and nothing else: never from hub- or view-reachable code.
+#                 mesh.TeardownAsync(timeout) / mesh.WaitForDisposalAndIoDrainAsync(...)
+#                     — a MESH ROOT, which additionally needs the IIoPool leaves cancelled+joined
+#                     and the AsyncDisposeQueue quiesced.
+#                 Both helpers are BOUNDED and both SAY it when the bound is hit. A silent hang is
+#                 not an improvement over a crash — and a budget that fires is a hub that is not
+#                 finishing, not a number to raise.
+#
+# WHAT THE SEEDING PASS FOUND (2026-08-29). The covered surface held exactly FOUR un-joined sites,
+# and all four are fixed in the change that added this file — so it is seeded EMPTY, on purpose:
+#
+#   * src/MeshWeaver.Hosting.Monolith.TestBase/MonolithMeshTestBase.cs — DisposeTestClients. On the
+#     ShareMeshAcrossTests path this is the LAST thing that touches the mesh before DisposeAsync
+#     returns and the next [Fact] begins.
+#   * src/MeshWeaver.Hosting.Orleans.TestBase/OrleansTestBase.cs — DisposeAsync. The next statement
+#     hands the cluster to OrleansClusterDisposal, stopping the silos those teardowns still talk to.
+#     Its `catch { /* best-effort */ }` also discarded disposal faults outright.
+#   * src/MeshWeaver.Hosting.Orleans.TestBase/SharedOrleansFixture.cs — CleanupSiloHubsWithPrefix.
+#     Silo-side hubs whose teardown deactivates the owning grain; returning early lets the next
+#     test race a deactivation in flight.
+#   * tools/MeshWeaver.PluginTester/PluginGateRunner.cs — the render client (see the incident above).
+#
+# 🚨 THIS LIST MAY ONLY SHRINK, and it is already at zero. Adding a line is NOT a fix, and
+# HubDisposalJoinRatchetGuard.TotalBudget (0) fails the PR that tries.
+#
+# Scope: src/*.TestBase, src/*.Fixture, tools/, and fixtures under test/. Product code is
+# deliberately OUT — a SynchronizationStream unsubscribing its sync hub, Workspace evicting a client
+# subscription, OrleansRoutingService releasing a pod claim: nothing there is about to tear down the
+# scope or exit, and blocking a hub thread to watch a disposal finish would be the deadlock the
+# reactive rule forbids. Test BODIES are out for the same reason from the other side: their base
+# class joins the mesh, and the mesh's disposal joins its hosted hubs.
+#
+# format: <path>	<count>
