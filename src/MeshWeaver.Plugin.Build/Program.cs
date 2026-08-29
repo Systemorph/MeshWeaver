@@ -175,8 +175,31 @@ foreach (var unit in units)
 
     failures++;
     Console.Error.WriteLine($"  FAILED {unit.NodePath}");
-    foreach (var line in output.Split('\n').Where(l => l.Contains("error CS", StringComparison.Ordinal)).Take(5))
+    // 🚨 Match "error " generally, NOT "error CS". A unit fails for reasons the compiler never
+    // reaches: NU1605 when a referenced package has no build at the framework version, MSB when
+    // the SDK is wrong, a child that dies before emitting a diagnostic at all. Filtering to CS
+    // discarded ALL of those and printed a bare "FAILED", which is how 33 of 33 code-bearing
+    // packages once failed across a whole lane with not one diagnostic anywhere in the log.
+    var diagnostics = output
+        .Split('\n')
+        .Where(l => l.Contains("error ", StringComparison.Ordinal))
+        .Take(5)
+        .ToArray();
+    // Nothing matched: the build still failed, so it said SOMETHING. Print the tail rather than
+    // nothing — an unrecognised failure is exactly the case where the raw output is all there is.
+    if (diagnostics.Length == 0)
+        diagnostics = output
+            .Split('\n')
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .TakeLast(15)
+            .ToArray();
+    foreach (var line in diagnostics)
         Console.Error.WriteLine($"    {line.Trim()}");
+    // A silent child is itself the finding — say so instead of leaving the reader to wonder
+    // whether the output was empty or merely filtered away.
+    if (diagnostics.Length == 0)
+        Console.Error.WriteLine(
+            $"    (dotnet build exited {process.ExitCode} without writing any output)");
     // A closure that resolved short is the likeliest cause, and the declared queries are the
     // only place that shows it — print them rather than making the next person go find the node.
     if (unit.DeclaredSources.Length > 0)
@@ -189,7 +212,7 @@ if (failures > 0)
     return 1;
 }
 
-Console.WriteLine($"all {units.Length} unit(s) built");
+Console.WriteLine($"all {units.Length} unit(s) {(build ? "built" : "emitted")}");
 
 if (packDirectory is null)
     return 0;
