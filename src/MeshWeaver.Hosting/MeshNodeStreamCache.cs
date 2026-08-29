@@ -227,7 +227,49 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // Lazy<T>(ThreadSafety.ExecutionAndPublication) guarantees the factory
     // runs at most once per key, even when multiple GetOrAdd calls race.
     private readonly ConcurrentDictionary<string, Lazy<Entry>> _streams = new();
-    private readonly ConcurrentDictionary<(string Path, string UserId), AccessEntry> _access = new();
+    private readonly ConcurrentDictionary<AccessCacheKey, AccessEntry> _access = new();
+
+    /// <summary>
+    /// The key of the permission-probe cache below.
+    ///
+    /// <para>🚨 <b>It carries every <see cref="AccessContext"/> dimension the evaluation READS,
+    /// not just the identity.</b> <c>PermissionEvaluator.GetEffectivePermissions</c> is not a
+    /// function of <c>(path, userId)</c> alone: it also reads <see cref="AccessContext.IsApiToken"/>
+    /// and the token's claim roles (the API-token capability clamp, which zeroes the WHOLE
+    /// permission set when a bearer context lacks <c>Api</c>), and <see cref="AccessContext.IsHub"/>
+    /// (the hub-credential early return). Keying on <c>(path, userId)</c> alone made two contexts
+    /// for the SAME person share one verdict, and the cache is a process-wide singleton, so the
+    /// two surfaces really do meet in it:</para>
+    ///
+    /// <list type="bullet">
+    /// <item><b>Too permissive (a capability bypass).</b> A portal read caches the unclamped
+    /// permissions; an MCP/bearer read of the same node within the TTL takes that entry and
+    /// never runs the API-token clamp at all — the token is admitted to the API surface the
+    /// clamp exists to keep it off.</item>
+    /// <item><b>Too restrictive (the reported symptom).</b> A bearer read the clamp zeroed caches
+    /// <c>Permission.None</c>; the same user's PORTAL read within the TTL then fails with
+    /// "lacks Read permission", on a node they are plainly granted.</item>
+    /// </list>
+    ///
+    /// <para>Both directions are wrong ANSWERS rather than errors, which is why nothing logged
+    /// and neither surface could be trusted to reproduce the other's result.</para>
+    /// </summary>
+    internal readonly record struct AccessCacheKey(
+        string Path, string UserId, bool IsApiToken, bool IsHub, string ClaimRoles);
+
+    /// <summary>
+    /// Builds the probe key for a context. <paramref name="context"/>'s claim roles are folded in
+    /// ORDER-INDEPENDENTLY (they are a set) so two equivalent tokens still share an entry, while
+    /// two tokens whose claims genuinely differ — one carrying <c>Api</c>, one not — never do.
+    /// </summary>
+    internal static AccessCacheKey BuildAccessCacheKey(string path, AccessContext context) =>
+        new(path,
+            context.ObjectId,
+            context.IsApiToken,
+            context.IsHub,
+            context.Roles is null || context.Roles.Count == 0
+                ? string.Empty
+                : string.Join('\u001f', context.Roles.OrderBy(r => r, StringComparer.Ordinal)));
 
     // 🚨 Idle release of read entries — the read-side counterpart of the write
     // cache's (_updateQueues) sliding expiration. Window/interval come from
@@ -722,7 +764,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             logger.LogDebug(ex, "MeshNodeStreamCache: error disposing update-queue cache");
         }
 
-        // 3. Permission probe cache — drop the cached (path,user)⇒Permission
+        // 3. Permission probe cache — drop the cached (path,user,context)⇒Permission
         //    entries so nothing roots the disposed mesh's identities.
         _access.Clear();
 
@@ -1536,7 +1578,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// </summary>
     private IObservable<Permission> ProbeEffectivePermissions(string path, AccessContext captured)
     {
-        var key = (Path: path, UserId: captured.ObjectId);
+        var key = BuildAccessCacheKey(path, captured);
         return Observable.Defer(() =>
         {
             // TTL cache hit ⇒ short-circuit the evaluation.
