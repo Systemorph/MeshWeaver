@@ -671,7 +671,7 @@ public static class PreWarmServiceCollectionExtensions
 
 /// <summary>
 /// The hosting-layer <see cref="IPrebuiltAssemblyConsumer"/>: adoption for a specific type set
-/// over the deployment's bundle sources — see <see cref="ShippedPrebuiltBundles.SeedForTypes"/>.
+/// over the deployment's bundle sources — see <see cref="ShippedPrebuiltBundles.SeedForTypes(IMessageHub, System.Collections.Generic.IReadOnlyCollection{string}, Microsoft.Extensions.Logging.ILogger, string, string)"/>.
 /// </summary>
 internal sealed class PrebuiltAssemblyConsumer(
     IMessageHub mesh,

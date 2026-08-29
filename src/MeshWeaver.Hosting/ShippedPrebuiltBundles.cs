@@ -196,6 +196,31 @@ public static class ShippedPrebuiltBundles
     public static IObservable<int> SeedForTypes(
         IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
         string? imageDirectory = null, string? publishedRoot = null)
+        => SeedForTypes(mesh, typePaths, logger, imageDirectory, publishedRoot, onCovered: null);
+
+    /// <summary>
+    /// <see cref="SeedForTypes(IMessageHub, IReadOnlyCollection{string}, ILogger, string, string)"/>
+    /// with a per-path witness: <paramref name="onCovered"/> is invoked once for every NodeType
+    /// path this pass BACKED — adopted now, or already current — from the seeder's own pool
+    /// threads, so an implementation must be thread-safe.
+    ///
+    /// <para>🚨 A separate overload rather than one more optional parameter, and every argument
+    /// here is REQUIRED. C# bakes a call's full argument list into the CALL SITE, so widening the
+    /// shipped signature with an optional parameter is a BINARY break: an assembly compiled
+    /// against the old surface still calls the 5-argument form and would fail with
+    /// <c>MissingMethodException</c> at runtime — which in this framework means a prebuilt bundle
+    /// adopted from an earlier build, exactly the artifact this method exists to serve. Leaving
+    /// the overlapping parameters required is what keeps <c>SeedForTypes(mesh, paths, logger)</c>
+    /// from becoming ambiguous between the two.</para>
+    ///
+    /// <para>The count it emits is unchanged and still authoritative; the witness only says WHICH
+    /// paths are behind that count, which is the question a bake shortfall raises
+    /// (<c>BakeSeedConsumer.Shortfall</c>).</para>
+    /// </summary>
+    public static IObservable<int> SeedForTypes(
+        IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
+        string? imageDirectory, string? publishedRoot,
+        Action<string>? onCovered)
         => Observable.Defer(() =>
         {
             if (typePaths.Count == 0)
@@ -217,13 +242,13 @@ public static class ShippedPrebuiltBundles
                         .EnumerateFiles(imageDir, "*.zip", SearchOption.TopDirectoryOnly)
                         .OrderBy(f => f, StringComparer.Ordinal)
                         .ToList(),
-                    logger, paths),
+                    logger, paths, onCovered),
             };
             if (!string.IsNullOrWhiteSpace(publishedRoot))
             {
                 var identityDir = Path.Combine(publishedRoot, PrebuiltAssemblySeeder.LiveFrameworkMvid);
                 seeds.Add(SeedBundles(mesh, identityDir,
-                    () => CompletePublishedBundlesOf(identityDir, logger), logger, paths));
+                    () => CompletePublishedBundlesOf(identityDir, logger), logger, paths, onCovered));
             }
             return seeds.Concat().Aggregate(0, (total, adopted) => total + adopted);
         });
@@ -263,7 +288,7 @@ public static class ShippedPrebuiltBundles
     ///
     /// <para>An EMPTY <see cref="Nodes"/> map means "no record snapshot available", and the
     /// deviation check then answers "deviates" for everything — the install/push caller
-    /// (<see cref="SeedForTypes"/>) supplies paths rather than a query, and it is called precisely
+    /// (<see cref="SeedForTypes(IMessageHub, System.Collections.Generic.IReadOnlyCollection{string}, Microsoft.Extensions.Logging.ILogger, string, string)"/>) supplies paths rather than a query, and it is called precisely
     /// when content just changed, so re-adopting is the right answer there anyway.</para>
     /// </summary>
     private sealed record TypeSnapshot(
@@ -276,7 +301,7 @@ public static class ShippedPrebuiltBundles
     /// caller already knows which types it is consuming for (#1707 slice 3).</summary>
     private static IObservable<int> SeedBundles(
         IMessageHub mesh, string dir, Func<List<string>> enumerateBundles, ILogger? logger,
-        ImmutableHashSet<string>? typePathFilter = null)
+        ImmutableHashSet<string>? typePathFilter = null, Action<string>? onCovered = null)
         => Observable.Defer(() =>
         {
             if (!Directory.Exists(dir))
@@ -351,7 +376,7 @@ public static class ShippedPrebuiltBundles
                             return snapshot
                                 .SelectMany(existing => bundles
                                     .Select(bundle => SeedBundle(
-                                        mesh, pool, store, bundle, existing, logger))
+                                        mesh, pool, store, bundle, existing, logger, onCovered))
                                     .Concat()
                                     .Aggregate(default(SeedTally), (total, one) => total + one)
                                     .Do(tally =>
@@ -420,7 +445,8 @@ public static class ShippedPrebuiltBundles
         IAssemblyStore store,
         string bundlePath,
         TypeSnapshot snapshot,
-        ILogger? logger)
+        ILogger? logger,
+        Action<string>? onCovered = null)
         => pool
             .InvokeBlocking(_ => Plugin.Packaging.BundleReader.ReadManifest(bundlePath))
             .SelectMany(manifest =>
@@ -491,6 +517,13 @@ public static class ShippedPrebuiltBundles
                             .Select(c => c.Entry.NodePath)
                             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
                         var alreadyCurrent = checks.Count - deviating.Count;
+                        // An already-current entry is COVERED — the store holds its bytes under the
+                        // record the mesh already carries. It counts toward Covered, so it must be
+                        // witnessed here too, or the shortfall would name a type that is fine.
+                        if (onCovered is not null)
+                            foreach (var check in checks)
+                                if (check.Current)
+                                    onCovered(check.Entry.NodePath);
 
                         if (deviating.IsEmpty)
                         {
@@ -507,7 +540,7 @@ public static class ShippedPrebuiltBundles
                                 .ReadFile(bundlePath, deviating))
                             .SelectMany(payload => SeedPayloads(
                                 mesh, bundlePath, manifest.FrameworkMvid,
-                                payload.Assemblies, alreadyCurrent, logger));
+                                payload.Assemblies, alreadyCurrent, logger, onCovered));
                     });
             })
             .Catch<SeedTally, Exception>(ex =>
@@ -584,12 +617,18 @@ public static class ShippedPrebuiltBundles
         string? frameworkMvid,
         IReadOnlyList<Plugin.Packaging.BundleReader.Payload> assemblies,
         int alreadyCurrent,
-        ILogger? logger)
+        ILogger? logger,
+        Action<string>? onCovered = null)
         => assemblies
             .Select(a => PrebuiltAssemblySeeder
                 .Seed(mesh, a.NodePath, a.Assembly, a.Pdb, frameworkMvid, logger, a.Dependencies)
                 .Take(1)
                 .Timeout(SeedBudget)
+                .Do(adopted =>
+                {
+                    if (adopted)
+                        onCovered?.Invoke(a.NodePath);
+                })
                 .Catch<bool, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,

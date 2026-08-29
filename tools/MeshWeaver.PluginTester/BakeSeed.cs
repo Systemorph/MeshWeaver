@@ -124,7 +124,7 @@ public sealed record BakeSeed(
 /// The gate's <see cref="IPrebuiltAssemblyConsumer"/>: adoption restricted to ONE bake directory,
 /// with the accounting the gate's postcondition needs.
 ///
-/// <para>🚨 It delegates to <see cref="ShippedPrebuiltBundles.SeedForTypes"/> — the SAME consumption
+/// <para>🚨 It delegates to <see cref="ShippedPrebuiltBundles.SeedForTypes(MeshWeaver.Messaging.IMessageHub, System.Collections.Generic.IReadOnlyCollection{string}, Microsoft.Extensions.Logging.ILogger, string, string)"/> — the SAME consumption
 /// implementation a portal runs — rather than re-reading the bundles itself. A gate that proved a
 /// bake adoptable through a second, gate-only reader would prove nothing about the reader that
 /// actually runs in production; the framework gate, the per-type dependency-record gate and the
@@ -145,10 +145,18 @@ public sealed class BakeSeedConsumer(
     Func<IMessageHub> mesh,
     BakeSeed seed) : IPrebuiltAssemblyConsumer
 {
+    /// <summary>The logger category every adoption line rides — named once so the gate can raise
+    /// exactly this category to Information and nothing else (see GateMesh.Create).</summary>
+    public const string LogCategory = "bake-seed";
+
     private readonly object gate = new();
     // Same comparer as BakeSeed.DeclaredTypePaths and as the seeder's own path set — the three
     // are intersected to reach a verdict and must agree on what "the same node path" means.
     private ImmutableSortedSet<string> requested =
+        ImmutableSortedSet.Create<string>(StringComparer.OrdinalIgnoreCase);
+    // The paths the seeder actually BACKED, witnessed one by one as it backs them. A count alone
+    // cannot answer "which one declined", and that is the only question a shortfall raises.
+    private ImmutableSortedSet<string> covered =
         ImmutableSortedSet.Create<string>(StringComparer.OrdinalIgnoreCase);
     private int adopted;
 
@@ -161,6 +169,13 @@ public sealed class BakeSeedConsumer(
     /// <summary>Assemblies adopted from the bake across the whole run.</summary>
     public int Adopted => Volatile.Read(ref adopted);
 
+    /// <summary>Every NodeType path the seeder BACKED from this bake — adopted now or already
+    /// current. The witness behind <see cref="Shortfall"/>'s named verdict.</summary>
+    public ImmutableSortedSet<string> Covered
+    {
+        get { lock (gate) return covered; }
+    }
+
     /// <summary>The bake this consumer serves.</summary>
     public BakeSeed Seed => seed;
 
@@ -171,7 +186,7 @@ public sealed class BakeSeedConsumer(
             lock (gate)
                 requested = requested.Union(typePaths);
             var hub = mesh();
-            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("bake-seed");
+            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(LogCategory);
             return ShippedPrebuiltBundles
                 .SeedForTypes(hub, typePaths, logger, imageDirectory: seed.Directory,
                     // The gate consumes exactly the bake it was pointed at. Null here falls back to
@@ -179,7 +194,12 @@ public sealed class BakeSeedConsumer(
                     // is empty by construction (its IConfiguration is a bare ConfigurationBuilder)
                     // — so there is only ever one source and "the gate adopted N" stays
                     // attributable to the bake under test.
-                    publishedRoot: null)
+                    publishedRoot: null,
+                    // Witnessed per path, on the seeder's own pool threads — hence the lock.
+                    onCovered: path =>
+                    {
+                        lock (gate) covered = covered.Add(path);
+                    })
                 .Do(count => Interlocked.Add(ref adopted, count));
         });
 
@@ -193,28 +213,54 @@ public sealed class BakeSeedConsumer(
     /// entire consuming half could silently stop working and every run would stay green. That is
     /// the same shape as a skipped CI job wearing a passing tick.</para>
     /// </summary>
-    public string? Shortfall()
+    public string? Shortfall() =>
+        DescribeShortfall(seed.DeclaredTypePaths, Requested, Covered, Adopted, seed.Directory);
+
+    /// <summary>
+    /// <see cref="Shortfall"/>'s verdict as a PURE function of the four facts it rests on, so the
+    /// accounting can be pinned without standing up a mesh (the same seam
+    /// <c>PrebuiltAssemblySeeder.DeclineReason</c> exposes for the same reason).
+    /// </summary>
+    /// <param name="declared">Every path the bake carries bytes for.</param>
+    /// <param name="requested">Every path the install asked the consumer about.</param>
+    /// <param name="covered">Every path the seeder actually backed.</param>
+    /// <param name="adopted">The seeder's own count, reported as-is.</param>
+    /// <param name="directory">The bake directory, for the no-overlap message.</param>
+    public static string? DescribeShortfall(
+        ImmutableSortedSet<string> declared,
+        ImmutableSortedSet<string> requested,
+        ImmutableSortedSet<string> covered,
+        int adopted,
+        string directory)
     {
-        var expected = seed.DeclaredTypePaths.Intersect(Requested);
+        var expected = declared.Intersect(requested);
         if (expected.Count == 0)
-            return seed.DeclaredTypePaths.Count == 0
+            return declared.Count == 0
                 ? null
-                : $"the bake in '{seed.Directory}' declares assemblies for "
-                  + $"{seed.DeclaredTypePaths.Count} NodeType(s), NONE of which this run installed "
+                : $"the bake in '{directory}' declares assemblies for "
+                  + $"{declared.Count} NodeType(s), NONE of which this run installed "
                   + "— the gate judged none of the baked bytes. Bake and gate must be staged from "
                   + "the same tree (declared: "
-                  + $"{string.Join(", ", seed.DeclaredTypePaths.Take(5))}"
-                  + (seed.DeclaredTypePaths.Count > 5 ? ", …" : "") + ").";
-        if (Adopted >= expected.Count)
+                  + $"{string.Join(", ", declared.Take(5))}"
+                  + (declared.Count > 5 ? ", …" : "") + ").";
+        var missing = expected.Except(covered);
+        if (missing.Count == 0)
             return null;
-        // WHICH assembly was declined is not knowable here — ShippedPrebuiltBundles reports a
-        // count, and the per-assembly reason goes to the log where it belongs. So name the SET the
-        // shortfall is inside rather than inventing a per-path verdict this consumer never saw.
-        return $"the gate adopted {Adopted} of {expected.Count} baked assembly(ies) for the types "
-            + $"it installed — {expected.Count - Adopted} were DECLINED and compiled locally, so "
-            + "the gate did not judge the bytes the bake shipped for them. The per-assembly reason "
-            + "is logged by PrebuiltAssemblySeeder (framework identity, or the per-type dependency "
-            + $"record). The bake covered: {string.Join(", ", expected.Take(20))}"
-            + (expected.Count > 20 ? ", …" : "") + ".";
+        // 🚨 NAME them. This used to say WHICH assembly declined "is not knowable here", because
+        // the seeder reported only a COUNT; it now witnesses every path it backs, so the single
+        // question a shortfall raises is answered in the verdict itself. That matters because the
+        // per-assembly reason it deferred to is logged at Information and THE GATE MESH RUNS AT
+        // WARNING — the pointer led to lines the gate never writes, which is why a 1-of-87
+        // shortfall was undiagnosable from a CI log (MeshWeaver.Crm main, red from 2026-08-28
+        // 21:54 for ~12 h with every per-type verdict green). A verdict carries its own evidence.
+        return $"the gate adopted {adopted} of {expected.Count} baked assembly(ies) for the types "
+            + $"it installed — {missing.Count} were DECLINED and compiled locally, so the gate did "
+            + "not judge the bytes the bake shipped for them. DECLINED: "
+            + $"{string.Join(", ", missing.Take(20))}"
+            + (missing.Count > 20 ? ", …" : "")
+            + ". The per-assembly reason (framework identity, the per-type dependency record, or a "
+            + $"payload the bundle's manifest names but does not carry) is logged above under the "
+            + $"'{LogCategory}' category, which the gate raises to Information whenever it consumes "
+            + "a bake; outside the gate, enable that category to read it.";
     }
 }

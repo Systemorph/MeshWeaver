@@ -676,6 +676,19 @@ public static class PluginGateRunner
                 // Warning volume is a handful of lines per run — the trace levels are still opt-in
                 // through MW_LOG_LEVEL.
                 logging.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; });
+                // 🚨 The bake-consumption category is raised to Information whenever a bake is
+                // being consumed — the same argument as the always-attach fix above, one seam
+                // over. A bake shortfall is a RED verdict, and every reason an assembly is
+                // declined (framework identity, the per-type dependency record, a payload the
+                // bundle's manifest names but does not carry) is logged at Information by
+                // ShippedPrebuiltBundles / PrebuiltAssemblySeeder. At the gate's default Warning
+                // those lines are never written, so the verdict pointed at evidence that did not
+                // exist: MeshWeaver.Crm main sat red from 2026-08-28 21:54 for ~12 hours on
+                // "adopted 86 of 87 … 1 were DECLINED" with every per-type verdict green and no
+                // way to tell which assembly, or why, from the job log. The volume is one line
+                // per bundle (34 on that run) — the trace levels stay opt-in via MW_LOG_LEVEL.
+                if (seed is not null)
+                    logging.AddFilter(BakeSeedConsumer.LogCategory, LogLevel.Information);
                 foreach (var category in (Environment.GetEnvironmentVariable("MW_LOG_CATEGORIES") ?? "")
                          .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     logging.AddFilter(category, minLevel);
