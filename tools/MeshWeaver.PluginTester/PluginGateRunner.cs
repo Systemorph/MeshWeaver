@@ -838,32 +838,28 @@ public static class PluginGateRunner
                     output.WriteLine($"[teardown] hosted service stop failed: {ex.Message}");
                 }
             }
-            try
-            {
-                Client.Dispose();
-            }
-            catch (Exception ex)
-            {
-                output.WriteLine($"[teardown] client dispose failed: {ex.Message}");
-            }
-            try
-            {
-                Mesh.Dispose();
-                // Block-join at the run boundary: teardown = synchronous dispose that joins.
-                Mesh.DisposalCompleted
-                    .FirstOrDefaultAsync()
-                    .Timeout(TimeSpan.FromSeconds(30))
-                    .Catch((TimeoutException _) =>
-                    {
-                        output.WriteLine("[teardown] mesh disposal did not complete within 30s");
-                        return Observable.Return(Unit.Default);
-                    })
-                    .Wait();
-            }
-            catch (Exception ex)
-            {
-                output.WriteLine($"[teardown] mesh dispose failed: {ex.Message}");
-            }
+            // 🚨 The CLIENT is block-joined too, not merely disposed. It was the one hub in this
+            // teardown that only had its disposal STARTED: the next statements dispose the Mesh and
+            // then the whole container, so the client's still-draining action block, its
+            // routing-stream unregistration and its sync-stream registrants ran against services
+            // being torn down underneath them. That is the burst of
+            // `[SYNC_STREAM] Not setting … — stream is disposed` + `resubscribe failed …
+            // TargetInvocationException` immediately before the gate died with exit 139 mid-run
+            // (MeshWeaver.Plugins run 33236823482, job 99060770662) — a use-after-dispose, not the
+            // final teardown, which already joined.
+            Client.DisposeAndJoin(
+                message => output.WriteLine($"[teardown] {message}"),
+                TimeSpan.FromSeconds(30));
+            // Block-join at the run boundary: teardown = synchronous dispose that joins.
+            //
+            // This used to splice `.Timeout(30s).Catch(...)` INTO the signal, which races the thing
+            // being waited for and leaves a fault arriving afterwards with no observer — the
+            // unobserved exception ReactiveCompletion's remarks describe (#2301/#2488). The bound is
+            // now outside the signal and the subscription outlives it, so a late disposal fault is
+            // still SAID.
+            Mesh.DisposeAndJoin(
+                message => output.WriteLine($"[teardown] {message}"),
+                TimeSpan.FromSeconds(30));
             try
             {
                 ServiceProvider.GetRequiredService<IoPoolRegistry>().DrainAll();
