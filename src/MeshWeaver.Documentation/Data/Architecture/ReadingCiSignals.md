@@ -110,6 +110,20 @@ git -C <plugins> grep -c '<newKey>' origin/main -- clients/react/src/i18n/string
 ```
 Core `1` / Plugins `0` is this, every time.
 
+🚨 **The guard asserts the mirror is IDENTICAL to the whole server catalog — not that particular
+keys exist.** So a mirror PR that copies "the keys that broke it" is still red, one key short, and
+looks like the fix failing:
+
+```
+FAIL  catalog drift guard > strings.en.json is identical to the server catalog
+AssertionError: expected [ 'about.buildCommit', …(1043) ] to deeply equal [ …(1044) ]
+```
+
+Mirror by **diffing the key sets**, never by copying the keys you happened to notice — a second,
+unrelated key added to core in the meantime is exactly what you will miss. And insert at the
+**text level**: re-serialising the JSON rewrites unrelated `\uXXXX` escapes across the whole file
+and buries the real change.
+
 Note the RN job is **not** a required context in Plugins, so this reds PRs without blocking them —
 which is its own hazard: eleven PRs red on a known-benign check is exactly the noise a *real*
 failure hides in.
