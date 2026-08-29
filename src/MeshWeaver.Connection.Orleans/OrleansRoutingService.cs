@@ -540,7 +540,14 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         }
     }
 
-    private static bool IsTransientFailure(Exception ex)
+    /// <summary>
+    /// A failure worth another attempt: a transport-level blip, an Orleans rejection, or the grain
+    /// directory mid-handoff. Mirrors <c>RoutingGrain.IsTransientFailure</c>; <c>internal</c> so a
+    /// test can pin the PREMISE of the attach retry (issue #2633) rather than only its effect.
+    /// </summary>
+    /// <param name="ex">The exception a cluster call faulted with.</param>
+    /// <returns><c>true</c> when re-attempting is worthwhile.</returns>
+    internal static bool IsTransientFailure(Exception ex)
     {
         return ex is SocketException
             or HttpRequestException
@@ -946,6 +953,87 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     // and that must surface as a Critical, never a silent hang (wedges-to-zero).
     private static readonly TimeSpan StreamingReadinessTimeout = TimeSpan.FromSeconds(120);
 
+    /// <summary>
+    /// How many times the stream ATTACH is re-attempted after a TRANSIENT failure — issue #2633.
+    ///
+    /// <para>🚨 <b>Bounded and loud, never a poll.</b> This is not the readiness gate above (that is
+    /// deterministic ordering); it covers the seconds AFTER the gate opens, in which the subscribe's
+    /// own grain-directory lookup can be refused because cluster membership is mid-handoff. Five
+    /// attempts across <see cref="SubscribeAttachBackoff"/> spend ≈7.75 s — comfortably longer than
+    /// the ~0.5–0.9 s reconnect Orleans' own <c>ConnectionManager</c> promises in the very message
+    /// it fails with, and far short of the caller-visible budgets that sit above this.</para>
+    ///
+    /// <para>Everything <see cref="IsTransientFailure"/> does NOT recognise still gives up on the
+    /// first attempt, and an exhausted budget still ends in the same <c>LogCritical</c> +
+    /// <c>null</c>: a permanent failure must still fail.</para>
+    /// </summary>
+    internal const int SubscribeAttachRetries = 5;
+
+    /// <summary>
+    /// Backoff between stream-attach attempts: 250 ms doubling to a 4 s ceiling.
+    /// </summary>
+    /// <param name="attempt">Zero-based index of the attempt that just failed.</param>
+    /// <returns>How long to wait before the next attempt.</returns>
+    internal static TimeSpan SubscribeAttachBackoff(int attempt) =>
+        TimeSpan.FromMilliseconds(Math.Min(250 * Math.Pow(2, attempt), 4_000));
+
+    /// <summary>
+    /// Test seam (<c>InternalsVisibleTo</c>): the backoff the stream-attach retry uses. Instance
+    /// state, never static — a unit test collapses it to zero so the POLICY (how many attempts, and
+    /// that a non-transient failure gets exactly one) is assertable without a wall clock, while
+    /// production keeps <see cref="SubscribeAttachBackoff"/>.
+    /// </summary>
+    internal Func<int, TimeSpan> AttachBackoff { get; set; } = SubscribeAttachBackoff;
+
+    /// <summary>
+    /// Runs <paramref name="attach"/>, re-attempting it while it fails TRANSIENTLY and the budget
+    /// holds — the retry-with-fresh-resolve shape <c>RoutingGrain.DeliverToGrainObservable</c>
+    /// already applies to the DELIVERY leg, applied here to the SUBSCRIBE leg (issue #2633).
+    ///
+    /// <para>🚨 <b>What this must not become.</b> It is bounded (<paramref name="maxRetries"/>), it
+    /// is loud (<paramref name="onTransientRetry"/> fires on every re-attempt), it never swallows
+    /// the terminal exception — the last one is rethrown to the caller's own failure branch — and it
+    /// never retries a cancellation. A permanent failure is still permanent.</para>
+    ///
+    /// <para><paramref name="backoff"/> is a seam so the policy is testable with no wall clock.</para>
+    /// </summary>
+    /// <typeparam name="T">The attach result (the Orleans subscription handle).</typeparam>
+    /// <param name="attach">The attach attempt; re-invoked from scratch on every retry.</param>
+    /// <param name="isTransient">Predicate deciding whether another attempt is worth making.</param>
+    /// <param name="onTransientRetry">Called with the failure, the 1-based attempt number and the wait.</param>
+    /// <param name="ct">Cancels the wait and stops the budget.</param>
+    /// <param name="maxRetries">Number of RE-attempts after the first (so attempts = this + 1).</param>
+    /// <param name="backoff">Wait before the attempt following a zero-based failed attempt index.</param>
+    /// <returns>The attach result, or the last exception rethrown once the budget is exhausted.</returns>
+    internal static async Task<T> AttachWithBoundedRetryAsync<T>(
+        Func<Task<T>> attach,
+        Func<Exception, bool> isTransient,
+        Action<Exception, int, TimeSpan> onTransientRetry,
+        CancellationToken ct,
+        int maxRetries = SubscribeAttachRetries,
+        Func<int, TimeSpan>? backoff = null)
+    {
+        var delay = backoff ?? SubscribeAttachBackoff;
+        for (var attempt = 0; ; attempt++)
+        {
+            TimeSpan wait;
+            try
+            {
+                return await attach().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                attempt < maxRetries
+                && !ct.IsCancellationRequested
+                && ex is not OperationCanceledException
+                && isTransient(ex))
+            {
+                wait = delay(attempt);
+                onTransientRetry(ex, attempt + 1, wait);
+            }
+            await Task.Delay(wait, ct).ConfigureAwait(false);
+        }
+    }
+
     // Attaches the Orleans memory-stream subscription for <paramref name="address"/> once the
     // Orleans lifecycle reports streaming usable — a deterministic ordering gate on
     // OrleansStreamingReadiness (ServiceLifecycleStage.Active), NOT a retry loop. Touching
@@ -967,48 +1055,91 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 .ToTask(ct)
                 .ConfigureAwait(false);
 
-            var stream = GetStreamProvider(StreamProviders.Memory)
-                .GetStream<IMessageDelivery>(address.ToString());
-            var handle = await stream.SubscribeAsync((v, _) =>
-            {
-                OrleansRouteTrace.Write($"OrleansRoutingService.STREAM_CALLBACK addr={address} msg={v.Message?.GetType().Name} id={v.Id}");
-                // Orleans stream handlers must return Task; the AsyncDelivery callback is a cold
-                // IObservable — Subscribe to run the delivery (the hub queues it), then signal Orleans
-                // the message was accepted. 🚨 onError is mandatory: we return Task.CompletedTask below,
-                // so Orleans considers the item accepted and nothing retries — a faulted delivery here
-                // IS a lost message and must be loud, never an unobserved rethrow.
-                callback.Invoke(v, CancellationToken.None).Subscribe(
-                    _ => { },
-                    ex =>
-                    {
-                        logger.LogError(ex,
-                            "Delivery callback faulted for {MessageType} ({Id}) on stream {Address} — message dropped",
-                            v.Message?.GetType().Name, v.Id, address);
-                        OrleansRouteTrace.Write(
-                            $"OrleansRoutingService.STREAM_CALLBACK FAULTED addr={address} msg={v.Message?.GetType().Name} id={v.Id} ex={ex.Message}");
-                    });
-                return Task.CompletedTask;
-            },
-            ex =>
-            {
-                // 🚨 The transport TELLING us it lost/failed delivery must never be silent
-                // (issue #1081 — a dropped frame on this stream leaves a mirror tracking its
-                // owner at a permanent deficit; the protocol-level BasedOnVersion chain heals
-                // it, but the loss itself must be attributable). Orleans reports pulling-agent
-                // faults and cache-pressure data loss (DataNotAvailableException) through this
-                // callback; without it the default handler swallows the signal.
-                logger.LogError(ex,
-                    "Orleans '{Provider}' stream for {Address} reported a delivery error — frames may have been lost; mirrors recover via the BasedOnVersion resync chain",
-                    StreamProviders.Memory, address);
-                OrleansRouteTrace.Write(
-                    $"OrleansRoutingService.STREAM_ONERROR addr={address} ex={ex.Message}");
-                return Task.CompletedTask;
-            }).ConfigureAwait(false);
+            // 🚨 THE ATTACH IS RETRIED, THE GATE IS NOT — issue #2633.
+            //
+            // Everything below this line runs AFTER the ordering gate has opened, and it is a
+            // CLUSTER call: SubscribeAsync resolves the stream's PubSubRendezvousGrain through
+            // Orleans' grain directory, which is exactly the component that is unstable while
+            // membership changes. Every rolling deploy produces that window and it is over in
+            // seconds — Orleans' own ConnectionManager says so in the message it fails with
+            // ("Unable to connect to S… , will retry after 582.6889ms").
+            //
+            // This used to be a single attempt inside the catch-all below, so one such rejection
+            // LATCHED the hub into "cross-process routing DISABLED" for the rest of its life:
+            // nothing re-attempted, and the loss persisted until the hub re-registered (a circuit
+            // reconnect, or a pod restart). Six per-user losses across three ReplicaSet generations
+            // on memex-cloud, every one of them a transient the delivery leg would have ridden out
+            // — RoutingGrain.DeliverToGrainWithRetry retries this identical exception class. That
+            // inconsistency between the two legs was the whole defect.
+            //
+            // Bounded, loud, and still terminal: see AttachWithBoundedRetryAsync.
+            var handle = await AttachWithBoundedRetryAsync(
+                AttachSubscriptionAsync,
+                IsTransientFailure,
+                (ex, attempt, wait) =>
+                {
+                    OrleansRouteTrace.Write(
+                        $"OrleansRoutingService.SubscribeAsync RETRY addr={address} attempt={attempt} delayMs={wait.TotalMilliseconds} ex={ex.Message}");
+                    // Warning, not Debug: the retry itself is expected during a roll, but a hub whose
+                    // cross-process routing is momentarily unattached is exactly what the Critical
+                    // below used to be the only evidence of. Losing that evidence entirely would trade
+                    // one silent failure for another.
+                    logger.LogWarning(ex,
+                        "Orleans '{Provider}' stream subscription for {Address} could not be attached (attempt {Attempt}/{Max}) — "
+                        + "the grain directory is unstable, which every rolling deploy produces; retrying in {Delay}ms",
+                        StreamProviders.Memory, address, attempt, SubscribeAttachRetries + 1, wait.TotalMilliseconds);
+                },
+                ct,
+                backoff: AttachBackoff).ConfigureAwait(false);
 
             OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync OK addr={address}");
             logger.LogDebug("Orleans '{Provider}' stream subscription attached for {Address}",
                 StreamProviders.Memory, address);
             return handle;
+
+            // The attach ITSELF, re-invoked from scratch on every retry: a fresh GetStream and a
+            // fresh SubscribeAsync, so Orleans re-resolves the rendezvous grain rather than
+            // re-using a reference minted while the directory was mid-handoff. The two handler
+            // lambdas are unchanged from the former single-attempt path.
+            Task<StreamSubscriptionHandle<IMessageDelivery>> AttachSubscriptionAsync() =>
+                GetStreamProvider(StreamProviders.Memory)
+                    .GetStream<IMessageDelivery>(address.ToString())
+                    .SubscribeAsync((v, _) =>
+                    {
+                        OrleansRouteTrace.Write($"OrleansRoutingService.STREAM_CALLBACK addr={address} msg={v.Message?.GetType().Name} id={v.Id}");
+                        // Orleans stream handlers must return Task; the AsyncDelivery callback is a cold
+                        // IObservable — Subscribe to run the delivery (the hub queues it), then signal
+                        // Orleans the message was accepted. 🚨 onError is mandatory: we return
+                        // Task.CompletedTask below, so Orleans considers the item accepted and nothing
+                        // retries — a faulted delivery here IS a lost message and must be loud, never an
+                        // unobserved rethrow.
+                        callback.Invoke(v, CancellationToken.None).Subscribe(
+                            _ => { },
+                            ex =>
+                            {
+                                logger.LogError(ex,
+                                    "Delivery callback faulted for {MessageType} ({Id}) on stream {Address} — message dropped",
+                                    v.Message?.GetType().Name, v.Id, address);
+                                OrleansRouteTrace.Write(
+                                    $"OrleansRoutingService.STREAM_CALLBACK FAULTED addr={address} msg={v.Message?.GetType().Name} id={v.Id} ex={ex.Message}");
+                            });
+                        return Task.CompletedTask;
+                    },
+                    ex =>
+                    {
+                        // 🚨 The transport TELLING us it lost/failed delivery must never be silent
+                        // (issue #1081 — a dropped frame on this stream leaves a mirror tracking its
+                        // owner at a permanent deficit; the protocol-level BasedOnVersion chain heals
+                        // it, but the loss itself must be attributable). Orleans reports pulling-agent
+                        // faults and cache-pressure data loss (DataNotAvailableException) through this
+                        // callback; without it the default handler swallows the signal.
+                        logger.LogError(ex,
+                            "Orleans '{Provider}' stream for {Address} reported a delivery error — frames may have been lost; mirrors recover via the BasedOnVersion resync chain",
+                            StreamProviders.Memory, address);
+                        OrleansRouteTrace.Write(
+                            $"OrleansRoutingService.STREAM_ONERROR addr={address} ex={ex.Message}");
+                        return Task.CompletedTask;
+                    });
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1023,6 +1154,12 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // unobserved exception, no retry into a broken state). The local route registered
             // above stays live, so in-process delivery keeps working; only this hub's
             // cross-process routing is degraded — never a silent silo wedge.
+            //
+            // 🚨 Reaching here is now a REAL give-up, and that is the point of #2633: a transient
+            // directory rejection has already been re-attempted SubscribeAttachRetries times (each
+            // one a Warning naming the attempt), so this Critical no longer fires for a condition
+            // that was over in half a second. A permanent failure still lands here, still latches,
+            // and still says so.
             OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync FAILED addr={address} ex={ex.Message}");
             logger.LogCritical(ex,
                 "Orleans '{Provider}' stream subscription could not be attached for {Address} — cross-process routing for this hub is DISABLED (in-process routing remains active)",
