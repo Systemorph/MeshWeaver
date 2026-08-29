@@ -4,17 +4,125 @@ using MeshWeaver.PluginCatalog;
 
 namespace MeshWeaver.PluginTester;
 
-/// <summary>Outcome of one gate check (compile / render / Tests area) on one NodeType.</summary>
+/// <summary>
+/// Outcome of one gate check (compile / render / Tests area) on one NodeType.
+///
+/// <para>🚨 <b>Three ways for a check not to pass, and they have DIFFERENT OWNERS.</b> They were
+/// one member (<see cref="Failed"/>) until #2454/#2463, and collapsing them is the most expensive
+/// reporting defect this gate can have: a verdict that names the wrong component sends the reader
+/// to the one place the cause provably is not.</para>
+///
+/// <list type="table">
+///   <item><term><see cref="Failed"/></term><description>the check produced a NEGATIVE verdict —
+///     the compiler emitted diagnostics, the area rendered an error, a test went red. <b>Fix the
+///     source.</b></description></item>
+///   <item><term><see cref="Inconclusive"/></term><description>the check produced NO verdict —
+///     nothing answered within the budget. "I did not get an answer" is not "the answer was no".
+///     <b>Investigate the mesh, not the source.</b></description></item>
+///   <item><term><see cref="Unrecorded"/></term><description>the WORK succeeded and the mesh
+///     failed to RECORD it — the bake this run consumed carries the type's assembly, so the
+///     compile is proven, and only the status write was lost. <b>Fix the writer; the content is
+///     fine.</b></description></item>
+/// </list>
+///
+/// <para>Modelled on <c>MeshWeaver.Hosting.PreWarmStatus</c>, which already separates
+/// <c>CompileError</c> from <c>TimedOut</c> / <c>NoSources</c> / <c>UpstreamUnevaluated</c> for
+/// exactly this reason — "I don't know" propagates as "I don't know" there rather than becoming a
+/// verdict. This is the same distinction at the CI gate.</para>
+///
+/// <para>🚨 All three still FAIL the run. A gate that cannot judge must not look like a gate that
+/// passed (the node-repo CI policy's invariants #3/#4), and neither non-verdict is evidence the
+/// content is good. What changes is WHICH CAUSE IS NAMED — see
+/// <c>GateVerdict.Headline</c>.</para>
+/// </summary>
 public enum CheckOutcome
 {
     /// <summary>The check passed.</summary>
     Passed,
 
-    /// <summary>The check failed — the gate exits non-zero.</summary>
+    /// <summary>
+    /// The check produced a NEGATIVE verdict: the compiler emitted diagnostics, the area rendered
+    /// an error control, a test row went red. This is a CONTENT failure — the gate exits non-zero
+    /// and the reader fixes the source.
+    /// </summary>
     Failed,
 
     /// <summary>The check does not apply (e.g. the type declares no Tests area).</summary>
     Skipped,
+
+    /// <summary>
+    /// NO VERDICT: the check never produced an answer within its budget — the mesh wrote no
+    /// terminal compile status, an area never emitted. The gate exits non-zero (an unjudged check
+    /// is not a passing one) but the failure is a TIMEOUT or a WEDGE, not a diagnostic: nothing
+    /// reported an error and no source was found wanting.
+    ///
+    /// <para>🚨 Reported under its own headline label so a CI annotation cannot send the reader to
+    /// diff the PR's source. #2454: a PR whose entire diff was one markdown line, a test ledger
+    /// and a test-list row was annotated <i>"a public API change here broke plugin node
+    /// source"</i> — the gate had observed <c>no terminal compile status within 300s</c> and
+    /// scored it <see cref="Failed"/>.</para>
+    /// </summary>
+    Inconclusive,
+
+    /// <summary>
+    /// The WORK SUCCEEDED and the mesh failed to RECORD it. Reachable only on a run that CONSUMES
+    /// a bake (<see cref="GateOptions.Seed"/>): the bake declares an assembly for this type, so
+    /// the compile is PROVEN by bytes on disk, and what is missing is the mesh-side status write.
+    ///
+    /// <para>🚨 This is INFRASTRUCTURE, never content. #2463: the compiler logged
+    /// <c>ok RolePlay/Scenery</c> and baked four assemblies; six minutes later <c>MergeGuard</c>
+    /// refused the adoption stamp as a stale/reordered cross-hub write, <c>CompileWatcher</c> said
+    /// <c>the write did not converge</c> in as many words — and the gate reported
+    /// <c>compile=FAILED</c>, turning main red and holding a production rollout for ~11 hours on a
+    /// compile that had never failed. Same shape in #2454, where the owning hub was disposed with
+    /// a <c>CreateOrUpdateNodeRequest</c> still in flight.</para>
+    ///
+    /// <para>It still fails the run: the type never settled, so the gate could judge neither its
+    /// render nor its <c>Tests</c> area, and a green here would be a claim about checks that never
+    /// ran. Making it PASS would be a separate, deliberate policy change — it needs the render and
+    /// Tests halves to run against the adopted bytes first.</para>
+    /// </summary>
+    Unrecorded,
+}
+
+/// <summary>Outcome classification helpers shared by the report and the verdict.</summary>
+public static class CheckOutcomes
+{
+    /// <summary>
+    /// Whether <paramref name="outcome"/> fails the gate. Every non-verdict fails: a check that
+    /// produced no answer is not a check that passed. 🚨 Never write <c>!= Failed</c> — that is
+    /// the test that made <see cref="CheckOutcome.Inconclusive"/> and
+    /// <see cref="CheckOutcome.Unrecorded"/> silently green when they were introduced.
+    /// </summary>
+    public static bool Fails(this CheckOutcome outcome) =>
+        outcome is CheckOutcome.Failed or CheckOutcome.Inconclusive or CheckOutcome.Unrecorded;
+
+    /// <summary>
+    /// The headline label for a failing <paramref name="outcome"/> on <paramref name="check"/>:
+    /// the bare check name for a real verdict, a distinct token for each non-verdict — so the ONE
+    /// line CI lifts cannot say "compile" about a compile that succeeded.
+    /// </summary>
+    public static string Label(string check, CheckOutcome outcome) => outcome switch
+    {
+        CheckOutcome.Inconclusive => $"{check}-no-verdict",
+        CheckOutcome.Unrecorded => $"{check}-status-unrecorded",
+        _ => check,
+    };
+
+    /// <summary>
+    /// The one clause that tells the reader WHERE TO LOOK, appended once per non-verdict kind in
+    /// the headline. Null for a real verdict — the check name already says it.
+    /// </summary>
+    public static string? Guidance(CheckOutcome outcome) => outcome switch
+    {
+        CheckOutcome.Inconclusive =>
+            "no result was observed — a timeout or a wedge in the mesh, NOT a compiler "
+            + "diagnostic; investigate the mesh, not the source",
+        CheckOutcome.Unrecorded =>
+            "the work SUCCEEDED and the mesh did not record it — infrastructure, not the "
+            + "content; fix the writer",
+        _ => null,
+    };
 }
 
 /// <summary>The gate results for one NodeType node of a package.</summary>
@@ -53,11 +161,15 @@ public sealed record NodeTypeResult(string Path, string Package)
     /// </summary>
     public string? TestsHost { get; init; }
 
-    /// <summary>True when no gate check failed.</summary>
+    /// <summary>
+    /// True when no gate check failed. 🚨 Reads <see cref="CheckOutcomes.Fails"/>, never
+    /// <c>!= Failed</c>: a check that produced NO verdict
+    /// (<see cref="CheckOutcome.Inconclusive"/> / <see cref="CheckOutcome.Unrecorded"/>) has not
+    /// passed either, and an inequality test against one member silently admits every member
+    /// added after it.
+    /// </summary>
     public bool Success =>
-        Compile != CheckOutcome.Failed
-        && Render != CheckOutcome.Failed
-        && Tests != CheckOutcome.Failed;
+        !Compile.Fails() && !Render.Fails() && !Tests.Fails();
 }
 
 /// <summary>The gate results for one installed package.</summary>
@@ -153,10 +265,18 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
             .ToImmutableList(),
     };
 
+    /// <summary>
+    /// Maps a local outcome onto the wire contract. 🚨 EXHAUSTIVE by construction — a new member
+    /// must be given a wire spelling here, never fall into a catch-all. The previous
+    /// <c>_ =&gt; Skipped</c> would have reported both non-verdicts to the combo verifier as
+    /// "the check does not apply", which is the same collapse one process boundary further out.
+    /// </summary>
     private static GateRunOutcome Map(CheckOutcome outcome) => outcome switch
     {
         CheckOutcome.Passed => GateRunOutcome.Passed,
         CheckOutcome.Failed => GateRunOutcome.Failed,
+        CheckOutcome.Inconclusive => GateRunOutcome.Inconclusive,
+        CheckOutcome.Unrecorded => GateRunOutcome.Unrecorded,
         _ => GateRunOutcome.Skipped,
     };
 
@@ -239,20 +359,29 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
             (package.InstallError is null || verdict.IsKnownDebt(package.Id, "install"))
             && (package.IdempotenceError is null || verdict.IsKnownDebt(package.Id, "idempotence"))
             && package.NodeTypes.All(t =>
-                (t.Compile != CheckOutcome.Failed || verdict.IsKnownDebt(t.Path, "compile"))
-                && (t.Render != CheckOutcome.Failed || verdict.IsKnownDebt(t.Path, "render"))
-                && (t.Tests != CheckOutcome.Failed || verdict.IsKnownDebt(t.Path, "tests")));
+                (!t.Compile.Fails() || verdict.IsKnownDebt(t.Path, "compile"))
+                && (!t.Render.Fails() || verdict.IsKnownDebt(t.Path, "render"))
+                && (!t.Tests.Fails() || verdict.IsKnownDebt(t.Path, "tests")));
         return allKnown ? "DEBT" : "FAIL";
     }
 
     private static string Debt(GateVerdict? verdict, string scope, string check) =>
         verdict is not null && verdict.IsKnownDebt(scope, check) ? " [known-debt]" : "";
 
+    /// <summary>
+    /// The per-type summary token. 🚨 The three not-passing states print DIFFERENTLY — this line
+    /// is what a human scans, and <c>compile=FAILED</c> for a compile that succeeded is the whole
+    /// defect (#2454/#2463).
+    /// </summary>
     private static string Describe(CheckOutcome outcome, string? detail = null) =>
         outcome switch
         {
             CheckOutcome.Passed => detail is null ? "ok" : detail,
             CheckOutcome.Failed => detail is null ? "FAILED" : $"FAILED({detail})",
+            CheckOutcome.Inconclusive =>
+                detail is null ? "NO-VERDICT" : $"NO-VERDICT({detail})",
+            CheckOutcome.Unrecorded =>
+                detail is null ? "UNRECORDED" : $"UNRECORDED({detail})",
             _ => "skipped",
         };
 
