@@ -257,7 +257,8 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
 # ── the decision ─────────────────────────────────────────────────────────────────────────────
 
 def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: str | None,
-           override: list[str] | None, say, publishing: bool = False) -> dict:
+           override: list[str] | None, say, publishing: bool = False,
+           always: frozenset[str] = frozenset()) -> dict:
     all_packages = sorted(node_packages(root))
     universe = ([e["module"] for e in entries] if lane == "modules" else all_packages)
 
@@ -399,6 +400,20 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
                         "packing every module.")
         hits = {k: list(v) for k, v in got.items()}
 
+    # 🚨 THE FLOOR IS NOT A SELECTION. The caller's gates COMPOSE a fixed set of module bundles
+    # (the AI engine that registers Skill/Agent; the carved-out collaboration module) from THIS
+    # run's artifacts, so those bundles must exist on every run regardless of the diff. A
+    # narrowing that dropped them made a Hosting-only PR red on both required gates with "the
+    # modules job's artifact matched nothing" — an input the workflow itself failed to produce
+    # (Plugins #915, 2026-08-29). A floor name the matrix does not carry is a misconfiguration
+    # that must be loud, and the safe bias is the full set.
+    known = {e["module"] for e in entries}
+    unknown_floor = sorted(always - known)
+    if unknown_floor:
+        return full(f"the caller's always-modules floor names {', '.join(unknown_floor)}, which "
+                    "the module matrix does not carry — the floor and the matrix have drifted. "
+                    "Packing every module.")
+
     selected: list[dict] = []
     why: dict[str, str] = {}
     for e in entries:
@@ -408,6 +423,8 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         if hits.get(e["project"]):
             reasons.append("compiled closure reaches " + ", ".join(f"`{p}`"
                                                                    for p in hits[e["project"]]))
+        if e["module"] in always:
+            reasons.append("always built: the caller's gates compose this bundle on every run")
         if reasons:
             why[e["module"]] = "; ".join(reasons)
             selected.append(e)
@@ -580,6 +597,19 @@ def self_test() -> int:
               got["packages"] == ["Alpha", "Beta"] and got["skipped"] == ["Gamma"],
               f"{got['packages']} skipped={got['skipped']}")
 
+        print("the floor — bundles the caller's gates compose on EVERY run:")
+        got = _run(root, "modules", "pull_request", ["docs/guide.md"], extra=["--always", "Acme.Alpha"])
+        check("[modules] a diff reaching nothing still builds the floor, and only the floor",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Alpha"] and got["count"] == 1
+              and "always built" in got["why"].get("Acme.Alpha", ""),
+              f"{got['scope']} {got['selected']} why={got['why']}")
+        got = _run(root, "modules", "pull_request", ["Beta/Board.json"], extra=["--always", "Acme.Alpha"])
+        check("[modules] the floor never shrinks a selection that already reaches it",
+              got["selected"] == ["Acme.Alpha", "Acme.Beta"], f"{got['selected']}")
+        got = _run(root, "modules", "pull_request", ["docs/guide.md"], extra=["--always", "Acme.Nope"])
+        check("[modules] a floor naming a module the matrix lacks is LOUD: full set, reason names it",
+              got["scope"] == "full" and "Acme.Nope" in got["reason"], f"{got['scope']} {got['reason'][:80]}")
+
         print("narrowed — the COMPILED half (the graph affected-modules.py answers ALL for):")
         for label, changed, expect in (
                 ("a module's own project selects only that module", ["src/Acme.Beta/T.cs"],
@@ -750,6 +780,9 @@ def main() -> int:
                    help="this run hands its output to a registry or feed — never narrow. The "
                         "publish path's change detector is the derived version, and a diff that "
                         "misses a unit means that unit silently never ships.")
+    p.add_argument("--always", default="",
+                   help="comma-separated module names the caller's gates compose on EVERY run — "
+                        "a floor the narrowing always keeps (--for modules)")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     args = p.parse_args()
     if args.self_test:
@@ -773,9 +806,10 @@ def main() -> int:
     root = Path(args.root).resolve()
     say = lambda *a: print(*a, file=sys.stderr)  # noqa: E731
     changed = None if args.changed_list is None else [c for c in args.changed_list.split(",") if c]
+    always = frozenset(a.strip() for a in args.always.split(",") if a.strip())
     answer = decide(root, args.lane, entries, args.event,
                     f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
-                    publishing=args.publishing)
+                    publishing=args.publishing, always=always)
 
     # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
     # goes red. Emitting it as an answer is how "build everything, and everything is nothing"
