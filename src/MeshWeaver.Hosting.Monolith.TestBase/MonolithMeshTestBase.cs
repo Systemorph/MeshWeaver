@@ -1253,7 +1253,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// suite. The waits are sequential on purpose — a client that will not finish is named
     /// individually, which is what the trace file needs to be attributable.</para>
     /// </summary>
-    private async Task DisposeTestClients(string testName, Stopwatch sw)
+    private async Task DisposeTestClientsAsync(string testName, Stopwatch sw)
     {
         lock (_requestHubLock) _requestHub = null;
         IMessageHub[] snapshot;
@@ -1399,7 +1399,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // intermediate tests were already slow from the action-block
             // congestion). See ConcurrentRequests deadlock (commit 02dd88f37)
             // and the AI/Threading suite 6-min CI timeout.
-            await DisposeTestClients(testName, sw);
+            await DisposeTestClientsAsync(testName, sw);
             TestPhaseTrace(testName, "DISPOSE_SHARED_SKIP", sw.ElapsedMilliseconds);
             try { await base.DisposeAsync(); }
             catch (Exception ex)
@@ -1416,7 +1416,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // Non-shared path also benefits — Mesh.Dispose disposes all hosted hubs
         // including clients, but doing it via the tracked list is faster and
         // more deterministic (no race against the Mesh's own dispose).
-        await DisposeTestClients(testName, sw);
+        await DisposeTestClientsAsync(testName, sw);
 
         try
         {
