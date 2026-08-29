@@ -2066,6 +2066,7 @@ public static class PackageInstaller
 
     // The node's scalar fields, applying the incoming's non-null values over the current (mirrors
     // UpdateAccordingToSourceNode) — unchanged? The churn fields (LastModified/Version) are ignored.
+    // MainNode is the one field that is NOT null-keeps-state; see the comment on its line.
     private static bool ScalarsUnchanged(MeshNode current, MeshNode incoming) =>
         (incoming.Name ?? current.Name) == current.Name
         && (incoming.NodeType ?? current.NodeType) == current.NodeType
@@ -2073,7 +2074,15 @@ public static class PackageInstaller
         && (incoming.Category ?? current.Category) == current.Category
         && (incoming.State == default ? current.State : incoming.State) == current.State
         && (incoming.PreRenderedHtml ?? current.PreRenderedHtml) == current.PreRenderedHtml
-        && (incoming.Order ?? current.Order) == current.Order;
+        && (incoming.Order ?? current.Order) == current.Order
+        // 🚨 MainNode's "was it set?" test is MeshNode.HasExplicitMainNode, NOT a null check — the
+        // field is non-nullable and defaults to the node's own path, so a plain `?? current` would
+        // read every untouched source as "re-parent to self" and demote every satellite. Missing
+        // here as well as in the merge until #2631, which is why an install could never move one:
+        // this gate skipped the write before the upsert was even asked (a package's _Access grant
+        // carries an AUTHORED mainNode, preserved by ParseNodeRepoFile, and re-scoping it landed
+        // nowhere).
+        && (incoming.HasExplicitMainNode ? incoming.MainNode : current.MainNode) == current.MainNode;
 
     // Content serialized with the hub options ($type discriminators), then CANONICALIZED — object
     // keys sorted recursively — so the comparison is order-insensitive. It must be: on a
