@@ -213,9 +213,9 @@ public record PreWarmOutcome(string TypePath, PreWarmStatus Status, string? Deta
 ///
 /// <para><b>Best-effort — never blocks, never wedges.</b> It runs on a background
 /// subscription after the silo is up (<c>ApplicationStarted</c>), bounds concurrency with
-/// a reactive <c>Merge(maxConcurrency)</c> (Roslyn itself is already serialized on the
-/// Compile IoPool, so this only caps how many activations are in flight), and gives each
-/// type a generous per-type budget. A type that fails to compile, times out, or faults is
+/// a reactive <c>Merge(maxConcurrency)</c> — which is the ONLY bound on how many Roslyn emits
+/// run at once, so do not widen it on the belief that something below serializes them (see the
+/// #890 correction on the sweep default) — and gives each type a generous per-type budget. A type that fails to compile, times out, or faults is
 /// LOGGED and skipped — it does not block the others and it is NOT gated on. If any type
 /// is still compiling when a user arrives, Part 2
 /// (<see cref="NodeTypeEnrichmentHelpers.WaitForCompileSettled"/>) makes that activation
@@ -236,12 +236,21 @@ public static class DynamicTypePreWarmer
     /// measurably harmful): on 2026-07-28 04:05 four compiles were triggered on memex in quick
     /// succession — nothing to do with this warmer, but the identical load shape — and within
     /// minutes SIX plugin roots (Claims, Edu, Underwriting, Chess, Publish, Training) fell to the
-    /// "did not settle" overlay and needed a scale-to-zero to recover. The compiles already
-    /// serialize on the Compile IoPool, so concurrency bought nothing except simultaneous cold
-    /// ACTIVATIONS — the expensive part (109ms/0ms discovery for the same NodeType shape on a fresh
+    /// "did not settle" overlay and needed a scale-to-zero to recover. Concurrency bought
+    /// nothing except simultaneous cold ACTIVATIONS — the expensive part (109ms/0ms discovery for the same NodeType shape on a fresh
     /// mesh, versus 45.20s on memex — issue #686). A dependency ORDER cannot be honoured while its
     /// members run in parallel either, so the sweep is now strictly sequential and the knob is
     /// gone rather than left lying about what it does.</para>
+    ///
+    /// <para>🚨 <b>Correction (#890).</b> Two comments here used to assert that "Roslyn itself is
+    /// already serialized on the Compile IoPool". It is not, and never was. The Compile pool gates
+    /// only the NuGet-restore leaf; <c>MeshNodeCompilationService.OnThreadPool</c> deliberately
+    /// runs the compile on a bare <c>Task.Run</c> — its own comment says "NOT the IoPool … no gate,
+    /// no re-entrancy" — precisely because that pool's semaphore deadlocked the compile against
+    /// itself. So concurrent Roslyn emits over the process-wide
+    /// <c>CompileReferences.Default</c> reference instances ARE reachable. That is a live axis in
+    /// #890, and a false claim of serialization sitting in the one place a reader would check is
+    /// how an axis gets ruled out without ever being tested.</para>
     /// </summary>
     /// <remarks>
     /// 🚨 This is the SERVING-pod default, and on a big mesh it — not Roslyn — is the bake's
