@@ -176,6 +176,20 @@ manufactured by every deploy. Two residual silent-loss windows remain:
 > a different (classification) fix, written up in the roll plan's "What the swap traded" section.
 > Size the pre-release-package decision on the stream tickets alone.
 
+> 🚨 **…and that decision has since been MADE, in the other direction — do not evaluate the
+> pre-release package.** Maintainer direction, 2026-08-27 (recorded on #2320 and #2322):
+> *"we can essentially use mesh nodes for durable streams"*. So the answer to both stream-leg
+> residuals is **not** `Microsoft.Orleans.Streaming.AdoNet` as a second named provider; it is a
+> node-backed stream, on primitives the platform already operates: node content is PG-backed and
+> versioned, `GetMeshNodeStream(path)` is the change feed, the owning hub's action block gives
+> ordered serialised writes, and a late subscriber gets current state rather than a missed edge.
+> There is then no queue grain to lose (#2322) and no producer to register (#2320).
+>
+> The paragraph above is kept because its SIZING is still correct — these are fallback-path tickets.
+> Only its implied next step is superseded. And the design has one hard constraint attached from
+> #2426: the subscriber lifetime must be **derived** (expiry, or eviction on a genuinely terminal
+> `NotFound`), never dependent on an `UnsubscribeRequest` a restarting portal never sends.
+
 Plus one deployment-shaped residual: **the `AzureTables` / Azure Container Apps route still runs a
 memory PubSubStore**, and it is a multi-silo shape. Anyone taking that route to production must pass
 a durable `configurePubSubStore` (Azure Table or Blob grain storage under the name `PubSubStore`)
