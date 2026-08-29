@@ -120,8 +120,15 @@ jobs:
                         --jq '.repositories[].full_name' | sort -u)
           repos=""
           for candidate in $installed; do
-            if gh api "repos/$candidate/contents/.github/workflows/ci.yml" --jq '.content' 2>/dev/null \
-                 | base64 -d 2>/dev/null | grep -q 'meshweaver-framework-released'; then
+            # 🚨 RAW, not base64. `--jq '.content' | base64 -d` works on macOS and FAILS on the
+            # GNU coreutils base64 the runner has: GitHub wraps the payload in newlines, which GNU
+            # rejects as invalid input unless --ignore-garbage. Every probe then fails silently and
+            # EVERY repo looks like a non-subscriber — measured on run 33276934253:
+            # "installed: 33  declaring a receiver: 0", against 5 when the same check is run
+            # locally. The Accept header returns the file directly and has no such trap.
+            if gh api "repos/$candidate/contents/.github/workflows/ci.yml" \
+                 -H "Accept: application/vnd.github.raw" 2>/dev/null \
+                 | grep -q 'meshweaver-framework-released'; then
               repos="$repos$candidate"$'\n'
             fi
           done
