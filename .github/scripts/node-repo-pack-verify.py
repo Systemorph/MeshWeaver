@@ -69,6 +69,11 @@ def read_receipts(directory: Path) -> tuple[dict[str, dict], list[str]]:
     return found, broken
 
 
+def _receipt_stem(broken_entry: str) -> str:
+    """The module a broken-receipt entry is FOR — `X.json` or `X.json (claims module 'Y')` ⇒ X."""
+    return broken_entry.split(".json", 1)[0]
+
+
 def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
            pack_result: str, receipts_dir_exists: bool,
            scope: str = "", declared: set[str] | None = None) -> tuple[int, list[str], list[str]]:
@@ -87,12 +92,16 @@ def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
             return 1, [f"{len(undeclared)} selected module(s) are not in the caller's own "
                        f"`modules:` list — the selection and the matrix disagree: "
                        + ", ".join(undeclared)], []
+        # A sibling's receipt is set aside whether it parsed or not: a corrupt receipt for a module
+        # this call never declared is the sibling's finding, not this call's.
         sibling = sorted(m for m in receipts if m not in declared)
-        if sibling:
+        sibling_broken = sorted(b for b in broken if _receipt_stem(b) not in declared)
+        if sibling or sibling_broken:
             receipts = {m: r for m, r in receipts.items() if m in declared}
-            notes.append(f"{len(sibling)} receipt(s) belong to a sibling module-pack call in this "
-                         f"run (artifacts are run-wide) and are not this call's to count: "
-                         + ", ".join(sibling))
+            broken = [b for b in broken if _receipt_stem(b) in declared]
+            notes.append(f"{len(sibling) + len(sibling_broken)} receipt(s) belong to a sibling "
+                         f"module-pack call in this run (artifacts are run-wide) and are not this "
+                         f"call's to count: " + ", ".join(sibling + sibling_broken))
     got = set(receipts)
 
     if broken:
@@ -243,6 +252,14 @@ def self_test() -> int:
         check("a SELECTED module the caller never declared is refused (selector ≠ matrix)",
               code == 1 and any("not in the caller" in e and "MeshWeaver.Ghost" in e for e in errors),
               f"{errors}")
+        (d / "MeshWeaver.Ghost.json").write_text("{ not json", encoding="utf-8")
+        code, errors, notes = run(d, three, declared=set(three))
+        check("a CORRUPT receipt of a sibling call is the sibling's finding ⇒ pass, named",
+              code == 0 and any("sibling" in n and "MeshWeaver.Ghost" in n for n in notes),
+              f"{errors} {notes}")
+        code, errors, _ = run(d, three, declared=set(three) | {"MeshWeaver.Ghost"})
+        check("…while a corrupt receipt of a DECLARED module still fails",
+              code == 1 and any("could not be read" in e for e in errors), f"{errors}")
         (d / "MeshWeaver.Ghost.json").unlink()
         check("--declared accepts the workflow's JSON entries, plain names, and nothing",
               parse_declared('[{"package": "AI", "module": "MeshWeaver.AI"}, "MeshWeaver.Mcp"]')
@@ -302,8 +319,8 @@ def self_test() -> int:
               "this gate is the only thing standing between a narrowed matrix and a silently "
               "skipped module bundle.")
         return 1
-    print("\n✓ node-repo-pack-verify self-test: 2 green-run assertions, 9 mutations that must go "
-          "red, the sibling-call receipt that must NOT, and 5 empty-selection cases including the "
+    print("\n✓ node-repo-pack-verify self-test: 2 green-run assertions, 10 mutations that must go "
+          "red, the two sibling-call receipts (well-formed and corrupt) that must NOT, and 5 empty-selection cases including the "
           "scope=full contradiction lock — all green.")
     return 0
 
