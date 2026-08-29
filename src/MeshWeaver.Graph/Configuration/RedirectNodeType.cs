@@ -64,8 +64,7 @@ public static class RedirectNodeType
             .AddLayout(layout => layout
                 .WithDefaultArea(MeshNodeLayoutAreas.OverviewArea)
                 .WithView(MeshNodeLayoutAreas.OverviewArea, Overview)
-                .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create)
-                .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
+                .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create));
 
     /// <summary>
     /// The "this moved" page. Reached only when navigation did NOT follow the declaration, so it has
