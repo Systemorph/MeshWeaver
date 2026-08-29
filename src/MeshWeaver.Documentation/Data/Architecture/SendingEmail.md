@@ -138,6 +138,44 @@ point the queued `New` mail goes out by itself, with no data repair and nothing 
 That is the whole reason refusing beats succeeding quietly: mail stamped `Sent` that was never sent
 is indistinguishable from mail that really was sent, and no restart recovers it (#2023).
 
+### 🚨 An INCOMPLETE section refuses at STARTUP, by key (#2636, #2637)
+
+The watcher refusal above is correct and stays. It is also, on its own, **invisible**: its whole
+output is one `Error` line per host start. On memex the `Email` section sat half-set — enabled, with
+`Email:TenantId` and `Email:ClientId` unset — and the portal came up perfectly healthy with mail
+dark. `/health` was 200, the site served, and every invitation, notification and document share
+queued as `New` and stayed there until a human noticed mail had not arrived.
+
+So `MemexConfiguration.ConfigureMemexMesh` now runs `EmailConfigurationGuard.Validate(configuration)`
+at boot, beside `ValidateContentStorageDurability` and `MicrosoftTenant.Validate`. **Two rules, and
+they are deliberately different:**
+
+| The `Email` section is… | Verdict | Why |
+|---|---|---|
+| **absent, or `Email:Enabled=false`** | **starts** — never refused, however blank | Blank is what "no mail on this install" looks like: every local dev run, every test host, every deployment that never wanted mail. Aborting a portal for an unconfigured OPTIONAL integration is #2510 verbatim. |
+| **`Email:Enabled=true` and complete** (either flow) | **starts** | Nothing to refuse. Managed identity needs no credential keys at all. |
+| **`Email:Enabled=true` and INCOMPLETE** | **refuses at startup**, naming every missing key in **both** forms — `Email:TenantId` *and* `Email__TenantId` | Someone MEANT to enable mail. Such an install sends nothing today, so refusing cannot take working mail down — it converts a silent drop into a named configuration error an operator can act on. |
+
+Required when enabled: `Email:MailboxAddress` (both flows — the system send path is
+`/users/{MailboxAddress}/sendMail`), plus `Email:TenantId`, `Email:ClientId`, `Email:ClientSecret`
+for the client-secret flow, or nothing further for `Email:UseManagedIdentity=true`. The credential
+half is `EmailOptions.MissingCredentialKeys()` — the same answer the watchers and `NoOpEmailSender`
+report, deliberately not a second copy. Scope is OUTBOUND; the inbound keys
+(`Email:InboundEnabled`, `Email:WebhookBaseUrl`, `Email:SubscriptionClientState`) are not guarded.
+
+> 🚨 **This does NOT re-open #2510.** That incident was `EmailDeliveryGuard` *activating* the Graph
+> sender from `IHostedService.StartAsync`, whose `ClientSecretCredential` constructor threw
+> `ArgumentException: Invalid tenant id provided` → `Hosting failed to start` — an unactionable
+> message from a container resolution. This verdict is reached from **inert configuration data
+> only**: no container, no credential object, no I/O, so it cannot throw for any reason other than
+> the one it reports. And the **unconfigured** install still starts. What changed is only the
+> severity of the enabled-but-incomplete case, from a log line nobody reads to a named refusal.
+
+⚠️ **Operationally**: an install that is enabled-but-incomplete TODAY will refuse to start once it
+rolls onto a build carrying this guard. Complete the section, or set `Email__Enabled=false`, **before**
+that roll. That is the intended trade — a portal that says mail is on and drops every message is the
+defect this replaces.
+
 🚨 **The order the two questions are asked in is load-bearing** (#2510). The guard runs inside
 `IHostedService.StartAsync`, where a throw aborts the **host**, not a feature. It therefore asks the
 configuration *first*, from data that cannot throw, and only a completely-configured install goes on
