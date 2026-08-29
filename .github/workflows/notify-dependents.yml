@@ -106,14 +106,33 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The subscriber set, read at run time. Not a variable, not a literal in this file.
-          repos=$(gh api --paginate /installation/repositories \
-                    --jq '.repositories[].full_name' | sort -u)
+          # 🚨 INSTALLATION IS NOT SUBSCRIPTION. The App is installed org-wide for OTHER reasons
+          # (GitSync), so its installation list is 33 repositories — customer and solution repos
+          # included. Measured on the first dry run (run 33275415742): 33 installed, and exactly
+          # FIVE declare a `meshweaver-framework-released` receiver. Dispatching to the other 28
+          # is not harmful — a repo with no receiver runs nothing — but it is wrong, unreviewable,
+          # and it makes "who is subscribed?" unanswerable from the release side.
+          #
+          # So subscription is DISCOVERED: a repo is a subscriber iff its ci.yml declares the
+          # event. Still no hand-maintained list — adding a receiver to a repo subscribes it, which
+          # is the same property the installation list was reached for, minus the over-reach.
+          installed=$(gh api --paginate /installation/repositories \
+                        --jq '.repositories[].full_name' | sort -u)
+          repos=""
+          for candidate in $installed; do
+            if gh api "repos/$candidate/contents/.github/workflows/ci.yml" --jq '.content' 2>/dev/null \
+                 | base64 -d 2>/dev/null | grep -q 'meshweaver-framework-released'; then
+              repos="$repos$candidate"$'\n'
+            fi
+          done
+          repos=$(printf '%s' "$repos" | sed '/^$/d' | sort -u)
+          echo "installed: $(echo "$installed" | wc -l | tr -d ' ')  declaring a receiver: $(echo "$repos" | sed '/^$/d' | wc -l | tr -d ' ')"
 
           if [ -z "$repos" ]; then
-            echo "::error::the dispatch App is installed on NO repositories, so this release"
-            echo "::error::notified nobody. Install it on the plugin repos — a fan-out that reaches"
-            echo "::error::zero subscribers is exactly the silent no-op this job replaced."
+            echo "::error::NO repository declares a meshweaver-framework-released receiver, so this"
+            echo "::error::release notified nobody. Either the App lost access, or every receiver was"
+            echo "::error::removed. A fan-out reaching zero subscribers is exactly the silent no-op"
+            echo "::error::this job replaced, so it is an error rather than a quiet success."
             exit 1
           fi
 
