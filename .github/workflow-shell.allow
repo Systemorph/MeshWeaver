@@ -1,0 +1,26 @@
+# ── Waivers for .github/scripts/check-workflow-shell.py ─────────────────────────────────────────
+#
+# A ONE-WAY RATCHET. Every entry needs its diagnosis in the `#` lines directly above it (a
+# reasonless entry FAILS the gate), and an entry that no longer matches anything FAILS too — so
+# this list can only ever shrink. Adding a line is a diagnosis, not a fix.
+#
+# 🚨 It is seeded with ONE entry, and that is deliberate. The first run of this gate found 22
+# findings; 21 of them were REMEDIED in the same change rather than waived, because for a
+# genuinely-intended fail-open the remedy costs nothing: dropping `2>/dev/null` leaves the control
+# flow byte-for-byte identical and restores the evidence. That is precisely what would have turned
+# MeshWeaver#2642 from a 33-hour misdiagnosis into a 10-minute one — az's own
+# "In function contains(), invalid type for value: None" would have been printed directly above the
+# step's confident, wrong conclusion that promote had never armed a release.
+#
+# Format:  <check> <path> <hash>       (the gate prints the exact line to paste)
+
+# publish-bake-bundles.sh: the ABSENCE of $DEST/$SOURCE_MARKER is a NORMAL, expected state — a
+# publication sealed before source-marker recording existed simply has no such file, and this
+# script's whole job at that point is to notice that and republish. So `az storage file download`
+# failing here is the ordinary path, not an incident, and it runs once per module per publish (~40
+# times a run). Letting its stderr through would print an Azure "ResourceNotFound" storm on every
+# healthy re-publish, which is how a log stops being read. The empty answer is also NOT taken as
+# authoritative: the next two lines test it against $SOURCE_SHA and fall through to republishing
+# when it does not match, so a genuine credential failure degrades to "publish again", never to
+# "already published; skipping".
+swallow .github/scripts/publish-bake-bundles.sh 67fc06cddcb7
