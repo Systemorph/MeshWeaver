@@ -477,7 +477,7 @@ public static class VersionLayoutArea
 
     /// <summary>
     /// Whether the redline can speak for this node: the projection reads markdown SPECIFICALLY
-    /// (<see cref="ChangeProjection.CleanTextOf"/>), so a type whose prose lives in some other text
+    /// (the collaboration module's <c>ChangeProjection.CleanTextOf</c>), so a type whose prose lives in other text
     /// field is prose for the diff editor's syntax highlighting but would redline nothing.
     /// <para>
     /// A Markdown node counts even when it is EMPTY at both ends — an emptied or not-yet-written

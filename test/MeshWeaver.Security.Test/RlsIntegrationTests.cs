@@ -513,39 +513,6 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         permissions2.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export | Permission.Compile); // Editor
     }
 
-    [Fact]
-    public async Task CreateComment_RequiresCommentPermission()
-    {
-        // Arrange — "commenter"/"viewer_cmt" seeded statically with Commenter/Viewer at parentPath.
-        var client = GetClient();
-
-        const string commenterId = "commenter";
-        const string viewerId = "viewer_cmt";
-        const string parentPath = "rls/comments";
-
-        // Act - commenter creates a Comment node
-        var commentNode = new MeshNode("Comment1", parentPath)
-        {
-            Name = "Test Comment",
-            NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Text = "Hello", Author = commenterId }
-        };
-        var commentResponse = await client.Observe(new CreateNodeRequest(commentNode) { CreatedBy = commenterId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
-
-        // Viewer tries to create a Comment node
-        var viewerComment = new MeshNode("Comment2", parentPath)
-        {
-            Name = "Viewer Comment",
-            NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Text = "Denied", Author = viewerId }
-        };
-        var viewerResponse = await client.Observe(new CreateNodeRequest(viewerComment) { CreatedBy = viewerId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
-
-        // Assert
-        commentResponse.Message.Success.Should().BeTrue("Commenter has Comment permission");
-        viewerResponse.Message.Success.Should().BeFalse("Viewer lacks Comment permission");
-        viewerResponse.Message.RejectionReason.Should().Be(NodeCreationRejectionReason.ValidationFailed);
-    }
 
     [Fact]
     public async Task CreateNode_RequiresUpdatePermission()
@@ -579,27 +546,6 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         commenterResponse.Message.RejectionReason.Should().Be(NodeCreationRejectionReason.ValidationFailed);
     }
 
-    [Fact]
-    public async Task EditorCanComment_UpdateImpliesComment()
-    {
-        // Arrange — "editor_commenter" seeded statically with Editor at parentPath.
-        var client = GetClient();
-
-        const string editorId = "editor_commenter";
-        const string parentPath = "rls/editor_comment";
-
-        // Act - editor creates a Comment node
-        var commentNode = new MeshNode("Comment1", parentPath)
-        {
-            Name = "Editor Comment",
-            NodeType = CommentNodeType.NodeType,
-            Content = new Comment { Text = "Editor can comment", Author = editorId }
-        };
-        var response = await client.Observe(new CreateNodeRequest(commentNode) { CreatedBy = editorId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
-
-        // Assert
-        response.Message.Success.Should().BeTrue("Editor has Update which implies Comment permission");
-    }
 
     [Fact]
     public async Task CreateNode_Anonymous_NoCreatedBy_Fails()

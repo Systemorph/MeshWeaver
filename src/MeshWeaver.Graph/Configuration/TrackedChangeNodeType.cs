@@ -1,52 +1,38 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.Messaging;
-using MeshWeaver.Graph.Security;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
-using MeshWeaver.Mesh.Services;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// LEGACY configuration for persisted TrackedChange satellite nodes.
-/// <para>
-/// 🚨 Nothing writes these any more — tracked changes are a view model projected from the version
-/// history (<see cref="ChangeProjection"/>). This registration survives for the deprecation window
-/// so <c>_Tracking</c> rows written by older builds stay readable and permission-delegating (the
-/// central Collaboration plugin keeps a legacy accept/reject reader). It goes away together with
-/// <see cref="AnnotationExtensions.TrackingPartition"/> and the <c>_Tracking → annotations</c> table
-/// mapping once no deployment carries such rows.
-/// </para>
-/// TrackedChange nodes are satellite entities — excluded from search and create contexts.
-/// Access is delegated to the MainNode (parent) via SatelliteAccessRule.
+/// The platform-side DECLARATION of the legacy <c>TrackedChange</c> satellite node type.
+///
+/// <para>🚨 Nothing writes these any more — tracked changes are a view model projected from the
+/// version history by the collaboration module. The declaration survives here for the same reason
+/// <see cref="CommentNodeType"/>'s does: <c>_Tracking</c> rows written by older builds must stay
+/// installable and readable on a mesh that does not carry the module.</para>
 /// </summary>
 public static class TrackedChangeNodeType
 {
-    /// <summary>
-    /// The NodeType value used to identify tracked change nodes.
-    /// </summary>
+    /// <summary>The NodeType value identifying tracked change nodes.</summary>
     public const string NodeType = "TrackedChange";
 
     /// <summary>
-    /// Registers the built-in "TrackedChange" MeshNode on the mesh builder.
+    /// Registers the built-in <c>TrackedChange</c> MeshNode on the mesh builder.
     /// </summary>
+    /// <typeparam name="TBuilder">The concrete mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder to register on.</param>
+    /// <returns>The same builder, for chaining.</returns>
     public static TBuilder AddTrackedChangeType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
-        builder.ConfigureServices(services =>
-        {
-            services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SatelliteAccessRule(NodeType, sp.GetRequiredService<IMessageHub>()));
-            return services;
-        });
         return builder;
     }
 
     /// <summary>
-    /// Creates a MeshNode definition for the TrackedChange node type.
+    /// Creates the MeshNode definition for the <c>TrackedChange</c> node type.
     /// </summary>
+    /// <returns>The node definition.</returns>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "TrackedChange",
@@ -54,7 +40,7 @@ public static class TrackedChangeNodeType
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
         HubConfiguration = config => config
-            .AddMeshDataSource(source => source
-                .WithContentType<TrackedChange>())
+            .AddMeshDataSource(source => source.WithContentType<MeshWeaver.Mesh.TrackedChange>())
+            .ApplyNodeHubContributions(NodeType)
     };
 }

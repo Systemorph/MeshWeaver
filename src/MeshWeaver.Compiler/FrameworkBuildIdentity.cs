@@ -134,7 +134,13 @@ public static class FrameworkBuildIdentity
         "MeshWeaver.Layout",
         "MeshWeaver.Maps",
         "MeshWeaver.Markdown",
-        "MeshWeaver.Markdown.Collaboration",
+        // MeshWeaver.Markdown.Collaboration left the content surface with the collaboration
+        // carve-out, for the same reason MeshWeaver.AI did above: comments and the tracked-change
+        // view model are the MeshWeaver.Markdown.Collaboration MODULE now, composed into content compiles
+        // per-mesh via CompileReferences.ComposeWithModules — never part of the framework identity.
+        // In-mesh content that binds ChangeRendering / CommentNodeType (the Collaboration package's
+        // own Review sources) compiles wherever that module is installed, and it is required by
+        // the pre-installed Essentials package so every portal lands it.
         "MeshWeaver.Mesh.Contract",
         "MeshWeaver.Mesh.Operations",
         "MeshWeaver.Messaging.Contract",

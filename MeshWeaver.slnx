@@ -55,7 +55,6 @@
     <Project Path="src/MeshWeaver.Kernel/MeshWeaver.Kernel.csproj" />
     <Project Path="src/MeshWeaver.Layout/MeshWeaver.Layout.csproj" />
     <Project Path="src/MeshWeaver.Markdown/MeshWeaver.Markdown.csproj" />
-    <Project Path="src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj" />
     <Project Path="src/MeshWeaver.Markdown.Export.Contract/MeshWeaver.Markdown.Export.Contract.csproj" />
     <Project Path="src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
     <Project Path="src/MeshWeaver.Mesh.Operations/MeshWeaver.Mesh.Operations.csproj" />
@@ -101,7 +100,6 @@
     <Project Path="test/MeshWeaver.Hosting.Test/MeshWeaver.Hosting.Test.csproj" />
     <Project Path="test/MeshWeaver.Hub.Fixture/MeshWeaver.Hub.Fixture.csproj" />
     <Project Path="test/MeshWeaver.Kernel.Test/MeshWeaver.Kernel.Test.csproj" />
-    <Project Path="test/MeshWeaver.Markdown.Collaboration.Test/MeshWeaver.Markdown.Collaboration.Test.csproj" />
     <Project Path="test/MeshWeaver.PluginImage.Test/MeshWeaver.PluginImage.Test.csproj" />
     <Project Path="test/MeshWeaver.PluginTester.Test/MeshWeaver.PluginTester.Test.csproj" />
     <Project Path="test/MeshWeaver.Auth.Test/MeshWeaver.Auth.Test.csproj" />

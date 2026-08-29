@@ -40,7 +40,7 @@ public static class ApiTokenNodeType
         // Same pattern as Thread → Permission.Thread and Comment → Permission.Comment.
         //
         // Register all ApiToken domain + message types in the hub's type registry so
-        // they serialize correctly across silos (Orleans). Mirrors CommentNodeType /
+        // they serialize correctly across silos (Orleans). Mirrors the collaboration module's Comment /
         // ThreadNodeType which do the same — without this, cross-silo CreateNodeRequest
         // for nodeType=ApiToken fails with "NodeType 'ApiToken' is not registered"
         // because the receiving silo can't deserialize the typed payload.
