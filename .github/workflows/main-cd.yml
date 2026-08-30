@@ -1766,9 +1766,19 @@ jobs:
           az acr login --name meshweaver
           # The digest of mw-plugin-test:main — the exact pin (MW_IMAGE_DIGEST) the plugin repos
           # compile against. Resolved HERE so the mesh side needs no registry credential.
-          DIGEST=$(docker buildx imagetools inspect meshweaver.azurecr.io/mw-plugin-test:main --format '{{json .Manifest.Digest}}' | tr -d '"')
-          [ -n "$DIGEST" ] || { echo "::error::could not resolve mw-plugin-test:main digest — the release event would name a pin that does not exist"; exit 1; }
-          BODY=$(printf '{"event":"platform-build","repo":"%s","sha":"%s","version":"%s","image":"meshweaver.azurecr.io/mw-plugin-test","digest":"%s"}' "$GITHUB_REPOSITORY" "$SHA" "$V_PLUGIN" "$DIGEST")
+          # 🚨 Resolved from THIS run's version tag, never `:main` — `main` moves the moment another run
+          # promotes, so a fact read a minute later could name a set this run did not build. The
+          # promote job tags every image of the set with the version, so the three digests below are
+          # the ONE set the receivers should pin together (Plugins #944: the PlatformPinUpdater moves
+          # the tester AND the portal pin from one fact).
+          resolve() { docker buildx imagetools inspect "meshweaver.azurecr.io/$1:$V_PLUGIN" --format '{{json .Manifest.Digest}}' | tr -d '"'; }
+          DIGEST=$(resolve mw-plugin-test)
+          [ -n "$DIGEST" ] || { echo "::error::could not resolve mw-plugin-test:$V_PLUGIN digest — the release event would name a pin that does not exist"; exit 1; }
+          PORTAL_DIGEST=$(resolve memex-portal-ai)
+          [ -n "$PORTAL_DIGEST" ] || { echo "::error::could not resolve memex-portal-ai:$V_PLUGIN digest — the release event would name a portal pin that does not exist"; exit 1; }
+          MIGRATION_DIGEST=$(resolve memex-migration)
+          [ -n "$MIGRATION_DIGEST" ] || { echo "::error::could not resolve memex-migration:$V_PLUGIN digest — the release event would name a migration pin that does not exist"; exit 1; }
+          BODY=$(printf '{"event":"platform-build","repo":"%s","sha":"%s","version":"%s","image":"meshweaver.azurecr.io/mw-plugin-test","digest":"%s","portalImage":"meshweaver.azurecr.io/memex-portal-ai","portalDigest":"%s","migrationImage":"meshweaver.azurecr.io/memex-migration","migrationDigest":"%s"}' "$GITHUB_REPOSITORY" "$SHA" "$V_PLUGIN" "$DIGEST" "$PORTAL_DIGEST" "$MIGRATION_DIGEST")
           SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
           # `|| code=000` is not defensive noise: `run:` is `bash -e`, so a curl that fails at the
           # TRANSPORT level (DNS, TLS, connection refused) would kill the step before the verdict
