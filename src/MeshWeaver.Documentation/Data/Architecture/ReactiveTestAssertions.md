@@ -108,7 +108,9 @@ public async Task ObserveQuery_EmitsInitialResults()            // ← async Tas
 
 `.Emit()` and `.Match()` **return** the matched value, so `var x = await obs.Should().Match(...)` replaces a hand-rolled `var x = await obs.FirstAsync().ToTask()` one-for-one.
 
-> **The wait is the sanctioned test-edge Rx→Task bridge.** The source is `SubscribeOn`'d onto `TaskPoolScheduler`, filtered, `Take(1)`'d, bounded with `Timeout` (throwing a private sentinel so the assertion's own timeout stays distinguishable from a `TimeoutException` raised by the *source*), and bridged via `.ToTask()`. Nothing blocks a thread. A timed-out assertion reports what the stream actually emitted — "emitted nothing at all" versus "last of N emissions was …" — because those two failures have opposite fixes.
+> 🚨 **There is no sanctioned Rx→Task bridge — not even at the test edge** (2026-08-30). The wait goes through `ObservableAwait.Await(ct)` / `ReactiveCompletion.ObserveCompletion`, which queue the continuation instead of resuming it inline on the signalling thread.
+>
+> **How the wait is composed.** The source is `SubscribeOn`'d onto `TaskPoolScheduler`, filtered, `Take(1)`'d, bounded with `Timeout` (throwing a private sentinel so the assertion's own timeout stays distinguishable from a `TimeoutException` raised by the *source*), and bridged via `.ToTask()`. Nothing blocks a thread. A timed-out assertion reports what the stream actually emitted — "emitted nothing at all" versus "last of N emissions was …" — because those two failures have opposite fixes.
 
 ---
 

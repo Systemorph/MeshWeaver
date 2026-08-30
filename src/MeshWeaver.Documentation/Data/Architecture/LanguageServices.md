@@ -155,7 +155,7 @@ Speculative compiles do **not** cache — every `LspCheckNode` call rebuilds the
 
 > 🚨 **Never `Observable.FromAsync` here — or anywhere in `src/`.** A bare `FromAsync` runs the function's synchronous prologue on the *subscribing* thread and applies no concurrency bound; under a blocking subscriber it deadlocks, because `SubscribeOn` moves only the subscribe, not the `await` continuation. The pool runs the leaf with `ConfigureAwait(false)` behind a gate, which is what makes it safe. See [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling).
 
-MCP and agent tool surfaces bridge to `Task<string>` via `.FirstAsync().ToTask()`, which is the sanctioned exception for external-protocol adapters (see [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls)). No `await` anywhere in hub-reachable code.
+MCP and agent tool surfaces must return `Task<string>` because their SDK signature demands it — they compose reactively and settle through `ObserveCompletion`, never `.ToTask()` (forbidden everywhere since 2026-08-30). Historically this read `.FirstAsync().ToTask()`, which was the sanctioned exception for external-protocol adapters (see [AsynchronousCalls](/Doc/Architecture/AsynchronousCalls)). No `await` anywhere in hub-reachable code.
 
 ## What's Deferred
 
