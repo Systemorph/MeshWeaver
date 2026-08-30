@@ -5,7 +5,7 @@ using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
+using System.Reactive.Threading.Tasks;  // Task<T>.ToObservable() — the SAFE direction; nothing here bridges the other way.
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
@@ -814,8 +814,17 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
         if (asyncDisposeQueue is not null)
             // The ONE place a Task appears, and only because the queue's contract is Task-shaped —
-            // the sanctioned boundary conversion, with the body above staying reactive.
-            asyncDisposeQueue.Enqueue(_ => teardown.DefaultIfEmpty(Unit.Default).LastAsync().ToTask());
+            // the body above stays reactive. 🚨 The wait is ObserveCompletion, never Rx's own
+            // observable-to-Task bridge (maintainer, 2026-08-30: "no ToTask ever"): the queue
+            // awaits this, and Rx's bridge would resume the DRAIN inline on the thread that
+            // finished the unsubscribe, running the rest of the teardown queue there.
+            asyncDisposeQueue.Enqueue(_ => teardown
+                .DefaultIfEmpty(Unit.Default)
+                .LastAsync()
+                .ObserveCompletion(
+                    ex => logger.LogDebug(ex,
+                        "Orleans stream teardown for {Address} faulted AFTER the wait settled — "
+                        + "reported, not orphaned", address)));
         else
             // No queue registered (a bare mesh in a unit test): there is no async teardown to join,
             // so the previous detached behaviour is correct rather than a regression.
@@ -1051,9 +1060,19 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // The readiness signal is an AsyncSubject the Orleans lifecycle completes at Active —
             // the source observable IS the gate (no polling, no timer). Late subscribers get the
             // completed signal replayed, so hubs registered after startup pass straight through.
+            // 🚨 ObserveCompletion, never Rx's own observable-to-Task bridge (maintainer,
+            // 2026-08-30: "no ToTask ever"). Ready is completed by the Orleans lifecycle at
+            // ServiceLifecycleStage.Active — on the SILO'S OWN lifecycle thread. Rx's bridge
+            // resumes its awaiter inline on the signalling thread, so everything below (a
+            // cluster call that resolves a PubSubRendezvousGrain through the grain directory)
+            // would run on the lifecycle thread that is still bringing the silo up.
             await serviceProvider.GetRequiredService<OrleansStreamingReadiness>().Ready
                 .Timeout(StreamingReadinessTimeout)
-                .ToTask(ct)
+                .ObserveCompletion(
+                    ex => logger.LogDebug(ex,
+                        "Orleans streaming readiness faulted AFTER the wait settled for {Address} — "
+                        + "reported, not orphaned", address),
+                    ct)
                 .ConfigureAwait(false);
 
             // 🚨 THE ATTACH IS RETRIED, THE GATE IS NOT — issue #2633.
@@ -1092,11 +1111,18 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 },
                 backoff: AttachBackoff)
                 // The enclosing method is async by construction — RegisterStream stores the Task so
-                // teardown can await the handle it produced and unsubscribe it. ToTask(ct) is the one
-                // bridge, and it is where cancellation lands: a teardown that cancels mid-budget
-                // surfaces as OperationCanceledException into the catch below, exactly as the
-                // pre-#2633 single attempt did.
-                .ToTask(ct).ConfigureAwait(false);
+                // teardown can await the handle it produced and unsubscribe it. 🚨 The wait is
+                // ObserveCompletion, never Rx's own observable-to-Task bridge (maintainer,
+                // 2026-08-30: "no ToTask ever"); it is where cancellation lands: a teardown that
+                // cancels mid-budget surfaces as OperationCanceledException into the catch below,
+                // exactly as the pre-#2633 single attempt did. The retry composition above CAN
+                // emit and then fault, which is precisely the shape a settled Task drops — so the
+                // error arm stays attached here.
+                .ObserveCompletion(
+                    ex => logger.LogWarning(ex,
+                        "Orleans stream attach for {Address} faulted AFTER the wait settled — "
+                        + "reported, not orphaned", address),
+                    ct).ConfigureAwait(false);
 
             OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync OK addr={address}");
             logger.LogDebug("Orleans '{Provider}' stream subscription attached for {Address}",

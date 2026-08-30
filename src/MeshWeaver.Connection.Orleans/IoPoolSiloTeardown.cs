@@ -1,7 +1,7 @@
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Runtime;
@@ -103,20 +103,25 @@ public sealed class IoPoolSiloTeardown(
     //
     // 🚨 THE DEADLOCK QUESTION FIRST — "whose thread am I blocking, and does the signal I am
     // waiting for need it?" Here: NOBODY'S. This method composes and RETURNS; it never awaits, so
-    // no scheduler is held while registry.Disposed is pending. The bridge sits at the OUTERMOST
-    // edge, which is the whole rule: a .ToTask() that is HANDED to the API demanding it is safe,
-    // a .ToTask() that you then `await` in the middle of your own work is how #2301 parked the
-    // grain scheduler its next wait needed. (/async skill, Rule 1a: subscribe, hand back a Task,
-    // do not await inside the turn.)
+    // no scheduler is held while registry.Disposed is pending. The wait sits at the OUTERMOST
+    // edge, which is the whole rule: a Task that is HANDED to the API demanding it is safe, a Task
+    // that you then `await` in the middle of your own work is how #2301 parked the grain scheduler
+    // its next wait needed. (/async skill, Rule 1a: subscribe, hand back a Task, do not await
+    // inside the turn.)
     //
-    // The two secondary properties, both checked:
-    //   • every fault is observed BEFORE the bridge — the .Catch below is inside the composition,
-    //     so nothing can fault past .ToTask() into an unobserved task;
-    //   • IoPoolRegistry.Disposed is an AsyncSubject<int>: it fires ONCE and replays. It cannot
-    //     emit a value and then fault, so there is no "late fault after the interesting value"
-    //     for the settled Task to miss. (Where a signal CAN do that — anything composed, merged,
-    //     or polled — use ReactiveCompletion.ObserveCompletion, which keeps its error arm
-    //     attached after the task settles AND completes with RunContinuationsAsynchronously.)
+    // 🚨 The wait is ReactiveCompletion.ObserveCompletion, never Rx's own observable-to-Task
+    // bridge (maintainer, 2026-08-30: "no ToTask ever"). This paragraph used to argue the bridge
+    // was safe HERE because IoPoolRegistry.Disposed is an AsyncSubject<int> that fires once and
+    // cannot fault afterwards — but the signal handed to the wait is not that subject, it is the
+    // COMPOSITION below (.Timeout / .Catch / .Do / .Select), and this file's own rule already
+    // said: where a signal can emit and then fault — anything composed, merged, or polled — use
+    // ObserveCompletion, which keeps its error arm attached after the task settles AND completes
+    // with RunContinuationsAsynchronously so Orleans' shutdown continuation is never resumed
+    // inline on the last pool leaf's unwinding thread.
+    //
+    // The remaining secondary property, still checked:
+    //   • every fault is observed BEFORE the wait — the .Catch below is inside the composition, so
+    //     nothing can fault past it into an unobserved task;
     //   • the .Timeout is a REPORTED budget on a join, not a silent race: expiry lands in Report(-1)
     //     as a LogError naming the consequence. It is the weaker class #2488 lists at 4–5, kept
     //     because a silo that never releases is worse than one that releases loudly.
@@ -164,7 +169,10 @@ public sealed class IoPoolSiloTeardown(
             .Do(Report)
             .Select(_ => Unit.Default)
             .FirstAsync()
-            .ToTask();
+            .ObserveCompletion(
+                ex => logger.LogError(ex,
+                    "IoPoolSiloTeardown: the drain signal faulted AFTER the join settled — "
+                    + "reported, not orphaned"));
     }
 
     private void Report(int leaked)

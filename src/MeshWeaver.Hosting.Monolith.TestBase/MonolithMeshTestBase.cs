@@ -942,11 +942,18 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // (maxParallelThreads:1) that thread IS the only one that can pump the
         // CreateNode completion — so `.Wait()` from an `async Task` test deadlocks
         // (the test then dies at its [Fact(Timeout=…)] cap with an empty message).
-        // Bridge at the test edge instead: `.FirstAsync().ToTask()` and the caller
-        // `await`s. Observable.Using opens the ImpersonateAsSystem scope on Subscribe
-        // (here, synchronously, when .ToTask() subscribes) and keeps the System
-        // AsyncLocal alive for the lifetime of the create — so the write authorises
-        // as the platform provisioner (see PathResolutionService for the same shape).
+        //
+        // 🚨 And it is NOT an Rx→Task bridge either (maintainer, 2026-08-30: "no ToTask
+        // ever"). Rx's own bridge completes its TaskCompletionSource from INSIDE the
+        // pipeline, without RunContinuationsAsynchronously, so the awaiting test resumes
+        // INLINE on the signalling thread — still inside Rx's trampoline — and everything
+        // the test then does inherits that. ReactiveCompletion.ObserveCompletion is the
+        // sanctioned wait: it subscribes, keeps its error arm attached for a late fault,
+        // and queues the continuation instead of running it on the signaller's thread.
+        // Observable.Using opens the ImpersonateAsSystem scope on Subscribe (here,
+        // synchronously, when ObserveCompletion subscribes) and keeps the System AsyncLocal
+        // alive for the lifetime of the create — so the write authorises as the platform
+        // provisioner (see PathResolutionService for the same shape).
         return Observable.Using(
                 () => access.ImpersonateAsSystem(),
                 _ => NodeFactory.CreateNode(node))
@@ -956,7 +963,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             .SubscribeOn(TaskPoolScheduler.Default)
             .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync()
-            .ToTask();
+            .ObserveCompletion(
+                ex => FileOutput.WriteLine(
+                    $"[SEED] SeedTopLevel({node.Id}): create faulted AFTER the wait settled — "
+                    + $"reported, not orphaned: {ex.GetType().Name}: {ex.Message}"))!;
     }
 
     /// <summary>
@@ -1016,9 +1026,19 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     {
         try
         {
-            return await (hub ?? RequestHub).Observe(request, options)
+            // 🚨 ObserveCompletion, never an Rx→Task bridge (maintainer, 2026-08-30: "no
+            // ToTask ever"). This is THE request/response wait the whole suite runs, so the
+            // scheduler it resumes on shapes every test that uses it: Rx's own bridge
+            // completes its TaskCompletionSource from inside the pipeline without
+            // RunContinuationsAsynchronously, resuming the test INLINE on the responding
+            // hub's action-block thread and leaving the rest of the test body on it.
+            return (await (hub ?? RequestHub).Observe(request, options)
                 .FirstAsync()
-                .ToTask(ct ?? TestContext.Current.CancellationToken);
+                .ObserveCompletion(
+                    ex => FileOutput.WriteLine(
+                        $"[REQUEST] {request.GetType().Name}: response faulted AFTER the wait "
+                        + $"settled — reported, not orphaned: {ex.GetType().Name}: {ex.Message}"),
+                    ct ?? TestContext.Current.CancellationToken))!;
         }
         catch (ObjectDisposedException disposed)
         {
