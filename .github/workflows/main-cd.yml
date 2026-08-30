@@ -848,16 +848,59 @@ jobs:
       # that IS what pushing costs) but under a name no consumer can select, so this leg succeeding
       # ships NOTHING on its own. `promote` applies version/sha/main once every leg has succeeded.
       - name: Build + push portal-ai (staging tag)
-        run: >
-          dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
-          -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
-          -p:CIRun=true
-          -p:MeshWeaverRoot=${{ github.workspace }}
-          -p:ContainerRegistry=${{ env.ACR }}
-          -p:ContainerRepository=memex-portal-ai
-          -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
-          -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
+        run: |
+          # 🚨 Bounded retry, and deliberately NOT a skip-trapdoor: after the last attempt this
+          # still fails RED. It exists because the BLOB UPLOAD is the failure, not the build.
+          #
+          # Measured 2026-08-30, run 33328213655 (target 84bf70b17): the linux-arm64 leg pushed
+          # cleanly at 18:48:05, then at 18:52:58 the x64 leg logged
+          #     [Registry] Encountered a HttpRequestException Unknown with message "Broken pipe".
+          #     Pausing before retry.
+          # and nine seconds later
+          #     CONTAINER1013: Failed to push to the output registry: CONTAINER1001: Failed to
+          #     upload blob using PATCH https://meshweaver.azurecr.io/v2/memex-portal-ai/blobs/uploads/...
+          # The SDK's own retry did not recover it. Same pair on run 33322756606 (target
+          # 8cbf69ac9) at 16:49Z. Between those two, ci.6846 promoted successfully at 18:14Z — so
+          # the fault is INTERMITTENT, not a credential, quota or purge problem, and the registry
+          # is Premium SKU and healthy throughout.
+          #
+          # Publication is ALL-OR-NOTHING (the promote job tags only when every leg succeeded), so
+          # one broken pipe on one architecture costs the whole delivery: no image, and every
+          # self-updating install stays on the previous one until a later run happens to get a
+          # clean connection. That is the cost this retry removes.
+          #
+          # It does NOT paper over a real failure: a compile error, a missing project or a bad
+          # credential fails identically on all three attempts and the step ends RED, naming the
+          # last attempt's output. Only a connection that dies mid-upload gets a second chance,
+          # which is what a bounded retry is for. Mirrors the idiom already used by
+          # node-repo-{compile-check,gate,publish-bake}.yml for their registry logins.
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "::group::portal-ai publish attempt $attempt of 3"
+            if dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
+                 -c Release --no-self-contained -t:PublishContainer -p:PublishProfile= \
+                 -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"' \
+                 -p:CIRun=true \
+                 -p:MeshWeaverRoot=${{ github.workspace }} \
+                 -p:ContainerRegistry=${{ env.ACR }} \
+                 -p:ContainerRepository=memex-portal-ai \
+                 -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }} \
+                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest; then
+              echo "::endgroup::"
+              echo "portal-ai published on attempt $attempt"
+              exit 0
+            fi
+            echo "::endgroup::"
+            if [ "$attempt" -lt 3 ]; then
+              # Re-login before retrying: an ACR token can expire during a long multi-arch push,
+              # and a re-auth costs seconds against a leg that takes minutes.
+              echo "attempt $attempt failed — re-authenticating and retrying in 30s"
+              az acr login --name meshweaver || true
+              sleep 30
+            fi
+          done
+          echo "::error::portal-ai publish failed on all 3 attempts — read the LAST attempt's output above. A CONTAINER1001 blob-upload failure there means the registry connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
+          exit 1
 
   migration-image:
     name: "Build + push migration image"
