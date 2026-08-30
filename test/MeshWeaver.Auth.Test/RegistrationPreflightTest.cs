@@ -19,7 +19,7 @@ public class RegistrationPreflightTest
     public void NoBootstrapKey_IsANoOp()
     {
         var (action, reason) = InstanceAutoRegistrationService.DecideRegistration(
-            null, null, null, masterKeyPresent: false);
+            null, null, null, masterKeyPresent: false, consentGiven: true);
         Assert.Equal(InstanceAutoRegistrationService.RegistrationPreflight.Skip, action);
         Assert.Null(reason);
     }
@@ -28,7 +28,7 @@ public class RegistrationPreflightTest
     public void ExplicitToken_WinsOverTheBootstrapKey()
     {
         var (action, reason) = InstanceAutoRegistrationService.DecideRegistration(
-            Key, "mwi_configured", "my-instance", masterKeyPresent: true);
+            Key, "mwi_configured", "my-instance", masterKeyPresent: true, consentGiven: true);
         Assert.Equal(InstanceAutoRegistrationService.RegistrationPreflight.Skip, action);
         Assert.Contains("explicit token wins", reason);
     }
@@ -37,7 +37,7 @@ public class RegistrationPreflightTest
     public void MissingInstanceId_Aborts_NamingTheSetting()
     {
         var (action, reason) = InstanceAutoRegistrationService.DecideRegistration(
-            Key, null, "  ", masterKeyPresent: true);
+            Key, null, "  ", masterKeyPresent: true, consentGiven: true);
         Assert.Equal(InstanceAutoRegistrationService.RegistrationPreflight.Abort, action);
         Assert.Contains("PluginCatalog:InstanceId", reason);
     }
@@ -50,7 +50,7 @@ public class RegistrationPreflightTest
         // was consumed, because the whole point of refusing early is that the bootstrap key stays
         // valid and the instance id stays free.
         var (action, reason) = InstanceAutoRegistrationService.DecideRegistration(
-            Key, null, "my-instance", masterKeyPresent: false);
+            Key, null, "my-instance", masterKeyPresent: false, consentGiven: true);
         Assert.Equal(InstanceAutoRegistrationService.RegistrationPreflight.Abort, action);
         Assert.Contains("Ai:KeyProtection:MasterKey", reason);
         Assert.Contains("before anything is consumed", reason);
@@ -60,7 +60,7 @@ public class RegistrationPreflightTest
     public void FullyConfigured_Registers()
     {
         var (action, reason) = InstanceAutoRegistrationService.DecideRegistration(
-            Key, "", "my-instance", masterKeyPresent: true);
+            Key, "", "my-instance", masterKeyPresent: true, consentGiven: true);
         Assert.Equal(InstanceAutoRegistrationService.RegistrationPreflight.Register, action);
         Assert.Null(reason);
     }
