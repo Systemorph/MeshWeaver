@@ -12,7 +12,6 @@ using MeshWeaver.Messaging;
 using Xunit;
 
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Serialization.Test;
 
 public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
@@ -319,7 +318,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         // RegisterCallback path used to wrap; hub.Observe doesn't). Awaiting the cold
         // observable's first emission rethrows that OnError.
         Func<Task> act = () => client.Observe(unknownRequest, o => o.WithTarget(CreateHostAddress()))
-            .FirstAsync().Timeout(5.Seconds()).ToTask();
+            .FirstAsync().Timeout(5.Seconds()).Await();
         var exception = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
 
         exception.Should().NotBeNull();

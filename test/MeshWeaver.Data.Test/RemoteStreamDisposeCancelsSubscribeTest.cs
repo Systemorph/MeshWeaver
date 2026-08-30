@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -80,7 +79,7 @@ public class RemoteStreamDisposeCancelsSubscribeTest(ITestOutputHelper output) :
             .Where(id => id == stream.StreamId)
             .FirstAsync()
             .Timeout(10.Seconds())
-            .ToTask();
+            .Await();
 
         // Precondition that makes the seam live. Without it a "released" assertion after Dispose
         // would pass against a hub that never had the callback in the first place.
@@ -122,7 +121,7 @@ public class RemoteStreamDisposeCancelsSubscribeTest(ITestOutputHelper output) :
             .Where(id => id == stream.StreamId)
             .FirstAsync()
             .Timeout(10.Seconds())
-            .ToTask();
+            .Await();
 
         var released = false;
         stream.RegisterForDisposal(System.Reactive.Disposables.Disposable.Create(() => released = true));

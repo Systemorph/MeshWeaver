@@ -15,8 +15,8 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
@@ -72,7 +72,7 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
         Func<Task> act = () => stream
             .FirstAsync()
             .Timeout(3.Seconds())
-            .ToTask();
+            .Await();
 
         var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
         ex.Message.Should().Contain("Access denied");
@@ -103,7 +103,7 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
 
         // GetDataRequest also has [RequiresPermission(Permission.Read)] —
         // the cold Observe observable surfaces DeliveryFailureException via OnError.
-        Func<Task> act = () => client.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
+        Func<Task> act = () => client.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(nodeAddress)).FirstAsync().Await();
 
         var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
         ex.Message.Should().Contain("Access denied");
@@ -235,7 +235,7 @@ public class UserHubAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(
         Func<Task> act = () =>
             RequestHub.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(new Address("User")))
                 .FirstAsync()
-                .ToTask();
+                .Await();
 
         var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
         ex.Message.Should().Contain("Access denied");

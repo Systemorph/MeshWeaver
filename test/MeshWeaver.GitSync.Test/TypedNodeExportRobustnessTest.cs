@@ -1,11 +1,11 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -49,11 +49,11 @@ public class TypedNodeExportRobustnessTest(ITestOutputHelper output) : GitHubSyn
                 Description = "A shared-pool presentation.",
                 Slides = ["Slides/S01", "Slides/S02", "Slides/S03"],
             },
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
 
         var repo = "https://github.com/test/deck-json";
-        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
 
         // Exported via the universal JSON serializer → Show.json, with the manifest preserved.
         var file = Fake.Tree(repo).FirstOrDefault(f => f.Path == "Show.json");
@@ -63,7 +63,7 @@ public class TypedNodeExportRobustnessTest(ITestOutputHelper output) : GitHubSyn
 
         // Import into a fresh Space — the Deck round-trips TYPED with its ordered manifest intact.
         var b = "GhTl" + Guid.NewGuid().ToString("N")[..8];
-        await Sync.ImportFromGitHub(repo, "main", b, "Deck B", null, UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ImportFromGitHub(repo, "main", b, "Deck B", null, UserId).Timeout(90.Seconds()).Await();
 
         var deckNode = await WaitForNode($"{b}/Show");
         Assert.Equal(DeckNodeType.NodeType, deckNode.NodeType);
@@ -87,8 +87,8 @@ public class TypedNodeExportRobustnessTest(ITestOutputHelper output) : GitHubSyn
         var repo = "https://github.com/test/missing-type";
         await CreateSpace(a, "Repair Space");
         await CreateMarkdown($"{a}/Seed", "Seed", "# seed");   // seeds a valid root + tree
-        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
 
         // A BROKEN file: a Deck node whose content object has NO "$type".
         var brokenJson = """
@@ -105,9 +105,9 @@ public class TypedNodeExportRobustnessTest(ITestOutputHelper output) : GitHubSyn
             AuthorName = "Git Author",
             AuthorEmail = "git-author@test",
             AccessToken = "ghp_test_token",
-        }).Timeout(30.Seconds()).ToTask();
+        }).Timeout(30.Seconds()).Await();
 
-        await Sync.ReimportAtCommit(a, commit.CommitSha, UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(a, commit.CommitSha, UserId).Timeout(90.Seconds()).Await();
 
         var node = await WaitForNode($"{a}/Show");
         Assert.Equal("Deck", node.NodeType);
@@ -146,11 +146,11 @@ public class TypedNodeExportRobustnessTest(ITestOutputHelper output) : GitHubSyn
                 Code = "public sealed record PluginContent(string? ContactEmail);",
                 Language = "csharp",
             },
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
 
         var repo = "https://github.com/test/plugin-src";
-        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
 
         // The Code node must land as Source/PluginContent.cs with its verbatim C# body — never dropped.
         var cs = Fake.Tree(repo).FirstOrDefault(f => f.Path == "Source/PluginContent.cs");
@@ -159,7 +159,7 @@ public class TypedNodeExportRobustnessTest(ITestOutputHelper output) : GitHubSyn
 
         // Import into a fresh Space — the C# source round-trips as a typed Code node.
         var b = "GhSrd" + Guid.NewGuid().ToString("N")[..8];
-        await Sync.ImportFromGitHub(repo, "main", b, "Plugin B", null, UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ImportFromGitHub(repo, "main", b, "Plugin B", null, UserId).Timeout(90.Seconds()).Await();
 
         var codeNode = await WaitForNode($"{b}/Source/PluginContent");
         Assert.Equal("Code", codeNode.NodeType);

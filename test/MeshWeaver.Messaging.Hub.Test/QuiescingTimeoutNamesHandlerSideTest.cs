@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
@@ -87,7 +86,7 @@ public class QuiescingTimeoutNamesHandlerSideTest(ITestOutputHelper output) : Hu
         await handlerRan.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         host.Dispose();
-        await host.DisposalCompleted.FirstAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(20));
+        await host.DisposalCompleted.FirstAsync().Await().WaitAsync(TimeSpan.FromSeconds(20));
 
         host.AnyHubQuiescingTimedOut().Should().BeTrue(
             "the abandoned callback is exactly what the Quiescing budget exists to catch");
@@ -134,7 +133,7 @@ public class QuiescingTimeoutNamesHandlerSideTest(ITestOutputHelper output) : Hu
         await handlerRan.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         client.Dispose();
-        await client.DisposalCompleted.FirstAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(20));
+        await client.DisposalCompleted.FirstAsync().Await().WaitAsync(TimeSpan.FromSeconds(20));
 
         var summary = client.GetQuiescingTimeoutSummary();
         Output.WriteLine(summary);
@@ -167,7 +166,7 @@ public class QuiescingTimeoutNamesHandlerSideTest(ITestOutputHelper output) : Hu
         await handlerRan.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         host.Dispose();
-        await host.DisposalCompleted.FirstAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(20));
+        await host.DisposalCompleted.FirstAsync().Await().WaitAsync(TimeSpan.FromSeconds(20));
 
         var summary = host.GetQuiescingTimeoutSummary();
         Output.WriteLine(summary);
@@ -201,7 +200,7 @@ public class QuiescingTimeoutNamesHandlerSideTest(ITestOutputHelper output) : Hu
         await handlerRan.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         client.Dispose();
-        await client.DisposalCompleted.FirstAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(20));
+        await client.DisposalCompleted.FirstAsync().Await().WaitAsync(TimeSpan.FromSeconds(20));
 
         client.AnyHubQuiescingTimedOut().Should().BeTrue();
 

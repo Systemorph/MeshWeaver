@@ -5,7 +5,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -19,6 +18,7 @@ using MeshWeaver.Plugin.Packaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -56,7 +56,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
 
             var adopted = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             adopted.Should().Be(1, "the present type adopts; the absent one is skipped");
 
             // The adopted stamp, as the sweep will read it.
@@ -65,7 +65,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                     ?.CompilationStatus == CompilationStatus.Ok)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             var def = node!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
 
             def.CompiledFrameworkVersion.Should().Be(PrebuiltAssemblySeeder.LiveFrameworkMvid,
@@ -80,7 +80,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
             var storePath = await store
                 .TryGetAssemblyPath(typePath, def.LastCompiledVersion!.Value)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             storePath.Should().NotBeNullOrEmpty(
                 "adoption uploads the bytes under the exact (path, version) key the probe asks");
             NodeTypeBakeStatus
@@ -146,7 +146,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
             // ── 1. First boot: the bundle is adopted, exactly as before. ──────────────────────
             var first = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             first.Should().Be(1, "a type with no build yet must be adopted");
 
             var adopted = (await AdoptedNode(typePath))
@@ -160,7 +160,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
             // ── 2. Second boot, nothing changed: SKIPPED — but still COVERED. ─────────────────
             var second = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             second.Should().Be(1,
                 "coverage is unchanged by the skip — deploy/aks/values.aks.yaml makes this count "
                 + "the signal that the CI bake lane works, so it must NOT collapse to 0 on a "
@@ -187,7 +187,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
 
             var third = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             third.Should().Be(1, "the entry is covered again — this time by actually re-adopting it");
 
             // Wait for the RE-ADOPTION — the record Seed restamps — and not for a version bump:
@@ -199,7 +199,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                     && d.LastCompileSucceededAt != adoptedAt)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             afterThird!.LastCompileSucceededAt.Should().NotBe(adoptedAt,
                 "the record may never be trusted over the store: a cleared assembly volume "
                 + "leaves every record pristine over bytes that are gone, and a skip decided "
@@ -256,7 +256,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
 
             var first = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             first.Should().Be(1, "a type with no build yet must be adopted");
 
             var afterAdoption = await AdoptedNode(typePath);
@@ -278,7 +278,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                         }))
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
 
             // 🚨 The fixture is only meaningful once that write has actually MOVED the counter the
             // old assertion keyed on — Update emits the writer's optimistic snapshot, which still
@@ -287,13 +287,13 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                 .Where(n => n is not null && n.Version > afterAdoption.Version)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             bumped!.Version.Should().BeGreaterThan(afterAdoption.Version,
                 "without a moved counter this test cannot distinguish the fix from the bug");
 
             var second = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             second.Should().Be(1,
                 "the entry is still covered — the foreign write changed nothing the seeder stamps");
 
@@ -348,7 +348,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                 ?.CompilationStatus == CompilationStatus.Ok)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken)!;
+            .Await(TestContext.Current.CancellationToken)!;
 
     /// <summary>The node as it stands right now.</summary>
     private Task<MeshNode> CurrentNode(string typePath) =>
@@ -356,7 +356,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
             .Where(n => n is not null)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken)!;
+            .Await(TestContext.Current.CancellationToken)!;
 
     /// <summary>#1707 slice 3: install/push-time consumption is scoped to the CALLER's types —
     /// the mesh-wide enumeration is the boot path's business only.</summary>
@@ -381,7 +381,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
             var adopted = await ShippedPrebuiltBundles
                 .SeedForTypes(Mesh, [wantedPath], null, imageDirectory: dir)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             adopted.Should().Be(1, "only the requested type adopts — the other is not this call's business");
 
             await Mesh.GetWorkspace().GetMeshNodeStream(wantedPath)
@@ -389,13 +389,13 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                     ?.CompilationStatus == CompilationStatus.Ok)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
 
             var other = await Mesh.GetWorkspace().GetMeshNodeStream(otherPath)
                 .Where(n => n is not null)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             other!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!
                 .CompilationStatus.Should().BeNull("the unrequested type must stay untouched");
         }
@@ -452,7 +452,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
 
             var adopted = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             adopted.Should().Be(1, "the module-mismatched assembly declines; the matching one adopts");
 
             var fresh = await Mesh.GetWorkspace().GetMeshNodeStream(freshPath)
@@ -460,7 +460,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                     ?.CompilationStatus == CompilationStatus.Ok)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             fresh!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!
                 .CompiledDependencies.Should().NotBeNull()
                 .And.Subject.Should().ContainKey("MeshWeaver.Mesh.Contract");
@@ -469,7 +469,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                 .Where(n => n is not null)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             stale!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!
                 .CompilationStatus.Should().BeNull("a declined assembly leaves the type to compile normally");
         }
@@ -495,7 +495,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
 
             var adopted = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             adopted.Should().Be(0,
                 "bytes built against different framework content must never be adopted");
 
@@ -503,7 +503,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                 .Where(n => n is not null)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             var def = node!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
             def.CompilationStatus.Should().NotBe(CompilationStatus.Ok,
                 "a declined bundle must leave the record untouched — the type compiles normally");
@@ -548,7 +548,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
 
             var adopted = await ShippedPrebuiltBundles.SeedPublishedRoot(Mesh, root, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             adopted.Should().Be(1,
                 "the pod seeds its own identity's directory (sealed source subdirs only), "
                 + "and never another identity's");
@@ -558,7 +558,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                     ?.CompilationStatus == CompilationStatus.Ok)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             var def = node!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
             def.CompiledFrameworkVersion.Should().Be(PrebuiltAssemblySeeder.LiveFrameworkMvid);
 
@@ -566,7 +566,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
             var storePath = await store
                 .TryGetAssemblyPath(typePath, def.LastCompiledVersion!.Value)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             storePath.Should().NotBeNullOrEmpty(
                 "a CI-published bake must be FOUND by the sweep's store probe — pending=0");
         }
@@ -581,7 +581,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
     {
         var adopted = await ShippedPrebuiltBundles.SeedPublishedRoot(Mesh, null, null)
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
         adopted.Should().Be(0, "a deployment that does not consume CI bakes seeds nothing");
     }
 
@@ -618,7 +618,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
 
             var adopted = await ShippedPrebuiltBundles.SeedPublishedRoot(Mesh, root, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             adopted.Should().Be(0,
                 "neither an unsealed nor a torn publication may seed anything");
         }
@@ -652,7 +652,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                 }))
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask();
+            .Await();
     }
 
     /// <summary>
@@ -685,7 +685,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
 
             var adopted = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, log)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
 
             adopted.Should().Be(0, "this mesh holds no NodeType at that path");
 

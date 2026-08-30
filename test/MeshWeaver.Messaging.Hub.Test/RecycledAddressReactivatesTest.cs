@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
@@ -48,7 +47,7 @@ public class RecycledAddressReactivatesTest(ITestOutputHelper output) : HubTestB
         first.Should().NotBeNull();
 
         first!.Dispose();
-        await first.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask(ct);
+        await first.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(ct);
         first.RunLevel.Should().Be(MessageHubRunLevel.Dead,
             "the precondition for this test is a hub that has FINISHED disposing");
 
@@ -78,7 +77,7 @@ public class RecycledAddressReactivatesTest(ITestOutputHelper output) : HubTestB
 
         var first = host.GetHostedHub(address, HostedHubCreation.Always);
         first!.Dispose();
-        await first.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask(ct);
+        await first.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(ct);
 
         var probed = host.GetHostedHub(address, HostedHubCreation.Never);
 

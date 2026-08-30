@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Test;
 
@@ -12,10 +12,10 @@ public class TextExtractorTest
     private readonly ITextExtractor _extractor = new TextExtractor(IoPool.Unbounded);
 
     private async Task<string> Extract(string fileName, byte[] bytes) =>
-        await _extractor.ExtractText(fileName, bytes).FirstAsync().ToTask();
+        await _extractor.ExtractText(fileName, bytes).FirstAsync().Await();
 
     private async Task<ExtractedDocument> ExtractDoc(string fileName, byte[] bytes) =>
-        await _extractor.ExtractDocument(fileName, bytes).FirstAsync().ToTask();
+        await _extractor.ExtractDocument(fileName, bytes).FirstAsync().Await();
 
     [Fact]
     public async Task Txt_DecodesUtf8()

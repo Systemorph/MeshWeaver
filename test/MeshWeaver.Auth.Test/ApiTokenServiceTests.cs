@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Graph.Configuration;
@@ -16,6 +15,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Auth.Test;
 
@@ -786,7 +786,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Where(ns => ns == $"{userId}/ApiToken")
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask();
+            .Await();
 
     private sealed record LogEntry(LogLevel Level, string Message);
 

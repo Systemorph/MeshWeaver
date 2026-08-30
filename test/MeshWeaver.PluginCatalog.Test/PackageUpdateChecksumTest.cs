@@ -2,7 +2,6 @@
 
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -48,7 +48,7 @@ public class PackageUpdateChecksumTest(ITestOutputHelper output) : MonolithMeshT
     {
         // 1) First install → both content nodes written.
         var first = await PackageInstaller.Install(Mesh, Manifest, Files("# A one", "# B one"), "HEAD")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         first.Total.Should().Be(2);
         first.Written.Should().Be(2);
         first.Unchanged.Should().Be(0);
@@ -64,7 +64,7 @@ public class PackageUpdateChecksumTest(ITestOutputHelper output) : MonolithMeshT
 
         // 2) Re-install the IDENTICAL files → nothing written, no version churn.
         var second = await PackageInstaller.Install(Mesh, Manifest, Files("# A one", "# B one"), "HEAD")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         second.Written.Should().Be(0, "an unchanged re-install must not write any node");
         second.Unchanged.Should().Be(2);
         (await Read("ChecksumTest/A")).Version.Should().Be(aV1, "the unchanged node must not bump its version");
@@ -72,7 +72,7 @@ public class PackageUpdateChecksumTest(ITestOutputHelper output) : MonolithMeshT
 
         // 3) Change ONLY A → exactly one node written; B is left untouched.
         var third = await PackageInstaller.Install(Mesh, Manifest, Files("# A CHANGED", "# B one"), "HEAD")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         third.Written.Should().Be(1, "only the changed file should be written");
         third.Unchanged.Should().Be(1);
 
@@ -104,7 +104,7 @@ public class PackageUpdateChecksumTest(ITestOutputHelper output) : MonolithMeshT
         };
 
         // First install → NodeType node + one Source Code node written.
-        var first = await PackageInstaller.Install(Mesh, manifest, files, "HEAD").FirstAsync().ToTask();
+        var first = await PackageInstaller.Install(Mesh, manifest, files, "HEAD").FirstAsync().Await();
         first.Total.Should().Be(2);
         first.Written.Should().Be(2);
 
@@ -118,7 +118,7 @@ public class PackageUpdateChecksumTest(ITestOutputHelper output) : MonolithMeshT
         // Re-install the IDENTICAL package → nothing written: the NodeType compare looks only at the
         // authored Configuration (ignoring compile-derived state), and the Source is unchanged. A
         // redundant recompile is therefore not triggered either.
-        var second = await PackageInstaller.Install(Mesh, manifest, files, "HEAD").FirstAsync().ToTask();
+        var second = await PackageInstaller.Install(Mesh, manifest, files, "HEAD").FirstAsync().Await();
         second.Written.Should().Be(0, "an unchanged code re-install must not rewrite the NodeType or its Source");
         second.Unchanged.Should().Be(2);
     }
@@ -126,7 +126,7 @@ public class PackageUpdateChecksumTest(ITestOutputHelper output) : MonolithMeshT
     private async Task<MeshNode> Read(string path) =>
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n?.Content is not null)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
     /// <summary>
     /// The node once its body IS <paramref name="body"/> — i.e. once the install that wrote it has
@@ -142,5 +142,5 @@ public class PackageUpdateChecksumTest(ITestOutputHelper output) : MonolithMeshT
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n?.Content is MeshWeaver.Markdown.MarkdownContent m
                         && m.Content.Contains(body, System.StringComparison.Ordinal))
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
 }

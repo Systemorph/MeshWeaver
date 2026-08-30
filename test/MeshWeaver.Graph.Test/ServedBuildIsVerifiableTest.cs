@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Threading.Tasks;
 using Microsoft.Reactive.Testing;
@@ -202,7 +201,7 @@ public class ServedBuildIsVerifiableTest(ITestOutputHelper output) : HubTestBase
 
     private static async Task<bool> DisposedWithinAsync(IObservable<bool> disposed, TimeSpan window)
     {
-        try { return await disposed.FirstAsync().Timeout(window).ToTask(); }
+        try { return await disposed.FirstAsync().Timeout(window).Await(); }
         catch (TimeoutException) { return false; }
     }
 

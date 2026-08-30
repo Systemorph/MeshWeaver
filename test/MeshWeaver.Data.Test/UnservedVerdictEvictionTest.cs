@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data.TestDomain;
@@ -109,7 +108,7 @@ public class UnservedVerdictEvictionTest(ITestOutputHelper output) : HubTestBase
             .Where(n => n >= 1)
             .FirstAsync()
             .Timeout(20.Seconds())
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     /// <summary>
     /// 🚨 THE PIN (#2756). A TRANSIENT unserved verdict must leave the server-side stream intact:

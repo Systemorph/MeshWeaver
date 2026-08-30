@@ -1,12 +1,12 @@
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.Hosting.Internal;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -40,14 +40,14 @@ public class ModuleGenerationsGcHostedServiceTest : IDisposable
 
         // FIFO probe through the same cap-1 pool: had StartAsync scheduled the sweep, it would
         // have run before this probe completed. A positive signal, not a sleep.
-        await pool.InvokeBlocking(_ => 0).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await pool.InvokeBlocking(_ => 0).FirstAsync().Await(TestContext.Current.CancellationToken);
         Assert.Equal(0, Volatile.Read(ref invoked));
 
         lifetime.NotifyStarted();
         var removed = await svc.Completed
             .Timeout(TimeSpan.FromSeconds(10))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         Assert.Equal(7, removed);
         Assert.Equal(1, Volatile.Read(ref invoked));
@@ -93,12 +93,12 @@ public class ModuleGenerationsGcHostedServiceTest : IDisposable
 
         // The sweep IS running (on a pool thread), parked in its "IO".
         await entered.Timeout(TimeSpan.FromSeconds(10)).FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         // Teardown: disposing the service unsubscribes the pooled leaf, which cancels its linked
         // token — the stalled collector unwinds instead of parking the drain.
         await svc.StopAsync(CancellationToken.None);
         await unwound.Timeout(TimeSpan.FromSeconds(10)).FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
     }
 }

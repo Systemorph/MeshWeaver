@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -15,6 +14,7 @@ using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -73,7 +73,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .Take(2)
             .ToList()
             .Timeout(TimeSpan.FromSeconds(100))
-            .ToTask();
+            .Await();
 
         var good = outcomes.Single(o => o.TypePath == GoodPath);
         var broken = outcomes.Single(o => o.TypePath == BrokenPath);
@@ -128,7 +128,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .ProbeDynamicTypes(Mesh, logger)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .ToTask();
+            .Await();
 
         Output.WriteLine($"Probe → {report.Summary}");
 
@@ -237,7 +237,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .Take(3)
             .ToList()
             .Timeout(TimeSpan.FromSeconds(110))
-            .ToTask();
+            .Await();
 
         foreach (var o in outcomes)
             Output.WriteLine($"{o.TypePath} → {o.Status} {o.Detail}");
@@ -313,7 +313,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .Take(2)
             .ToList()
             .Timeout(TimeSpan.FromSeconds(110))
-            .ToTask();
+            .Await();
 
         foreach (var o in outcomes)
             Output.WriteLine($"{o.TypePath} → {o.Status} {o.Detail}");
@@ -581,7 +581,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(predicate)
             .FirstAsync()
             .Timeout(timeout)
-            .ToTask();
+            .Await();
 
     // =============================================================================================
     // Batch bake (issue #1207): the initial-bake mode drives the ONE compiler directly — batched
@@ -602,7 +602,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .Select(d => d!)
             .Take(1)
             .Timeout(timeout)
-            .ToTask();
+            .Await();
 
     /// <summary>
     /// Waits until the PERSISTED node at <paramref name="path"/> satisfies
@@ -626,7 +626,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .Select(d => d!)
             .FirstAsync()
             .Timeout(timeout)
-            .ToTask();
+            .Await();
     }
 
     /// <summary>
@@ -740,7 +740,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .Take(3)
             .ToList()
             .Timeout(TimeSpan.FromSeconds(100))
-            .ToTask();
+            .Await();
 
         foreach (var o in outcomes)
             Output.WriteLine($"{o.TypePath} → {o.Status} {o.Detail}");
@@ -776,7 +776,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
                 .TryGetAssemblyPath(path, stamped.LastCompiledVersion!.Value)
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(10))
-                .ToTask();
+                .Await();
             assemblyPath.Should().NotBeNullOrEmpty(
                 $"the batch bake must leave {path}'s assembly on the share at the stamped version");
         }
@@ -848,7 +848,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .Take(3)
             .ToList()
             .Timeout(TimeSpan.FromSeconds(100))
-            .ToTask();
+            .Await();
 
         foreach (var o in outcomes)
             Output.WriteLine($"{o.TypePath} → {o.Status} {o.Detail}");
@@ -906,7 +906,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(o => o.TypePath == warm)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(100))
-            .ToTask();
+            .Await();
 
         Output.WriteLine($"{outcome.TypePath} → {outcome.Status} {outcome.Detail}");
         outcome.Status.Should().Be(PreWarmStatus.AlreadyBaked,
@@ -958,7 +958,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(o => o.TypePath == LatePath)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(100))
-            .ToTask();
+            .Await();
 
         // …then write the type, standing in for what the import is still landing.
         await NodeFactory.CreateNode(new MeshNode("LateImportedType", Partition)
@@ -1009,7 +1009,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
 
         // A subscriber arriving AFTER the fact still gets it — the pre-warmer may resolve the signal
         // late (its own hosted service starts after the import's), and must not hang.
-        await settled.Settled.Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        await settled.Settled.Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
     }
 
     // ————————————————————————————————— per-type compile cost (issue #1439)
@@ -1082,7 +1082,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(o => o.TypePath == typePath)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(100))
-            .ToTask();
+            .Await();
 
         Output.WriteLine($"{outcome.TypePath} → {outcome.Status} — {outcome.DescribeCost()}");
         outcome.Duration.Should().BeGreaterThan(TimeSpan.Zero,

@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -13,6 +12,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Security;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -71,7 +71,7 @@ public class PermissionFoldUnavailableTest(ITestOutputHelper output) : MonolithM
         Func<Task> act = () => client
             .Observe(new GetDataRequest(new UnifiedReference("data:")),
                 o => o.WithTarget(new Address(NodePath)))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
 
@@ -104,7 +104,7 @@ public class PermissionFoldUnavailableTest(ITestOutputHelper output) : MonolithM
         Func<Task> act = () => client
             .Observe(new GetDataRequest(new UnifiedReference("data:")),
                 o => o.WithTarget(new Address(NodePath)))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         // A DeliveryFailure — never data. The request does not succeed just because the fold broke.
         await act.Should().ThrowAsync<DeliveryFailureException>();
@@ -139,7 +139,7 @@ public class PermissionFoldDenialStillDeniesTest(ITestOutputHelper output) : Mon
         Func<Task> act = () => client
             .Observe(new GetDataRequest(new UnifiedReference("data:")),
                 o => o.WithTarget(new Address(NodePath)))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
 
@@ -282,7 +282,7 @@ public class PermissionCheckShortCircuitTest(ITestOutputHelper output) : Monolit
         // 1. Decisive check FIRST. It faults ⇒ Undetermined ⇒ the delivery is refused as Unavailable.
         Func<Task> decisiveFirst = () => client
             .Observe<ShortCircuitProbeResponse>(new DecisiveFirstProbe(), o => o.WithTarget(target))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var ex = (await decisiveFirst.Should().ThrowAsync<DeliveryFailureException>()).Which;
 
@@ -295,7 +295,7 @@ public class PermissionCheckShortCircuitTest(ITestOutputHelper output) : Monolit
         //    could still have been doing. No sleep, no "wait a bit and hope".
         Func<Task> grantedFirst = () => client
             .Observe<ShortCircuitProbeResponse>(new GrantedFirstProbe(), o => o.WithTarget(target))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         await grantedFirst.Should().ThrowAsync<DeliveryFailureException>();
 

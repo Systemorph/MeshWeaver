@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Settings;
 using MeshWeaver.Data;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -49,7 +49,7 @@ public class WhatsNewSatelliteEntryTest(ITestOutputHelper output) : MonolithMesh
                 string.Equals(n.NodeType, WhatsNewSettingsTab.EntryNodeType, StringComparison.Ordinal)))
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
         listed.Should().Contain(
             n => n.Name == "A fix that shipped from a satellite repo",

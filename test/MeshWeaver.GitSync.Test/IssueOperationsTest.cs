@@ -1,7 +1,7 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.GitSync;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -19,12 +19,12 @@ public class IssueOperationsTest(ITestOutputHelper output) : GitHubSyncTestBase(
         var space = "GhIs" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(space, "Issue Space");
         var repo = "https://github.com/test/issue-space";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
 
         var n1 = Fake.SeedIssue(repo, "First issue", "body one");
         var n2 = Fake.SeedIssue(repo, "Second issue", "body two", GitHubIssueState.Closed);
 
-        var count = await Issues.SyncIssues(space, UserId).Timeout(60.Seconds()).ToTask();
+        var count = await Issues.SyncIssues(space, UserId).Timeout(60.Seconds()).Await();
         Assert.Equal(2, count);
 
         var issue1 = await WaitForIssue(IssueService.IssuePath(space, n1), i => i.Title == "First issue");
@@ -35,7 +35,7 @@ public class IssueOperationsTest(ITestOutputHelper output) : GitHubSyncTestBase(
         Assert.Equal("Second issue", issue2.Title);
 
         // The Space lists both synced issue nodes.
-        var nodes = await Issues.ListIssueNodes(space).Timeout(30.Seconds()).ToTask();
+        var nodes = await Issues.ListIssueNodes(space).Timeout(30.Seconds()).Await();
         Assert.Equal(2, nodes.Count);
     }
 
@@ -46,12 +46,12 @@ public class IssueOperationsTest(ITestOutputHelper output) : GitHubSyncTestBase(
         var space = "GhIf" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(space, "Issue Filter Space");
         var repo = "https://github.com/test/issue-filter";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
 
         Fake.SeedIssue(repo, "Open one");
         Fake.SeedIssue(repo, "Closed one", state: GitHubIssueState.Closed);
 
-        var count = await Issues.SyncIssues(space, UserId, GitHubIssueState.Open).Timeout(60.Seconds()).ToTask();
+        var count = await Issues.SyncIssues(space, UserId, GitHubIssueState.Open).Timeout(60.Seconds()).Await();
         Assert.Equal(1, count);
     }
 
@@ -62,10 +62,10 @@ public class IssueOperationsTest(ITestOutputHelper output) : GitHubSyncTestBase(
         var space = "GhIc" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(space, "Issue Create Space");
         var repo = "https://github.com/test/issue-create";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
 
         var node = await Issues.CreateIssue(space, "New bug", "It broke", new[] { "bug" }, UserId)
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
 
         var issue = await WaitForIssue(node.Path, i => i.Title == "New bug");
         Assert.Equal(GitHubIssueState.Open, issue.State);
@@ -80,13 +80,13 @@ public class IssueOperationsTest(ITestOutputHelper output) : GitHubSyncTestBase(
         var space = "GhIm" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(space, "Issue Comment Space");
         var repo = "https://github.com/test/issue-comment";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
 
         var number = Fake.SeedIssue(repo, "Needs discussion");
-        await Issues.SyncIssue(space, number, UserId).Timeout(60.Seconds()).ToTask();
+        await Issues.SyncIssue(space, number, UserId).Timeout(60.Seconds()).Await();
         await WaitForIssue(IssueService.IssuePath(space, number), i => i.CommentsCount == 0);
 
-        await Issues.CommentIssue(space, number, "Here is my thought", UserId).Timeout(60.Seconds()).ToTask();
+        await Issues.CommentIssue(space, number, "Here is my thought", UserId).Timeout(60.Seconds()).Await();
 
         var updated = await WaitForIssue(IssueService.IssuePath(space, number), i => i.CommentsCount == 1);
         Assert.Contains(updated.Comments, c => c.Body == "Here is my thought");

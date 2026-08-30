@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -90,8 +89,13 @@ public static class PluginBundleEndpoints
                 ?.CreateLogger(typeof(PluginBundleEndpoints));
             var authenticator = http.RequestServices.GetRequiredService<InstanceRegistryAuthenticator>();
 
-            var outcome = await authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
-                .FirstAsync().ToTask(http.RequestAborted);
+            var outcome = (await authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
+                .FirstAsync()
+                .ObserveCompletion(
+                    ex => logger?.LogWarning(ex,
+                        "Plugin bundles: instance authentication for {Path} faulted after the request had already been answered",
+                        http.Request.Path),
+                    http.RequestAborted))!;
 
             if (outcome.IsUnavailable)
                 return InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger);
@@ -407,14 +411,19 @@ public static class PluginBundleEndpoints
                     // extracted modules against the very platform update that needed them
                     // (rc6→rc7, 2026-08-22). Real refusals (the app-closure same-identity
                     // trap-door, malformed names) still surface as the observable's error.
-                    outcome = await landing.ShelveModule(
+                    outcome = (await landing.ShelveModule(
                         accepted.Module, accepted.Files,
                         frameworkMvid: accepted.FrameworkMvid,
                         packagePath: accepted.PackagePath,
                         version: accepted.Version,
                         minMeshVersion: accepted.MinMeshVersion,
                         staticAssets: accepted.StaticAssets)
-                        .FirstAsync().ToTask(ct);
+                        .FirstAsync()
+                        .ObserveCompletion(
+                            ex => logger?.LogWarning(ex,
+                                "Module publish for {Plugin}: landing '{Module}' faulted after the "
+                                + "publish had already been answered", plugin, accepted.Module),
+                            ct))!;
                 }
                 catch (Exception exception)
                 {
@@ -586,6 +595,10 @@ public static class PluginBundleEndpoints
     {
         var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}{RoutePrefix}";
         var ledger = Ledger(http);
+        // Resolved NOW, while the request scope is alive: a late fault arrives after
+        // HttpContext.RequestServices has been disposed, so resolving inside the lambda would throw
+        // exactly when the report is needed.
+        var lateFaultLogger = Log(http);
 
         return Servable(rootHub, Anchor(http), ct)
             .Select(state =>
@@ -630,7 +643,10 @@ public static class PluginBundleEndpoints
                     }).ToArray(),
                 })))
             .FirstAsync()
-            .ToTask(ct);
+            .ObserveCompletion(
+                ex => lateFaultLogger?.LogWarning(ex,
+                    "Plugin bundles: the index faulted after the response had already been sent"),
+                ct)!;
     }
 
     /// <summary>
@@ -928,6 +944,8 @@ public static class PluginBundleEndpoints
     {
         var anchorService = Anchor(http);
         var ledger = Ledger(http);
+        // Resolved NOW — see Index: the request scope is gone by the time a late fault lands.
+        var lateFaultLogger = Log(http);
         return Servable(rootHub, anchorService, ct)
             .SelectMany(state =>
             {
@@ -974,7 +992,11 @@ public static class PluginBundleEndpoints
                 return Observable.Return(NoSuchBundle());
             })
             .FirstAsync()
-            .ToTask(ct);
+            .ObserveCompletion(
+                ex => lateFaultLogger?.LogWarning(ex,
+                    "Plugin bundles: {Plugin}@{Version} faulted after the response had already been sent",
+                    plugin, version),
+                ct)!;
     }
 
     /// <summary>

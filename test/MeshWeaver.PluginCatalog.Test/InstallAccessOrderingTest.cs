@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph.Configuration;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -159,20 +159,20 @@ public class InstallAccessOrderingTest(ITestOutputHelper output) : MonolithMeshT
     {
         var source = Source();
         var manifests = await source.ListPackages("HEAD")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         var pkg = manifests.Single(m => m.Id == id);
         var files = await source.FetchPackageFiles(pkg, "HEAD")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         return await PackageInstaller.Install(
                 Mesh, pkg, files, "HEAD", authorizingUserId: PlatformAdmin)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(180)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await();
     }
 
     /// <summary>Authoritative single-node read straight off storage (never the lagging index).</summary>
     private Task<MeshNode?> Read(string path) =>
         Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(path, Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await();
 
     private async Task<MeshNode> Stored(string path)
     {

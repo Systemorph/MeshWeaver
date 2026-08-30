@@ -1,7 +1,6 @@
 using System;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
@@ -74,7 +73,7 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
             .Timeout(10.Seconds())
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         Action act = () => _ = new SynchronizationStream<Empty>(
             new StreamIdentity(host.Address, null),
@@ -193,7 +192,7 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
             .Timeout(2.Seconds())
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         armed = true;
 

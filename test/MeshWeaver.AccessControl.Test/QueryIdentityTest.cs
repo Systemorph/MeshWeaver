@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -15,6 +14,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.AccessControl.Test;
 
@@ -121,7 +121,7 @@ public class QueryIdentityTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 })
                 .FirstAsync()
                 .Timeout(30.Seconds())
-                .ToTask();
+                .Await();
     }
 
     private async Task<IReadOnlyList<MeshNode>> RunQuery(MeshQueryRequest request) =>
@@ -129,7 +129,7 @@ public class QueryIdentityTest(ITestOutputHelper output) : MonolithMeshTestBase(
             .Where(c => c.ChangeType == QueryChangeType.Initial)
             .FirstAsync()
             .Timeout(20.Seconds())
-            .ToTask()).Items;
+            .Await()).Items;
 
     /// <summary>
     /// 🚨 THE trap, end to end. A read aimed at a user's own private node, issued from a context

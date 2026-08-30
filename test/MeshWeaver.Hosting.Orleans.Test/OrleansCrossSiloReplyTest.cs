@@ -2,7 +2,6 @@
 
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -13,6 +12,7 @@ using Microsoft.Extensions.Hosting;
 using Orleans;
 using Orleans.TestingHost;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -83,7 +83,7 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
                 Name = "Doc",
                 State = MeshNodeState.Active,
             }), o => o.WithTarget(hubA.Address))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
         create.Message.Success.Should().BeTrue(create.Message.Error ?? "");
 
         // Same-silo leg first: proves the node reads fine at all, so a cross-silo failure
@@ -92,7 +92,7 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
         {
             var node = await hub.GetMeshNode(path, TimeSpan.FromSeconds(20))
                 .FirstAsync()
-                .ToTask(ct);
+                .Await(ct);
             node.Should().NotBeNull(
                 $"the read issued on {label}'s root mesh hub must receive its reply — "
                 + "when this is the non-owning silo, the reply crosses silos, and a hang here "
@@ -139,7 +139,7 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
                 Name = "Doc",
                 State = MeshNodeState.Active,
             }), o => o.WithTarget(hubA.Address))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
         create.Message.Success.Should().BeTrue(create.Message.Error ?? "");
 
         foreach (var (hub, label) in new[] { (hubA, "silo A"), (hubB, "silo B") })
@@ -147,7 +147,7 @@ public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture
             var pong = await hub.Observe(new PingRequest(), o => o.WithTarget((Address)path))
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(40))
-                .ToTask(ct);
+                .Await(ct);
 
             pong.Message.Should().NotBeNull(
                 $"the ping issued on {label}'s ROOT MESH HUB must receive its PingResponse. When "
@@ -258,11 +258,11 @@ public class OrleansCrossSiloReplyRolloverTest : IClassFixture<TwoSiloCacheUpdat
                 Name = "Doc",
                 State = MeshNodeState.Active,
             }), o => o.WithTarget(hubA.Address))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
         create.Message.Success.Should().BeTrue(create.Message.Error ?? "");
 
         // Touch the node once so its grain is activated (on whichever silo).
-        var before = await hubA.GetMeshNode(path, TimeSpan.FromSeconds(20)).FirstAsync().ToTask(ct);
+        var before = await hubA.GetMeshNode(path, TimeSpan.FromSeconds(20)).FirstAsync().Await(ct);
         before.Should().NotBeNull("the node must read before the rollover");
 
         // The rollover: the secondary silo leaves gracefully (the rolling-deploy shape).
@@ -278,7 +278,7 @@ public class OrleansCrossSiloReplyRolloverTest : IClassFixture<TwoSiloCacheUpdat
             .Where(n => n is not null)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(90))
-            .ToTask(ct);
+            .Await(ct);
         after!.Path.Should().Be(path,
             "after the secondary silo departs, the surviving silo must re-own the grain and "
             + "serve the read — a hang here is a failed rollover");

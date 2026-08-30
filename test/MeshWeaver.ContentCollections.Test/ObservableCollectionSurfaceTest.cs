@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,26 +51,26 @@ public class ObservableCollectionSurfaceTest(ITestOutputHelper output) : HubTest
     {
         var ct = TestContext.Current.CancellationToken;
         var collection = CreateCollection(out _);
-        await collection.Initialize().FirstAsync().ToTask(ct);
+        await collection.Initialize().FirstAsync().Await(ct);
 
         using (var stream = new MemoryStream("hello files"u8.ToArray()))
-            await collection.SaveFile("/", "hello.txt", stream).ToTask(ct);
+            await collection.SaveFile("/", "hello.txt", stream).Await(ct);
 
         // The very next listing must show the uploaded file — this is the FileBrowser
         // refresh-after-upload path that had no test when the Files tab "lost" uploads.
-        var items = await collection.GetCollectionItems("/").ToList().FirstAsync().ToTask(ct);
+        var items = await collection.GetCollectionItems("/").ToList().FirstAsync().Await(ct);
         items.Should().Contain(i => i.Name == "hello.txt",
             "a file saved through the collection must be visible in the immediately following listing");
 
-        var bytes = await collection.GetContentBytes("/hello.txt").FirstAsync().ToTask(ct);
+        var bytes = await collection.GetContentBytes("/hello.txt").FirstAsync().Await(ct);
         bytes.Should().NotBeNull();
         System.Text.Encoding.UTF8.GetString(bytes!).Should().Be("hello files");
 
-        var size = await collection.GetContentSize("/hello.txt").FirstAsync().ToTask(ct);
+        var size = await collection.GetContentSize("/hello.txt").FirstAsync().Await(ct);
         size.Should().Be((long)bytes!.Length);
 
-        await collection.DeleteFile("/hello.txt").ToTask(ct);
-        var afterDelete = await collection.GetCollectionItems("/").ToList().FirstAsync().ToTask(ct);
+        await collection.DeleteFile("/hello.txt").Await(ct);
+        var afterDelete = await collection.GetCollectionItems("/").ToList().FirstAsync().Await(ct);
         afterDelete.Should().NotContain(i => i.Name == "hello.txt");
     }
 
@@ -80,7 +79,7 @@ public class ObservableCollectionSurfaceTest(ITestOutputHelper output) : HubTest
     {
         var ct = TestContext.Current.CancellationToken;
         var collection = CreateCollection(out var provider);
-        await collection.Initialize().FirstAsync().ToTask(ct);
+        await collection.Initialize().FirstAsync().Await(ct);
 
         // Subscribe from a DEDICATED thread and BLOCK it until the pipeline completes. This pins
         // the decoupling property that broke in prod: a subscriber that blocks its own thread (a
@@ -122,14 +121,14 @@ public class ObservableCollectionSurfaceTest(ITestOutputHelper output) : HubTest
     {
         var ct = TestContext.Current.CancellationToken;
         var collection = CreateCollection(out var provider);
-        await collection.Initialize().FirstAsync().ToTask(ct);
+        await collection.Initialize().FirstAsync().Await(ct);
 
         var accessService = GetHost().ServiceProvider.GetRequiredService<AccessService>();
         var caller = new AccessContext { ObjectId = "test-user-object-id", Name = "Test User" };
 
         using (accessService.SwitchAccessContext(caller))
         using (var stream = new MemoryStream("who am I"u8.ToArray()))
-            await collection.SaveFile("/", "identity.txt", stream).ToTask(ct);
+            await collection.SaveFile("/", "identity.txt", stream).Await(ct);
 
         provider.SaveAccessContext.Should().NotBeNull(
             "the caller's AccessContext snapshot must be re-established inside the pool leaf — "

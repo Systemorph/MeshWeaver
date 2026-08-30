@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -95,7 +95,7 @@ public class ReleaseRequestSatisfiedByCurrentBuildTest(ITestOutputHelper output)
         var firstBuild = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n?.Content is NodeTypeDefinition)
             .Select(n => (NodeTypeDefinition)n!.Content!)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"=== first build settled Ok at {firstBuild.LastCompileSucceededAt:O} ===");
 
         // 2. A plain release request on the unchanged, current build: SATISFIED — the trigger is
@@ -112,7 +112,7 @@ public class ReleaseRequestSatisfiedByCurrentBuildTest(ITestOutputHelper output)
         var satisfied = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n?.Content is NodeTypeDefinition)
             .Select(n => (NodeTypeDefinition)n!.Content!)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
         satisfied.LastCompileSucceededAt.Should().Be(firstBuild.LastCompileSucceededAt,
             "a satisfied request must not dispatch Roslyn — any compile rewrites this stamp");
         Output.WriteLine("=== plain request satisfied without compiling ===");

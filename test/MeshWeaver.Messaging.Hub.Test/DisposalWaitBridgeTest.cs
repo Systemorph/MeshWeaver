@@ -1,10 +1,11 @@
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Messaging.Hub.Test;
 
@@ -107,6 +108,11 @@ public class DisposalWaitBridgeTest
     [Fact]
     public async Task TheOldToTaskBridge_ResumesItsCallerInlineOnTheSignallingThread()
     {
+        // 🚨 DELIBERATE, and the ONLY .ToTask() left in the repository: this is the NEGATIVE
+        // CONTROL for the ban. It asserts that Rx's own bridge really does resume its caller
+        // inline on the signalling thread — the defect the ruling exists to prevent. Converting
+        // it to the safe wrapper inverts what it proves, so ObservableToTaskBridgeGuard allow-lists
+        // exactly this file and this method.
         var signal = new Subject<Unit>();
         var wait = signal.FirstOrDefaultAsync().ToTask();
 
@@ -153,7 +159,7 @@ public class DisposalWaitBridgeTest
         signal.OnError(late);            // THE LATE FAULT
 
         reported.Should().BeSameAs(late,
-            "the subscription's error arm outlives the task on purpose — .ToTask() unsubscribes " +
+            "the subscription's error arm outlives the task on purpose — .Await() unsubscribes " +
             "on settle and the fault then reaches nobody at all");
     }
 

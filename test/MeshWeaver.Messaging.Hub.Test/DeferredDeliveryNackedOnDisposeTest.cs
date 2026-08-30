@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -69,7 +68,7 @@ public class DeferredDeliveryNackedOnDisposeTest(ITestOutputHelper output) : Hub
         var response = host
             .Observe<GatedResponse>(new GatedRequest(), o => o.WithTarget(GatedAddress))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         // Wait until the request is DEMONSTRABLY parked in the deferred queue before recycling.
         // Without this the test could dispose before the delivery was ever accepted, which is the

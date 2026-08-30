@@ -3,7 +3,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -16,6 +15,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -187,7 +187,7 @@ public class InstanceComboReaderTest(ITestOutputHelper output) : MonolithMeshTes
             Name = "Written here, after the sync",
             State = MeshNodeState.Active,
             Content = "# Not in that commit",
-        })).Timeout(60.Seconds()).ToTask();
+        })).Timeout(60.Seconds()).Await();
 
         var after = await Reader.Read().Should().Within(120.Seconds()).Emit();
         after.Modules.Single(m => m.ModuleId == "SocialMedia").ProvenanceRef.Should().Be(CommitSha,
@@ -328,13 +328,13 @@ public class InstanceComboReaderTest(ITestOutputHelper output) : MonolithMeshTes
                 Name = space,
                 State = MeshNodeState.Active,
                 Content = new Space(),
-            }).Timeout(60.Seconds()).ToTask();
+            }).Timeout(60.Seconds()).Await();
 
         await Sync.SaveConfig(
                 space, RepoUrl, "main", subdirectory,
                 createBranchIfMissing: false, createRepoIfMissing: false,
                 direction: SyncDirection.ImportOnly)
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
 
         if (lastSyncCommitSha is null)
             return;
@@ -352,7 +352,7 @@ public class InstanceComboReaderTest(ITestOutputHelper output) : MonolithMeshTes
                     LastSyncCommitSha = lastSyncCommitSha,
                 },
             })
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
     }
 
     /// <summary>Installs a package for real — <see cref="PackageInstaller"/> writes the
@@ -372,7 +372,7 @@ public class InstanceComboReaderTest(ITestOutputHelper output) : MonolithMeshTes
                 },
                 [new PackageFile($"{id}/Doc.md", $"# {id}")],
                 "HEAD")
-            .FirstAsync().Timeout(120.Seconds()).ToTask();
+            .FirstAsync().Timeout(120.Seconds()).Await();
 
     /// <summary>
     /// The record a <see cref="ModuleDiscoveryService"/> scan writes: the repo ships two modules,
@@ -416,7 +416,7 @@ public class InstanceComboReaderTest(ITestOutputHelper output) : MonolithMeshTes
         // A target-less post on `Mesh` defaults to the ROUTER itself, so it made the router both
         // ends of the delivery AND ran the upsert on its action block (#2423).
         await AsSystem(() => ObserveNodeOperation(new CreateOrUpdateNodeRequest(node)))
-            .FirstAsync().Timeout(60.Seconds()).ToTask();
+            .FirstAsync().Timeout(60.Seconds()).Await();
     }
 
     /// <summary>Establishes System on the write's OWN subscribe — an ambient impersonation does not

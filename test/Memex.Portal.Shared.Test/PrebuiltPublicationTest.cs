@@ -1,7 +1,6 @@
 using System.IO.Compression;
 using System.Net;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -14,6 +13,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -191,7 +191,7 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
     private Task<string> RegisterInstance(string instanceId, params string[] defaultGrants) =>
         InstanceService(defaultGrants)
             .Register("owner", "Owner", "owner@test.com", instanceId, instanceId)
-            .Select(r => r.RawKey).FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask();
+            .Select(r => r.RawKey).FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
 
     private async Task<WebApplication> StartHost(string publishedRoot)
     {

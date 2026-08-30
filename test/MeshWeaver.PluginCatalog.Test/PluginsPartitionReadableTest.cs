@@ -3,7 +3,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -11,6 +10,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -69,7 +69,7 @@ public class PluginsPartitionReadableTest(ITestOutputHelper output) : MonolithMe
             Version = "1.0.0",
         };
         var files = new[] { new PackageFile("readable-pack/Doc.md", "# Doc\n\nInstalled for the readability pin.") };
-        var result = await PackageInstaller.Install(Mesh, manifest, files, "HEAD").FirstAsync().ToTask();
+        var result = await PackageInstaller.Install(Mesh, manifest, files, "HEAD").FirstAsync().Await();
         result.Written.Should().Be(1);
 
         // The EXACT installed-state query the catalog UI issues (CatalogLayoutAreas.

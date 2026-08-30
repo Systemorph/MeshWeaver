@@ -3,7 +3,6 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Content.Test;
 
@@ -147,7 +147,7 @@ public class ContentImportAccessContextTest(ITestOutputHelper output) : Monolith
                 .Do(_ => identityInsideSubscriberCallback = access.Context?.ObjectId)
                 .FirstAsync()
                 .Timeout(StepTimeout)
-                .ToTask(ct);
+                .Await(ct);
         }, ct);
 
         ambientAtSubscribe.Should().NotBe(Importer.ObjectId,
@@ -155,7 +155,7 @@ public class ContentImportAccessContextTest(ITestOutputHelper output) : Monolith
                      "subscribing thread the test would pass with or without the fix and prove " +
                      "nothing about the capture");
 
-        var stamped = await _stampedIdentities.FirstAsync().Timeout(StepTimeout).ToTask(ct);
+        var stamped = await _stampedIdentities.FirstAsync().Timeout(StepTimeout).Await(ct);
         stamped.Should().Be(Importer.ObjectId,
             because: "SyncContentFilesBuilder.Post captures the caller EAGERLY and pins it on the " +
                      "delivery, so the owning node hub authorises the write as the caller. Without " +
@@ -300,14 +300,14 @@ public class ContentImportAccessContextTest(ITestOutputHelper output) : Monolith
                     _ => nodeWrites.Concat(fileWrites).ToList())
                 .Timeout(StepTimeout)
                 .FirstAsync()
-                .ToTask(ct), ct);
+                .Await(ct), ct);
 
-        var nodeStamp = await _nodeStamps.FirstAsync().Timeout(StepTimeout).ToTask(ct);
-        var fileStamp = await _stampedIdentities.FirstAsync().Timeout(StepTimeout).ToTask(ct);
+        var nodeStamp = await _nodeStamps.FirstAsync().Timeout(StepTimeout).Await(ct);
+        var fileStamp = await _stampedIdentities.FirstAsync().Timeout(StepTimeout).Await(ct);
         // The run is over, so the sample set is complete: close the subject and take ALL of it.
         // Asserting only the first sample would let a later one silently see the enclosing scope.
         _secondStageAmbient.OnCompleted();
-        var stage2Ambients = await _secondStageAmbient.ToList().Timeout(StepTimeout).ToTask(ct);
+        var stage2Ambients = await _secondStageAmbient.ToList().Timeout(StepTimeout).Await(ct);
         Output.WriteLine($"ok={results.Count(r => r)}/{results.Count} nodeStamp={nodeStamp} " +
                          $"fileStamp={fileStamp} " +
                          $"stage2Ambients=[{string.Join(", ", stage2Ambients.Select(a => a ?? "(null)"))}]");
@@ -365,9 +365,9 @@ public class ContentImportAccessContextTest(ITestOutputHelper output) : Monolith
 
         var ct = TestContext.Current.CancellationToken;
         var response = await Task.Run(
-            () => import.FirstAsync().Timeout(StepTimeout).ToTask(ct), ct);
+            () => import.FirstAsync().Timeout(StepTimeout).Await(ct), ct);
 
-        var stamped = await _stampedIdentities.FirstAsync().Timeout(StepTimeout).ToTask(ct);
+        var stamped = await _stampedIdentities.FirstAsync().Timeout(StepTimeout).Await(ct);
         stamped.Should().Be(Importer.ObjectId,
             because: "ContentImportBuilder.Post carries the same eager capture — the collection→" +
                      "collection import is the second half of the same defect, and a caller that " +

@@ -1,7 +1,6 @@
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
@@ -64,9 +63,14 @@ public static class WebhookInboxEndpoints
         var headers = request.Headers.Select(h =>
             new KeyValuePair<string, string>(h.Key, h.Value.ToString()));
 
-        var result = await WebhookInbox.Deliver(
+        var result = (await WebhookInbox.Deliver(
                 hub, allowed, target, request.ContentType, headers, body)
-            .FirstAsync().ToTask(ct);
+            .FirstAsync()
+            .ObserveCompletion(
+                ex => logger?.LogWarning(ex,
+                    "Webhook delivery for target '{Target}' faulted after the response had already been sent",
+                    target),
+                ct))!;
         switch (result.Status)
         {
             case WebhookInbox.DeliveryStatus.Accepted:

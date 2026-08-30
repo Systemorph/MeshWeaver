@@ -2,13 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.NodeOperations.Test;
 
@@ -136,7 +136,7 @@ public class DeleteProviderAgreementTest
                 "the pre-flight must name the provider that blocks, so the delete handler can "
                 + "refuse BEFORE the bottom-up subtree walk removes any writable descendant");
 
-        Func<Task> act = async () => await service.Delete(shipped.Path).FirstAsync().ToTask();
+        Func<Task> act = async () => await service.Delete(shipped.Path).FirstAsync().Await();
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*READ-ONLY*ReadOnlyNs*",
                 "the refusal must say WHY and WHICH provider serves it — not claim, falsely, that "

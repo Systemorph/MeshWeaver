@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -84,7 +83,7 @@ public class DeletedAddressNackClassificationTest(ITestOutputHelper output) : Hu
         var response = host
             .Observe<GatedResponse>(new GatedRequest(), o => o.WithTarget(DeletedAddress))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         await WaitForDeferredBacklog(host);
         host.Post(new DisposeRequest(), o => o.WithTarget(DeletedAddress));
@@ -156,7 +155,7 @@ public class DeletedAddressNackClassificationTest(ITestOutputHelper output) : Hu
 
         var failure = await Assert.ThrowsAsync<DeliveryFailureException>(
             () => host.Observe<GatedResponse>(new ThrowingRequest(), o => o.WithTarget(DeletedAddress))
-                .FirstAsync().ToTask(TestContext.Current.CancellationToken));
+                .FirstAsync().Await(TestContext.Current.CancellationToken));
         Output.WriteLine($"[nack] {failure.Failure!.ErrorType}: {failure.Failure.Message}");
 
         failure.Failure!.ErrorType.Should().Be(ErrorType.NotFound,
@@ -184,7 +183,7 @@ public class DeletedAddressNackClassificationTest(ITestOutputHelper output) : Hu
 
         var failure = await Assert.ThrowsAsync<DeliveryFailureException>(
             () => host.Observe<GatedResponse>(new ThrowingRequest(), o => o.WithTarget(LiveAddress))
-                .FirstAsync().ToTask(TestContext.Current.CancellationToken));
+                .FirstAsync().Await(TestContext.Current.CancellationToken));
         Output.WriteLine($"[nack] {failure.Failure!.ErrorType}: {failure.Failure.Message}");
 
         failure.Failure!.ErrorType.Should().Be(ErrorType.ShuttingDown,

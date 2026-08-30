@@ -2,13 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Reactive.Testing;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -94,7 +94,7 @@ public class RoutingGrainStreamPostBoundTest
                 postFailureToSender: (m, t) => nacks.Add((m, t)),
                 logger: NullLogger.Instance,
                 timeout: Timeout)
-            .ToTask();
+            .Await();
 
         var nack = nacks.Should().ContainSingle().Subject;
         nack.Type.Should().Be(ErrorType.Failed);
@@ -114,7 +114,7 @@ public class RoutingGrainStreamPostBoundTest
                 postFailureToSender: (m, t) => nacks.Add((m, t)),
                 logger: NullLogger.Instance,
                 timeout: Timeout)
-            .ToTask();
+            .Await();
 
         result.Should().Be(Unit.Default);
         nacks.Should().BeEmpty("a delivered post must never NACK the sender");

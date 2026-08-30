@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -94,7 +94,7 @@ public class ShutdownRoutingRejectClassificationTest(ITestOutputHelper output) :
         // so the probe's routing is a cache hit and completes well inside the Quiescing budget.
         var resolution = await Mesh.ServiceProvider.GetRequiredService<IPathResolver>()
             .ResolvePath(path)
-            .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(30.Seconds()).Await(ct);
         resolution.Should().NotBeNull("the node was just created — routing must resolve it");
         resolution!.Remainder.Should().BeNullOrEmpty(
             "an exact resolution is what sends the probe down the CreateHub path whose reject we are classifying");
@@ -123,7 +123,7 @@ public class ShutdownRoutingRejectClassificationTest(ITestOutputHelper output) :
             probe = Mesh.Observe(
                     new GetDataRequest(new MeshNodeReference()),
                     o => o.WithTarget(new Address(path)))
-                .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(10.Seconds()).Await(ct);
 
             // 3. Dispose: IsDisposing flips synchronously, ShutdownRequest queues after the probe.
             Mesh.Dispose();

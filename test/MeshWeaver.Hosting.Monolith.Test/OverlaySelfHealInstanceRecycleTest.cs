@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -172,7 +172,7 @@ public class OverlaySelfHealInstanceRecycleTest(ITestOutputHelper output) : Mono
                     .Where(c => c is HtmlControl h && (h.Data?.ToString() ?? string.Empty).Contains(marker))
                     .Take(1)
                     .Timeout(15.Seconds())
-                    .ToTask(TestContext.Current.CancellationToken);
+                    .Await(TestContext.Current.CancellationToken);
                 healedHtml = (control as HtmlControl)?.Data?.ToString();
             }
             catch (TimeoutException)

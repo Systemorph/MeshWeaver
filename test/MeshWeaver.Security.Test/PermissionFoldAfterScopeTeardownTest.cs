@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -10,6 +9,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -97,7 +97,7 @@ public class PermissionFoldAfterScopeTeardownTest(ITestOutputHelper output) : Mo
         // disposed flag flips FIRST, every resolve from it throws from that instant, and the hub
         // instance is disposed later in the same sweep. No hub.Dispose() is called here.
         ((IDisposable)hub.ServiceProvider).Dispose();
-        await hub.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask();
+        await hub.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
 
         hub.IsServiceScopeDisposed().Should().BeTrue(
             "the probe is the positive signal every teardown classification is gated on");

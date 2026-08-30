@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text;
 using MeshWeaver.ContentCollections.Indexing;
@@ -7,6 +6,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Graph.Test;
 
@@ -61,7 +61,7 @@ public class MeshDocumentSinkTest(ITestOutputHelper output) : MonolithMeshTestBa
             .Where(n => n?.Content is Document)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
     [Fact(Timeout = 60_000)]
     public async Task IndexedFile_WritesFirstClassDocumentMeshNode()
@@ -76,7 +76,7 @@ public class MeshDocumentSinkTest(ITestOutputHelper output) : MonolithMeshTestBa
         var bytes = Encoding.UTF8.GetBytes(body);
 
         var result = await service.IndexFile(Collection, filePath, fileName, bytes)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         result.Status.Should().Be(IndexStatus.Indexed);
         result.ChunkCount.Should().BeGreaterThan(1);
         summarizer.Calls.Should().Be(1);
@@ -121,7 +121,7 @@ public class MeshDocumentSinkTest(ITestOutputHelper output) : MonolithMeshTestBa
         var bytes = Encoding.UTF8.GetBytes("Round-trip body long enough to chunk and summarize.");
 
         var result = await service.IndexFile(Collection, filePath, fileName, bytes)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         result.Status.Should().Be(IndexStatus.Indexed);
 
         var node = await ReadDocumentNode(DocumentPaths.For(Collection, filePath));
@@ -150,7 +150,7 @@ public class MeshDocumentSinkTest(ITestOutputHelper output) : MonolithMeshTestBa
         var filePath = $"pages/{fileName}";
         var bytes = Encoding.UTF8.GetBytes("# Title\n\nBody about chunking and embeddings.\n");
 
-        var first = await service.IndexFile(Collection, filePath, fileName, bytes).FirstAsync().ToTask();
+        var first = await service.IndexFile(Collection, filePath, fileName, bytes).FirstAsync().Await();
         first.Status.Should().Be(IndexStatus.Indexed);
         summarizer.Calls.Should().Be(1);
 
@@ -160,7 +160,7 @@ public class MeshDocumentSinkTest(ITestOutputHelper output) : MonolithMeshTestBa
         var hashAfterFirst = (afterFirst.Content as Document)!.ContentHash;
 
         // Re-index identical bytes -> hash gate short-circuits BEFORE extract/summarize/document.
-        var second = await service.IndexFile(Collection, filePath, fileName, bytes).FirstAsync().ToTask();
+        var second = await service.IndexFile(Collection, filePath, fileName, bytes).FirstAsync().Await();
         second.Status.Should().Be(IndexStatus.Skipped);
         second.ChunkCount.Should().Be(0);
 

@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -109,7 +109,7 @@ public class NodeTypePathCollisionTest(ITestOutputHelper output) : MonolithMeshT
         var enriched = await factory.ResolveHubConfiguration(instance)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask(ct);
+            .Await(ct);
 
         enriched.HubConfiguration.Should().NotBeNull(
             "an unresolvable NodeType still yields the overlay configuration, never a null hub");

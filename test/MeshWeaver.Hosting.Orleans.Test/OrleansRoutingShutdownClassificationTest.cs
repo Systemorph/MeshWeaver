@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
@@ -86,7 +85,7 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
         var routing = CreateRouter();
         lifetime.StopApplication();
 
-        await routing.DeliverMessage(NewDelivery()).FirstAsync().ToTask();
+        await routing.DeliverMessage(NewDelivery()).FirstAsync().Await();
 
         var failure = await nack.Task.WaitAsync(TimeSpan.FromSeconds(10));
         // A reject caused by THIS process going away is transient: consumers with recovery
@@ -107,7 +106,7 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
         var routing = CreateRouter();
         lifetime.StopApplication();
 
-        var result = await routing.DeliverMessage(NewDelivery()).FirstAsync().ToTask();
+        var result = await routing.DeliverMessage(NewDelivery()).FirstAsync().Await();
 
         Assert.Equal(MessageDeliveryState.Failed, result.State);
         // This path posts its own DeliveryFailure, so it must declare that — otherwise whoever
@@ -128,6 +127,6 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
         // With the host running the router must still place IRoutingGrain — the null factory is
         // the probe that proves placement was reached.
         await Assert.ThrowsAsync<NullReferenceException>(
-            () => routing.DeliverMessage(NewDelivery()).FirstAsync().ToTask());
+            () => routing.DeliverMessage(NewDelivery()).FirstAsync().Await());
     }
 }

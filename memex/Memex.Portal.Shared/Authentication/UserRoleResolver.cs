@@ -1,8 +1,8 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.Authentication;
 
@@ -46,7 +46,10 @@ internal static class UserRoleResolver
     /// <para>The single Task bridge here lives at the ASP.NET
     /// <c>AuthenticationHandler.HandleAuthenticateAsync</c> boundary —
     /// callers expect a Task-returning helper, but everything below
-    /// stays observable.</para>
+    /// stays observable. It is
+    /// <see cref="ReactiveCompletion.ObserveCompletion{T}"/>, never Rx's
+    /// <c>.ToTask()</c>, which would resume the caller inline on whichever hub
+    /// thread published the roles (forbidden since 2026-08-30).</para>
     /// </summary>
     /// <param name="services">Scope to resolve the hub (and through it the workspace) from.</param>
     /// <param name="userId">The mesh user id whose grants to read.</param>
@@ -62,13 +65,16 @@ internal static class UserRoleResolver
         if (string.IsNullOrEmpty(userId))
             return IdentityReadOutcome<IReadOnlyCollection<string>>.Resolved(Array.Empty<string>());
 
+        var lateFaultLogger = services.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(UserRoleResolver));
+
         // 🚨 Resolving the hub and its workspace happens INSIDE the chain, not before it. A hub
         // mid-disposal (portal restart) throws from GetWorkspace(), and that throw used to be
         // absorbed by the caller's bare `catch { }`. With the swallow gone it would escape as a
         // 500 — an availability failure reported as a server error, i.e. this issue's own defect
         // reappearing inside its fix. Deferring puts it on the same classified path as any other
         // read fault: Unavailable, retryable, 503.
-        return await Observable.Defer(() =>
+        return (await Observable.Defer(() =>
                 {
                     var workspace = services.GetService<IMessageHub>()?.GetWorkspace();
                     // No role SOURCE at all is a static configuration fact — there is nothing to
@@ -82,7 +88,11 @@ internal static class UserRoleResolver
             .Catch<IdentityReadOutcome<IReadOnlyCollection<string>>, Exception>(ex =>
                 Observable.Return(IdentityReadOutcome<IReadOnlyCollection<string>>.Unavailable(
                     $"LoadDbRoles({userId}) faulted resolving the role source: {ex.GetType().Name}")))
+            // The trailing Catch turns every fault into a value, so this source emits EXACTLY
+            // ONCE; FirstAsync is kept so an empty completion still surfaces as an error rather
+            // than silently authenticating an under-privileged principal.
             .FirstAsync()
-            .ToTask();
+            .ObserveCompletion(ex => lateFaultLogger?.LogWarning(ex,
+                "LoadDbRoles({UserId}) faulted after the role read had already settled", userId)))!;
     }
 }

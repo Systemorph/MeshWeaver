@@ -1,7 +1,7 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.GitSync;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -22,10 +22,10 @@ public class SyncDirectionAndSourcesTest(ITestOutputHelper output) : GitHubSyncT
         await CreateMarkdown($"{a}/Page", "Page", "# Page");
         await Sync.SaveConfig(a, "https://github.com/test/import-only", "main", null, true, true,
                 SyncDirection.ImportOnly)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Sync.SyncToGitHub(a, UserId).Timeout(30.Seconds()).ToTask());
+            () => Sync.SyncToGitHub(a, UserId).Timeout(30.Seconds()).Await());
         Assert.Contains("import-only", ex.Message);
     }
 
@@ -38,15 +38,15 @@ public class SyncDirectionAndSourcesTest(ITestOutputHelper output) : GitHubSyncT
         await CreateMarkdown($"{a}/Page", "Page", "# Page");
         await Sync.SaveConfig(a, "https://github.com/test/export-only", "main", null, true, true,
                 SyncDirection.ExportOnly)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         // Export is allowed on an export-only source…
-        var pushed = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        var pushed = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
         Assert.False(string.IsNullOrEmpty(pushed.CommitSha));
 
         // …importing back is not.
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Sync.ReimportAtCommit(a, pushed.CommitSha, UserId).Timeout(30.Seconds()).ToTask());
+            () => Sync.ReimportAtCommit(a, pushed.CommitSha, UserId).Timeout(30.Seconds()).Await());
         Assert.Contains("export-only", ex.Message);
     }
 
@@ -60,39 +60,39 @@ public class SyncDirectionAndSourcesTest(ITestOutputHelper output) : GitHubSyncT
 
         // Primary + one additional source, each with its own repository.
         await Sync.SaveConfig(a, "https://github.com/test/primary", "main", null, true, true)
-            .Timeout(30.Seconds()).ToTask();
-        var added = await Sync.AddSyncSource(a, "Mirror").Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
+        var added = await Sync.AddSyncSource(a, "Mirror").Timeout(30.Seconds()).Await();
         Assert.Equal($"{a}/_GitSync/Mirror", added.Path);
         await Sync.SaveConfig(a, "https://github.com/test/mirror", "main", null, true, true,
                 SyncDirection.ExportOnly, sourceId: "Mirror")
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         // Both sources are listed (primary first, then the additional one).
         var sources = await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => Sync.WatchConfigNodes(a).Take(1))
             .Where(list => list.Count == 2)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.Contains(sources, n => n.Path == GitHubSyncService.ConfigPath(a));
         Assert.Contains(sources, n => n.Path == $"{a}/_GitSync/Mirror");
 
         // Sync the ADDITIONAL source: the commit lands in ITS repository and the last-sync
         // state is recorded on ITS config node — the primary stays untouched.
-        var pushed = await Sync.SyncToGitHub(a, UserId, "Mirror").Timeout(60.Seconds()).ToTask();
+        var pushed = await Sync.SyncToGitHub(a, UserId, "Mirror").Timeout(60.Seconds()).Await();
         Assert.Contains(Fake.Tree("https://github.com/test/mirror"), f => f.Path == "Page.md");
         var mirrorCfg = await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => Sync.ReadConfig(a, "Mirror"))
             .Where(c => c?.LastSyncCommitSha == pushed.CommitSha)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.NotNull(mirrorCfg!.LastSyncedAt);
-        var primaryCfg = await Sync.ReadConfig(a).Timeout(10.Seconds()).ToTask();
+        var primaryCfg = await Sync.ReadConfig(a).Timeout(10.Seconds()).Await();
         Assert.Null(primaryCfg!.LastSyncCommitSha);
 
         // Remove the additional source — only the primary remains.
-        Assert.True(await Sync.RemoveSyncSource(a, "Mirror").Timeout(30.Seconds()).ToTask());
+        Assert.True(await Sync.RemoveSyncSource(a, "Mirror").Timeout(30.Seconds()).Await());
         var afterRemove = await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => Sync.WatchConfigNodes(a).Take(1))
             .Where(list => list.Count == 1)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.Equal(GitHubSyncService.ConfigPath(a), afterRemove[0].Path);
     }
 }
