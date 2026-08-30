@@ -64,6 +64,36 @@ public class RecycledHubRefusalTest : HubTestBase
     }
 
     /// <summary>
+    /// #2673: an UNDETERMINED permission outcome on a hub that is going away must be answered in
+    /// the recycling vocabulary too, not as "we could not check".
+    ///
+    /// <para>The fold cannot reach a verdict while the owner is recycled, and the honest-sounding
+    /// <c>Unavailable</c> answer carries no marker any transient classifier matches — so
+    /// <c>GetMeshNode</c> took it as TERMINAL and resolved <b>null</b> for a node that exists at an
+    /// address that reactivates (measured: "recovered in 62 ms: (null)"). The reason string is the
+    /// only evidence available on that path, hence the string overload.</para>
+    /// </summary>
+    [Fact]
+    public void AnUndeterminedCheck_OnAGoneHub_IsClassifiedTransientToo()
+    {
+        var refusal = AccessControlPipeline.RecyclingRefusal(
+            new Address("TestData", "reprobe-recovers"), "GetDataRequest",
+            "the permission query could not run");
+
+        MeshNodeStreamCache.IsTransientOwnerFailure(new InvalidOperationException(refusal))
+            .Should().BeTrue("otherwise GetMeshNode resolves null for a node that EXISTS — #2673");
+
+        AccessControlPipeline.IsHubGone(GetHost(),
+                "Instances cannot be resolved and nested lifetimes cannot be created from this "
+                + "LifetimeScope as it (or one of its parent scopes) has already been disposed.")
+            .Should().BeTrue("a disposed scope named in the REASON is the same fact as one thrown");
+        AccessControlPipeline.IsHubGone(GetHost(), "the query returned no rows")
+            .Should().BeFalse("an ordinary undetermined outcome on a LIVE hub keeps its honest "
+                + "'we could not check' answer — calling that a recycle would make a real gate "
+                + "failure retry forever");
+    }
+
+    /// <summary>
     /// The discrimination. A disposed SCOPE means the hub is gone; an unrelated
     /// <see cref="ObjectDisposedException"/> from something a handler touched on a LIVE hub is a
     /// real fault and must keep its honest "the gate could not run" classification — over-claiming

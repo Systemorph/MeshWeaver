@@ -1838,17 +1838,25 @@ public static class DataExtensions
     /// delivery passes through unchanged for whoever else handles it (the request/response callback
     /// already ran; it is first in the rule chain).</para>
     ///
-    /// <para>🚨 <b>The <c>ErrorType == NotFound</c> half of this gate was removed deliberately.</b>
-    /// It was redundant belt-and-braces from the era when the router's ONLY unserved verdict came
-    /// from the stream leg's subscriber probe. Since
-    /// <c>RoutingGrain.AnswerPodHubNotHere</c> the router also stamps the verdict on the
-    /// TRANSIENT <see cref="ErrorType.ShuttingDown"/> — "no silo serves this hub right now" reached
-    /// in one hop through the grain directory, the answer that replaced the stream publish
-    /// (<c>Doc/Architecture/DurableStreamsViaMeshNodes</c>). Keeping the NotFound test would have
-    /// made that answer inert here and silently re-opened this very leak for every dead circuit in
-    /// the fleet. The two verdicts are complementary, not contradictory: the SUBSCRIBER rides
-    /// <c>ShuttingDown</c> out and re-asks, while the OWNER drops the server-side half it can no
-    /// longer push to — which is exactly the recovery described below.</para>
+    /// <para>🚨 <b>A TRANSIENT verdict must NOT evict — issue #2756.</b> The stamp says "no silo
+    /// serves this address"; the <see cref="ErrorType"/> beside it says whether that is a fact
+    /// about a DEAD process or about a moment in time. Since <c>RoutingGrain.AnswerPodHubNotHere</c>
+    /// the router also stamps the verdict on <see cref="ErrorType.ShuttingDown"/> — reached in one
+    /// hop through Orleans' grain directory when the owner is mid-roll or its pod-hub claim has not
+    /// landed yet (<c>Doc/Architecture/DurableStreamsViaMeshNodes</c>). That one is explicitly
+    /// recoverable, and <c>JsonSynchronizationStream</c> is built to ride it out and RE-ARM rather
+    /// than re-subscribe. So evicting on it destroys the server-side half of a subscription whose
+    /// other half is deliberately sitting still — the owner throws the stream away while the
+    /// subscriber waits for it. #2745 briefly gated on the stamp alone and turned main red on
+    /// <c>ObservableQueryTests.ObserveQuery_EmitsRemovedOnDeletedNode</c>, where both halves live
+    /// in one process and the eviction wins the race against the mirror.</para>
+    ///
+    /// <para>The leak this handler exists to close (#2426/#2546) is a subscriber whose PROCESS is
+    /// GONE — the terminal verdict. A transient one is not that, and answering it with an
+    /// irreversible eviction trades a bounded wait for a lost subscription. Hence: the stamp
+    /// decides whether the delivery is OURS to act on, and the verdict decides whether the right
+    /// action is to evict or to leave the stream alone. Both halves are load-bearing, and each is
+    /// pinned by its own test in <c>UnservedVerdictEvictionTest</c>.</para>
     ///
     /// <para>Evict-only, and terminal per NACK: nothing here retries, re-probes or resubscribes. A
     /// subscriber that was in fact alive but unreachable loses only its server-side stream, and
@@ -1860,6 +1868,14 @@ public static class DataExtensions
     {
         var failure = delivery.Message;
         if (!failure.TargetUnserved)
+            return delivery;
+        // 🚨 TRANSIENT ⇒ leave the stream alone (#2756). ShuttingDown is the platform's
+        // "come back and re-ask" verdict — JsonSynchronizationStream rides it out and re-arms
+        // instead of re-subscribing — so evicting here would dispose the server-side half of a
+        // subscription that is deliberately waiting for it. A NEW transient ErrorType must be added
+        // to this test, not left to fall through: the default here is to evict, and eviction is
+        // irreversible for a subscriber that never re-asks.
+        if (failure.ErrorType == ErrorType.ShuttingDown)
             return delivery;
         var deadSubscriber = failure.Delivery?.Target;
         if (deadSubscriber is null || hub.GetWorkspace() is not Workspace workspace)
