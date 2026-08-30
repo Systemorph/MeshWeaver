@@ -442,11 +442,18 @@ public static class CascadeBuild
             }
 
             StaticTestRunner.Run? tests = null;
-            if (options.RunTests && definition.Tests is { Count: > 0 })
+            if (options.RunTests)
             {
+                // Run whatever test classes the emitted assembly actually contains. A type's
+                // Test/*.cs reaches the compile through the compiler's DEFAULT query — the node
+                // declares `sources`, rarely `tests` — so gating on the declaration reported zero
+                // tests for every package on the first real run (33319413459). The assembly is
+                // the truth: no test classes, no cases, and the report says so.
                 testClock.Start();
                 tests = StaticTestRunner.Execute(
-                    compiled.DllPath, [.. dependencyAssemblies, .. emitted], options.CaseTimeout, options.Output);
+                    compiled.DllPath,
+                    [.. options.ModuleAssemblyPaths, .. dependencyAssemblies, .. emitted],
+                    options.CaseTimeout, options.Output);
                 testClock.Stop();
             }
 
@@ -456,7 +463,9 @@ public static class CascadeBuild
             options.Output.WriteLine(
                 $"{Stamp()} [{id}]   ok  {compiled.NodePath} ({typeClock.Elapsed.TotalMilliseconds:F0} ms, "
                 + $"{compiled.Inputs.MatchedSourcePaths.Length} source(s))"
-                + (tests is null ? "" : $" tests: {tests.Passed} passed, {tests.Failed} failed, {tests.NeedsMesh} needs-mesh")
+                + (tests is null ? "" : tests.Cases.IsEmpty
+                    ? " tests: no test classes in the assembly"
+                    : $" tests: {tests.Cases.Length} case(s) — {tests.Passed} passed, {tests.Failed} failed, {tests.NeedsMesh} needs-mesh")
                 + (binds.IsEmpty ? "" : $" binds-dependency-assembly: {string.Join(", ", binds)}"));
         }
         compileClock.Stop();
