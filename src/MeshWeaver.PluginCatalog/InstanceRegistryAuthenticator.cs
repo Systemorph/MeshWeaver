@@ -32,63 +32,117 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     /// hot path (a consumer polls its catalog, it does not stream).</summary>
     public static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(1);
 
+    /// <summary>
+    /// How long a DEFINITIVE "this key is unknown" is reused — far shorter than a positive.
+    ///
+    /// <para>The two are not symmetric. A positive answer costs a minute of staleness on a
+    /// revocation, which is the trade <see cref="CacheDuration"/> makes deliberately. A negative
+    /// costs a minute of lockout to an instance that has just been registered or re-keyed, for no
+    /// benefit at all: nobody polls a key that does not work. Five seconds still absorbs a burst of
+    /// unauthenticated requests without turning a registration into a coffee break.</para>
+    /// </summary>
+    public static readonly TimeSpan NegativeCacheDuration = TimeSpan.FromSeconds(5);
+
+    /// <summary>Retry-After (seconds) an endpoint advertises when resolution was UNAVAILABLE.
+    /// Matches the API-token leg's <c>ApiTokenAuthenticationHandler.RetryAfterSeconds</c>.</summary>
+    public const int RetryAfterSeconds = 5;
+
     private readonly ConcurrentDictionary<string, (DateTimeOffset At, AuthenticatedInstance? Result)> cache = new();
 
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The node read, injectable so the CACHE and CLASSIFICATION rules can be driven without a
+    /// mesh. Production is <see cref="IMessageHub"/>'s interrogable one-shot read; a test supplies
+    /// an unavailable/absent/present sequence directly.
+    /// </summary>
+    internal Func<string, IObservable<NodeReadOutcome>>? ReadOverride { get; init; }
 
     /// <summary>
     /// Resolves the caller. Emits the authenticated instance, or <c>null</c> when the header carries
     /// no instance key, the key is unknown, its hash does not match, or the instance is disabled.
     /// Never throws for an unauthenticated caller — a failure to authenticate is a <c>null</c>, and
     /// the endpoint turns that into a 401.
+    ///
+    /// <para>🚨 A <c>null</c> here still conflates "unknown key" with "could not find out", which is
+    /// why every endpoint should call <see cref="AuthenticateOutcome"/> instead. This overload is
+    /// kept for callers that genuinely only need the instance.</para>
     /// </summary>
-    public IObservable<AuthenticatedInstance?> Authenticate(string? authorizationHeader)
+    public IObservable<AuthenticatedInstance?> Authenticate(string? authorizationHeader) =>
+        AuthenticateOutcome(authorizationHeader).Select(outcome => outcome.Instance);
+
+    /// <summary>
+    /// Resolves the caller, keeping "this key is unknown" apart from "I could not find out".
+    ///
+    /// <para>🚨 THE DISTINCTION IS THE POINT (#2695). Three point reads stand between a bearer key
+    /// and its instance, and a transient failure of ANY of them used to become a <c>null</c> — which
+    /// the endpoint renders as <c>401 "A registered instance key is required"</c>, and which was then
+    /// <b>cached for a full minute</b>. One slow read on one pod therefore made a perfectly valid key
+    /// unknown to that pod for sixty seconds, and the 401 steered its owner at the wrong fix: a CI
+    /// guard read it as "this instance needs a whole-source grant" while the grant was present and
+    /// unchanged (MeshWeaver.Crm run 33269921011, both jobs, passing minutes later with no change
+    /// anywhere).</para>
+    ///
+    /// <para>So: an <see cref="NodeReadStatus.Unavailable"/> on any leg yields
+    /// <see cref="InstanceAuthResult.Unavailable"/>, and <b>is never cached</b> — a fault must not
+    /// become a fact. Only a read that reached a verdict is remembered. This is the same two-shape
+    /// outcome the identity side adopted for #637; the instance-key leg simply never got it.</para>
+    /// </summary>
+    public IObservable<InstanceAuthResult> AuthenticateOutcome(string? authorizationHeader)
     {
         var rawKey = InstanceKeys.ExtractKey(authorizationHeader);
         if (rawKey is null)
             return AuthenticateToken(authorizationHeader);
 
         var hash = InstanceKeys.Hash(rawKey);
-        if (cache.TryGetValue(hash, out var hit) && DateTimeOffset.UtcNow - hit.At < CacheDuration)
-            return Observable.Return(hit.Result);
+        if (cache.TryGetValue(hash, out var hit)
+            && DateTimeOffset.UtcNow - hit.At < (hit.Result is null ? NegativeCacheDuration : CacheDuration))
+            return Observable.Return(InstanceAuthResult.Resolved(hit.Result));
 
         return Resolve(hash)
-            .Do(result => cache[hash] = (DateTimeOffset.UtcNow, result))
+            .Do(result =>
+            {
+                // Only a VERDICT is cached. Caching the unavailable branch is the whole defect.
+                if (!result.IsUnavailable)
+                    cache[hash] = (DateTimeOffset.UtcNow, result.Instance);
+            })
             .Catch((Exception ex) =>
             {
-                // A read failure is NOT an authentication success. Surface null (→ 401) and log;
-                // never fall through to "allow" because the mesh was briefly unreachable.
-                logger.LogWarning(ex, "Instance key resolution failed for hash prefix {Prefix}",
-                    InstanceKeys.HashPrefix(hash));
-                return Observable.Return<AuthenticatedInstance?>(null);
+                // A read failure is NOT an authentication success — and it is not a denial either.
+                // It is unavailability: uncached, and surfaced as such so the caller retries instead
+                // of being told its key is unknown.
+                logger.LogWarning(ex, "Instance key resolution UNAVAILABLE for hash prefix {Prefix} "
+                    + "— reporting retryable, NOT 'unknown key'", InstanceKeys.HashPrefix(hash));
+                return Observable.Return(InstanceAuthResult.Unavailable(ex.Message));
             });
     }
 
     /// <summary>
-    /// The short-lived-token half of <see cref="Authenticate"/>. A verified token resolves through
-    /// exactly the same index as the key it was exchanged from — it carries that key's hash — so
-    /// there is one resolution path, and re-issuing an instance key invalidates every outstanding
-    /// token because the instance record then holds a different hash.
+    /// The short-lived-token half of <see cref="AuthenticateOutcome"/>. A verified token resolves
+    /// through exactly the same index as the key it was exchanged from — it carries that key's hash
+    /// — so there is one resolution path, and re-issuing an instance key invalidates every
+    /// outstanding token because the instance record then holds a different hash.
     ///
     /// <para>🚨 The token contributes IDENTITY and SCOPE, never authority. The live
     /// <see cref="PluginGrant"/> is still read and still decides, so a revoked or expired sync
     /// licence takes effect immediately instead of surviving until the token runs out.</para>
     /// </summary>
-    private IObservable<AuthenticatedInstance?> AuthenticateToken(string? authorizationHeader)
+    private IObservable<InstanceAuthResult> AuthenticateToken(string? authorizationHeader)
     {
         var rawToken = SyncAccessToken.ExtractToken(authorizationHeader);
         if (rawToken is null)
-            return Observable.Return<AuthenticatedInstance?>(null);
+            return Observable.Return(InstanceAuthResult.Resolved(null));
 
         var keys = hub.ServiceProvider.GetService<SyncTokenSigningKeyService>();
         if (keys is null)
         {
             // No key service is not "allow": a registry that cannot verify a signature must refuse
-            // the token, never accept it unverified.
+            // the token, never accept it unverified. This is a CONFIGURATION verdict, not a
+            // transient one — retrying will not register the service — so it stays a denial.
             logger.LogWarning(
                 "A sync access token was presented but no {Service} is registered — refusing.",
                 nameof(SyncTokenSigningKeyService));
-            return Observable.Return<AuthenticatedInstance?>(null);
+            return Observable.Return(InstanceAuthResult.Resolved(null));
         }
 
         // Existing(), never Resolve(): this caller has not authenticated yet, so minting on their
@@ -101,35 +155,35 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                 // token minted moments before a rotation still works.
                 var claims = material?.Verify(rawToken, DateTimeOffset.UtcNow);
                 if (claims is null)
-                    return Observable.Return<AuthenticatedInstance?>(null);
+                    return Observable.Return(InstanceAuthResult.Resolved(null));
 
                 return Resolve(claims.KeyHash)
-                    .Select(resolved =>
+                    .Select(outcome =>
                     {
-                        if (resolved is null)
-                            return null;
+                        if (outcome.IsUnavailable || outcome.Instance is null)
+                            return outcome;
                         // The token names an instance AND routes to one. They must be the same
                         // instance, or it is being replayed against a record it does not describe.
                         if (!string.Equals(
-                                resolved.Instance.InstanceId, claims.InstanceId, StringComparison.Ordinal))
+                                outcome.Instance.Instance.InstanceId, claims.InstanceId, StringComparison.Ordinal))
                         {
                             logger.LogWarning(
                                 "Sync access token claims instance {Claimed} but its key resolves to "
                                 + "{Actual} — refusing.",
-                                claims.InstanceId, resolved.Instance.InstanceId);
-                            return null;
+                                claims.InstanceId, outcome.Instance.Instance.InstanceId);
+                            return InstanceAuthResult.Resolved(null);
                         }
-                        return resolved with { TokenScope = claims };
+                        return InstanceAuthResult.Resolved(outcome.Instance with { TokenScope = claims });
                     });
             })
             .Catch((Exception ex) =>
             {
-                logger.LogWarning(ex, "Sync access token resolution failed");
-                return Observable.Return<AuthenticatedInstance?>(null);
+                logger.LogWarning(ex, "Sync access token resolution UNAVAILABLE");
+                return Observable.Return(InstanceAuthResult.Unavailable(ex.Message));
             });
     }
 
-    private IObservable<AuthenticatedInstance?> Resolve(string hash)
+    private IObservable<InstanceAuthResult> Resolve(string hash)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var indexPath = $"{MeshWeaverInstanceNodeType.IndexNamespace}/{InstanceKeys.HashPrefix(hash)}";
@@ -142,41 +196,83 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
         // of that same Subscribe, and delivers every notification under the subscriber's own
         // identity, so the three reads below are System and nothing downstream inherits it.
         return accessService.RunAsSystem(() => Read(indexPath)
-            .SelectMany(indexNode =>
+            .SelectMany(indexRead =>
             {
-                var index = Content<MeshWeaverInstanceIndex>(indexNode);
+                if (Unavailable(indexRead, indexPath) is { } unavailable)
+                    return Observable.Return(unavailable);
+
+                var index = Content<MeshWeaverInstanceIndex>(indexRead.Node);
                 if (index is null || !InstanceKeys.HashEquals(hash, index.KeyHash))
-                    return Observable.Return<AuthenticatedInstance?>(null);
+                    return Observable.Return(InstanceAuthResult.Resolved(null));
 
                 return Read(index.InstancePath)
-                    .SelectMany(instanceNode =>
+                    .SelectMany(instanceRead =>
                     {
-                        var instance = Content<MeshWeaverInstance>(instanceNode);
+                        if (Unavailable(instanceRead, index.InstancePath) is { } instanceUnavailable)
+                            return Observable.Return(instanceUnavailable);
+
+                        var instance = Content<MeshWeaverInstance>(instanceRead.Node);
                         // Re-check the hash on the instance itself: the index is a routing hint,
                         // the instance record is the authority. A stale index must not authenticate.
                         if (instance is null || !InstanceKeys.HashEquals(hash, instance.KeyHash))
-                            return Observable.Return<AuthenticatedInstance?>(null);
+                            return Observable.Return(InstanceAuthResult.Resolved(null));
                         if (instance.IsDisabled)
                         {
                             logger.LogWarning("Instance {InstanceId} presented a valid key but is disabled",
                                 instance.InstanceId);
-                            return Observable.Return<AuthenticatedInstance?>(null);
+                            return Observable.Return(InstanceAuthResult.Resolved(null));
                         }
 
-                        return Read(MeshWeaverInstanceNodeType.GrantPath(instance.InstanceId))
-                            // No grant node at all is the NORMAL state for a freshly registered
-                            // instance — it authenticates, and is entitled to nothing.
-                            .Select(grantNode => (AuthenticatedInstance?)new AuthenticatedInstance(
-                                instance,
-                                Content<PluginGrant>(grantNode) ?? new PluginGrant { InstanceId = instance.InstanceId }));
+                        var grantPath = MeshWeaverInstanceNodeType.GrantPath(instance.InstanceId);
+                        return Read(grantPath)
+                            .Select(grantRead =>
+                            {
+                                // 🚨 The grant leg needs the SAME distinction, and it is the easiest
+                                // one to miss: no grant node at all is the NORMAL state for a freshly
+                                // registered instance (it authenticates, and is entitled to nothing),
+                                // whereas an UNREADABLE grant would silently authenticate the caller
+                                // and then refuse every package it asked for — a 403 nobody can act
+                                // on, cached for a minute.
+                                if (Unavailable(grantRead, grantPath) is { } grantUnavailable)
+                                    return grantUnavailable;
+                                return InstanceAuthResult.Resolved(new AuthenticatedInstance(
+                                    instance,
+                                    Content<PluginGrant>(grantRead.Node)
+                                    ?? new PluginGrant { InstanceId = instance.InstanceId }));
+                            });
                     });
             }));
     }
 
-    /// <summary>One-shot read by exact path. The System identity comes from the single
+    /// <summary>The unavailable result for a read that reached no verdict, or null when it did.
+    /// <see cref="NodeReadStatus.DeleteInProgress"/> counts as a verdict — the record is going away,
+    /// so "unknown key" is the right answer and retrying would only delay it.</summary>
+    private InstanceAuthResult? Unavailable(NodeReadOutcome read, string path)
+    {
+        if (read.Status != NodeReadStatus.Unavailable)
+            return null;
+        var reason = read.Failure?.Message ?? "the read reached no verdict";
+        logger.LogWarning(
+            "Instance key resolution: {Path} was UNAVAILABLE ({Reason}) — answering retryable, "
+            + "never 'unknown key', and caching nothing", path, reason);
+        return InstanceAuthResult.Unavailable($"{path}: {reason}");
+    }
+
+    /// <summary>
+    /// One-shot INTERROGABLE read by exact path. The System identity comes from the single
     /// <see cref="ImpersonationScopeExtensions.RunAsSystem{T}"/> scope in <see cref="Resolve"/>, so
-    /// this composes inside it rather than opening a scope of its own.</summary>
-    private IObservable<MeshNode?> Read(string path) => hub.GetMeshNode(path, ReadTimeout);
+    /// this composes inside it rather than opening a scope of its own.
+    ///
+    /// <para>🚨 <c>GetMeshNodeOutcome</c>, not <c>GetMeshNode</c>: the convenience read maps every
+    /// non-Present outcome to the same <c>null</c>, and "absent" versus "I could not read it" is the
+    /// entire question this authenticator has to answer. <see cref="ReadTimeoutBehavior.EmitNull"/>
+    /// keeps a budget overrun on the outcome channel as <see cref="NodeReadStatus.Unavailable"/>
+    /// rather than throwing it into the caller's catch-all.</para>
+    /// </summary>
+    private IObservable<NodeReadOutcome> Read(string path) =>
+        ReadOverride is { } test
+            ? test(path)
+            : hub.GetMeshNodeOutcome(path, ReadTimeout, ReadTimeoutBehavior.EmitNull);
 
     private T? Content<T>(MeshNode? node) where T : class
     {
@@ -190,6 +286,44 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
             return null;
         }
     }
+}
+
+/// <summary>
+/// The outcome of resolving a presented instance key — the seam that keeps <b>"this key is
+/// unknown"</b> apart from <b>"I could not find out"</b> (#2695).
+///
+/// <para>Exactly two shapes, deliberately mirroring the identity side's
+/// <c>IdentityReadOutcome&lt;T&gt;</c> (#637), because it is the same mistake in a different leg:
+/// <list type="bullet">
+///   <item><description><b>Resolved</b> — the resolution reached a verdict.
+///     <see cref="Instance"/> <c>null</c> here is a DEFINITIVE negative: no such key, hash
+///     mismatch, or the instance is disabled. The endpoint answers <c>401</c>, and the result may
+///     be cached.</description></item>
+///   <item><description><b>Unavailable</b> — one of the three reads reached no verdict. NOTHING was
+///     established about the key, so the endpoint answers <c>503</c> + <c>Retry-After</c> and the
+///     result is NEVER cached.</description></item>
+/// </list></para>
+/// </summary>
+public sealed record InstanceAuthResult
+{
+    /// <summary>The authenticated caller, or <c>null</c> — which is a definitive negative when
+    /// resolved, and carries no meaning at all when <see cref="IsUnavailable"/>.</summary>
+    public AuthenticatedInstance? Instance { get; init; }
+
+    /// <summary>Why no verdict was reached, or <c>null</c> when one was.</summary>
+    public string? UnavailableReason { get; init; }
+
+    /// <summary>True when resolution reached NO verdict — retryable, never "unknown key".</summary>
+    public bool IsUnavailable => UnavailableReason is not null;
+
+    /// <summary>The resolution completed; <paramref name="instance"/> is the answer (possibly a
+    /// definitive <c>null</c>).</summary>
+    public static InstanceAuthResult Resolved(AuthenticatedInstance? instance) =>
+        new() { Instance = instance };
+
+    /// <summary>The resolution reached no verdict — answer retryable, and cache nothing.</summary>
+    public static InstanceAuthResult Unavailable(string reason) =>
+        new() { UnavailableReason = reason };
 }
 
 /// <summary>An authenticated caller: which instance presented the key, and what it may pull.</summary>

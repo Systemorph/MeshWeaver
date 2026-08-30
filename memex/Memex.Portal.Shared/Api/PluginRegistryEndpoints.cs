@@ -57,9 +57,16 @@ public static class PluginRegistryEndpoints
                 ?.CreateLogger(typeof(PluginRegistryEndpoints));
 
             var authenticator = http.RequestServices.GetRequiredService<InstanceRegistryAuthenticator>();
-            var caller = await authenticator.Authenticate(http.Request.Headers.Authorization)
+            var outcome = await authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
                 .FirstAsync().ToTask(http.RequestAborted);
 
+            // 🚨 BEFORE the anonymous fallback below, deliberately. "I could not find out" must not
+            // fall through to serving this registry's sources anonymously — that would turn a
+            // transient read failure into an open door on any instance where the legacy mode is on.
+            if (outcome.IsUnavailable)
+                return InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger);
+
+            var caller = outcome.Instance;
             if (caller is not null)
             {
                 http.Items[CallerItemKey] = caller;
@@ -94,6 +101,8 @@ public static class PluginRegistryEndpoints
 
         return endpoints;
     }
+
+
 
     /// <summary><see cref="HttpContext.Items"/> key holding the authenticated caller.</summary>
     private const string CallerItemKey = "PluginRegistry.Caller";

@@ -90,9 +90,13 @@ public static class PluginBundleEndpoints
                 ?.CreateLogger(typeof(PluginBundleEndpoints));
             var authenticator = http.RequestServices.GetRequiredService<InstanceRegistryAuthenticator>();
 
-            var caller = await authenticator.Authenticate(http.Request.Headers.Authorization)
+            var outcome = await authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
                 .FirstAsync().ToTask(http.RequestAborted);
 
+            if (outcome.IsUnavailable)
+                return InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger);
+
+            var caller = outcome.Instance;
             if (caller is null)
             {
                 // 🚨 Fails CLOSED, with no anonymous escape hatch — unlike /api/plugins, which
@@ -109,6 +113,8 @@ public static class PluginBundleEndpoints
             http.Items[CallerItemKey] = caller;
             return await next(ctx);
         });
+
+
 
         // 🚨 The hub is resolved from RequestServices INSIDE the handler, never bound as a
         // parameter. Minimal-API binds handler arguments BEFORE endpoint filters run, so a bound
