@@ -82,6 +82,48 @@ Two bugs that make a monitor lie, both hit in one session:
   of a PR with zero checks. Decide readiness by asserting the **required set is present and
   SUCCESS**, never by the absence of failures.
 
+## Reading a RED shard: the exit marker classifies it, the log text does not
+
+A red shard says *why* in exactly one place — the **exit marker** printed by "Fail on non-zero
+project exit". Read that line; do not count words in the log.
+
+```
+[CI] MeshWeaver.Hosting.Monolith.Test exit=1 TESTFAIL (1 failing test(s) recorded in trx —
+     xunit v3 exits with the failure count; the host completed normally) elapsed=402s
+
+[CI] MeshWeaver.Hosting.Monolith.Test (part 1/2) exit=1 MASKED (trx records 2 failing test(s),
+     which does not explain exit=1 — host crashed after streaming results) elapsed=462s
+```
+
+| classification | what happened | what to do |
+|---|---|---|
+| `TESTFAIL` | ordinary failing tests; **the host completed normally** | read the named tests — a flake cluster or a real regression |
+| `MASKED` | the exit code is not explained by the trx — **the host died after streaming results** | a crash: read the trx `HOST_CRASHED` entry and [Debugging Native Crashes](/Doc/Architecture/DebuggingNativeCrashes) |
+| `TIMEOUT` / `SIGNAL` | the host died mid-run | same — the host, not the test |
+
+**These are different defects and they attribute differently.** `TESTFAIL` on one test is a problem
+in that test's own path; `MASKED` is a process-level failure that can take unrelated tests down with
+it. Treating a `TESTFAIL` as a crash invents a trunk emergency; treating a `MASKED` as a flake hides
+one.
+
+🚨 **`HOST_CRASHED` appearing in the log is NOT evidence of a crash.** The "Summarize test failures"
+step *echoes its own script*, including the sentence explaining the mechanism —
+*"…a crashed/killed host is NOT covered by this silence: since #2495 it is written INTO the trx as a
+`<project>.HOST_CRASHED` failure by `.github/scripts/record-host-crash.py`…"*. A `grep -c HOST_CRASHED`
+over the log therefore returns hits on runs where **no host crashed at all**, and the count scales
+with the number of steps that echoed the sentence, not with crashes. Measured 2026-08-30: two main
+reds were reported as "2× then 4× HOST_CRASHED" when the markers said one `TESTFAIL` (a
+`SilentReadNackTest` flake) and one genuine `MASKED`. It is the same family as the monitor traps
+above — a line a *script* printed is not a measurement.
+
+**Then attribute by REACHABILITY before by adjacency.** The merge that happens to sit under a red is
+the first suspect and usually the wrong one. Open the failing test project's `.csproj` and ask
+whether the suspect diff is even on its reference graph: on 2026-08-30 an Orleans silo-stop change
+(#2726) was suspected for a `MeshWeaver.Hosting.Monolith.Test` crash, and
+`MeshWeaver.Hosting.Monolith.Test.csproj` references no Orleans project at all — the monolith host
+runs no Orleans. One `grep` closed it. The same check exonerated a CI/tooling diff (#2721) whose own
+issue body had already said so.
+
 ## 🌍 The i18n mirror — deal with it routinely, not as an incident
 
 Core owns `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json`. MeshWeaver.Plugins
