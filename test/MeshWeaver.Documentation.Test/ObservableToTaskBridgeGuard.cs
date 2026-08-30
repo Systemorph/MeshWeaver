@@ -86,6 +86,21 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     private const string AllowFileName = "ObservableToTaskBridgeSites.allow";
 
     /// <summary>
+    /// The ONE exemption, and it is not an escape hatch: the test whose entire PURPOSE is to
+    /// demonstrate the banned shape's behaviour, by measuring that it resumes its awaiter on the
+    /// signalling thread. A rule about a defect needs one place that may still exhibit the defect,
+    /// or it cannot be evidenced — and this one is what stops the plausible "simplification" of
+    /// swapping the bridge for a direct <c>await</c> of the observable, which resumes inline in
+    /// exactly the same way.
+    ///
+    /// <para>🚨 It is verified rather than trusted: <see cref="TheExemptedPinningTestStillPinsTheShape"/>
+    /// fails if this file stops existing or stops containing the shape, so the exemption cannot
+    /// quietly decay into a hole someone parks a real bridge in.</para>
+    /// </summary>
+    private static readonly string[] ExemptPinningFiles =
+        ["test/MeshWeaver.Messaging.Hub.Test/InlineResumptionMechanismTest.cs"];
+
+    /// <summary>
     /// The seeded inventory's size. Per-file entries stop a new site in a file that already carries
     /// the shape; this stops the list as a WHOLE from growing — including by the trick of adding a
     /// new file's line. Lower it whenever you delete or lower an entry.
@@ -219,7 +234,30 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
         SourceScan.SourceFiles(root, roots)
             .Select(f => (Relative: SourceScan.Relative(root, f), Count: CountSites(f)))
             .Where(x => x.Count > 0)
+            .Where(x => !ExemptPinningFiles.Contains(x.Relative, StringComparer.Ordinal))
             .ToDictionary(x => x.Relative, x => x.Count, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Keeps <see cref="ExemptPinningFiles"/> honest. An exemption that outlives its subject is a
+    /// hole with a comment on it — the failure mode AGENTS.md names as "a guard whose subject moved
+    /// and whose roots did not passes having checked nothing".
+    /// </summary>
+    [Fact]
+    public void TheExemptedPinningTestStillPinsTheShape()
+    {
+        var root = SourceScan.FindRepoRoot();
+        foreach (var relative in ExemptPinningFiles)
+        {
+            var path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+            Assert.True(File.Exists(path),
+                $"{relative} is exempted from this guard but no longer exists. Delete the exemption "
+                + "— an exemption whose subject is gone is a hole a real bridge can be parked in.");
+            Assert.True(CountSites(path) > 0,
+                $"{relative} is exempted from this guard but no longer contains the shape it exists "
+                + "to demonstrate. Either it was rewritten (delete the exemption) or the scanner "
+                + "broke (fix that first — every count in the allow file depends on it).");
+        }
+    }
 
     /// <summary>Occurrences of <see cref="Marker"/>, with comments and string literals masked first.</summary>
     private static int CountSites(string path)

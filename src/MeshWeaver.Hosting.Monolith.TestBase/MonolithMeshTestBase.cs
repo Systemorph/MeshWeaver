@@ -950,13 +950,16 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // the test then does inherits that. ReactiveCompletion.ObserveCompletion is the
         // sanctioned wait: it subscribes, keeps its error arm attached for a late fault,
         // and queues the continuation instead of running it on the signaller's thread.
-        // Observable.Using opens the ImpersonateAsSystem scope on Subscribe (here,
-        // synchronously, when ObserveCompletion subscribes) and keeps the System AsyncLocal
-        // alive for the lifetime of the create — so the write authorises as the platform
-        // provisioner (see PathResolutionService for the same shape).
-        return Observable.Using(
-                () => access.ImpersonateAsSystem(),
-                _ => NodeFactory.CreateNode(node))
+        // 🚨 RunAsSystem, not a raw Observable.Using(access.ImpersonateAsSystem, …) — the SEALED
+        // impersonation boundary (ImpersonationScopeExtensions). The raw shape opens the
+        // AsyncLocal scope on the SUBSCRIBING thread and disposes it when the inner observable
+        // terminates, which can be a DIFFERENT thread — latching System onto the subscriber or
+        // restoring the previous identity onto the terminating thread. RunAsSystem enters at
+        // Subscribe and leaves on the way out of that same subscription. This was the last
+        // entry MonolithMeshTestBase held in ImpersonationScopeSites.allow; retiring it here
+        // (Copilot review, #2748). The scope still spans the whole create, so the write
+        // authorises as the platform provisioner.
+        return access.RunAsSystem(() => NodeFactory.CreateNode(node))
             // Subscribe off the test's single-threaded async sync-context (see
             // ObservableAssertions): keeps the create round-trip on the thread pool
             // instead of funnelling its continuations onto the one xUnit thread.
