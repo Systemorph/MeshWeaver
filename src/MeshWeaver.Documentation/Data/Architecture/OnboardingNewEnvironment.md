@@ -48,8 +48,8 @@ each one carries:
 | `values.<env>.yaml` | host, `MEMEX_DATABASENAME`, TLS `secretName`, AI + auth config, resources, `selfUpdate.azureClientId` (the shared `portalIdentityClientId` — same value for every env) |
 | `portal-pvcs.yaml` | `namespace: <env>` on every PVC |
 | `portal-ingress.yaml` | `namespace`, host, TLS secret, affinity cookie name |
-| `secretproviderclass.yaml` | `namespace`, synced secret name `<env>-portal-ai-secrets`, KV `objectName`s |
-| `portal-patch.json` | (usually unchanged — binds PVCs + the CSI secret mount + `envFrom`) |
+| `secretproviderclass.yaml` | **legacy** — declare the secrets under `keyVaultSecrets:` in `values.<env>.yaml` instead (the chart renders the `SecretProviderClass`, the CSI volume, its mount and the `envFrom`; see [DeploymentAKS](/Doc/Architecture/DeploymentAKS) → "Key Vault secrets are DECLARED in values") |
+| `portal-patch.json` | (usually unchanged — binds PVCs; the CSI secret mount + `envFrom` now render from `keyVaultSecrets`) |
 | `deploy.sh` / `tls.sh` | `NS`, `RELEASE`, host |
 
 > `values.<env>.yaml` and `secretproviderclass.yaml` are **git-ignored** (see
