@@ -177,7 +177,7 @@ public static class PluginGateRunner
             return report;
         var expected = consumer.Seed.DeclaredTypePaths.Intersect(consumer.Requested).Count;
         options.Output.WriteLine(
-            $"seed: adopted {consumer.Adopted} of {expected} baked assembly(ies) for the "
+            $"seed: adopted {consumer.AdoptedPaths} of {expected} baked assembly(ies) for the "
             + $"{consumer.Requested.Count} installed NodeType(s) "
             + $"(bake: {consumer.Seed.Describe()})");
         if (consumer.Shortfall() is not { } shortfall)

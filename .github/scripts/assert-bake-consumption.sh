@@ -67,13 +67,19 @@ echo "$LABEL: seed postcondition — adopted=$adopted declared=$expected"
 [ "$expected" -gt 0 ] \
   || fail "$LABEL: the gate adopted $adopted of 0 baked assembly(ies) — the bake declared nothing this run installed, so the gate judged NONE of the bytes that ship. Bake and gate must be staged from the same tree."
 
-# 🚨 `>=`, NOT `=`, and that is the tester's OWN contract (BakeSeed.Shortfall: `if (Adopted >=
-# expected.Count) return null;`) rather than a loosened one. `adopted` counts adoption EVENTS over
-# the run while `declared` counts distinct baked types, and the gate installs every package TWICE
-# (the idempotence pin re-installs the unchanged snapshot), so the second install adopts the same
-# assemblies again. Measured on samples/Graph/Data: `adopted 32 of 28`. An equality test here would
-# be red on every healthy run — and a gate that cries wolf is a gate that gets switched off.
-[ "$adopted" -ge "$expected" ] \
+# 🚨 `=`, and it can be `=` since #2697. This was `>=` because the tester reported adoption EVENTS:
+# the gate installs every package TWICE (the idempotence pin re-installs the unchanged snapshot),
+# so the second install adopted the same assemblies again and a healthy run measured `adopted 32 of
+# 28` on samples/Graph/Data. An equality test would have been red on every healthy run then — and a
+# gate that cries wolf gets switched off.
+#
+# The tester now reports BakeSeedConsumer.AdoptedPaths: the size of the set of distinct paths that
+# were declared AND requested AND backed — the exact complement of the DECLINED list in the same
+# verdict. It cannot exceed `expected` however many times the seeder acted, so `>=` had become a
+# strictly weaker way of writing `=`, and the reason for the weakness was a bug rather than a
+# property of the run. Equality now says what this check actually means: every baked assembly this
+# run installed was judged from the bake's own bytes.
+[ "$adopted" -eq "$expected" ] \
   || fail "$LABEL: the gate adopted only $adopted of $expected baked assembly(ies) — the rest were DECLINED and compiled locally. PrebuiltAssemblySeeder logs the per-assembly reason (framework identity, or the per-type dependency record)."
 
 [ "$fallback_hit" = "0" ] || exit 1
