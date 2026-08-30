@@ -18,7 +18,7 @@
 #
 #   brew tap systemorph/memex
 #   brew install memex-local
-#   memex-local registry https://memex.meshweaver.cloud --key mwr_…   # consume the cloud registry
+#   memex-local registry https://memex.meshweaver.cloud   # consume the cloud registry (free tier; --key mwr_… for a plan)
 #   memex-local up
 #
 # From a checkout (developing memex-local itself), a local tap over THIS file works too:
@@ -72,17 +72,18 @@ class MemexLocal < Formula
     <<~EOS
       memex-local automates Doc/Architecture/LocalColimaMac (Colima k3s on Mac).
 
-      Recommended: consume the cloud plugin registry (LocalColimaMac §17). A platform
-      admin mints a registration key on memex.meshweaver.cloud (Settings ▸
-      Administration ▸ Instance grants ▸ Registration keys), then:
+      Recommended: consume the cloud plugin registry (LocalColimaMac §17) — no key
+      needed, an un-keyed registration lands on the FREE tier:
 
-        memex-local registry https://memex.meshweaver.cloud --key mwr_…
+        memex-local registry https://memex.meshweaver.cloud
         memex-local up
 
       That pulls the CI-built multi-arch image from ACR (`az login` first — no .NET
       SDK, no source checkout), registers this install at the registry on first
       boot, installs the packages it is granted and lands their compiled modules —
       the only way a local install gets Radzen/Analysis/EntityViews/GoogleMaps/Speech.
+      A higher plan is a platform admin's edit of this instance's grant on the
+      registry, or a registration key minted for that plan (--key mwr_…).
 
       Alternative (serving plugins from a source checkout, §16): set MEMEX_REPO to a
       MeshWeaver checkout with MeshWeaver.Plugins beside it, install the .NET SDK

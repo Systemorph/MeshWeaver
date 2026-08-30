@@ -309,10 +309,21 @@ if [ "$RC" -eq 0 ] && case "$OUT" in *SELF-REGISTRY*) true ;; *) false ;; esac; 
   ok "a fresh install reports self-registry mode"
 else bad "a fresh install reports self-registry mode" "exited ${RC}: ${OUT}"; fi
 
-reg https://memex.example.test
-if [ "$RC" -ne 0 ] && case "$OUT" in *"--key"*) true ;; *) false ;; esac; then
-  ok "a registry URL without a key refuses and names --key"
-else bad "a registry URL without a key refuses and names --key" "exited ${RC}: ${OUT}"; fi
+# No key is the DEFAULT: an open registration the registry enrols into its default plan (the free
+# tier). The file must then carry NO secrets block at all — an empty PluginCatalog__BootstrapKey
+# would still render into the chart's secret and read as "a key was given".
+reg https://memex.example.test --id open-box
+rfile="$RHOME/registry.yaml"
+if [ "$RC" -eq 0 ] && case "$OUT" in *"OPEN registration"*) true ;; *) false ;; esac; then
+  ok "a registry URL without a key is an OPEN (free-tier) registration"
+else bad "a registry URL without a key is an OPEN (free-tier) registration" "exited ${RC}: ${OUT}"; fi
+if [ -f "$rfile" ] && ! grep -q "PluginCatalog__BootstrapKey\|^secrets:" "$rfile"; then
+  ok "an open registration writes no secrets block"
+else bad "an open registration writes no secrets block" "$(cat "$rfile" 2>/dev/null)"; fi
+reg status
+case "$OUT" in *"OPEN"*"free tier"*) ok "status names the open registration and the free tier" ;;
+  *) bad "status names the open registration and the free tier" "$OUT" ;; esac
+reg off >/dev/null 2>&1 || true
 
 reg https://memex.example.test --key mwi_this-is-an-instance-key
 if [ "$RC" -ne 0 ] && case "$OUT" in *"REGISTRATION key"*) true ;; *) false ;; esac; then
@@ -330,7 +341,6 @@ if [ "$RC" -ne 0 ] && case "$OUT" in *"--id must be"*) true ;; *) false ;; esac;
 else bad "an instance id outside the registry's alphabet refuses" "exited ${RC}: ${OUT}"; fi
 
 reg https://memex.example.test/ --key mwr_abcdefghijklmnop --id my-box
-rfile="$RHOME/registry.yaml"
 if [ "$RC" -eq 0 ] && [ -f "$rfile" ]; then ok "registry <url> --key --id writes the registry file"
 else bad "registry <url> --key --id writes the registry file" "exited ${RC}: ${OUT}"; fi
 if grep -q 'registryUrl: "https://memex.example.test"$' "$rfile" 2>/dev/null; then

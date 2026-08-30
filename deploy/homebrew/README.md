@@ -47,27 +47,30 @@ install --HEAD systemorph/memex-dev/memex-local`). A brew install's wrapper pins
 | **Registry** (§17, recommended) | `REGISTRY MODE — consumes https://memex.meshweaver.cloud` | installed from the cloud registry, per the instance's **grant** | **land from the registry's bundles** into `/data` | CI-built multi-arch from ACR (`az login`) |
 | **Self-registry** (§16) | `SELF-REGISTRY MODE` | served from a `MeshWeaver.Plugins` **checkout** beside `MEMEX_REPO` | 🚨 **never** — a checkout has source, not assemblies (MeshWeaver#2417); the five required ones are blanked | built from source (Option B) |
 
-Registry mode is one command; a platform admin on the registry mints the key
-(Settings ▸ Administration ▸ Instance grants ▸ Registration keys):
+Registry mode is one command, and needs **no key by default** — an un-keyed registration is
+an *open* one, which memex.meshweaver.cloud enrols into its default plan, the **free tier**:
 
 ```bash
-memex-local registry https://memex.meshweaver.cloud --key mwr_… [--id my-mac]
+memex-local registry https://memex.meshweaver.cloud [--id my-mac]      # free tier, no key
+memex-local registry https://memex.meshweaver.cloud --key mwr_…         # a plan an admin minted a key for
 memex-local up        # or `update` on an existing install
 ```
 
 `~/.memex-local/registry.yaml` (0600) then carries `pluginCatalog.registryUrl` /
-`instanceId` and the bootstrap key; `helm_deploy` layers it last. On first boot the
-portal presents the key **once**, is issued its own instance key (stored encrypted in
-its database, so it survives every `update`), installs everything it is granted and
-lands the modules; `verify --repair` performs the one activation restart. What it is
-granted is the **registry's** decision — see
-[`PluginRegistry.md`](../../src/MeshWeaver.Documentation/Data/Architecture/PluginRegistry.md).
-`memex-local registry off` returns to serving a checkout.
+`instanceId` — and the bootstrap key, when one was given; `helm_deploy` layers it last. On
+first boot the portal registers itself (presenting the key **once** if it has one), is issued
+its own instance key (stored encrypted in its database, so it survives every `update`),
+installs everything it is granted and lands the modules; `verify --repair` performs the one
+activation restart. What it is granted is the **registry's** decision — a plan-scoped grant,
+raised by a platform admin there (Instance grants ▸ Plan), never something the install can
+ask for — see
+[`PluginRegistry.md`](../../src/MeshWeaver.Documentation/Data/Architecture/PluginRegistry.md)
+→ *Plans*. `memex-local registry off` returns to serving a checkout.
 
 ## Use
 
 ```bash
-memex-local registry <url> --key mwr_…   # REGISTRY MODE: consume a remote plugin registry (§17)
+memex-local registry <url> [--key mwr_…]  # REGISTRY MODE: consume a remote plugin registry (§17); no key = free tier
 memex-local registry status|off          # which mode this install is in / back to self-registry
 memex-local up                 # full stack, idempotent (registry mode: ACR image; else local build)
 memex-local up --from-acr      # pull the multi-arch image from ACR explicitly (Option A)
