@@ -382,7 +382,7 @@ public static class ModulePackCommand
 
         // The package tree, walked in a stable order so two packs of the same tree produce
         // byte-identical manifests. obj/bin are a developer's build residue, never package content
-        // — the same exclusions PluginPacker applies.
+        // — the exclusions the retired node-package packer applied (PluginPacker, removed 2026-08-30).
         // 🚨 STATIC WEB ASSETS ride the bundle. A view pack's CSS/JS reaches the browser through
         // the host's build-time static-web-assets graph — i.e. through the ProjectReference the
         // module lane removes — so without this a landed view pack renders unstyled and its
