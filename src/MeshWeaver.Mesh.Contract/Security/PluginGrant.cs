@@ -84,15 +84,34 @@ public record PluginGrant
     /// <summary>
     /// Whether this grant permits <paramref name="packageId"/> — declaring
     /// <paramref name="packageTier"/> — from registry source <paramref name="sourceName"/> at
-    /// <paramref name="now"/>: some entry matches the pair, is within its term, and COVERS the
-    /// package's tier under <paramref name="ranks"/> (<see cref="PlanTierRanks.Covers"/>). A plan-less
-    /// entry covers every tier; a plan-scoped one covers what its plan ranks at or above it. This is
-    /// the overload every registry surface decides with.
+    /// <paramref name="now"/> to an instance on <paramref name="instancePlan"/>: some entry matches
+    /// the pair, is within its term, and the package's tier is COVERED by the instance's plan under
+    /// <paramref name="ranks"/> — narrowed by the entry's own cap when it names one
+    /// (<see cref="PlanTierRanks.Narrower"/>, <see cref="PlanTierRanks.CoversInstance"/>). This is
+    /// the overload every registry surface decides with (#2804).
+    ///
+    /// <para>🚨 The licence is the INSTANCE's plan, never the entry's. Until #2804 a plan-less entry
+    /// covered every tier and a <c>@pro</c> suffix licensed pro on any instance that carried it, so
+    /// the plan lived in N grant strings and "no suffix" silently meant "everything". Now an entry
+    /// says WHICH sources and packages; the record's <see cref="MeshWeaverInstance.Plan"/> says at
+    /// what level, and a blank plan is the baseline — a free instance, not an unlimited one.</para>
+    /// </summary>
+    public bool Allows(
+        string sourceName, string packageId, string? packageTier, PlanTierRanks ranks,
+        string? instancePlan, DateTimeOffset now) =>
+        !IsRevoked && Entries.Any(e =>
+            e.Matches(sourceName, packageId) && e.IsValidAt(now)
+            && ranks.CoversInstance(ranks.Narrower(instancePlan, e.Tier), packageTier));
+
+    /// <summary>
+    /// <see cref="Allows(string,string,string?,PlanTierRanks,string?,DateTimeOffset)"/> for a
+    /// caller that knows no instance plan — decided at the BASELINE, so a plan-less entry covers
+    /// free and untiered packages and nothing above. Kept for the surfaces that carry no instance
+    /// record; every registry surface passes the record's plan.
     /// </summary>
     public bool Allows(
         string sourceName, string packageId, string? packageTier, PlanTierRanks ranks, DateTimeOffset now) =>
-        !IsRevoked && Entries.Any(e =>
-            e.Matches(sourceName, packageId) && e.IsValidAt(now) && e.Covers(packageTier, ranks));
+        Allows(sourceName, packageId, packageTier, ranks, instancePlan: null, now);
 
     /// <summary><see cref="Allows(string,string,string?,PlanTierRanks,DateTimeOffset)"/> at the
     /// current instant.</summary>

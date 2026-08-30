@@ -91,12 +91,16 @@ public static class InstanceTokenEndpoints
 
                 var effective = EffectiveScope(caller, body?.Scope, now);
 
-                // Licensed for nothing (or for nothing that was asked for) means there is nothing to
-                // mint a token FOR. Answering 403 with the reason beats handing back a token that
-                // will 404 on every call.
-                if (effective.Count == 0)
+                // A caller that ASKED for something its licence does not cover is told so (403)
+                // rather than handed a token that will 404 on every call. A caller that asked for
+                // nothing in particular gets an UNNARROWED token — identity only — even when its
+                // grant is empty today: since #2804 the token is what every registry call carries,
+                // authority is re-decided per request against the live grant and the live plan on
+                // the record, and a freshly registered instance must be able to authenticate before
+                // an admin has granted it anything.
+                if (body?.Scope is { Count: > 0 } && effective.Count == 0)
                     return Observable.Return(Results.Json(
-                        new { error = "This instance holds no current sync licence for the requested scope." },
+                        new { error = "This instance holds no current licence for the requested scope." },
                         statusCode: StatusCodes.Status403Forbidden));
 
                 var lifetime = body?.LifetimeSeconds is > 0
@@ -109,7 +113,7 @@ public static class InstanceTokenEndpoints
                 {
                     var token = SyncAccessToken.Mint(
                         caller.Instance.InstanceId, caller.Instance.KeyHash, effective, now, lifetime,
-                        material.Current);
+                        material.Current, Issuer(http));
                     var claims = SyncAccessToken.Verify(token, now, material.Current)!;
 
                     logger?.LogInformation(
@@ -135,6 +139,11 @@ public static class InstanceTokenEndpoints
                     "Sync access token exchange faulted after the response had already been sent"),
                 ct)!;
     }
+
+    /// <summary>The <c>iss</c> claim: this registry as the caller reached it. Informational — the
+    /// signature is what verifies — and what a second-issuer verifier (#2483) keys its trust on.</summary>
+    private static string Issuer(HttpContext http) =>
+        http.Request.Host.HasValue ? $"{http.Request.Scheme}://{http.Request.Host}" : "";
 
     /// <summary>
     /// What the token will actually carry: the caller's CURRENT licence entries, narrowed to what

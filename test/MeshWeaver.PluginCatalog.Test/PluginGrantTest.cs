@@ -150,8 +150,35 @@ public class PluginGrantTest
         Entries = [new PluginGrantEntry { Source = "Plugins", PackageId = PluginGrantEntry.AllPackages, Tier = tier }],
     };
 
+    // The instance is ON the plan its entry names — the entry caps at its own level, which is no
+    // cap, so the ladder rule alone decides. The instance plan is what licenses (#2804).
     private static bool Covers(string plan, string? packageTier) =>
-        PlanGrant(plan).Allows("Plugins", "SomePackage", packageTier, Ladder);
+        PlanGrant(plan).Allows("Plugins", "SomePackage", packageTier, Ladder, plan, DateTimeOffset.UtcNow);
+
+    private static PluginGrant PlanLessGrant() => new()
+    {
+        InstanceId = "customer",
+        Entries = [new PluginGrantEntry { Source = "Plugins", PackageId = PluginGrantEntry.AllPackages }],
+    };
+
+    [Fact]
+    public void TheInstancePlanIsTheLicence_AnEntryCanOnlyCapIt()
+    {
+        var now = DateTimeOffset.UtcNow;
+        // A plan-less entry licenses at the INSTANCE's plan — not every tier.
+        Assert.True(PlanLessGrant().Allows("Plugins", "P", "pro", Ladder, "pro", now));
+        Assert.False(PlanLessGrant().Allows("Plugins", "P", "enterprise", Ladder, "pro", now));
+        // An instance that names no plan is on the baseline: free and untiered, nothing above.
+        Assert.True(PlanLessGrant().Allows("Plugins", "P", "free", Ladder, null, now));
+        Assert.True(PlanLessGrant().Allows("Plugins", "P", null, Ladder, null, now));
+        Assert.False(PlanLessGrant().Allows("Plugins", "P", "personal", Ladder, null, now));
+        // An entry's plan CAPS: a free-capped entry on a pro instance licenses free only …
+        Assert.False(PlanGrant("free").Allows("Plugins", "P", "pro", Ladder, "pro", now));
+        Assert.True(PlanGrant("free").Allows("Plugins", "P", "free", Ladder, "pro", now));
+        // … and never RAISES: an enterprise-suffixed entry on a free instance is still free.
+        Assert.False(PlanGrant("enterprise").Allows("Plugins", "P", "pro", Ladder, "free", now));
+        Assert.False(PlanGrant("enterprise").Allows("Plugins", "P", "pro", Ladder, null, now));
+    }
 
     [Theory]
     [InlineData("personal", "free", true)]
@@ -184,10 +211,15 @@ public class PluginGrantTest
         => Assert.True(Covers(plan, null));
 
     [Fact]
-    public void UnknownPlanOnTheEntry_LicensesNothing()
+    public void UnknownPlan_ReadsAsTheBaseline_NeverWider()
     {
-        Assert.False(Covers("platinum", "free"));
-        Assert.False(Covers("platinum", null));
+        // A plan the ladder does not know — a typo, or one this registry never seeded — can never
+        // WIDEN a licence; it narrows to the baseline. "Nothing at all" would not be safer, it
+        // would be a portal without its Store (#2804).
+        Assert.True(Covers("platinum", "free"));
+        Assert.True(Covers("platinum", null));
+        Assert.False(Covers("platinum", "personal"));
+        Assert.False(Covers("platinum", "enterprise"));
     }
 
     [Fact]
@@ -196,18 +228,25 @@ public class PluginGrantTest
         => Assert.False(Covers("enterprise", "gold"));
 
     [Fact]
-    public void WithoutALadder_PlanScopedEntriesFailClosed_AndPlanLessOnesStand()
+    public void WithoutALadder_NothingWidensBeyondTheBaseline()
     {
+        // No ladder: "pro" cannot be ranked, so a pro-capped entry — and a pro instance — read as
+        // the baseline. Free and untiered packages flow; the paid tier does not.
         var scoped = PlanGrant("pro");
-        Assert.False(scoped.Allows("Plugins", "Store", "free", PlanTierRanks.Empty));
-        Assert.False(scoped.Allows("Plugins", "Store", null, PlanTierRanks.Empty));
-        // The customer-portal grant of today — no plan — is unchanged by the ladder's absence.
+        Assert.True(scoped.Allows("Plugins", "Store", "free", PlanTierRanks.Empty, "pro", DateTimeOffset.UtcNow));
+        Assert.True(scoped.Allows("Plugins", "Store", null, PlanTierRanks.Empty, "pro", DateTimeOffset.UtcNow));
+        Assert.False(scoped.Allows("Plugins", "Store", "pro", PlanTierRanks.Empty, "pro", DateTimeOffset.UtcNow));
+        // A plan-less entry on a ladder-less registry licenses the BASELINE — free and untiered
+        // packages, which is what a local self-registry or the e2e stub serves — and nothing
+        // above it: without a ladder a paid tier cannot be ranked, so it is not covered (#2804).
         var open = new PluginGrant
         {
             InstanceId = "prod",
             Entries = [new PluginGrantEntry { Source = "Plugins" }],
         };
-        Assert.True(open.Allows("Plugins", "Store", "enterprise", PlanTierRanks.Empty));
+        Assert.True(open.Allows("Plugins", "Store", null, PlanTierRanks.Empty));
+        Assert.True(open.Allows("Plugins", "Store", "free", PlanTierRanks.Empty));
+        Assert.False(open.Allows("Plugins", "Store", "enterprise", PlanTierRanks.Empty));
     }
 
     [Fact]
@@ -232,8 +271,10 @@ public class PluginGrantTest
     [Fact]
     public void PlanMatchIsCaseInsensitive_OnBothSides()
     {
-        Assert.True(PlanGrant("PRO").Allows("Plugins", "X", "Personal", Ladder));
-        Assert.True(PlanGrant("pro").Allows("Plugins", "X", " PRO ", Ladder));
+        var now = DateTimeOffset.UtcNow;
+        Assert.True(PlanGrant("PRO").Allows("Plugins", "X", "Personal", Ladder, "Pro", now));
+        Assert.True(PlanGrant("pro").Allows("Plugins", "X", " PRO ", Ladder, " PRO ", now));
+        Assert.True(PlanLessGrant().Allows("Plugins", "X", "pro", Ladder, "PRO", now));
     }
 
     [Theory]

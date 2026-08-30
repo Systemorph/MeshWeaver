@@ -129,12 +129,31 @@ public class InstanceOpenRegistrationTest(ITestOutputHelper output) : MonolithMe
             InstanceRegistrationPayloads.Json);
         issued!.InstanceKey.Should().StartWith("mwi_", "the instance is issued its own durable key, once");
 
-        var grant = await GrantOf("homebrew-mac-open");
-        grant.Should().NotBeNull("open registration seeds the plan's grant");
-        grant!.Entries.Should().ContainSingle(e => e.ToString() == $"{Source}/*@free",
+        // The licence is on the RECORD (#2804): the instance enrols into the plan the open key was
+        // minted for, and the grant says only which source it may see — a plan-less entry, which
+        // is capped by that plan and can never raise it.
+        (await PlanOf("homebrew-mac-open")).Should().Be(PlanTierRanks.BaselinePlan,
             "the instance enrols into the plan the open key was minted for — and ONLY that plan");
-        grant.Entries.Should().NotContain(e => !e.IsPlanScoped,
-            "a free-tier key must never seed a plan-less whole-source entry");
+        var grant = await GrantOf("homebrew-mac-open");
+        grant.Should().NotBeNull("open registration seeds the source grant");
+        grant!.Entries.Should().ContainSingle(e => e.ToString() == $"{Source}/*",
+            "one whole-source entry per configured source, decided at the instance's plan");
+        grant.Entries.Should().NotContain(e => e.IsPlanScoped,
+            "the plan lives on the instance record, never duplicated into the entry");
+    }
+
+    /// <summary>The plan on the registered instance's record, read the way the registry reads it.</summary>
+    private Task<string?> PlanOf(string instanceId)
+    {
+        var plans = Mesh.ServiceProvider.GetRequiredService<InstancePlanService>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        return plans.FindInstancePath(instanceId)
+            .SelectMany(path => path is null
+                ? Observable.Return<MeshNode?>(null)
+                : access.RunAsSystem(() => Mesh.GetMeshNode(path, TimeSpan.FromSeconds(10)).Take(1)))
+            .Select(node => node?.ContentAs<MeshWeaverInstance>(Mesh.JsonSerializerOptions)?.Plan)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .Await();
     }
 
     [Fact(Timeout = 300_000)]

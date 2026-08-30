@@ -44,6 +44,9 @@ public static class InstanceGrantAdminSettingsTab
     private const string MintResultDataId = "registrationKeyMintResult";
     private const string KeyListDataId = "registrationKeyList";
     private const string TierOptionsDataId = "registrationKeyTierOptions";
+    private const string PlanFormDataId = "instancePlanForm";
+    private const string PlanOptionsDataId = "instancePlanOptions";
+    private const string PlanResultDataId = "instancePlanResult";
 
     /// <summary>Registers the instance-grants settings tab provider (global admins only).</summary>
     public static MessageHubConfiguration AddInstanceGrantAdminSettingsTab(
@@ -120,7 +123,101 @@ public static class InstanceGrantAdminSettingsTab
 
         stack = stack.WithView(GrantList(host));
 
+        stack = stack.WithView(PlanSection(host));
+
         return stack.WithView(RegistrationKeySection(host));
+    }
+
+    /// <summary>
+    /// The instance's PLAN — the licence every fetch is decided against (#2804). One field on the
+    /// instance record, set here by a global admin; the options are the registry's own ladder,
+    /// never free text, so an unknown plan cannot be stored as one that licenses nothing.
+    /// </summary>
+    private static UiControl PlanSection(LayoutAreaHost host)
+    {
+        host.UpdateData(PlanFormDataId, new Dictionary<string, object?>
+        {
+            ["instanceId"] = "",
+            ["plan"] = PlanTierRanks.BaselinePlan,
+        });
+        host.UpdateData(PlanOptionsDataId,
+            new[] { new Option<string>(PlanTierRanks.BaselinePlan, PlanTierRanks.BaselinePlan) });
+        host.Hub.ServiceProvider.GetService<PlanTierLadder>()?.Read().Take(1)
+            .Subscribe(ranks => host.UpdateData(PlanOptionsDataId,
+                (ranks.Ids.Count == 0 ? [PlanTierRanks.BaselinePlan] : ranks.Ids)
+                    .Select(id => new Option<string>(id, id)).ToArray()));
+
+        var dataContext = LayoutAreaReference.GetDataPointer(PlanFormDataId);
+        var row = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 12px; align-items: flex-end; flex-wrap: wrap;")
+            .WithView(new TextFieldControl(new JsonPointerReference("instanceId"))
+            {
+                Label = host.Localize("instanceGrants.field.instance"),
+                DataContext = dataContext,
+            }.WithWidth("200px"))
+            .WithView(new SelectControl(
+                new JsonPointerReference("plan"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(PlanOptionsDataId)))
+            {
+                Label = host.Localize("instancePlan.field.plan"),
+                DataContext = dataContext,
+            }.WithWidth("180px"))
+            .WithView(Controls.Button(host.Localize("instancePlan.promote"))
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(PlanFormDataId)
+                        .Take(1)
+                        .Subscribe(data => Promote(ctx.Host, host, data));
+                    return Task.CompletedTask;
+                }));
+
+        return Controls.Stack
+            .WithView(Controls.Title(host.Localize("instancePlan.heading"), 3))
+            .WithView(Controls.Markdown(host.Localize("instancePlan.hint")))
+            .WithView(row)
+            .WithView(host.Stream
+                .GetDataStream<string>(PlanResultDataId)
+                .StartWith("")
+                .Select(md => string.IsNullOrEmpty(md) ? (UiControl)Controls.Stack : Controls.Markdown(md)))
+            .WithStyle("padding: 16px; background: var(--neutral-layer-2); border-radius: 8px; "
+                       + "gap: 12px; margin-bottom: 24px;");
+    }
+
+    private static void Promote(LayoutAreaHost target, LayoutAreaHost host, Dictionary<string, object?>? data)
+    {
+        var instanceId = data?.GetValueOrDefault("instanceId")?.ToString()?.Trim() ?? "";
+        var plan = PlanTierRanks.Canonical(data?.GetValueOrDefault("plan")?.ToString());
+        if (instanceId.Length == 0 || plan.Length == 0)
+        {
+            target.UpdateData(PlanResultDataId, host.Localize("instanceGrants.error.incomplete"));
+            return;
+        }
+
+        var service = host.Hub.ServiceProvider.GetRequiredService<InstancePlanService>();
+        var ladder = host.Hub.ServiceProvider.GetService<PlanTierLadder>();
+        // The baseline is always a legal answer — it is what an instance with no plan already
+        // reads as — every other id must be one the registry's ladder ranks (fail closed).
+        var known = plan == PlanTierRanks.BaselinePlan
+            ? Observable.Return(true)
+            : ladder?.Read().Take(1).Select(ranks => ranks.RankOf(plan) is not null)
+              ?? Observable.Return(false);
+
+        target.UpdateData(PlanResultDataId, host.Localize("instanceGrants.applying"));
+
+        known
+            .SelectMany(ok => ok
+                ? service.FindInstancePath(instanceId)
+                : Observable.Throw<string?>(new ArgumentException(host.Localize("instanceGrants.error.unknownTier"))))
+            .SelectMany(path => path is null
+                ? Observable.Throw<MeshNode>(new ArgumentException(host.Localize("instancePlan.error.unknownInstance")))
+                : service.SetPlan(path, plan))
+            .Subscribe(
+                _ => target.UpdateData(PlanResultDataId,
+                    $"{host.Localize("instancePlan.promoted")} **{instanceId}** → `{plan}`"),
+                ex => target.UpdateData(PlanResultDataId,
+                    $"{host.Localize("instanceGrants.error.failed")} {ex.Message}"));
     }
 
     /// <summary>
