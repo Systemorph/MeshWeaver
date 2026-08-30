@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Reactive;
 using System.Reactive.Concurrency;
+using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -112,29 +114,36 @@ public class RoutingGrainDeliveryRetryTest
     }
 
     [Fact]
-    public void DeliverToGrainWithRetry_OnTerminalFault_NacksSenderFast_NotSilentDeadEnd()
+    public async Task DeliverToGrainWithRetry_OnTerminalFault_NacksSenderFast_NotSilentDeadEnd()
     {
         var nacks = new List<(string Message, ErrorType Type)>();
-        using var done = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate: the NACK callback → test signal is an AsyncSubject the producer
+        // completes, awaited through the assertion helpers.
+        var done = new AsyncSubject<Unit>();
 
         RoutingGrain.DeliverToGrainWithRetry(
             grainCall: () => Task.FromException<IMessageDelivery>(new InvalidOperationException("node type not registered")),
             grainKey: "X",
             addressPath: "X",
             deliveryId: "t4",
-            postFailureToSender: (m, t) => { nacks.Add((m, t)); done.Set(); },
+            postFailureToSender: (m, t) =>
+            {
+                nacks.Add((m, t));
+                done.OnNext(Unit.Default);
+                done.OnCompleted();
+            },
             logger: NullLogger.Instance,
             backoff: NoBackoff,
             scheduler: Scheduler.Immediate);
 
         // The sender must be NACKed (deterministic OnError) — never left to a silent dead-end → 60 s timeout.
-        Assert.True(done.Wait(TimeSpan.FromSeconds(5)));
+        await done.Should().Within(5.Seconds()).Emit();
         var nack = Assert.Single(nacks);
         Assert.Equal(ErrorType.Failed, nack.Type);
     }
 
     [Fact]
-    public void DeliverToGrainWithRetry_ExhaustedRetries_SurfacesRecordedActivationError_NotRawRejection()
+    public async Task DeliverToGrainWithRetry_ExhaustedRetries_SurfacesRecordedActivationError_NotRawRejection()
     {
         // Issue #464, Defect 3: a grain stuck in a PERSISTENT activation-fault loop rejects every
         // delivery with the raw Orleans rejection ("DeactivateOnIdle was called … Rejecting now"),
@@ -144,7 +153,9 @@ public class RoutingGrainDeliveryRetryTest
         // OnError with an actionable message instead of Orleans internals.
         const string realCause = "Compilation failed for 'UWDeepfield/UwAttention': CS1501 no overload for 'GetFiles' takes 2 arguments";
         var nacks = new List<(string Message, ErrorType Type)>();
-        using var done = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate: the NACK callback → test signal is an AsyncSubject the producer
+        // completes, awaited through the assertion helpers.
+        var done = new AsyncSubject<Unit>();
 
         RoutingGrain.DeliverToGrainWithRetry(
             // Every attempt lands in a deactivation window — the persistent-fault loop.
@@ -152,7 +163,12 @@ public class RoutingGrainDeliveryRetryTest
             grainKey: "UWDeepfield/UwAttention",
             addressPath: "UWDeepfield/UwAttention",
             deliveryId: "t5",
-            postFailureToSender: (m, t) => { nacks.Add((m, t)); done.Set(); },
+            postFailureToSender: (m, t) =>
+            {
+                nacks.Add((m, t));
+                done.OnNext(Unit.Default);
+                done.OnCompleted();
+            },
             logger: NullLogger.Instance,
             maxRetries: 2,
             backoff: NoBackoff,
@@ -161,7 +177,7 @@ public class RoutingGrainDeliveryRetryTest
             resolveActivationError: gk =>
                 gk == "UWDeepfield/UwAttention" ? realCause : null);
 
-        Assert.True(done.Wait(TimeSpan.FromSeconds(5)));
+        await done.Should().Within(5.Seconds()).Emit();
         var nack = Assert.Single(nacks);
         Assert.Equal(ErrorType.Failed, nack.Type);
         // The NACK must carry the REAL cause the grain recorded — not the raw rejection text.
@@ -169,25 +185,32 @@ public class RoutingGrainDeliveryRetryTest
     }
 
     [Fact]
-    public void DeliverToGrainWithRetry_NoRecordedActivationError_FallsBackToRawException()
+    public async Task DeliverToGrainWithRetry_NoRecordedActivationError_FallsBackToRawException()
     {
         // When nothing was recorded for the grain key (the registry has no entry, or no registry is
         // wired at all), behaviour is unchanged: the NACK carries the underlying exception message.
         var nacks = new List<(string Message, ErrorType Type)>();
-        using var done = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate: the NACK callback → test signal is an AsyncSubject the producer
+        // completes, awaited through the assertion helpers.
+        var done = new AsyncSubject<Unit>();
 
         RoutingGrain.DeliverToGrainWithRetry(
             grainCall: () => Task.FromException<IMessageDelivery>(new InvalidOperationException("node type not registered")),
             grainKey: "X",
             addressPath: "X",
             deliveryId: "t6",
-            postFailureToSender: (m, t) => { nacks.Add((m, t)); done.Set(); },
+            postFailureToSender: (m, t) =>
+            {
+                nacks.Add((m, t));
+                done.OnNext(Unit.Default);
+                done.OnCompleted();
+            },
             logger: NullLogger.Instance,
             backoff: NoBackoff,
             scheduler: Scheduler.Immediate,
             resolveActivationError: _ => null);
 
-        Assert.True(done.Wait(TimeSpan.FromSeconds(5)));
+        await done.Should().Within(5.Seconds()).Emit();
         var nack = Assert.Single(nacks);
         Assert.Equal(ErrorType.Failed, nack.Type);
         Assert.Contains("node type not registered", nack.Message);

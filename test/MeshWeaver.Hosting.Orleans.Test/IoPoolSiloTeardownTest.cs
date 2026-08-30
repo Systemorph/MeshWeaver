@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -106,19 +108,23 @@ public class IoPoolSiloTeardownTest
         // One pooled leaf in flight that ends ONLY when it is cancelled — the shape the drain
         // exists for (a live change-feed leaf never completes on its own, so a wait-without-cancel
         // would burn the budget and then release over live work).
-        using var entered = new ManualResetEventSlim(false);
-        using var unwound = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate: `entered` travels leaf → test, so it is an AsyncSubject the leaf
+        // completes and the test awaits reactively; `unwound` is never WAITED on — it is read as
+        // state after OnStop returns — so a volatile flag says exactly that and nothing more.
+        var entered = new AsyncSubject<Unit>();
+        var unwound = 0;
         using var leaf = registry.Get(IoPoolNames.FileSystem)
             .InvokeBlocking(ct =>
             {
-                entered.Set();
+                entered.OnNext(Unit.Default);
+                entered.OnCompleted();
                 ct.WaitHandle.WaitOne(Budget);
-                unwound.Set();
+                Volatile.Write(ref unwound, 1);
                 return 0;
             })
             .Subscribe(_ => { }, _ => { });
 
-        entered.Wait(Budget).Should().BeTrue(
+        await entered.Should().Within(Budget).Emit(
             "precondition: the pooled leaf must actually be running before the drain is asked to join it");
 
         // 🚨 The race, reproduced: host startup was aborted, so the root provider was disposed
@@ -132,7 +138,7 @@ public class IoPoolSiloTeardownTest
         Func<Task> stop = () => observer.OnStop(TestContext.Current.CancellationToken);
         await stop.Should().NotThrowAsync();
 
-        unwound.IsSet.Should().BeTrue(
+        Volatile.Read(ref unwound).Should().Be(1,
             "OnStop must not RETURN until the pooled leaf has actually unwound — the join is the "
             + "whole point, and returning over live work is the use-after-unload SIGSEGV (#613)");
         logger.Entries.Should().Contain(

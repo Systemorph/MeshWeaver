@@ -1,8 +1,10 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
-using System.Threading;
+using System.Reactive.Subjects;
+using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
 
@@ -31,21 +33,27 @@ public class NodeTypeAdoptionRegistryTest
     }
 
     [Fact]
-    public void AReservationHoldsTheWait_UntilItIsReleased()
+    public async Task AReservationHoldsTheWait_UntilItIsReleased()
     {
         var registry = new NodeTypeAdoptionRegistry();
         var reservation = registry.Reserve("Widget/Thing");
         Assert.True(registry.IsReserved("Widget/Thing"));
 
-        var cleared = new ManualResetEventSlim();
+        // 🚨 An AsyncSubject the subscription completes, not a hand-woven gate — both waits below
+        // are reactive assertions on it, so nothing parks a thread.
+        var cleared = new AsyncSubject<Unit>();
         using var subscription = registry.WhenClear("Widget/Thing")
-            .Subscribe(_ => cleared.Set());
+            .Subscribe(_ =>
+            {
+                cleared.OnNext(Unit.Default);
+                cleared.OnCompleted();
+            });
 
-        Assert.False(cleared.Wait(TimeSpan.FromMilliseconds(200)),
+        await cleared.Should().NotEmit(200.Milliseconds(),
             "the kickoff must not proceed while an adoption is in flight — that is the whole race");
 
         reservation.Dispose();
-        Assert.True(cleared.Wait(Budget),
+        await cleared.Should().Within(Budget).Emit(
             "the kickoff must proceed once the adoption released its reservation; a missed release "
             + "costs the caller its ENTIRE wait budget, per type");
         Assert.False(registry.IsReserved("Widget/Thing"));
@@ -73,23 +81,27 @@ public class NodeTypeAdoptionRegistryTest
     /// adoption and the second races exactly as before.
     /// </summary>
     [Fact]
-    public void ReservationsAreReferenceCounted()
+    public async Task ReservationsAreReferenceCounted()
     {
         var registry = new NodeTypeAdoptionRegistry();
         var first = registry.Reserve("Widget/Thing");
         var second = registry.Reserve("Widget/Thing");
 
-        var cleared = new ManualResetEventSlim();
+        var cleared = new AsyncSubject<Unit>();
         using var subscription = registry.WhenClear("Widget/Thing")
-            .Subscribe(_ => cleared.Set());
+            .Subscribe(_ =>
+            {
+                cleared.OnNext(Unit.Default);
+                cleared.OnCompleted();
+            });
 
         first.Dispose();
         Assert.True(registry.IsReserved("Widget/Thing"));
-        Assert.False(cleared.Wait(TimeSpan.FromMilliseconds(200)),
+        await cleared.Should().NotEmit(200.Milliseconds(),
             "one of two in-flight adoptions finishing must not release the path");
 
         second.Dispose();
-        Assert.True(cleared.Wait(Budget));
+        await cleared.Should().Within(Budget).Emit();
     }
 
     /// <summary>A reservation on one path says nothing about another.</summary>

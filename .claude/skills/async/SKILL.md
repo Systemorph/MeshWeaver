@@ -191,8 +191,8 @@ Full reference:
 
 ### 🚨🚨🚨 ABSOLUTE: no hand-woven async/concurrency primitives — not even a `SemaphoreSlim`
 
-**A `SemaphoreSlim` (or any hand-rolled async gate / lock-for-async / signal) anywhere in `src/` is
-FORBIDDEN — outside the one place sealed inside `IoPool`.** `SemaphoreSlim.WaitAsync()`
+**A `SemaphoreSlim` (or any hand-rolled async gate / lock-for-async / signal) anywhere in `src/` OR
+`test/` is FORBIDDEN — outside the one place sealed inside `IoPool`.** `SemaphoreSlim.WaitAsync()`
 blocks/parks a thread and its continuation captures the awaiting scheduler. On a hub it parks the
 single-threaded action block (or a grain turn) → the message you're waiting on can never be
 processed → **deadlock**. This is the same defect class as `async`/`await`/`Task<T>` in hub code; a
@@ -219,6 +219,19 @@ boundary between the turn-based hub schedulers and genuinely-async I/O leaves, r
 hub with `ConfigureAwait(false)`. Everywhere else, a `SemaphoreSlim` is a bug to delete. The litmus
 test: if your gate runs on (or is awaited from) a hub action block / grain turn / Blazor circuit, it
 deadlocks — channel it through a hub or `IIoPool` instead.
+
+🚨 **`test/` is at ZERO too, as of 2026-08-30 — there is no allow file left.** The 79 seeded
+`ManualResetEventSlim` sites across 23 test files were all converted, and `HandWovenGateRatchetGuard`
+now scans `test` in the same zero-tolerance root list as `src`. Two shapes, chosen by which way the
+signal travels: **producer → test** is an `AsyncSubject<Unit>` the producer completes
+(`OnNext` then `OnCompleted`), awaited through the assertion helpers
+(`await x.Should().Within(...).Emit(because)`, or `.NotEmit(within)` for the negative) — **never
+`.Wait()` on it, which merely trips `BlockingBridgeInTestRatchetGuard` instead**; **test → a worker
+the test deliberately parks** (a wedged action block, a leaf that ignores its token) keeps the park,
+because the park IS the subject, but drops the handle: a volatile `int` polled under a bounded
+`SpinWait.SpinUntil(predicate, budget)`, written in a **`finally`** so an assertion that throws
+first cannot strand that worker. Full treatment:
+[RemovingHandWovenGates.md](../../../src/MeshWeaver.Documentation/Data/Architecture/RemovingHandWovenGates.md).
 
 ## Rule 2 — Carry the identity across every boundary
 

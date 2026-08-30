@@ -1,5 +1,7 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -59,23 +61,28 @@ public class OwnerDisposalNackTest(ITestOutputHelper output) : MonolithMeshTestB
         // Park the PRIMARY data-source stream's turn executor with a gated no-op turn:
         // the patch's merge turn queues BEHIND it on the same serialized executor, so it
         // provably cannot run before the hub is disposed. Test-side gating only — the
-        // same ManualResetEventSlim pattern as TeardownHubCreationFreezeTest.
+        // same AsyncSubject + volatile-flag pattern as TeardownHubCreationFreezeTest.
         var primary = nodeHub!.GetWorkspace().DataContext
             .GetDataSourceForType(typeof(MeshNode))!
             .GetStreamForPartition(null)!;
-        using var gateEntered = new ManualResetEventSlim(false);
-        using var releaseGate = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate: turn → test is an AsyncSubject the parked turn completes; the
+        // release travels back INTO that turn, so it is a volatile flag polled under a bounded
+        // SpinUntil and written in the `finally` below.
+        var gateEntered = new AsyncSubject<Unit>();
+        var releaseGate = 0;
         primary.Update((Func<EntityStore?, ChangeItem<EntityStore>?>)(_ =>
         {
-            gateEntered.Set();
-            releaseGate.Wait(TimeSpan.FromSeconds(60));
+            gateEntered.OnNext(Unit.Default);
+            gateEntered.OnCompleted();
+            SpinWait.SpinUntil(() => Volatile.Read(ref releaseGate) == 1, TimeSpan.FromSeconds(60));
             return null;
         }), _ => { });
-        gateEntered.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue(
-            "the gated turn must be running on the primary stream's executor before the patch is posted");
 
         try
         {
+            await gateEntered.Should().Within(10.Seconds()).Emit(
+                "the gated turn must be running on the primary stream's executor before the patch is posted");
+
             // Post the patch with a pre-registered response observable, then FENCE on a
             // GetDataRequest response from the same single-threaded action block — when the
             // fence answers, the patch handler has run: ack watcher + disposal NACK are
@@ -111,7 +118,7 @@ public class OwnerDisposalNackTest(ITestOutputHelper output) : MonolithMeshTestB
         }
         finally
         {
-            releaseGate.Set();
+            Volatile.Write(ref releaseGate, 1);
         }
     }
 }
