@@ -64,7 +64,6 @@ src/MeshWeaver.Graph/MeshDataSource.cs	1
 src/MeshWeaver.Graph/MeshNodeExtensions.cs	6
 src/MeshWeaver.Graph/NodeTypeReleaseExtensions.cs	1
 src/MeshWeaver.Graph/StaticRepoImporter.cs	1
-src/MeshWeaver.Hosting.Monolith.TestBase/MonolithMeshTestBase.cs	1
 src/MeshWeaver.Hosting/MeshNodeStreamCache.cs	1
 src/MeshWeaver.Hosting/NodeUpdatePipeline.cs	1
 src/MeshWeaver.Mesh.Contract/MeshExtensions.cs	1

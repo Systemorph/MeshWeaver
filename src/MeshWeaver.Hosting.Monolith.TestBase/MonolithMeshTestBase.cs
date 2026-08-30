@@ -942,21 +942,34 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // (maxParallelThreads:1) that thread IS the only one that can pump the
         // CreateNode completion — so `.Wait()` from an `async Task` test deadlocks
         // (the test then dies at its [Fact(Timeout=…)] cap with an empty message).
-        // Bridge at the test edge instead: `.FirstAsync().ToTask()` and the caller
-        // `await`s. Observable.Using opens the ImpersonateAsSystem scope on Subscribe
-        // (here, synchronously, when .ToTask() subscribes) and keeps the System
-        // AsyncLocal alive for the lifetime of the create — so the write authorises
-        // as the platform provisioner (see PathResolutionService for the same shape).
-        return Observable.Using(
-                () => access.ImpersonateAsSystem(),
-                _ => NodeFactory.CreateNode(node))
+        //
+        // 🚨 And it is NOT an Rx→Task bridge either (maintainer, 2026-08-30: "no ToTask
+        // ever"). Rx's own bridge completes its TaskCompletionSource from INSIDE the
+        // pipeline, without RunContinuationsAsynchronously, so the awaiting test resumes
+        // INLINE on the signalling thread — still inside Rx's trampoline — and everything
+        // the test then does inherits that. ReactiveCompletion.ObserveCompletion is the
+        // sanctioned wait: it subscribes, keeps its error arm attached for a late fault,
+        // and queues the continuation instead of running it on the signaller's thread.
+        // 🚨 RunAsSystem, not a raw Observable.Using(access.ImpersonateAsSystem, …) — the SEALED
+        // impersonation boundary (ImpersonationScopeExtensions). The raw shape opens the
+        // AsyncLocal scope on the SUBSCRIBING thread and disposes it when the inner observable
+        // terminates, which can be a DIFFERENT thread — latching System onto the subscriber or
+        // restoring the previous identity onto the terminating thread. RunAsSystem enters at
+        // Subscribe and leaves on the way out of that same subscription. This was the last
+        // entry MonolithMeshTestBase held in ImpersonationScopeSites.allow; retiring it here
+        // (Copilot review, #2748). The scope still spans the whole create, so the write
+        // authorises as the platform provisioner.
+        return access.RunAsSystem(() => NodeFactory.CreateNode(node))
             // Subscribe off the test's single-threaded async sync-context (see
             // ObservableAssertions): keeps the create round-trip on the thread pool
             // instead of funnelling its continuations onto the one xUnit thread.
             .SubscribeOn(TaskPoolScheduler.Default)
             .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync()
-            .ToTask();
+            .ObserveCompletion(
+                ex => FileOutput.WriteLine(
+                    $"[SEED] SeedTopLevel({node.Id}): create faulted AFTER the wait settled — "
+                    + $"reported, not orphaned: {ex.GetType().Name}: {ex.Message}"))!;
     }
 
     /// <summary>
@@ -1016,9 +1029,19 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     {
         try
         {
-            return await (hub ?? RequestHub).Observe(request, options)
+            // 🚨 ObserveCompletion, never an Rx→Task bridge (maintainer, 2026-08-30: "no
+            // ToTask ever"). This is THE request/response wait the whole suite runs, so the
+            // scheduler it resumes on shapes every test that uses it: Rx's own bridge
+            // completes its TaskCompletionSource from inside the pipeline without
+            // RunContinuationsAsynchronously, resuming the test INLINE on the responding
+            // hub's action-block thread and leaving the rest of the test body on it.
+            return (await (hub ?? RequestHub).Observe(request, options)
                 .FirstAsync()
-                .ToTask(ct ?? TestContext.Current.CancellationToken);
+                .ObserveCompletion(
+                    ex => FileOutput.WriteLine(
+                        $"[REQUEST] {request.GetType().Name}: response faulted AFTER the wait "
+                        + $"settled — reported, not orphaned: {ex.GetType().Name}: {ex.Message}"),
+                    ct ?? TestContext.Current.CancellationToken))!;
         }
         catch (ObjectDisposedException disposed)
         {

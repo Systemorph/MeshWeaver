@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.GitSync;
+using MeshWeaver.Messaging;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.PluginCatalog;
 
@@ -144,6 +145,10 @@ var assembler = new InstanceComboAssembler(
         Output = Console.Out,
     });
 
-var report = await assembler.Assemble(combo, workRoot).FirstAsync().ToTask();
+// 🚨 ObserveCompletion, never Rx's own observable-to-Task bridge — see the ruling of
+// 2026-08-30 ("no ToTask ever") and ReactiveCompletion's remarks.
+var report = (await assembler.Assemble(combo, workRoot).FirstAsync()
+    .ObserveCompletion(ex => Console.Error.WriteLine(
+        $"combo assemble faulted AFTER the report was produced — reported, not orphaned: {ex}")))!;
 report.WriteSummary(Console.Out);
 return report.ExitCode;

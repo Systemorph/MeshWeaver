@@ -1,6 +1,5 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
@@ -576,10 +575,21 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
     /// Reactive end-to-end: no <c>await</c> on a per-type-source step (that bridge
     /// is what deadlocks the hub action block when a type source touches a hub —
     /// see <c>Doc/Architecture/InitializationGates.md</c>). The single
-    /// <c>.FirstAsync().ToTask(ct)</c> at the bottom is the framework-edge bridge
-    /// because <see cref="StreamConfiguration{T}.WithInitialization(System.Func{ISynchronizationStream{T}, System.Threading.CancellationToken, System.Threading.Tasks.Task{T}})"/> consumes a
-    /// <c>Func&lt;…, Task&lt;TStream&gt;&gt;</c>; that bridge is sanctioned per
-    /// <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// <c>ObserveCompletion</c> at the bottom is the framework-edge wait, because
+    /// <see cref="StreamConfiguration{T}.WithInitialization(System.Func{ISynchronizationStream{T}, System.Threading.CancellationToken, System.Threading.Tasks.Task{T}})"/> consumes a
+    /// <c>Func&lt;…, Task&lt;TStream&gt;&gt;</c>.
+    /// </para>
+    /// <para>
+    /// 🚨 That wait is <see cref="MeshWeaver.Messaging.ReactiveCompletion.ObserveCompletion{T}"/>,
+    /// never Rx's own observable-to-Task bridge (maintainer, 2026-08-30: <i>"no ToTask ever"</i>).
+    /// Rx's bridge completes its <c>TaskCompletionSource</c> from inside the pipeline without
+    /// <c>RunContinuationsAsynchronously</c>, so the stream's init continuation resumed INLINE on
+    /// whichever type source signalled last — the very thing the reactive composition above exists
+    /// to avoid. <c>StreamConfiguration</c> also carries an <c>IObservable</c>-shaped
+    /// <c>WithInitialization</c> overload; moving to it would drop the Task from this edge
+    /// altogether, but it routes initialization down a different path (per-emission
+    /// <c>SetCurrent</c> instead of the hub-init boundary bridge) and so is a behavioural change
+    /// that belongs in its own commit, not in a mechanical de-bridging.
     /// </para>
     /// </summary>
     protected virtual Task<EntityStore> GetInitialValueAsync(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
@@ -606,7 +616,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
             })
             .Aggregate(emptyStore, (acc, item) => acc.Update(item.Reference, item.Instances))
             .FirstAsync()
-            .ToTask(cancellationToken);
+            .ObserveCompletion(ReportLateInitFault, cancellationToken)!;
     }
 
 
@@ -625,6 +635,13 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
     {
         Logger.LogError("An exception occurred synchronizing Data Source {Identity}: {Exception}", this.Id, exception);
     }
+
+    /// <summary>
+    /// Late-fault sink for the initialization wait: a type source that faults AFTER the initial
+    /// store was already handed to the stream. A <see cref="Task"/> cannot carry it, and an
+    /// unobserved one detonates on the finalizer — so it is logged here instead of discarded.
+    /// </summary>
+    private void ReportLateInitFault(Exception ex) => LogException(ex);
 
     /// <summary>
     /// Configures the data-source stream and subscribes a resilient handler that feeds external changes
@@ -749,7 +766,7 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
             })
             .Aggregate(emptyStore, (acc, item) => acc.Update(item.Reference, item.Instances))
             .FirstAsync()
-            .ToTask(cancellationToken);
+            .ObserveCompletion(ReportLateInitFault, cancellationToken)!;
     }
 
     /// <summary>
@@ -819,4 +836,14 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
         );
         return stream;
     }
+
+    /// <summary>
+    /// Late-fault sink for the initialization waits above: a type source that faults AFTER the
+    /// initial store was already handed to the stream. A <see cref="Task"/> cannot carry it, and
+    /// an unobserved one detonates on the finalizer — so it is logged here instead.
+    /// </summary>
+    private void ReportLateInitFault(Exception ex)
+        => Logger.LogError(
+            "A type source faulted AFTER the initial store was handed to Data Source {Identity} — "
+            + "reported, not orphaned: {Exception}", Id, ex);
 }
