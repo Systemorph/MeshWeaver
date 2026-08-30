@@ -38,6 +38,14 @@ name: Node repo gate (reusable)
 
 on:
   workflow_call:
+    outputs:
+      gate-log-artifact:
+        description: >-
+          The name of the artifact holding the tester's stdout (gate-log-<sha>) — EMPTY when the gate
+          ran nothing (a PR whose diff reaches no module content). A caller's own ratchet keys on
+          this: present ⇒ download and read it, and fail on a missing or truncated log; empty ⇒
+          there was no gate run to ratchet, which the gate's own log states.
+        value: ${{ jobs.test-repos.outputs.gate-log-artifact }}
     inputs:
       test-image:
         description: The mw-plugin-test image reference (the caller's vars.MW_TEST_IMAGE).
@@ -194,6 +202,8 @@ on:
 jobs:
   test-repos:
     name: Compile + render node repos (MeshWeaver from ACR)
+    outputs:
+      gate-log-artifact: ${{ steps.gate.outputs.artifact }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -554,6 +564,7 @@ jobs:
           echo "EXT_MODULES_DIR=$EXT" >> "$GITHUB_ENV"
           echo "EXT_MODULE_ARGS=$MODULE_ARGS" >> "$GITHUB_ENV"
       - name: Import + compile + render + run tests for each node repo
+        id: gate
         env:
           TEST_IMAGE: ${{ inputs.test-image }}
           IMAGE_DIGEST: ${{ inputs.image-digest }}
@@ -667,6 +678,7 @@ jobs:
             --entrypoint /app/mw-plugin-test "$IMAGE" /repo \
             "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} --seed /seed | tee "$GATE_LOG"
           echo "GATE_LOG=$GATE_LOG" >> "$GITHUB_ENV"
+          echo "artifact=gate-log-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           echo "OWN_BAKE=$OWN_BAKE" >> "$GITHUB_ENV"
           echo "bake identity: $(cat "$OWN_BAKE/framework-mvid.txt") — $(ls "$OWN_BAKE"/*.zip | wc -l | tr -d ' ') bundle(s), gated on their own bytes"
       # 🚨 The dump is written by the CONTAINER, which runs as root, so the file lands owned by
