@@ -5,6 +5,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.ComboVerifier;
 using MeshWeaver.GitSync;
+using MeshWeaver.Messaging;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.PluginCatalog;
 
@@ -190,7 +191,13 @@ var assembler = new InstanceComboAssembler(
 var gate = new DockerImageGate(pools, gateTimeout, Console.Out, platform);
 var verifier = new InstanceComboVerifier(assembler, gate.Run);
 
-var run = await verifier.Verify(combo, imageRef, workRoot, candidateTag).FirstAsync().ToTask();
+// 🚨 ObserveCompletion, never Rx's own observable-to-Task bridge (maintainer, 2026-08-30:
+// "no ToTask ever"). Rx's bridge resumes this top-level continuation INLINE on whichever
+// thread the verifier's last stage signalled from, still inside Rx's trampoline — and every
+// later `await` in this file then schedules onto that same captured scheduler.
+var run = (await verifier.Verify(combo, imageRef, workRoot, candidateTag).FirstAsync()
+    .ObserveCompletion(ex => Console.Error.WriteLine(
+        $"combo verify faulted AFTER the run was reported — reported, not orphaned: {ex}")))!;
 
 run.WriteSummary(Console.Out);
 

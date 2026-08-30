@@ -1,6 +1,5 @@
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Mesh;
@@ -8,6 +7,7 @@ using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.Persistence.Http;
 
@@ -280,7 +280,15 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
         {
             // The connect already ran (or is running) on the pool; observe its single
             // result to dispose it. No re-connect — the ReplaySubject replays.
-            client = await connect.FirstOrDefaultAsync().ToTask().ConfigureAwait(false);
+            // 🚨 ObserveCompletion, never an Rx-to-Task bridge (maintainer, 2026-08-30: "no
+            // ToTask ever"). Rx's bridge resumes this disposal INLINE on whichever thread the
+            // connect promise signalled from — and the rest of DisposeAsync then runs there,
+            // disposing an MCP client on a foreign scheduler.
+            client = await connect.FirstOrDefaultAsync()
+                .ObserveCompletion(
+                    ex => _loggerFactory.CreateLogger<McpRemoteMeshClient>().LogDebug(ex,
+                        "MCP connect faulted AFTER the disposal wait settled — reported, not orphaned"))
+                .ConfigureAwait(false);
         }
         catch { /* connect failed — nothing to dispose */ }
 
