@@ -5,6 +5,10 @@
          PresentationScreenTest, next to the rest of the screen's behaviour, so the completion
          surface's rule cannot drift from the one the tile surfaces apply. -->
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+    <!-- The recycled-hub refusal (AccessControlPipeline.IsHubGone / RecyclingRefusal, issue #2727)
+         is pinned there: its discrimination and its WORDING are both contract, and the wording is
+         only meaningful against MeshNodeStreamCache's transient classifier in the same assembly. -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
   </ItemGroup>
   <PropertyGroup>
     <ProjectGuid>{93595120-3ccf-45c6-8783-4829a1120166}</ProjectGuid>

@@ -35,6 +35,55 @@ public static class AccessControlPipeline
     private static readonly ConcurrentDictionary<Type, RequiresPermissionAttribute?> AttributeCache = new();
 
     /// <summary>
+    /// True when the gate could not run because THIS HUB IS GONE — it is shutting down (its own
+    /// disposal, or an ancestor's freeze), or the failure is the disposed lifetime scope its
+    /// services resolve from.
+    ///
+    /// <para>Both halves are needed and neither is sufficient. <see cref="IMessageHub.IsShuttingDown"/>
+    /// alone misses the RECYCLE window this exists for: the delivery is being evaluated on a hub
+    /// whose disposal has already COMPLETED, so it is not "shutting down" any more, it is gone —
+    /// and the only evidence left is the <see cref="ObjectDisposedException"/> its scope throws.
+    /// The exception test alone would over-claim: an <see cref="ObjectDisposedException"/> from
+    /// something the HANDLER touched on a live hub is a real fault, not a recycle, so the message
+    /// is matched on the Autofac scope wording the rest of the codebase already keys on (the same
+    /// two shapes <c>TeardownStragglerCapturer</c> filters).</para>
+    /// </summary>
+    /// <summary>
+    /// The refusal a delivery gets when it reached a hub that is GONE (see <see cref="IsHubGone"/>).
+    ///
+    /// <para>🚨 THE WORDING IS CONTRACT, exactly as <c>MessageService.NackThroughParent</c>'s is.
+    /// The mesh classifies delivery failures by their MESSAGE TEXT as well as their ErrorType, and
+    /// this sentence must be matched as TRANSIENT by every one of
+    /// <c>MeshNodeStreamCache.IsTransientOwnerFailure</c>, <c>RoutingGrain.IsTransientFailure</c>
+    /// and <c>AreaErrorClassifier.IsTransientHubFailure</c> — that is the whole point: the caller
+    /// must RE-PROBE and land on the fresh activation instead of taking a corpse's answer as
+    /// final. It therefore carries their markers verbatim ("is shutting down", "Rejecting now").
+    /// Reword it casually and #2727 comes back silently — nothing fails to compile, the delivery
+    /// is still refused, and the caller simply stops retrying again. Pinned by
+    /// <c>RecycledHubRefusalTest</c>.</para>
+    /// </summary>
+    internal static string RecyclingRefusal(Address address, string messageTypeName, Exception error) =>
+        $"Hub {address} is shutting down (its lifetime scope is gone, {error.GetType().Name}) "
+        + $"— cannot evaluate access for {messageTypeName}; the address may reactivate "
+        + "(recycle / restart). Rejecting now.";
+
+    internal static bool IsHubGone(IMessageHub hub, Exception error)
+    {
+        if (hub.IsShuttingDown)
+            return true;
+        for (var e = error; e is not null; e = e.InnerException)
+        {
+            if (e is not ObjectDisposedException)
+                continue;
+            var msg = e.Message ?? string.Empty;
+            if (msg.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// One (path, permission) check together with the outcome the fold reached for it. Carries the
     /// tri-state (<see cref="PermissionCheckOutcome"/>) AND the identity of the check that produced
     /// it, so the <see cref="DeliveryFailure"/> can name the exact path/permission that refused the
@@ -147,6 +196,55 @@ public static class AccessControlPipeline
                     // NOT a swallow: the delivery is refused (next is never invoked) and the
                     // reason is both logged and carried to the caller. It is classified, because
                     // "the gate could not run" is not the same fact as "you are not allowed".
+                    //
+                    // 🚨 …and "the gate could not run BECAUSE THIS HUB IS GONE" is a third fact
+                    // again, which is what issue #2727 is. A delivery routed to a hub that has
+                    // since been RECYCLED reaches this pipeline holding the OLD hub's captured
+                    // `hub`, whose lifetime scope core#2438 now genuinely closes — so the first
+                    // `GetRequiredService` throws ObjectDisposedException and every such delivery
+                    // was answered `Unavailable` with a sentence carrying none of the markers the
+                    // transient classifiers match (MeshNodeStreamCache.IsTransientOwnerFailure,
+                    // RoutingGrain.IsTransientFailure, AreaErrorClassifier.IsTransientHubFailure).
+                    // The caller therefore treated a hub that is COMING BACK as a terminal answer
+                    // and never re-probed: RecycleSurvivesItsOwnDisposeTest reads null for an
+                    // address that is alive one activation later, SilentReadNackTest gets a
+                    // non-NACK, and a layout render wedges instead of retrying. Before #2438 the
+                    // scope never actually closed, so the same ordering resolved from a zombie
+                    // scope and passed — the bug was always here, the leak fix only exposed it.
+                    //
+                    // So: recognise it, and answer it in the vocabulary the rest of the mesh
+                    // already speaks for a recycling address — the SAME wording MessageService's
+                    // shutting-down gate uses, markers included ("is shutting down", "the address
+                    // may reactivate (recycle / restart)", "Rejecting now"), so the existing
+                    // re-probe machinery rides it out and lands on the fresh activation.
+                    // Refusal is unchanged: `next` is still never invoked, so nothing is granted.
+                    if (IsHubGone(hub, ex))
+                    {
+                        var recycling = RecyclingRefusal(hub.Address, delivery.Message.GetType().Name, ex);
+                        logger?.LogDebug(ex,
+                            "AccessControlPipeline: {MessageType} reached {Hub} after that hub was disposed — "
+                            + "NACKing as SHUTTING DOWN so the caller re-probes the fresh activation, "
+                            + "not as a permission verdict",
+                            delivery.Message.GetType().Name, hub.Address);
+                        // 🚨 Through the PARENT. This hub's own Post is gated closed once it is past
+                        // DisposeHostedHubs (PostImplGeneric refuses every non-shutdown message), so
+                        // posting the refusal here is how the caller ended up with silence instead of
+                        // a NACK. Same escape MessageService.NackThroughParent uses; correlation
+                        // rides ResponseFor's RequestId, never the posting hub's identity. During a
+                        // whole-mesh teardown the parent is itself past that point, the guard skips
+                        // the post, and nobody is waiting anyway.
+                        var parent = hub.Configuration.ParentHub;
+                        if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                            parent.Post(
+                                new DeliveryFailure(delivery)
+                                {
+                                    ErrorType = ErrorType.ShuttingDown,
+                                    Message = recycling
+                                },
+                                o => o.ResponseFor(delivery));
+                        return Observable.Return(delivery.Failed(recycling, ErrorType.ShuttingDown));
+                    }
+
                     logger?.LogWarning(ex,
                         "AccessControlPipeline: could not evaluate access for {MessageType} on {Hub} — "
                         + "reporting UNAVAILABLE (retryable), not a denial",
