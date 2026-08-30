@@ -42,7 +42,7 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
             return Observable.Return<string?>(null);
 
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var request = new MeshQueryRequest
         {
             Query = $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId.Trim()}",

@@ -347,7 +347,8 @@ cmd_registry() {
         info "  memex-local registry $url --key mwr_…"
       fi
       info "Apply it: memex-local update   (pulls the CI-built image from $ACR and re-renders the chart;"
-      info "          the portal registers itself on first boot and installs what it is granted)."
+      info "          after a platform admin accepts the privacy statement and platform terms in Settings ▸
+          Instance registration, the portal registers itself and installs what it is granted)."
       ;;
   esac
 }
