@@ -596,6 +596,74 @@ set on a mesh nobody can see:
 > a healthy type can serve perfectly with its release pointer several versions behind, and a check of
 > that shape fires constantly on healthy meshes. The fingerprint comparison above is the signal
 > precisely because it does not have this problem.
+### 🚨 When the PROCESS cannot emit — a failure that is not a verdict at all
+
+Everything above assumes the compile *found something out*. Sometimes it does not: Roslyn's `Emit`
+**throws** instead of returning diagnostics, and from that moment the process cannot emit any
+assembly at all. This is [#890](https://github.com/Systemorph/MeshWeaver/issues/890) — a
+`NullReferenceException` inside `Cci.MetadataWriter.GetConsolidatedTypeParameters`, reading a
+`ContainingType` that the guard immediately above it had just read as non-null.
+
+**The condition is total and permanent, not intermittent.** Measured on run `33322993649` shard 1
+(2026-08-30): the first throw landed at 16:42:42.375, and across the remaining 6 m 15 s of that
+process **7 of 7** compiles that reached the metadata writer failed identically and **none**
+succeeded. Compiles that only needed *diagnostics* kept working perfectly — the deliberately-broken
+NodeTypes in `NodeTypeCompileParkTest` still reported their real `CS1040`/`CS0246` codes — so parse
+and bind were healthy and only the **emit** was dead. That split is the fastest way to recognise it
+in a log: correct `CS####` for broken source, `NullReferenceException` for source that should
+succeed.
+
+**It is not a MeshWeaver defect and no compile-side change fixes it.** `EmitPipeline`'s canary
+answers that at the first throw, in two legs: re-emit a trivial, freshly parsed, known-good
+compilation against the same references, then — if that fails too — against an image-backed CoreLib
+that shares neither the `MetadataReference` instances nor their file mappings. `REFERENCES` and
+`BELOW-ROSLYN` both mean **the control could not emit either**.
+
+#### What that changes about the verdict
+
+A compile that aborts this way has learned **nothing** about the code it was handed, so recording
+`CompilationStatus.Error` states a verdict that was never formed — and it is durable: the same write
+stamps `FailedBuildInputs`, the re-drive above reads it back as *"formed under exactly the live
+inputs"*, and declines. The type is left saying *"your code is broken"* about code nothing evaluated,
+retried by nothing until a human presses **Compile** or an input genuinely moves.
+
+So `IsAvailabilityNonVerdict` treats it as the third availability fact, beside an unestablished
+source set and a recycling address: status `Unavailable`, no verdict recorded, the park budget
+untouched, and the type re-drivable — which is what lets a later, healthy process compile it. The
+bake gate filing this as *unevaluated* rather than as a code regression is the correct reading: a
+bake whose process cannot emit has evaluated nothing.
+
+🚨 **The predicate reads the VERDICT, never the presence of a canary.** Every emit-phase throw
+carries one, and three of the five verdicts deliberately withhold the claim — `OK` (the control
+emitted fine against the same references, so the fault *is* this compilation's inputs — a genuine
+`Error`), `INCONCLUSIVE` (the control could not be built, so leg 2 never ran) and `DIVERGENT` (both
+legs failed, in different frames). Widening this to "any infrastructure fault" is the blind spot
+`SourceSnapshotEstablishmentTest.EveryOtherCompileFailure_StillStampsError` exists to refuse.
+
+#### Reading it in CI — one event, many names
+
+One poisoned process reports as up to ten unrelated test failures; across 2026-08-22→08-29 that was
+**9 events wearing 37 distinct test names**, 23 % of all failing test names in the week. Every
+occurrence has cost a fresh and always-identical misdiagnosis. In run `33322993649` all five
+failures — three `NodeTypeCompileParkTest`, one `CodeEditRecompileTest`, one
+`ReleaseRequestWatcherHighWaterTest` — were this one event, and the shard's `exit=124` was its
+consequence, not a second problem.
+
+Two readings that look right and are not:
+
+- **"The retry compiled stale source."** It did not. The retry runs a real compile; the broken
+  source's `CS####` lines in the same test's output belong to the *first* compile, before the fix was
+  written. The retry's own error is the `NullReferenceException`. Compare timestamps, not adjacency.
+- **"That one is just a slow shard."** `ReleaseRequestWatcherHighWaterTest`'s compile threw **174 ms**
+  after `TEST START`; the 50 s wait that followed was waiting for an `Ok` that could never arrive.
+
+> 🚨 **The core dump the canary asks for cannot be captured this way.** `DOTNET_DbgEnableMiniDump`
+> fires on a *signal*, and this process never crashes — it throws a managed exception and keeps
+> running until CI's 8-minute cap kills it (`exit=124`, no dump). That is why three weeks of
+> "capture a core dump" produced none. Its SIGSEGV twin,
+> [#613](https://github.com/Systemorph/MeshWeaver/issues/613), *does* dump — see
+> [Debugging Native Crashes](/Doc/Architecture/DebuggingNativeCrashes) for the invariant the two share (a single
+> 8-byte word reading exactly zero while its block stays coherent) and for how to read one.
 
 ### Framework-version freezing
 
