@@ -248,6 +248,11 @@ public sealed class RegistryUpdateReconciler(
     /// withhold the rest, and <see cref="PluginBundleClient.AdoptModule"/> already absorbs its own
     /// failures into a logged zero.</para>
     /// </summary>
+    /// <summary>The most one package's module adopt may take before the reconcile moves on —
+    /// generous for a large bundle download, small against a boot; the point is only that it is
+    /// FINITE (see the Timeout note below, Plugins#959).</summary>
+    internal static readonly TimeSpan PerPackageAdoptBudget = TimeSpan.FromMinutes(3);
+
     private IObservable<Unit> ReconcileModules(
         PluginBundleClient bundles,
         string registryName,
@@ -270,11 +275,22 @@ public sealed class RegistryUpdateReconciler(
                         // Not installed here → somebody else's module; nothing to reconcile.
                         ? Observable.Return(0)
                         : bundles.AdoptModule(pkg.Id, pkg.Module!, recordPath, unattended: true))
+                    // 🚨 A HANG is worse than a failure here: the packages run as one sequential
+                    // Concat, so a single adopt that never answers (a wedged record read, a
+                    // download that stalls) silently starves EVERY package after it — on
+                    // memex.systemorph.com the Northwind adopt was never even attempted while
+                    // earlier packages logged failures (Plugins#959). A bounded wait turns the
+                    // hang into the loud, caught failure below and the chain proceeds.
+                    .Timeout(PerPackageAdoptBudget)
                     .Catch((Exception ex) =>
                     {
+                        // The CAUSE goes into the message itself, not only the attached exception:
+                        // single-line log pipelines (Loki greps) see the template line alone, and
+                        // "failed" with no reason cost a night of archaeology (Plugins#959).
                         logger.LogWarning(ex,
                             "[RegistryUpdate] module reconcile of {Id} against {Name} failed — "
-                            + "its landed module is unchanged.", pkg.Id, registryName);
+                            + "its landed module is unchanged. Cause: {Cause}",
+                            pkg.Id, registryName, ex.Message);
                         return Observable.Return(0);
                     })
                     .Select(_ => Unit.Default);
