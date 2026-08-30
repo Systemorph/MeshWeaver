@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Email;
@@ -12,6 +11,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -192,7 +192,7 @@ public class EmailMisconfigurationRefusalTest
         IEmailSender sender = new NoOpEmailSender(HalfConfigured());
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => sender.SendEmail("x@example.test", "s", "<p>b</p>").FirstAsync().ToTask());
+            () => sender.SendEmail("x@example.test", "s", "<p>b</p>").FirstAsync().Await());
 
         Assert.Contains("Email:TenantId", failure.Message, StringComparison.Ordinal);
         Assert.Contains("Email:ClientId", failure.Message, StringComparison.Ordinal);

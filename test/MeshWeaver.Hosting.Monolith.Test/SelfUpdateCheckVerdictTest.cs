@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
@@ -15,6 +14,7 @@ using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -121,7 +121,7 @@ public class SelfUpdateCheckVerdictTest(ITestOutputHelper output) : MonolithMesh
                 .Where(l => l.Message.Contains("[SelfUpdate] check (", StringComparison.Ordinal))
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             return logger;
         }
         finally
@@ -188,7 +188,7 @@ public class SelfUpdateCheckVerdictTest(ITestOutputHelper output) : MonolithMesh
             .Where(c => c.LastCheckedAt is not null)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         content.LastCheckVerdict.Should().Contain("no newer release");
         content.LastCheckTrigger.Should().Be(nameof(SelfUpdateTrigger.Startup));
@@ -226,7 +226,7 @@ public class SelfUpdateCheckVerdictTest(ITestOutputHelper output) : MonolithMesh
                     && l.Message.Contains(nameof(SelfUpdateTrigger.SafetyNet), StringComparison.Ordinal))
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
         }
         finally
         {
@@ -261,7 +261,7 @@ public class SelfUpdateCheckVerdictTest(ITestOutputHelper output) : MonolithMesh
                     && l.Message.Contains("NO build-completion event", StringComparison.Ordinal))
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
 
             warning.Message.Should().Contain("WebhookInbox",
                 "the report must name the chain to check, not this service");
@@ -292,7 +292,7 @@ public class SelfUpdateCheckVerdictTest(ITestOutputHelper output) : MonolithMesh
                 .Where(l => l.Message.Contains(nameof(SelfUpdateTrigger.BuildCompletion), StringComparison.Ordinal))
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
         }
         finally
         {

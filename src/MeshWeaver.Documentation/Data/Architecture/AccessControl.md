@@ -408,11 +408,11 @@ fold therefore has **no terminal at all**, and a `.Take(1)` around it bounds the
 rather than the wait. This is not hypothetical — it is the ordinary cross-silo shape, where the
 owning activation lives on a peer silo that is busy or has just gone away.
 
-Not every leg is like that, and the difference is deliberate. `ObserveGatedNodes` starts with
-`.StartWith(empty)` precisely so a slow leg cannot stall the fold — safe because a gate only ever
-*adds* `Read`. The grant and policy legs **must not** be seeded: "no grants yet" reads as a denial,
-which would be a silent wrong answer. So an unanswerable read cannot be projected onto the yes/no
-axis at all. It needs a third outcome:
+Not every leg is like that, and the difference is deliberate — see
+[the convergence contract](#-the-convergence-contract--which-legs-may-be-seeded-and-why-the-gate-is-not-bounded)
+below for the rule that decides it. `ObserveGatedNodes` starts with `.StartWith(empty)` precisely so a
+slow leg cannot stall the fold; the grant, policy and membership legs **must not** be seeded. So an
+unanswerable read cannot be projected onto the yes/no axis at all. It needs a third outcome:
 
 | Outcome | Means | Reported as |
 |---|---|---|
@@ -443,6 +443,92 @@ deadline, and it must re-emit when the grants finally land.
 Before this existed, `CreateNodeRequest` simply sat `Executing` — 33 s in the reported case — until
 its *caller's* `RequestTimeout` ended it, which names the caller's impatience rather than the read
 that starved (#1446).
+
+### 🚨 The convergence contract — which legs may be seeded, and why the gate is not bounded
+
+The fold's liveness problem has one obvious cure — give every leg a `.StartWith(empty)` so
+`CombineLatest` can never park on a slow source — and it is **wrong for three of the four legs**. The
+rule that decides it is **monotonicity**:
+
+> A leg of the permission fold may carry an empty seed **if and only if** its contribution is purely
+> **ADDITIVE**. A leg that also SUBTRACTS must never be seeded: the seed drops its subtractions, and
+> the fold's first emission is then more permissive than the truth.
+
+| leg | additive contribution | subtractive contribution | seeded? |
+|---|---|---|---|
+| `ObserveGatedNodes` | `GateGrant` ORs in `Read` on a declared public surface | **none** — "a gate NEVER subtracts" | ✅ **yes**, `StartWith(empty)` |
+| `ObserveEffectiveAssignments` | every runtime `AccessAssignment` grant | `Denied` role assignments, from the *same* nodes (`ComputeScopeRoles` returns `Granted` **and** `Denied`) | ❌ no |
+| `ObserveScopePolicies` | `PublicRead` | `GetPermissionCap()`, `BreaksInheritance` — and their **absence widens** | ❌ no |
+| `ObserveAllMembershipNodes` | group grants reach the viewer | the same subject set decides which **denials** match | ❌ no |
+
+**Why the first emission is the whole story.** `AccessControlPipeline` runs
+`hub.CheckPermissionOutcome(…).TakeDecisionOutsideGate()`, and `TakeDecisionOutsideGate` is a
+`Take(1)`. The fold's **first** emission *is* the verdict for every `[RequiresPermission]` delivery. A
+seed is not a "brief pre-load window that settles a moment later" — from the gate's point of view it
+is the answer, permanently.
+
+Each refusal, concretely:
+
+- **`ObserveEffectiveAssignments`** is fail-**OPEN** in the narrow direction (an empty seed drops a
+  runtime *deny* of a role that survives the seed — a static grant, the self-partition Admin) and
+  catastrophically wrong in the wide one: it drops every *runtime* grant, which is what almost all
+  real grants are. The first emission on a cold scope is `Permission.None`, so an entitled user is
+  answered **"Access denied"** — the false, actionable-looking verdict #974 exists to prevent, now
+  fired on every cold scope. A hang is a bad answer; a wrong answer is worse.
+- **`ObserveScopePolicies`** is fail-**OPEN**. `ComputeRoleState` falls back to the *static* policy
+  map when a scope has no runtime policy, and a missing policy means `cap = (Permission)~0` with
+  inheritance unbroken. An empty seed therefore hands the gate a verdict that ignores every runtime
+  permission cap and every `BreaksInheritance` boundary.
+- **`ObserveAllMembershipNodes`** is fail-**OPEN**. The viewer's subject set gates *denials* as much
+  as grants, so an empty seed keeps a viewer's direct grant while dropping the group deny that
+  revokes it.
+
+**The conclusion, and it is a strong one:** there is **no permissive seed that is not a hole and no
+conservative seed that is not a spurious denial**. The fold genuinely needs its inputs, so a starving
+leg's only sound terminal is an **error** — which the fold already propagates as
+`PermissionCheckOutcome.Undetermined` → `ErrorType.Unavailable` (retryable, and attributed to the read
+rather than to the caller's impatience). Making a *silent* starvation produce that error is a
+query-layer change, not a fold change: `MeshQuery` already **detects** it (`InitialStallProbe`, 20 s,
+whose own warning says *"Fix the stalled provider; never bump the consumer's timeout"*) and
+deliberately only logs. Turning that probe into a terminal would change every query in the mesh and is
+a platform decision in its own right — it is tracked, not slipped in under a symptom fix.
+
+**The gate stays unbounded, deliberately.** `AccessControlPipeline` carries no `Timeout` (see its "No
+Timeout here" comment) and this change does not add one. Bounding the shared gate would change the
+behaviour of every `[RequiresPermission]` message; more importantly a ceiling there cannot attribute
+anything — it would only say "the gate ran out of time", never *which* read starved. That attribution
+is exactly what `RlsNodeValidator`'s `PermissionEstablishmentBudget` provides on the node-operation
+path, and it is why the bounded twin's `Unavailable` is a *better* answer than the unbounded path's
+60 s caller timeout even though both describe the same event.
+
+**Silence is not consent (#2742).** The fold has **three** terminals, not two — emit, fault, and
+*complete without ever emitting* — and only the first two were represented. `CombineLatest` completes
+the moment any source completes having produced no value, so one silent leg empties the whole fold;
+`CheckPermissionOutcome` passed that empty completion straight through; and an empty check is not a
+refusal anywhere downstream — the pipeline's `.Take(1).Select(…).DefaultIfEmpty()` reads `null` as
+"no check refused ⇒ every check was granted" and **invokes the handler**. Measured before the fix: a
+`[RequiresPermission(Read)]` `GetDataRequest` was delivered and answered normally with no failure at
+all — a full authorization bypass, reachable through the public `WithPermissionEvaluator` seam.
+`CheckPermissionOutcome` now materialises that terminal as `Undetermined`, so it fails **closed** and
+reports `Unavailable` rather than vanishing.
+
+**Both consumers had the same hole, so both were closed.** `RlsNodeValidator` — the *node-operation*
+gate — ends its chain in `TakeDecisionOutsideGate().Timeout(budget).Catch(…)`, which covers a value and
+a fault. `Take(1)` on an empty fold completes empty; `Timeout` forwards that completion unchanged (it
+bounds silence *before* a terminal, not an empty one); the `Catch` never fires; and the validator emits
+**no** `NodeValidationResult`. `RunCreationValidatorsObs`'s `Concat` skips a validator that yields
+nothing, so "no verdict" read as "nothing objected" — measured: a caller holding **no grant at all**
+created a node under a silent evaluator and got back `State = Active, CreatedBy = <that user>`. It now
+ends in `.DefaultIfEmpty(UnestablishedCheck(…, cause: null))`, whose message names the silent case
+apart from the stalled and the faulted one, because the three have different causes.
+
+> **The rule, stated once:** wherever a permission answer is consumed, **"no outcome" is not consent.**
+> A chain that can end without emitting must materialise that ending as a refusal — never leave it
+> empty for a downstream `DefaultIfEmpty` / `Concat` / `Where` to read as "nothing objected".
+
+Pinned by `PermissionFoldSilentTerminalTest` (message gate) and `RlsSilentFoldWriteTest` (node
+operations), each with an over-reach control proving a healthy fold on the same mesh still answers; the
+seeding rule above is pinned by `PermissionFoldLegSeedGuardTest`.
 
 ### 🚨 The budget is DERIVED, never configured beside the bound it sits inside (#1198)
 

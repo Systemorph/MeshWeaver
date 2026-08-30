@@ -18,8 +18,8 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
@@ -381,7 +381,7 @@ public class ConcurrentRequestsTest(ITestOutputHelper output) : MonolithMeshTest
                 {
                     var address = new Address(path);
                     Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] {path}: Ping starting");
-                    await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+                    await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().Await(TestContext.Current.CancellationToken);
                     Output.WriteLine($"[{sw.ElapsedMilliseconds}ms] {path}: Ping returned");
 
                     var workspace = client.GetWorkspace();

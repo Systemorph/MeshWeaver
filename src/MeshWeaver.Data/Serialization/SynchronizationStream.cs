@@ -1167,6 +1167,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         }
         Hub = syncHub;
 
+        // The outstanding fresh-snapshot re-ask dies with the stream — a pending Observe callback
+        // that outlives it is exactly the leaked callback the quiescing budget flags.
+        RegisterForDisposal(resyncSubscription);
+
         // 🚨 Capture the creating user's identity ONCE, here on the thread that constructs
         // the stream — in production that is the circuit thread (cache.GetMeshNodeStream)
         // or the owner's SubscribeRequest handler, where AccessService.Context is the real
@@ -1475,8 +1479,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // FULL consumes it (a stray reordered patch must still be dropped), and it is set ONLY when
         // the mirror is genuinely behind (receivedVersion < announcedVersion), so it can never
         // clobber a newer optimistic write with a stale snapshot (that case keeps the gate CLOSED).
+        //
+        // 🚨🚨 …AND THE SAME ACCEPTANCE IS OWED TO A FULL A MIRROR WITH NO SNAPSHOT RECEIVES (#2654).
+        // `currentJson is null` says the mirror is holding NOTHING it could apply a patch onto —
+        // either it never had a snapshot, or RequestFreshSnapshot DISCARDED it before it
+        // re-asked. In that state a rebased Full can clobber nothing, and refusing it leaves the
+        // mirror with nothing at all: strictly worse. This is the case the guard used to lose. When
+        // the owner has to REBUILD the server-side stream to answer a re-ask (the subscriber was
+        // evicted on the router's TargetUnserved verdict, #2620; the owner grain recycled), that
+        // fresh stream's frame clock starts from scratch, so the snapshot the mirror ASKED FOR is
+        // stamped below what it still holds in Current — and the guard threw it away. The gate
+        // stayed shut, every later Patch was swallowed at Debug on the "Patch before base Full"
+        // branch, and the area sat on its placeholder forever with nothing logged above Debug.
+        // Same reasoning as ExpectResubscribeFull, taken off the STATE that justifies it rather
+        // than off a separately-armed latch — and off the CACHE rather than the in-flight gate, so
+        // it holds however the answer and the gate's release interleave.
+        var currentJson = Get<JsonElement?>();
         var acceptRebasedFull = delivery.Message.ChangeType == ChangeType.Full
-            && Interlocked.Exchange(ref _acceptResubscribeFull, 0) == 1;
+            && (Interlocked.Exchange(ref _acceptResubscribeFull, 0) == 1 || currentJson is null);
 
         // 🚨 Monotonicity guard — applies to PATCHES *and* FULLS. Version is ALWAYS the OWNER
         // hub's Version (BuildChangeItem/BuildFullChangeItem: the owner stamps its monotonic
@@ -1504,7 +1524,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 "[SYNC_STREAM] Accepting rebased resubscribe Full for {StreamId}: incoming v{In} < current v{Cur} (recycled owner re-snapshot)",
                 StreamId, delivery.Message.Version, Current.Version);
 
-        var currentJson = Get<JsonElement?>();
         if (delivery.Message.ChangeType == ChangeType.Full)
         {
             logger.LogDebug("[SYNC_STREAM] Processing Full change for {StreamId}", StreamId);
@@ -1520,8 +1539,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                     delivery.Message.Version));
                 Set(currentJson);
                 // A Full re-established Current — any pending resync is satisfied;
-                // allow a future Patch-before-Full gap to resubscribe again.
-                _resyncInFlight = false;
+                // allow a future Patch-before-Full gap to resubscribe again, and clear the
+                // did-not-converge counter: THIS is the event that says the resync worked.
+                ReleaseResyncGate();
+                resyncAttempts = 0;
             }
             catch (Exception ex)
             {
@@ -1551,8 +1572,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 // forever — the "stream never emits" CI deadlock (CreateThread,
                 // RapidSubmits, TodoDataChangeWorkflow query waits). Request a fresh
                 // Full so we get the CURRENT state including this change. Flood-safe:
-                // RequestFreshSnapshot is gated by _resyncInFlight — exactly ONE
-                // resubscribe per gap, cleared when a Full re-establishes Current.
+                // RequestFreshSnapshot is gated by resyncInFlight — ONE re-ask
+                // OUTSTANDING at a time, released when that re-ask is answered.
+                //
+                // 🚨 That last clause is the #2654 fix, and it is what makes this branch a recovery
+                // rather than a trapdoor. The gate used to be released ONLY by a Full landing, so a
+                // re-ask whose ANSWER never arrived — lost on the same leg that lost the frame,
+                // refused, undeliverable — shut this branch permanently: every subsequent Patch
+                // logged the Debug line below and was dropped, forever. The frame chain cannot see
+                // that loss either, because a re-assert Full carries the version of the state it
+                // re-asserts rather than a new one (BuildReassertFrame), so two consecutive frames
+                // share a version and `BasedOnVersion` collapses — measured. The answer therefore
+                // has to come from the REQUEST's own round trip, which is why RequestFreshSnapshot
+                // now observes it.
                 logger.LogDebug(
                     "[SYNC_STREAM] Patch before base Full for {StreamId}; requesting fresh snapshot", StreamId);
                 RequestFreshSnapshot();
@@ -1571,7 +1603,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             // "awaiting first data" for the full 45s detector with no error anywhere. A Patch
             // whose BasedOnVersion is NOT the version we last applied proves the gap; the only
             // sound reaction is a fresh authoritative snapshot from the owner (event-driven,
-            // storm-gated by _resyncInFlight — no timer, no retry loop). Applies to
+            // storm-gated by resyncInFlight — no timer, no retry loop). Applies to
             // DataChangedEvent (owner→mirror) only: a PatchDataChangeRequest's chain is stamped
             // by the SENDING mirror and is not comparable to this stream's applied version.
             // Fulls need no gap check — a Full re-establishes the complete state, and a LOST
@@ -1651,9 +1683,49 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     // so every subsequent Patch (until the fresh Full lands) re-enters the
     // "Patch before base Full" path. Without this gate each of those Patches would
     // post another SubscribeRequest, flooding the owner's action block and starving
-    // real requests (the TodoDataChangeWorkflow UpdateNodeRequest leak). One
-    // resubscribe per gap; cleared when a Full re-establishes Current.
-    private bool _resyncInFlight;
+    // real requests (the TodoDataChangeWorkflow UpdateNodeRequest leak).
+    //
+    // 🚨 A GATE, NOT A TRAPDOOR (#2654). What it bounds is "ONE re-ask OUTSTANDING", and until now
+    // it did not: it was released by exactly ONE event — a Full landing — while the re-ask itself
+    // was posted FIRE-AND-FORGET down the very leg that had just proven it loses frames, with no
+    // NACK arm, no OnError and no terminal of any kind. Every way the answer could fail to arrive
+    // therefore shut this gate for the rest of the mirror's life: each later Patch took the "Patch
+    // before base Full" branch, RequestFreshSnapshot no-opped on this flag, and the frame was
+    // dropped at Debug. No error, no warning, no recovery — a layout area on its placeholder
+    // forever, which is the whole of #2654.
+    //
+    // It is now released by the re-ask's ROUND TRIP, which is the event that actually bounds it:
+    //   • the fresh Full lands — the mirror has its base (the success case, unchanged);
+    //   • the owner ACKs — it has processed the re-subscribe and done whatever it is going to do,
+    //     so the request is no longer outstanding;
+    //   • the request is refused or unanswerable — see ResyncRefused.
+    // Releasing the gate ASKS FOR NOTHING BY ITSELF: nothing here polls, retries or runs on a
+    // timer. Only the next frame that PROVES the mirror still has no base drives a new re-ask, so
+    // the rate is bounded by the round trip AND by the owner actually emitting — the same bound
+    // JsonSynchronizationStream.Resubscribe's in-flight flag has always lived with, and the
+    // opposite of the unbounded per-Patch flood this gate was introduced for.
+    // Interlocked because the ack / refusal arms run on the response thread, not the hub turn.
+    private int resyncInFlight;
+
+    /// <summary>Re-opens the resync gate — see <see cref="resyncInFlight"/>. Never re-asks by
+    /// itself: the next frame that proves the mirror still has no base does that.</summary>
+    private void ReleaseResyncGate() => Interlocked.Exchange(ref resyncInFlight, 0);
+
+    /// <summary>
+    /// Consecutive fresh-snapshot requests that have not produced a base snapshot, reset by the
+    /// Full that finally does. Anything above 1 is a mirror that asked and was NOT answered — the
+    /// non-convergence of #2654 — which is what turns that state from silence into a Warning naming
+    /// the stream and the owner. Hub-turn confined, like <see cref="Current"/>.
+    /// </summary>
+    private int resyncAttempts;
+
+    /// <summary>
+    /// The re-ask currently outstanding. At most ONE at a time (<see cref="resyncInFlight"/>), so a
+    /// <see cref="SerialDisposable"/> both bounds the registration — a CompositeDisposable entry per
+    /// resync would grow for the life of the stream — and cancels a superseded pending callback,
+    /// which is what keeps <c>responseSubjects</c> from accumulating entries nothing will answer.
+    /// </summary>
+    private readonly SerialDisposable resyncSubscription = new();
 
     /// <summary>
     /// Latch (0/1) set by <see cref="ExpectResubscribeFull"/> when a version-gated resubscribe is
@@ -1677,28 +1749,157 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
 
     private void RequestFreshSnapshot()
     {
-        if (_resyncInFlight)
-            return;
-        _resyncInFlight = true;
-        Set<JsonElement?>(null);
-        if (Reference is WorkspaceReference wsRef)
+        // 🚨 Establish that we CAN ask before latching anything. A stream whose Reference is not a
+        // WorkspaceReference has no owner-side subscription to refresh, and the previous order
+        // (latch, null the cache, then discover there is nothing to post) closed the gate on a
+        // re-ask that was never made — permanent by construction.
+        if (Reference is not WorkspaceReference wsRef)
         {
-            var accessService = Host.ServiceProvider
-                .GetService(typeof(AccessService)) as AccessService;
-            using (accessService?.ImpersonateAsSystem())
-            {
-                // 🚨 Minted, never constructed inline: a re-subscribe declares the SAME negotiated
-                // wire capabilities as the initial subscribe. When the owner cannot match this
-                // request to a live server-side stream (the subscriber was evicted on a
-                // TargetUnserved verdict, the owner recycled) it builds a fresh one and reads the
-                // capabilities off THIS request — so a capability omitted here is withdrawn for the
-                // rest of the mirror's life, silently. See MintSubscribeRequest.
-                Host.Post(
+            logger.LogDebug(
+                "[SYNC_STREAM] Cannot request a fresh snapshot for {StreamId}: {Reference} is not a WorkspaceReference",
+                StreamId, Reference);
+            return;
+        }
+        if (Interlocked.Exchange(ref resyncInFlight, 1) == 1)
+            return;
+        // 🚨 THE ONE LINE THAT MAKES NON-CONVERGENCE VISIBLE. A second consecutive ask means the
+        // first one produced no base snapshot — the answer was lost, refused or thrown away — which
+        // is exactly the state #2654 spent its whole life in at Debug level, with a stuck layout
+        // area as the only outward sign. Warning names the stream and the owner so a portal log
+        // distinguishes "gaps that were answered" (the healthy shape, §6 of DataSyncAndCrdt) from
+        // "a stream that keeps asking and never converges" (the defect).
+        if (++resyncAttempts > 1)
+            logger.LogWarning(
+                "[SYNC_STREAM] Resync has not converged for {StreamId}: asking {Owner} for a fresh snapshot again (attempt {Attempt}) — the previous request produced no base snapshot",
+                StreamId, StreamIdentity.Owner, resyncAttempts);
+        Set<JsonElement?>(null);
+        var accessService = Host.ServiceProvider
+            .GetService(typeof(AccessService)) as AccessService;
+        using (accessService?.ImpersonateAsSystem())
+        {
+            // 🚨 Minted, never constructed inline: a re-subscribe declares the SAME negotiated
+            // wire capabilities as the initial subscribe. When the owner cannot match this
+            // request to a live server-side stream (the subscriber was evicted on a
+            // TargetUnserved verdict, the owner recycled) it builds a fresh one and reads the
+            // capabilities off THIS request — so a capability omitted here is withdrawn for the
+            // rest of the mirror's life, silently. See MintSubscribeRequest.
+            //
+            // 🚨 OBSERVE, never Post (#2654). This is the THIRD SubscribeRequest site, and until
+            // now it was the only one with no arm on its answer — the other two
+            // (CreateExternalClient's initial subscribe and its Resubscribe) have always used
+            // hub.Observe precisely so a refusal reaches them. SubscribeRequest is an
+            // IRequest<SubscribeAck> and the owner answers every one of them
+            // (DataExtensions.HandleSubscribeRequest), so a verdict — ack, DeliveryFailure, or the
+            // hub's own "no response" terminal — always arrives. Fire-and-forget threw all three
+            // away and left the gate shut on silence.
+            //
+            // 🚨 DEFER, so a SYNCHRONOUS throw is an OnError. Host.Observe posts inline (it
+            // registers the response subject and then calls Post), and a Post that throws — the
+            // host is disposing, routing refuses — would otherwise bubble out of UpdateStream with
+            // the gate already set and the cached JSON already dropped: the exact permanent wedge
+            // this change exists to remove, recreated on the failure path. Inside Defer the throw
+            // reaches ResyncRefused like any other verdict, which always releases the gate. The
+            // factory still runs inside the impersonation scope, because Subscribe is called here.
+            resyncSubscription.Disposable = Observable
+                .Defer(() => Host.Observe(
                     JsonSynchronizationStream.MintSubscribeRequest(StreamId, wsRef, identity: null)
                         with { Subscriber = Configuration.Subscriber! },
-                    o => o.WithTarget(StreamIdentity.Owner));
-            }
+                    o => o.WithTarget(StreamIdentity.Owner)))
+                .Take(1)
+                .Subscribe(
+                    _ =>
+                    {
+                        // 🚨 THE ACK RELEASES THE GATE. It means the owner has PROCESSED this
+                        // re-subscribe and done whatever it is going to do about it, so the request
+                        // is no longer outstanding — and the gate's contract is "one OUTSTANDING
+                        // re-ask", never "one re-ask ever". Waiting for the Full instead is what
+                        // made the gate permanent whenever the Full did not arrive, and the frame
+                        // chain cannot cover for that: a re-assert Full carries the version of the
+                        // state it re-asserts (BuildReassertFrame), so it shares a version with the
+                        // frame before it and its loss leaves the BasedOnVersion chain looking
+                        // intact — measured on StreamResyncConvergenceTest.
+                        //
+                        // Releasing here re-asks NOTHING. The next re-ask needs a frame that proves
+                        // the mirror still has no base, so the worst case is one redundant round
+                        // trip when a Patch overtakes the answering Full — and that redundant
+                        // re-ask is itself answered with a Full, which ends the cycle.
+                        logger.LogDebug(
+                            "[SYNC_STREAM] Fresh-snapshot request for {StreamId} acknowledged by owner {Owner}",
+                            StreamId, StreamIdentity.Owner);
+                        ReleaseResyncGate();
+                    },
+                    ResyncRefused);
         }
+    }
+
+    /// <summary>
+    /// The failure arm the fresh-snapshot re-ask never had (#2654). Called when the owner answers
+    /// the re-ask with anything other than a <see cref="SubscribeAck"/> — a
+    /// <see cref="DeliveryFailure"/>, or the hub's own "no response" terminal when the request was
+    /// undeliverable.
+    ///
+    /// <para>It re-opens the gate FIRST and unconditionally: whatever the verdict, this re-ask is
+    /// over, and keeping the gate shut on a dead re-ask is what made non-convergence permanent and
+    /// silent. Re-opening asks for nothing by itself — the next frame that proves the mirror is
+    /// still without a base drives exactly one new re-ask, so a mirror whose owner has gone quiet
+    /// stays quiet too.</para>
+    ///
+    /// <para>The classification is the SAME ONE this stream's own <c>DeliveryFailure</c> handler
+    /// applies, deliberately — one policy per type, not two:
+    /// <see cref="ErrorType.ShuttingDown"/> is transient and gets ridden out; every other verdict is
+    /// terminal and faults the stream, so the subscriber SEES a failure instead of holding a
+    /// placeholder for a snapshot that is never coming.</para>
+    ///
+    /// <para>🚨 It keys on <see cref="ErrorType"/> and NEVER on
+    /// <see cref="DeliveryFailure.TargetUnserved"/>. That stamp is the OWNER-side eviction gate
+    /// (<c>DataExtensions.HandleTargetUnservedFailure</c>, #2426/#2546), and the router deliberately
+    /// stamps it on BOTH of its "nobody serves that address" verdicts — the terminal
+    /// no-live-subscriber refusal (<c>RefuseNoSubscriber</c>, <see cref="ErrorType.NotFound"/>) and
+    /// the TRANSIENT pod-hub refusal a rolling deploy produces while a silo's claim has not landed
+    /// yet (<c>AnswerPodHubNotHere</c>, <see cref="ErrorType.ShuttingDown"/>, #2745). Reading the
+    /// stamp as "terminal" would fault every mirror in that overlap window; RoutingGrain's own
+    /// contract says it: the stamp is the eviction gate, the ErrorType beside it says whether the
+    /// SENDER keeps its recovery armed, and the two are independent.</para>
+    ///
+    /// <para>A verdict that never arrives at all — the request was undeliverable, so the hub's own
+    /// request/response terminal fires — is neither: it is reported at Warning and left recoverable,
+    /// because "we could not find out" is not an answer about the owner.</para>
+    /// </summary>
+    private void ResyncRefused(Exception error)
+    {
+        ReleaseResyncGate();
+
+        if (error is DeliveryFailureException { Failure: { } failure })
+        {
+            if (failure.ErrorType == ErrorType.ShuttingDown)
+            {
+                logger.LogDebug(
+                    "[SYNC_STREAM] Fresh-snapshot request for {StreamId} was rejected by {Owner} while it is shutting down or not yet served (TargetUnserved={TargetUnserved}) — keeping the stream alive; the next proven gap re-asks",
+                    StreamId, StreamIdentity.Owner, failure.TargetUnserved);
+                return;
+            }
+            logger.LogWarning(
+                "[SYNC_STREAM] Fresh-snapshot request for {StreamId} was refused terminally by {Owner} ({ErrorType}, TargetUnserved={TargetUnserved}): {Message}",
+                StreamId, StreamIdentity.Owner, failure.ErrorType, failure.TargetUnserved,
+                failure.Message);
+            OnError(error);
+            return;
+        }
+
+        // Teardown is not a fault to report: a re-ask racing this stream's own disposal cannot be
+        // answered and does not need to be. Same classification OnError applies, for the same
+        // reason — a Warning per disposed stream is log volume, not information.
+        if (IsObjectDisposed(error))
+        {
+            logger.LogDebug(error,
+                "[SYNC_STREAM] Fresh-snapshot request for {StreamId} could not be issued — the stream or its host is tearing down",
+                StreamId);
+            return;
+        }
+
+        logger.LogWarning(error,
+            "[SYNC_STREAM] Fresh-snapshot request for {StreamId} was not answered by {Owner} — the mirror has no base snapshot; the next frame that proves the gap will re-ask",
+            StreamId, StreamIdentity.Owner);
     }
 
 

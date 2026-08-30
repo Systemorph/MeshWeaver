@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -47,11 +47,11 @@ public class ForcePrunePreservesIgnoredNodesTest(ITestOutputHelper output) : Git
         await CreateMarkdown($"{space}/release/r2", "r2", "release record 2");
 
         var repo = "https://github.com/test/space-ignore-prune";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
 
         // Export: the ignore rules strip the release records, so the repo genuinely does not carry
         // them. That is the precondition for the bug — and it must hold for BOTH casings.
-        var pushed = await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+        var pushed = await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
         var tree = Fake.Tree(repo).Select(f => f.Path).ToImmutableList();
         Output.WriteLine($"exported tree: {string.Join(", ", tree)}");
         tree.Should().NotContain(p => p.Contains("Release/", StringComparison.OrdinalIgnoreCase),
@@ -62,7 +62,7 @@ public class ForcePrunePreservesIgnoredNodesTest(ITestOutputHelper output) : Git
         // deliberate destructive path, and it is what the operator reached for when the Space would
         // not converge. It must still not delete records the repo was never allowed to hold.
         var forced = await Sync.ReimportAtCommit(space, "main", UserId, force: true)
-            .Timeout(120.Seconds()).ToTask();
+            .Timeout(120.Seconds()).Await();
         Output.WriteLine($"forced import pruned: [{string.Join(", ", forced.PrunedPaths)}]");
 
         forced.PrunedPaths.Should().NotContain(
@@ -78,7 +78,7 @@ public class ForcePrunePreservesIgnoredNodesTest(ITestOutputHelper output) : Git
         // turned the prune off rather than taught it what "absent" means.
         await CreateMarkdown($"{space}/MeshOnly", "MeshOnly", "# MeshOnly");
         var second = await Sync.ReimportAtCommit(space, "main", UserId, force: true)
-            .Timeout(120.Seconds()).ToTask();
+            .Timeout(120.Seconds()).Await();
         second.PrunedPaths.Should().Contain(p =>
                 p.EndsWith("/MeshOnly", StringComparison.OrdinalIgnoreCase),
             "an ordinary mesh-only extra must still be pruned by a force — the guard is scoped to "

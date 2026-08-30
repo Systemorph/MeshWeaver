@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -25,11 +26,20 @@ namespace MeshWeaver.Documentation.Test;
 /// twice in one day. Product code that deadlocks fails one request; a test that deadlocks takes the
 /// shard's remaining tests with it and lies about why.</para>
 ///
-/// <para><b>The fix at a site</b> is the sanctioned test-edge bridge: <c>await</c> the stream
-/// (<c>await source.Should().Emit()</c> / <c>.Match(...)</c>, or <c>.FirstAsync().ToTask(ct)</c>),
-/// which suspends the test rather than parking its thread and therefore CANNOT self-deadlock. Where
-/// the assertion must stay synchronous, subscribe and collect on <c>ImmediateScheduler</c> — the
-/// pattern <c>PresentationScreenTest</c> moved to and documents.</para>
+/// <para><b>The fix at a site</b> is to <c>await</c> the stream
+/// (<c>await source.Should().Emit()</c> / <c>.Match(...)</c>), which suspends the test rather than
+/// parking its thread and therefore CANNOT self-deadlock. Where the assertion must stay
+/// synchronous, subscribe and collect on <c>ImmediateScheduler</c> — the pattern
+/// <c>PresentationScreenTest</c> moved to and documents.</para>
+///
+/// <para>🚨 <b>The fix is NOT an Rx-to-Task bridge.</b> This guard's remarks used to name
+/// <c>.FirstAsync().ToTask(ct)</c> as the sanctioned test edge; that exemption is RETRACTED
+/// (maintainer, 2026-08-30: <i>"no ToTask ever"</i>). It does not park a thread, so it is not the
+/// defect THIS guard ratchets — but it resumes the awaiting test INLINE on the signalling thread,
+/// inside Rx's trampoline, which is its own defect class and is ratcheted by
+/// <see cref="ObservableToTaskBridgeGuard"/>. Trading one for the other is not a fix; where a wait
+/// must produce a Task, it goes through
+/// <c>MeshWeaver.Messaging.ReactiveCompletion.ObserveCompletion</c>.</para>
 ///
 /// <para><b>Why the file is seeded rather than empty, and what the seeding measured.</b> #2013 counted
 /// 37 <c>.Wait()</c> sites and asked for per-site judgement rather than a blanket rewrite. The
@@ -108,8 +118,9 @@ public class BlockingBridgeInTestRatchetGuard(ITestOutputHelper output)
             if (!allowed.TryGetValue(file, out var budget))
                 failures.Add(
                     $"  NEW SITE   {file} ({count}) — await the stream instead "
-                    + "(`await source.Should().Emit()` / `.FirstAsync().ToTask(ct)`), or subscribe and "
-                    + "collect on ImmediateScheduler. Do NOT add a line to " + AllowFileName + ".");
+                    + "(`await source.Should().Emit()` / `.FirstAsync().Await(ct)`), or subscribe and "
+                    + "collect on ImmediateScheduler. Do NOT add a line to " + AllowFileName + ", and do NOT "
+                    + "swap it for an Rx-to-Task bridge (see ObservableToTaskBridgeGuard).");
             else if (count > budget)
                 failures.Add(
                     $"  MORE       {file} ({count} > {budget} allowed) — a bridge was ADDED to a file "

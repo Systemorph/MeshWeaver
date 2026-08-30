@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
@@ -19,6 +18,7 @@ using Microsoft.Extensions.Logging;
 using Xunit;
 using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.GitSync;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -137,7 +137,7 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
                 UpdatePolicyKind.Continuous)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     private static SelfUpdateOptions FastPoll() => new()
     {
@@ -170,7 +170,7 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
                 .Where(content => content.IsHeld(CandidateTag))
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
 
             held.HeldReason.Should().Contain("Store",
                 "the refusal must name the package that blocks it — an unnamed hold is unactionable");
@@ -206,7 +206,7 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
                 .Where(content => content.IsHeld(CandidateTag))
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
 
             // The bake lands...
             gate.Allow();
@@ -220,7 +220,7 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
             var applied = await updater.Patched
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
             applied.Should().Be(CandidateTag);
 
             var cleared = await Mesh.GetWorkspace()
@@ -229,7 +229,7 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
                 .Where(content => content.HeldTag is null)
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
 
             cleared.HeldReason.Should().BeNull(
                 "a resolved hold must disappear from the admin tab, not linger as a stale scare");
@@ -270,7 +270,7 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
                 .Where(content => content.IsHeld(CandidateTag))
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
 
             held.HeldIndeterminate.Should().BeTrue(
                 "an unwired gate is the ABSENCE of a verdict — an availability failure to fix, "
@@ -317,7 +317,7 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
             var applied = await updater.Patched
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
             applied.Should().Be(CandidateTag);
         }
         finally
@@ -364,7 +364,7 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
                 .Where(content => content.IsHeld(CandidateTag))
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
 
             held.HeldIndeterminate.Should().BeTrue(
                 "clearing the PACING floor says nothing about whether the release is AVAILABLE — "
@@ -399,7 +399,7 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
             var applied = await updater.Patched
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
             applied.Should().Be(CandidateTag);
         }
         finally

@@ -1,7 +1,6 @@
 using System;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
@@ -61,7 +60,7 @@ public class InitializationErrorSurfacedTest(ITestOutputHelper output) : HubTest
         // If the hub wedged (gate never opened), nothing returns within 8s → TimeoutException.
         var act = () => client
             .Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
-            .FirstAsync().Timeout(8.Seconds()).ToTask();
+            .FirstAsync().Timeout(8.Seconds()).Await();
 
         var ex = (await act.Should().ThrowAsync<Exception>(
             "a hub whose init threw must answer requests with an error, not hang")).Which;
@@ -111,7 +110,7 @@ public class InitializationHangSurfacedTest(ITestOutputHelper output) : HubTestB
         // deferral-timeout (so a genuine wedge surfaces as a TimeoutException and fails the test).
         var act = () => client
             .Observe(new PingRequest(), o => o.WithTarget(host.Address))
-            .FirstAsync().Timeout(15.Seconds()).ToTask();
+            .FirstAsync().Timeout(15.Seconds()).Await();
 
         var ex = (await act.Should().ThrowAsync<Exception>(
             "a hub whose init HUNG must answer requests with an error, not hang forever")).Which;

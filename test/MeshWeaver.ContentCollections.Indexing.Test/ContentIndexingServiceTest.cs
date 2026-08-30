@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Test;
 
@@ -45,11 +45,11 @@ public class ContentIndexingServiceTest : IDisposable
 
     private async Task<IndexResult> Index(string filePath, string fileName, bool force = false) =>
         await _service.IndexFile(Collection, filePath, fileName, File.ReadAllBytes(filePath), force)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
     private async Task<IReadOnlyList<ContentChunk>> Search(string text, int topK) =>
-        await _store.Search(Collection, await _embedder.Embed(text).FirstAsync().ToTask(), topK)
-            .FirstAsync().ToTask();
+        await _store.Search(Collection, await _embedder.Embed(text).FirstAsync().Await(), topK)
+            .FirstAsync().Await();
 
     [Fact]
     public async Task IndexFile_ProducesChunksWithEmbeddingsAndHash()
@@ -72,7 +72,7 @@ public class ContentIndexingServiceTest : IDisposable
         hits.Should().OnlyContain(c => c.CollectionPath == Collection && c.FilePath == filePath);
 
         // The recorded file hash matches the bytes and is identical on every chunk.
-        var expectedHash = await _store.GetFileHash(Collection, filePath).FirstAsync().ToTask();
+        var expectedHash = await _store.GetFileHash(Collection, filePath).FirstAsync().Await();
         expectedHash.Should().NotBeNull();
         hits.Should().OnlyContain(c => c.ContentHash == expectedHash);
     }
@@ -105,7 +105,7 @@ public class ContentIndexingServiceTest : IDisposable
         reindexed.ChunkCount.Should().BeGreaterThan(0);
 
         // The store reflects the NEW content (old chunks were replaced, not appended).
-        var hash = await _store.GetFileHash(Collection, filePath).FirstAsync().ToTask();
+        var hash = await _store.GetFileHash(Collection, filePath).FirstAsync().Await();
         var hits = await Search("insurance risk", topK: 100);
         hits.Should().OnlyContain(c => c.ContentHash == hash);
         hits.Should().Contain(c => c.Text.Contains("insurance"));
@@ -180,7 +180,7 @@ public class ContentIndexingServiceTest : IDisposable
 
         result.Status.Should().Be(IndexStatus.NoText);
         result.ChunkCount.Should().Be(0);
-        (await _store.Search(Collection, new float[_embedder.Dimensions], 10).FirstAsync().ToTask())
+        (await _store.Search(Collection, new float[_embedder.Dimensions], 10).FirstAsync().Await())
             .Should().BeEmpty();
     }
 

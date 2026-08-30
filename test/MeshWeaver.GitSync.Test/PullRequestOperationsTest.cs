@@ -1,10 +1,10 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -23,12 +23,12 @@ public class PullRequestOperationsTest(ITestOutputHelper output) : GitHubSyncTes
         await CreateSpace(space, "Branch Space");
         await CreateMarkdown($"{space}/Page", "Page", "# page");
         var repo = "https://github.com/test/branch-space";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
         // A push creates the repo + the main branch so CreateBranch has a base ref.
-        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
 
         var result = await PullRequests.CreateBranch(space, "feature/x", "main", UserId)
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
 
         Assert.Equal("feature/x", result.Branch);
         Assert.False(string.IsNullOrEmpty(result.CommitSha));
@@ -43,12 +43,12 @@ public class PullRequestOperationsTest(ITestOutputHelper output) : GitHubSyncTes
         await CreateSpace(space, "PR Space");
         await CreateMarkdown($"{space}/Page", "Page", "# page");
         var repo = "https://github.com/test/pr-space";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
 
         // Step 1+2: AI drafts the title/body and a draft PR node is created (local state only).
         var draftNode = await PullRequests.CreateDraft(space, headBranch: "main", baseBranch: "main")
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
         var prPath = draftNode.Path;
 
         // The AI-draft step ran with the change context (Space name flowed through to the agent).
@@ -60,7 +60,7 @@ public class PullRequestOperationsTest(ITestOutputHelper output) : GitHubSyncTes
         Assert.Null(drafted.Number);
         Assert.Null(drafted.Url);
         // Status is NOT replicated — it's asked live; a not-yet-opened PR reports Draft.
-        var draftStatus = await PullRequests.AskStatus(space, prPath, UserId).Timeout(30.Seconds()).ToTask();
+        var draftStatus = await PullRequests.AskStatus(space, prPath, UserId).Timeout(30.Seconds()).Await();
         Assert.Equal(PullRequestStatus.Draft, draftStatus.Status);
 
         // Step 3: the user edits the bound node's Title (the GUI way — a per-field JSON patch via
@@ -68,11 +68,11 @@ public class PullRequestOperationsTest(ITestOutputHelper output) : GitHubSyncTes
         const string editedTitle = "Edited PR title before submit";
         await Mesh.GetMeshNodeStream(prPath)
             .Update(n => n with { Content = PatchField(n.Content, "title", JsonValue.Create(editedTitle)) })
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
         await WaitForPr(prPath, pr => pr.Title == editedTitle);
 
         // Step 4: submit → opens the PR on GitHub and writes ONLY the immutable handle (number+url).
-        var info = await PullRequests.Submit(space, prPath, UserId).Timeout(60.Seconds()).ToTask();
+        var info = await PullRequests.Submit(space, prPath, UserId).Timeout(60.Seconds()).Await();
         Assert.True(info.Number > 0);
         Assert.Contains("/pull/", info.Url);
         Assert.Equal(PullRequestStatus.Open, info.Status);
@@ -91,23 +91,23 @@ public class PullRequestOperationsTest(ITestOutputHelper output) : GitHubSyncTes
         await CreateSpace(space, "Status Space");
         await CreateMarkdown($"{space}/Page", "Page", "# page");
         var repo = "https://github.com/test/status-space";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
 
-        var draftNode = await PullRequests.CreateDraft(space, "main", "main").Timeout(60.Seconds()).ToTask();
+        var draftNode = await PullRequests.CreateDraft(space, "main", "main").Timeout(60.Seconds()).Await();
         var prPath = draftNode.Path;
-        var info = await PullRequests.Submit(space, prPath, UserId).Timeout(60.Seconds()).ToTask();
+        var info = await PullRequests.Submit(space, prPath, UserId).Timeout(60.Seconds()).Await();
         await WaitForPr(prPath, pr => pr.Number != null);
 
         // Open → AskStatus reads Open live from GitHub.
         Assert.Equal(PullRequestStatus.Open,
-            (await PullRequests.AskStatus(space, prPath, UserId).Timeout(60.Seconds()).ToTask()).Status);
+            (await PullRequests.AskStatus(space, prPath, UserId).Timeout(60.Seconds()).Await()).Status);
 
         // Simulate GitHub merging the PR. AskStatus reflects the new state immediately — because it
         // delegates to GitHub rather than reading a replicated field.
         Fake.SetPullRequestStatus(repo, info.Number, PullRequestStatus.Merged);
         Assert.Equal(PullRequestStatus.Merged,
-            (await PullRequests.AskStatus(space, prPath, UserId).Timeout(60.Seconds()).ToTask()).Status);
+            (await PullRequests.AskStatus(space, prPath, UserId).Timeout(60.Seconds()).Await()).Status);
 
         // The node itself holds NO status field — only the immutable handle. (GitHubPullRequest has
         // no Status property; this is a compile-time guarantee, asserted here as the node round-trips
@@ -124,15 +124,15 @@ public class PullRequestOperationsTest(ITestOutputHelper output) : GitHubSyncTes
         await CreateSpace(space, "Update Space");
         await CreateMarkdown($"{space}/Welcome", "Welcome", "# Welcome\n\nv1.");
         var repo = "https://github.com/test/update-space";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
 
         // Add a node, sync again (the repo HEAD now has Extra), then locally "delete" it by
         // re-importing main HEAD which still has both — assert update-to-latest mirrors HEAD.
         await CreateMarkdown($"{space}/Extra", "Extra", "# Extra\n\nlater.");
-        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
 
-        var result = await PullRequests.UpdateToLatest(space, UserId).Timeout(90.Seconds()).ToTask();
+        var result = await PullRequests.UpdateToLatest(space, UserId).Timeout(90.Seconds()).Await();
         Assert.True(result.Count >= 1);
         Assert.NotNull(await WaitForNode($"{space}/Extra"));
         Assert.NotNull(await WaitForNode($"{space}/Welcome"));
@@ -146,11 +146,11 @@ public class PullRequestOperationsTest(ITestOutputHelper output) : GitHubSyncTes
         await CreateSpace(space, "Branch State Space");
         await CreateMarkdown($"{space}/Page", "Page", "# v1");
         var repo = "https://github.com/test/branch-state";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
 
-        var c1 = await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+        var c1 = await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
         // Right after a sync, the Space is up to date with the branch HEAD it just wrote.
-        var st1 = await Sync.AskBranchState(space, UserId).Timeout(60.Seconds()).ToTask();
+        var st1 = await Sync.AskBranchState(space, UserId).Timeout(60.Seconds()).Await();
         Assert.Equal("main", st1.Branch);
         Assert.Equal(c1.CommitSha, st1.HeadCommitSha);
         Assert.True(st1.UpToDate);
@@ -167,9 +167,9 @@ public class PullRequestOperationsTest(ITestOutputHelper output) : GitHubSyncTes
             AuthorName = "other",
             AuthorEmail = "other@example.com",
             AccessToken = "t",
-        }).Timeout(30.Seconds()).ToTask();
+        }).Timeout(30.Seconds()).Await();
 
-        var st2 = await Sync.AskBranchState(space, UserId).Timeout(60.Seconds()).ToTask();
+        var st2 = await Sync.AskBranchState(space, UserId).Timeout(60.Seconds()).Await();
         Assert.Equal(external.CommitSha, st2.HeadCommitSha);   // live HEAD, not the stored last-sync
         Assert.False(st2.UpToDate);                            // Space's last sync != branch HEAD
     }
@@ -180,7 +180,7 @@ public class PullRequestOperationsTest(ITestOutputHelper output) : GitHubSyncTes
             .Select(pr => pr!)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
     private JsonElement PatchField(object? content, string key, JsonNode value)
     {

@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Autofac;
@@ -143,8 +142,8 @@ public class ScopeTeardownRenderTest : HubTestBase
 
         // Two barriers: the render has parked on `scopeDisposing`, and the client has received the
         // base frame — the render subscription is live and the area is being served.
-        await generatorInvoked.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
-        await frames.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
+        await generatorInvoked.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
+        await frames.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
 
         // The window, from Autofac itself: CurrentScopeEnding is raised inside Dispose(true), after
         // the disposed flag is set and before the disposer reaches anything. Resuming the parked
@@ -161,7 +160,7 @@ public class ScopeTeardownRenderTest : HubTestBase
 
         // The barrier: the host hub's disposal has COMPLETED, so every record its teardown was
         // going to write — the render's fault handling and the stream's own teardown — is written.
-        await host.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask();
+        await host.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
 
         // Everything the host reported about this area — a synchronous snapshot, not a wait.
         var all = capture.Recorded.Where(r => r.Area == RacingView).ToArray();

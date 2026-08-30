@@ -1,11 +1,11 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -39,14 +39,14 @@ public class NodeTypeOwnershipSyncTest(ITestOutputHelper output) : GitHubSyncTes
             Name = "Widget",
             State = MeshNodeState.Active,
             Content = content,
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
 
         var repo = "https://github.com/test/space-types";
         await Sync.SaveConfig(space, repo, "main", subdirectory: null,
                 createBranchIfMissing: true, createRepoIfMissing: true,
                 direction: SyncDirection.Bidirectional, sourceId: null, twoWay: false)
-            .Timeout(30.Seconds()).ToTask();
-        var commit = await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
+        var commit = await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
         await WaitForConfig(space, c => c.LastSyncCommitSha == commit.CommitSha);
 
         // EXPORT: the committed file carries the authored definition only — no compile verdict.
@@ -81,9 +81,9 @@ public class NodeTypeOwnershipSyncTest(ITestOutputHelper output) : GitHubSyncTes
             AuthorName = "test",
             AuthorEmail = "test@test",
             AccessToken = "x",
-        }).Timeout(30.Seconds()).ToTask();
+        }).Timeout(30.Seconds()).Await();
 
-        await Sync.ReimportAtCommit(space, "main", UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(space, "main", UserId).Timeout(90.Seconds()).Await();
 
         // IMPORT: the authored change landed; the live compile state survived; the file's stale
         // verdict did not.
@@ -94,7 +94,7 @@ public class NodeTypeOwnershipSyncTest(ITestOutputHelper output) : GitHubSyncTes
             .Where(d => d?.Configuration == "config => CHANGED")
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
         Assert.NotNull(updated);
         Assert.Equal(1082, updated!.LastCompiledVersion);
         Assert.Equal("Widget/v1082.dll", updated.LatestAssemblyPath);

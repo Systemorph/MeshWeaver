@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -145,7 +144,7 @@ public class DataContextShutdownGateAnswersDeferredTest(ITestOutputHelper output
                 Observable.Return((Outcome: ex.GetType().Name, Level: victim.RunLevel)))
             .FirstAsync()
             .Timeout(budget)
-            .ToTask(ct);
+            .Await(ct);
 
     /// <summary>
     /// Waits until the victim's deferred queue holds <paramref name="count"/> message(s). Queue
@@ -159,5 +158,5 @@ public class DataContextShutdownGateAnswersDeferredTest(ITestOutputHelper output
             .Where(diagnostics => diagnostics.Contains($"deferred={count}", StringComparison.Ordinal))
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(20))
-            .ToTask(ct);
+            .Await(ct);
 }

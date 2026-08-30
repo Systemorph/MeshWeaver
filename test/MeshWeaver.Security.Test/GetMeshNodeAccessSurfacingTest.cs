@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -63,7 +63,7 @@ public class GetMeshNodeAccessSurfacingTest(ITestOutputHelper output) : Monolith
                 o => o.WithTarget(new Address("Secret/Item")))
             .FirstAsync()
             .Timeout(10.Seconds())
-            .ToTask();
+            .Await();
 
         var ex = (await act.Should().ThrowAsync<Exception>()).Which;
         Output.WriteLine($"Surfaced: {ex.GetType().Name}: {ex.Message}");
@@ -93,7 +93,7 @@ public class GetMeshNodeAccessSurfacingTest(ITestOutputHelper output) : Monolith
         MeshNode? emitted = null;
         try
         {
-            emitted = await Mesh.GetMeshNode("Secret/Item", 10.Seconds()).FirstAsync().ToTask();
+            emitted = await Mesh.GetMeshNode("Secret/Item", 10.Seconds()).FirstAsync().Await();
         }
         catch (Exception ex)
         {

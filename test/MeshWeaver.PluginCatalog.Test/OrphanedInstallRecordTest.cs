@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -78,13 +78,13 @@ public class OrphanedInstallRecordTest(ITestOutputHelper output) : MonolithMeshT
         PackageInstaller.Install(
                 Mesh, Manifest(id), [new PackageFile($"{id}/Doc.md", $"# {id}")], "HEAD",
                 authorizingUserId: PlatformAdmin)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await();
 
     /// <summary>Authoritative single-node read straight off storage (never the lagging index).</summary>
     private Task<MeshNode?> Read(string path) =>
         Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(path, Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await();
 
     [Fact(Timeout = 180_000)]
     public async Task ARecordWithNoRegistryCounterpart_IsOffered_AndActuallyRemoved()
@@ -127,7 +127,7 @@ public class OrphanedInstallRecordTest(ITestOutputHelper output) : MonolithMeshT
 
         // ── the removal actually removes ──────────────────────────────────────────────────────
         var removed = await PackageInstaller.RemoveInstalledRecord(Mesh, DepartedId)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
         removed.Should().BeTrue("the sanctioned route runs as System — the identity that wrote it");
 
         (await Read(recordPath)).Should().BeNull(
@@ -153,7 +153,7 @@ public class OrphanedInstallRecordTest(ITestOutputHelper output) : MonolithMeshT
     {
         var exception = await Record.ExceptionAsync(() =>
             PackageInstaller.RemoveInstalledRecord(Mesh, "never-installed")
-                .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask());
+                .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await());
 
         exception.Should().NotBeNull("a record that is not there was not removed");
         exception!.Message.Should().Contain($"{PackageInstaller.InstalledPartition}/never-installed",

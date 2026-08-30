@@ -95,6 +95,8 @@ The disposing-hub case is a lifecycle event, not a fault, and the fold treats it
 
 `CheckPermissionOutcome` is the one place that distinction is made: it classifies the verdict as `Granted` / `Denied` / `Undetermined` (carrying the reason). `IsGranted` is `false` on the undetermined leg, so a consumer that ignores the tri-state still fails **closed**. Use it wherever the UI or the caller reports *why* access was refused; never re-derive the difference from a `false` or an exception message upstream.
 
+🚨 **It always produces exactly one outcome, and that is contract (#2742).** A fold has three terminals, not two: it can emit, it can fault, and it can *complete without ever emitting* — which is what one silent leg of the `CombineLatest` does to the whole fold. That third terminal used to pass straight through as an EMPTY stream, and an empty check is not a refusal anywhere downstream: `AccessControlPipeline` ends its decision chain in `.Take(1).Select(…).DefaultIfEmpty()`, whose `null` means "no check refused ⇒ every check was granted", so the message was delivered. `CheckPermissionOutcome` now materialises that terminal as `Undetermined` too. If you write your own consumer of the raw evaluator, apply the same rule: **treat "no outcome" as no verdict, never as consent.** See [AccessControl → The convergence contract](/Doc/Architecture/AccessControl).
+
 `Permission.None` is a special case in both overloads: it short-circuits to `true` without consulting the evaluator.
 
 ## See also

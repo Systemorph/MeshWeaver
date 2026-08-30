@@ -1,7 +1,7 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -35,7 +35,7 @@ public class IoPoolDisposeReleaseOrderTest
             leafEntered.TrySetResult();
             await release.Task;
             return 42;
-        }).ToTask();
+        }).Await();
 
         await leafEntered.Task;      // the permit is taken and _inFlight is 1
 
@@ -57,13 +57,13 @@ public class IoPoolDisposeReleaseOrderTest
         var leafEntered = new TaskCompletionSource();
         var release = new TaskCompletionSource();
 
-        var disposed = pool.Disposed.FirstAsync().ToTask();
+        var disposed = pool.Disposed.FirstAsync().Await();
         var run = pool.Invoke(async ct =>
         {
             leafEntered.TrySetResult();
             await release.Task;
             return 1;
-        }).ToTask();
+        }).Await();
 
         await leafEntered.Task;
         pool.Dispose();
@@ -84,7 +84,7 @@ public class IoPoolDisposeReleaseOrderTest
         // The path that always worked, kept honest: with nothing in flight, Dispose completes on
         // the spot rather than waiting for a leaf that will never come.
         var pool = new IoPool(maxConcurrency: 2);
-        var disposed = pool.Disposed.FirstAsync().ToTask();
+        var disposed = pool.Disposed.FirstAsync().Await();
 
         pool.Dispose();
 

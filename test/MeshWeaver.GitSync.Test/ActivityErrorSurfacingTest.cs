@@ -1,12 +1,12 @@
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -36,7 +36,7 @@ public class ActivityErrorSurfacingTest(ITestOutputHelper output) : GitHubSyncTe
         var activityPath = await Mesh.RunActivity(
                 space, ActivityCategory.DataUpdate, "Throwing operation",
                 _ => Observable.Throw<Unit>(new InvalidOperationException("boom: repository unreachable")))
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
 
         var log = await WaitForActivity(activityPath, l => l.Status != ActivityStatus.Running);
         Assert.Equal(ActivityStatus.Failed, log.Status);
@@ -61,7 +61,7 @@ public class ActivityErrorSurfacingTest(ITestOutputHelper output) : GitHubSyncTe
                     ctx.Log("Item 2 could not be imported.", LogLevel.Error);
                     return Observable.Return(Unit.Default);
                 })
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
 
         var log = await WaitForActivity(activityPath, l => l.Status != ActivityStatus.Running);
         Assert.Equal(ActivityStatus.Failed, log.Status);
@@ -82,7 +82,7 @@ public class ActivityErrorSurfacingTest(ITestOutputHelper output) : GitHubSyncTe
                     ctx.Log("Node X skipped from export.", LogLevel.Warning);
                     return Observable.Return(Unit.Default);
                 })
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
 
         var log = await WaitForActivity(activityPath, l => l.Status != ActivityStatus.Running);
         Assert.Equal(ActivityStatus.Warning, log.Status);
@@ -98,13 +98,13 @@ public class ActivityErrorSurfacingTest(ITestOutputHelper output) : GitHubSyncTe
         var repo = "https://github.com/test/malformed-import";
         await Sync.SaveConfig(space, repo, "main", subdirectory: null,
                 createBranchIfMissing: true, createRepoIfMissing: true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         // Seed the repo with a real export (root index.json + Good.md), then push the same tree
         // PLUS one malformed node JSON on top (Push mirrors, so the good files must be re-sent).
         // The malformed file used to be dropped with NO trace anywhere (JsonFileParser swallowed
         // the exception before even the server log saw it).
-        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
         var seeded = Fake.Tree(repo)
             .Append(new RepoFile("Broken.json", "{ this is not valid json !!"))
             .ToImmutableList();
@@ -117,11 +117,11 @@ public class ActivityErrorSurfacingTest(ITestOutputHelper output) : GitHubSyncTe
             AuthorName = "test",
             AuthorEmail = "test@test",
             AccessToken = "t",
-        }).Timeout(30.Seconds()).ToTask();
+        }).Timeout(30.Seconds()).Await();
 
         // Run the user-facing operation (the same entry point the GUI uses).
         var activityPath = await Mesh.ReimportFromGitHub(space, "main", UserId)
-            .Timeout(90.Seconds()).ToTask();
+            .Timeout(90.Seconds()).Await();
 
         var log = await WaitForActivity(activityPath, l => l.Status != ActivityStatus.Running);
         // The dropped file is an Error line naming the file — and it flips the terminal status.
@@ -140,5 +140,5 @@ public class ActivityErrorSurfacingTest(ITestOutputHelper output) : GitHubSyncTe
             .Select(l => l!)
             .FirstAsync()
             .Timeout(60.Seconds())
-            .ToTask();
+            .Await();
 }

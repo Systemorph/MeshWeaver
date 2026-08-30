@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -98,7 +97,7 @@ public class SelfTypedDeclarationRepairRetainsNothingTest(ITestOutputHelper outp
             .Where(s => s is null)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
         Field(repair, "subscription").Should().BeNull(
             "a finished sweep has nothing to cancel, so keeping the handle would keep its "

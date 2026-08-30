@@ -10,7 +10,6 @@ using MeshWeaver.Connection.Orleans;
 using Orleans;
 
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 public class OrleansMeshTests(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
@@ -22,7 +21,7 @@ public class OrleansMeshTests(ITestOutputHelper output) : OrleansSharedTestBase(
     {
         var client = GetClient();
         var response = await client
-            .Observe(new PingRequest(), o => o.WithTarget(OrleansTestMeshNodeAttribute.Address)).FirstAsync().ToTask(new CancellationTokenSource(20.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(OrleansTestMeshNodeAttribute.Address)).FirstAsync().Await(new CancellationTokenSource(20.Seconds()).Token);
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
     }
@@ -36,7 +35,7 @@ public class OrleansMeshTests(ITestOutputHelper output) : OrleansSharedTestBase(
         var address = AddressExtensions.CreateAppAddress(id);
 
         var response = await client
-            .Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(new CancellationTokenSource(20.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().Await(new CancellationTokenSource(20.Seconds()).Token);
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
 
@@ -57,7 +56,7 @@ public class OrleansMeshTests(ITestOutputHelper output) : OrleansSharedTestBase(
                 ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown }
                     ? Observable.Timer(TimeSpan.FromMilliseconds(200))
                     : Observable.Throw<long>(ex)))
-            .ToTask(new CancellationTokenSource(20.Seconds()).Token);
+            .Await(new CancellationTokenSource(20.Seconds()).Token);
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
     }

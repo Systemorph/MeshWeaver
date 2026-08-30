@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -11,6 +10,7 @@ using System.Text;
 using System.Text.Json;
 using MeshWeaver.GitSync;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -45,7 +45,7 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         var space = "GhWo" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(space, "Webhook Open Space");
         var repo = "https://github.com/test/webhook-open";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
 
         var payload = JsonDocument.Parse($$"""
         {
@@ -61,7 +61,7 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         }
         """).RootElement;
 
-        var updated = await Webhooks.Process("issues", payload).Timeout(60.Seconds()).ToTask();
+        var updated = await Webhooks.Process("issues", payload).Timeout(60.Seconds()).Await();
         Assert.Equal(1, updated);
 
         var issue = await WaitForIssue(IssueService.IssuePath(space, 42), i => i.Number == 42);
@@ -78,11 +78,11 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         var space = "GhWc" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(space, "Webhook Comment Space");
         var repo = "https://github.com/test/webhook-comment";
-        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(space, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
 
         // Sync issue #7 first (node starts with zero comments).
         var number = Fake.SeedIssue(repo, "Existing issue");
-        await Issues.SyncIssue(space, number, UserId).Timeout(60.Seconds()).ToTask();
+        await Issues.SyncIssue(space, number, UserId).Timeout(60.Seconds()).Await();
         await WaitForIssue(IssueService.IssuePath(space, number), i => i.CommentsCount == 0);
 
         var payload = JsonDocument.Parse($$"""
@@ -102,7 +102,7 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         }
         """).RootElement;
 
-        var updated = await Webhooks.Process("issue_comment", payload).Timeout(60.Seconds()).ToTask();
+        var updated = await Webhooks.Process("issue_comment", payload).Timeout(60.Seconds()).Await();
         Assert.Equal(1, updated);
 
         var issue = await WaitForIssue(IssueService.IssuePath(space, number), i => i.CommentsCount == 1);
@@ -116,7 +116,7 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         var space = "GhWu" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(space, "Webhook Unmatched Space");
         await Sync.SaveConfig(space, "https://github.com/test/some-repo", "main", null, true, true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         var payload = JsonDocument.Parse("""
         {
@@ -126,7 +126,7 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         }
         """).RootElement;
 
-        var updated = await Webhooks.Process("issues", payload).Timeout(60.Seconds()).ToTask();
+        var updated = await Webhooks.Process("issues", payload).Timeout(60.Seconds()).Await();
         Assert.Equal(0, updated);
     }
 
@@ -213,13 +213,13 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         var a = "GhPa" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(a, "Push Source Space");
         await CreateMarkdown($"{a}/Welcome", "Welcome", "# Welcome\n\nPushed content.");
-        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
 
         // Space B syncs the SAME repo but has never imported — the push must update it headlessly.
         var b = "GhPb" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(b, "Push Target Space");
-        await Sync.SaveConfig(b, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(b, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
 
         // 🚨 The webhook HTTP request is ANONYMOUS (its authorization is the HMAC signature).
         // Drop every ambient identity — the DevLogin persistent circuit fallback masked the
@@ -239,7 +239,7 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
               "repository": { "full_name": "test/push-auto" },
               "commits": [ { "added": [], "modified": ["Welcome.md"], "removed": [] } ] }
             """).RootElement;
-            Assert.Equal(0, await Webhooks.Process("push", pushPayload).Timeout(60.Seconds()).ToTask());
+            Assert.Equal(0, await Webhooks.Process("push", pushPayload).Timeout(60.Seconds()).Await());
 
             // A RED build imports nothing either — that is the whole point of the gate.
             var redBuild = JsonDocument.Parse("""
@@ -249,7 +249,7 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
                                 "head_sha": "deadbeef", "id": 1, "run_number": 1,
                                 "name": "CI", "event": "push", "updated_at": "2026-08-07T10:00:00Z" } }
             """).RootElement;
-            Assert.Equal(0, await Webhooks.Process("workflow_run", redBuild).Timeout(60.Seconds()).ToTask());
+            Assert.Equal(0, await Webhooks.Process("workflow_run", redBuild).Timeout(60.Seconds()).Await());
 
             // The GREEN build of the default branch is what imports — for BOTH sync sources.
             var greenBuild = JsonDocument.Parse("""
@@ -262,9 +262,9 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
             // 🚨 The return codes above say "nothing was TRIGGERED"; this says "nothing was
             // IMPORTED". Without it, a regression that imports on push while still returning 0
             // would sail through — the assertion below would find the node already there and pass.
-            Assert.Null(await ReadNode($"{b}/Welcome").Timeout(30.Seconds()).ToTask());
+            Assert.Null(await ReadNode($"{b}/Welcome").Timeout(30.Seconds()).Await());
 
-            recorded = await Webhooks.Process("workflow_run", greenBuild).Timeout(60.Seconds()).ToTask();
+            recorded = await Webhooks.Process("workflow_run", greenBuild).Timeout(60.Seconds()).Await();
         }
         finally
         {
@@ -300,25 +300,25 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
 
         // A green PR-branch run: publishable-looking, but unmerged — nothing recorded.
         Assert.Equal(0, await Webhooks.Process("workflow_run", Run("\"head_branch\": \"feat/x\","))
-            .Timeout(60.Seconds()).ToTask());
+            .Timeout(60.Seconds()).Await());
         // No branch at all (e.g. a tag run): fail closed.
         Assert.Equal(0, await Webhooks.Process("workflow_run", Run(""))
-            .Timeout(60.Seconds()).ToTask());
+            .Timeout(60.Seconds()).Await());
 
         // 🚨 GitHub's Copilot reviewer completes green on the DEFAULT branch with event="dynamic"
         // (observed on the education hook). It is not a build of the branch's content and must not
         // publish anything — the trigger check is what rejects it.
         Assert.Equal(0, await Webhooks.Process("workflow_run",
                 Run("\"head_branch\": \"main\",", runEvent: "dynamic", name: "Running Copilot Code Review"))
-            .Timeout(60.Seconds()).ToTask());
+            .Timeout(60.Seconds()).Await());
         // A pull_request run of the CONTENT workflow can also report head_branch=main; still not a push.
         Assert.Equal(0, await Webhooks.Process("workflow_run",
                 Run("\"head_branch\": \"main\",", runEvent: "pull_request"))
-            .Timeout(60.Seconds()).ToTask());
+            .Timeout(60.Seconds()).Await());
 
         // The default branch's push-triggered green run IS the publish signal.
         Assert.Equal(1, await Webhooks.Process("workflow_run", Run("\"head_branch\": \"main\","))
-            .Timeout(60.Seconds()).ToTask());
+            .Timeout(60.Seconds()).Await());
         var record = await WaitForNode("Admin/_Build/test.plugins-repo");
         Assert.Equal("BuildCompletion", record.NodeType);
     }

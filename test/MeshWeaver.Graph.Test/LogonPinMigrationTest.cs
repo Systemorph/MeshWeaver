@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -177,10 +177,10 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
                 UnpinPaths = DocPins,
                 PinPaths = CoursePins,
             },
-        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
 
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
-        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         var profile = await AwaitProfileAsync(user, u => u.CompletedLogonActions.ContainsKey(actionId));
         profile.PinnedPaths.Should().Equal(CoursePins);
@@ -195,7 +195,7 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
         await CreateUserAsync(user, new User { PinnedPaths = DocPins });
 
         var runner = Mesh.ServiceProvider.GetRequiredService<LogonActionRunner>();
-        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+        await runner.RunFor(IdentityFor(user)).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         var profile = await ReadProfileAsync(user);
         profile.PinnedPaths.Should().Equal(DocPins);
@@ -232,7 +232,7 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
     /// its actions from DI and the Admin partition, so a test-constructed action is driven through
     /// the same commit path via <see cref="LogonActionRunner.RunFor"/> after registration.</summary>
     private static Task RunAsync(LogonActionRunner runner, AccessContext identity, PinMigrationLogonAction action) =>
-        runner.RunFor(identity, [action]).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+        runner.RunFor(identity, [action]).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
     private static AccessContext IdentityFor(string userPath) =>
         new() { ObjectId = userPath, Name = userPath, Email = $"{userPath}@meshweaver.io" };
@@ -248,7 +248,7 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = "Space",
             Name = path,
             State = MeshNodeState.Active,
-        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
     }
 
     /// <summary>A child node inside an existing course partition — used to prove a descendant row
@@ -261,7 +261,7 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = "Markdown",
             Name = id,
             State = MeshNodeState.Active,
-        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+        }).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
     }
 
     /// <summary>Creates the user's partition root as onboarding does — as System, because
@@ -276,7 +276,7 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
             Name = path,
             State = MeshNodeState.Active,
             Content = content,
-        })).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+        })).FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
     }
 
     private Task UpdateProfileAsync(string path, Func<User, User> change) =>
@@ -284,13 +284,13 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
             .Update(node => node.ContentAs<User>(Mesh.JsonSerializerOptions) is { } u
                 ? node with { Content = change(u) }
                 : node)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
 
     private async Task<User> ReadProfileAsync(string path)
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n?.Content is not null)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
         return node.ContentAs<User>(Mesh.JsonSerializerOptions)!;
     }
 
@@ -298,7 +298,7 @@ public class LogonPinMigrationTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n?.ContentAs<User>(Mesh.JsonSerializerOptions) is { } u && predicate(u))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         return node.ContentAs<User>(Mesh.JsonSerializerOptions)!;
     }
 }

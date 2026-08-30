@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
@@ -10,6 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Orleans;
 using Orleans.Runtime;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -87,14 +87,14 @@ public class RoutingQuiescenceTest
                     Volatile.Write(ref inFlightWhenStopped, inFlight);
                     Volatile.Write(ref stopped, 1);
                 })
-                .ToTask();
+                .Await();
     }
 
     private static async Task<int> WaitForCount(RoutingQuiescence quiescence, int expected) =>
         await quiescence.InFlightChanges
             .Where(n => n == expected)
             .FirstAsync()
-            .ToTask(new CancellationTokenSource(Bound).Token);
+            .Await(new CancellationTokenSource(Bound).Token);
 
     /// <summary>
     /// 🚨 THE ORDERING. With a leg in flight the silo stop does not reach grain deactivation; once
@@ -255,7 +255,7 @@ public class RoutingQuiescenceTest
                 deliveryId: "d-2638-leg",
                 postFailureToSender: (_, _) => { },
                 logger: NullLogger.Instance)
-            .ToTask();
+            .Await();
 
         leg.IsCompleted.Should().BeFalse(
             "the leg must remain in flight while the grain call is pending — a detached delivery is "
@@ -284,7 +284,7 @@ public class RoutingQuiescenceTest
                 logger: NullLogger.Instance,
                 backoff: _ => TimeSpan.Zero,
                 scheduler: System.Reactive.Concurrency.Scheduler.Immediate)
-            .ToTask()
+            .Await()
             .WaitAsync(Bound);
 
         var nack = nacks.Should().ContainSingle().Subject;

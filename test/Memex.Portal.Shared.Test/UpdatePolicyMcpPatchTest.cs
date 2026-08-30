@@ -3,7 +3,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
@@ -17,6 +16,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -55,7 +55,7 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
 
         var result = await new MeshOperations(Mesh)
             .Patch(UpdatePolicyNodeType.NodePath, """{"content":{"policy":"None"}}""")
-            .FirstAsync().Timeout(Budget).ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Patch tool returned: {result}");
         result.Should().NotContain("Error:", "a real, applicable field change must not be refused");
@@ -89,7 +89,7 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
 
         var result = await new MeshOperations(Mesh)
             .Patch(UpdatePolicyNodeType.NodePath, """{"content":{"policy":"None"}}""")
-            .FirstAsync().Timeout(Budget).ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
         await pollerTicks;
 
@@ -146,7 +146,7 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
 
         var result = await new MeshOperations(Mesh)
             .Patch(UpdatePolicyNodeType.NodePath, """{"content":{"policy":"None"}}""")
-            .FirstAsync().Timeout(Budget).ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
         // Check the claim AT THE INSTANT it was made — before the storm is torn down and its
         // remaining in-flight writes settle, which would let plenty of real time pass and give a
@@ -196,7 +196,7 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
             })
             .FirstAsync()
             .Timeout(Budget)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>One storm writer: flips <c>policy</c> to <paramref name="value"/> — the SAME leaf
@@ -217,7 +217,7 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
             })
             .FirstAsync()
             .Timeout(Budget)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>Same write shape as <c>SelfUpdateHostedService.RecordAvailable</c> — touches only
@@ -241,7 +241,7 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
             })
             .FirstAsync()
             .Timeout(Budget)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>A single authoritative read off the shared stream handle — the same primitive a
@@ -257,5 +257,5 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
             .Select(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions))
             .FirstAsync()
             .Timeout(Budget)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 }

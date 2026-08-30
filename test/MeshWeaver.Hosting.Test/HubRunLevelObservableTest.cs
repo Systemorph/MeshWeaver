@@ -1,12 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -43,7 +43,7 @@ public class HubRunLevelObservableTest
         // Subscribing AFTER the hub started must not wait for the next transition — otherwise
         // subscribing in order to observe the disposal window would itself race the window, which
         // is the defect one level down.
-        var current = await mesh.RunLevelChanged.FirstAsync().ToTask();
+        var current = await mesh.RunLevelChanged.FirstAsync().Await();
 
         current.Should().Be(mesh.RunLevel,
             "the source replays the current level, so a subscription is never behind the property");

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -182,11 +182,11 @@ public class AppIconAdoptionTest(ITestOutputHelper output) : MonolithMeshTestBas
         await runner.RunFor(
                 new AccessContext { ObjectId = user, Name = user },
                 [new AppIconAdoptionLogonAction()])
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         var record = await Mesh.GetWorkspace().GetMeshNodeStream(AppNodeType.PathFor(user, app))
             .Where(n => n is not null && n.Icon == Real)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         record.Icon.Should().Be(Real, "the record adopted the app's icon");
         // 🚨 The assertion that matters: these are the USER's records, and the platform must not
@@ -207,7 +207,7 @@ public class AppIconAdoptionTest(ITestOutputHelper output) : MonolithMeshTestBas
                 .Select(c => (IReadOnlyCollection<MeshNode>)c.Items.ToArray())
                 .Take(1))
             .Where(items => items.Count > 0)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
     }
 
     /// <summary>Seeds a node as System — the User partition root is reserved to the platform by
@@ -217,6 +217,6 @@ public class AppIconAdoptionTest(ITestOutputHelper output) : MonolithMeshTestBas
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
         await access.RunAsSystem(() => mesh.CreateNode(node))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
     }
 }

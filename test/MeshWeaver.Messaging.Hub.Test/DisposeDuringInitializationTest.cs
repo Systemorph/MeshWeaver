@@ -2,7 +2,6 @@ using System;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
@@ -80,13 +79,13 @@ public class DisposeDuringInitializationTest(ITestOutputHelper output) : HubTest
                 }));
 
         child.Should().NotBeNull();
-        await buildupWaiting.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
+        await buildupWaiting.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
 
         // Dispose the parent mid-init — the transient-probe lifecycle. CancelCallbacks errors
         // the pending request with ObjectDisposedException INTO the child's still-running
         // BuildupAction, while the child is already frozen by the disposal cascade.
         parent.Dispose();
-        await parent.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask();
+        await parent.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
 
         ((MessageHub)child!).InitializationError.Should().BeNull(
             "dispose-during-init is a NORMAL path for a hub inside a disposing subtree — it must "

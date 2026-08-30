@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using Memex.Portal.Shared.Email;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -65,7 +65,7 @@ public class OutboundSendQueueTest
         }
 
         public Task<IList<string>> AwaitProcessed(int count) =>
-            Queue.Processed.Take(count).ToList().Timeout(TestBudget).FirstAsync().ToTask();
+            Queue.Processed.Take(count).ToList().Timeout(TestBudget).FirstAsync().Await();
 
         public void Dispose() => Queue.Dispose();
     }

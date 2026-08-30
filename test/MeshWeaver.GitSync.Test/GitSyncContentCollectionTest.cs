@@ -1,10 +1,10 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -76,7 +76,7 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
             CommitMessage = "seed",
             AuthorName = "t", AuthorEmail = "t@t",
             AccessToken = "ghp_test_token",
-        }).Timeout(30.Seconds()).ToTask();
+        }).Timeout(30.Seconds()).Await();
         return result.CommitSha;
     }
 
@@ -107,10 +107,10 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
 
         var space = "Course" + Guid.NewGuid().ToString("N")[..8];
         await Sync.ImportFromGitHub(repo, "main", space, "Course", subdirectory: null, UserId)
-            .Timeout(90.Seconds()).ToTask();
+            .Timeout(90.Seconds()).Await();
         // Record the repo on the Space so ReimportAtCommit (which reads the config) can re-import.
         await Sync.SaveConfig(space, repo, "main", subdirectory: null, createBranchIfMissing: true, createRepoIfMissing: true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         // The node landed…
         Assert.NotNull(await WaitForNode($"{space}/Module1"));
@@ -121,7 +121,7 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
         Assert.Equal(VideoBytes, ReadContent(space, "Module1/diagram.bin"));
 
         // (2) RE-import the SAME commit → content still present (idempotent, no corruption).
-        await Sync.ReimportAtCommit(space, c1, UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(space, c1, UserId).Timeout(90.Seconds()).Await();
         Assert.Equal(VideoBytes, ReadContent(space, "videos/intro.bin"));
         Assert.Equal(PosterBytes, ReadContent(space, "posters/intro.jpg"));
 
@@ -133,7 +133,7 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
             new RepoFile("Module1/content/diagram.bin", string.Empty, VideoBytes));
         Assert.NotEqual(c1, c2);
 
-        await Sync.ReimportAtCommit(space, c2, UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(space, c2, UserId).Timeout(90.Seconds()).Await();
         // The video the repo still carries survives; the poster the repo dropped is pruned.
         Assert.Equal(VideoBytes, ReadContent(space, "videos/intro.bin"));
         Assert.Equal(VideoBytes, ReadContent(space, "Module1/diagram.bin"));
@@ -167,9 +167,9 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
 
         var space = "Course" + Guid.NewGuid().ToString("N")[..8];
         await Sync.ImportFromGitHub(repo, "main", space, "Course", subdirectory: null, UserId)
-            .Timeout(90.Seconds()).ToTask();
+            .Timeout(90.Seconds()).Await();
         await Sync.SaveConfig(space, repo, "main", subdirectory: null, createBranchIfMissing: true, createRepoIfMissing: true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         await WaitForContent(space, "videos/intro.bin", VideoBytes);
         await WaitForContent(space, "posters/p.jpg", PosterBytes);
@@ -182,7 +182,7 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
             .Add("videos/user-upload.bin", UserUploadBytes)
             .Mirror(false)
             .Post()
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
         Assert.True(upload.Success, upload.Error);
         await WaitForContent(space, "videos/user-upload.bin", UserUploadBytes);
 
@@ -192,7 +192,7 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
             new RepoFile("content/videos/intro.bin", string.Empty, VideoBytes));
         Assert.NotEqual(c1, c2);
 
-        await Sync.ReimportAtCommit(space, c2, UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(space, c2, UserId).Timeout(90.Seconds()).Await();
 
         // The genuinely-removed source poster is pruned (mirror still prunes what the SOURCE dropped)…
         await WaitForContentGone(space, "posters/p.jpg");
@@ -210,7 +210,7 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
         await SeedRepo(repo, RootIndex(), new RepoFile("content/ok.bin", string.Empty, VideoBytes));
         var space = "Course" + Guid.NewGuid().ToString("N")[..8];
         await Sync.ImportFromGitHub(repo, "main", space, "Course", subdirectory: null, UserId)
-            .Timeout(90.Seconds()).ToTask();
+            .Timeout(90.Seconds()).Await();
         await WaitForContent(space, "ok.bin", VideoBytes);
 
         // A traversal path must be REJECTED (never escape the collection root), not written.
@@ -218,7 +218,7 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
             .To(ContentCollectionsExtensions.DefaultCollectionName)
             .Add("../escape.bin", VideoBytes)
             .Post()
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
         Assert.False(resp.Success);
         Assert.Contains("Unsafe", resp.Error);
         // Nothing escaped the space's content dir.
@@ -231,7 +231,7 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
             .Where(b => b is not null && b.SequenceEqual(expected))
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
     private async Task WaitForContentGone(string spaceId, string relPath) =>
         await Observable.Interval(100.Milliseconds()).StartWith(0L)
@@ -239,5 +239,5 @@ public class GitSyncContentCollectionTest(ITestOutputHelper output) : GitHubSync
             .Where(b => b is null)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 }

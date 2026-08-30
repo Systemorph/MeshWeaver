@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -16,6 +15,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Auth.Test;
 
@@ -106,7 +106,7 @@ public class InstanceAutoRegistrationTest(ITestOutputHelper output) : MonolithMe
     {
         await Assert.ThrowsAsync<InvalidBootstrapKeyException>(() => Service()
             .RegisterWithBootstrapKey(RegistrationKeys.Generate(), "auto-instance-unknown")
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken));
+            .FirstAsync().Await(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -119,7 +119,7 @@ public class InstanceAutoRegistrationTest(ITestOutputHelper output) : MonolithMe
 
         await Assert.ThrowsAsync<InvalidBootstrapKeyException>(() => Service()
             .RegisterWithBootstrapKey(mint.RawKey, "auto-instance-revoked")
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken));
+            .FirstAsync().Await(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class InstanceAutoRegistrationTest(ITestOutputHelper output) : MonolithMe
 
         await Assert.ThrowsAsync<InvalidBootstrapKeyException>(() => Service()
             .RegisterWithBootstrapKey(mint.RawKey, "auto-instance-expired")
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken));
+            .FirstAsync().Await(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -145,7 +145,7 @@ public class InstanceAutoRegistrationTest(ITestOutputHelper output) : MonolithMe
         await Service().RegisterWithBootstrapKey(mint.RawKey, "auto-instance-dup").Should().Emit();
         await Assert.ThrowsAsync<InstanceIdTakenException>(() => Service()
             .RegisterWithBootstrapKey(mint.RawKey, "auto-instance-dup")
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken));
+            .FirstAsync().Await(TestContext.Current.CancellationToken));
     }
 
     [Fact]

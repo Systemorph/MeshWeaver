@@ -3,7 +3,6 @@
 using System;
 using System.IO;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -43,15 +43,15 @@ public class PackageInstallTest(ITestOutputHelper output) : MonolithMeshTestBase
             // A non-package folder (no manifest) must be ignored by the catalog.
             WriteFile(repo, "notes/scratch.md", "not a package");
 
-            await git.Run(repo, ["init"]).FirstAsync().ToTask();
-            await git.Run(repo, ["add", "-A"]).FirstAsync().ToTask();
+            await git.Run(repo, ["init"]).FirstAsync().Await();
+            await git.Run(repo, ["add", "-A"]).FirstAsync().Await();
             await git.Run(repo, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"])
-                .FirstAsync().ToTask();
+                .FirstAsync().Await();
 
             var source = new GitPackageSource(git, repo);
 
             // List: exactly the one folder that carries a manifest.
-            var packages = await source.ListPackages("HEAD").FirstAsync().ToTask();
+            var packages = await source.ListPackages("HEAD").FirstAsync().Await();
             packages.Count.Should().Be(1);
             var pkg = packages[0];
             pkg.Id.Should().Be("hello-pack");
@@ -61,19 +61,19 @@ public class PackageInstallTest(ITestOutputHelper output) : MonolithMeshTestBase
             pkg.Kind.Should().Be(PackageKind.Content);
 
             // Fetch + install.
-            var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().ToTask();
-            var result = await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().ToTask();
+            var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().Await();
+            var result = await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().Await();
             result.Total.Should().Be(1);
             result.Written.Should().Be(1);
 
             // The content landed under the target partition, rebased off the package folder.
             var installed = await Mesh.GetWorkspace().GetMeshNodeStream("CatalogTest/Greeting")
-                .Where(n => n is not null).FirstAsync().Timeout(30.Seconds()).ToTask();
+                .Where(n => n is not null).FirstAsync().Timeout(30.Seconds()).Await();
             installed.NodeType.Should().Be("Markdown");
 
             // And the install was recorded in the Plugins registry with the source ref + version.
             var record = await Mesh.GetWorkspace().GetMeshNodeStream("Plugins/hello-pack")
-                .Where(n => n is not null).FirstAsync().Timeout(30.Seconds()).ToTask();
+                .Where(n => n is not null).FirstAsync().Timeout(30.Seconds()).Await();
             record.NodeType.Should().Be("Package");
             var manifest = record.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions);
             manifest.Should().NotBeNull();
@@ -112,20 +112,20 @@ public class PackageInstallTest(ITestOutputHelper output) : MonolithMeshTestBase
                 """{"id":"warm-pack","name":"Warm Pack","kind":"content","targetPartition":"WarmTest","version":"1.0.0"}""");
             WriteFile(repo, "warm-pack/Page.md", "# Warm\n\nThe root must be live once this lands.");
 
-            await git.Run(repo, ["init"]).FirstAsync().ToTask();
-            await git.Run(repo, ["add", "-A"]).FirstAsync().ToTask();
+            await git.Run(repo, ["init"]).FirstAsync().Await();
+            await git.Run(repo, ["add", "-A"]).FirstAsync().Await();
             await git.Run(repo, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"])
-                .FirstAsync().ToTask();
+                .FirstAsync().Await();
 
             var source = new GitPackageSource(git, repo);
-            var pkg = (await source.ListPackages("HEAD").FirstAsync().ToTask())[0];
-            var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().ToTask();
+            var pkg = (await source.ListPackages("HEAD").FirstAsync().Await())[0];
+            var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().Await();
 
             // Nothing has touched the partition yet — the hub must not exist before the install.
             Mesh.GetHostedHub(new Address("WarmTest"), c => c, HostedHubCreation.Never)
                 .Should().BeNull("nothing has activated the partition before its install");
 
-            await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().ToTask();
+            await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().Await();
 
             Mesh.GetHostedHub(new Address("WarmTest"), c => c, HostedHubCreation.Never)
                 .Should().NotBeNull(
@@ -153,22 +153,22 @@ public class PackageInstallTest(ITestOutputHelper output) : MonolithMeshTestBase
             WriteFile(repo, "catalog/echo-agent/Echo.md",
                 "---\nnodeType: Agent\nname: Echo\ndescription: A sample agent.\ncategory: Agents\n---\n\nYou are Echo, a sample agent.");
 
-            await git.Run(repo, ["init"]).FirstAsync().ToTask();
-            await git.Run(repo, ["add", "-A"]).FirstAsync().ToTask();
+            await git.Run(repo, ["init"]).FirstAsync().Await();
+            await git.Run(repo, ["add", "-A"]).FirstAsync().Await();
             await git.Run(repo, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"])
-                .FirstAsync().ToTask();
+                .FirstAsync().Await();
 
             var source = new GitPackageSource(git, repo, "catalog");
-            var packages = await source.ListPackages("HEAD").FirstAsync().ToTask();
+            var packages = await source.ListPackages("HEAD").FirstAsync().Await();
             var pkg = packages.First(p => p.Id == "echo-agent");
-            var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().ToTask();
+            var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().Await();
 
-            await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().ToTask();
+            await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().Await();
 
             // The Agent .md installs as a proper Agent node in the Agent partition — proving the
             // catalog installs real AI content, not just plain markdown.
             var agent = await Mesh.GetWorkspace().GetMeshNodeStream("Agent/Echo")
-                .Where(n => n is not null).FirstAsync().Timeout(30.Seconds()).ToTask();
+                .Where(n => n is not null).FirstAsync().Timeout(30.Seconds()).Await();
             agent.NodeType.Should().Be("Agent");
             agent.Name.Should().Be("Echo");
         }
@@ -197,18 +197,18 @@ public class PackageInstallTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         var source = new GitHubPackageSource(fetch, "https://github.com/acme/plugins", subdir: "catalog");
 
-        var packages = await source.ListPackages("HEAD").FirstAsync().ToTask();
+        var packages = await source.ListPackages("HEAD").FirstAsync().Await();
         packages.Count.Should().Be(1);
         var pkg = packages[0];
         pkg.Id.Should().Be("gh-pack");
         pkg.SourceFolder.Should().Be("catalog/gh-pack");
 
-        var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().ToTask();
-        var result = await PackageInstaller.Install(Mesh, pkg, files, "main").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().Await();
+        var result = await PackageInstaller.Install(Mesh, pkg, files, "main").FirstAsync().Await();
         result.Written.Should().Be(1);
 
         var node = await Mesh.GetWorkspace().GetMeshNodeStream("GhPart/Doc")
-            .Where(n => n is not null).FirstAsync().Timeout(30.Seconds()).ToTask();
+            .Where(n => n is not null).FirstAsync().Timeout(30.Seconds()).Await();
         node.NodeType.Should().Be("Markdown");
     }
 

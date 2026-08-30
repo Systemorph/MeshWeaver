@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel;
@@ -11,6 +10,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -96,7 +96,7 @@ public class KernelControlResultNotLoggedTest(ITestOutputHelper output) : Monoli
             .Where(l => l is not null && l!.Status != ActivityStatus.Running)
             .Select(l => l!.Messages.Select(m => m.Message).ToArray())
             .FirstAsync()
-            .ToTask();
+            .Await();
 
         client.Post(new SubmitCodeRequest(code), o => o.WithTarget(address));
         return await settled.WaitAsync(TimeSpan.FromSeconds(120));

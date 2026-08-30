@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
@@ -88,7 +87,7 @@ public class HubDisposalFailureClassificationTest(ITestOutputHelper output) : Hu
         var response = client
             .Observe<Ack>(request, o => o.WithTarget(ServerAddress))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
         var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
         Output.WriteLine($"{request.GetType().Name}: errorType={failure.Failure?.ErrorType} message={failure.Failure?.Message}");
         failure.Failure.Should().NotBeNull();

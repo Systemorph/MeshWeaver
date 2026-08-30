@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
@@ -130,7 +129,11 @@ public static class InstanceTokenEndpoints
                 return Observable.Return(Results.Json(
                     new { error = ex.Message }, statusCode: StatusCodes.Status502BadGateway));
             })
-            .FirstAsync().ToTask(ct);
+            .FirstAsync()
+            .ObserveCompletion(
+                ex => logger?.LogWarning(ex,
+                    "Sync access token exchange faulted after the response had already been sent"),
+                ct)!;
     }
 
     /// <summary>

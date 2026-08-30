@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Microsoft.Extensions.DependencyInjection;
@@ -82,7 +81,7 @@ public class HubDisposesItsServiceProviderTest(ITestOutputHelper output) : HubTe
         Assert.False(tracker.IsDisposed, "precondition: the singleton is alive while the hub is");
 
         hub.Dispose();
-        await hub.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(120));
+        await hub.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TimeSpan.FromSeconds(120));
 
         Assert.True(tracker.IsDisposed,
             "the hub owns its container, so disposing the hub must dispose what the container holds — "
@@ -110,7 +109,7 @@ public class HubDisposesItsServiceProviderTest(ITestOutputHelper output) : HubTe
         Assert.False(tracker.IsDisposed, "precondition: the singleton is alive while the parent is");
 
         host.Dispose();
-        await host.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(120));
+        await host.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TimeSpan.FromSeconds(120));
 
         Assert.True(tracker.IsDisposed,
             "a parent's teardown must close the scopes it opened for its children, not merely dispose "

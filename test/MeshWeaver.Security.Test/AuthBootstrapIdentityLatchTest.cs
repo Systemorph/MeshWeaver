@@ -1,7 +1,6 @@
 using System;
 using System.Security.Cryptography;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Graph.Configuration;
@@ -11,6 +10,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -82,7 +82,7 @@ public class AuthBootstrapIdentityLatchTest(ITestOutputHelper output) : Monolith
                 .ValidateTokenViaHub(rawToken, Mesh)
                 .FirstAsync()
                 .Timeout(StepTimeout)
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
 
             // ── The assertion. Read BEFORE awaiting: the response has not arrived, so under the old
             // shape nothing has disposed the scope and this thread is still impersonated.

@@ -2,13 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -81,7 +81,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask();
+            .Await();
 
         change.ChangeType.Should().Be(QueryChangeType.Initial);
         var paths = change.Items.Select(n => n.Path).ToList();
@@ -102,7 +102,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask();
+            .Await();
 
         change.ChangeType.Should().Be(QueryChangeType.Initial);
         change.Items.Should().BeEmpty();
@@ -120,7 +120,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask();
+            .Await();
 
         var paths = change.Items.Select(n => n.Path).ToList();
         paths.Should().HaveCount(2);
@@ -145,7 +145,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 2 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask();
+            .Await();
 
         change.ChangeType.Should().Be(QueryChangeType.Initial);
         change.Items.Should().HaveCount(2, "the Limit clip must still apply through the probe wrapper");
@@ -168,7 +168,7 @@ public class MeshQueryMergeContractTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask();
+            .Await();
 
         await act.Should().ThrowAsync<InvalidOperationException>();
     }

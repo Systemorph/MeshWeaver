@@ -1,7 +1,6 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using MeshWeaver.Graph.Logon;
 using MeshWeaver.Mesh;
@@ -89,8 +88,18 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // with NO bearer token always EMITS the NoToken sentinel, so a null here can only mean
             // "a token WAS presented but validation produced no verdict" — which, like an
             // explicitly-unavailable response, is a retryable infrastructure fault (issue #637).
+            //
+            // 🚨 The wait is ObserveCompletion, never an Rx-to-Task bridge (maintainer,
+            // 2026-08-30: "no ToTask ever"). Rx's bridge resumes this middleware INLINE on the
+            // ApiToken hub's own action-block thread, and the whole remainder of the request
+            // pipeline then runs there — the exact shape that wedges a partition hub.
             var bearer = await ExtractFromBearerToken(context.Request, hub)
-                .FirstOrDefaultAsync().ToTask(context.RequestAborted);
+                .FirstOrDefaultAsync()
+                .ObserveCompletion(
+                    ex => logger.LogWarning(ex,
+                        "Bearer token validation faulted AFTER the wait settled for {Path} — "
+                        + "reported, not orphaned", path),
+                    context.RequestAborted);
             var unavailableReason = bearer is null
                 ? "token validation produced no verdict (ApiToken hub unreachable)"
                 : bearer.UnavailableReason;

@@ -1,6 +1,5 @@
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
@@ -57,8 +56,13 @@ public static class PluginRegistryEndpoints
                 ?.CreateLogger(typeof(PluginRegistryEndpoints));
 
             var authenticator = http.RequestServices.GetRequiredService<InstanceRegistryAuthenticator>();
-            var outcome = await authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
-                .FirstAsync().ToTask(http.RequestAborted);
+            var outcome = (await authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
+                .FirstAsync()
+                .ObserveCompletion(
+                    ex => logger?.LogWarning(ex,
+                        "Plugin registry: instance authentication for {Path} faulted after the request had already been answered",
+                        http.Request.Path),
+                    http.RequestAborted))!;
 
             // 🚨 BEFORE the anonymous fallback below, deliberately. "I could not find out" must not
             // fall through to serving this registry's sources anonymously — that would turn a
@@ -186,7 +190,11 @@ public static class PluginRegistryEndpoints
                 return Observable.Return((IResult)Results.Json(
                     new { error = ex.Message }, statusCode: StatusCodes.Status502BadGateway));
             })
-            .FirstAsync().ToTask(ct);
+            .FirstAsync()
+            .ObserveCompletion(
+                ex => logger?.LogWarning(ex,
+                    "Plugin registry: listing faulted after the response had already been sent"),
+                ct)!;
     }
 
     private static Task<IResult> Files(
@@ -241,7 +249,12 @@ public static class PluginRegistryEndpoints
                 return Observable.Return((IResult)Results.Json(
                     new { error = ex.Message }, statusCode: StatusCodes.Status502BadGateway));
             })
-            .FirstAsync().ToTask(ct);
+            .FirstAsync()
+            .ObserveCompletion(
+                ex => logger?.LogWarning(ex,
+                    "Plugin registry: fetching files for {Id} faulted after the response had already been sent",
+                    body.Id),
+                ct)!;
     }
 
     /// <summary>Fetch-files request: only the package <paramref name="Id"/> is authoritative — the

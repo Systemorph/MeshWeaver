@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -129,7 +129,7 @@ public class CreateNodesRequestTest(ITestOutputHelper output)
         response.Created.Should().BeEmpty("validate-all-then-write: nothing may land on a refusal");
 
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
-        var plain = await storage.Read(plainPath, Mesh.JsonSerializerOptions).FirstAsync().ToTask();
+        var plain = await storage.Read(plainPath, Mesh.JsonSerializerOptions).FirstAsync().Await();
         plain.Should().BeNull("the valid sibling of a refused batch must not have been written");
     }
 
@@ -156,7 +156,7 @@ public class CreateNodesRequestTest(ITestOutputHelper output)
         response.Created.Should().BeEmpty();
 
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
-        var valid = await storage.Read(validPath, Mesh.JsonSerializerOptions).FirstAsync().ToTask();
+        var valid = await storage.Read(validPath, Mesh.JsonSerializerOptions).FirstAsync().Await();
         valid.Should().BeNull("validate-all-then-write: the valid sibling must not have been written");
     }
 
@@ -199,7 +199,7 @@ public class CreateNodesRequestTest(ITestOutputHelper output)
         response.Created.Should().BeEmpty();
 
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
-        var sibling = await storage.Read(path, Mesh.JsonSerializerOptions).FirstAsync().ToTask();
+        var sibling = await storage.Read(path, Mesh.JsonSerializerOptions).FirstAsync().Await();
         sibling.Should().BeNull("nothing may land from a refused batch");
     }
 

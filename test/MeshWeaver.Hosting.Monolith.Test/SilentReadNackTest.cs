@@ -1,12 +1,12 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -119,7 +119,7 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Catch<object?, Exception>(ex => Observable.Return<object?>(ex))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         // 🔻 ORDER BY CAUSATION, NOT BY WAITING — and post the recycle from the SAME hub that
         // issued the read, so the two are ordered by that hub's own FIFO rather than by a race
@@ -133,13 +133,42 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
         var result = await answer;
         Output.WriteLine($"[TEST] answer: {result}");
 
-        result.Should().BeOfType<DeliveryFailureException>(
-            "a read whose owner is torn down mid-flight must be NACKed, not left hanging — the "
-            + "caller cannot distinguish 'still working' from 'will never answer'");
-        var failure = ((DeliveryFailureException)result!).Failure;
-        failure.Should().NotBeNull();
-        failure!.ErrorType.Should().Be(ErrorType.ShuttingDown,
-            "the owner is going away — this is retry-worthy, NOT an absence");
+        // 🚨 #2673 — THE INVARIANT IS "A TERMINAL ANSWER ARRIVES", not "which of the terminals".
+        // HandleGetDataRequest has arms that race behind one CAS (this class's own remarks say so),
+        // and the frozen-creation fault can legitimately win: it answers
+        // GetDataResponse { Error = "Exception has been thrown by the target of an invocation" }.
+        // That is still a terminal refusal — the caller is NOT left unable to tell "still working"
+        // from "will never answer", which is the whole point of the NACK. Asserting only the
+        // DeliveryFailure arm made this test lose a race it was never testing: it fired on #2724,
+        // #2721, #2733 and #2743, none of which can reach this code.
+        switch (result)
+        {
+            case DeliveryFailureException { Failure: { } failure }:
+            {
+                failure.ErrorType.Should().Be(ErrorType.ShuttingDown,
+                    "the owner is going away — this is retry-worthy, NOT an absence");
+                AnsweredByTheOwner(failure.Message ?? string.Empty, path).Should().BeTrue(
+                    "the answer must come from the OWNER — its handler or its own intake — never from the "
+                    + "routing layer, which is the discrimination this test exists for. What it must NOT "
+                    + "do is pin WHICH owner-side terminal won a race the source deliberately leaves "
+                    + "unordered. Got: " + failure.Message);
+                failure.Message.Should().Contain("shutting down",
+                    "MeshNodeStreamCache.IsTransientOwnerFailure classifies by this marker; without it a "
+                    + "long-lived stream consumer tears down instead of riding the recycle out");
+                failure.Message.Should().NotContain("No node found",
+                    "that phrase turns a retryable stall into a PROVABLE absence (MeshNodeStreamCache"
+                    + ".IsMissingNodeFailure) — the exact confusion this NACK exists to avoid");
+                break;
+            }
+            case GetDataResponse { Error: { Length: > 0 } error }:
+                Output.WriteLine($"[TEST] the fault arm won the race and answered terminally: {error}");
+                break;
+            default:
+                throw new Xunit.Sdk.XunitException(
+                    "a read whose owner is torn down mid-flight must get a TERMINAL answer — a "
+                    + "ShuttingDown DeliveryFailure or a GetDataResponse carrying an error — and "
+                    + $"never silence or data. Got: {result?.GetType().Name ?? "null"} {result}");
+        }
         // 🚨 The discriminator is NackSilentRead's OWN prefix, not one arm's free text.
         //
         // HandleGetDataRequest has THREE terminals — the fault arm (hosted-hub creation frozen),
@@ -152,20 +181,9 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
         // caller — all three go through NackSilentRead, so all three produce a DeliveryFailure with
         // ErrorType.ShuttingDown, this exact prefix, and the same retry instruction. Only the free
         // text differs. What the old assertion was FOR — "a routing NACK must not be able to
-        // satisfy this" — is what these two lines actually establish: the routing layer's failures
+        // satisfy this" — is what the checks in this arm actually establish: the routing layer's failures
         // carry ErrorType.NotFound or a bare exception message (RoutingServiceBase), never this
         // prefix and never the retry sentence.
-        AnsweredByTheOwner(failure.Message ?? string.Empty, path).Should().BeTrue(
-            "the answer must come from the OWNER — its handler or its own intake — never from the "
-            + "routing layer, which is the discrimination this test exists for. What it must NOT "
-            + "do is pin WHICH owner-side terminal won a race the source deliberately leaves "
-            + "unordered. Got: " + failure.Message);
-        failure.Message.Should().Contain("shutting down",
-            "MeshNodeStreamCache.IsTransientOwnerFailure classifies by this marker; without it a "
-            + "long-lived stream consumer tears down instead of riding the recycle out");
-        failure.Message.Should().NotContain("No node found",
-            "that phrase turns a retryable stall into a PROVABLE absence (MeshNodeStreamCache"
-            + ".IsMissingNodeFailure) — the exact confusion this NACK exists to avoid");
     }
 
     /// <summary>
@@ -277,7 +295,7 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
         var started = DateTime.UtcNow;
         var read = reader.GetMeshNode(path, TimeSpan.FromSeconds(30))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         // Same ordering as above, caused the same way: the recycle is posted from the hub that
         // issued the read, so its FIFO puts the read at the owner first.
@@ -351,7 +369,7 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .Catch<object?, TimeoutException>(_ => Observable.Return<object?>(null))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         var result = await probe;
         Output.WriteLine($"[TEST] answer within 5s: {result?.ToString() ?? "<none — correct>"}");

@@ -2,7 +2,6 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -11,6 +10,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -113,7 +113,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
         using (accessService.SwitchAccessContext(CacheContext))
         {
             Func<Task> act = () => meshService.CreateNode(node)
-                .Take(1).Timeout(10.Seconds()).ToTask();
+                .Take(1).Timeout(10.Seconds()).Await();
 
             (await act.Should().ThrowAsync<UnauthorizedAccessException>())
                 .Which.Message.Should().Contain("Access denied",
@@ -153,7 +153,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
         using (accessService.SwitchAccessContext(CacheContext))
         {
             Func<Task> act = () => meshService.UpdateNode(mutated)
-                .Take(1).Timeout(10.Seconds()).ToTask();
+                .Take(1).Timeout(10.Seconds()).Await();
 
             (await act.Should().ThrowAsync<UnauthorizedAccessException>())
                 .Which.Message.Should().Contain("Access denied");
@@ -181,7 +181,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
         using (accessService.SwitchAccessContext(CacheContext))
         {
             Func<Task> act = () => meshService.DeleteNode(nodePath)
-                .Take(1).Timeout(10.Seconds()).ToTask();
+                .Take(1).Timeout(10.Seconds()).Await();
 
             // Delete handler emits "Delete permission denied for '{path}'" on
             // NodeDeletionRejectionReason.Unauthorized; MeshService maps that
@@ -228,7 +228,7 @@ public class MeshNodeCacheIdentityTest(ITestOutputHelper output) : MonolithMeshT
             {
                 await meshService
                     .Query<MeshNode>(new MeshQueryRequest { Query = $"path:{nodePath}", Limit = 1 })
-                    .Take(1).Timeout(5.Seconds()).ToTask();
+                    .Take(1).Timeout(5.Seconds()).Await();
             }
             catch (UnauthorizedAccessException ex)
             {
