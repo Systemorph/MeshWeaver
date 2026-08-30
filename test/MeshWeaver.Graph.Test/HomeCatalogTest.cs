@@ -99,10 +99,11 @@ public class HomeCatalogTest
     public void Catalog_ExcludesTheUsersOwnRootNode()
     {
         // The viewer's own home root (path == owner, namespace == "") matches the partition-roots
-        // leg (`namespace:` = empty-namespace top level), so the leg must exclude User nodes — a
-        // home page never lists the user itself.
+        // leg (`namespace:` = empty-namespace top level), so that leg must not list the user
+        // itself. First-level says so by ALLOW-list — a User is not a Space — and the subtree
+        // shape, which has no root leg to allow-list, still says so by exclusion.
         var search = UserActivityLayoutAreas.BuildCatalog(NodePath).Should().BeOfType<MeshSearchControl>().Subject;
-        search.HiddenQuery!.ToString().Should().Contain("-nodeType:User");
+        search.HiddenQuery!.ToString().Should().Contain("namespace: is:main is:content nodeType:Space");
 
         var subtree = UserActivityLayoutAreas
             .BuildCatalog(NodePath, new HomeConfig { Scope = HomeCatalogScope.Subtree })

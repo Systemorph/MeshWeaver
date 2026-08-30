@@ -683,23 +683,26 @@ public static class UserActivityLayoutAreas
     // The home is a SHALLOW, first-level index — NOT a full-tree dump. Each sort order is a UNION of two
     // sub-queries (newline-joined; MeshSearchView issues them as a MeshQueryRequest union, sort/limit
     // taken from the FIRST):
-    //   1. `namespace:` (empty) → the root-level partition nodes the reader can see — spaces,
-    //      courses/plugins, their own home root (default scope is children-of-root = the roots).
+    //   1. `namespace:` (empty) → the root-level partition nodes the reader can see — and of those,
+    //      only SPACES (see RootTypeFilter): the workspaces, nothing else.
     //   2. `namespace:{ownerId}` → the user's OWN top-level home items (default scope children = the
     //      DIRECT children of their home partition root).
     // Neither spans a subtree, so no deep `…/Introduction/Exercise/…` nodes leak in.
     /// <summary>Builds the two-query first-level UNION for a given sort suffix (newline-joined).
-    /// The root leg excludes User nodes: the viewer's OWN home root has namespace "" and would
-    /// otherwise list itself on its own home page. <paramref name="exclusions"/> (leading-space
-    /// <c>-nodeType:…</c> clauses) applies to BOTH legs — the Spaces tab's dedup.</summary>
+    /// The root leg is an ALLOW-list (<see cref="RootTypeFilter"/>), which is why it carries no
+    /// <c>-nodeType:User</c>: a User root is simply not a Space. <paramref name="exclusions"/>
+    /// (leading-space <c>-nodeType:…</c> clauses) applies to the OWN leg only — the root leg has
+    /// nothing left to exclude.</summary>
     private static string FirstLevelUnion(string ownerId, string sortSuffix, string exclusions = "") =>
-        $"namespace: is:main is:content -nodeType:User{exclusions} {sortSuffix}\n" +
+        $"namespace: is:main is:content{RootTypeFilter} {sortSuffix}\n" +
         $"namespace:{ownerId} is:main is:content{exclusions} {sortSuffix}";
 
-    /// <summary>The catalog query for a scope + sort suffix: the first-level union (partition roots + the
-    /// user's home children), or a cross-partition SUBTREE query (everything the viewer can read at every
-    /// depth) when <see cref="HomeConfig.Scope"/> selects <see cref="HomeCatalogScope.Subtree"/>. User
-    /// nodes are excluded in both shapes — a home page never lists the user's own root.</summary>
+    /// <summary>The catalog query for a scope + sort suffix: the first-level union (the SPACES the viewer
+    /// can reach + the user's home children), or a cross-partition SUBTREE query (everything the viewer
+    /// can read at every depth) when <see cref="HomeConfig.Scope"/> selects
+    /// <see cref="HomeCatalogScope.Subtree"/>. The user's own root never lists on their home page: the
+    /// first-level shape drops it because a User is not a Space, the subtree shape excludes it by type.
+    /// <c>Subtree</c> is the admin's explicit "show me everything" and keeps the deny-list shape.</summary>
     private static string CatalogQuery(HomeCatalogScope scope, string ownerId, string sortSuffix, string exclusions = "") =>
         scope == HomeCatalogScope.Subtree
             ? $"is:main is:content -nodeType:User{exclusions} {sortSuffix}"
@@ -777,10 +780,13 @@ public static class UserActivityLayoutAreas
 
     /// <summary>
     /// The <b>Content</b> section — ONE category of content plus, when the viewer has any, a
-    /// <b>Pinned</b> tab. The category is simply <b>All</b>: every top-level node the viewer can
-    /// reach. "Spaces" never described anything real (the list is just what you have access to),
-    /// and slicing one list into three tabs was navigation the reader had to think about before
-    /// they could look at anything.
+    /// <b>Pinned</b> tab. The category is simply <b>All</b>: the SPACES the viewer can reach plus
+    /// their own home items. Slicing one list into three tabs was navigation the reader had to
+    /// think about before they could look at anything.
+    /// <para>🚨 At the root level the list is Spaces and only Spaces
+    /// (<see cref="RootTypeFilter"/>). Everything else that can sit at a partition root — a
+    /// publishing hub, an event hub, a plugin cover, a course — is something you LAUNCH, and it
+    /// appears exactly once, in the Apps band above.</para>
     /// <para>Store items are excluded — those are apps, and an app appears exactly once, up in the
     /// Apps section. The sort dropdown offers last accessed / last modified / alphabetical, and the
     /// search box searches the active tab. <see cref="HomeConfig.Scope"/> can widen the list to the
@@ -1095,9 +1101,25 @@ public static class UserActivityLayoutAreas
             },
         };
 
-    /// <summary>Dedup for the content scopes: anything living in the Store (and therefore
+    /// <summary>
+    /// What the ROOT leg of the home list is allowed to be: a <b>Space</b>, and nothing else.
+    /// <para>🚨 An ALLOW-list, deliberately — this used to be a deny-list
+    /// (<see cref="SpacesDedupExclusions"/> plus <c>-nodeType:User</c>) and a deny-list is only
+    /// ever as complete as the last person who remembered to extend it. It was not: on
+    /// memex.meshweaver.cloud the home listed <c>Posts</c> under a "Posts Hubs" heading (a
+    /// <c>SocialMedia/PostsHub</c> partition root) and <c>Event</c> under "Event Hubs" — every
+    /// root type that was not a store item leaked in and minted its own type group. The home's
+    /// content list answers "which workspaces can I reach", so it lists workspaces; a hub, a
+    /// plugin cover, a course — anything you LAUNCH — belongs in the Apps band above it, exactly
+    /// once. A new root NodeType now has to opt IN to the list rather than remember to opt out.
+    /// </para>
+    /// </summary>
+    private const string RootTypeFilter = " nodeType:Space";
+
+    /// <summary>Dedup for the OWN-partition leg: anything living in the Store (and therefore
     /// representable as an installed app — plugin covers, the store root) is EXCLUDED, so an app
-    /// appears exactly once, on the Apps scope.
+    /// appears exactly once, on the Apps scope. The root leg no longer needs it —
+    /// <see cref="RootTypeFilter"/> subsumes it.
     /// <para>🚨 This is the ONE list left, and it should not be here either: these belong on their
     /// own NodeType nodes as <c>ExcludeFromContext: ["content"]</c> — which is one
     /// <c>.HideFromContent()</c> call — but <c>Store/Plugin</c> and <c>Store/Catalog</c> are
