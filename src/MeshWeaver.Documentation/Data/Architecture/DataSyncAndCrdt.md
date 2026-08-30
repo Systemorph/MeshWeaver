@@ -269,11 +269,23 @@ Three properties this contract needs, each of which was missing:
 1. **The re-ask is `Observe`d, never `Post`ed.** `SubscribeRequest` is an
    `IRequest<SubscribeAck>` and `DataExtensions.HandleSubscribeRequest` answers every one
    of them, so a verdict always exists — fire-and-forget threw it away. `ResyncRefused`
-   classifies it by its documented meaning: `ShuttingDown` is transient (ride it out),
-   `TargetUnserved` / `Unauthorized` / `Forbidden` are terminal and **fault the stream** so
-   the subscriber sees a failure rather than an eternal placeholder, and everything else —
-   including a bare `NotFound`, which a *live* hub also answers — is a Warning and stays
-   recoverable.
+   applies the **same** classification the stream's own `DeliveryFailure` handler does, one
+   policy per type: `ShuttingDown` is transient and is ridden out; every other verdict is
+   terminal and **faults the stream**, so the subscriber sees a failure rather than an
+   eternal placeholder. A verdict that never arrives at all (the request was undeliverable)
+   is neither — Warning, recoverable. The `Observe` is wrapped in `Observable.Defer` so a
+   *synchronous* post throw reaches the same arm instead of escaping `UpdateStream` with the
+   gate already shut.
+
+   🚨 **Classify on `ErrorType`, never on `TargetUnserved`.** That stamp is the *owner-side*
+   eviction gate (`DataExtensions.HandleTargetUnservedFailure`, #2426/#2546), and the router
+   deliberately puts it on **both** of its "nobody serves that address" verdicts — the
+   terminal no-live-subscriber refusal (`RefuseNoSubscriber`, `NotFound`) **and** the
+   transient pod-hub refusal a rolling deploy produces while a silo's claim has not landed
+   (`AnswerPodHubNotHere`, `ShuttingDown`, #2745). Reading the stamp as "terminal" faults
+   every mirror in that overlap window. `RoutingGrain` states the rule itself: the stamp is
+   the eviction gate, the `ErrorType` beside it says whether the *sender* keeps its recovery
+   armed, and the two are independent.
 2. **A mirror holding no cached JSON accepts a Full at any frame version.**
    `RequestFreshSnapshot` discards the snapshot before re-asking, so there is nothing a
    rebased Full could clobber, and refusing it leaves the mirror with nothing at all. This
@@ -304,8 +316,9 @@ construction. The subscriber is therefore always answered with a Full; if that F
 in transport, the gate above — not the chain — is what recovers it.
 
 Pinned by `StreamResyncConvergenceTest`: the answer lost in transport, the answer arriving
-on a rebased clock, and the re-ask refused as `TargetUnserved`. Each fails on the
-pre-#2654 tree.
+on a rebased clock, the re-ask refused **terminally** (must fault), and the re-ask refused
+**transiently** with the identical `TargetUnserved` stamp (must be ridden out and still
+converge). Each fails on the pre-#2654 tree.
 
 ---
 

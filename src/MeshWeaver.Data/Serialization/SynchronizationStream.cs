@@ -1792,10 +1792,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             // (DataExtensions.HandleSubscribeRequest), so a verdict — ack, DeliveryFailure, or the
             // hub's own "no response" terminal — always arrives. Fire-and-forget threw all three
             // away and left the gate shut on silence.
-            resyncSubscription.Disposable = Host.Observe(
+            //
+            // 🚨 DEFER, so a SYNCHRONOUS throw is an OnError. Host.Observe posts inline (it
+            // registers the response subject and then calls Post), and a Post that throws — the
+            // host is disposing, routing refuses — would otherwise bubble out of UpdateStream with
+            // the gate already set and the cached JSON already dropped: the exact permanent wedge
+            // this change exists to remove, recreated on the failure path. Inside Defer the throw
+            // reaches ResyncRefused like any other verdict, which always releases the gate. The
+            // factory still runs inside the impersonation scope, because Subscribe is called here.
+            resyncSubscription.Disposable = Observable
+                .Defer(() => Host.Observe(
                     JsonSynchronizationStream.MintSubscribeRequest(StreamId, wsRef, identity: null)
                         with { Subscriber = Configuration.Subscriber! },
-                    o => o.WithTarget(StreamIdentity.Owner))
+                    o => o.WithTarget(StreamIdentity.Owner)))
                 .Take(1)
                 .Subscribe(
                     _ =>
@@ -1835,20 +1844,26 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// still without a base drives exactly one new re-ask, so a mirror whose owner has gone quiet
     /// stays quiet too.</para>
     ///
-    /// <para>The classification is the documented meaning of each verdict, not a guess:</para>
-    /// <list type="bullet">
-    /// <item><see cref="ErrorType.ShuttingDown"/> without
-    /// <see cref="DeliveryFailure.TargetUnserved"/> is TRANSIENT — our re-ask raced the owner's
-    /// recycle. Ride it out, exactly as this stream's own <c>DeliveryFailure</c> handler does.</item>
-    /// <item><see cref="DeliveryFailure.TargetUnserved"/> is the ROUTER's authoritative "no hub
-    /// anywhere serves that address" (#2426/#2546), and a denial
-    /// (<see cref="ErrorType.Unauthorized"/>/<see cref="ErrorType.Forbidden"/>) will not fix itself.
-    /// Both are terminal: fault the stream so the subscriber SEES a failure, instead of holding a
-    /// placeholder for a snapshot that is never coming.</item>
-    /// <item>Everything else — including a bare <see cref="ErrorType.NotFound"/>, which a LIVE hub
-    /// also answers and which therefore must NOT be read as "the owner is gone" — is reported at
-    /// Warning and left recoverable.</item>
-    /// </list>
+    /// <para>The classification is the SAME ONE this stream's own <c>DeliveryFailure</c> handler
+    /// applies, deliberately — one policy per type, not two:
+    /// <see cref="ErrorType.ShuttingDown"/> is transient and gets ridden out; every other verdict is
+    /// terminal and faults the stream, so the subscriber SEES a failure instead of holding a
+    /// placeholder for a snapshot that is never coming.</para>
+    ///
+    /// <para>🚨 It keys on <see cref="ErrorType"/> and NEVER on
+    /// <see cref="DeliveryFailure.TargetUnserved"/>. That stamp is the OWNER-side eviction gate
+    /// (<c>DataExtensions.HandleTargetUnservedFailure</c>, #2426/#2546), and the router deliberately
+    /// stamps it on BOTH of its "nobody serves that address" verdicts — the terminal
+    /// no-live-subscriber refusal (<c>RefuseNoSubscriber</c>, <see cref="ErrorType.NotFound"/>) and
+    /// the TRANSIENT pod-hub refusal a rolling deploy produces while a silo's claim has not landed
+    /// yet (<c>AnswerPodHubNotHere</c>, <see cref="ErrorType.ShuttingDown"/>, #2745). Reading the
+    /// stamp as "terminal" would fault every mirror in that overlap window; RoutingGrain's own
+    /// contract says it: the stamp is the eviction gate, the ErrorType beside it says whether the
+    /// SENDER keeps its recovery armed, and the two are independent.</para>
+    ///
+    /// <para>A verdict that never arrives at all — the request was undeliverable, so the hub's own
+    /// request/response terminal fires — is neither: it is reported at Warning and left recoverable,
+    /// because "we could not find out" is not an answer about the owner.</para>
     /// </summary>
     private void ResyncRefused(Exception error)
     {
@@ -1856,23 +1871,30 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
 
         if (error is DeliveryFailureException { Failure: { } failure })
         {
-            if (failure.TargetUnserved
-                || failure.ErrorType is ErrorType.Unauthorized or ErrorType.Forbidden)
-            {
-                logger.LogWarning(
-                    "[SYNC_STREAM] Fresh-snapshot request for {StreamId} was refused terminally by {Owner} ({ErrorType}, TargetUnserved={TargetUnserved}): {Message}",
-                    StreamId, StreamIdentity.Owner, failure.ErrorType, failure.TargetUnserved,
-                    failure.Message);
-                OnError(error);
-                return;
-            }
             if (failure.ErrorType == ErrorType.ShuttingDown)
             {
                 logger.LogDebug(
-                    "[SYNC_STREAM] Fresh-snapshot request for {StreamId} was rejected by {Owner} while it shuts down — keeping the stream alive; the next proven gap re-asks",
-                    StreamId, StreamIdentity.Owner);
+                    "[SYNC_STREAM] Fresh-snapshot request for {StreamId} was rejected by {Owner} while it is shutting down or not yet served (TargetUnserved={TargetUnserved}) — keeping the stream alive; the next proven gap re-asks",
+                    StreamId, StreamIdentity.Owner, failure.TargetUnserved);
                 return;
             }
+            logger.LogWarning(
+                "[SYNC_STREAM] Fresh-snapshot request for {StreamId} was refused terminally by {Owner} ({ErrorType}, TargetUnserved={TargetUnserved}): {Message}",
+                StreamId, StreamIdentity.Owner, failure.ErrorType, failure.TargetUnserved,
+                failure.Message);
+            OnError(error);
+            return;
+        }
+
+        // Teardown is not a fault to report: a re-ask racing this stream's own disposal cannot be
+        // answered and does not need to be. Same classification OnError applies, for the same
+        // reason — a Warning per disposed stream is log volume, not information.
+        if (IsObjectDisposed(error))
+        {
+            logger.LogDebug(error,
+                "[SYNC_STREAM] Fresh-snapshot request for {StreamId} could not be issued — the stream or its host is tearing down",
+                StreamId);
+            return;
         }
 
         logger.LogWarning(error,

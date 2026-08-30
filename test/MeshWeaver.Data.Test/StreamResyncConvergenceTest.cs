@@ -34,7 +34,7 @@ namespace MeshWeaver.Data.Test;
 /// <item>the fresh snapshot is lost in transport, exactly like the frame that started the resync;</item>
 /// <item>the fresh snapshot arrives but carries a RESET frame clock (the owner had to rebuild the
 /// server-side stream), so the mirror's own monotonicity guard throws it away;</item>
-/// <item>the re-ask is refused with the router's authoritative "nothing serves that address".</item>
+/// <item>the re-ask is refused terminally, with the router's "nothing serves that address".</item>
 /// </list>
 /// </summary>
 public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase(output)
@@ -139,10 +139,19 @@ public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase
             {
                 // THE REFUSED RE-ASK. The initial subscribe goes through (mirrorStreamId is still
                 // unknown when it is posted); the resync's re-ask carries the SAME stream id and is
-                // answered with the router's authoritative "no hub anywhere serves that address" —
-                // ErrorType.ShuttingDown + TargetUnserved, the exact verdict RoutingGrain produces
-                // for a stream-routed delivery with no live subscriber (#2426/#2546, #2620).
-                if (refuseTheResyncRequest
+                // answered with the router's TERMINAL "no hub anywhere serves that address" — the
+                // exact verdict RoutingGrain.RefuseNoSubscriber produces for a stream-routed
+                // delivery the cluster-wide subscription registry says nobody is serving
+                // (#2426/#2546): ErrorType.NotFound carrying the authoritative TargetUnserved stamp.
+                //
+                // 🚨 NotFound, not ShuttingDown, and the difference is the whole classification:
+                // the router stamps TargetUnserved on BOTH of its verdicts, and its transient one
+                // (AnswerPodHubNotHere, #2745 — a silo whose pod-hub claim has not landed during a
+                // rolling deploy) carries ErrorType.ShuttingDown precisely so a sync stream RIDES IT
+                // OUT. Keying the tear-down on the stamp would fault every mirror in that overlap
+                // window, so the stream keys on the ErrorType, exactly as its own DeliveryFailure
+                // handler always has.
+                if (refuseTheResyncRequestAs is { } verdict
                     && d.Message is SubscribeRequest sr
                     && sr.StreamId == mirrorStreamId
                     && Interlocked.Exchange(ref refusedResyncRequests, 1) == 0)
@@ -150,7 +159,9 @@ public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase
                     client!.Post(
                         new DeliveryFailure(d)
                         {
-                            ErrorType = ErrorType.ShuttingDown,
+                            ErrorType = verdict,
+                            // The stamp is the SAME on both verdicts, on purpose — it is the
+                            // owner-side eviction gate, not a sender-side classification.
                             TargetUnserved = true,
                             Message = "no live subscriber for the owner address",
                         },
@@ -164,7 +175,13 @@ public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase
     /// <summary>Which failure this test arms; set before the mirror is opened.</summary>
     private volatile bool eatTheFreshSnapshot;
     private volatile bool rebaseTheFreshSnapshot;
-    private volatile bool refuseTheResyncRequest;
+
+    /// <summary>
+    /// The verdict the resync's re-ask is refused with, or <c>null</c> to let it through. Both
+    /// values the router really produces are exercised, and they must be treated DIFFERENTLY
+    /// despite carrying the identical <see cref="DeliveryFailure.TargetUnserved"/> stamp.
+    /// </summary>
+    private ErrorType? refuseTheResyncRequestAs;
 
     /// <summary>The client hub, so the refusal arm can answer its own outgoing request.</summary>
     private volatile IMessageHub? client;
@@ -211,17 +228,18 @@ public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase
     }
 
     /// <summary>
-    /// THE RE-ASK IS REFUSED TERMINALLY. <see cref="DeliveryFailure.TargetUnserved"/> is the ROUTER's
-    /// authoritative "no hub anywhere in the cluster serves that address" (#2426/#2546) — the mirror
-    /// is never getting its snapshot. Pre-fix nothing was listening: the re-ask was posted
-    /// fire-and-forget, so the verdict resolved no callback, reached no arm and was simply dropped,
-    /// and the mirror sat silent behind a gate that could no longer open. A subscriber must SEE that
-    /// failure instead of holding a placeholder for a snapshot that is never coming.
+    /// THE RE-ASK IS REFUSED TERMINALLY. The router asked the cluster-wide subscription registry and
+    /// was told nobody serves the owner address (<c>RoutingGrain.RefuseNoSubscriber</c>,
+    /// #2426/#2546) — the mirror is never getting its snapshot. Pre-fix nothing was listening: the
+    /// re-ask was posted fire-and-forget, so the verdict resolved no callback, reached no arm and
+    /// was simply dropped, and the mirror sat silent behind a gate that could no longer open. A
+    /// subscriber must SEE that failure instead of holding a placeholder for a snapshot that is
+    /// never coming.
     /// </summary>
     [HubFact]
     public async Task ARefusedReAsk_FaultsTheMirrorInsteadOfLatchingItSilently()
     {
-        refuseTheResyncRequest = true;
+        refuseTheResyncRequestAs = ErrorType.NotFound;
         var host = GetHost();
         client = GetClient();
         var accessService = host.ServiceProvider.GetRequiredService<AccessService>();
@@ -246,13 +264,39 @@ public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase
             .Where(n => n.Kind == System.Reactive.NotificationKind.OnError)
             .Take(1)
             .Should().Within(15.Seconds())
-            .Emit("a re-ask the router refused as TargetUnserved is terminal: the mirror must "
-                + "surface the failure, not hold a gate that can no longer open");
+            .Emit("a re-ask the router refused because nothing serves the owner is terminal: the "
+                + "mirror must surface the failure, not hold a gate that can no longer open");
 
         Volatile.Read(ref droppedPatches).Should().Be(1,
             "the wire loss is what triggers the resync — without it there is no re-ask to refuse");
         Volatile.Read(ref refusedResyncRequests).Should().Be(1,
             "the resync's SubscribeRequest must have been refused — otherwise this test asserts nothing");
+    }
+
+    /// <summary>
+    /// THE RE-ASK IS REFUSED **TRANSIENTLY** — and must NOT fault the mirror.
+    ///
+    /// <para>The router stamps <see cref="DeliveryFailure.TargetUnserved"/> on BOTH of its "nobody
+    /// serves that address" verdicts. The one this test injects is
+    /// <c>RoutingGrain.AnswerPodHubNotHere</c> (#2745): a silo-hosted owner whose pod-hub claim has
+    /// not landed yet — the ordinary overlap window of a rolling deploy — answered
+    /// <see cref="ErrorType.ShuttingDown"/> precisely so that consumers with recovery machinery ride
+    /// it out. Classifying on the STAMP instead of the ErrorType would fault every mirror in that
+    /// window, which is a worse outcome than the bug this ticket fixes.</para>
+    ///
+    /// <para>So: keep the stream, re-open the gate, and let the next frame that proves the mirror
+    /// still has no base earn one new re-ask. Convergence IS the assertion — a faulted stream
+    /// replays its error to every later subscriber, so the wait below would report the fault rather
+    /// than time out.</para>
+    /// </summary>
+    [HubFact]
+    public async Task ATransientlyRefusedReAsk_IsRiddenOutAndStillConverges()
+    {
+        refuseTheResyncRequestAs = ErrorType.ShuttingDown;
+        await RunConvergenceScenario();
+        Volatile.Read(ref refusedResyncRequests).Should().Be(1,
+            "the resync's SubscribeRequest must have been refused transiently — without the refusal "
+            + "this test does not distinguish riding it out from never being refused at all");
     }
 
     /// <summary>
