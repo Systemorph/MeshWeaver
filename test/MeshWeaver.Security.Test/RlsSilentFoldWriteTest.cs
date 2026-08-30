@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -68,7 +67,11 @@ public class RlsSilentFoldWriteTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // 🚨 THE REGRESSION PIN. Before the fix this returned a live MeshNode — the write happened.
-        Func<Task> act = () => meshService.CreateNode(node).FirstAsync().ToTask();
+        // ObserveCompletion, never `.ToTask()` (ObservableToTaskBridgeGuard) — it settles off the
+        // signalling thread and faults the task with the ORIGINAL exception.
+        Func<Task> act = () => meshService.CreateNode(node)
+            .FirstAsync()
+            .ObserveCompletion(ex => Output.WriteLine($"[late fault] {ex}"));
         var ex = (await act.Should().ThrowAsync<Exception>()).Which;
 
         ex.Message.Should().Contain("could not be established",

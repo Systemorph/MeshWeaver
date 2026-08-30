@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -101,8 +100,15 @@ public class PermissionFoldLegSeedGuardTest(ITestOutputHelper output) : Monolith
     /// The first emission of a COLD fold — the value the <c>[RequiresPermission]</c> gate takes as
     /// its verdict.
     /// </summary>
+    /// <remarks>
+    /// <c>Should().Emit()</c> — the repo's reactive assertion — rather than a <c>.ToTask()</c>
+    /// bridge (ObservableToTaskBridgeGuard). It takes the FIRST emission, which is precisely the
+    /// value under test, and FAILS if the stream completes without one, so a fold that produced
+    /// nothing can never be mistaken here for a fold that answered <c>Permission.None</c>.
+    /// </remarks>
     private Task<Permission> FirstVerdict(string path, string userId)
-        => Mesh.GetEffectivePermissions(path, userId).FirstAsync().ToTask();
+        => Mesh.GetEffectivePermissions(path, userId).Should()
+            .Emit("the gate takes the fold's FIRST emission as its verdict");
 
     [Fact(Timeout = 30_000)]
     public async Task TheMembershipLegIsSUBTRACTIVE_SoAnEmptySeedWouldGrantWhatAGroupDenyRevokes()

@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -80,10 +79,15 @@ public class PermissionFoldSilentTerminalTest(ITestOutputHelper output) : Monoli
         accessService.SetHostIdentity(new AccessContext { ObjectId = "Entitled", Name = "Entitled" });
 
         // GetDataRequest carries [RequiresPermission(Permission.Read)], so it goes through the fold.
+        // 🚨 ObserveCompletion, never `.ToTask()` (ObservableToTaskBridgeGuard): Rx's own bridge
+        // resumes the awaiter INLINE on the thread that signalled, so it changes how the code under
+        // test runs. This one settles off the signalling thread and still faults the task with the
+        // ORIGINAL exception, which is what the assertion below needs to see.
         Func<Task> act = () => client
             .Observe(new GetDataRequest(new UnifiedReference("data:")),
                 o => o.WithTarget(new Address(SilentPath)))
-            .FirstAsync().ToTask();
+            .FirstAsync()
+            .ObserveCompletion(ex => Output.WriteLine($"[late fault] {ex}"));
 
         // 🚨 THE REGRESSION PIN. Before the fix this threw NOTHING — the request was answered
         // normally, i.e. the gate let it through having established nothing at all.
@@ -113,6 +117,6 @@ public class PermissionFoldSilentTerminalTest(ITestOutputHelper output) : Monoli
         await client
             .Observe(new GetDataRequest(new UnifiedReference("data:")),
                 o => o.WithTarget(new Address(HealthyPath)))
-            .FirstAsync().ToTask();
+            .Should().Emit("a healthy fold reaches a verdict, so the delivery goes through");
     }
 }
