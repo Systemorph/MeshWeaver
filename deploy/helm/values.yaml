@@ -193,20 +193,93 @@ hostingOperator:
 # raises this without them fails the build instead of the deployment.
 replicas:
   portal: 1
+# ---- Key Vault secrets, DECLARED (renders the SecretProviderClass) ---------
+# The portal's secrets live in Azure Key Vault and reach the pod through the
+# secrets-store CSI driver: a SecretProviderClass names the vault objects, the
+# driver mounts them and syncs them into a Kubernetes Secret, and the pod reads
+# that Secret via envFrom. Until 2026-08-30 the SecretProviderClass was a
+# HAND-MADE object in every namespace — `kubectl apply`-ed once, present in no
+# repo, rendered by nothing — and the values file could only point at it by
+# name (extraEnvFrom / extraVolumes below). So which secrets a pod carried was
+# knowable only from the cluster, and the memex install ended up with its
+# Email configuration TWICE: the chart's ConfigMap said Email__Enabled=false,
+# a hand-made Secret patched onto the live Deployment as explicit env said
+# EMAIL__ENABLED=true, and because .NET's environment provider is case-
+# insensitive, which copy won was decided by enumeration order at each pod
+# start. A coin toss per boot, invisible from any file; it crashed the portal
+# with EmailConfigurationGuard on 2026-08-30.
+#
+# This block is the declaration. The chart renders from it, in one place:
+#   * templates/memex-portal/secretproviderclass.yaml — the SecretProviderClass
+#     (every `secrets[]` entry as a vault object AND as a key of the synced
+#     Secret), and
+#   * templates/memex-portal/deployment.yaml — the CSI volume, its mount (the
+#     mount is what makes the driver sync and keep rotating), and the envFrom
+#     on the synced Secret. Nothing else needs to be patched onto the pod.
+#
+# EMPTY `secrets` ⇒ NOTHING renders, so an environment that has not opted in
+# is byte-identical to before. With any entry, `vaultName`, `tenantId` and
+# `identityClientId` are REQUIRED — a half-declared block fails the render
+# rather than producing a SecretProviderClass that syncs nothing.
+#
+# 🚨 NAMES ONLY. `vaultSecret` is the vault OBJECT'S name and `key` is the
+# environment key it lands as (`Section__Key` ↔ `Section:Key`). No value ever
+# appears here — the value stays in the vault, and this file stays committable.
+# Fleet convention for the vault name: `<keyVaultSecretPrefix><Section>-<Key>`
+# (memexcloud-Email-ClientSecret ↔ Email__ClientSecret); the Hosting plugin's
+# Deployment record derives it from the key when the record leaves it blank.
+#
+# 🚨 A declared object that does NOT exist in the vault fails the whole mount:
+# the pod stays ContainerCreating and the rollout stalls while the OLD pod
+# keeps serving. Create the vault secret BEFORE declaring it here.
+#
+# 🚨 A new or changed vault value needs the pod to RESTART (the driver reads
+# the vault at pod start) — see Doc/Architecture/DeploymentAKS → "KeyVault CSI
+# env timing": a synced Secret populated by pod A is read by pod B.
+keyVaultSecrets:
+  # The vault, its tenant, and the client id of the identity that READS it —
+  # the Key Vault Secrets Provider add-on's user-assigned identity:
+  #   az aks show -g <rg> -n <cluster> \
+  #     --query addonProfiles.azureKeyvaultSecretsProvider.identity.clientId -o tsv
+  # That identity needs secret GET on the vault (role "Key Vault Secrets User").
+  vaultName: ""
+  tenantId: ""
+  identityClientId: ""
+  # The SecretProviderClass's name, and the Kubernetes Secret it syncs into
+  # (blank ⇒ the same name). An environment adopting a hand-made SPC states
+  # the live names here so `helm-release adopt` stamps ownership on the
+  # existing objects instead of creating a second pair beside them.
+  name: "memex-portal-keyvault"
+  syncedSecret: ""
+  # The CSI volume's name and mount path inside the portal container.
+  volumeName: "kv-secrets"
+  mountPath: "/mnt/secrets-store"
+  # The secrets, by name. Example:
+  #   secrets:
+  #     - vaultSecret: memexcloud-Email-ClientSecret
+  #       key: Email__ClientSecret
+  #     - vaultSecret: memexcloud-Authentication-Microsoft-ClientSecret
+  #       key: Authentication__Microsoft__ClientSecret
+  secrets: []
 # ---- Extra env sources for the portal (verbatim EnvFromSource objects) ----
-# For env the chart does not own — typically a Key Vault CSI-synced Secret
-# (SecretProviderClass → k8s Secret). Without this key such a source can only
-# be attached by a live kubectl patch, which the next `helm upgrade` silently
-# drops (the memex-cloud AI-keys shape). Example:
+# ⚠️ LEGACY ESCAPE HATCH — kept for environments whose SecretProviderClass is
+# still hand-made. Declare the secrets under `keyVaultSecrets` above instead;
+# that renders the SecretProviderClass AND the envFrom, so the pod's secret
+# set is readable from the values file. For env the chart does not own —
+# typically a Key Vault CSI-synced Secret (SecretProviderClass → k8s Secret).
+# Without this key such a source can only be attached by a live kubectl
+# patch, which the next `helm upgrade` silently drops (the memex-cloud
+# AI-keys shape). Example:
 #   extraEnvFrom:
 #     - secretRef:
 #         name: memexcloud-portal-ai-secrets
 extraEnvFrom: []
 # ---- Extra volumes/mounts for the portal (verbatim Volume/VolumeMount) ----
-# The volume-shaped twin of extraEnvFrom, for resources the chart does not
-# own — typically the secrets-store CSI volume behind a SecretProviderClass:
-# the MOUNT is what makes the CSI driver sync (and keep rotating) the k8s
-# Secret that extraEnvFrom then reads. Example:
+# ⚠️ LEGACY ESCAPE HATCH — see extraEnvFrom; `keyVaultSecrets` renders the
+# CSI volume and its mount too. The volume-shaped twin of extraEnvFrom, for
+# resources the chart does not own — typically the secrets-store CSI volume
+# behind a SecretProviderClass: the MOUNT is what makes the CSI driver sync
+# (and keep rotating) the k8s Secret that extraEnvFrom then reads. Example:
 #   extraVolumes:
 #     - name: kv-ai-secrets
 #       csi:

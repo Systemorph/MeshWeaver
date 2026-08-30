@@ -320,7 +320,7 @@ az keyvault secret set --vault-name <key-vault> --name ai-keyprotection-masterke
 
 **To rotate a secret:** `az keyvault secret set` (creates a new version) → `kubectl -n memex rollout restart deployment/memex-portal-deployment` (the CSI driver re-reads on the next mount).
 
-The `SecretProviderClass` + the CSI volume/`envFrom` are applied post-`deploy.sh` today. Folding them into the chart is tracked in §11.
+The `SecretProviderClass` + the CSI volume/`envFrom` were applied post-`deploy.sh` by hand until 2026-08-30. The chart now renders all of them from the `keyVaultSecrets` values block (names only); see [DeploymentAKS](/Doc/Architecture/DeploymentAKS) → "Key Vault secrets are DECLARED in values". The hand-made `memex-kv` object above is the shape the record adopts by stating its live names.
 
 > **Windows `az` gotcha:** the CLI's console writer cannot encode non-ASCII characters in cp1252 and crashes on a raw log dump. Pipe the cluster-side command through `tr -cd '\11\12\15\40-\176'` to strip non-ASCII before `az` prints it.
 

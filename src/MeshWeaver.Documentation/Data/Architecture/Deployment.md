@@ -75,7 +75,7 @@ For single-tenant apps, configure the tenant ID explicitly — the default `/com
 
 # Secrets Management
 
-Secrets are stored in `dotnet user-secrets` for local development and in GitHub secrets for CI/CD. (On AKS, secrets come from the Key Vault `SecretProviderClass` wired by `deploy/aks/envs/<env>/deploy.sh`.)
+Secrets are stored in `dotnet user-secrets` for local development and in GitHub secrets for CI/CD. (On AKS, secrets come from Key Vault through a `SecretProviderClass` the chart renders from the `keyVaultSecrets` values block — names only, never values; see [DeploymentAKS](/Doc/Architecture/DeploymentAKS) → "Key Vault secrets are DECLARED in values".)
 
 Parameters for distributed modes (the authoritative list is the `builder.AddParameter(...)` calls in `../MeshWeaver.Plugins/src/Memex.AppHost/Program.cs`):
 
