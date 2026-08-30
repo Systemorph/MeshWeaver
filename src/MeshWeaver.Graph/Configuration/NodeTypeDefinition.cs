@@ -496,7 +496,7 @@ public record NodeTypeDefinition
     /// <summary>
     /// A REQUEST to the owning per-NodeType hub: "stamp <see cref="CompiledSources"/> from your own
     /// <see cref="CurrentSourceVersions"/>". Written by
-    /// <see cref="PrebuiltAssemblySeeder.Seed"/> when it adopts a prebuilt assembly; consumed —
+    /// <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> when it adopts a prebuilt assembly; consumed —
     /// exactly once — on the owner, which clears it in the same write that applies the stamp.
     ///
     /// <para>🚨 <b>Why the value cannot be written by the adopter</b> (#1834). A bundle's own
@@ -525,6 +525,56 @@ public record NodeTypeDefinition
     /// import (<see cref="Mesh.NodeTypeOperationalContent"/>).</para>
     /// </summary>
     public DateTimeOffset? RequestedSourceStampAt { get; init; }
+
+    /// <summary>
+    /// The source fingerprint the PRODUCER recorded for the adopted bytes — a content hash over
+    /// the Code/Test nodes the bundle was compiled from
+    /// (<see cref="Mesh.PartitionSourceFingerprint"/>). Written by
+    /// <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> beside <see cref="RequestedSourceStampAt"/>;
+    /// <c>null</c> for a locally-compiled build and for a LEGACY bundle published before producers
+    /// recorded one.
+    ///
+    /// <para>🚨 <b>It must be a CONTENT hash, never a version one.</b>
+    /// <see cref="CurrentSourceVersions"/> is <c>{path → LastModified.UtcTicks}</c> — mesh-LOCAL
+    /// modification times, which the producer cannot know and does not have (the bake writes
+    /// zeros). A fingerprint over ticks would therefore never match and every adoption would be
+    /// refused. Content is the only thing both sides can compute the same way.</para>
+    ///
+    /// <para>Compared against <see cref="CurrentSourceFingerprint"/> by
+    /// <c>NodeTypeCompilationHelpers.ApplyAdoptedSourceStamp</c>, on the OWNER — the only party
+    /// that holds both authoritatively (#1834).</para>
+    /// </summary>
+    public string? AdoptedSourceFingerprint { get; init; }
+
+    /// <summary>
+    /// Content fingerprint of the LIVE source set — the same
+    /// <see cref="Mesh.PartitionSourceFingerprint"/> shape as
+    /// <see cref="AdoptedSourceFingerprint"/>, computed over this NodeType's own Code/Test nodes
+    /// by the sources watcher and written in the SAME update as
+    /// <see cref="CurrentSourceVersions"/>.
+    ///
+    /// <para>🚨 <b>Computed only when it can be USED</b> — when the node carries an
+    /// <see cref="AdoptedSourceFingerprint"/> or a pending
+    /// <see cref="RequestedSourceStampAt"/>. Hashing every source node's serialised content on
+    /// every source emission, for every NodeType, would put a SHA-256 over the whole source set on
+    /// a path that today only reads timestamps, and a locally-compiled type has nothing to compare
+    /// it against. So a type that never adopts pays nothing, and the field stays <c>null</c> —
+    /// which is deliberately DISTINCT from "computed and empty".</para>
+    /// </summary>
+    public string? CurrentSourceFingerprint { get; init; }
+
+    /// <summary>
+    /// Where the current build came from, and whether an adopted one was ever checked against the
+    /// source this node holds. See <see cref="Mesh.Services.BuildProvenance"/> for why this has to
+    /// be READABLE ON THE RECORD rather than inferable — every other signal
+    /// (<see cref="CompilationStatus"/>, <see cref="IsDirty"/>) reads clean for an adopted build,
+    /// because the adoption writes the second one itself (#2813).
+    ///
+    /// <para>Operational, never authored: stripped on export, preserved from the live node on
+    /// import. An authored value would forge a provenance claim — the same class of unearned claim
+    /// this field exists to expose.</para>
+    /// </summary>
+    public Mesh.Services.BuildProvenance BuildProvenance { get; init; }
 
     /// <summary>
     /// <see cref="DateTime"/> ticks for <c>1601-01-01</c> — the FILETIME epoch, and the value

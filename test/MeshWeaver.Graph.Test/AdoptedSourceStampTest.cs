@@ -61,7 +61,8 @@ public class AdoptedSourceStampTest
         // !IsDirty — so without the stamp the next release request recompiles it.
         adopted.IsDirty.Should().BeTrue("this is the state the adoption used to commit");
 
-        var stamped = NodeTypeCompilationHelpers.ApplyAdoptedSourceStamp(adopted, live);
+        var stamped = NodeTypeCompilationHelpers.ApplyAdoptedSourceStamp(
+            adopted, live, canCompileLocally: true);
 
         stamped.CompiledSources.Should().Equal(live,
             "the stamp IS the owner's live snapshot — equal by construction, never by timing");
@@ -77,7 +78,8 @@ public class AdoptedSourceStampTest
     {
         var live = Snapshot(("P/T/Source/Model", 7));
         var adopted = JustAdopted() with { CurrentSourceVersions = live };
-        var stamped = NodeTypeCompilationHelpers.ApplyAdoptedSourceStamp(adopted, live);
+        var stamped = NodeTypeCompilationHelpers.ApplyAdoptedSourceStamp(
+            adopted, live, canCompileLocally: true);
 
         // Everything the adoption itself decided must survive verbatim — the stamp answers ONE
         // question and must not become a second, competing terminal write.
@@ -98,7 +100,7 @@ public class AdoptedSourceStampTest
         // null — that is what NodeTypeDefinition documents a sourceless success as recording.
         var empty = ImmutableDictionary<string, long>.Empty;
         var stamped = NodeTypeCompilationHelpers.ApplyAdoptedSourceStamp(
-            JustAdopted() with { CurrentSourceVersions = empty }, empty);
+            JustAdopted() with { CurrentSourceVersions = empty }, empty, canCompileLocally: true);
 
         stamped.CompiledSources.Should().NotBeNull();
         stamped.CompiledSources!.Count.Should().Be(0);
@@ -114,7 +116,7 @@ public class AdoptedSourceStampTest
         // would silently rewrite what "was compiled".
         var live = new Dictionary<string, long> { ["P/T/Source/Model"] = 5 };
         var stamped = NodeTypeCompilationHelpers.ApplyAdoptedSourceStamp(
-            JustAdopted() with { CurrentSourceVersions = live }, live);
+            JustAdopted() with { CurrentSourceVersions = live }, live, canCompileLocally: true);
 
         stamped.CompiledSources.Should().BeAssignableTo<ImmutableDictionary<string, long>>();
         live["P/T/Source/Model"] = 6;

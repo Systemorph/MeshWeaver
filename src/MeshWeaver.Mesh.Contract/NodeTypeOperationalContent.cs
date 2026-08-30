@@ -70,6 +70,12 @@ public static class NodeTypeOperationalContent
         // sharper one: an authored value would ask the owner to re-stamp a compile's source
         // snapshot from the live set, silently suppressing a needed rebuild.
         "requestedSourceStampAt",
+        // #2813 — build PROVENANCE. Operational for the same reason the verdict fields are:
+        // an authored value would forge the very claim these exist to expose (an adopted
+        // assembly asserting it was checked against source nobody compared it to).
+        "adoptedSourceFingerprint",
+        "currentSourceFingerprint",
+        "buildProvenance",
         "compiledFrameworkVersion",
         // #1793 — the inputs the standing FAILURE verdict was formed from. Operational for the
         // same reason compiledFrameworkVersion is, and for one sharper one: an authored token that

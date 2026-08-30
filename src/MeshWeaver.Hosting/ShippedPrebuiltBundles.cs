@@ -435,7 +435,7 @@ public static class ShippedPrebuiltBundles
     /// node path and dependency record; the assemblies are the bundle's entire weight. Reading the
     /// manifest alone is enough to answer the whole adoption question, so a bundle whose types are
     /// all current is answered without decompressing a single assembly — on top of the per-type hub
-    /// activation and store upload that <see cref="PrebuiltAssemblySeeder.Seed"/> would cost.</para>
+    /// activation and store upload that <see cref="PrebuiltAssemblySeeder.Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> would cost.</para>
     ///
     /// <para>Emits the tally; folds its own faults to zero.</para>
     /// </summary>
