@@ -18,6 +18,52 @@ memex login mw_yourtoken --base-url https://memex.meshweaver.cloud
 
 The token and base URL are stored in `~/.memex/config.json`; `$MEMEX_TOKEN` / `$MEMEX_BASE_URL` or `--token` / `--base-url` override per call.
 
+## Building a plugin (`memex build plugin`)
+
+The whole CI contract for a plugin repo, in three lines:
+
+```yaml
+- uses: actions/checkout@v7
+- run: dotnet tool install -g MeshWeaver.Cli
+- run: memex build plugin . --image meshweaver.azurecr.io/mw-plugin-test:<tag>
+```
+
+The tool pulls the image, **pins it by digest**, and runs the platform's own builder and tester
+inside it. Nothing in the job needs to know about docker, mounts, seeds or allow-files.
+
+It runs the two stages the plugin build contract defines, in order:
+
+1. **produce** — `compile /repo … --output /bake`, then assert the bake identity
+   (`framework-mvid.txt`) is non-empty. A compile that emitted no bundles still exits 0, so
+   "the command returned" is not evidence.
+2. **consume** — the gate with `--seed /bake`, standing a mesh up on **those bytes**. Testing the
+   baked bytes is a stronger claim than a fused pass: the bytes judged are the bytes that ship.
+
+| option | meaning |
+|---|---|
+| `--image` *(required)* | image to build against; pulled and pinned by digest |
+| `--bake-output <dir>` | where the bundles land (default: a temp dir) |
+| `--external-modules <dir>` | module DLLs to mount at `/ext` |
+| `--source-sha <sha>` | commit stamped into the bake |
+| `--allow <file>` | allow-file relative to the plugin path (default `plugin-gate.allow`, used only if present) |
+
+The image is an **argument, not an ambient**: which image a plugin is built against decides the
+result, so it belongs where a reader can see it. A gate that resolves its framework from an
+environment variable while advertising a branch name will eventually report a missing type against
+the wrong repository — which is exactly what happened on 2026-08-30.
+
+### Before the package is published
+
+The verb ships in `MeshWeaver.Cli`, so `dotnet tool install -g MeshWeaver.Cli` needs a release that
+contains it. From a platform checkout it runs directly:
+
+```bash
+dotnet run --project src/MeshWeaver.Cli -c Release -- \
+  build plugin ../MeshWeaver.Plugins --image meshweaver.azurecr.io/mw-plugin-test:<tag>
+```
+
+Same behaviour, no install — useful for trying it on a repo before the tool version is out.
+
 ## Commands
 
 | Command | Purpose |
