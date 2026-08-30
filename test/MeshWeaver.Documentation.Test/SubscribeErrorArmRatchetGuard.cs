@@ -8,7 +8,13 @@ namespace MeshWeaver.Documentation.Test;
 
 /// <summary>
 /// 🚨 <c>.Subscribe(x =&gt; …)</c> with no error arm is how a fault escapes the mesh and kills the
-/// process. Every subscription in production carries <c>.Subscribe(onNext, onError)</c>.
+/// process. Every subscription in production MUST carry <c>.Subscribe(onNext, onError)</c>.
+///
+/// <para>🚨 <b>Stated as the requirement, not as the state of the tree — the tree does not meet it
+/// yet.</b> This is a RATCHET seeded at <see cref="Baseline"/>, so bare subscriptions currently
+/// exist and pass. Reading the rule as a description would be the "prose asserts a guard that does
+/// not exist" trap: a later reader concludes the property is already held, and stops checking. What
+/// is enforced is only that the count never rises.</para>
 ///
 /// <para><b>Why the single-argument overload specifically.</b> Rx routes a throw inside
 /// <c>Select</c>/<c>SelectMany</c>/<c>Defer</c> to <c>onError</c> — but it <b>rethrows out of an
@@ -25,9 +31,11 @@ namespace MeshWeaver.Documentation.Test;
 /// repeatedly: <c>Passed! - Failed: 0</c> <b>and a non-zero exit</b> — a shard that reports
 /// everything green and reds anyway, carrying a message with no stack.</para>
 ///
-/// <para><b>Why a ratchet.</b> 89 sites across 45 files at seeding. Small enough that conversion is
-/// realistic, too large to fix in one change. 🚨 Raising <see cref="Baseline"/> is not a fix; the
-/// number is in the diff so that re-seeding is visible to a reviewer.</para>
+/// <para><b>Why a ratchet, and what that means the guard does NOT prove.</b> 95 sites across
+/// <c>src/</c> and <c>memex/</c> at seeding — small enough that conversion is realistic, too large
+/// to fix in one change. So a green run means "no NEW bare subscription landed", never "the tree is
+/// clean". 🚨 Raising <see cref="Baseline"/> is not a fix; the number is in the diff so that
+/// re-seeding is visible to a reviewer.</para>
 ///
 /// <para><b>🚨 The conversion depends on the subscription's LIFETIME, and getting this backwards
 /// builds a wedge.</b> <c>onError</c> is TERMINAL in Rx: the subscription is finished the moment it
