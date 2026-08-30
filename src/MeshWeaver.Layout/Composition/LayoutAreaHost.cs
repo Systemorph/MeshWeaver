@@ -738,11 +738,20 @@ public record LayoutAreaHost : IDisposable
         // RenderingContext. Logging Reference.Area here printed "Rendering failed for
         // area (null)" for exactly those renders, hiding WHICH area failed (issue #1182).
         var area = context.Area;
+        // Probed ONCE per failure: is this host's own DI scope already gone? It gates two things —
+        // the classification of a bare ObjectDisposedException below, and whether a placeholder can
+        // be rendered at all (#2679). On a live scope it is one lookup of an already-materialised
+        // singleton; render failures are rare, so the cost is nil.
+        var ownScopeDisposed = Hub.IsServiceScopeDisposed();
         // 🚨 FIRST — a teardown race is not a render failure, and this is the only arm whose fault
         // arrives WRAPPED past every text-matching predicate below (the reflective
         // SynchronizationStream.Reduce hop mints a TargetInvocationException whose own message is
         // "Exception has been thrown by the target of an invocation"). See the Debug level below.
-        if (AreaErrorClassifier.IsHubDisposalRace(ex))
+        // The probe-gated overload also recognises the DI-scope shape of the same race: Autofac's
+        // own ObjectDisposedException from a service resolved on this host's disposed scope (the
+        // permission fold's next emission, #2679) — the type-only test looked straight past it and
+        // filed an incident for a routine teardown.
+        if (AreaErrorClassifier.IsHubDisposalRace(ex, () => ownScopeDisposed))
             // A hub deactivating is normal grain lifecycle, and its own exception says the address
             // may reactivate. DEBUG, matching SynchronizationStream.OnError's classification of the
             // same exception as benign teardown: at Error this filed an incident for a routine
@@ -766,6 +775,19 @@ public record LayoutAreaHost : IDisposable
                 area, AreaErrorClassifier.TryGetMissingNodePath(ex) ?? "(path not recoverable)");
         else
             logger.LogError(ex, "Rendering failed for area {Area}", area);
+
+        // 🚨 No placeholder on a dead scope (#2679). CreateRenderErrorControl localises its copy
+        // through this host's scope (LayoutAreaLocalizationExtensions.Localize → AccessService), so
+        // on a disposed scope the placeholder itself faulted with a SECOND ObjectDisposedException
+        // — one disposal produced two fail lines and the user got neither the area nor a message.
+        // There is also nobody to render FOR: this host's hub is a tracked component of the very
+        // scope that is gone, so its stream is being torn down with it, and what recovers the area
+        // is the client's own subscription re-attaching to the fresh activation (NamedAreaView +
+        // AreaStreamRetry) — never a frame pushed from a host that cannot outlive the condition it
+        // is reporting. The fault above is already logged at its own level; emit the cleared store.
+        if (ownScopeDisposed)
+            return cleared;
+
         try
         {
             var rendered = RenderArea(context, CreateRenderErrorControl(ex), cleared.Store);
@@ -1295,15 +1317,19 @@ public record LayoutAreaHost : IDisposable
     private void FailRendering(Exception ex, string? area)
     {
         // Same classification as the top-level arm: a hub disposal race is routine lifecycle, not a
-        // render fault, so it must not land on an error dashboard (#2255). The visible frame is
-        // still surfaced below — CreateRenderErrorControl serves the named transient one.
-        if (AreaErrorClassifier.IsHubDisposalRace(ex))
+        // render fault, so it must not land on an error dashboard (#2255) — including the DI-scope
+        // shape, a bare ObjectDisposedException off this host's own disposed scope (#2679). The
+        // visible frame is still surfaced below — CreateRenderErrorControl serves the named
+        // transient one — EXCEPT on a dead scope, where the frame cannot be localised and there is
+        // no live stream to push it into (see RenderRenderingError).
+        var ownScopeDisposed = Hub.IsServiceScopeDisposed();
+        if (AreaErrorClassifier.IsHubDisposalRace(ex, () => ownScopeDisposed))
             logger.LogDebug(ex,
                 "Area {Area} on {Hub} raced a hub disposal — transient, the address reactivates",
                 area ?? "(default)", Hub.Address);
         else
             logger.LogWarning(ex, "Rendering failed for area {Area} on {Hub}", area ?? "(default)", Hub.Address);
-        if (string.IsNullOrEmpty(area))
+        if (string.IsNullOrEmpty(area) || ownScopeDisposed)
             return;
 
         var errorControl = CreateRenderErrorControl(ex);

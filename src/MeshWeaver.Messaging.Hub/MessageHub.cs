@@ -538,7 +538,9 @@ public sealed class MessageHub : IMessageHub
                 // (mesh/... data-source hubs during the 2026-08-26 host-start aborts). A disposed
                 // scope means this hub cannot live regardless — its own disposal is already queued
                 // in the same disposer, by construction — so classify it as the shutdown it is.
-                if (IsShuttingDown || IsTerminatedByScopeTeardown(ex))
+                // The classifier is the shared, probe-gated ScopeTeardown (one shape for init,
+                // routing, the permission fold and the layout error path — #2444/#2638/#2679).
+                if (IsShuttingDown || this.IsTerminatedByScopeTeardown(ex))
                 {
                     logger.LogDebug(ex,
                         "Hub {Address} initialization ended by shutdown ({ExceptionType}) — recognized "
@@ -562,44 +564,6 @@ public sealed class MessageHub : IMessageHub
                 OpenGate(MessageHubConfiguration.InitializeGateName);
                 return Observable.Return(request.Failed($"Hub '{Address}' initialization failed — {reason}"));
             });
-    }
-
-    /// <summary>
-    /// True when an initialization fault is (or wraps) an <see cref="ObjectDisposedException"/> AND
-    /// this hub's own service scope no longer resolves — i.e. the DI scope backing this hub, one of
-    /// its parent scopes, or the host's root container has begun disposal (issue #2444). The probe
-    /// resolves this hub's own already-materialized <see cref="IMessageHub"/> registration: on a
-    /// live scope that is a cheap instance lookup with no side effects; on a disposing scope it
-    /// throws <see cref="ObjectDisposedException"/> — the positive signal that the
-    /// ObjectDisposedException the BuildupAction saw came from scope teardown, not from some
-    /// unrelated disposed dependency (which must still fault the init).
-    /// <para>A disposed scope is proof this hub is going away: the hub instance is a tracked
-    /// component of that same scope, so its <c>Dispose()</c> is already queued in the very disposer
-    /// that killed the scope. FAILED-state residue on it would outlive nothing.</para>
-    /// </summary>
-    private bool IsTerminatedByScopeTeardown(Exception exception)
-    {
-        // The graph, not the chain: an init fault that reaches here through a reactive Merge or a
-        // WhenAll arrives as an AggregateException whose ordering nobody controls, and walking only
-        // InnerException sees InnerExceptions[0] alone. Classifying a teardown by which fault
-        // happened to land first is a race, so this shares ONE walker with IsHubDisposal.
-        return ExceptionChain.Contains<ObjectDisposedException>(exception)
-               && IsServiceScopeDisposed();
-    }
-
-    /// <summary>Probes whether this hub's own DI scope still resolves (see
-    /// <see cref="IsTerminatedByScopeTeardown"/>).</summary>
-    private bool IsServiceScopeDisposed()
-    {
-        try
-        {
-            ServiceProvider.GetService(typeof(IMessageHub));
-            return false;
-        }
-        catch (ObjectDisposedException)
-        {
-            return true;
-        }
     }
 
     /// <summary>
