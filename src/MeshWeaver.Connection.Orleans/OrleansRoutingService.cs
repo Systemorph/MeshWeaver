@@ -1113,6 +1113,25 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     internal Func<int, TimeSpan> AttachBackoff { get; set; } = SubscribeAttachBackoff;
 
     /// <summary>
+    /// Test seam (<c>InternalsVisibleTo</c>): the task that completes once the stream attach for
+    /// <paramref name="address"/> has <b>terminated</b> — attached, given up after exhausting the
+    /// budget, or been cancelled. It is the same task <see cref="RegisterStream"/> stores as the
+    /// outbound gate, so it never faults and always completes.
+    ///
+    /// <para>🚨 This exists because the alternative is a settle-by-silence poll, and that measures
+    /// the wrong thing. A test that watched the attempt counter and called it "settled" after two
+    /// equal readings 25 ms apart was reading a <i>pause</i>: the retry hops through the thread-pool
+    /// scheduler between attempts, and on a loaded CI shard that hop exceeds 25 ms, so the poll
+    /// returned 1 — which is precisely the value the regression under test produces (#2633). A
+    /// false RED that spells the regression's own signature is worse than no test (#2793). The
+    /// condition is "the attach stopped attempting", and this is that condition, positively.</para>
+    /// </summary>
+    /// <param name="address">The address whose attach to await.</param>
+    /// <returns>The completion task, or <c>null</c> if nothing is registered for the address.</returns>
+    internal Task? AttachSettled(Address address) =>
+        subscriptionReady.TryGetValue(address, out var settled) ? settled : null;
+
+    /// <summary>
     /// The attach, re-attempted while it fails TRANSIENTLY and the budget holds (issue #2633).
     ///
     /// <para>Deliberately the SAME reactive shape as <see cref="AttachPodHub"/> forty lines below
