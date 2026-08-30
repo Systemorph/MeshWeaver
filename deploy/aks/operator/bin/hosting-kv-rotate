@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# hosting-kv-rotate --vault <name> --prefix <prefix> --namespace <ns> --synced-secret <k8s secret> [--key <config key>]
+#
+# Rotate this instance's plugin-registry key: mint a fresh `mwi_` key, put it in Key Vault, and
+# report ONLY ITS HASH back to the mesh. The registry adopts the hash (the control plane reacts to
+# the `::hosting:: key_hash=` line below); the restart that follows in the plan puts the new value
+# into the pods. The raw key exists in exactly two places, ever: this process's memory and the vault.
+#
+# 🚨 IT NEVER PRINTS THE KEY. Not on success, not on failure, not in a `set -x` (deliberately not
+# enabled), not in a `::hosting::` fact. The 2026-08-30 exposure this verb exists to repair came
+# from a CHECK that selected `.value` while asking "is this stored in the clear?" — the audit was
+# the leak. Every read below compares hashes and names.
+#
+# 🚨 IT DOES OVERWRITE — the one operator script that does. `hosting-kv-ensure` refuses to touch
+# an existing secret because the master key seals stored credentials; a registry key seals
+# nothing and is meant to be replaced. That is why this is a separate verb with its own name, and
+# why `kv-ensure` must never grow a --force.
+# shellcheck source=_common.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-kv-rotate"
+vault="" prefix="" namespace="" synced="" key="PluginCatalog__RegistryToken"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --vault)         vault="${2:-}";     shift 2 ;;
+    --prefix)        prefix="${2:-}";    shift 2 ;;
+    --namespace)     namespace="${2:-}"; shift 2 ;;
+    --synced-secret) synced="${2:-}";    shift 2 ;;
+    --key)           key="${2:-}";       shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+hosting::need_flag vault "$vault"
+hosting::need_flag namespace "$namespace"
+hosting::need_flag synced-secret "$synced"
+hosting::safe_name vault "$vault"
+hosting::safe_name namespace "$namespace"
+hosting::safe_name synced-secret "$synced"
+[ -z "$prefix" ] || hosting::safe_name prefix "$prefix"
+
+# The vault object name follows the SecretProviderClass convention: <prefix><Section>-<Key>, every
+# `__` becoming `-` (HelmValues.VaultSecretName). For PluginCatalog__RegistryToken that is
+# <prefix>PluginCatalog-RegistryToken — the exact name hosting-kv-ensure lists as REQUIRED.
+object="${prefix}${key//__/-}"
+
+hosting::step "Mint a new instance key"
+# 32 random bytes, URL-safe base64, no padding, `mwi_` prefix — InstanceKeys.Generate, exactly.
+raw="mwi_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+hash="$(printf '%s' "$raw" | sha256sum | cut -c1-64)"
+hosting::log "new key hash ${hash:0:12}… (the key itself is not shown, here or anywhere)"
+
+hosting::step "Store the new key in Key Vault"
+if hosting::dry; then
+  hosting::log "(dry run) would set ${object} in vault ${vault}"
+else
+  az keyvault secret set --vault-name "$vault" --name "$object" --value "$raw" --output none \
+    || { unset raw; hosting::die "could not set ${object} in vault ${vault}"; }
+fi
+unset raw
+hosting::log "stored  ${object} in vault ${vault}"
+
+# 🚨 The fact the mesh reacts to. The control plane adopts this hash on the registry BEFORE the
+# restart below lands the new value in the pods, so the pods never come up against a registry
+# that still expects the old key. A hash is not a secret: the registry stores it in the clear.
+hosting::say key_hash "$hash"
+
+hosting::step "Wait for the synced Secret to carry the new key"
+# The Key Vault CSI driver re-syncs on its rotation interval; a restart that reads the OLD synced
+# Secret would put the OLD key into the new pods (DeploymentAKS → "KeyVault CSI env timing").
+# Compared by HASH of the decoded value — the value itself is never printed.
+if hosting::dry; then
+  hosting::log "(dry run) would wait for ${synced}/${key} in ${namespace} to hash to ${hash:0:12}…"
+else
+  attempts="${HOSTING_KV_SYNC_ATTEMPTS:-40}"
+  synced_hash=""
+  for i in $(seq 1 "$attempts"); do
+    synced_hash="$(kubectl -n "$namespace" get secret "$synced" -o "jsonpath={.data.${key}}" 2>/dev/null \
+      | base64 -d 2>/dev/null | sha256sum | cut -c1-64)"
+    if [ "$synced_hash" = "$hash" ]; then
+      hosting::log "synced Secret ${synced} carries the new key (attempt ${i})"
+      break
+    fi
+    sleep 15
+  done
+  [ "$synced_hash" = "$hash" ] \
+    || hosting::die "synced Secret ${synced} in ${namespace} did not pick up ${object} within $((attempts * 15))s — the pods would restart onto the OLD key. The SecretProviderClass must list ${object} and the driver's rotation must be enabled."
+fi
+hosting::say kv_rotated 1
