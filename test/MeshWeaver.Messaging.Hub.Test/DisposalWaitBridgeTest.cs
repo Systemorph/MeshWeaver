@@ -283,13 +283,17 @@ public class DisposalWaitBridgeTest
         var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var source = Observable.Create<Unit>(_ => Disposable.Create(() => disposed.TrySetResult()));
 
+        // Never an empty reporter — the contract forbids it, and an ignored late fault here would
+        // hide the very thing this file exists to keep observable.
+        Exception? late = null;
         using var cts = new CancellationTokenSource();
-        var wait = source.ObserveCompletion(_ => { }, cancelSource: true, cts.Token);
+        var wait = source.ObserveCompletion(ex => late = ex, cancelSource: true, cts.Token);
 
         await cts.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
         await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        late.Should().BeNull("the source only ever completes by disposal, so nothing may be reported");
     }
 
     /// <summary>
@@ -337,9 +341,11 @@ public class DisposalWaitBridgeTest
             return Disposable.Create(() => disposed.TrySetResult());
         });
 
-        var wait = source.ObserveCompletion(_ => { }, cancelSource: true, cts.Token);
+        Exception? late = null;
+        var wait = source.ObserveCompletion(ex => late = ex, cancelSource: true, cts.Token);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
         await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        late.Should().BeNull("nothing faults here — a report would mean the SAD race took another route");
     }
 }

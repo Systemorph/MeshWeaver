@@ -106,8 +106,11 @@ public static class ReactiveCompletion
     ///
     /// <para>Pass <c>true</c> when the wait owns a bounded or request-scoped resource — a pooled
     /// permit, a request slot — and giving up must release it. Accept that a fault arriving after
-    /// cancellation is then lost, exactly as it was under <c>.ToTask(ct)</c>: you are choosing the
-    /// resource over the diagnostic, so choose it deliberately.</para>
+    /// cancellation is then <b>no longer guaranteed to be observed</b>, exactly as under
+    /// <c>.ToTask(ct)</c>: you are choosing the resource over the diagnostic, so choose it
+    /// deliberately. It is "not guaranteed" rather than "lost" on purpose — cancellation and the
+    /// fault race, so an <c>OnError</c> that reaches the observer before the disposal takes effect
+    /// still reaches <paramref name="reportLateFault"/>. Do not build on either outcome.</para>
     /// </summary>
     /// <typeparam name="T">The signal's payload type.</typeparam>
     /// <param name="source">The completion signal; must terminate.</param>
@@ -142,16 +145,24 @@ public static class ReactiveCompletion
 
         if (cancellationToken.CanBeCanceled)
         {
-            var registration = cancellationToken.Register(
-                state =>
-                {
-                    var (tcs, sub) = ((TaskCompletionSource<T?>, IDisposable?))state!;
-                    tcs.TrySetCanceled();
-                    // Only when the caller asked for it. Disposing here is what makes Rx cancel
-                    // subscriberCt, which is what releases an IoPool permit (#2772).
-                    sub?.Dispose();
-                },
-                (completion, (IDisposable?)subscription));
+            // 🚨 Two shapes, because this is a hot utility and the default must not pay for the
+            // option. The non-disposing path keeps the original STATIC callback over the
+            // TaskCompletionSource itself — no closure, no boxed tuple. Only the opt-in allocates
+            // the extra state it actually needs (Copilot review on #2772).
+            var registration = subscription is null
+                ? cancellationToken.Register(
+                    static state => ((TaskCompletionSource<T?>)state!).TrySetCanceled(),
+                    completion)
+                : cancellationToken.Register(
+                    static state =>
+                    {
+                        var (tcs, sub) = ((TaskCompletionSource<T?>, IDisposable))state!;
+                        tcs.TrySetCanceled();
+                        // Disposing is what makes Rx cancel subscriberCt, which is what releases
+                        // an IoPool permit (#2772).
+                        sub.Dispose();
+                    },
+                    (completion, (IDisposable)subscription));
             // Release the registration once the wait is over, whichever way it ended. Not a wait
             // of its own: the continuation only disposes, and the task itself is observed by the
             // caller that awaits it.
