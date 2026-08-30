@@ -1,5 +1,7 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -71,8 +73,11 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
 
     private async Task RunRace(Address victimAddress, bool faulting)
     {
-        using var handlerEntered = new ManualResetEventSlim(false);
-        using var releaseHandler = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate: handler → test is an AsyncSubject the producer completes; the
+        // release travels INTO the deliberately parked action block, so it is a volatile flag
+        // polled under a bounded SpinUntil and written in the `finally` below.
+        var handlerEntered = new AsyncSubject<Unit>();
+        var releaseHandler = 0;
 
         var host = GetHost();
         var victim = host.GetHostedHub(victimAddress, c => c
@@ -84,8 +89,9 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
             // made deterministic.
             .WithHandler<Blocker>((_, d) =>
             {
-                handlerEntered.Set();
-                releaseHandler.Wait(TimeSpan.FromSeconds(60));
+                handlerEntered.OnNext(Unit.Default);
+                handlerEntered.OnCompleted();
+                SpinWait.SpinUntil(() => Volatile.Read(ref releaseHandler) == 1, TimeSpan.FromSeconds(60));
                 return d.Processed();
             })
             // Both handlers WOULD answer / would be entered, so a pass can only come from the
@@ -103,7 +109,7 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
         {
             // 1. Stall the victim's turn loop.
             host.Post(new Blocker(), o => o.WithTarget(victimAddress));
-            handlerEntered.Wait(TimeSpan.FromSeconds(20)).Should().BeTrue(
+            await handlerEntered.Should().Within(20.Seconds()).Emit(
                 "the blocker handler must be holding the victim's action block");
 
             // 2. Accepted while the hub is healthy, so it lands in the MAIN queue behind the
@@ -123,7 +129,7 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
             Output.WriteLine($"victim RunLevel at release: {victim.RunLevel}");
 
             // 4. Let the turn loop reach our request.
-            releaseHandler.Set();
+            Volatile.Write(ref releaseHandler, 1);
 
             // WITHOUT the fix this task never completes and the [Fact] timeout fires with no
             // explanation — exactly the production symptom (an install that spins for 60 s, a
@@ -145,7 +151,7 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
         }
         finally
         {
-            releaseHandler.Set();
+            Volatile.Write(ref releaseHandler, 1);
         }
     }
 

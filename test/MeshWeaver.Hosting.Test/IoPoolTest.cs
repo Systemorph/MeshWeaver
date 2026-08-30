@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Mesh.Threading;
@@ -16,8 +17,15 @@ namespace MeshWeaver.Hosting.Test;
 /// pushes genuinely-async / sync-blocking leaf work off the hub schedulers onto a
 /// bounded slice of the shared ThreadPool. These prove the two properties the
 /// pool exists for: it caps concurrency, and it runs off the calling thread.
-/// No <c>Task.Delay</c>-to-wait — every wait is a condition wait
-/// (<see cref="SpinWait.SpinUntil(Func{bool}, TimeSpan)"/> / <see cref="ManualResetEventSlim"/>).
+/// No <c>Task.Delay</c>-to-wait — every wait is a condition wait.
+///
+/// <para>🚨 And no hand-woven concurrency gate, in either direction. A signal a POOL LEAF produces
+/// and the test consumes is an <see cref="AsyncSubject{T}"/> the leaf completes, awaited through
+/// the assertion helpers (never a blocking bridge). A release that travels the other way — INTO a
+/// leaf this test deliberately parks, because "a leaf that ignores its cancellation token" IS the
+/// subject of half these tests — is a volatile flag the leaf polls under a bounded
+/// <see cref="SpinWait.SpinUntil(Func{bool}, TimeSpan)"/>, written in a <c>finally</c> so a failing
+/// assertion cannot leave a pool thread parked into the next test.</para>
 /// </summary>
 public class IoPoolTest
 {
@@ -52,19 +60,20 @@ public class IoPoolTest
     public async Task Dispose_cancels_without_blocking_and_reports_through_Disposed()
     {
         var pool = new IoPool(2);
-        using var entered = new ManualResetEventSlim(false);
+        var entered = new AsyncSubject<Unit>();
         var observedCancellation = false;
 
         pool.InvokeBlocking(ct =>
         {
-            entered.Set();
+            entered.OnNext(Unit.Default);
+            entered.OnCompleted();
             // Honours the token — so the pool's cancel is what ends it.
             ct.WaitHandle.WaitOne(Timeout10);
             observedCancellation = ct.IsCancellationRequested;
             return 0;
         }).Subscribe(_ => { }, _ => { });
 
-        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+        await entered.Should().Within(Timeout5).Emit();
         pool.CurrentInFlight.Should().Be(1);
 
         // Dispose must return PROMPTLY even with a leaf in flight — the whole point.
@@ -91,27 +100,46 @@ public class IoPoolTest
     public async Task Disposed_waits_for_the_last_leaf_and_replays_to_a_late_subscriber()
     {
         var pool = new IoPool(2);
-        using var entered = new ManualResetEventSlim(false);
-        using var release = new ManualResetEventSlim(false);
+        var entered = new AsyncSubject<Unit>();
+        var release = 0;
 
-        pool.InvokeBlocking(_ => { entered.Set(); release.Wait(Timeout10); return 0; })
+        pool.InvokeBlocking(_ =>
+            {
+                entered.OnNext(Unit.Default);
+                entered.OnCompleted();
+                SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, Timeout10);
+                return 0;
+            })
             .Subscribe(_ => { }, _ => { });
-        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+        await entered.Should().Within(Timeout5).Emit();
 
-        using var fired = new ManualResetEventSlim(false);
-        pool.Disposed.Subscribe(_ => fired.Set());
+        // An EARLY subscriber — the property under test is that IT is not notified prematurely,
+        // which a late `pool.Disposed` read (AsyncSubject replays) could not distinguish.
+        var fired = new AsyncSubject<Unit>();
+        pool.Disposed.Subscribe(_ =>
+        {
+            fired.OnNext(Unit.Default);
+            fired.OnCompleted();
+        });
 
-        pool.Dispose();
-        fired.Wait(300, TestContext.Current.CancellationToken).Should().BeFalse(
-            "Disposed must not fire while the leaf is still running");
+        try
+        {
+            pool.Dispose();
+            await fired.Should().NotEmit(300.Milliseconds(),
+                "Disposed must not fire while the leaf is still running");
 
-        release.Set();
-        await pool.Disposed.Timeout(Timeout10).FirstAsync().Await(TestContext.Current.CancellationToken);
-        fired.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+            Volatile.Write(ref release, 1);
+            await pool.Disposed.Timeout(Timeout10).FirstAsync().Await(TestContext.Current.CancellationToken);
+            await fired.Should().Within(Timeout5).Emit();
 
-        var late = -1;
-        pool.Disposed.Subscribe(n => late = n);
-        late.Should().Be(0, "AsyncSubject replays the terminal report to a late subscriber");
+            var late = -1;
+            pool.Disposed.Subscribe(n => late = n);
+            late.Should().Be(0, "AsyncSubject replays the terminal report to a late subscriber");
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
     }
 
     /// <summary>
@@ -124,28 +152,53 @@ public class IoPoolTest
         var registry = new IoPoolRegistry();
         var a = registry.Get("pool-a");
         var b = registry.Get("pool-b");
-        using var enteredA = new ManualResetEventSlim(false);
-        using var enteredB = new ManualResetEventSlim(false);
-        using var releaseA = new ManualResetEventSlim(false);
-        using var releaseB = new ManualResetEventSlim(false);
+        var enteredA = new AsyncSubject<Unit>();
+        var enteredB = new AsyncSubject<Unit>();
+        var releaseA = 0;
+        var releaseB = 0;
 
-        a.InvokeBlocking(_ => { enteredA.Set(); releaseA.Wait(Timeout10); return 0; }).Subscribe(_ => { }, _ => { });
-        b.InvokeBlocking(_ => { enteredB.Set(); releaseB.Wait(Timeout10); return 0; }).Subscribe(_ => { }, _ => { });
-        enteredA.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
-        enteredB.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
-        registry.TotalInFlight.Should().Be(2);
+        a.InvokeBlocking(_ =>
+        {
+            enteredA.OnNext(Unit.Default);
+            enteredA.OnCompleted();
+            SpinWait.SpinUntil(() => Volatile.Read(ref releaseA) == 1, Timeout10);
+            return 0;
+        }).Subscribe(_ => { }, _ => { });
+        b.InvokeBlocking(_ =>
+        {
+            enteredB.OnNext(Unit.Default);
+            enteredB.OnCompleted();
+            SpinWait.SpinUntil(() => Volatile.Read(ref releaseB) == 1, Timeout10);
+            return 0;
+        }).Subscribe(_ => { }, _ => { });
 
-        using var fired = new ManualResetEventSlim(false);
-        registry.Disposed.Subscribe(_ => fired.Set());
-        registry.Dispose();
+        try
+        {
+            await enteredA.Should().Within(Timeout5).Emit();
+            await enteredB.Should().Within(Timeout5).Emit();
+            registry.TotalInFlight.Should().Be(2);
 
-        releaseA.Set();
-        fired.Wait(300, TestContext.Current.CancellationToken).Should().BeFalse(
-            "one pool finishing is not every pool finishing");
+            var fired = new AsyncSubject<Unit>();
+            registry.Disposed.Subscribe(_ =>
+            {
+                fired.OnNext(Unit.Default);
+                fired.OnCompleted();
+            });
+            registry.Dispose();
 
-        releaseB.Set();
-        var total = await registry.Disposed.Timeout(Timeout10).FirstAsync().Await(TestContext.Current.CancellationToken);
-        total.Should().Be(0, "both pools joined — the silo may release");
+            Volatile.Write(ref releaseA, 1);
+            await fired.Should().NotEmit(300.Milliseconds(),
+                "one pool finishing is not every pool finishing");
+
+            Volatile.Write(ref releaseB, 1);
+            var total = await registry.Disposed.Timeout(Timeout10).FirstAsync().Await(TestContext.Current.CancellationToken);
+            total.Should().Be(0, "both pools joined — the silo may release");
+        }
+        finally
+        {
+            Volatile.Write(ref releaseA, 1);
+            Volatile.Write(ref releaseB, 1);
+        }
     }
 
     /// <summary>
@@ -213,15 +266,16 @@ public class IoPoolTest
     public async Task SubscribeThroughPool_holds_a_slot_and_Drain_joins_the_in_flight_subscribe()
     {
         using var pool = new IoPool(4);
-        var subscribeEntered = new ManualResetEventSlim();
-        var releaseSubscribe = new ManualResetEventSlim();
+        var subscribeEntered = new AsyncSubject<Unit>();
+        var releaseSubscribe = 0;
         var subscribeFinished = false;
 
         // A source whose SUBSCRIBE blocks — stands in for the initial-emission → CreateHub window.
         var source = Observable.Create<int>(obs =>
         {
-            subscribeEntered.Set();
-            releaseSubscribe.Wait(Timeout5);
+            subscribeEntered.OnNext(Unit.Default);
+            subscribeEntered.OnCompleted();
+            SpinWait.SpinUntil(() => Volatile.Read(ref releaseSubscribe) == 1, Timeout5);
             subscribeFinished = true;
             obs.OnNext(1);
             return System.Reactive.Disposables.Disposable.Empty;
@@ -229,22 +283,29 @@ public class IoPoolTest
 
         using var sub = pool.SubscribeThroughPool(source).Subscribe(_ => { });
 
-        Assert.True(subscribeEntered.Wait(Timeout5), "the subscribe must run on the pool");
-        Assert.True(SpinWait.SpinUntil(() => pool.CurrentInFlight == 1, Timeout5),
-            "the subscribe must hold a pool slot (tracked) for its duration — else the drain can't see it");
+        try
+        {
+            await subscribeEntered.Should().Within(Timeout5).Emit("the subscribe must run on the pool");
+            Assert.True(SpinWait.SpinUntil(() => pool.CurrentInFlight == 1, Timeout5),
+                "the subscribe must hold a pool slot (tracked) for its duration — else the drain can't see it");
 
-        // Drain() must JOIN: block until the in-flight subscribe releases its slot.
-        var drainDone = Task.Run(() => pool.Drain());
-        // Confirm Drain does NOT complete while the subscribe still holds a slot (the owning scope must
-        // not dispose yet) — a "wait to confirm nothing happened" negative check.
-        var winner = await Task.WhenAny(drainDone, Task.Delay(TimeSpan.FromMilliseconds(200)));
-        Assert.NotSame(drainDone, winner);
+            // Drain() must JOIN: block until the in-flight subscribe releases its slot.
+            var drainDone = Task.Run(() => pool.Drain());
+            // Confirm Drain does NOT complete while the subscribe still holds a slot (the owning scope must
+            // not dispose yet) — a "wait to confirm nothing happened" negative check.
+            var winner = await Task.WhenAny(drainDone, Task.Delay(TimeSpan.FromMilliseconds(200)));
+            Assert.NotSame(drainDone, winner);
 
-        releaseSubscribe.Set();
+            Volatile.Write(ref releaseSubscribe, 1);
 
-        await drainDone.WaitAsync(Timeout5);
-        Assert.True(subscribeFinished, "Drain must have JOINED the in-flight subscribe before returning");
-        Assert.Equal(0, pool.CurrentInFlight);
+            await drainDone.WaitAsync(Timeout5);
+            Assert.True(subscribeFinished, "Drain must have JOINED the in-flight subscribe before returning");
+            Assert.Equal(0, pool.CurrentInFlight);
+        }
+        finally
+        {
+            Volatile.Write(ref releaseSubscribe, 1);
+        }
     }
 
     [Fact]
@@ -283,10 +344,10 @@ public class IoPoolTest
     }
 
     [Fact]
-    public void Invoke_runs_the_leaf_on_the_threadpool_not_the_subscriber()
+    public async Task Invoke_runs_the_leaf_on_the_threadpool_not_the_subscriber()
     {
         using var pool = new IoPool(2);
-        AssertLeafRunsOffSubscriber(io => pool.Invoke(io));
+        await AssertLeafRunsOffSubscriber(io => pool.Invoke(io));
     }
 
     [Fact]
@@ -295,7 +356,7 @@ public class IoPoolTest
         const int cap = 3;
         const int total = 12;
         using var pool = new IoPool(cap);
-        using var release = new ManualResetEventSlim(false);
+        var release = 0;
         var current = 0;
         var max = 0;
         var maxLock = new object();
@@ -308,21 +369,31 @@ public class IoPoolTest
                 if (Environment.CurrentManagedThreadId == callingThread) ranOffThread = false;
                 var c = Interlocked.Increment(ref current);
                 lock (maxLock) { if (c > max) max = c; }
-                release.Wait(ct);        // blocks a real scheduler thread
+                // blocks a real scheduler thread — that occupancy IS what the cap is measured on
+                SpinWait.SpinUntil(
+                    () => Volatile.Read(ref release) == 1 || ct.IsCancellationRequested, Timeout10);
+                ct.ThrowIfCancellationRequested();
                 Interlocked.Decrement(ref current);
                 return c;
             }).Await()).ToArray();
 
-        SpinWait.SpinUntil(() => Volatile.Read(ref current) == cap, Timeout5)
-            .Should().BeTrue("the dedicated scheduler should admit exactly the cap concurrently");
-        pool.CurrentInFlight.Should().Be(cap);
+        try
+        {
+            SpinWait.SpinUntil(() => Volatile.Read(ref current) == cap, Timeout5)
+                .Should().BeTrue("the dedicated scheduler should admit exactly the cap concurrently");
+            pool.CurrentInFlight.Should().Be(cap);
 
-        release.Set();
-        await Task.WhenAll(tasks).WaitAsync(Timeout10, TestContext.Current.CancellationToken);
+            Volatile.Write(ref release, 1);
+            await Task.WhenAll(tasks).WaitAsync(Timeout10, TestContext.Current.CancellationToken);
 
-        max.Should().Be(cap, "the limited-concurrency scheduler must never exceed the cap");
-        ranOffThread.Should().BeTrue();
-        pool.CurrentInFlight.Should().Be(0);
+            max.Should().Be(cap, "the limited-concurrency scheduler must never exceed the cap");
+            ranOffThread.Should().BeTrue();
+            pool.CurrentInFlight.Should().Be(0);
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
     }
 
     // 🚨 REPRO for the #613 family: Drain()'s contract says "0 means the join is REAL: no pool
@@ -338,36 +409,45 @@ public class IoPoolTest
     public async Task Drain_joins_InvokeBlocking_leaves_too()
     {
         using var pool = new IoPool(2);
-        using var entered = new ManualResetEventSlim(false);
-        using var release = new ManualResetEventSlim(false);
+        var entered = new AsyncSubject<Unit>();
+        var release = 0;
 
         pool.InvokeBlocking(_ =>
         {
-            entered.Set();
-            release.Wait(Timeout10);   // deliberately ignores the token
+            entered.OnNext(Unit.Default);
+            entered.OnCompleted();
+            // deliberately ignores the token — that is the case Drain's non-zero return reports
+            SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, Timeout10);
             return 0;
         }).Subscribe(_ => { }, _ => { });
 
-        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
-        pool.CurrentInFlight.Should().Be(1, "a running blocking leaf must be visible as in-flight");
+        try
+        {
+            await entered.Should().Within(Timeout5).Emit();
+            pool.CurrentInFlight.Should().Be(1, "a running blocking leaf must be visible as in-flight");
 
-        // Drain on ANOTHER thread and assert it does NOT return while the leaf runs. That is the
-        // contract — "0 means no pool thread is still running" — and it makes the repro fast: the
-        // earlier shape let Drain sit out the leaf's full 10s hold to observe the same thing.
-        // (Copilot review, #1334.)
-        var drain = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
-        // await, never Task.Wait/.Result — CI's analyzers (xUnit1031) reject blocking task ops in a
-        // test, and they are right: this test exists to prove a JOIN, so it must not itself block.
-        var raced = await Task.WhenAny(drain, Task.Delay(300, TestContext.Current.CancellationToken));
-        raced.Should().NotBeSameAs(drain,
-            "Drain must block while a blocking leaf is still executing — a blocking leaf holds no "
-            + "gate permit, so re-acquiring the gate joins nothing and Drain used to return 0 here");
+            // Drain on ANOTHER thread and assert it does NOT return while the leaf runs. That is the
+            // contract — "0 means no pool thread is still running" — and it makes the repro fast: the
+            // earlier shape let Drain sit out the leaf's full 10s hold to observe the same thing.
+            // (Copilot review, #1334.)
+            var drain = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
+            // await, never Task.Wait/.Result — CI's analyzers (xUnit1031) reject blocking task ops in a
+            // test, and they are right: this test exists to prove a JOIN, so it must not itself block.
+            var raced = await Task.WhenAny(drain, Task.Delay(300, TestContext.Current.CancellationToken));
+            raced.Should().NotBeSameAs(drain,
+                "Drain must block while a blocking leaf is still executing — a blocking leaf holds no "
+                + "gate permit, so re-acquiring the gate joins nothing and Drain used to return 0 here");
 
-        release.Set();
+            Volatile.Write(ref release, 1);
 
-        var residual = await drain.WaitAsync(Timeout5, TestContext.Current.CancellationToken);
-        residual.Should().Be(0, "the leaf unwound within the budget — nothing to report");
-        pool.CurrentInFlight.Should().Be(0);
+            var residual = await drain.WaitAsync(Timeout5, TestContext.Current.CancellationToken);
+            residual.Should().Be(0, "the leaf unwound within the budget — nothing to report");
+            pool.CurrentInFlight.Should().Be(0);
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
     }
 
     /// <summary>
@@ -381,44 +461,54 @@ public class IoPoolTest
     public async Task Drain_joinsABlockingLeaf_evenWhileAnAsyncLeafIsRunning()
     {
         using var pool = new IoPool(4);
-        using var asyncEntered = new ManualResetEventSlim(false);
-        using var blockingEntered = new ManualResetEventSlim(false);
-        using var release = new ManualResetEventSlim(false);
+        var asyncEntered = new AsyncSubject<Unit>();
+        var blockingEntered = new AsyncSubject<Unit>();
+        var release = 0;
         var asyncGate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // An ASYNC leaf, in flight for the whole test — it holds the shared counter above zero.
-        pool.Invoke(_ =>
+        try
         {
-            asyncEntered.Set();
-            return asyncGate.Task;
-        }).Subscribe(_ => { }, _ => { });
-        asyncEntered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+            // An ASYNC leaf, in flight for the whole test — it holds the shared counter above zero.
+            pool.Invoke(_ =>
+            {
+                asyncEntered.OnNext(Unit.Default);
+                asyncEntered.OnCompleted();
+                return asyncGate.Task;
+            }).Subscribe(_ => { }, _ => { });
+            await asyncEntered.Should().Within(Timeout5).Emit();
 
-        // …and now a BLOCKING leaf on top of it.
-        pool.InvokeBlocking(_ =>
+            // …and now a BLOCKING leaf on top of it.
+            pool.InvokeBlocking(_ =>
+            {
+                blockingEntered.OnNext(Unit.Default);
+                blockingEntered.OnCompleted();
+                SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, Timeout10);
+                return 0;
+            }).Subscribe(_ => { }, _ => { });
+            await blockingEntered.Should().Within(Timeout5).Emit();
+
+            var drain = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
+            var raced = await Task.WhenAny(drain, Task.Delay(300, TestContext.Current.CancellationToken));
+            raced.Should().NotBeSameAs(drain,
+                "the blocking leaf is still running, and a concurrently-running ASYNC leaf must not make "
+                + "the blocking join believe the pool is idle");
+
+            Volatile.Write(ref release, 1);
+            asyncGate.TrySetResult(0);
+
+            // Assert the VALUE, not just that it returned: both leaves unwound inside the budget, so a
+            // non-zero residual would mean the join reported a survivor that had already finished — the
+            // other direction of the shared-counter defect. (Copilot review, #1338.)
+            var residual = await drain.WaitAsync(Timeout5, TestContext.Current.CancellationToken);
+            residual.Should().Be(0,
+                "both the blocking and the async leaf unwound within the budget — nothing to report");
+            pool.CurrentInFlight.Should().Be(0);
+        }
+        finally
         {
-            blockingEntered.Set();
-            release.Wait(Timeout10);
-            return 0;
-        }).Subscribe(_ => { }, _ => { });
-        blockingEntered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
-
-        var drain = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
-        var raced = await Task.WhenAny(drain, Task.Delay(300, TestContext.Current.CancellationToken));
-        raced.Should().NotBeSameAs(drain,
-            "the blocking leaf is still running, and a concurrently-running ASYNC leaf must not make "
-            + "the blocking join believe the pool is idle");
-
-        release.Set();
-        asyncGate.TrySetResult(0);
-
-        // Assert the VALUE, not just that it returned: both leaves unwound inside the budget, so a
-        // non-zero residual would mean the join reported a survivor that had already finished — the
-        // other direction of the shared-counter defect. (Copilot review, #1338.)
-        var residual = await drain.WaitAsync(Timeout5, TestContext.Current.CancellationToken);
-        residual.Should().Be(0,
-            "both the blocking and the async leaf unwound within the budget — nothing to report");
-        pool.CurrentInFlight.Should().Be(0);
+            Volatile.Write(ref release, 1);
+            asyncGate.TrySetResult(0);
+        }
     }
 
 
@@ -452,19 +542,20 @@ public class IoPoolTest
     }
 
     [Fact]
-    public void Invoke_releases_the_slot_when_subscription_disposed_before_completion()
+    public async Task Invoke_releases_the_slot_when_subscription_disposed_before_completion()
     {
         using var pool = new IoPool(1);
-        using var entered = new ManualResetEventSlim(false);
+        var entered = new AsyncSubject<Unit>();
 
         var sub = pool.Invoke(async ct =>
         {
-            entered.Set();
+            entered.OnNext(Unit.Default);
+            entered.OnCompleted();
             await Task.Delay(System.Threading.Timeout.Infinite, ct); // cancellable hold
             return 0;
         }).Subscribe(_ => { }, _ => { });
 
-        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+        await entered.Should().Within(Timeout5).Emit();
         pool.CurrentInFlight.Should().Be(1);
 
         sub.Dispose(); // cancels ct → Task.Delay throws → finally releases the slot
@@ -482,18 +573,19 @@ public class IoPoolTest
     public async Task Drain_cancels_in_flight_leaves_and_joins_synchronously()
     {
         using var pool = new IoPool(2);
-        using var entered = new ManualResetEventSlim(false);
+        var entered = new AsyncSubject<Unit>();
         var cancelled = false;
 
         pool.Invoke(async ct =>
         {
-            entered.Set();
+            entered.OnNext(Unit.Default);
+            entered.OnCompleted();
             try { await Task.Delay(System.Threading.Timeout.Infinite, ct); } // never completes on its own
             catch (OperationCanceledException) { cancelled = true; throw; }
             return 0;
         }).Subscribe(_ => { }, _ => { });
 
-        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+        await entered.Should().Within(Timeout5).Emit();
         pool.CurrentInFlight.Should().Be(1);
 
         pool.Drain(); // cancel the leaf + JOIN — returns only once it has unwound
@@ -537,8 +629,8 @@ public class IoPoolTest
     public async Task Drain_terminates_a_SubscribeThroughPool_leg_it_cancels()
     {
         using var pool = new IoPool(1);
-        var legAEntered = new ManualResetEventSlim();
-        var releaseLegA = new ManualResetEventSlim();
+        var legAEntered = new AsyncSubject<Unit>();
+        var releaseLegA = 0;
         // Whether leg A was RELEASED rather than timing out. If the wait ever timed out, leg A would
         // free the permit on its own and the "leg B is parked on the gate" premise would be false —
         // the test could then pass for the wrong reason. Asserted on the test thread below.
@@ -546,70 +638,86 @@ public class IoPoolTest
 
         var legA = Observable.Create<int>(obs =>
         {
-            legAEntered.Set();
-            if (releaseLegA.Wait(Timeout10)) Interlocked.Exchange(ref legAReleasedCleanly, 1);
+            legAEntered.OnNext(Unit.Default);
+            legAEntered.OnCompleted();
+            if (SpinWait.SpinUntil(() => Volatile.Read(ref releaseLegA) == 1, Timeout10))
+                Interlocked.Exchange(ref legAReleasedCleanly, 1);
             obs.OnNext(1);
             return System.Reactive.Disposables.Disposable.Empty;
         });
 
         using var subA = pool.SubscribeThroughPool(legA).Subscribe(_ => { });
-        Assert.True(legAEntered.Wait(Timeout5), "leg A must be inside its subscribe, holding the only permit");
+        try
+        {
+            await legAEntered.Should().Within(Timeout5)
+                .Emit("leg A must be inside its subscribe, holding the only permit");
 
-        // Leg B can never acquire the permit — it is parked on the gate when the drain cancels.
-        var legBTerminated = new ManualResetEventSlim();
-        // Written from the pool's subscribe thread, read from the test thread — Interlocked/Volatile,
-        // not a plain bool: a stale read of `false` is the PASSING value here, so an unsynchronised
-        // field could hide a real regression (leg B being subscribed despite the drain).
-        var legBSubscribed = 0;
-        using var subB = pool
-            .SubscribeThroughPool(Observable.Create<int>(obs =>
-            {
-                Interlocked.Exchange(ref legBSubscribed, 1);
-                obs.OnNext(2);
-                return System.Reactive.Disposables.Disposable.Empty;
-            }))
-            .Finally(legBTerminated.Set)
-            .Subscribe(_ => { }, _ => { });
+            // Leg B can never acquire the permit — it is parked on the gate when the drain cancels.
+            var legBTerminated = new AsyncSubject<Unit>();
+            // Written from the pool's subscribe thread, read from the test thread — Interlocked/Volatile,
+            // not a plain bool: a stale read of `false` is the PASSING value here, so an unsynchronised
+            // field could hide a real regression (leg B being subscribed despite the drain).
+            var legBSubscribed = 0;
+            using var subB = pool
+                .SubscribeThroughPool(Observable.Create<int>(obs =>
+                {
+                    Interlocked.Exchange(ref legBSubscribed, 1);
+                    obs.OnNext(2);
+                    return System.Reactive.Disposables.Disposable.Empty;
+                }))
+                .Finally(() =>
+                {
+                    legBTerminated.OnNext(Unit.Default);
+                    legBTerminated.OnCompleted();
+                })
+                .Subscribe(_ => { }, _ => { });
 
-        Assert.True(SpinWait.SpinUntil(() => pool.CurrentInFlight == 1, Timeout5),
-            "exactly leg A holds the permit; leg B must still be waiting on the gate");
+            Assert.True(SpinWait.SpinUntil(() => pool.CurrentInFlight == 1, Timeout5),
+                "exactly leg A holds the permit; leg B must still be waiting on the gate");
 
-        var drainDone = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
+            var drainDone = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
 
-        // 🚨 ESTABLISH the ordering the assertions below depend on — do not assume it.
-        //
-        // `Task.Run` only SCHEDULES Drain; it says nothing about whether Drain has reached its
-        // `_poolCts.Cancel()`. Releasing leg A here — as this test used to — frees the only permit
-        // while the cancel may still be queued behind a busy thread pool, and SemaphoreSlim then
-        // legitimately hands that permit to the leg B waiter already queued on it. Leg B's
-        // `ct.ThrowIfCancellationRequested()` guard passes (nothing is cancelled yet), it subscribes,
-        // and the test fails on `legBSubscribed == 1` — reporting a product regression when the
-        // product did exactly the right thing. Observed on a loaded CI runner (six shards on one
-        // box); the assertion asserted an ordering the test never created.
-        //
-        // Leg B's TERMINATION is the observable proof that the cancel has happened: it is parked in
-        // `_gate.WaitAsync(linked)`, so `_poolCts.Cancel()` is what completes that wait as cancelled
-        // → OnCompleted → this `.Finally`. Waiting for it costs nothing when the pool is healthy and
-        // is what makes "the drain cancels BEFORE the permit is granted" true by construction rather
-        // than by scheduling luck. It does not deadlock: Drain blocks re-acquiring leg A's permit,
-        // which is independent of leg B's cancellation continuation.
-        Assert.True(legBTerminated.Wait(Timeout5),
-            "a leg the drain cancels MUST terminate (OnCompleted) so its .Finally runs — that callback "
-            + "is what releases RoutingGrain's in-flight route slot and advances OrderedRouteDispatcher's "
-            + "per-destination FIFO; swallowing the cancellation silently leaked both");
+            // 🚨 ESTABLISH the ordering the assertions below depend on — do not assume it.
+            //
+            // `Task.Run` only SCHEDULES Drain; it says nothing about whether Drain has reached its
+            // `_poolCts.Cancel()`. Releasing leg A here — as this test used to — frees the only permit
+            // while the cancel may still be queued behind a busy thread pool, and SemaphoreSlim then
+            // legitimately hands that permit to the leg B waiter already queued on it. Leg B's
+            // `ct.ThrowIfCancellationRequested()` guard passes (nothing is cancelled yet), it subscribes,
+            // and the test fails on `legBSubscribed == 1` — reporting a product regression when the
+            // product did exactly the right thing. Observed on a loaded CI runner (six shards on one
+            // box); the assertion asserted an ordering the test never created.
+            //
+            // Leg B's TERMINATION is the observable proof that the cancel has happened: it is parked in
+            // `_gate.WaitAsync(linked)`, so `_poolCts.Cancel()` is what completes that wait as cancelled
+            // → OnCompleted → this `.Finally`. Waiting for it costs nothing when the pool is healthy and
+            // is what makes "the drain cancels BEFORE the permit is granted" true by construction rather
+            // than by scheduling luck. It does not deadlock: Drain blocks re-acquiring leg A's permit,
+            // which is independent of leg B's cancellation continuation.
+            await legBTerminated.Should().Within(Timeout5).Emit(
+                "a leg the drain cancels MUST terminate (OnCompleted) so its .Finally runs — that callback "
+                + "is what releases RoutingGrain's in-flight route slot and advances OrderedRouteDispatcher's "
+                + "per-destination FIFO; swallowing the cancellation silently leaked both");
 
-        releaseLegA.Set();
-        await drainDone.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
+            Volatile.Write(ref releaseLegA, 1);
+            await drainDone.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
 
-        Volatile.Read(ref legAReleasedCleanly).Should().Be(1,
-            "leg A must have been RELEASED, not timed out — a timed-out wait would free the permit on "
-            + "its own and leg B would no longer be parked on the gate, so the test would prove nothing");
-        // 🚨 THE REGRESSION GUARD — and it is now asserted on a cancellation that PROVABLY preceded
-        // the permit becoming free (see the wait above), so a pass means the drain refused leg B
-        // rather than merely outrunning it. Before the termination fix this never fired at all and
-        // the test hung to its timeout.
-        Volatile.Read(ref legBSubscribed).Should().Be(0,
-            "the drain cancels before the permit is granted, so leg B's source must never be subscribed");
+            Volatile.Read(ref legAReleasedCleanly).Should().Be(1,
+                "leg A must have been RELEASED, not timed out — a timed-out wait would free the permit on "
+                + "its own and leg B would no longer be parked on the gate, so the test would prove nothing");
+            // 🚨 THE REGRESSION GUARD — and it is now asserted on a cancellation that PROVABLY preceded
+            // the permit becoming free (see the wait above), so a pass means the drain refused leg B
+            // rather than merely outrunning it. Before the termination fix this never fired at all and
+            // the test hung to its timeout.
+            Volatile.Read(ref legBSubscribed).Should().Be(0,
+                "the drain cancels before the permit is granted, so leg B's source must never be subscribed");
+        }
+        finally
+        {
+            // 🚨 Leg A is a deliberately parked subscribe. Releasing it here means an assertion that
+            // throws above cannot leave it holding a pool thread for the full Timeout10.
+            Volatile.Write(ref releaseLegA, 1);
+        }
     }
 
     /// <summary>
@@ -640,9 +748,11 @@ public class IoPoolTest
     public async Task Drain_terminates_a_SubscribeThroughPool_leg_that_already_subscribed()
     {
         using var pool = new IoPool(2);
-        var subscribed = new ManualResetEventSlim();
-        var innerDisposed = new ManualResetEventSlim();
-        var terminated = new ManualResetEventSlim();
+        // Three signals the PRODUCT emits and the test consumes — nothing is parked here, so all
+        // three are AsyncSubjects awaited through the assertion helpers.
+        var subscribed = new AsyncSubject<Unit>();
+        var innerDisposed = new AsyncSubject<Unit>();
+        var terminated = new AsyncSubject<Unit>();
 
         // A LONG-LIVED source, the shape every real SubscribeThroughPool caller has: the subscribe
         // returns promptly (releasing the pool permit) and the subscription then stays open,
@@ -650,15 +760,24 @@ public class IoPoolTest
         // drains, which is what host shutdown does to every live route.
         var source = Observable.Create<int>(obs =>
         {
-            subscribed.Set();
-            return System.Reactive.Disposables.Disposable.Create(innerDisposed.Set);
+            subscribed.OnNext(Unit.Default);
+            subscribed.OnCompleted();
+            return System.Reactive.Disposables.Disposable.Create(() =>
+            {
+                innerDisposed.OnNext(Unit.Default);
+                innerDisposed.OnCompleted();
+            });
         });
 
         using var sub = pool.SubscribeThroughPool(source)
-            .Finally(terminated.Set)
+            .Finally(() =>
+            {
+                terminated.OnNext(Unit.Default);
+                terminated.OnCompleted();
+            })
             .Subscribe(_ => { }, _ => { });
 
-        Assert.True(subscribed.Wait(Timeout5),
+        await subscribed.Should().Within(Timeout5).Emit(
             "the source must have been subscribed before the drain — this test is about the window "
             + "AFTER the subscribe completed");
         Assert.True(SpinWait.SpinUntil(() => pool.CurrentInFlight == 0, Timeout5),
@@ -667,12 +786,12 @@ public class IoPoolTest
 
         var drainDone = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
 
-        Assert.True(innerDisposed.Wait(Timeout5),
+        await innerDisposed.Should().Within(Timeout5).Emit(
             "the drain must tear the live inner subscription down — asserted FIRST so a failure on "
             + "termination below is attributable to the missing terminal, not to a drain that never ran");
         // 🚨 THE REGRESSION GUARD. Before the fix this never fired: the drain disposed the inner
         // subscription and emitted nothing, so `.Finally` never ran and this waited out its budget.
-        Assert.True(terminated.Wait(Timeout5),
+        await terminated.Should().Within(Timeout5).Emit(
             "a leg the drain tears down AFTER its subscribe completed MUST terminate (OnCompleted) so "
             + "its .Finally runs — that callback releases RoutingGrain's in-flight route slot and "
             + "advances OrderedRouteDispatcher's per-destination FIFO; disposing the subscription "
@@ -685,9 +804,9 @@ public class IoPoolTest
     }
 
     [Fact]
-    public void Unbounded_fallback_runs_the_leaf_on_the_threadpool()
+    public async Task Unbounded_fallback_runs_the_leaf_on_the_threadpool()
     {
-        AssertLeafRunsOffSubscriber(io => IoPool.Unbounded.Invoke(io));
+        await AssertLeafRunsOffSubscriber(io => IoPool.Unbounded.Invoke(io));
         IoPool.Unbounded.CurrentInFlight.Should().Be(0);
     }
 
@@ -746,13 +865,19 @@ public class IoPoolTest
     // dedicated Thread is never a ThreadPool thread, so checking
     // IsThreadPoolThread on the body avoids the flaky "different thread id" guess
     // (the ThreadPool can otherwise reuse an awaiting caller's thread).
-    private static void AssertLeafRunsOffSubscriber(
+    private static async Task AssertLeafRunsOffSubscriber(
         Func<Func<CancellationToken, Task<int>>, IObservable<int>> invoke)
     {
         var subscriberThread = -1;
         var bodyThread = -1;
         var bodyOnThreadPool = false;
-        using var done = new ManualResetEventSlim(false);
+        var done = new AsyncSubject<Unit>();
+
+        void Done()
+        {
+            done.OnNext(Unit.Default);
+            done.OnCompleted();
+        }
 
         var t = new Thread(() =>
         {
@@ -762,11 +887,11 @@ public class IoPoolTest
                 bodyThread = Environment.CurrentManagedThreadId;
                 bodyOnThreadPool = Thread.CurrentThread.IsThreadPoolThread;
                 return Task.FromResult(0);
-            }).Subscribe(_ => done.Set(), _ => done.Set());
+            }).Subscribe(_ => Done(), _ => Done());
         }) { IsBackground = true };
         t.Start();
 
-        done.Wait(Timeout5).Should().BeTrue("the leaf should complete");
+        await done.Should().Within(Timeout5).Emit("the leaf should complete");
         bodyOnThreadPool.Should().BeTrue("the leaf must run on the ThreadPool, not the subscriber's thread");
         bodyThread.Should().NotBe(subscriberThread);
     }
@@ -794,8 +919,8 @@ public class IoPoolTest
     {
         using var pool = new IoPool(4);
         var source = new Subject<int>();
-        using var teardownEntered = new ManualResetEventSlim(false);
-        using var releaseTeardown = new ManualResetEventSlim(false);
+        var teardownEntered = new AsyncSubject<Unit>();
+        var releaseTeardown = 0;
         var teardownThread = 0;
 
         using var subscription = pool.SubscribeThroughPool<int>(source).Subscribe(
@@ -803,34 +928,44 @@ public class IoPoolTest
             () =>
             {
                 teardownThread = Environment.CurrentManagedThreadId;
-                teardownEntered.Set();
-                releaseTeardown.Wait(Timeout10);
+                teardownEntered.OnNext(Unit.Default);
+                teardownEntered.OnCompleted();
+                // The teardown leg simply does not return promptly — that is the whole
+                // precondition of the wedge this test repros.
+                SpinWait.SpinUntil(() => Volatile.Read(ref releaseTeardown) == 1, Timeout10);
             });
 
-        SpinWait.SpinUntil(() => source.HasObservers, Timeout5)
-            .Should().BeTrue("the pooled subscribe must have completed before the drain");
+        try
+        {
+            SpinWait.SpinUntil(() => source.HasObservers, Timeout5)
+                .Should().BeTrue("the pooled subscribe must have completed before the drain");
 
-        var drainThread = 0;
-        var drain = Task.Run(
-            () =>
-            {
-                drainThread = Environment.CurrentManagedThreadId;
-                return pool.Drain();
-            },
-            TestContext.Current.CancellationToken);
+            var drainThread = 0;
+            var drain = Task.Run(
+                () =>
+                {
+                    drainThread = Environment.CurrentManagedThreadId;
+                    return pool.Drain();
+                },
+                TestContext.Current.CancellationToken);
 
-        teardownEntered.Wait(Timeout5, TestContext.Current.CancellationToken)
-            .Should().BeTrue("Drain cancels the pool, which terminates every pooled subscription");
+            await teardownEntered.Should().Within(Timeout5)
+                .Emit("Drain cancels the pool, which terminates every pooled subscription");
 
-        teardownThread.Should().NotBe(drainThread,
-            "a pooled subscription's downstream teardown must never run on the thread that called "
-            + "Drain() — that thread is the mesh-teardown thread, and Cancel() executes registered "
-            + "callbacks synchronously on whoever calls it (#2394)");
+            teardownThread.Should().NotBe(drainThread,
+                "a pooled subscription's downstream teardown must never run on the thread that called "
+                + "Drain() — that thread is the mesh-teardown thread, and Cancel() executes registered "
+                + "callbacks synchronously on whoever calls it (#2394)");
 
-        releaseTeardown.Set();
+            Volatile.Write(ref releaseTeardown, 1);
 
-        var residual = await drain.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
-        residual.Should().Be(0, "the teardown finished inside the budget — nothing to report");
+            var residual = await drain.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
+            residual.Should().Be(0, "the teardown finished inside the budget — nothing to report");
+        }
+        finally
+        {
+            Volatile.Write(ref releaseTeardown, 1);
+        }
     }
 
     /// <summary>
@@ -841,34 +976,42 @@ public class IoPoolTest
     /// unwinding needs pool threads — the starvation deadlock the method's own comment describes.
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public void Dispose_doesNotBlockOnASlowPooledSubscriptionTeardown()
+    public async Task Dispose_doesNotBlockOnASlowPooledSubscriptionTeardown()
     {
         var pool = new IoPool(4);
         var source = new Subject<int>();
-        using var teardownEntered = new ManualResetEventSlim(false);
-        using var releaseTeardown = new ManualResetEventSlim(false);
+        var teardownEntered = new AsyncSubject<Unit>();
+        var releaseTeardown = 0;
 
         using var subscription = pool.SubscribeThroughPool<int>(source).Subscribe(
             _ => { },
             () =>
             {
-                teardownEntered.Set();
-                releaseTeardown.Wait(Timeout5);
+                teardownEntered.OnNext(Unit.Default);
+                teardownEntered.OnCompleted();
+                // A SLOW teardown leg — the condition under which Dispose used to block.
+                SpinWait.SpinUntil(() => Volatile.Read(ref releaseTeardown) == 1, Timeout5);
             });
 
-        SpinWait.SpinUntil(() => source.HasObservers, Timeout5)
-            .Should().BeTrue("the pooled subscribe must have completed before disposal");
+        try
+        {
+            SpinWait.SpinUntil(() => source.HasObservers, Timeout5)
+                .Should().BeTrue("the pooled subscribe must have completed before disposal");
 
-        var sw = Stopwatch.StartNew();
-        pool.Dispose();
-        sw.Stop();
+            var sw = Stopwatch.StartNew();
+            pool.Dispose();
+            sw.Stop();
 
-        teardownEntered.Wait(Timeout5).Should().BeTrue("disposal must still terminate the subscription");
-        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
-            "Dispose must return immediately — the WAIT belongs on Disposed, and running the "
-            + "pooled subscriptions' teardown inline made Dispose block for as long as they took");
-
-        releaseTeardown.Set();
+            await teardownEntered.Should().Within(Timeout5)
+                .Emit("disposal must still terminate the subscription");
+            sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
+                "Dispose must return immediately — the WAIT belongs on Disposed, and running the "
+                + "pooled subscriptions' teardown inline made Dispose block for as long as they took");
+        }
+        finally
+        {
+            Volatile.Write(ref releaseTeardown, 1);
+        }
     }
 
     /// <summary>
@@ -879,30 +1022,38 @@ public class IoPoolTest
     /// the level it stopped at.
     /// </summary>
     [Fact]
-    public void AResidualNamesTheLeafThatWouldNotUnwind()
+    public async Task AResidualNamesTheLeafThatWouldNotUnwind()
     {
         var pool = new IoPool(2);
-        using var entered = new ManualResetEventSlim(false);
-        using var release = new ManualResetEventSlim(false);
+        var entered = new AsyncSubject<Unit>();
+        var release = 0;
 
         // A leaf that ignores its token — exactly the defect the residual exists to report.
         pool.InvokeBlocking(_ =>
         {
-            entered.Set();
-            release.Wait(Timeout10);
+            entered.OnNext(Unit.Default);
+            entered.OnCompleted();
+            SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, Timeout10);
             return 0;
         }).Subscribe(_ => { }, _ => { });
 
-        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+        try
+        {
+            await entered.Should().Within(Timeout5).Emit();
 
-        var sites = pool.PendingLeafSites;
-        sites.Should().NotBeEmpty("a leaf is in flight, so the pool must be able to say WHICH");
-        string.Join(" | ", sites).Should().Contain(nameof(AResidualNamesTheLeafThatWouldNotUnwind),
-            "the lambda's compiler-generated name carries its ENCLOSING method — that is what turns "
-            + "'AgentStore=1' into a pointer at the operation to fix");
-
-        release.Set();
-        pool.Dispose();
+            var sites = pool.PendingLeafSites;
+            sites.Should().NotBeEmpty("a leaf is in flight, so the pool must be able to say WHICH");
+            string.Join(" | ", sites).Should().Contain(nameof(AResidualNamesTheLeafThatWouldNotUnwind),
+                "the lambda's compiler-generated name carries its ENCLOSING method — that is what turns "
+                + "'AgentStore=1' into a pointer at the operation to fix");
+        }
+        finally
+        {
+            // 🚨 In a `finally`: an assertion that throws above must not leave the leaf holding a
+            // pool thread for the full Timeout10, into the next test.
+            Volatile.Write(ref release, 1);
+            pool.Dispose();
+        }
     }
 
     /// <summary>A pool that drains cleanly reports no sites — the diagnostic is not noise.</summary>

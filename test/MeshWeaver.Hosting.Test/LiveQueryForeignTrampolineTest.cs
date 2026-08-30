@@ -71,7 +71,10 @@ public class LiveQueryForeignTrampolineTest
         adapter.Write(new MeshNode("one", "probe/_Usage") { NodeType = "TokenUsage" }, Options)
             .Subscribe();
         var provider = new StorageAdapterMeshQueryProvider(adapter);
-        using var initial = new ManualResetEventSlim(false);
+        // 🚨 A volatile flag, not a hand-woven gate. Blocking the trampoline frame IS the subject
+        // (see below), and a flag polled under a bounded SpinUntil expresses that with no kernel
+        // handle to dispose and no observable→blocking bridge.
+        var initial = 0;
         var insideTrampoline = false;
 
         // Schedule() IS the trampoline: inside this action CurrentThreadScheduler reports that one
@@ -81,13 +84,13 @@ public class LiveQueryForeignTrampolineTest
             insideTrampoline = !CurrentThreadScheduler.IsScheduleRequired;
             using var sub = provider
                 .Query<MeshNode>(MeshQueryRequest.FromQueries([query], "system-security"), Options)
-                .Subscribe(c => { if (c.ChangeType == QueryChangeType.Initial) initial.Set(); });
+                .Subscribe(c => { if (c.ChangeType == QueryChangeType.Initial) Volatile.Write(ref initial, 1); });
 
             // 🚨 Blocking HERE is the point, not a shortcut: the stranded walk could only ever run
             // after this frame returns to the trampoline that owns it, so a caller that waits for
             // its own Initial is the shape that deadlocked. A budget generous enough that only a
             // never-scheduled walk can exhaust it — this work is microseconds.
-            Assert.True(initial.Wait(TimeSpan.FromSeconds(5)),
+            Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref initial) == 1, TimeSpan.FromSeconds(5)),
                 $"Initial never arrived for [{query}] — the scope walk was queued on the caller's "
                 + "trampoline instead of running inline, so it can never run (#2377)");
         });

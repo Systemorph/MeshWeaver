@@ -1,5 +1,7 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -90,19 +92,24 @@ public class QueuedWriteAdvancesOnHandoffTest(ITestOutputHelper output) : Monoli
         var primary = nodeHub!.GetWorkspace().DataContext
             .GetDataSourceForType(typeof(MeshNode))!
             .GetStreamForPartition(null)!;
-        using var gateEntered = new ManualResetEventSlim(false);
-        using var releaseGate = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate: turn → test is an AsyncSubject the parked turn completes; the
+        // release travels back INTO that turn, so it is a volatile flag polled under a bounded
+        // SpinUntil and written in the `finally` below.
+        var gateEntered = new AsyncSubject<Unit>();
+        var releaseGate = 0;
         primary.Update((Func<EntityStore?, ChangeItem<EntityStore>?>)(_ =>
         {
-            gateEntered.Set();
-            releaseGate.Wait(TimeSpan.FromSeconds(60));
+            gateEntered.OnNext(Unit.Default);
+            gateEntered.OnCompleted();
+            SpinWait.SpinUntil(() => Volatile.Read(ref releaseGate) == 1, TimeSpan.FromSeconds(60));
             return null;
         }), _ => { });
-        gateEntered.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue(
-            "the gated turn must be running on the primary stream's executor before the writes");
 
         try
         {
+            await gateEntered.Should().Within(10.Seconds()).Emit(
+                "the gated turn must be running on the primary stream's executor before the writes");
+
             // WRITE 1 — its ack cannot arrive while the merge turn is parked. Pre-#2346 the
             // caller's terminal at that bound is what released the queue slot; pre-#2661 that
             // terminal existed at all. Subscribe and fence on the patch being in flight instead:
@@ -139,7 +146,7 @@ public class QueuedWriteAdvancesOnHandoffTest(ITestOutputHelper output) : Monoli
             Output.WriteLine("[write 2] enqueued");
 
             // Release: the owner drains the parked turn, then write 1's merge, then write 2's.
-            releaseGate.Set();
+            Volatile.Write(ref releaseGate, 1);
             Output.WriteLine("[owner] merge executor released");
 
             // GROUND TRUTH — the store must end on the SUCCESSOR's value. Pre-fix write 2 shipped
@@ -186,7 +193,7 @@ public class QueuedWriteAdvancesOnHandoffTest(ITestOutputHelper output) : Monoli
         }
         finally
         {
-            releaseGate.Set();
+            Volatile.Write(ref releaseGate, 1);
         }
     }
 }
