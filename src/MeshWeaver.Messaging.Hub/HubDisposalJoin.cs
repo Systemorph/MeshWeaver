@@ -33,7 +33,7 @@ namespace MeshWeaver.Messaging;
 /// a number to raise when it fires. A join that times out is a hub that is not finishing; find it.</para>
 ///
 /// <para>🚨 <b>No <c>Timeout</c> is composed into the signal</b>, in either form. Both go through
-/// <see cref="ReactiveCompletion.ObserveCompletion"/> — bounded by a
+/// <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, System.Threading.CancellationToken)"/> — bounded by a
 /// <see cref="CancellationTokenSource"/> (async) or by <c>Task.Wait(TimeSpan)</c> (sync) — so the
 /// subscription stays attached after the wait gives up and a fault arriving later is still reported
 /// instead of becoming the unobserved exception that xUnit v3 escalates to a Catastrophic failure

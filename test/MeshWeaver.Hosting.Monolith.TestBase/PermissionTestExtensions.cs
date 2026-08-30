@@ -125,7 +125,7 @@ public static class PermissionTestExtensions
 
     /// <summary>
     /// Late-fault sink for the waits above. 🚨 These wait through
-    /// <see cref="ReactiveCompletion.ObserveCompletion{T}"/>, never an Rx-to-Task bridge
+    /// <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, System.Threading.CancellationToken)"/>, never an Rx-to-Task bridge
     /// (maintainer, 2026-08-30: "no ToTask ever"): Rx's own bridge completes its
     /// <c>TaskCompletionSource</c> from inside the pipeline without
     /// <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/>, so the awaiting test

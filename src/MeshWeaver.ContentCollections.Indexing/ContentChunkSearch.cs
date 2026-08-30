@@ -70,7 +70,8 @@ public static class ContentChunkSearch
         var toolCall = BuildToolCall(ns, scope, text, limit);
 
         ContentSearchResult Empty(string message) =>
-            new(text, ns, scope, limit, Array.Empty<ChunkHit>(), toolCall, message);
+            new(text, ns, scope, limit, Array.Empty<ChunkHit>(), toolCall, message)
+            { Searched = false };   // 🚨 nothing was searched — see ContentSearchResult.Searched (#2741)
 
         if (ContentIndexAvailability.IsOff(store, embedder))
             return Observable.Return(Empty(ContentIndexAvailability.ReasonOff(store, embedder)));
@@ -102,7 +103,8 @@ public static class ContentChunkSearch
 
         ContentSearchResult Empty(string message) =>
             new(text, NormalizePath(anchorPath), ContentSearchScope.AncestorsAndSelf, limit,
-                Array.Empty<ChunkHit>(), toolCall, message);
+                Array.Empty<ChunkHit>(), toolCall, message)
+            { Searched = false };   // 🚨 nothing was searched — see ContentSearchResult.Searched (#2741)
 
         if (ContentIndexAvailability.IsOff(store, embedder))
             return Observable.Return(Empty(ContentIndexAvailability.ReasonOff(store, embedder)));
@@ -139,6 +141,12 @@ public static class ContentChunkSearch
             _ => store.SearchSubtree(ns, vector, limit), // Subtree (default)
         };
 
+    /// <summary>
+    /// The <c>error</c> discriminator carried by an envelope whose search never ran, so a caller can
+    /// branch on a stable token instead of parsing the human-readable <c>message</c>.
+    /// </summary>
+    public const string NotSearchedError = "search-not-performed";
+
     /// <summary>Serializes a result to the tool's JSON envelope <c>{count, results, message?}</c>.</summary>
     public static string ToJson(ContentSearchResult result)
     {
@@ -163,11 +171,24 @@ public static class ContentChunkSearch
             results.Add(hitObj);
         }
 
-        var obj = new JsonObject
+        // 🚨 A search that did not RUN gets no count and no results array (MeshWeaver#2741).
+        // Reporting `{"count":0,"results":[]}` for a disabled index made "nothing matched" and
+        // "nothing was searched" byte-identical to the one field every caller actually reads, and
+        // the caller most likely to read it is an agent performing the pre-deletion sweep AGENTS.md
+        // mandates. Omitting the fields is what makes the difference impossible to miss: a consumer
+        // testing `count == 0` now finds no `count` at all, rather than a zero that means the
+        // opposite of what it looks like.
+        var obj = new JsonObject { ["searched"] = result.Searched };
+        if (result.Searched)
         {
-            ["count"] = results.Count,
-            ["results"] = results,
-        };
+            obj["count"] = results.Count;
+            obj["results"] = results;
+        }
+        else
+        {
+            obj["error"] = NotSearchedError;
+        }
+
         if (!string.IsNullOrEmpty(result.Message))
             obj["message"] = result.Message;
         return obj.ToJsonString();
@@ -294,7 +315,26 @@ public record ContentSearchResult(
     int Limit,
     IReadOnlyList<ChunkHit> Hits,
     string ToolCall,
-    string? Message = null);
+    string? Message = null)
+{
+    /// <summary>
+    /// Whether a search actually RAN. False when the engine returned before embedding anything —
+    /// content indexing is off on this deployment, or the query carried no text / no namespace.
+    ///
+    /// <para>🚨 <b>This exists because "we did not look" and "we looked and found nothing" were the
+    /// same answer</b> (MeshWeaver#2741). AGENTS.md requires a live-mesh <c>search_chunks</c> sweep
+    /// before deleting any public framework surface, precisely because the mesh holds callers the
+    /// repo has already dropped. On a deployment without an embedding provider that sweep answered
+    /// <c>{"count":0,"results":[]}</c> — and an agent following the procedure reads <c>count: 0</c>
+    /// as permission to delete. That is a verification step that cannot fail, which this repo
+    /// treats as a defect class in its own words.</para>
+    ///
+    /// <para>An <b>init-only property</b> rather than a constructor parameter on purpose: adding a
+    /// positional parameter would change the primary constructor's signature, which the public
+    /// binary-compatibility gate is right to refuse.</para>
+    /// </summary>
+    public bool Searched { get; init; } = true;
+}
 
 /// <summary>How a content search resolves which collections to read from a single named namespace.</summary>
 public enum ContentSearchScope

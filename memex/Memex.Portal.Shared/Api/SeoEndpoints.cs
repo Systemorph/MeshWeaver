@@ -34,7 +34,7 @@ public sealed record PublishedPage(MeshNode Node, string Path);
 public static class SeoEndpoints
 {
     /// <summary>
-    /// Late-fault sink for this surface's <see cref="ReactiveCompletion.ObserveCompletion{T}"/>
+    /// Late-fault sink for this surface's <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, System.Threading.CancellationToken)"/>
     /// bridges: a fault that lands AFTER the crawler response has already settled cannot change the
     /// answer, but discarding it would hide a mesh read that failed on the way out. The logger is
     /// captured eagerly, because a late fault arrives long after the request scope is gone.

@@ -580,7 +580,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
     /// <c>Func&lt;…, Task&lt;TStream&gt;&gt;</c>.
     /// </para>
     /// <para>
-    /// 🚨 That wait is <see cref="MeshWeaver.Messaging.ReactiveCompletion.ObserveCompletion{T}"/>,
+    /// 🚨 That wait is <see cref="MeshWeaver.Messaging.ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, bool, System.Threading.CancellationToken)"/>,
     /// never Rx's own observable-to-Task bridge (maintainer, 2026-08-30: <i>"no ToTask ever"</i>).
     /// Rx's bridge completes its <c>TaskCompletionSource</c> from inside the pipeline without
     /// <c>RunContinuationsAsynchronously</c>, so the stream's init continuation resumed INLINE on
@@ -616,7 +616,13 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
             })
             .Aggregate(emptyStore, (acc, item) => acc.Update(item.Reference, item.Instances))
             .FirstAsync()
-            .ObserveCompletion(ReportLateInitFault, cancellationToken)!;
+            // cancelSource: TRUE — the initial-store build fans out to every type source, and those
+            // legs run through the mesh IO pool. Under the non-disposing default a cancelled
+            // initialization (teardown, a lifetime token) left that work running and holding its
+            // pool permits for a store nobody would read (MeshWeaver#2772). Disposing propagates the
+            // cancel into the source, which is what releases them. Nothing is lost by it: a fault
+            // ReportLateInitFault would have caught can no longer arise from work that has stopped.
+            .ObserveCompletion(ReportLateInitFault, cancelSource: true, cancellationToken)!;
     }
 
 
@@ -766,7 +772,13 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
             })
             .Aggregate(emptyStore, (acc, item) => acc.Update(item.Reference, item.Instances))
             .FirstAsync()
-            .ObserveCompletion(ReportLateInitFault, cancellationToken)!;
+            // cancelSource: TRUE — the initial-store build fans out to every type source, and those
+            // legs run through the mesh IO pool. Under the non-disposing default a cancelled
+            // initialization (teardown, a lifetime token) left that work running and holding its
+            // pool permits for a store nobody would read (MeshWeaver#2772). Disposing propagates the
+            // cancel into the source, which is what releases them. Nothing is lost by it: a fault
+            // ReportLateInitFault would have caught can no longer arise from work that has stopped.
+            .ObserveCompletion(ReportLateInitFault, cancelSource: true, cancellationToken)!;
     }
 
     /// <summary>

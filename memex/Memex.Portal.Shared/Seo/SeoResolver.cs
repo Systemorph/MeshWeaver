@@ -88,7 +88,7 @@ public static class SeoResolver
 
     /// <summary>
     /// The static-SSR boundary bridge — the only <c>Task</c> on this surface, and it goes through
-    /// <see cref="ReactiveCompletion.ObserveCompletion{T}"/> rather than Rx's <c>.ToTask()</c>:
+    /// <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, System.Threading.CancellationToken)"/> rather than Rx's <c>.ToTask()</c>:
     /// the latter resumes its awaiter INLINE on the signalling thread, which here is whichever mesh
     /// hub answered the path resolution — so the rest of the Razor render would run on that hub's
     /// action block (forbidden since 2026-08-30).

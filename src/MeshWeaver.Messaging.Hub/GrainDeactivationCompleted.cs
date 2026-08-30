@@ -31,5 +31,5 @@ namespace MeshWeaver.Messaging;
 /// <param name="Deactivated">Fires <see cref="Unit"/> once and completes when the hosting
 /// activation is fully gone; replays to late subscribers. Subscribe with an error arm — never
 /// bridge it to a <see cref="System.Threading.Tasks.Task"/> except through
-/// <see cref="ReactiveCompletion.ObserveCompletion{T}"/> at a genuine async edge.</param>
+/// <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, System.Threading.CancellationToken)"/> at a genuine async edge.</param>
 public record GrainDeactivationCompleted(IObservable<Unit> Deactivated);
