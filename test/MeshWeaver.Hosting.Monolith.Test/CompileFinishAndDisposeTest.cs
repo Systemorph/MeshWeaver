@@ -105,13 +105,36 @@ public class CompileFinishAndDisposeTest(ITestOutputHelper output) : MonolithMes
 
         response.Log.Should().NotBeNull("every compile is a proper Activity with a log");
 
+        // 🔬 Diagnostic transcript (queue incident 2026-08-30): CI intermittently sees
+        // Status=Warning here with no warning visible anywhere in the job log. Status is
+        // folded from the MaxSeverity COUNTER, not from a scan of Messages, so the entry
+        // that raised it can be flushed out of the bounded message window by the time the
+        // response surfaces. Print the whole transcript on every run — pass or fail — so
+        // the next CI occurrence names the entry instead of an anonymous status.
+        var log = response.Log!;
+        FileOutput.WriteLine(
+            $"[compile-activity transcript] Id={log.Id} Status={log.Status} " +
+            $"MaxSeverity={log.MaxSeverity} MessageCount={log.TotalMessageCount} " +
+            $"(window holds {log.Messages.Count}) Version={log.Version} End={log.End:O}");
+        foreach (var m in log.Messages)
+            FileOutput.WriteLine($"[compile-activity transcript]   {m.LogLevel}: {m.Message}");
+        foreach (var sub in log.SubActivities)
+            FileOutput.WriteLine(
+                $"[compile-activity transcript]   sub {sub.Id}: Status={sub.Status} " +
+                $"MaxSeverity={sub.MaxSeverity} messages={sub.TotalMessageCount}");
+
         // Terminal / auto-dispose: a finished activity is Succeeded with an End
         // timestamp. The bug left it stuck (Status stays Running, End null) so
         // every instance fell through to the 30s "compile did not settle"
         // overlay. Asserting Succeeded + End locks in that the activity actually
         // completes and is free to deactivate.
         response.Log!.Status.Should().Be(ActivityStatus.Succeeded,
-            "the compile activity must reach a terminal Succeeded status — finished generation");
+            "the compile activity must reach a terminal Succeeded status — finished generation; " +
+            $"transcript: MaxSeverity={log.MaxSeverity}, windowed messages=[{string.Join(" | ",
+                log.Messages.Select(m => $"{m.LogLevel}:{m.Message}"))}], " +
+            $"flushed-before-window={log.TotalMessageCount - log.Messages.Count}, " +
+            $"subActivities=[{string.Join(", ",
+                log.SubActivities.Select(s => $"{s.Id}:{s.Status}/{s.MaxSeverity}"))}]");
         response.Log.Status.Should().NotBe(ActivityStatus.Running,
             "the activity must not be left Running (the wedged-compile symptom)");
         response.Log.End.Should().NotBeNull(
