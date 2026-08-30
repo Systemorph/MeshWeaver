@@ -43,6 +43,7 @@ public static class InstanceGrantAdminSettingsTab
     private const string MintFormDataId = "registrationKeyMintForm";
     private const string MintResultDataId = "registrationKeyMintResult";
     private const string KeyListDataId = "registrationKeyList";
+    private const string TierOptionsDataId = "registrationKeyTierOptions";
 
     /// <summary>Registers the instance-grants settings tab provider (global admins only).</summary>
     public static MessageHubConfiguration AddInstanceGrantAdminSettingsTab(
@@ -107,6 +108,7 @@ public static class InstanceGrantAdminSettingsTab
             ["instanceId"] = "",
             ["source"] = sources.FirstOrDefault() ?? "",
             ["packageId"] = PluginGrantEntry.AllPackages,
+            ["tier"] = "",
         });
 
         stack = stack.WithView(GrantForm(host));
@@ -135,7 +137,18 @@ public static class InstanceGrantAdminSettingsTab
             ["description"] = "",
             ["expiresDays"] = "",
             ["keyId"] = "",
+            ["tier"] = "",
         });
+        // The plan a key enrols its instances into is a SELECT over the registry's own ladder
+        // (Admin/Tiers/*), never free text: a plan the ladder does not know licenses nothing, so a
+        // typo would mint a key whose every registration installs nothing. "No plan" stays first —
+        // the DefaultGrants-only key every registration before plans existed is.
+        var none = new Option<string>("", host.Localize("registrationKeys.tier.none"));
+        host.UpdateData(TierOptionsDataId, new[] { none });
+        host.Hub.ServiceProvider.GetService<PlanTierLadder>()?.Read()
+            .Take(1)
+            .Subscribe(ranks => host.UpdateData(TierOptionsDataId,
+                new[] { none }.Concat(ranks.Ids.Select(id => new Option<string>(id, id))).ToArray()));
 
         return Controls.Stack
             .WithView(Controls.Title(host.Localize("registrationKeys.heading"), 3))
@@ -167,6 +180,13 @@ public static class InstanceGrantAdminSettingsTab
                 Placeholder = "∞",
                 DataContext = dataContext,
             }.WithWidth("110px"))
+            .WithView(new SelectControl(
+                new JsonPointerReference("tier"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(TierOptionsDataId)))
+            {
+                Label = host.Localize("registrationKeys.field.tier"),
+                DataContext = dataContext,
+            }.WithWidth("220px"))
             .WithView(Controls.Button(host.Localize("registrationKeys.mint"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
@@ -224,14 +244,18 @@ public static class InstanceGrantAdminSettingsTab
             expiresAt = DateTimeOffset.UtcNow.AddDays(days);
         }
 
+        var tier = data?.GetValueOrDefault("tier")?.ToString()?.Trim() ?? "";
         var service = host.Hub.ServiceProvider.GetRequiredService<RegistrationKeyService>();
         service.Mint(
                 userId, context.Name ?? "", context.Email ?? "",
-                data?.GetValueOrDefault("description")?.ToString()?.Trim() ?? "", expiresAt)
+                data?.GetValueOrDefault("description")?.ToString()?.Trim() ?? "", expiresAt, tier)
             .Subscribe(
                 result => target.UpdateData(MintResultDataId,
                     $"{host.Localize("registrationKeys.minted")}\n\n```\n{result.RawKey}\n```\n\n"
-                    + host.Localize("registrationKeys.keyShownOnce")),
+                    + host.Localize("registrationKeys.keyShownOnce")
+                    + (result.Key.Tier is { } plan
+                        ? $"\n\n{host.Localize("registrationKeys.mintedPlan")} **{plan}**"
+                        : "")),
                 ex => target.UpdateData(MintResultDataId,
                     $"{host.Localize("registrationKeys.error.failed")} {ex.Message}"));
     }
@@ -343,6 +367,14 @@ public static class InstanceGrantAdminSettingsTab
                 Placeholder = PluginGrantEntry.AllPackages,
                 DataContext = dataContext,
             }.WithWidth("220px"))
+            // The PLAN the entry is scoped to — optional; Apply refuses an id the registry's own
+            // ladder does not know, so a typo cannot be stored as a plan that licenses nothing.
+            .WithView(new TextFieldControl(new JsonPointerReference("tier"))
+            {
+                Label = host.Localize("instanceGrants.field.tier"),
+                Placeholder = "*",
+                DataContext = dataContext,
+            }.WithWidth("130px"))
             .WithView(Controls.Button(host.Localize("instanceGrants.grant"))
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
@@ -365,6 +397,7 @@ public static class InstanceGrantAdminSettingsTab
         return Controls.Stack
             .WithView(Controls.Title(host.Localize("instanceGrants.formHeading"), 3))
             .WithView(Controls.Markdown(host.Localize("instanceGrants.formHint")))
+            .WithView(Controls.Markdown(host.Localize("instanceGrants.tierHint")))
             .WithView(row)
             .WithStyle("padding: 16px; background: var(--neutral-layer-2); border-radius: 8px; "
                        + "gap: 12px; margin-bottom: 24px;");
@@ -389,14 +422,29 @@ public static class InstanceGrantAdminSettingsTab
             target.UpdateData(ResultDataId, host.Localize("instanceGrants.error.unknownSource"));
             return;
         }
+        var tier = PlanTierRanks.Canonical(data?.GetValueOrDefault("tier")?.ToString());
+        if (tier == PluginGrantEntry.AllPackages)
+            tier = "";   // the placeholder, typed literally: every tier
 
-        var entry = new PluginGrantEntry { Source = source, PackageId = packageId };
+        var entry = new PluginGrantEntry
+        {
+            Source = source, PackageId = packageId, Tier = tier.Length > 0 ? tier : null,
+        };
         var path = MeshWeaverInstanceNodeType.GrantPath(instanceId);
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var adminId = accessService?.Context?.ObjectId ?? "";
         var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         target.UpdateData(ResultDataId, host.Localize("instanceGrants.applying"));
+
+        // A plan is validated against the registry's OWN ladder before anything is written — an
+        // unknown plan would store cleanly and license nothing (PlanTierRanks fails closed), the
+        // same silent shape an unknown source has. Revoking never needs the check: the pair is
+        // what is removed.
+        var ladder = host.Hub.ServiceProvider.GetService<PlanTierLadder>();
+        var planKnown = entry.IsPlanScoped && !revoke && ladder is not null
+            ? ladder.Read().Take(1).Select(ranks => ranks.RankOf(entry.Tier) is not null)
+            : Observable.Return(!entry.IsPlanScoped || revoke);
 
         // 🚨 Read-then-CreateOrUpdate, NOT stream.Update. An instance's FIRST grant has no node yet,
         // and Update on a path that does not exist aborts with "no initial state arrived for … within
@@ -405,8 +453,11 @@ public static class InstanceGrantAdminSettingsTab
         //
         // The prior read is a one-shot by exact path — never a query, which is eventually consistent
         // and would happily drop an entry another admin just added.
-        host.Hub.GetMeshNode(path, TimeSpan.FromSeconds(10))
-            .Take(1)
+        planKnown
+            .SelectMany(known => known
+                ? host.Hub.GetMeshNode(path, TimeSpan.FromSeconds(10)).Take(1)
+                : Observable.Throw<MeshNode?>(new ArgumentException(
+                    host.Localize("instanceGrants.error.unknownTier"))))
             .SelectMany(existing =>
             {
                 var grant = existing?.ContentAs<PluginGrant>(host.Hub.JsonSerializerOptions)

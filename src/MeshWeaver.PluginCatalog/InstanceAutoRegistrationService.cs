@@ -1,5 +1,6 @@
 using MeshWeaver.AI;   // IProviderKeyProtector & co keep their ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
 using System.Collections.Immutable;
+using System.Net;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
@@ -356,25 +357,38 @@ public sealed class InstanceAutoRegistrationService(
     internal static (RegistrationPreflight Action, string? Reason) DecideRegistration(
         string? bootstrapKey, string? registryToken, string? instanceId, bool masterKeyPresent)
     {
-        if (string.IsNullOrWhiteSpace(bootstrapKey))
+        // OPEN registration: an instance id and no key. The registry decides whether it accepts
+        // un-keyed callers and which plan they enrol into (the free tier on the cloud registry);
+        // a refusal is logged and skipped by the caller, never an abort — that id was harmless
+        // before the open lane existed and must stay so.
+        var open = string.IsNullOrWhiteSpace(bootstrapKey);
+        if (open && string.IsNullOrWhiteSpace(instanceId))
             return (RegistrationPreflight.Skip, null);  // manual token (or none) — nothing to register
         if (!string.IsNullOrWhiteSpace(registryToken))
-            return (RegistrationPreflight.Skip,
-                "PluginCatalog:BootstrapKey is set but a registry token is already configured — the "
-                + "explicit token wins; skipping auto-registration.");
+            return (RegistrationPreflight.Skip, open
+                ? "PluginCatalog:InstanceId is set but a registry token is already configured — the "
+                  + "explicit token wins; skipping (open) auto-registration."
+                : "PluginCatalog:BootstrapKey is set but a registry token is already configured — the "
+                  + "explicit token wins; skipping auto-registration.");
         if (string.IsNullOrWhiteSpace(instanceId))
             return (RegistrationPreflight.Abort,
                 "PluginCatalog:BootstrapKey is set but PluginCatalog:InstanceId is not. The instance "
                 + "id is a stable global identity and is never derived from a machine or pod name — "
                 + "set it explicitly.");
         if (!masterKeyPresent)
-            return (RegistrationPreflight.Abort,
-                "PluginCatalog:BootstrapKey is set but no encryption master key is configured "
-                + "(Ai:KeyProtection:MasterKey), so the instance key the registry would issue could "
-                + "not be stored — it is stored encrypted or not at all. REFUSING to register before "
-                + "anything is consumed: the bootstrap key stays valid and the instance id stays "
-                + "free, so configuring the master key and restarting completes the registration. "
-                + "(Registering first and failing to store would burn both — #2585.)");
+            return open
+                ? (RegistrationPreflight.Skip,
+                    "PluginCatalog:InstanceId is set (open registration) but no encryption master key "
+                    + "is configured (Ai:KeyProtection:MasterKey), so the instance key the registry "
+                    + "would issue could not be stored — skipping registration; configure the master "
+                    + "key and restart to register.")
+                : (RegistrationPreflight.Abort,
+                    "PluginCatalog:BootstrapKey is set but no encryption master key is configured "
+                    + "(Ai:KeyProtection:MasterKey), so the instance key the registry would issue could "
+                    + "not be stored — it is stored encrypted or not at all. REFUSING to register before "
+                    + "anything is consumed: the bootstrap key stays valid and the instance id stays "
+                    + "free, so configuring the master key and restarting completes the registration. "
+                    + "(Registering first and failing to store would burn both — #2585.)");
         return (RegistrationPreflight.Register, null);
     }
 
@@ -477,6 +491,22 @@ public sealed class InstanceAutoRegistrationService(
                                 })
                                 .Finally(() => write.Dispose());
                         });
+                    })
+                    // An OPEN registration the registry refuses (401: it configures no open key) is
+                    // not this deployment's fault and not a reason to withhold the install phase —
+                    // the id was set, no key was, and that combination was harmless before the open
+                    // lane existed. Say what would make it work, and go on unregistered.
+                    .Catch((InstanceRegistrationException ex) =>
+                    {
+                        if (bootstrapKey.Length > 0 || ex.StatusCode != HttpStatusCode.Unauthorized)
+                            return Observable.Throw<Unit>(ex);
+                        logger.LogWarning(
+                            "Open registration as '{InstanceId}' at {Url} was refused (401): that registry "
+                            + "accepts no un-keyed registrations. Ask its platform admin for a registration "
+                            + "key (PluginCatalog:BootstrapKey) — or for the free-tier open key to be "
+                            + "configured there. Continuing without a registry credential.",
+                            instanceId, registry.Url);
+                        return Observable.Return(Unit.Default);
                     })
                     // Concurrent replicas race this whole block: both read "no credential", one
                     // registers first, and the loser sees 409 (the id is taken) — or, narrower, the

@@ -39,7 +39,11 @@ public static class InstanceRegistrationEndpoints
     {
         var logger = http.RequestServices.GetService<ILoggerFactory>()
             ?.CreateLogger(typeof(InstanceRegistrationEndpoints));
-        var instances = rootHub.ServiceProvider.GetRequiredService<MeshWeaverInstanceService>();
+        // Request services first, then the mesh's — the same two-step resolution the bundle routes
+        // use for their anchor, so a host (or a test) can wire an instance service with its own
+        // configuration without a second resolution rule.
+        var instances = http.RequestServices.GetService<MeshWeaverInstanceService>()
+            ?? rootHub.ServiceProvider.GetRequiredService<MeshWeaverInstanceService>();
 
         if (!MeshWeaverInstanceService.IsValidInstanceId(body.InstanceId))
             return Task.FromResult(Results.Json(
@@ -47,18 +51,29 @@ public static class InstanceRegistrationEndpoints
                               + "hyphens, not starting or ending with a hyphen." },
                 statusCode: StatusCodes.Status400BadRequest));
 
-        return instances
-            .RegisterWithBootstrapKey(
-                body.BootstrapKey, body.InstanceId, body.DisplayName, body.Description, body.HomeUrl)
+        // No key at all is OPEN registration — accepted only where the registry's operator
+        // configured a key for un-keyed callers (the free plan on memex.meshweaver.cloud), refused
+        // with the same 401 as an invalid key everywhere else. The caller never learns which.
+        var open = string.IsNullOrWhiteSpace(body.BootstrapKey);
+        return (open
+                ? instances.RegisterOpen(body.InstanceId, body.DisplayName, body.Description, body.HomeUrl)
+                : instances.RegisterWithBootstrapKey(
+                    body.BootstrapKey, body.InstanceId, body.DisplayName, body.Description, body.HomeUrl))
             .Select(registration => (IResult)Results.Json(
                 new InstanceRegistrationPayloads.Response(
                     registration.Instance.InstanceId, registration.RawKey),
                 InstanceRegistrationPayloads.Json))
             .Catch((InvalidBootstrapKeyException ex) =>
             {
-                logger?.LogWarning(
-                    "Instance registration rejected for id '{InstanceId}' — invalid, revoked or "
-                    + "expired bootstrap key", body.InstanceId);
+                if (open)
+                    logger?.LogWarning(
+                        "OPEN instance registration rejected for id '{InstanceId}' — this registry "
+                        + "configures no {Key}", body.InstanceId,
+                        MeshWeaverInstanceService.OpenRegistrationKeyConfigKey);
+                else
+                    logger?.LogWarning(
+                        "Instance registration rejected for id '{InstanceId}' — invalid, revoked or "
+                        + "expired bootstrap key", body.InstanceId);
                 return Observable.Return((IResult)Results.Json(
                     new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized));
             })

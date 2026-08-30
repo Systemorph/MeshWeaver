@@ -79,7 +79,7 @@ readonly MEMEX_LOCAL_VERSION="0.2.0"
 readonly LOCAL_HOME="${MEMEX_LOCAL_HOME:-$HOME/.memex-local}"
 readonly OVERLAY="$LOCAL_HOME/values.local.yaml"
 # ── REGISTRY MODE — this install CONSUMES a remote plugin registry ──────────────────────────────
-# Written by `memex-local registry <url> --key mwr_… [--id ID]`, read by helm_deploy as one more
+# Written by `memex-local registry <url> [--key mwr_…] [--id ID]`, read by helm_deploy as one more
 # values file (passed AFTER the user's overlay, so it wins). Its presence IS the mode switch: with it
 # the local portal stops being its own registry off a source checkout — which can never land a
 # module binary (MeshWeaver#2417) — and instead registers itself at the remote registry on first
@@ -230,31 +230,43 @@ registry_instance_id() {
   awk '/^[[:space:]]+instanceId:/ { gsub(/"/, "", $2); print $2; exit }' "$REGISTRY_FILE"
 }
 
-# Write the registry values file. The bootstrap key is a SECRET (it registers instances under the
-# minting admin's identity), so the file is 0600 like the overlay, and `status` never prints it.
+# Write the registry values file. A bootstrap key, when given, is a SECRET (it registers instances
+# under the minting admin's identity), so the file is 0600 like the overlay, and `status` never
+# prints it. No key = OPEN registration: the portal presents only its instance id, and the registry
+# decides whether it accepts that and which plan it enrols the install into (the free tier on
+# memex.meshweaver.cloud — Doc/Architecture/PluginRegistry → Plans); the secrets block is then left
+# out entirely rather than written empty.
 write_registry_file() {
   local url="$1" key="$2" id="$3"
   mkdir -p "$LOCAL_HOME"
+  local secrets=""
+  if [ -n "$key" ]; then
+    secrets="secrets:
+  memex_portal:
+    PluginCatalog__BootstrapKey: \"$key\""
+  fi
   # Subshell: the umask must not leak into the rest of this process (the overlay, the cert files
   # and every later write keep their own modes).
   ( umask 077; cat > "$REGISTRY_FILE" ) <<YAML
 # memex-local REGISTRY MODE — managed by \`memex-local registry\`; re-run it to change, \`registry off\`
 # to delete. Layered LAST over the overlay by helm_deploy. This install is a CONSUMER of the registry
-# below: it registers itself there on first boot (PluginCatalog__BootstrapKey, presented ONCE — the
-# issued instance key is then stored encrypted in this install's own database and survives every
-# \`memex-local update\`), installs the packages it is granted, and lands their compiled modules
-# from the registry's bundles. What it is granted is decided on the REGISTRY (Admin ▸ Instance
-# grants) — see Doc/Architecture/PluginRegistry.
+# below: it registers itself there on first boot (a bootstrap key is presented ONCE when one was
+# given; without one this is an OPEN registration the registry enrols into its default plan — the
+# free tier on memex.meshweaver.cloud), stores the issued instance key encrypted in its own database
+# (it survives every \`memex-local update\`), installs the packages it is granted, and lands their
+# compiled modules from the registry's bundles. What it is granted is decided on the REGISTRY
+# (Admin ▸ Instance grants) — see Doc/Architecture/PluginRegistry.
 pluginCatalog:
   registryUrl: "$url"
   instanceId: "$id"
   homeUrl: "https://${HOSTNAME_LOCAL}"
-secrets:
-  memex_portal:
-    PluginCatalog__BootstrapKey: "$key"
+${secrets}
 YAML
   chmod 600 "$REGISTRY_FILE"
 }
+
+# Whether the registry file carries a bootstrap key (else the registration is OPEN).
+registry_has_key() { grep -q '^    PluginCatalog__BootstrapKey: "mwr_' "$REGISTRY_FILE" 2>/dev/null; }
 
 # A default instance id: <user>-<host>, lower-cased, restricted to the registry's id alphabet.
 default_instance_id() {
@@ -270,7 +282,12 @@ cmd_registry() {
       if registry_mode; then
         ok "REGISTRY MODE — this install consumes $(registry_url)"
         info "instance id:   $(registry_instance_id)"
-        info "bootstrap key: $(awk '/PluginCatalog__BootstrapKey:/ { gsub(/"/, "", $2); print substr($2, 1, 8) "…" ; exit }' "$REGISTRY_FILE") (presented once on first boot; never printed)"
+        if registry_has_key; then
+          info "registration:  with bootstrap key $(awk '/PluginCatalog__BootstrapKey:/ { gsub(/"/, "", $2); print substr($2, 1, 8) "…" ; exit }' "$REGISTRY_FILE") (presented once on first boot; never printed)"
+        else
+          info "registration:  OPEN — no key; the registry enrols this install into its default plan"
+          info "               (the free tier on memex.meshweaver.cloud). A platform admin there raises it."
+        fi
         info "values file:   $REGISTRY_FILE (layered last by helm_deploy)"
         info "images:        pulled from $ACR (tag $ACR_DEFAULT_TAG) unless --build is passed"
         info "modules:       landed from the registry's bundles into Modules__Root=/data"
@@ -278,7 +295,8 @@ cmd_registry() {
         ok "SELF-REGISTRY MODE — this install serves plugins from a source checkout (§16)"
         info "no module BINARY can land in this mode (MeshWeaver#2417): Radzen, Analysis, EntityViews,"
         info "GoogleMaps and Speech stay absent. Switch with:"
-        info "  memex-local registry $DEFAULT_REGISTRY_URL --key mwr_… [--id $(default_instance_id)]"
+        info "  memex-local registry $DEFAULT_REGISTRY_URL [--id $(default_instance_id)]   # free tier, no key"
+        info "  memex-local registry $DEFAULT_REGISTRY_URL --key mwr_…                     # a plan an admin minted a key for"
       fi
       ;;
     off)
@@ -292,11 +310,11 @@ cmd_registry() {
       fi
       ;;
     *)
-      # `registry <url> --key mwr_… [--id ID]` — the URL is the subcommand word itself.
+      # `registry <url> [--key mwr_…] [--id ID]` — the URL is the subcommand word itself.
       local url="$sub" key="" id=""
       case "$url" in
         http://*|https://*) ;;
-        *) die "registry: expected a URL, 'status' or 'off' — got '$url' (try: memex-local registry $DEFAULT_REGISTRY_URL --key mwr_…)" ;;
+        *) die "registry: expected a URL, 'status' or 'off' — got '$url' (try: memex-local registry $DEFAULT_REGISTRY_URL)" ;;
       esac
       while [ $# -gt 0 ]; do
         case "$1" in
@@ -308,18 +326,26 @@ cmd_registry() {
       done
       # 🚨 The key SHAPE is checked here so a pasted instance key (mwi_) or personal token (mw_) is
       # refused with its name, not by a 401 on first boot that reads like a broken registry. A
-      # bootstrap key registers instances; nothing else does.
+      # bootstrap key registers instances; nothing else does. NO key is the default and is an OPEN
+      # registration — the registry's decision, not this tool's (PluginCatalog:OpenRegistration:Key
+      # on the registry, minted for the free plan on memex.meshweaver.cloud).
       case "$key" in
-        mwr_*) ;;
-        "") die "registry: --key mwr_… is required — mint one on the registry: Settings ▸ Administration ▸ Instance grants ▸ Registration keys (a platform admin, see Doc/Architecture/PluginRegistry)" ;;
-        *) die "registry: '--key' must be a REGISTRATION key (mwr_…); an instance key (mwi_) or a personal token (mw_) cannot register an install" ;;
+        ""|mwr_*) ;;
+        *) die "registry: '--key' must be a REGISTRATION key (mwr_…); an instance key (mwi_) or a personal token (mw_) cannot register an install — or pass no key at all for an open (free-tier) registration" ;;
       esac
       [ -n "$id" ] || id="$(default_instance_id)"
       case "$id" in
         *[!a-z0-9-]*|"") die "registry: --id must be lower-case letters, digits and dashes (got '$id')" ;;
       esac
       write_registry_file "${url%/}" "$key" "$id"
-      ok "registry mode ON — $url, instance id '$id' (stored in $REGISTRY_FILE)"
+      if [ -n "$key" ]; then
+        ok "registry mode ON — $url, instance id '$id', registering with the given key (stored in $REGISTRY_FILE)"
+      else
+        ok "registry mode ON — $url, instance id '$id', OPEN registration (stored in $REGISTRY_FILE)"
+        info "No key: the registry enrols this install into its default plan (the free tier on"
+        info "memex.meshweaver.cloud). A platform admin there raises it — or mints a key for a plan:"
+        info "  memex-local registry $url --key mwr_…"
+      fi
       info "Apply it: memex-local update   (pulls the CI-built image from $ACR and re-renders the chart;"
       info "          the portal registers itself on first boot and installs what it is granted)."
       ;;
@@ -655,7 +681,7 @@ helm_deploy() {
     info "serving plugin repo '$repo_name' from $repo_path (granted to every new instance)"
     idx=$((idx + 1))
   done
-  [ "$idx" -eq 0 ] && ! registry_mode && info "no local plugin repo found — the catalog will be empty (set MEMEX_PLUGIN_REPOS, or switch to registry mode: memex-local registry $DEFAULT_REGISTRY_URL --key mwr_…)"
+  [ "$idx" -eq 0 ] && ! registry_mode && info "no local plugin repo found — the catalog will be empty (set MEMEX_PLUGIN_REPOS, or switch to registry mode: memex-local registry $DEFAULT_REGISTRY_URL)"
 
   # 🚨 InstallByDefault must name the sources we ACTUALLY configured. The chart ships
   # ["Plugins/*"], which is right for the cloud registry but silently installs NOTHING here the
@@ -1002,8 +1028,9 @@ verify_usable() {
      installs DefaultViews/GraphViews from there and lands their modules from its bundles. It did not.
      Remedy: read why with
        memex-local logs --no-follow --tail 400 | grep -E 'DefaultInstall|Module|register'
-     — a 401 means the bootstrap key was refused (revoked/expired: mint a new one, 'memex-local
-     registry <url> --key …'); 'advertises 0 package(s)' means the registry granted this instance
+     — a 401 means the registration was refused: with a key, it is revoked/expired (mint a new one,
+     'memex-local registry <url> --key …'); without one, that registry accepts no OPEN registrations
+     (ask its platform admin for a key); 'advertises 0 package(s)' means the registry granted this instance
      nothing (a platform admin adds Plugins/* under Admin ▸ Instance grants for '$(registry_instance_id)')."
     failed=1
   elif [ -n "$missing" ]; then
@@ -2055,15 +2082,18 @@ COMMANDS:
                   --from-acr in registry mode (the CI-built multi-arch image, native
                   arm64 member), --build otherwise (Option B, source → Colima's
                   Docker store — the no-cloud-creds path).
-  registry <url> --key mwr_… [--id ID] | status | off
+  registry <url> [--key mwr_…] [--id ID] | status | off
                   REGISTRY MODE (§17): make this install a CONSUMER of a remote plugin
                   registry — normally $DEFAULT_REGISTRY_URL. It registers itself
-                  there on first boot with the registration key a platform admin
-                  minted (Settings ▸ Administration ▸ Instance grants), installs what
-                  it is granted, and lands the compiled modules from the registry's
-                  bundles — the only way a local install gets Radzen/Analysis/
-                  EntityViews/GoogleMaps/Speech at all (MeshWeaver#2417). Then run
-                  \`memex-local update\`. \`off\` returns to serving a checkout (§16).
+                  there on first boot — with NO key by default (an OPEN registration
+                  the registry enrols into its default plan, the free tier), or with
+                  a registration key a platform admin minted for a plan (Settings ▸
+                  Administration ▸ Instance grants) — installs what it is granted, and
+                  lands the compiled modules from the registry's bundles: the only way
+                  a local install gets Radzen/Analysis/EntityViews/GoogleMaps/Speech
+                  at all (MeshWeaver#2417). Then run \`memex-local update\`. Raising
+                  the plan is the registry admin's edit of this instance's grant.
+                  \`off\` returns to serving a checkout (§16).
   down [--purge] [--stop-colima]
                   Uninstall the release (keeps the Postgres PVC). --purge wipes
                   data (namespace + PVC + ingress-nginx); --stop-colima stops VM.
