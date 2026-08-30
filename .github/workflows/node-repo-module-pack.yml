@@ -428,11 +428,18 @@ jobs:
       # -p:CopyLocalLockFileAssemblies=true build was tried first and copied NOTHING on the CI
       # SDK while copying everything on a dev machine (2026-08-20, 12/14 jobs) — publish does not
       # depend on that flag at all.
+      # 🚨 The SAME reference set as the build: --no-build re-evaluates the project, and without
+      # -p:MeshWeaverRefs the platform ProjectReferences the build had dropped come back — publish
+      # then copies their outputs, which were never built ("MSB3030: Could not copy
+      # meshweaver/src/MeshWeaver.Graph/bin/Release/net10.0/MeshWeaver.Graph.dll", Plugins #940).
       - name: Publish the module (the closure the pack selects from)
+        env:
+          REFS: ${{ inputs.platform-image-digest != '' && format('{0}/platform-refs', runner.temp) || '' }}
         run: >
           dotnet publish "${{ matrix.entry.project }}" -c Release --no-build
           -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
           -p:Version=${{ steps.identity.outputs.version }}
+          ${REFS:+-p:MeshWeaverRefs=$REFS}
 
       - name: Build the module-pack tool
         run: dotnet build meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release
