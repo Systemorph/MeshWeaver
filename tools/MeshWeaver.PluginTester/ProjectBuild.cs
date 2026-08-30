@@ -82,6 +82,16 @@ public static class ProjectBuild
         /// </summary>
         public IReadOnlyList<string> GeneratorPaths { get; init; } = [];
 
+        /// <summary>
+        /// Where the RAZOR source generator lives. Null means the standard search —
+        /// <c>razor-generators/</c> beside this builder, then under <see cref="AppDirectory"/> —
+        /// which is where the image build lays it. Named separately from
+        /// <see cref="GeneratorPaths"/> because it is not optional in the same way: a project with
+        /// <c>.razor</c> files and no Razor compiler is a FAILURE, never a build that quietly
+        /// omits every component.
+        /// </summary>
+        public string? RazorGeneratorDirectory { get; init; }
+
         /// <summary>Concurrency cap across independent projects.</summary>
         public int MaxParallel { get; init; } = Math.Max(1, Environment.ProcessorCount);
 
@@ -108,6 +118,7 @@ public static class ProjectBuild
     /// <param name="AssemblyPath">The emitted DLL, when the emit succeeded.</param>
     /// <param name="UnresolvedPackages">Packages neither the container nor <c>--extra-refs</c> supplies.</param>
     /// <param name="Failure">Why the project is red, when it is.</param>
+    /// <param name="RazorCount">How many <c>.razor</c>/<c>.cshtml</c> files the Razor generator compiled.</param>
     public sealed record ProjectResult(
         string ProjectPath,
         string AssemblyName,
@@ -117,7 +128,8 @@ public static class ProjectBuild
         int Warnings,
         string? AssemblyPath,
         ImmutableArray<string> UnresolvedPackages,
-        string? Failure)
+        string? Failure,
+        int RazorCount = 0)
     {
         /// <summary>Compiled, emitted, and within the warning policy.</summary>
         public bool IsGreen => Failure is null && AssemblyPath is not null;
@@ -405,7 +417,9 @@ public static class ProjectBuild
     {
         var clock = Stopwatch.StartNew();
         var name = Path.GetFileNameWithoutExtension(model.ProjectPath);
-        sink.Info($"[{name}] start — {model.CompileItems.Length} source file(s), "
+        var razorGenerated = 0;
+        sink.Info($"[{name}] start — {model.CompileItems.Length} source file(s)"
+                  + (model.RazorItems.IsEmpty ? "" : $" + {model.RazorItems.Length} Razor file(s)") + ", "
                   + $"target {(model.TargetFramework.Length > 0 ? model.TargetFramework : "(unset)")}, "
                   + $"nullable {model.NullableOptions}, "
                   + $"warnings-as-errors {(model.TreatWarningsAsErrors ? "on" : "off")}");
@@ -528,6 +542,39 @@ public static class ProjectBuild
 
         var compilation = CSharpCompilation.Create(
             model.AssemblyName, trees, references, compilationOptions);
+
+        // 🚨 RAZOR FIRST. `.razor` becomes C# through a Roslyn source generator, so a Blazor project
+        // whose components have not been generated is not "a project with errors" — it is a project
+        // that was never fully read. Running it before any other generator also means an ordinary
+        // `--generators` generator sees the component partials, exactly as csc does.
+        if (!model.RazorItems.IsEmpty)
+        {
+            try
+            {
+                var directory = RazorGenerators.Locate(options.RazorGeneratorDirectory, options.AppDirectory)
+                    ?? throw new RazorGenerators.MissingRazorCompilerException(
+                        RazorGenerators.MissingCompilerMessage(
+                            name, model.RazorItems.Length,
+                            RazorGenerators.SearchPath(options.RazorGeneratorDirectory, options.AppDirectory)));
+                var razor = RazorGenerators.Load(directory, sink.Logger);
+                sink.Info(
+                    $"[{name}] Razor: {model.RazorItems.Length} file(s) through "
+                    + $"{razor.Generators.Length} generator(s) from {razor.Directory} ({razor.Provenance})");
+                var outcome = RazorGenerators.Run(compilation, model, razor, parseOptions, CancellationToken.None);
+                compilation = outcome.Compilation;
+                razorGenerated = outcome.GeneratedSources;
+                foreach (var diagnostic in outcome.Diagnostics.Where(d => d.Severity >= DiagnosticSeverity.Warning))
+                    sink.Warn($"[{name}] razor: {Render(diagnostic)}");
+                sink.Info($"[{name}] Razor: {razorGenerated} generated document(s)");
+            }
+            catch (RazorGenerators.MissingRazorCompilerException ex)
+            {
+                sink.Error($"[{name}] {ex.Message}");
+                return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
+                    model.CompileItems.Length, 1, 0, null, [], ex.Message);
+            }
+        }
+
         if (!generators.IsEmpty)
             compilation = GeneratorPipeline.RunSourceGenerators(
                 compilation, generators, sink.Logger, CancellationToken.None);
@@ -535,6 +582,7 @@ public static class ProjectBuild
         var errors = 0;
         var warnings = 0;
         var missingGeneratorPartials = 0;
+        var missingComponentOverrides = 0;
         foreach (var diagnostic in compilation.GetDiagnostics())
         {
             switch (diagnostic.Severity)
@@ -543,6 +591,11 @@ public static class ProjectBuild
                     errors++;
                     if (diagnostic.Id is "CS8795" or "CS8785" or "CS9248")
                         missingGeneratorPartials++;
+                    // CS0115 "no suitable method found to override" is what a Razor component looks
+                    // like when its generated half is absent: the .razor.cs declares
+                    // BuildRenderTree, the generator never produced the partial that has it.
+                    if (diagnostic.Id is "CS0115")
+                        missingComponentOverrides++;
                     sink.Error($"[{name}] {Render(diagnostic)}");
                     break;
                 case DiagnosticSeverity.Warning:
@@ -568,10 +621,21 @@ public static class ProjectBuild
                     + "built-in generators (GeneratedRegex, LoggerMessage, JsonSerializable) ship in "
                     + "the .NET SDK, not in a runtime image, so this container has none. Supply them "
                     + "with --generators <dir>, or the project cannot be built in this mode.");
+            if (model.RazorItems.IsEmpty && missingComponentOverrides > 0)
+                // 🚨 The other half of the same rule. CS0115 in a project this builder found NO
+                // Razor items in means the components were never offered to the generator at all —
+                // the item glob, not the compile, is what went wrong. Say which.
+                sink.Error(
+                    $"[{name}] {missingComponentOverrides} of those errors are overrides with nothing "
+                    + "to override — the signature of Razor components whose generated partial is "
+                    + "missing. This build found NO .razor/.cshtml items in the project, so the "
+                    + "generator was never asked to produce them: check the project's Sdk (Razor "
+                    + "items are compiled only under Microsoft.NET.Sdk.Razor/.Web) and its Content "
+                    + "items, rather than reading these as broken source.");
             sink.Error($"[{name}] RED — {errors} error(s), {warnings} warning(s) in {clock.Elapsed.TotalMilliseconds:F0} ms");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, errors, warnings, null, [],
-                $"{errors} compile error(s)");
+                $"{errors} compile error(s)", razorGenerated);
         }
         if (warnings > 0 && !options.AllowWarnings)
         {
@@ -599,10 +663,12 @@ public static class ProjectBuild
             }
             NameTheDocumentationFile(outputDirectory, model);
             sink.Info(
-                $"[{name}] OK — {model.CompileItems.Length} source file(s), {warnings} warning(s), "
+                $"[{name}] OK — {model.CompileItems.Length} source file(s)"
+                + (razorGenerated == 0 ? "" : $" + {model.RazorItems.Length} Razor file(s)")
+                + $", {warnings} warning(s), "
                 + $"{artifact.Length} bytes in {clock.Elapsed.TotalMilliseconds:F0} ms → {artifact.DllPath}");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
-                model.CompileItems.Length, 0, warnings, artifact.DllPath, [], null);
+                model.CompileItems.Length, 0, warnings, artifact.DllPath, [], null, razorGenerated);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -31,7 +31,8 @@ mw-compiler build-project <csproj|dir>     # BUILD A .csproj: no dotnet SDK, no 
 
 ```
 mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] [--extra-refs <dir>]... \
-    [--generators <dir|dll>]... [--accept <construct>]... [--allow-warnings] [--max-parallel <n>]
+    [--generators <dir|dll>]... [--razor-generators <dir>] \
+    [--accept <construct>]... [--allow-warnings] [--max-parallel <n>]
 ```
 
 Runs INSIDE the image (`memex build project --image …` is the trip in). Three parts:
@@ -75,11 +76,30 @@ for no doc file — which is when csc would not raise it either. The SDK's defau
 (`ActivityCategory.Compilation`) and pushed to the caller's observer the moment it is produced; the
 console is a rendering of that stream, which is why nothing is batched to the end.
 
-**Not supported, and each says so:** Razor/Blazor compilation (needs
-`Microsoft.CodeAnalysis.Razor.Compiler`, `Microsoft.AspNetCore.Razor.Utilities.Shared` and
-`Microsoft.Extensions.ObjectPool` in the image — it ships none), SDK source generators (they live in
-the SDK, not the runtime; `--generators` supplies them), embedded resources, `<Protobuf>`, MSBuild
-`<Target>`s and `<Sdk>` elements. Full measurements:
+**Razor/Blazor compiles** (2026-08-31). `.razor` and `.cshtml` are turned into C# by the SDK's
+Roslyn **source generator**, which the image now ships in `razor-generators/<rid>/` beside the
+builder: `Microsoft.CodeAnalysis.Razor.Compiler.dll` + `Microsoft.AspNetCore.Razor.Utilities.Shared.dll`
+— the measured closure, everything else the compiler references binds to the host.
+
+- 🚨 **Per RID.** The SDK crossgens its Razor compiler for the SDK's own runtime identifier, so ONE
+  copy cannot serve a multi-arch image: the same 10.0.400 file carries PE machine `0xFD1D` on
+  linux-x64 and `0xD11D` on linux-arm64, and the wrong one throws `BadImageFormatException`. CD
+  stages both; `--razor-generators <dir>` names another copy and REPLACES the search rather than
+  heading it.
+- 🚨 **Loaded into a host-first load context.** The generator is built against the SDK's Roslyn
+  (10.0.400's wants `Microsoft.CodeAnalysis` 5.9.0.0) and the image carries this repo's pin (5.6.0);
+  the default context refuses the lower version, so every assembly the host already has is bound to
+  the host's copy with the version ignored — which is also the only way the generator and the driver
+  agree on the identity of `ISourceGenerator`.
+- **Refused by name rather than skipped:** a project with Razor files and no generator (it says what
+  the CS0115 wall would have been); a generator that runs and emits nothing; `*.razor.css` CSS
+  isolation, whose `b-…` scope comes from an MSBuild task this builder does not run
+  (`--accept razor-css-scope` builds without it); and `.razor` files under a project whose `Sdk`
+  does not process them (`--accept razor-not-compiled`).
+
+**Still not supported, and each says so:** SDK source generators (they live in the SDK, not the
+runtime; `--generators` supplies them), embedded resources, `<Protobuf>`, MSBuild `<Target>`s and
+`<Sdk>` elements. Full measurements:
 [In-Mesh Build and Test](https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Documentation/Data/Architecture/InMeshBuildAndTest.md).
 
 ## `build` — compile AND test, per package, as a dependency cascade (2026-08-30)

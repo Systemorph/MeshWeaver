@@ -43,6 +43,16 @@ public static class ProjectFile
     /// with no matching <c>PackageVersion</c>.</param>
     public sealed record PackageRef(string Id, string? Version);
 
+    /// <summary>
+    /// One Razor input — a <c>.razor</c> component or a <c>.cshtml</c> view — with the
+    /// <c>TargetPath</c> the SDK's <c>AssignTargetPath</c> task would have given it (the path
+    /// relative to the project directory, which is what decides the generated type's namespace).
+    /// </summary>
+    /// <param name="Path">Absolute path of the file.</param>
+    /// <param name="TargetPath">Path relative to the project directory.</param>
+    /// <param name="IsComponent">True for <c>.razor</c>, false for <c>.cshtml</c>.</param>
+    public sealed record RazorItem(string Path, string TargetPath, bool IsComponent);
+
     /// <summary>The evaluated project.</summary>
     /// <param name="ProjectPath">Absolute path of the <c>.csproj</c>.</param>
     /// <param name="Sdk">The <c>Sdk</c> attribute, verbatim.</param>
@@ -65,6 +75,10 @@ public static class ProjectFile
     /// <param name="GlobalUsings">Namespaces the SDK would have emitted as <c>global using</c>.</param>
     /// <param name="Properties">Every evaluated property, for diagnosis.</param>
     /// <param name="UnexecutedTargets">Names of <c>Target</c> elements this evaluator did not run.</param>
+    /// <param name="RazorItems">Every <c>.razor</c>/<c>.cshtml</c> the Razor SDK would compile, ordered.</param>
+    /// <param name="RazorLangVersion">The <c>RazorLangVersion</c> the generator is given.</param>
+    /// <param name="RazorConfiguration">The <c>RazorConfiguration</c> the generator is given.</param>
+    /// <param name="SupportLocalizedComponentNames">The <c>SupportLocalizedComponentNames</c> setting.</param>
     public sealed record Model(
         string ProjectPath,
         string Sdk,
@@ -86,7 +100,11 @@ public static class ProjectFile
         ImmutableArray<PackageRef> PackageReferences,
         ImmutableArray<string> GlobalUsings,
         ImmutableDictionary<string, string> Properties,
-        ImmutableArray<string> UnexecutedTargets)
+        ImmutableArray<string> UnexecutedTargets,
+        ImmutableArray<RazorItem> RazorItems,
+        string RazorLangVersion,
+        string RazorConfiguration,
+        bool SupportLocalizedComponentNames)
     {
         /// <summary>The project's own directory.</summary>
         public string Directory => Path.GetDirectoryName(ProjectPath)!;
@@ -108,6 +126,25 @@ public static class ProjectFile
         /// <summary>Acknowledge a <c>Condition</c> expression outside the supported grammar,
         /// treating it as FALSE. <c>condition:&lt;text&gt;</c> accepts one.</summary>
         public const string AllConditions = "conditions";
+
+        /// <summary>
+        /// Acknowledge that CSS ISOLATION is not applied — the project has <c>*.razor.css</c> files
+        /// whose scope identifier the SDK computes with an MSBuild task this builder does not run,
+        /// so the components compile WITHOUT their <c>b-…</c> scope attributes. The assembly is
+        /// valid and every component in it renders; what it loses is the attribute that makes the
+        /// isolated stylesheet apply. Refused by default because reproducing the scope hash from
+        /// memory is exactly the guess this evaluator exists to avoid, and a half-right scope is
+        /// worse than a named refusal.
+        /// </summary>
+        public const string RazorCssScope = "razor-css-scope";
+
+        /// <summary>
+        /// Acknowledge that <c>.razor</c>/<c>.cshtml</c> files in the project tree are NOT compiled,
+        /// because the project's <c>Sdk</c> does not process Razor items (the SDK's own build would
+        /// ignore them too). Said out loud rather than skipped: a Razor file nobody compiles is the
+        /// exact failure this builder was extended to prevent.
+        /// </summary>
+        public const string RazorNotCompiled = "razor-not-compiled";
     }
 
     /// <summary>
@@ -121,6 +158,16 @@ public static class ProjectFile
         "System", "System.Collections.Generic", "System.IO", "System.Linq",
         "System.Net.Http", "System.Threading", "System.Threading.Tasks",
     ];
+
+    /// <summary>
+    /// What <c>build_property.RazorLangVersion</c> gets when the project does not set one. The SDK
+    /// sets it from the target framework; <c>Latest</c> is what the generator itself falls back to,
+    /// so this matches rather than inventing a third answer.
+    /// </summary>
+    public const string DefaultRazorLangVersion = "Latest";
+
+    /// <summary>What <c>build_property.RazorConfiguration</c> gets when the project does not set one.</summary>
+    public const string DefaultRazorConfiguration = "Default";
 
     /// <summary>The extra implicit usings <c>Microsoft.NET.Sdk.Web</c> adds on top.</summary>
     private static readonly ImmutableArray<string> WebImplicitUsings =
@@ -187,6 +234,8 @@ public static class ProjectFile
         private readonly Dictionary<string, string> _properties = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<string> _compileIncludes = [];
         private readonly List<string> _compileRemoves = [];
+        private readonly List<string> _razorIncludes = [];
+        private readonly List<string> _razorRemoves = [];
         private readonly List<string> _projectReferences = [];
         private readonly List<(string Id, string? Version)> _packageReferences = [];
         private readonly List<string> _usings = [];
@@ -435,8 +484,21 @@ public static class ProjectFile
                             + "two definitions of the same type in one compilation.");
                     break;
 
-                case "None":
+                // 🚨 Content is where Razor lives. The Razor SDK's default items are
+                // `Content Include="**\*.razor"` / `"**\*.cshtml"`, and its ResolveRazorComponentInputs
+                // /ResolveRazorGenerateInputs targets promote exactly those Content items to
+                // RazorComponent / RazorGenerate. So a project's own Content Include/Remove of a
+                // Razor file CHANGES WHAT COMPILES, and dropping it here would silently omit or
+                // silently add a component. Everything else about Content is packaging, which does
+                // not reach csc.
                 case "Content":
+                case "RazorComponent":
+                case "RazorGenerate":
+                    if (include.Length > 0) _razorIncludes.AddRange(Split(include).Where(IsRazorPattern));
+                    if (remove.Length > 0) _razorRemoves.AddRange(Split(remove).Where(IsRazorPattern));
+                    break;
+
+                case "None":
                 case "AdditionalFiles":
                 case "InternalsVisibleTo":
                 case "AssemblyAttribute":
@@ -445,9 +507,9 @@ public static class ProjectFile
                 case "SupportedPlatform":
                 case "TrimmerRootAssembly":
                 case "RuntimeHostConfigurationOption":
-                    // None/Content are packaging inputs; FrameworkReference is satisfied by the
-                    // container's own reference set (the process IS the framework); the rest are
-                    // metadata that does not change which sources compile against what.
+                    // None is a packaging input; FrameworkReference is satisfied by the container's
+                    // own reference set (the process IS the framework); the rest are metadata that
+                    // does not change which sources compile against what.
                     break;
 
                 default:
@@ -478,8 +540,9 @@ public static class ProjectFile
             _defaultCompileItemsDisabled =
                 IsFalse(Prop("EnableDefaultItems")) || IsFalse(Prop("EnableDefaultCompileItems"));
 
+            var razorItems = ResolveRazorItems(sdk);
             var sources = ResolveCompileItems();
-            if (sources.IsEmpty)
+            if (sources.IsEmpty && razorItems.IsEmpty)
                 throw new UnsupportedConstructException(
                     $"{projectPath}: no source files. A compile with nothing in it is a failure here, "
                     + "never a green no-op.");
@@ -516,8 +579,105 @@ public static class ProjectFile
                     .Select(p => new PackageRef(p.Id, p.Version ?? _packageVersions.GetValueOrDefault(p.Id)))],
                 globalUsings,
                 _properties.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
-                [.. _unexecutedTargets]);
+                [.. _unexecutedTargets],
+                razorItems,
+                Prop("RazorLangVersion") is { Length: > 0 } rlv ? rlv : DefaultRazorLangVersion,
+                Prop("RazorConfiguration") is { Length: > 0 } rc ? rc : DefaultRazorConfiguration,
+                IsTrue(Prop("SupportLocalizedComponentNames")));
         }
+
+        /// <summary>
+        /// The Razor inputs, by the Razor SDK's own rule: <c>Content Include="**\*.razor"</c> and
+        /// <c>"**\*.cshtml"</c> (its default items), promoted to <c>RazorComponent</c> /
+        /// <c>RazorGenerate</c>, plus whatever the project itself included or removed.
+        ///
+        /// <para>🚨 Two refusals live here, and both exist because the alternative is a silently
+        /// smaller assembly. A project whose <c>Sdk</c> does not process Razor but which HAS Razor
+        /// files is named (the SDK ignores them too — but this builder says so). A project with
+        /// <c>*.razor.css</c> is named, because the scope identifier comes from an MSBuild task this
+        /// builder does not run, so the components would compile without their isolation
+        /// attributes.</para>
+        /// </summary>
+        private ImmutableArray<RazorItem> ResolveRazorItems(string sdk)
+        {
+            var onDisk = RazorFilesOnDisk().ToImmutableArray();
+            if (!ProcessesRazor(sdk))
+            {
+                if (!onDisk.IsEmpty && !IsAccepted(Accept.RazorNotCompiled))
+                    throw new UnsupportedConstructException(
+                        $"{projectPath}: {onDisk.Length} Razor file(s) under a project whose Sdk is "
+                        + $"'{sdk}', which does not process Razor items — so they are NOT compiled "
+                        + $"({string.Join(", ", onDisk.Take(5).Select(f => Path.GetRelativePath(ProjectDirectory, f)))}"
+                        + (onDisk.Length > 5 ? ", …" : "") + "). The SDK's own build ignores them too, "
+                        + $"so re-run with --accept {Accept.RazorNotCompiled} if that is intended — a "
+                        + "silently skipped .razor file is the failure this check exists to prevent.");
+                return [];
+            }
+
+            var files = new List<string>();
+            // EnableDefaultItems/EnableDefaultContentItems are the two switches the Razor SDK guards
+            // its default Content globs with; either one off means the project lists its own.
+            if (!IsFalse(Prop("EnableDefaultItems")) && !IsFalse(Prop("EnableDefaultContentItems")))
+                files.AddRange(onDisk);
+            foreach (var include in _razorIncludes)
+                files.AddRange(ExpandGlob(include));
+
+            var removed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pattern in _razorRemoves)
+                foreach (var match in ExpandGlob(pattern))
+                    removed.Add(match);
+
+            var items = files
+                .Where(f => !removed.Contains(f))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(f => f, StringComparer.Ordinal)
+                .Select(f => new RazorItem(
+                    f,
+                    // AssignTargetPath with RootFolder=$(MSBuildProjectDirectory): the path relative
+                    // to the project, which is what the generator turns into the component's
+                    // namespace. Get it wrong and every component lands in the wrong namespace —
+                    // compiles, and nothing resolves it.
+                    Path.GetRelativePath(ProjectDirectory, f),
+                    f.EndsWith(".razor", StringComparison.OrdinalIgnoreCase)))
+                .ToImmutableArray();
+
+            if (!items.IsEmpty && !IsFalse(Prop("ScopedCssEnabled")))
+            {
+                var scoped = ScopedCssFilesOnDisk().ToImmutableArray();
+                if (!scoped.IsEmpty && !IsAccepted(Accept.RazorCssScope))
+                    throw new UnsupportedConstructException(
+                        $"{projectPath}: {scoped.Length} scoped-CSS file(s) (*.razor.css) — the SDK's "
+                        + "ComputeCssScope/ApplyCssScopes tasks derive each component's `b-…` scope "
+                        + "identifier, and this builder runs no MSBuild task, so the components would "
+                        + "compile WITHOUT their scope attributes and the isolated styles would not "
+                        + $"apply. Re-run with --accept {Accept.RazorCssScope} to build them anyway "
+                        + "(the assembly is valid; only CSS isolation is missing).");
+            }
+
+            return items;
+        }
+
+        /// <summary>Every <c>.razor</c>/<c>.cshtml</c> under the project, minus the output trees.</summary>
+        private IEnumerable<string> RazorFilesOnDisk() =>
+            DefaultGlob("*.razor").Concat(DefaultGlob("*.cshtml"));
+
+        /// <summary>Every <c>*.razor.css</c> under the project, minus the output trees.</summary>
+        private IEnumerable<string> ScopedCssFilesOnDisk() => DefaultGlob("*.razor.css");
+
+        /// <summary>
+        /// Whether this SDK compiles Razor. <c>Microsoft.NET.Sdk.Razor</c> does;
+        /// <c>Microsoft.NET.Sdk.Web</c> and <c>Microsoft.NET.Sdk.BlazorWebAssembly</c> import it.
+        /// Plain <c>Microsoft.NET.Sdk</c> does not, and neither does this builder then.
+        /// </summary>
+        private static bool ProcessesRazor(string sdk) =>
+            sdk.Contains("Sdk.Razor", StringComparison.OrdinalIgnoreCase)
+            || sdk.Contains("Sdk.Web", StringComparison.OrdinalIgnoreCase)
+            || sdk.Contains("BlazorWebAssembly", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Whether a Content/RazorComponent pattern can name a Razor input at all.</summary>
+        private static bool IsRazorPattern(string pattern) =>
+            pattern.EndsWith(".razor", StringComparison.OrdinalIgnoreCase)
+            || pattern.EndsWith(".cshtml", StringComparison.OrdinalIgnoreCase);
 
         private string Prop(string name) => _properties.GetValueOrDefault(name, string.Empty);
 
@@ -544,13 +704,25 @@ public static class ProjectFile
         }
 
         /// <summary>The SDK's default glob: every .cs under the project, minus the output trees.</summary>
-        private IEnumerable<string> DefaultCompileGlob()
+        private IEnumerable<string> DefaultCompileGlob() => DefaultGlob("*.cs");
+
+        /// <summary>
+        /// One of the SDK's default item globs — <c>**\&lt;suffix&gt;</c> under the project, minus
+        /// <c>bin</c>/<c>obj</c>, dot-directories and <c>DefaultItemExcludes</c>. The suffix is
+        /// matched EXACTLY rather than left to <c>EnumerateFiles</c>' three-character-extension
+        /// quirk, so <c>*.razor</c> can never quietly pick up a <c>*.razor.css</c>.
+        /// </summary>
+        /// <param name="suffix">e.g. <c>*.cs</c>, <c>*.razor</c>, <c>*.razor.css</c>.</param>
+        private IEnumerable<string> DefaultGlob(string suffix)
         {
+            var extension = suffix.TrimStart('*');
             var excludes = Split(Prop("DefaultItemExcludes"))
                 .Select(p => Path.GetFullPath(Path.Combine(ProjectDirectory, p.TrimEnd('*', '/', '\\'))))
                 .ToArray();
-            foreach (var file in Directory.EnumerateFiles(ProjectDirectory, "*.cs", SearchOption.AllDirectories))
+            foreach (var file in Directory.EnumerateFiles(ProjectDirectory, suffix, SearchOption.AllDirectories))
             {
+                if (!file.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+                    continue;
                 var relative = Path.GetRelativePath(ProjectDirectory, file);
                 var segments = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 if (segments.Any(s => s is "bin" or "obj" || s.StartsWith('.')))

@@ -392,17 +392,92 @@ with `--accept targets --accept embedded-resource` and ClosedXML + CsvHelper as 
 | | count | why |
 |---|---|---|
 | **green** | **12** | incl. `MeshWeaver.Import` — 90 source files, 0 warnings under warnings-as-errors |
-| Razor/Blazor (CS0115) | 15 | `.razor` components are not compiled — see below |
+| Razor/Blazor (CS0115) | 15 | *fixed 2026-08-31 — see below* |
 | source generators (CS8795) | 15 | `[GeneratedRegex]` / `[LoggerMessage]` / `[JsonSerializable]` |
 | gRPC `<Protobuf>` | 3 | protoc codegen is a build task, not a compile |
 | additional libraries | 5 | Snowflake.Data, Microsoft.Data.Sqlite, Azure.Cosmos, … — supply with `--extra-refs` |
 | portal hosts | 3 | an `<Import>` above the mount; Aspire's `<Sdk>` ELEMENT |
 
+## The container compiles Razor (2026-08-31)
+
+Razor was the biggest single category above, and it was one missing file rather than a missing
+feature: **Razor compilation in the .NET SDK is a Roslyn source generator**
+(`Microsoft.CodeAnalysis.Razor.Compiler`) that turns each `.razor` into the partial class carrying
+its generated `BuildRenderTree` override. A runtime image ships no SDK, so without the generator
+every component compiled to a class with nothing to override — a wall of CS0115 that reads exactly
+like broken source.
+
+The image now carries it, in `razor-generators/` beside the builder, and `build-project` finds and
+runs it automatically for any project whose `Sdk` processes Razor items.
+
+### The dependency closure, measured
+
+Exactly **two** assemblies, established by reading the compiler's own assembly references and then
+proving it by deleting one:
+
+| assembly | why |
+|---|---|
+| `Microsoft.CodeAnalysis.Razor.Compiler` | carries `RazorSourceGenerator`, the `[Generator]` type |
+| `Microsoft.AspNetCore.Razor.Utilities.Shared` | its one private dependency — with it absent the compiler loads, its types enumerate, and every call into it throws |
+
+Everything else it references — `netstandard`, `Microsoft.CodeAnalysis(.CSharp)`,
+`System.Collections.Immutable`, `System.Memory`, `System.Buffers` — binds to the assemblies the
+image already has. 🚨 **`Microsoft.Extensions.ObjectPool` is NOT needed**, though an older Razor
+compiler build referenced it; the belief that it was is exactly why the closure was measured rather
+than assumed.
+
+### Two traps, both of which fail at run time and nowhere else
+
+🚨 **The generator is built against the SDK's Roslyn, not the image's.** SDK 10.0.400's copy
+references `Microsoft.CodeAnalysis` **5.9.0.0** while the image carries this repo's pin, **5.6.0**.
+The default load context binds by name *and refuses a lower version*, so a plain `Assembly.LoadFrom`
+fails — and a generator loader that treats "cannot load" as "not a generator" then produces a build
+indistinguishable from one where nobody asked for Razor. The generator is therefore loaded into a
+context that binds every assembly the HOST already has to the host's copy, version ignored. That is
+also what keeps `ISourceGenerator` ONE type: a second Roslyn in that context would give the
+generator a different interface than the driver expects.
+
+🚨 **The generator is ReadyToRun-compiled for the SDK's own RID.** The same SDK 10.0.400 file carries
+PE machine `0xFD1D` on linux-x64, `0xD11D` on linux-arm64 and `0xEC20` on osx-arm64 (the target
+machine XOR'd with the operating system's R2R marker), and the wrong one throws
+`BadImageFormatException`. `mw-plugin-test` publishes BOTH architectures from ONE x64 build host, so
+copying the build machine's SDK once would have shipped an arm64 image that cannot compile a single
+Blazor project. CD stages one directory per RID (`razor-generators/<rid>/`, the arm64 copy read out
+of the dotnet/sdk image of the same SDK version with `docker create` + `docker cp`, so no emulation
+is involved), and the builder picks the directory for the RID it is running on.
+
+### What it refuses, and why
+
+- **A project with Razor files and no generator.** One named failure that says what the CS0115 wall
+  would have been, not the wall.
+- **A generator that ran and emitted nothing.** Not a compile error — a generator that did not
+  recognise its input, which otherwise fails four steps later as CS0115.
+- **CSS isolation (`*.razor.css`).** The `b-…` scope identifier comes from the SDK's
+  `ComputeCssScope`/`ApplyCssScopes` tasks, and this builder runs no MSBuild task, so the components
+  would compile without their scope attributes. `--accept razor-css-scope` builds them anyway (the
+  assembly is valid; only the isolated stylesheet stops applying). Reproducing the scope hash from
+  memory is the guess this evaluator exists to avoid.
+- **`.razor` under a project whose `Sdk` does not process Razor.** The SDK's build ignores them too,
+  so the outcome matches — but it is stated rather than skipped. `--accept razor-not-compiled`.
+
+### Measured, 2026-08-31 — 10 of the 11 Razor projects
+
+Every `Microsoft.NET.Sdk.Razor` project in `MeshWeaver.Plugins/src`, built against
+`memex-portal-ai@sha256:6f38db08…` with the builder mounted, `--accept targets --accept
+razor-css-scope --accept embedded-resource`:
+
+| | count | |
+|---|---|---|
+| **green, no extra help** | **7** | Blazor (31 `.cs` + **42 `.razor`**), Blazor.EntityViews, Blazor.Graph, Blazor.Analysis, Blazor.OpenStreetMap, Blazor.GoogleMaps, Blazor.AppleMaps |
+| green with `--generators` (the SDK's regex generator) | +2 | Blazor.Views, Blazor.Portal — they were blocked by `[GeneratedRegex]` in `MeshWeaver.Markdown.Collaboration`, not by Razor |
+| green with `--extra-refs` | +1 | Blazor.Radzen — `Radzen.Blazor` is an additional library |
+| still red | 1 | `Memex.Portal.Gui` — a transitive `MeshWeaver.Hosting.Grpc` carries `<Protobuf>`; protoc is a build task, not a compile |
+
+**Razor is no longer what blocks any of them.** The two remaining categories are the pre-existing
+ones — SDK source generators and `<Protobuf>`.
+
 ### What it does NOT do, and what each would take
 
-- **Razor/Blazor.** `.razor` and `.cshtml` are not compiled at all. Doing so needs
-  `Microsoft.CodeAnalysis.Razor.Compiler`, `Microsoft.AspNetCore.Razor.Utilities.Shared` and
-  `Microsoft.Extensions.ObjectPool` present in the image — today it ships none of them.
 - **Source generators.** They live in the .NET **SDK**, and a MeshWeaver image ships the **runtime**.
   `--generators <dir|dll>` loads them when supplied; with none, the builder names the generator that
   did not run rather than leaving a wall of CS8795 that reads like broken source.
