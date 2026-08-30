@@ -93,31 +93,85 @@ The design is the roll plan's **release N+2**, made precise:
   probe already produces for "no silo serves this hub" (#1742), now reached in one hop.
   `SynchronizationStream` and `MeshNodeStreamCache` ride it out; a requester gets its answer
   inside the directed call's own budget instead of the stream's.
-- **The owner's claim gets a DERIVED lifetime.** `OrleansRoutingService.AttachPodHub` today makes
-  six attempts over ≈3 s and then gives up at `Debug` — after which a silo-hosted hub keeps the
-  stream *forever*, invisibly (the only signal is the router-side fallback line). The claim
-  instead retries with its capped backoff **until one of two real terminals**: the hub's
+- **The owner's claim gets a DERIVED lifetime.** `OrleansRoutingService.AttachPodHub` used to make
+  six attempts over ≈3 s and then give up at `Debug` — after which a silo-hosted hub kept the
+  stream *forever*, invisibly (the only signal was the router-side fallback line). The claim
+  now retries with its capped backoff **until one of two real terminals**: the hub's
   registration is disposed, or `IHostApplicationLifetime.ApplicationStopping` fires (the gate
-  `GrainWhileRunning` already expresses). Once the initial budget is exhausted **on a silo** the
-  give-up line is `Warning` — a silo that cannot claim its own hub is abnormal, and the fleet has
+  `GrainWhileRunning` already expresses). Once the initial budget is exhausted **on a process that
+  can host grains** the line is `Warning` naming the hub — abnormal, and the fleet has
   no clients for which it would be noise. This is the #2426 rule applied to the claim: no
   cleanup message a restarting process would never send, only lifetimes derived from the hub and
   the host.
+  - **A third terminal, and it is derived too: IMPOSSIBILITY.** A process that cannot host a grain
+    can never win the claim — `PodHubGrain` is `[PreferLocalPlacement]`, so from a cluster client
+    the activation lands on some silo with no local route and answers `false`, for ever. There the
+    initial budget *is* the end and the give-up stays at `Debug`, because that is the expected
+    permanent outcome. Retrying it would not be a lifetime, it would be a poll that cannot
+    converge — and a measurable one: every attempt makes the *silo* log `[POD-HUB] Attach … landed
+    on a silo that has no local route` at `Information`, i.e. one line per hub per backoff
+    interval, which is the storm shape #2426/#2546 exist to remove. The discriminator is Orleans'
+    own: `ILocalSiloDetails` is registered by `DefaultSiloServices` and by nothing else.
 - **The stream stays only for CLIENT-hosted address types, by declaration.** The fallback is gated
-  on the address type being declared client-hosted (`MeshBuilder.AddClientHostedAddressType`,
-  which the Orleans test fixtures call for `client`), **never** on the grain answering "not here".
+  on the address type being declared client-hosted (`MeshBuilder.AddClientHostedAddressType`),
+  **never** on the grain answering "not here".
   In production no address type is declared client-hosted, so the router never publishes. The
-  test rig keeps its stream until the rig hosts its hubs on a silo, at which point
-  `AddMemoryStreams` and `PubSubStore` go with it.
-- **`StreamMessageSizeGuard` retargets**, as the roll plan already says: the wall is Orleans'
-  `MaxMessageBodySize` on the directed call, and crossing it throws, which is the outcome the guard
-  exists to produce.
+  Orleans test rig declares all four built-in stream-routed types — it hosts a hub of each on its
+  cluster client (`client/{id}` from `GetClient`, the client host's own root `mesh/{guid}`,
+  `portal/{guid}` in the documentation/graph/markdown tests, and the client's `cache` hub) — and
+  keeps its stream until the rig hosts its hubs on a silo, at which point `AddMemoryStreams` and
+  `PubSubStore` go with it.
+- **The verdict is `ShuttingDown` + `TargetUnserved`, and the owner-side eviction had to be
+  re-gated to see it.** `DataExtensions.HandleTargetUnservedFailure` — the #2426/#2546 fix that
+  stops an owner fanning changes out to a dead subscriber forever — required
+  `TargetUnserved && ErrorType == NotFound`. That second test was redundant belt-and-braces from
+  the era when the *only* producer of the stamp was the stream leg's subscriber probe; left in
+  place it would have made the new one-hop verdict **inert**, silently re-opening the leak for
+  every dead circuit in the fleet. The gate is now the STAMP alone, which is what
+  `DeliveryFailure.TargetUnserved`'s own contract always said ("only the router … may stamp
+  this"). The two facts are complementary rather than contradictory: the **subscriber** rides
+  `ShuttingDown` out and re-asks, while the **owner** drops the server-side half it can no longer
+  push to.
+- **`StreamMessageSizeGuard` (#1890) needs no code change, and did not get one.** The guard exists
+  to turn a *silent* drop into a loud, NACK'd refusal: an oversized payload on the memory stream
+  succeeds at the publish and dies inside `PersistentStreamPullingAgent`'s non-convergent retry
+  loop, naming only a queue id. On the directed call the wall is Orleans' `MaxMessageBodySize` and
+  crossing it **throws**, which `BuildPodHubRoute`'s `TerminalCallFailure` already turns into a
+  classified `DeliveryFailure` naming the address, the delivery id and the sender — the outcome
+  the guard exists to produce. Retargeting the constant itself (plumbing `SiloMessagingOptions`
+  into `RoutingGrain` plus its own refusal shape) is a separate change and is *not* required for
+  correctness here; the guard stays on `PostToStream`, which after this slice is reachable in
+  production for nothing at all.
 
-**The gate for shipping this is unchanged from the roll plan**: a full rolling deploy with none of
-`[ROUTE] Pod-hub grain for {Address} is not attached — falling back to the stream publish` in
-Loki. A line *during* a roll is the plan working; a line *after* the roll has settled is a hub
-whose owner never claimed — which the indefinite claim above turns from "invisible at Debug" into
-a `Warning` naming the hub.
+### The N+2 gate, and why these two slices shipped without waiting for it
+
+**The roll plan's gate was**: a full rolling deploy with none of `[ROUTE] Pod-hub grain for
+{Address} is not attached — falling back to the stream publish` in Loki. That gate measured a
+*risk that the two slices above jointly remove*, so it was satisfied by construction rather than
+by observation:
+
+- The gate's worry is the window "the owner exists, but its claim has not landed" — in which
+  removing the fallback would drop a delivery to a live hub. **Slice 2 does not drop it: it
+  ANSWERS it**, with a transient NACK inside the directed call's own budget. Every consumer on
+  that path already has recovery machinery armed for exactly this verdict
+  (`SynchronizationStream`'s resubscribe latch, `MeshNodeStreamCache.IsTransientOwnerFailure`,
+  `MeshNodeStreamExtensions`' paced retry), which is why the verdict is `ShuttingDown` and not
+  `NotFound`. The pre-change alternative was strictly worse for the same window: a publish that
+  *succeeds and discards* when nobody is subscribed, or stalls 30–60 s on a wedged queue grain —
+  the failure with **no** signal at all.
+- **Slice 1 closes the window rather than surviving it.** The claim now retries until it lands, so
+  "owner exists, claim not landed" resolves by retry instead of persisting for the life of the
+  process. Before slice 1 it could persist forever, which is precisely why the gate was needed.
+- And the gate's own instrument was unreliable in the direction that matters: the line it counts
+  is `Information`, emitted per delivery, and **its absence was never proof** (the page said so).
+  A `Warning` naming the hub, emitted once per claim that has not landed, is a strictly better
+  instrument — and it is what slice 1 adds. The fallback line survives, but after slice 2 only a
+  DECLARED client-hosted type can reach it, so in the fleet it cannot be emitted at all.
+
+Residual risk, stated plainly: an address type that is genuinely client-hosted in some deployment
+and was never declared would go from "works over the stream" to "NACK'd transiently". No such
+deployment exists — `UseOrleansMeshClient` has only test-fixture callers — and the symptom would
+be loud (a windowed `Warning` naming the address) rather than silent.
 
 ## 3 · Cross-silo change notifications — the storage layer's feed is the durable channel
 
@@ -202,21 +256,29 @@ checked against it:
 | classification of lifecycle faults as transient | **landed** — #2518, #2645, #2647 | row 1 needs nothing else |
 | this design | **this page** | records the direction on #1742, #2320, #2322, #2406 |
 | stale "listener never started" comments corrected | **landed with this page** | see below |
-| pod-hub claim: indefinite, derived lifetime, `Warning` on a silo | next | core only; closes the #1742 residual *"a claim that fails to land degrades silently"* |
+| pod-hub claim: indefinite, derived lifetime, `Warning` where grains can be hosted | **landed** — #2745 | closed the #1742 residual *"a claim that fails to land degrades silently"*; core only |
+| routing: transient NACK on `PodHubNotHere`; fallback gated on declared client-hosted types | **landed** — #2745 | closed #2320, #2322, #2406 as *made unreachable*. Shipped with slice 1 rather than after a clean roll — see *The N+2 gate* above for why the two together satisfy it by construction |
+| owner-side eviction re-gated on the `TargetUnserved` STAMP alone | **landed with the slice above** | required by it: gating on `NotFound` would have made the new verdict inert and re-opened #2426/#2546 |
 | `DataChangeNotification.NodeType/Version` + `StorageChangeFeedRelay` | next | **core first**; the relay must tolerate a payload without the new fields |
 | `notify_mesh_node_changes()` emits `nodeType`, `version` | after the core slice | PostgreSql adapter (MeshWeaver.Plugins); a schema-initializer revision, re-applied by the existing DROP-then-CREATE |
 | delete `OrleansMeshChangeFeed` broadcast + `PathCacheInvalidatorGrain` | after both | the memory stream then carries routing fallback only |
-| routing: transient NACK on `PodHubNotHere`; fallback gated on declared client-hosted types | after a clean roll (the Loki gate above) | closes #2320, #2322, #2406 as *made unreachable* |
+| `StreamMessageSizeGuard` retarget onto `MaxMessageBodySize` | optional, not blocking | the directed call already THROWS at that wall, which is the outcome the guard produces — see the bullet above |
 | test rig hosts hubs on a silo → `AddMemoryStreams` deleted | last | the only remaining user |
 
 ## How to check a live cluster
 
 ```
-# the N+2 gate — must be EMPTY across a full rolling deploy once the fleet has settled
+# 🚨 Must be EMPTY, always, not merely after a roll: only an address type DECLARED client-hosted
+# can reach this line, and production declares none. A hit means somebody added a declaration.
 {namespace="memex-cloud"} |= "falling back to the stream publish"
 
-# a silo-hosted hub whose claim never landed (after the claim slice lands: Warning, one per hub)
+# THE instrument now — a hub whose claim has not landed, once per claim, naming the address.
+# The claim keeps retrying, so a matching "landed after its initial budget was exhausted" line
+# for the same address is the resolution; one without it is a hub still on no transport at all.
 {namespace="memex-cloud"} |= "Pod-hub claim for" |= "did not land"
+
+# the transient NACK that replaced the publish — windowed to one Warning per address per 60 s
+{namespace="memex-cloud"} |= "was refused: no silo in this cluster is currently serving that hub"
 
 # the database feed is up on every pod — one line per pod per LISTEN (re)connect
 {namespace="memex-cloud"} |= "PostgreSQL LISTEN started on mesh_node_changes"

@@ -1830,13 +1830,25 @@ public static class DataExtensions
     /// names why nothing else ever ends it: "only an UnsubscribeRequest disposes a server-side
     /// stream", and a dead process sends none.</para>
     ///
-    /// <para>The verdict gate is the STAMP, never the <see cref="ErrorType"/> alone: a LIVE hub
-    /// also answers NotFound (an unhandled request), and evicting on that would tear down a
-    /// healthy subscriber's stream. Only the router — the one component that asked the
-    /// cluster-wide subscription registry — stamps <c>TargetUnserved</c>, so absence of the stamp
-    /// safely means "not ours to act on" and the delivery passes through unchanged for whoever
-    /// else handles it (the request/response callback already ran; it is first in the rule
-    /// chain).</para>
+    /// <para>The verdict gate is the STAMP, and ONLY the stamp — never the <see cref="ErrorType"/>.
+    /// A LIVE hub also answers NotFound (an unhandled request), which is why the ErrorType alone
+    /// could never be the gate; but only the router — the one component that asked the cluster,
+    /// through the stream's subscription registry or through Orleans' own grain directory — stamps
+    /// <c>TargetUnserved</c>, so absence of the stamp safely means "not ours to act on" and the
+    /// delivery passes through unchanged for whoever else handles it (the request/response callback
+    /// already ran; it is first in the rule chain).</para>
+    ///
+    /// <para>🚨 <b>The <c>ErrorType == NotFound</c> half of this gate was removed deliberately.</b>
+    /// It was redundant belt-and-braces from the era when the router's ONLY unserved verdict came
+    /// from the stream leg's subscriber probe. Since
+    /// <c>RoutingGrain.AnswerPodHubNotHere</c> the router also stamps the verdict on the
+    /// TRANSIENT <see cref="ErrorType.ShuttingDown"/> — "no silo serves this hub right now" reached
+    /// in one hop through the grain directory, the answer that replaced the stream publish
+    /// (<c>Doc/Architecture/DurableStreamsViaMeshNodes</c>). Keeping the NotFound test would have
+    /// made that answer inert here and silently re-opened this very leak for every dead circuit in
+    /// the fleet. The two verdicts are complementary, not contradictory: the SUBSCRIBER rides
+    /// <c>ShuttingDown</c> out and re-asks, while the OWNER drops the server-side half it can no
+    /// longer push to — which is exactly the recovery described below.</para>
     ///
     /// <para>Evict-only, and terminal per NACK: nothing here retries, re-probes or resubscribes. A
     /// subscriber that was in fact alive but unreachable loses only its server-side stream, and
@@ -1847,7 +1859,7 @@ public static class DataExtensions
         IMessageHub hub, IMessageDelivery<DeliveryFailure> delivery)
     {
         var failure = delivery.Message;
-        if (!failure.TargetUnserved || failure.ErrorType != ErrorType.NotFound)
+        if (!failure.TargetUnserved)
             return delivery;
         var deadSubscriber = failure.Delivery?.Target;
         if (deadSubscriber is null || hub.GetWorkspace() is not Workspace workspace)
