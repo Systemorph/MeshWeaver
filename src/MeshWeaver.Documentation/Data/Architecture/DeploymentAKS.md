@@ -312,9 +312,53 @@ then the namespace has no serving portal. The gate protects the database from a 
 **not** make the ordering safe on its own. Treat "the migration ran" as a precondition you verify, not one
 the roll guarantees.
 
+## Key Vault secrets are DECLARED in values — `keyVaultSecrets`
+
+Since 2026-08-30 the chart renders the `SecretProviderClass` itself, from one block in the values
+file, together with the three halves the pod needs (the CSI volume, its mount, the `envFrom` on the
+synced Secret):
+
+```yaml
+keyVaultSecrets:
+  vaultName: "Systemorph"
+  tenantId: "<entra tenant id>"
+  identityClientId: "<the Key Vault Secrets Provider add-on's user-assigned identity client id>"
+  name: "memexcloud-portal-ai-secrets"       # the SecretProviderClass; blank ⇒ memex-portal-keyvault
+  syncedSecret: ""                            # the synced k8s Secret; blank ⇒ the same name
+  secrets:
+    - vaultSecret: memexcloud-Email-ClientSecret          # the vault OBJECT'S name — never a value
+      key: Email__ClientSecret                            # the env key it lands as
+```
+
+Empty `secrets` renders nothing, so an environment that has not opted in is byte-identical to
+before. With any entry the vault, tenant and identity are **required** and a half-declared block
+fails `helm template` naming the key. Names only: no value is ever in values or in the render.
+
+🚨 **Why it moved into the chart.** Until then every `SecretProviderClass` in the fleet was a
+hand-made object — `kubectl apply`-ed once from a laptop, present in no repository, rendered by
+nothing — and the values file could only point at it by name (`extraEnvFrom` / `extraVolumes`,
+now the **legacy escape hatch**). Which vault objects a pod carried was knowable only from the
+cluster. On 2026-08-30 the `memex` install crashed at boot with `EmailConfigurationGuard`
+(`Email:Enabled=true`, `Email:ClientId` unset): its Email configuration existed TWICE on the live
+pod — the chart's ConfigMap rendering the defaults, and a hand-made Secret patched onto the live
+Deployment as explicit `env` entries in a different letter case — and .NET's case-insensitive
+environment provider let enumeration order pick the winner on every pod start. A coin toss per
+boot, invisible from any file.
+
+The fleet's records drive this block: a `Hosting/Deployment` record's `keyVaultSecrets` section is
+projected onto it by the Hosting plugin's `HelmValues`, with the vault name derived from the key by
+the convention `<keyVaultSecretPrefix><Section>-<Key>` when the record leaves it blank. The
+operator's page for the whole path — record → render → chart → ConfigMap / SecretProviderClass /
+synced Secret → env — is `Hosting/Configuration` in MeshWeaver.Plugins.
+
+Two things that do not change: a declared object the vault does **not** hold still fails the whole
+mount (the pod stays `ContainerCreating`, the old pod keeps serving, the rollout stalls) — create
+the vault secret before declaring it; and a new or changed vault value still needs the pod to
+restart (see "KeyVault CSI env timing" above).
+
 ## First-time environment setup ≠ code update
 
-`deploy/aks/envs/<env>/deploy.sh` provisions a **new** environment: `helm upgrade --install` of the chart, PVCs, the Key Vault `SecretProviderClass`, ingress, and the connection-string patch. **Do not run it for a code update** — it re-applies the whole chart and can reset live ConfigMaps (e.g. the email config). Use it only when standing up a brand-new namespace.
+`deploy/aks/envs/<env>/deploy.sh` provisions a **new** environment: `helm upgrade --install` of the chart, PVCs, the Key Vault `SecretProviderClass` (legacy hand-made shape — a new environment declares its secrets under `keyVaultSecrets` in values instead), ingress, and the connection-string patch. **Do not run it for a code update** — it re-applies the whole chart and can reset live ConfigMaps (e.g. the email config). Use it only when standing up a brand-new namespace.
 
 Only the reference env `deploy/aks/envs/example/` is in this repo; per-tenant env directories are git-ignored (`.gitignore`: "directory names are tenant identities and must not enter this public repo"), so the real ones live outside it. Copy `example/` as the template.
 
