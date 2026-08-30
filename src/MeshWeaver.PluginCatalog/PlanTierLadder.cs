@@ -41,13 +41,18 @@ public sealed class PlanTierLadder(IMessageHub hub, ILogger<PlanTierLadder> logg
 
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
 
-    // Instance state on a mesh-scoped singleton — dies with the mesh (NoStaticState).
-    private (DateTimeOffset At, PlanTierRanks Ranks)? cached;
+    /// <summary>One immutable snapshot — a REFERENCE, so a concurrent read can never observe a torn
+    /// (time, ranks) pair the way a nullable value tuple written from two threads could.</summary>
+    private sealed record Snapshot(DateTimeOffset At, PlanTierRanks Ranks);
+
+    // Instance state on a mesh-scoped singleton — dies with the mesh (NoStaticState). Written and
+    // read as one reference (Volatile — same discipline as PackageOriginAnchor's `last`).
+    private Snapshot? cached;
 
     /// <summary>The ladder — cached, or freshly listed from the tier nodes. Cold; emits once.</summary>
     public IObservable<PlanTierRanks> Read()
     {
-        if (cached is { } hit && DateTimeOffset.UtcNow - hit.At < CacheDuration)
+        if (Volatile.Read(ref cached) is { } hit && DateTimeOffset.UtcNow - hit.At < CacheDuration)
             return Observable.Return(hit.Ranks);
 
         return hub.ServiceProvider.GetRequiredService<IMeshService>()
@@ -58,7 +63,7 @@ public sealed class PlanTierLadder(IMessageHub hub, ILogger<PlanTierLadder> logg
             .Select(c => PlanTierRanks.From(c.Items.Select(Plan)))
             .Do(ranks =>
             {
-                cached = (DateTimeOffset.UtcNow, ranks);
+                Volatile.Write(ref cached, new Snapshot(DateTimeOffset.UtcNow, ranks));
                 if (ranks.Ranks.Count == 0)
                     logger.LogInformation(
                         "Plan ladder: no tier nodes under {Namespace} — plan-scoped grant entries license nothing here",
@@ -66,11 +71,11 @@ public sealed class PlanTierLadder(IMessageHub hub, ILogger<PlanTierLadder> logg
             })
             .Catch((Exception ex) =>
             {
-                var fallback = cached?.Ranks ?? PlanTierRanks.Empty;
+                var last = Volatile.Read(ref cached);
                 logger.LogWarning(ex,
                     "Plan ladder: listing {Namespace} failed — deciding with {What}",
-                    Namespace, cached is null ? "an EMPTY ladder (plan-scoped entries fail closed)" : "the last snapshot");
-                return Observable.Return(fallback);
+                    Namespace, last is null ? "an EMPTY ladder (plan-scoped entries fail closed)" : "the last snapshot");
+                return Observable.Return(last?.Ranks ?? PlanTierRanks.Empty);
             });
     }
 

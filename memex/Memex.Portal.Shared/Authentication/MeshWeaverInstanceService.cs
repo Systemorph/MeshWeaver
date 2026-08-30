@@ -297,10 +297,11 @@ public sealed class MeshWeaverInstanceService(
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var path = MeshWeaverInstanceNodeType.GrantPath(instanceId);
 
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => hub.GetMeshNode(path, TimeSpan.FromSeconds(10)))
-            .Take(1)
+        // RunAsSystem for the read, never Observable.Using over ImpersonateAsSystem: the scope is
+        // AsyncLocal and Rx disposes a Using resource on whatever thread terminates the sequence,
+        // which leaked System into the caller's continuation (#1790). RunAsSystem enters at
+        // Subscribe and leaves on the way out of it; the write below opens its own scope.
+        return accessService.RunAsSystem(() => hub.GetMeshNode(path, TimeSpan.FromSeconds(10)).Take(1))
             .SelectMany(existing => Observable.Defer(() =>
             {
                 var grant = existing?.ContentAs<PluginGrant>(hub.JsonSerializerOptions)

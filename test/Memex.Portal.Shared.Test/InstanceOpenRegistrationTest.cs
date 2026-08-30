@@ -94,10 +94,11 @@ public class InstanceOpenRegistrationTest(ITestOutputHelper output) : MonolithMe
     private Task<PluginGrant?> GrantOf(string instanceId)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        return Observable.Using(
-                () => access.ImpersonateAsSystem(),
-                _ => Mesh.GetMeshNode(MeshWeaverInstanceNodeType.GrantPath(instanceId), TimeSpan.FromSeconds(10)))
-            .Take(1)
+        // RunAsSystem, never Observable.Using over ImpersonateAsSystem: the scope is AsyncLocal and
+        // Rx may dispose on another thread, leaking System into whatever runs next (#1790).
+        return access.RunAsSystem(() =>
+                Mesh.GetMeshNode(MeshWeaverInstanceNodeType.GrantPath(instanceId), TimeSpan.FromSeconds(10))
+                    .Take(1))
             .Select(node => node?.ContentAs<PluginGrant>(Mesh.JsonSerializerOptions))
             .Timeout(TimeSpan.FromSeconds(30))
             .Await();

@@ -188,8 +188,9 @@ its check on the action.
 ### Plans — an entry scoped to a subscription tier
 
 The Store sells **plans** (`free` · `personal` · `pro` · `dedicated` — your own instance — ·
-`enterprise` — self-hosted; [Subscriptions](/Doc/Architecture/PluginRegistry) in the Store's own
-docs), and every package names the plan it belongs to in its root's `content.tier`. A grant entry
+`enterprise` — self-hosted; the ladder and the purchase rule are the Store's own, `Store/Subscriptions`
+in the MeshWeaver.Plugins repository), and every package names the plan it belongs to in its root's
+`content.tier`. A grant entry
 can now carry that plan too — `Plugins/*@pro` — and then licenses exactly **the packages of its
 source that the plan covers**, decided by `PlanTierRanks.Covers`:
 
