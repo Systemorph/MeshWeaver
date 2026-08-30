@@ -1082,7 +1082,7 @@ jobs:
           # bases' TEST START / TEST END lines as they happen instead of holding them for the file,
           # and -longRunning names any test still running after 60s WHILE it runs — so a wedge is
           # readable in the job log before the 8m cap kills the host.
-          echo "[CI] $(date -u +%H:%M:%S) ▶ $label starting (${#classargs[@]:-all} class(es))"
+          echo "[CI] $(date -u +%H:%M:%S) ▶ $label starting (${#classargs[@]} class arg(s))"
           ( cd "$dir" && timeout --signal=TERM --kill-after=30s 8m \
               dotnet "$name.dll" -trx "TestResults/$trxname.trx" -showLiveOutput -longRunning 60 "${classargs[@]}" )
           rc=$?
