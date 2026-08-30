@@ -282,10 +282,16 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
         Output.WriteLine($"Subscribed to typeStream + Progress area for {NodeTypePath}");
 
         // Wait for terminal Ok state on the NodeType MeshNode stream — this is
-        // the canonical "compile finished" signal. The Progress area's last
-        // emission tracks the same state (it subscribes to the same stream
-        // internally), so by the time this completes the area has emitted at
-        // least the terminal control.
+        // the canonical "compile finished" signal.
+        //
+        // 🚨 It is NOT a signal that the Progress area has emitted. The old comment here claimed
+        // "by the time this completes the area has emitted at least the terminal control" — the
+        // area subscribes to the same stream, but through its OWN subscription on a different
+        // hop, and nothing orders the two. The queue below was then asserted as a snapshot and
+        // came up empty: shard 4 on #2750 this morning, then main itself (e3a73f3b4, run
+        // 33320002359), which switched delivery off. So after the terminal wait, wait on the
+        // area's control stream directly for its first non-null control — exactly what the warm
+        // path further down already does — and only then assert the snapshot.
         var terminal = await clientWorkspace.GetMeshNodeStream(NodeTypePath)
             .Should().Within(30.Seconds()).Match(n => n?.Content is NodeTypeDefinition d
                         && d.CompilationStatus == CompilationStatus.Ok
@@ -325,6 +331,14 @@ public class NodeTypeProgressAreaTest(ITestOutputHelper output) : MonolithMeshTe
         // The "the area is wired up and reacting to typeStream" signal is
         // sufficient; the rendering itself is unit-tested elsewhere via the
         // helper that builds the Stack from a NodeTypeDefinition.
+        // The positive signal, before the snapshot: the area has rendered at least one control.
+        // Bounded, so a wedged area fails here with a message that names it rather than with an
+        // empty-queue assertion that looks like a race.
+        await clientWorkspace
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(nodeTypeAddress, progressRef)
+            .GetControlStream(progressRef.Area!)
+            .Should().Within(30.Seconds()).Match(c => c != null);
+
         progressEmissions.Should().NotBeEmpty(
             "the Progress layout area must emit at least one UiControl " +
             "across the compile lifecycle");
