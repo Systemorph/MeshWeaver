@@ -223,54 +223,42 @@ A build that closes downstream by default builds the dependents *as part of the 
 them*. That is [#2689](https://github.com/Systemorph/MeshWeaver/issues/2689)'s ask, delivered as a
 property of the build rather than as another gate someone has to remember to add.
 
-### The cost, stated
+### Build once, reuse everywhere — three rules
 
-A default that builds every dependent across six repos is expensive, and pretending otherwise would
-be dishonest. Two things make it tractable, and both already exist:
+**Maintainer, 2026-08-30:** *"I am speaking about minimalistic and maximally re-usable build."*
 
-- **the affected-set computation** — the closure is over what *changed*, not over everything; and
-- **the publication-derived baseline** — the diff is against what is actually published, so a
-  re-run or a raced run does not re-do the world.
+1. **We build the image.**
+2. **Any further testing is done against this image, no matter where.**
+3. **Every package is built and tested exactly once.**
 
-Which is why the `--self-test` that *proves the computation can say no* matters more here than
-anywhere else: with a bidirectional default, an affected-set computer that always answers
-"everything" turns every commit into a fleet-wide rebuild, and nothing about a green run would tell
-you.
+This is not an expensive default that needs justifying — it is the **cheap** one, and the current
+arrangement is the expensive one. Closing over dependents does not mean rebuilding the fleet
+repeatedly; it means the closure is computed once and **each package in it is built once**, against
+the one image, wherever it happens to live.
 
-**Most of this is already written — it is just split three ways and one of the three is python.**
+**The waste it removes, measured in `MeshWeaver.Plugins/.github/workflows/ci.yml`:**
 
-| piece | where it lives today | state |
-|---|---|---|
-| the tool CI would install | `src/MeshWeaver.Cli` — `PackAsTool`, `ToolCommandName=memex`, `PackageId=MeshWeaver.Cli`, `AssemblyName=memex` | **exists**, already documented as `dotnet tool install -g MeshWeaver.Cli` |
-| module pack/fetch + dependency closure | `src/MeshWeaver.Plugin.Build` — `ToolCommandName=meshweaver-plugin-build`, with `DepsClosure.cs`, `ModulePackCommand.cs`, `ModuleFetchCommand.cs` | **exists**, a second tool |
-| "what changed and everything that depends on it" | `MeshWeaver.Plugins/scripts/affected-modules.py` + `project-closure.py` | **python**, outside the mesh |
+- **14 jobs**, of which **5 check out `Systemorph/MeshWeaver`** and build the framework from source
+  through `-p:MeshWeaverRoot=…` — the same core, compiled again per job, in the same run;
+- `dotnet build -c Release -warnaserror "$project" -p:MeshWeaverRoot="$root"` appears repeatedly
+  across those jobs, so a package's dependencies are rebuilt once per consumer rather than
+  installed as artifacts.
 
-`affected-modules.py` already computes exactly the thing step 2 needs, and its own docstring states
-the contract better than a summary would: *map every changed file to its owning module, close over
-all transitive DEPENDENTS (a change to X invalidates everything that compiles against X), then add
-the transitive DEPENDENCIES of that closure* — because the gate boots a fresh mesh and a gated
-module whose dependencies are absent fails with `NodeType 'X' is not registered` and `shared=@…`
-sources that resolve to nothing.
+Rule 2 is what forbids that: once the image exists, nothing rebuilds what is in it. A repo that
+compiles its dependencies *"has not installed them — it has rebuilt somebody else's product, once
+per mesh, on every run, and it is testing bytes nobody will ever ship"*
+([The Plugin Build Contract](/Doc/Architecture/PluginBuildContract), step 2).
 
-It also already has **two consumers with one answer** (the gate narrows its mount; the bake narrows
-what it republishes), and it takes its baseline from the **publication** — the `source-commit.txt`
-beside the sealed bundles — rather than from `github.event.before`, so a run that lost a race, was
-re-run, or followed a skipped run still diffs against what is actually published.
+Rule 3 is what makes the bidirectional closure affordable: a package appearing in five consumers'
+closures is still built **once**. Without it, "build everything that depends on me" really would be
+the expensive thing I first assumed it was — with it, the closure is a *set*, and the cost is the
+size of the set, not the number of paths into it.
 
-**So the work is not "invent the affected-set logic". It is:**
-
-1. **One tool, not two.** `memex` is the thing CI installs; `meshweaver-plugin-build`'s pack/fetch
-   and `DepsClosure` belong behind it as verbs rather than as a second `dotnet tool install`.
-2. **Move the closure out of python and into that tool**, keeping the two-consumers-one-answer
-   property and the publication-derived baseline — both are load-bearing and neither is obvious.
-3. **Give it the verb**: `memex build plugin <path>`, taking the plugin's path as its argument and
-   deciding the rest. A repo's job is then literally the three lines above.
-
-🚨 **`affected-modules.py` has a `--self-test` that proves it can say NO.** Whatever replaces it must
-keep that, and it must be run in CI rather than existing: an affected-set computer that always
-answers "everything" is indistinguishable from a correct one on a green day, and an affected-set
-computer that answers "nothing" is a gate that tests nothing. That property is the single most
-important thing to carry across, and it is the easiest to lose in a port.
+🚨 **The property that keeps rule 3 honest is the affected-set self-test.** `affected-modules.py`
+carries a `--self-test` that proves the computation **can say no**. A set computer that always
+answers "everything" satisfies rule 3 trivially and rebuilds the world; one that answers "nothing"
+is a gate that tests nothing. Both look identical on a green day. Whatever replaces it must keep
+that self-test **and run it in CI**.
 
 ## What blocks "any plugin" today
 
