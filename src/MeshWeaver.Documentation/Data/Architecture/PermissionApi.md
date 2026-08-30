@@ -23,7 +23,7 @@ IObservable<bool> canTheyEdit = hub.CheckPermission(nodePath, "alice", Permissio
 IObservable<Permission> theirPerms = hub.GetEffectivePermissions(nodePath, "alice");
 ```
 
-All overloads return `IObservable<T>`. Compose them with `CombineLatest`, `Select`, and `Where` as you would any other stream. In tests, bridge to `Task` at the outermost edge with `.FirstAsync().ToTask()`. Never use `await` inside `src/`.
+All overloads return `IObservable<T>`. Compose them with `CombineLatest`, `Select`, and `Where` as you would any other stream. In tests, assert on the stream and let the assertion own the wait — `await hub.GetEffectivePermissions(path).Should().Be(Permission.Read);` — never `.FirstAsync().ToTask()`, which is forbidden in `test/` as well as `src/` (2026-08-30). Never use `await` inside `src/`.
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 280" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;">
   <defs>
     <marker id="perm-arr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">

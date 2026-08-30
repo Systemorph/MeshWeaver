@@ -143,7 +143,7 @@ This is not a timing edge case — it is a structural certainty whenever a handl
 
 ## The Fix: Reactive Streams (the Modern API)
 
-> **The `AwaitResponse` and `RegisterCallback` APIs are gone** — they no longer exist anywhere in `src/`; `hub.Observe(...)` is the only request/response surface. All hub-reachable code must use `IObservable<T>` end-to-end — no `await`, no `Task<T>`, no `TaskCompletionSource`. Tests may use `.FirstAsync().ToTask()` at the boundary; production code never does.
+> **The `AwaitResponse` and `RegisterCallback` APIs are gone** — they no longer exist anywhere in `src/`; `hub.Observe(...)` is the only request/response surface. All hub-reachable code must use `IObservable<T>` end-to-end — no `await`, no `Task<T>`, no `TaskCompletionSource`. **Tests are not exempt either**: `.FirstAsync().ToTask()` is forbidden everywhere as of 2026-08-30 (*"no ToTask ever"*). Tests assert on the observable through `MeshWeaver.Reactive.Assertions` (`await obs.Should().Match(...)`), which owns the wait; a foreign `Task`-shaped signature that genuinely needs the value uses `ReactiveCompletion.ObserveCompletion(reportLateFault, ct)`.
 
 The correct pattern for any write that produces a side effect is `stream.Update(...)`, which returns a cold `IObservable<T>`. Subscribe in the handler; the framework serialises the write through the owning hub's action block without blocking anything.
 
@@ -210,7 +210,7 @@ The response arrives as an observable emission, and the subscriber runs on the *
 | Mutate a node on a different hub | Same API — `GetMeshNodeStream` auto-dispatches cross-hub |
 | Wait for a state change | `GetMeshNodeStream(path).Where(predicate).Take(1).Timeout(...).Subscribe(...)` |
 | Call a different hub and handle the reply | `hub.Observe<TResponse>(request, o => o.WithTarget(addr)).Subscribe(...)` |
-| Test boundary only | `await stream.FirstAsync().ToTask()` is acceptable |
+| Test boundary | `await stream.Should().Match(predicate)` — the assertion owns the wait. **Never** `.FirstAsync().ToTask()`, and never a bare `await stream` |
 
 ---
 

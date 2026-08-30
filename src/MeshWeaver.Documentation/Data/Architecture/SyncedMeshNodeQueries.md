@@ -303,14 +303,19 @@ Subscribing to a synced query registers the result-set paths in the workspace's 
 In a UI that renders the list before exposing per-row buttons, the synced subscription is already established by the time the user clicks Revoke and the Update succeeds. **In tests or one-shot scripts that skip the list render**, pre-warm the synced query explicitly:
 
 ```csharp
-// Test setup mirroring UI lifecycle
+// Test setup mirroring UI lifecycle. The assertion owns the wait and subscribes
+// synchronously — the ToTask bridge is forbidden everywhere (2026-08-30), tests included.
 await service.GetTokensForUser(userId)
-    .Where(list => list.Any(t => t.NodePath == newPath))
-    .Take(1)
-    .ToTask(ct);   // synced subscription now registers newPath in the workspace
+    .Should().Within(10.Seconds())
+    .Match(list => list.Any(t => t.NodePath == newPath));
+// the synced subscription has now registered newPath in the workspace
 
 var outcome = await service.RevokeToken(newPath);   // GetMeshNodeStream(newPath).Update resolves correctly
 ```
+
+In a **script** (`.csx`), where the assertion surface is not available, the same pre-warm uses
+`ReactiveCompletion.ObserveCompletion` — `.FirstAsync(...)` so an empty completion still faults, then
+`.ObserveCompletion(ex => Log.LogWarning(ex, "…"), Ct)`.
 
 `MeshNodeStreamHandle.Update` waits up to 30 s for the initial frame and throws a precise `TimeoutException` with the path embedded if it never arrives — but the fast path is to have the synced query active.
 
@@ -339,10 +344,7 @@ public class FooSyncedQueryTest : MonolithMeshTestBase
         var snapshot = await Workspace.GetQuery(
             "test-id",
             "namespace:Agent nodeType:Agent")
-            .Where(s => s.Any())
-            .Take(1)
-            .Timeout(15.Seconds())
-            .ToTask();
+        .Should().Within(15.Seconds()).Match(s => s.Any());
 
         snapshot.Should().AllSatisfy(n =>
         {

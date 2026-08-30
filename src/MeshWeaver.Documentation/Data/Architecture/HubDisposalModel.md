@@ -113,18 +113,30 @@ awaits. The old `Task? Disposal` property is **gone** — a `Disposal is not nul
 check becomes `IsDisposing`, and an `await hub.Disposal` becomes a subscription.
 
 **At a genuine async edge** — xUnit teardown, `MessageHubGrain.OnDeactivateAsync` —
-where a `Task` is legitimately the calling convention, bridge the observable *once*:
+where a `Task` is legitimately the calling convention, bridge the observable *once*,
+through `ReactiveCompletion.ObserveCompletion`:
 
 ```csharp
 // Grain deactivation / test teardown — the ONLY place a Task appears, at the edge:
 await hub.DisposalCompleted
     .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))  // fault → "done"
     .FirstOrDefaultAsync()
-    .ToTask(ct);
+    .ObserveCompletion(
+        ex => logger.LogWarning(ex, "disposal faulted AFTER the wait settled"),
+        ct);
 ```
 
-That `.ToTask()` is the framework-lifecycle Task boundary (the same place tests
-`await`). Nowhere inside `src/` hub-reachable code does it appear.
+🚨 **Not `.ToTask(ct)`, and not a bare `await` on the observable either** — both are
+forbidden repo-wide as of 2026-08-30 (*"no ToTask ever"*), and for this signal in
+particular they are the deadlock: Rx completes its `TaskCompletionSource` without
+`RunContinuationsAsynchronously`, so the awaiter resumes INLINE on the thread that
+signalled — the hub's own disposal thread, or the grain's turn scheduler — and the
+rest of the teardown then runs there. `ObserveCompletion` queues the continuation
+instead, and keeps its error arm attached so a fault arriving after the wait settled
+is reported rather than orphaned as an `UnobservedTaskException`.
+
+That `ObserveCompletion` is the framework-lifecycle Task boundary (the same place tests
+`await`). Nowhere inside `src/` hub-reachable code does a Task appear at all.
 
 ---
 
@@ -421,8 +433,9 @@ teardown; silent on a direct `Dispose()`).
   its leaf must run on a mesh-scoped resource (the persistence layer / `IIoPool`) so
   the mesh-level teardown drain can join it.
 - **Need to wait for the hub to finish disposing?** Subscribe to
-  `hub.DisposalCompleted`. Only at the test / grain edge may you bridge it once with
-  `.FirstOrDefaultAsync().ToTask()`. To ask "is it shutting down?", read `IsDisposing`.
+  `hub.DisposalCompleted`. Only at the test / grain edge may you bridge it once, and
+  only with `.FirstOrDefaultAsync().ObserveCompletion(reportLateFault, ct)` — never
+  `.ToTask()`. To ask "is it shutting down?", read `IsDisposing`.
 - **Tempted to `await` something during disposal?** Don't — it deadlocks the action
   block. Express the wait as an `Observable` (`Interval` poll, `Timer`/`Amb` deadline,
   subscribe to a child's `DisposalCompleted`) and post the next phase from its

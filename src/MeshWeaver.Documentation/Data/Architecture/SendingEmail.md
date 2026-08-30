@@ -74,7 +74,9 @@ public sealed class Inviter(IEmailSender email) { /* email.SendEmail(...).Subscr
 ```
 
 Do **not** `await`/`.ToTask()` it inside hub-reachable code — keep the chain reactive
-(see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)). Tests may bridge with `.FirstAsync().ToTask()`.
+(see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)). **Tests are not an exception**
+(2026-08-30: *"no ToTask ever"*): assert on the observable — `await hub.SendEmail(to, subject, html).Should().Emit();`
+— and let the assertion own the wait.
 
 ---
 

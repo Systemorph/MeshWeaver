@@ -290,18 +290,19 @@ Verification follows an observe-until-condition rhythm (mirrors `ObservableQuery
 [Fact]
 public async Task DataChangeRequestOnSubscriber_PropagatesToOwningHub()
 {
-    var ct   = TestContext.Current.CancellationToken;
     var path = $"{SubjectsNamespace}/alpha";
 
-    // Source-side state.
-    await NodeFactory.CreateNode(MakeSubject("alpha", "Original"))
-        .FirstAsync().ToTask(ct);
+    // Source-side state. The write is a COLD observable, so the assertion's
+    // Subscribe IS the write — there is nothing to bridge.
+    await NodeFactory.CreateNode(MakeSubject("alpha", "Original")).Should().Emit();
 
     // Wait for the CONDITION, never a fixed sleep: a Task.Delay races CI load —
     // too short and it flakes, too long and it wastes the suite's budget.
-    var current = await ReadNode(path)
-        .Where(n => n is not null)
-        .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+    // 🚨 The assertion OWNS the wait. No FirstAsync + ToTask bridge — forbidden
+    // repo-wide (2026-08-30, "no ToTask ever") — and no bare `await observable`
+    // either: Rx's awaiter resumes the test inline on the signalling thread.
+    // `.Within(t)` is the deadline, which is why there is no CancellationToken here.
+    var current = await ReadNode(path).Should().Within(10.Seconds()).Match(n => n is not null);
 
     // Write at the SUBSCRIBER via DataChangeRequest. The subscriber's
     // synced data source routes the update through its cached per-node
@@ -309,13 +310,12 @@ public async Task DataChangeRequestOnSubscriber_PropagatesToOwningHub()
     await client.Observe(
             new DataChangeRequest { Updates = [current! with { Name = "Updated" }] },
             o => o.WithTarget(new Address(SubscriberPath)))
-        .FirstAsync().ToTask(ct);
+        .Should().Emit();
 
     // Source side reflects the write — again, observe until the condition holds.
     await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
         .SelectMany(_ => ReadNode(path))
-        .Where(n => n?.Name == "Updated")
-        .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+        .Should().Within(10.Seconds()).Match(n => n?.Name == "Updated");
 }
 ```
 

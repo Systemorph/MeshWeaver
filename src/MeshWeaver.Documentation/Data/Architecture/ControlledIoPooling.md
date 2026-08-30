@@ -483,9 +483,18 @@ await mesh.TeardownAsync(TimeSpan.FromSeconds(15));   // MeshWeaver.Mesh.MeshTea
 var ioPools = mesh.ServiceProvider.GetService<IoPoolRegistry>();        // capture BEFORE Dispose()
 var disposeQueue = mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
 mesh.Dispose();
+// 🚨 ObserveCompletion, never Rx's ToTask bridge (forbidden repo-wide, 2026-08-30) and
+//    never a bare `await disposalCompleted` either: both resume this method INLINE on the
+//    hub's own disposal thread, which then has to run phases 2 and 3 while the mesh is
+//    trying to finish tearing itself down. ObserveCompletion completes with
+//    RunContinuationsAsynchronously, so the disposing thread is released immediately.
+using var phase1Deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 await mesh.DisposalCompleted
     .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
-    .FirstOrDefaultAsync().ToTask().WaitAsync(TimeSpan.FromSeconds(15));   // phase 1
+    .FirstOrDefaultAsync()
+    .ObserveCompletion(
+        ex => logger.LogWarning(ex, "disposal faulted AFTER the wait settled"),
+        phase1Deadline.Token);                                             // phase 1
 var leakedIoLeaves = ioPools?.DrainAll() ?? 0;   // phase 2 — cancel + join, NOT a polled wait
 if (disposeQueue is not null)
     await disposeQueue.DrainAsync(TimeSpan.FromSeconds(15));               // phase 3

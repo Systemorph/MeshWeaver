@@ -197,8 +197,7 @@ The way through is to run the write **inside the mesh**, through the canonical s
 
 ```csharp
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
-using MeshWeaver.Messaging;                 // AccessService
+using MeshWeaver.Messaging;                 // AccessService, ReactiveCompletion.ObserveCompletion
 using MeshWeaver.Mesh.Services;             // IMeshService
 using Microsoft.Extensions.DependencyInjection;
 using Memex.Portal.Shared.Authentication;   // InvitationService
@@ -214,8 +213,16 @@ foreach (var (email, name) in new[]
     ("grace.hopper@example.com", "Grace Hopper"),
 })
 {
+    // 🚨 ObserveCompletion, never Rx's own observable-to-Task bridge (maintainer,
+    // 2026-08-30: "no ToTask ever") — and never a bare `await …FirstAsync()` either, because
+    // Rx's awaiter resumes the rest of this script INLINE on whichever hub thread signalled.
+    // FirstAsync (not Take(1)): the next line dereferences node.Path, so an empty completion
+    // must keep FAULTING rather than settling with null.
     var node = await svc.CreateInvitation(email, invitedBy: "rbuergi", note: name)
-        .FirstAsync().ToTask(Ct);
+        .FirstAsync()
+        .ObserveCompletion(
+            ex => Log.LogWarning(ex, "CreateInvitation faulted AFTER the wait settled"),
+            Ct);
     Log.LogInformation("Created {Path}", node.Path);
 }
 ```
@@ -241,7 +248,9 @@ Every script receives four globals (`MeshScriptGlobals`, `MeshWeaver.Kernel.Hub`
 
 `Inputs` is what makes "operation as a script" work without a side-channel node: the form or caller patches the inputs onto the request and the script reads them as typed JSON. Values are carried as `JsonElement` so any JSON shape survives serialization across hub boundaries without a type-registry entry per shape.
 
-> **Always pass `Ct` to async calls.** `Task.Delay(ms, Ct)`, `HttpClient.GetAsync(url, Ct)`, `FirstAsync(predicate).ToTask(Ct)` — every cancellable API should receive it. Without `Ct`, clicking Cancel in the Activity Control Plane sends the signal but the script can't act on it until the current await returns.
+> **Always pass `Ct` to async calls.** `Task.Delay(ms, Ct)`, `HttpClient.GetAsync(url, Ct)`, `.FirstAsync(predicate).ObserveCompletion(report, Ct)` — every cancellable API should receive it. Without `Ct`, clicking Cancel in the Activity Control Plane sends the signal but the script can't act on it until the current await returns.
+
+> **🚨 A script body is one of the few places an `await` is legitimate — the bridge it uses is not free choice.** `ObserveCompletion` (in `MeshWeaver.Messaging`, imported by default) is the only sanctioned way to take a value out of an observable here. `.ToTask(...)` is forbidden repo-wide as of the 2026-08-30 ruling (*"no ToTask ever"*), and `await someObservable` / `await source.FirstAsync()` is the same defect wearing a shorter spelling: Rx's awaiter is an `AsyncSubject<T>` that completes its continuation from inside `OnCompleted`, so the remainder of your script runs **on the mesh thread that signalled** — inside the portal, holding a hub's action block. `ObserveCompletion` completes through a `TaskCompletionSource` created with `RunContinuationsAsynchronously`, so the signalling thread is released immediately, and its `reportLateFault` arm stays attached for a fault that lands after the wait settled. Never pass an empty lambda there.
 
 ### Reactive waiting
 
@@ -253,8 +262,12 @@ Log.LogInformation("Waiting for downstream job to finish…");
 await Mesh.GetWorkspace()
     .GetMeshNodeStream("rbuergi/downstream-job")
     .Where(n => (n?.Content as JobContent)?.Status == JobStatus.Succeeded)
-    .Take(1)
-    .ToTask(Ct);                          // ← Ct propagates Cancel
+    .FirstAsync()                         // ← not .Take(1): an empty completion must FAULT,
+                                          //   or ObserveCompletion settles with null and the
+                                          //   script proceeds as though the wait had succeeded
+    .ObserveCompletion(
+        ex => Log.LogWarning(ex, "downstream watch faulted AFTER the wait settled"),
+        Ct);                              // ← Ct cancels the WAIT, so Cancel is honoured
 Log.LogInformation("Downstream finished — proceeding");
 ```
 

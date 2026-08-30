@@ -148,15 +148,15 @@ For a request/response consumer (cross-hub `AutocompleteRequest`), take the sett
 
 ### Testing progressive-snapshot providers
 
-Tests may bridge to `await` at the test edge — but bound it, and wait for the *shape* you expect rather than the first emission (the first is the empty seed):
+Tests assert on the stream and let the assertion own the wait — but bound it, and wait for the *shape* you expect rather than the first emission (the first is the empty seed):
 
 ```csharp
 var items = await provider.GetItems("@Sys", null)
-    .Where(snapshot => snapshot.Count > 0)
-    .Timeout(10.Seconds())
-    .FirstAsync()
-    .ToTask(ct);
+    .Should().Within(10.Seconds())
+    .Match(snapshot => snapshot.Count > 0);
 ```
+
+> **🚨 Not `.FirstAsync().ToTask(ct)`.** That bridge is forbidden repo-wide as of 2026-08-30, `test/**` included, and a bare `await observable` is the same defect: both resume the test inline on the mesh thread that emitted. `.Within(t)` is the bound, which is why there is no `Timeout` operator and no `CancellationToken` left in the chain.
 
 ---
 
@@ -222,10 +222,8 @@ Because the menu re-emits as permissions enrich, a test must **not** grab the fi
 ```csharp
 var items = await MenuStream(client, nodeAddress, NodeMenuContext)
     .CombineLatest(MenuStream(client, nodeAddress, MeshMenuContext), Merge)
-    .Where(set => set.Select(i => i.Label).ToHashSet().SetEquals(expectedLabels))
-    .Timeout(20.Seconds())
-    .FirstAsync()
-    .ToTask(ct);
+    .Should().Within(20.Seconds())
+    .Match(set => set.Select(i => i.Label).ToHashSet().SetEquals(expectedLabels));
 ```
 
 `SetEquals` waiting catches both *missing* items (role not yet propagated) and *extra* items (wrong gating) — either way the menu never reaches the expected set and the `Timeout` fails the test. See `MenuAccessControlTest`.
@@ -312,4 +310,4 @@ Any new aggregator that gathers items from multiple providers should look like o
 **Both:**
 
 - [ ] Providers are resolved via `hub.ServiceProvider.GetServices<T>()` after `TryAddEnumerable` (or, for menu delegate providers, registered via `AddNodeMenuItems`).
-- [ ] Tests bridge back to `await` via `.Where(predicate).Timeout(...).FirstAsync().ToTask(ct)` — waiting for the expected shape, never the first emission, and never `.ToTask()` on a raw hub-touching observable without a bounding `Timeout`.
+- [ ] Tests wait via `await stream.Should().Within(t).Match(predicate)` — for the expected shape, never the first emission. **No `.ToTask()` anywhere** (forbidden repo-wide, 2026-08-30) and no bare `await observable`; `.Within(t)` is the bound.
