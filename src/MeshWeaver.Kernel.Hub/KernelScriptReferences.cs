@@ -211,8 +211,15 @@ internal static class KernelScriptReferences
     public static async Task<ImmutableArray<MetadataReference>> GetReferencesAsync(
         IEnumerable<Assembly> sessionAssemblies, CancellationToken ct)
     {
-        // Wait for the shared warm-up (never for the caller's own materialization), then build the
-        // set from what is loaded NOW — see SharedWarmup for why this must not be a frozen list.
+        // Wait for the shared warm-up — which is where the BULK materialization (~350 assemblies,
+        // uncancellable CPU/disk) happens, off this caller's pooled leaf — then build the set from
+        // what is loaded NOW. See SharedWarmup for why this must not be a frozen list.
+        //
+        // 🚨 NOT "no synchronous work on the caller path". MaterializeCurrentAssemblies() resolves
+        // through the per-file memo, so an assembly that loaded AFTER the warm-up is materialized
+        // HERE, synchronously, by whichever caller sees it first — one CreateFromFile for that one
+        // file, then memoized for everyone. That is the price of not freezing the list, and it is
+        // bounded by how many assemblies have loaded since the warm-up, not by the ~350 total.
         await SharedWarmup.Value.WaitAsync(ct).ConfigureAwait(false);
         var snapshot = MaterializeCurrentAssemblies();
         var result = ImmutableArray.CreateBuilder<MetadataReference>(snapshot.Length + 4);
