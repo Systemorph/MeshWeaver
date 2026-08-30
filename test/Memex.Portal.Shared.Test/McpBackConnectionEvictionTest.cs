@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Data;
@@ -12,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -52,21 +52,21 @@ public class McpBackConnectionEvictionTest(ITestOutputHelper output) : MonolithM
         var svc = Service(tokens);
         var userId = $"mcpuser{Guid.NewGuid():N}"[..16];
 
-        var first = await svc.EnsureForUser(userId).FirstAsync().ToTask();
+        var first = await svc.EnsureForUser(userId).FirstAsync().Await();
         first.Should().NotBeNull("the first call mints a token");
         var firstToken = first!.BearerToken;
 
         // Cached: the same token comes back without minting a second one.
-        var cached = await svc.EnsureForUser(userId).FirstAsync().ToTask();
+        var cached = await svc.EnsureForUser(userId).FirstAsync().Await();
         cached!.BearerToken.Should().Be(firstToken, "a valid cached token is reused — that is the hot path");
 
         // Revoke it the way an operator would.
-        var mine = await tokens.GetTokensForUser(userId).FirstAsync().ToTask();
+        var mine = await tokens.GetTokensForUser(userId).FirstAsync().Await();
         mine.Should().NotBeEmpty("the mint created a token node for this user");
-        (await tokens.RevokeToken(mine[0].NodePath).FirstAsync().ToTask())
+        (await tokens.RevokeToken(mine[0].NodePath).FirstAsync().Await())
             .Should().BeTrue("revocation must succeed for this test to mean anything");
 
-        var afterRevoke = await svc.EnsureForUser(userId).FirstAsync().ToTask();
+        var afterRevoke = await svc.EnsureForUser(userId).FirstAsync().Await();
 
         afterRevoke.Should().NotBeNull();
         afterRevoke!.BearerToken.Should().NotBe(

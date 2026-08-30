@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.NodeOperations.Test;
 
@@ -125,7 +125,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - try to create the same node again
-        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().Await();
 
         // Assert
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -144,7 +144,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act
-        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().Await();
 
         // Assert
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
@@ -157,7 +157,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         // hub, so HandleCreateNodeRequest must reject it before persisting.
         var node = new MeshNode("BareNode", "bare/test") { Name = "Bare" };
 
-        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().Await();
 
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
             .WithMessage("*NodeType or Content*");
@@ -235,7 +235,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task DeleteNode_NotFound_ShouldFail()
     {
         // Act
-        Func<Task> act = async () => await NodeFactory.DeleteNode("nonexistent/path/Node").FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.DeleteNode("nonexistent/path/Node").FirstAsync().Await();
 
         // Assert
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -359,7 +359,7 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
         };
 
         // Act
-        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().Await();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -404,7 +404,7 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
         };
 
         // Act — creation should fail due to validator
-        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().Await();
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
 
         // Verify no trace of the node exists.
@@ -445,7 +445,7 @@ public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : 
         };
 
         // Act
-        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().Await();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -531,7 +531,7 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
         await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - try to delete the protected node
-        Func<Task> act = async () => await NodeFactory.DeleteNode("deletion/validation/ProtectedNode").FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.DeleteNode("deletion/validation/ProtectedNode").FirstAsync().Await();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -677,7 +677,7 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().Await();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -738,7 +738,7 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
         await NodeFactory.CreateNode(node).Should().Emit();
 
         // Act - try to delete the locked node
-        Func<Task> act = async () => await NodeFactory.DeleteNode("nodetype/deletion/LockedNode").FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.DeleteNode("nodetype/deletion/LockedNode").FirstAsync().Await();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -807,7 +807,7 @@ public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().Await();
 
         // Assert - global validator rejects first
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -826,7 +826,7 @@ public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.CreateNode(node).FirstAsync().Await();
 
         // Assert - NodeType validator rejects after global passes
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -1122,7 +1122,7 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
             Name = "Downgraded Node",
             Content = new UpdatableContent(Title: "Downgraded", Version: 3)
         };
-        Func<Task> act = async () => await NodeFactory.UpdateNode(downgradedNode).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.UpdateNode(downgradedNode).FirstAsync().Await();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -1165,7 +1165,7 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
         };
 
         // Act - try to update a node that doesn't exist
-        Func<Task> act = async () => await NodeFactory.UpdateNode(node).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.UpdateNode(node).FirstAsync().Await();
 
         // Assert — UpdateNodeRequest is forwarded to the owning per-node hub
         // (see MeshExtensions.cs HandleUpdateNodeRequest forwarding in 727ba0925).
@@ -1232,7 +1232,7 @@ public class NodeOperationsWithGlobalUpdateValidatorTest(ITestOutputHelper outpu
         {
             Name = "This is forbidden by policy"
         };
-        Func<Task> act = async () => await NodeFactory.UpdateNode(updatedNode).FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.UpdateNode(updatedNode).FirstAsync().Await();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()

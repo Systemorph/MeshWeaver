@@ -227,11 +227,17 @@ public static class MeshApiEndpoints
     /// <summary>
     /// <c>POST /api/mesh/render-area</c> — subscribes the node's layout area server-side (the
     /// same <c>GetRemoteStream</c> primitive the Blazor portal binds with), takes the first
-    /// fully-materialised Full <c>{areas,data}</c> frame, disposes the subscription (on every
-    /// path, including client abort — the observable chain tears down with the request's
-    /// <see cref="CancellationToken"/>), and ships the frame verbatim: hub serializer options,
+    /// fully-materialised Full <c>{areas,data}</c> frame, disposes the subscription on every
+    /// normal path, and ships the frame verbatim: hub serializer options,
     /// <c>$type</c> discriminators, JSON-encoded instance keys — byte-identical to the gRPC
     /// wire's Full <c>DataChangedEvent</c>, so an SSR client seeds its area source without
+    /// <para>🚨 On a CLIENT ABORT the wait stops but the subscription is NOT disposed: the
+    /// cancellation token passed to <c>ObserveCompletion</c> cancels the returned <c>Task</c>, and
+    /// that method deliberately keeps its error arm attached so a late fault is reported instead
+    /// of vanishing. The render therefore runs to completion server-side after an abort. Said
+    /// plainly because the earlier wording promised teardown the code does not perform; if a real
+    /// abort-cancels-the-render is wanted, it needs an explicit disposal path, not a doc edit.</para>
+    ///
     /// translation. A timeout returns a 504 JSON error instead of hanging; every other failure
     /// ships the <see cref="MeshOperations"/> <c>"Error: …"</c>/<c>"Not found: …"</c> sentinel
     /// exactly like the sibling verbs.
@@ -251,13 +257,16 @@ public static class MeshApiEndpoints
                             $"'{body.Area ?? "(default)"}' at '{body.Path}'.",
                 },
                 statusCode: StatusCodes.Status504GatewayTimeout)))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync()
+            .ObserveCompletion(LateFault(http, $"/api/mesh/render-area '{body.Path}'"), ct)!;
     }
 
     /// <summary>
     /// <c>POST /api/mesh/mirror</c>. Shaped like <see cref="HandleRenderArea"/>: the body is one
     /// composed observable and the ONLY bridge to <see cref="Task"/> is the trailing
-    /// <c>.FirstAsync().ToTask(ct)</c> at the ASP.NET edge. It used to <c>await</c> the hub
+    /// <c>.FirstAsync().ObserveCompletion(…, ct)</c> at the ASP.NET edge (never <c>.ToTask()</c>,
+    /// which resumes the awaiter inline on the signalling thread — forbidden since 2026-08-30). It
+    /// used to <c>await</c> the hub
     /// round-trip mid-method — the shape that reaches into hub code from an await chain, and the
     /// one the endpoint's own <c>Task&lt;IResult&gt;</c> signature is not licence for.
     /// </summary>
@@ -277,7 +286,8 @@ public static class MeshApiEndpoints
             })
             .Select(result => (IResult)Results.Content(
                 JsonSerializer.Serialize(result, sessionHub.JsonSerializerOptions), "application/json"))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync()
+            .ObserveCompletion(LateFault(http, $"/api/mesh/mirror '{body.SourcePath}'"), ct)!;
     }
 
     private static IResult HandleNavigateTo(HttpContext http, IOptions<McpConfiguration>? mcp, NavigateBody body)
@@ -295,7 +305,7 @@ public static class MeshApiEndpoints
     /// <c>CopyToAsync</c> over the request body are ASP.NET's own IO and belong at this edge — but it
     /// is quarantined in <see cref="ReadUploadAsync"/>, which never touches the mesh. The MESH call
     /// is composed, not awaited: the single bridge back to <see cref="Task"/> is the trailing
-    /// <c>.FirstAsync().ToTask(ct)</c>. An <c>await</c> that reaches into hub code is the shape the
+    /// <c>.FirstAsync().ObserveCompletion(…, ct)</c>. An <c>await</c> that reaches into hub code is the shape the
     /// endpoint's <c>Task&lt;IResult&gt;</c> signature is not licence for, however far from a hub
     /// scheduler this particular request thread happens to be.
     /// </summary>
@@ -306,7 +316,8 @@ public static class MeshApiEndpoints
                 : new MeshOperations(ResolveSession(http, rootHub))
                     .Upload(upload.Path!, upload.Bytes!)
                     .Select(result => (IResult)Results.Content(result, "application/json")))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync()
+            .ObserveCompletion(LateFault(http, "/api/mesh/upload"), ct)!;
 
     /// <summary>
     /// Reads the multipart body: either a <c>Failure</c> result to ship as-is, or the target path
@@ -361,6 +372,24 @@ public static class MeshApiEndpoints
         return services;
     }
 
+    /// <summary>
+    /// The late-fault sink for this surface's <see cref="ReactiveCompletion.ObserveCompletion{T}"/>
+    /// bridges. A fault that lands AFTER the response has already settled can no longer change the
+    /// answer, but it is the only record that anything went wrong on the way out — discarding it is
+    /// half of what <c>ObserveCompletion</c> exists to remove.
+    ///
+    /// <para>The logger is resolved EAGERLY, while the request scope is still alive, and captured:
+    /// a late fault arrives after <see cref="HttpContext.RequestServices"/> has been disposed, so
+    /// resolving from it inside the lambda would throw exactly when the report is needed.</para>
+    /// </summary>
+    private static Action<Exception> LateFault(HttpContext http, string what)
+    {
+        var logger = http.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(MeshApiEndpoints));
+        return ex => logger.LogWarning(
+            ex, "{What}: faulted after its HTTP response had already settled", what);
+    }
+
     private static IMessageHub ResolveSession(HttpContext http, IMessageHub rootHub)
     {
         var logger = http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(MeshApiEndpoints));
@@ -370,7 +399,9 @@ public static class MeshApiEndpoints
     /// <summary>
     /// The shared body of every string-returning verb on this surface. <c>work</c>'s observable is
     /// composed, never awaited: the single bridge to <see cref="Task"/> is the trailing
-    /// <c>.FirstAsync().ToTask(ct)</c>, which is the ASP.NET edge itself.
+    /// <c>.FirstAsync().ObserveCompletion(…, ct)</c>, which is the ASP.NET edge itself. Rx's own
+    /// <c>.ToTask()</c> is NOT that bridge — it resumes the awaiter inline on the signalling thread,
+    /// which on this surface is a mesh hub's action block (forbidden since 2026-08-30).
     /// </summary>
     private static Task<IResult> RunString(
         HttpContext http,
@@ -385,7 +416,8 @@ public static class MeshApiEndpoints
         // value the client can branch on (mirrors the MCP-tool contract).
         return work(ops)
             .Select(result => (IResult)Results.Content(result, "application/json"))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync()
+            .ObserveCompletion(LateFault(http, $"{http.Request.Path}"), ct)!;
     }
 
     private static string ResolveBaseUrl(HttpContext http, IOptions<McpConfiguration>? mcp)

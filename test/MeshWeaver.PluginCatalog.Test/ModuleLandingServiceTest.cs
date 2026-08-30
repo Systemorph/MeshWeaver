@@ -4,10 +4,10 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -57,7 +57,7 @@ public class ModuleLandingServiceTest : IDisposable
                 packagePath: "Plugins/acme-widgets",
                 version: "1.2.0",
                 minMeshVersion: "0.0.1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         // The activation entry + the minimal step-10 restart-required signal.
         var list = ModuleActivationSidecar.Read(baseDirectory);
@@ -90,9 +90,9 @@ public class ModuleLandingServiceTest : IDisposable
     {
         using var service = Service;
         await service.LandModule("Acme.Widgets", [("Acme.Widgets.dll", [1])], LiveFrameworkMvid)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         await service.LandModule("Acme.Widgets", [("Acme.Widgets.dll", [9, 9])], LiveFrameworkMvid)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var entry = ModuleActivationSidecar.Read(baseDirectory).Entries
             .Should().ContainSingle("re-landing upserts the entry, never appends a duplicate")
@@ -114,7 +114,7 @@ public class ModuleLandingServiceTest : IDisposable
         var act = () => service
             .LandModule("Acme.Widgets", [("Acme.Widgets.dll", [1])],
                 LiveFrameworkMvid, minMeshVersion: "999.0.0")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         (await act.Should().ThrowAsync<InvalidOperationException>(
                 "landing bytes whose required API surface does not exist here would surface only "
@@ -149,7 +149,7 @@ public class ModuleLandingServiceTest : IDisposable
             .ShelveModule("Acme.Widgets", [("Acme.Widgets.dll", [1, 2])],
                 LiveFrameworkMvid, packagePath: "Plugins/acme-widgets", version: "2.0.0",
                 minMeshVersion: "999.0.0")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         outcome.Held.Should().BeTrue("the floor exceeds the running platform — shelved, not activated");
         outcome.HoldReason.Should().Contain("999.0.0").And.Contain(
@@ -179,7 +179,7 @@ public class ModuleLandingServiceTest : IDisposable
         var outcome = await service
             .ShelveModule("Acme.Widgets", [("Acme.Widgets.dll", [7])],
                 LiveFrameworkMvid, version: "2.0.0", minMeshVersion: "0.0.1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         outcome.Held.Should().BeFalse("a satisfied floor shelves and activates in one landing");
         outcome.HoldReason.Should().BeNull();
@@ -200,7 +200,7 @@ public class ModuleLandingServiceTest : IDisposable
         var act = () => service
             .ShelveModule("Acme.Platform", [("Acme.Platform.dll", [2])],
                 LiveFrameworkMvid, minMeshVersion: "999.0.0")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
             .Which.Message.Should().Contain("Acme.Platform.dll");
@@ -220,7 +220,7 @@ public class ModuleLandingServiceTest : IDisposable
 
         await service.LandModule(
                 "Acme.Widgets", [("Acme.Widgets.dll", [1])], foreignBuild, version: "1.0.0")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var entry = ModuleActivationSidecar.Read(baseDirectory).Entries.Should().ContainSingle()
             .Subject;
@@ -243,7 +243,7 @@ public class ModuleLandingServiceTest : IDisposable
         using var service = Service;
         var act = () => service
             .LandModule("Acme.Platform", [("Acme.Platform.dll", [2])], LiveFrameworkMvid)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
             .Which.Message.Should().Contain("Acme.Platform.dll");
@@ -256,7 +256,7 @@ public class ModuleLandingServiceTest : IDisposable
         using var service = Service;
         var act = () => service
             .LandModule("Acme.Widgets", [("Acme.Widgets.Support.dll", [1])], LiveFrameworkMvid)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         await act.Should().ThrowAsync<ArgumentException>(
             "a modules/<name>/ folder without <name>.dll could never load");
     }
@@ -266,13 +266,13 @@ public class ModuleLandingServiceTest : IDisposable
     {
         using var service = Service;
         await service.LandModule("Acme.Widgets", [("Acme.Widgets.dll", [1])], LiveFrameworkMvid)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         // Simulate the boot that consumed the landing's restart flag, so the assert below
         // proves REMOVAL re-raises it.
         ModuleActivationSidecar.Write(baseDirectory,
             ModuleActivationSidecar.Read(baseDirectory) with { PendingRestart = false });
 
-        await service.RemoveModule("Acme.Widgets").FirstAsync().ToTask();
+        await service.RemoveModule("Acme.Widgets").FirstAsync().Await();
 
         GenerationDirectories()
             .Should().BeEmpty("uninstall deletes the landed generation (best-effort here; on a "
@@ -290,7 +290,7 @@ public class ModuleLandingServiceTest : IDisposable
     public async Task RemoveModule_UnknownName_Refuses()
     {
         using var service = Service;
-        var act = () => service.RemoveModule("Never.Landed").FirstAsync().ToTask();
+        var act = () => service.RemoveModule("Never.Landed").FirstAsync().Await();
         await act.Should().ThrowAsync<InvalidOperationException>(
             "publish-laid-out module folders are the deployment's, not uninstall's");
     }
@@ -306,7 +306,7 @@ public class ModuleLandingServiceTest : IDisposable
         using var service = Service;
         var act = () => service
             .LandModule(name, [(name + ".dll", [1])], LiveFrameworkMvid)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         await act.Should().ThrowAsync<ArgumentException>();
     }
 }

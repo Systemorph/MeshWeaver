@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Security;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -51,7 +51,7 @@ public class PermissionQueryHammerReproTest(ITestOutputHelper output) : Monolith
             Mesh.GetEffectivePermissions($"hammer{i}/space/sub/leaf{i}", $"nobody-{i}")
                 .Take(1)
                 .Timeout(60.Seconds())
-                .ToTask(ct)).ToArray();
+                .Await(ct)).ToArray();
 
         Permission[] results;
         try

@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -42,7 +42,7 @@ public class GitHubCredentialServiceTest(ITestOutputHelper output) : GitHubSyncT
     public async Task Delete_RemovesCredential()
     {
         await Connect();
-        await Credentials.Delete(UserId).Timeout(30.Seconds()).ToTask();
+        await Credentials.Delete(UserId).Timeout(30.Seconds()).Await();
         Assert.True(await IsAbsent(GitHubCredentialService.CredentialPath(UserId)));
     }
 

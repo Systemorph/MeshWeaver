@@ -3,7 +3,6 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -152,15 +152,15 @@ public class ActivationBacklogFifoTest(ITestOutputHelper output) : MonolithMeshT
         // fence response proves the mesh has processed everything posted before it.
         var fenceAddress = new Address(TestPartition);
         await client.Observe(new PingRequest(), o => o.WithTarget(fenceAddress))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(ct);
 
         // A — first message to the not-yet-activated probe hub. Its activation parks at
         // resolver call #1: the per-address ActivationSerializer is now alive with A pending.
         var aTask = client.Observe<OrderProbeResponse>(new OrderProbeRequest("A"),
                 o => o.WithTarget(probeAddress))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(ct);
         await gates.Calls.Where(c => c == 1).FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+            .Timeout(TimeSpan.FromSeconds(10)).Await(ct);
         Output.WriteLine("A parked in activation (resolver call #1).");
 
         // B — joins the activation backlog behind A. Fence: a ping to the pre-activated
@@ -169,9 +169,9 @@ public class ActivationBacklogFifoTest(ITestOutputHelper output) : MonolithMeshT
         // before A is released.
         var bTask = client.Observe<OrderProbeResponse>(new OrderProbeRequest("B"),
                 o => o.WithTarget(probeAddress))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(ct);
         await client.Observe(new PingRequest(), o => o.WithTarget(fenceAddress))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await(ct);
         Output.WriteLine("B enqueued behind A (mesh fence passed).");
 
         // Release A: the hub is constructed + REGISTERED, A is delivered, and B's serializer
@@ -179,7 +179,7 @@ public class ActivationBacklogFifoTest(ITestOutputHelper output) : MonolithMeshT
         // leapfrog window is open: hub registered, backlog (B) undrained.
         gates.ReleaseFirst();
         await gates.Calls.Where(c => c == 2).FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+            .Timeout(TimeSpan.FromSeconds(10)).Await(ct);
         Mesh.GetHostedHub(probeAddress, HostedHubCreation.Never).Should().NotBeNull(
             "A's activation must have registered the probe hub before B's serializer turn");
         Output.WriteLine("Hub registered; B parked in serializer turn (resolver call #2).");
@@ -187,9 +187,9 @@ public class ActivationBacklogFifoTest(ITestOutputHelper output) : MonolithMeshT
         // C — posted exactly in the window. It must NOT bypass the still-draining backlog.
         var cTask = client.Observe<OrderProbeResponse>(new OrderProbeRequest("C"),
                 o => o.WithTarget(probeAddress))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(ct);
         await client.Observe(new PingRequest(), o => o.WithTarget(fenceAddress))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await(ct);
         Output.WriteLine("C routed (mesh fence passed).");
 
         // Release B; every message must now complete.

@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -8,6 +7,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -71,8 +71,8 @@ public class SyncTriggerAuthorizationTest(ITestOutputHelper output) : GitHubSync
         await CreateSpace(Space, "Synced Space");
         await CreateMarkdown($"{Space}/Page", "Page", "# page");
         await Sync.SaveConfig(Space, RepoUrl, "main", null, true, true)
-            .Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(Space, UserId).Timeout(60.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(Space, UserId).Timeout(60.Seconds()).Await();
     }
 
     [Fact(Timeout = 120000)]
@@ -81,13 +81,13 @@ public class SyncTriggerAuthorizationTest(ITestOutputHelper output) : GitHubSync
         await ProvisionSyncedSpace();
         // The reader's own GitHub credential — whose token talks to the (fake) GitHub API.
         await Credentials.Save(Reader, new GitHubToken("ghp_reader", null, "bearer", "repo", null), "reader")
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         // The seeded shape really is production's: Read via the entitlement, and NOT partition
         // write — the retraction regime means no user can hold Create/Update here, which is
         // exactly why the trigger must not require it.
         var effective = await Mesh.GetEffectivePermissions(Space, Reader)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.True(effective.HasFlag(Permission.Read), $"reader should Read the Space, got {effective}");
         Assert.False(effective.HasFlag(Permission.Create), $"reader must NOT hold Create, got {effective}");
         Assert.False(effective.HasFlag(Permission.Update), $"reader must NOT hold Update, got {effective}");
@@ -96,7 +96,7 @@ public class SyncTriggerAuthorizationTest(ITestOutputHelper output) : GitHubSync
         // create ("Create permission required for '{Space}/_Activity/…'").
         Task<string> check;
         using (Access.SwitchAccessContext(Principal(Reader)))
-            check = Mesh.CheckBranchStateOnGitHub(Space, Reader).Timeout(90.Seconds()).ToTask();
+            check = Mesh.CheckBranchStateOnGitHub(Space, Reader).Timeout(90.Seconds()).Await();
         var checkPath = await check;
         var checkLog = await WaitForActivity(checkPath, l => l.Status != ActivityStatus.Running);
         Assert.Equal(ActivityStatus.Succeeded, checkLog.Status);
@@ -110,7 +110,7 @@ public class SyncTriggerAuthorizationTest(ITestOutputHelper output) : GitHubSync
         // update — repo → space convergence, same Read-based authorization.
         Task<string> update;
         using (Access.SwitchAccessContext(Principal(Reader)))
-            update = Mesh.UpdateToLatestFromGitHub(Space, Reader).Timeout(90.Seconds()).ToTask();
+            update = Mesh.UpdateToLatestFromGitHub(Space, Reader).Timeout(90.Seconds()).Await();
         var updatePath = await update;
         var updateLog = await WaitForActivity(updatePath, l => l.Status != ActivityStatus.Running);
         Assert.Equal(ActivityStatus.Succeeded, updateLog.Status);
@@ -124,7 +124,7 @@ public class SyncTriggerAuthorizationTest(ITestOutputHelper output) : GitHubSync
         // The reader may check/update but NOT commit — space → repo needs commit authority.
         Task<string> readerCommit;
         using (Access.SwitchAccessContext(Principal(Reader)))
-            readerCommit = Mesh.CommitToGitHub(Space, Reader).Timeout(60.Seconds()).ToTask();
+            readerCommit = Mesh.CommitToGitHub(Space, Reader).Timeout(60.Seconds()).Await();
         var deniedCommit = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => readerCommit);
         Assert.Contains("platform admin", deniedCommit.Message);
 
@@ -133,7 +133,7 @@ public class SyncTriggerAuthorizationTest(ITestOutputHelper output) : GitHubSync
         Task<string> anonymousCheck;
         using (Access.SwitchAccessContext(Principal(WellKnownUsers.Anonymous)))
             anonymousCheck = Mesh.CheckBranchStateOnGitHub(Space, WellKnownUsers.Anonymous)
-                .Timeout(60.Seconds()).ToTask();
+                .Timeout(60.Seconds()).Await();
         var deniedCheck = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => anonymousCheck);
         Assert.Contains("Sign-in required", deniedCheck.Message);
     }
@@ -143,21 +143,21 @@ public class SyncTriggerAuthorizationTest(ITestOutputHelper output) : GitHubSync
     {
         await ProvisionSyncedSpace();
         await Credentials.Save(PlatformAdmin, new GitHubToken("ghp_admin", null, "bearer", "repo", null), "admin")
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         // A platform admin is NOT a data superuser (#811's pin): the Admin-partition grant confers
         // nothing on the Space itself — no Read, no Update. Every trigger authorization below must
         // therefore come from IsGlobalAdmin, never from a per-space permission (which the
         // retraction handler would have removed anyway).
         var onSpace = await Mesh.GetEffectivePermissions(Space, PlatformAdmin)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.False(onSpace.HasFlag(Permission.Update), $"platform admin must NOT hold Update on the Space, got {onSpace}");
 
         // check — the deploy persona must be able to ask branch state even with NO Read on the
         // Space (the exact shape of a platform admin running `git_hub_sync check` on a mesh).
         Task<string> check;
         using (Access.SwitchAccessContext(Principal(PlatformAdmin)))
-            check = Mesh.CheckBranchStateOnGitHub(Space, PlatformAdmin).Timeout(90.Seconds()).ToTask();
+            check = Mesh.CheckBranchStateOnGitHub(Space, PlatformAdmin).Timeout(90.Seconds()).Await();
         var checkLog = await WaitForActivity(await check, l => l.Status != ActivityStatus.Running);
         Assert.Equal(ActivityStatus.Succeeded, checkLog.Status);
 
@@ -165,7 +165,7 @@ public class SyncTriggerAuthorizationTest(ITestOutputHelper output) : GitHubSync
 
         Task<string> commit;
         using (Access.SwitchAccessContext(Principal(PlatformAdmin)))
-            commit = Mesh.CommitToGitHub(Space, PlatformAdmin).Timeout(90.Seconds()).ToTask();
+            commit = Mesh.CommitToGitHub(Space, PlatformAdmin).Timeout(90.Seconds()).Await();
         var commitPath = await commit;
         var commitLog = await WaitForActivity(commitPath, l => l.Status != ActivityStatus.Running);
         Assert.Equal(ActivityStatus.Succeeded, commitLog.Status);
@@ -183,5 +183,5 @@ public class SyncTriggerAuthorizationTest(ITestOutputHelper output) : GitHubSync
             .Select(l => l!)
             .FirstAsync()
             .Timeout(60.Seconds())
-            .ToTask();
+            .Await();
 }

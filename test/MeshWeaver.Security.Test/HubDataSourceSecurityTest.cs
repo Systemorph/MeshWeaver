@@ -9,8 +9,8 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 public record TestItem(string Id, string Name);
@@ -55,7 +55,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
 
         ((object?)stream).Should().NotBeNull("workspace stream should exist for registered type");
 
-        Func<Task> act = () => stream!.FirstAsync().Timeout(5.Seconds()).ToTask();
+        Func<Task> act = () => stream!.FirstAsync().Timeout(5.Seconds()).Await();
         var ex = (await act.Should().ThrowAsync<Exception>()).Which;
         Output.WriteLine($"Exception: {ex.GetType().Name}: {ex.Message}");
         ex.Should().NotBeOfType<TimeoutException>(
@@ -83,7 +83,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
 
         ((object?)stream).Should().NotBeNull("workspace stream should exist for registered type");
 
-        Func<Task> act = () => stream!.FirstAsync().Timeout(5.Seconds()).ToTask();
+        Func<Task> act = () => stream!.FirstAsync().Timeout(5.Seconds()).Await();
         var ex = (await act.Should().ThrowAsync<Exception>()).Which;
         Output.WriteLine($"Exception: {ex.GetType().Name}: {ex.Message}");
         ex.Should().NotBeOfType<TimeoutException>(
@@ -112,7 +112,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         var internalStream = groupHub.GetWorkspace().GetStream<TestItem>();
         ((object?)internalStream).Should().NotBeNull("workspace stream should exist for registered type");
 
-        Func<Task> internalAct = () => internalStream!.FirstAsync().Timeout(5.Seconds()).ToTask();
+        Func<Task> internalAct = () => internalStream!.FirstAsync().Timeout(5.Seconds()).Await();
         var internalEx = (await internalAct.Should().ThrowAsync<Exception>()).Which;
         Output.WriteLine($"Step 1 - Internal stream errored: {internalEx.GetType().Name}: {internalEx.Message}");
         internalEx.Should().NotBeOfType<TimeoutException>("internal stream should error from access denial");
@@ -123,7 +123,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         var remoteStream = client.GetWorkspace().GetRemoteStream<EntityStore>(
             groupAddress, new CollectionsReference(typeof(TestItem).FullName!));
 
-        Func<Task> remoteAct = () => remoteStream.FirstAsync().Timeout(5.Seconds()).ToTask();
+        Func<Task> remoteAct = () => remoteStream.FirstAsync().Timeout(5.Seconds()).Await();
         var remoteEx = (await remoteAct.Should().ThrowAsync<Exception>()).Which;
         Output.WriteLine($"Step 2 - Remote stream result: {remoteEx.GetType().Name}: {remoteEx.Message}");
 
@@ -150,7 +150,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         var stream = client.GetWorkspace().GetRemoteStream<EntityStore>(
             groupAddress, new CollectionsReference(typeof(TestItem).FullName!));
 
-        Func<Task> act = () => stream.FirstAsync().Timeout(5.Seconds()).ToTask();
+        Func<Task> act = () => stream.FirstAsync().Timeout(5.Seconds()).Await();
         var ex = (await act.Should().ThrowAsync<Exception>()).Which;
         Output.WriteLine($"Exception: {ex.GetType().Name}: {ex.Message}");
 
@@ -178,7 +178,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         // Wait for the internal stream to error (proves initialization failed)
         var internalStream = groupHub.GetWorkspace().GetStream<TestItem>();
         ((object?)internalStream).Should().NotBeNull();
-        Func<Task> internalAct = () => internalStream!.FirstAsync().Timeout(5.Seconds()).ToTask();
+        Func<Task> internalAct = () => internalStream!.FirstAsync().Timeout(5.Seconds()).Await();
         var internalEx = (await internalAct.Should().ThrowAsync<Exception>()).Which;
         Output.WriteLine($"Internal stream errored: {internalEx.GetType().Name}: {internalEx.Message}");
         internalEx.Should().NotBeOfType<TimeoutException>();
@@ -189,7 +189,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         var remoteStream2 = client2.GetWorkspace().GetRemoteStream<EntityStore>(
             groupAddress, new CollectionsReference(typeof(TestItem).FullName!));
 
-        Func<Task> remoteAct2 = () => remoteStream2.FirstAsync().Timeout(3.Seconds()).ToTask();
+        Func<Task> remoteAct2 = () => remoteStream2.FirstAsync().Timeout(3.Seconds()).Await();
         var remoteEx2 = (await remoteAct2.Should().ThrowAsync<Exception>()).Which;
         Output.WriteLine($"Second subscriber result: {remoteEx2.GetType().Name}: {remoteEx2.Message}");
 
@@ -221,11 +221,11 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         // Wait for internal stream error (proves init failed)
         var stream = groupHub.GetWorkspace().GetStream<TestItem>();
         ((object?)stream).Should().NotBeNull();
-        await ((Func<Task>)(() => stream!.FirstAsync().Timeout(5.Seconds()).ToTask())).Should().ThrowAsync<Exception>();
+        await ((Func<Task>)(() => stream!.FirstAsync().Timeout(5.Seconds()).Await())).Should().ThrowAsync<Exception>();
 
         // GetDataRequest should throw, not timeout
         var client = GetClient();
-        Func<Task> act = () => client.Observe(new GetDataRequest(new CollectionsReference(typeof(TestItem).FullName!)), o => o.WithTarget(groupAddress)).FirstAsync().ToTask();
+        Func<Task> act = () => client.Observe(new GetDataRequest(new CollectionsReference(typeof(TestItem).FullName!)), o => o.WithTarget(groupAddress)).FirstAsync().Await();
         var ex = (await act.Should().ThrowAsync<Exception>()).Which;
 
         Output.WriteLine($"GetDataRequest error: {ex.GetType().Name}: {ex.Message}");
@@ -251,11 +251,11 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         // Wait for internal stream error
         var stream = groupHub.GetWorkspace().GetStream<TestItem>();
         ((object?)stream).Should().NotBeNull();
-        await ((Func<Task>)(() => stream!.FirstAsync().Timeout(5.Seconds()).ToTask())).Should().ThrowAsync<Exception>();
+        await ((Func<Task>)(() => stream!.FirstAsync().Timeout(5.Seconds()).Await())).Should().ThrowAsync<Exception>();
 
         // DataChangeRequest should throw, not timeout
         var client = GetClient();
-        Func<Task> act = () => client.Observe(new DataChangeRequest { Updates = [new TestItem("1", "Test")] }, o => o.WithTarget(groupAddress)).FirstAsync().ToTask();
+        Func<Task> act = () => client.Observe(new DataChangeRequest { Updates = [new TestItem("1", "Test")] }, o => o.WithTarget(groupAddress)).FirstAsync().Await();
         var ex = (await act.Should().ThrowAsync<Exception>()).Which;
 
         Output.WriteLine($"DataChangeRequest error: {ex.GetType().Name}: {ex.Message}");

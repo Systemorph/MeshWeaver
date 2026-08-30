@@ -3,7 +3,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -117,7 +117,7 @@ public class DefaultInstallBakeOrderingTest(ITestOutputHelper output) : Monolith
             .FirstAsync(listed => listed)
             .Timeout(TimeSpan.FromSeconds(5))
             .Catch<bool, TimeoutException>(_ => Observable.Return(false))
-            .ToTask();
+            .Await();
         raced.Should().BeFalse(
             "the default install must not even LIST packages before the bake settles — every "
             + "root it would go on to write parks on a type rebuild queued behind the sweep");
@@ -135,7 +135,7 @@ public class DefaultInstallBakeOrderingTest(ITestOutputHelper output) : Monolith
         preWarm.MarkSettled(PreWarmSettlement.Completed);
 
         var summary = await installer.Completed
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await();
 
         summary.Packages.Should().Contain("Seed");
         summary.Failed.Should().Be(0);
@@ -144,7 +144,7 @@ public class DefaultInstallBakeOrderingTest(ITestOutputHelper output) : Monolith
         // …and the gated pass still delivers: the install record and the content landed.
         var record = await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read($"{PackageInstaller.InstalledPartition}/Seed", Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await();
         record.Should().NotBeNull(
             "waiting for the bake must delay the baseline install, never lose it");
     }
@@ -179,7 +179,7 @@ public class DefaultInstallBakeOrderingTest(ITestOutputHelper output) : Monolith
         preWarm.MarkSettled(PreWarmSettlement.Faulted);
 
         var summary = await installer.Completed
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await();
 
         summary.Packages.Should().Contain("Seed",
             "an unproven bake must not withhold the default install — installs repair content, and "
@@ -189,7 +189,7 @@ public class DefaultInstallBakeOrderingTest(ITestOutputHelper output) : Monolith
 
         var record = await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read($"{PackageInstaller.InstalledPartition}/Seed", Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await();
         record.Should().NotBeNull(
             "the install must actually land, not merely be attempted");
     }

@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.GitSync;
@@ -7,6 +6,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -53,12 +53,12 @@ public class MeshNodeContentEditorTest(ITestOutputHelper output) : GitHubSyncTes
 
         Assert.True(await IsAbsent(cfgPath));
 
-        var created = await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).ToTask();
+        var created = await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).Await();
         Assert.Equal(cfgPath, created.Path);
         Assert.Equal(GitHubSyncService.ConfigNodeType, created.NodeType);
 
         // Second call must NOT create a duplicate — it returns the existing node.
-        var again = await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).ToTask();
+        var again = await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).Await();
         Assert.Equal(cfgPath, again.Path);
         var node = await WaitForNode(cfgPath);
         Assert.NotNull(node);
@@ -69,7 +69,7 @@ public class MeshNodeContentEditorTest(ITestOutputHelper output) : GitHubSyncTes
     {
         var space = await NewSpace();
         var cfgPath = GitHubSyncService.ConfigPath(space);
-        await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).ToTask();
+        await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).Await();
         var node = await WaitForNode(cfgPath);
 
         // Reproduce EXACTLY what MeshNodeContentEditorView writes: a per-field JSON patch on the
@@ -77,7 +77,7 @@ public class MeshNodeContentEditorTest(ITestOutputHelper output) : GitHubSyncTes
         const string repo = "https://github.com/acme/widgets";
         await Mesh.GetMeshNodeStream(cfgPath)
             .Update(n => n with { Content = PatchField(n.Content, "repositoryUrl", JsonValue.Create(repo)) })
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         // The camelCase JSON key round-trips to the typed GitHubSyncConfig property.
         var cfg = await WaitForConfig(space, c => c.RepositoryUrl == repo);
@@ -91,17 +91,17 @@ public class MeshNodeContentEditorTest(ITestOutputHelper output) : GitHubSyncTes
         var space = await NewSpace();
         await CreateMarkdown($"{space}/Page", "Page", "# hello");
         var cfgPath = GitHubSyncService.ConfigPath(space);
-        await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).ToTask();
+        await Sync.EnsureConfigNode(space).Timeout(30.Seconds()).Await();
         await Connect();
 
         // Edit the repo URL the GUI way (JSON patch via the node stream), then sync.
         const string repo = "https://github.com/acme/preserved";
         await Mesh.GetMeshNodeStream(cfgPath)
             .Update(n => n with { Content = PatchField(n.Content, "repositoryUrl", JsonValue.Create(repo)) })
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
         await WaitForConfig(space, c => c.RepositoryUrl == repo);
 
-        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
 
         // RecordLastSync merges only the last-sync fields: the edited repo URL survives.
         var cfg = await WaitForConfig(space, c => !string.IsNullOrEmpty(c.LastSyncCommitSha));
@@ -117,7 +117,7 @@ public class MeshNodeContentEditorTest(ITestOutputHelper output) : GitHubSyncTes
         await Connect(token: "ghp_live", login: "live-octocat");
         var cred = await Credentials.GetStream(UserId)
             .Where(c => c is { AccessToken.Length: > 0 })
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.NotNull(cred);
         Assert.Equal("ghp_live", cred!.AccessToken); // decrypted by GetStream
         Assert.Equal("live-octocat", cred.GitHubLogin);

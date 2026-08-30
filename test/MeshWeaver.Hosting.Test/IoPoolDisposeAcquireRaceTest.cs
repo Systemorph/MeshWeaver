@@ -1,12 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -49,7 +49,7 @@ public class IoPoolDisposeAcquireRaceTest
         pool.Dispose();
 
         var fault = await Record.ExceptionAsync(
-            () => cold.FirstAsync().ToTask(TestContext.Current.CancellationToken));
+            () => cold.FirstAsync().Await(TestContext.Current.CancellationToken));
 
         fault.Should().NotBeNull("a leaf that will not run must terminate, never hang");
         fault.Should().BeAssignableTo<OperationCanceledException>(
@@ -67,7 +67,7 @@ public class IoPoolDisposeAcquireRaceTest
         pool.Dispose();
 
         var fault = await Record.ExceptionAsync(
-            () => cold.FirstAsync().ToTask(TestContext.Current.CancellationToken));
+            () => cold.FirstAsync().Await(TestContext.Current.CancellationToken));
 
         fault.Should().NotBeNull("a leaf that will not run must terminate, never hang");
         fault.Should().NotBeOfType<ObjectDisposedException>();
@@ -90,7 +90,7 @@ public class IoPoolDisposeAcquireRaceTest
         pool.Dispose();
 
         var fault = await Record.ExceptionAsync(
-            () => cold.FirstAsync().ToTask(TestContext.Current.CancellationToken));
+            () => cold.FirstAsync().Await(TestContext.Current.CancellationToken));
 
         fault.Should().BeAssignableTo<OperationCanceledException>();
         fault.Should().NotBeOfType<ObjectDisposedException>();
@@ -106,7 +106,7 @@ public class IoPoolDisposeAcquireRaceTest
         pool.Dispose();
 
         var fault = await Record.ExceptionAsync(
-            () => cold.FirstAsync().ToTask(TestContext.Current.CancellationToken));
+            () => cold.FirstAsync().Await(TestContext.Current.CancellationToken));
 
         fault.Should().NotBeNull("the leg must TERMINATE — a silent hang is the one unacceptable outcome");
         fault.Should().NotBeOfType<ObjectDisposedException>();
@@ -130,7 +130,7 @@ public class IoPoolDisposeAcquireRaceTest
         for (var attempt = 0; attempt < 40; attempt++)
         {
             var pool = new IoPool(maxConcurrency: 1);
-            var disposed = pool.Disposed.FirstAsync().ToTask();
+            var disposed = pool.Disposed.FirstAsync().Await();
 
             var aEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -140,12 +140,12 @@ public class IoPoolDisposeAcquireRaceTest
                 aEntered.TrySetResult();
                 await releaseA.Task;
                 return 1;
-            }).ToTask();
+            }).Await();
 
             await aEntered.Task;                       // A holds the only permit
 
             // B queues on the gate. It cannot proceed until A releases (or the pool cancels it).
-            var b = pool.Invoke(_ => Task.FromResult(2)).ToTask();
+            var b = pool.Invoke(_ => Task.FromResult(2)).Await();
 
             pool.Dispose();                            // disposal begins while B is at the gate
             releaseA.TrySetResult();                   // A releases the permit — B may take it here
@@ -176,7 +176,7 @@ public class IoPoolDisposeAcquireRaceTest
     public async Task Disposal_completes_even_with_a_live_SubscribeThroughPool_subscription()
     {
         var pool = new IoPool(2);
-        var disposed = pool.Disposed.FirstAsync().ToTask();
+        var disposed = pool.Disposed.FirstAsync().Await();
 
         var terminated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var sub = pool.SubscribeThroughPool(Observable.Never<int>())

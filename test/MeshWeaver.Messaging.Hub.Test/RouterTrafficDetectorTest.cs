@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Microsoft.Extensions.DependencyInjection;
@@ -97,7 +96,7 @@ public class RouterTrafficDetectorTest : HubTestBase
         var response = await client
             .Observe<Pong>(new HopPing(), o => o.WithTarget(CreateHostAddress()))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
         response.Message.Should().BeOfType<Pong>();
 
         // Both legs hop through the mesh: the request client→host and the response host→client.
@@ -123,7 +122,7 @@ public class RouterTrafficDetectorTest : HubTestBase
         var response = await client
             .Observe<Pong>(new MeshTargetedRequest(), o => o.WithTarget(Mesh.Address))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
         response.Message.Should().BeOfType<Pong>();
 
         var report = Reports(nameof(MeshTargetedRequest)).Should().ContainSingle(
@@ -151,7 +150,7 @@ public class RouterTrafficDetectorTest : HubTestBase
         var response = await Mesh
             .Observe<Pong>(new MeshSentRequest(), o => o.WithTarget(CreateHostAddress()))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
         response.Message.Should().BeOfType<Pong>();
 
         var report = Reports(nameof(MeshSentRequest)).Should().ContainSingle(

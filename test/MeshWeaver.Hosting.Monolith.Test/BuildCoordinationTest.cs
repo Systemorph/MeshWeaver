@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,6 +13,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -40,50 +40,50 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
         var workspace = hub.GetWorkspace();
 
         // Materialize once — a second Ensure must resolve to the same node, not a second create.
-        var first = await hub.EnsureBuildNode().FirstAsync().ToTask();
-        var second = await hub.EnsureBuildNode().FirstAsync().ToTask();
+        var first = await hub.EnsureBuildNode().FirstAsync().Await();
+        var second = await hub.EnsureBuildNode().FirstAsync().Await();
         first.Path.Should().Be(BuildNodeType.RootPath);
         second.Path.Should().Be(first.Path);
 
         // Candidate A registers and is granted by the arbiter (nobody holds the node).
-        await hub.RequestBuildClaim("holder-a", "fp-a").FirstAsync().ToTask();
+        await hub.RequestBuildClaim("holder-a", "fp-a").FirstAsync().Await();
         var grantedA = await hub.ObserveBuildClaim("holder-a")
-            .FirstAsync().Timeout(WaitBudget).ToTask();
+            .FirstAsync().Timeout(WaitBudget).Await();
         grantedA.FrameworkVersion.Should().Be("fp-a");
         grantedA.Status.Should().Be(BuildStatus.Planning);
 
         // Candidate B registers while A holds — it must QUEUE, not preempt.
-        await hub.RequestBuildClaim("holder-b", "fp-b").FirstAsync().ToTask();
+        await hub.RequestBuildClaim("holder-b", "fp-b").FirstAsync().Await();
         var whileAHolds = await workspace.GetMeshNodeStream(BuildNodeType.RootPath)
             .Select(n => n?.ContentAs<BuildState>(hub.JsonSerializerOptions))
             .Where(s => s?.RequestedClaims?.ContainsKey("holder-b") == true)
-            .FirstAsync().Timeout(WaitBudget).ToTask();
+            .FirstAsync().Timeout(WaitBudget).Await();
         whileAHolds!.ClaimedBy.Should().Be("holder-a");
 
         // A non-holder's guarded write is a no-op — a superseded builder cannot corrupt state.
         await hub.UpdateBuildAsHolder("holder-b", s => s with { Error = "must not land" })
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         var afterGuardedWrite = await workspace.GetMeshNodeStream(BuildNodeType.RootPath)
-            .Where(n => n is not null).FirstAsync().ToTask();
+            .Where(n => n is not null).FirstAsync().Await();
         afterGuardedWrite.ContentAs<BuildState>(hub.JsonSerializerOptions)!
             .Error.Should().BeNull();
 
         // A completes: GO for fp-a lands, the claim is released, and the arbiter grants B.
         await hub.CompleteBuild("holder-a", new BuildGo("fp-a", DateTime.UtcNow))
-            .FirstAsync().ToTask();
-        var goA = await hub.ObserveBuildGo("fp-a").FirstAsync().Timeout(WaitBudget).ToTask();
+            .FirstAsync().Await();
+        var goA = await hub.ObserveBuildGo("fp-a").FirstAsync().Timeout(WaitBudget).Await();
         goA.FrameworkVersion.Should().Be("fp-a");
         var grantedB = await hub.ObserveBuildClaim("holder-b")
-            .FirstAsync().Timeout(WaitBudget).ToTask();
+            .FirstAsync().Timeout(WaitBudget).Await();
         grantedB.FrameworkVersion.Should().Be("fp-b");
 
         // B completes: fp-b's GO is ADDED — fp-a's GO must survive. Old-image silos stay ready.
         await hub.CompleteBuild("holder-b", new BuildGo("fp-b", DateTime.UtcNow))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         var final = await workspace.GetMeshNodeStream(BuildNodeType.RootPath)
             .Select(n => n?.ContentAs<BuildState>(hub.JsonSerializerOptions))
             .Where(s => s?.Ready?.ContainsKey("fp-b") == true)
-            .FirstAsync().Timeout(WaitBudget).ToTask();
+            .FirstAsync().Timeout(WaitBudget).Await();
         final!.Ready!.Should().ContainKey("fp-a");
         final.Ready.Should().ContainKey("fp-b");
         final.ClaimedBy.Should().BeNull();
@@ -127,20 +127,20 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
             .WarmDynamicTypes(Mesh, buildProtocol: true)
             .ToList()
             .Timeout(TimeSpan.FromSeconds(120))
-            .ToTask();
+            .Await();
         (outcomes.Count > 0).Should().Be(true);
 
         var root = await workspace.GetMeshNodeStream(BuildNodeType.RootPath)
             .Select(n => n?.ContentAs<BuildState>(Mesh.JsonSerializerOptions))
             .Where(s => s?.Ready is { Count: > 0 })
-            .FirstAsync().Timeout(WaitBudget).ToTask();
+            .FirstAsync().Timeout(WaitBudget).Await();
         root!.Status.Should().Be(BuildStatus.Ready);
         root.ClaimedBy.Should().BeNull();
 
         var chunk = await workspace.GetMeshNodeStream($"{BuildNodeType.RootPath}/{partition}")
             .Select(n => n?.ContentAs<BuildState>(Mesh.JsonSerializerOptions))
             .Where(s => s is { Status: BuildStatus.Ready })
-            .FirstAsync().Timeout(WaitBudget).ToTask();
+            .FirstAsync().Timeout(WaitBudget).Await();
         // The sweep may have re-baked the type (a host without an assembly store re-compiles by
         // design), so the chunk's written path can be a NEWER release than the kickoff one — what
         // is contractual is that the paths it reports are release nodes of this chunk's types.
@@ -153,7 +153,7 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
         var activity = await workspace.GetMeshNodeStream(chunk.ActivityPath!)
             .Select(n => n?.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions))
             .Where(l => l is not null && l.Status.IsTerminal())
-            .FirstAsync().Timeout(WaitBudget).ToTask();
+            .FirstAsync().Timeout(WaitBudget).Await();
         activity!.Status.Should().Be(ActivityStatus.Succeeded);
     }
 
@@ -199,8 +199,8 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
         const string fingerprint = "fp-falls-free";
 
         // A rival wins the build and starts baking.
-        await hub.RequestBuildClaim("rival", fingerprint).FirstAsync().ToTask();
-        await hub.ObserveBuildClaim("rival").FirstAsync().Timeout(WaitBudget).ToTask();
+        await hub.RequestBuildClaim("rival", fingerprint).FirstAsync().Await();
+        await hub.ObserveBuildClaim("rival").FirstAsync().Timeout(WaitBudget).Await();
 
         var baked = 0;
         var run = BuildProtocolDriver.Run(
@@ -217,12 +217,12 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
                 logger: null)
             .ToList()
             .Timeout(TimeSpan.FromSeconds(45))
-            .ToTask();
+            .Await();
 
         // Past the grant window our candidate is a follower. Now the builder dies: the claim is
         // dropped and no GO is ever published for this fingerprint.
-        await AfterTheGrantWindow().FirstAsync().ToTask();
-        await hub.FailBuild("rival", "builder process gone").FirstAsync().ToTask();
+        await AfterTheGrantWindow().FirstAsync().Await();
+        await hub.FailBuild("rival", "builder process gone").FirstAsync().Await();
 
         var outcomes = await run;
 
@@ -231,7 +231,7 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // …and it finished the job properly: the GO it published is what every other silo is waiting on.
         var final = await Root().Where(s => s.Ready?.ContainsKey(fingerprint) == true)
-            .FirstAsync().Timeout(WaitBudget).ToTask();
+            .FirstAsync().Timeout(WaitBudget).Await();
         final.ClaimedBy.Should().BeNull();
     }
 
@@ -247,8 +247,8 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
         var hub = Mesh;
         const string fingerprint = "fp-stand-down";
 
-        await hub.RequestBuildClaim("rival", fingerprint).FirstAsync().ToTask();
-        await hub.ObserveBuildClaim("rival").FirstAsync().Timeout(WaitBudget).ToTask();
+        await hub.RequestBuildClaim("rival", fingerprint).FirstAsync().Await();
+        await hub.ObserveBuildClaim("rival").FirstAsync().Timeout(WaitBudget).Await();
 
         var baked = 0;
         var run = BuildProtocolDriver.Run(
@@ -264,11 +264,11 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
                 logger: null)
             .ToList()
             .Timeout(TimeSpan.FromSeconds(45))
-            .ToTask();
+            .Await();
 
-        await AfterTheGrantWindow().FirstAsync().ToTask();
+        await AfterTheGrantWindow().FirstAsync().Await();
         await hub.CompleteBuild("rival", new BuildGo(fingerprint, DateTime.UtcNow))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         await run;
         baked.Should().Be(0, "the build was done — the follower had nothing to bake");
@@ -277,13 +277,13 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
         // already walked away. A single pending registration here is the wedge.
         var settled = await Root()
             .Where(s => s.ClaimedBy is null && s.RequestedClaims is null or { Count: 0 })
-            .FirstAsync().Timeout(WaitBudget).ToTask();
+            .FirstAsync().Timeout(WaitBudget).Await();
         settled.Ready.Should().ContainKey(fingerprint);
 
         // …and it really is claimable: a fresh candidate is granted rather than queued forever.
-        await hub.RequestBuildClaim("next-image", "fp-next").FirstAsync().ToTask();
+        await hub.RequestBuildClaim("next-image", "fp-next").FirstAsync().Await();
         var grantedNext = await hub.ObserveBuildClaim("next-image")
-            .FirstAsync().Timeout(WaitBudget).ToTask();
+            .FirstAsync().Timeout(WaitBudget).Await();
         grantedNext.FrameworkVersion.Should().Be("fp-next");
     }
 

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -76,7 +75,7 @@ public class DataContextInitTimeoutTest(ITestOutputHelper output) : HubTestBase(
         // gate left shut surfaces as this test's own TimeoutException and fails it).
         var act = () => client
             .Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
 
         var ex = (await act.Should().ThrowAsync<Exception>(
             "a hub whose data-source init hung must answer requests with an error, not serve "
@@ -147,7 +146,7 @@ public class DataContextInitFaultedTest(ITestOutputHelper output) : HubTestBase(
 
         var act = () => client
             .Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
 
         var ex = (await act.Should().ThrowAsync<Exception>(
             "a hub whose data-source init threw must answer requests with an error")).Which;

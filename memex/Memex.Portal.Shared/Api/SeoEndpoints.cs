@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Xml.Linq;
 using Memex.Portal.Shared.Seo;
@@ -11,6 +10,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.Api;
 
@@ -33,6 +33,20 @@ public sealed record PublishedPage(MeshNode Node, string Path);
 
 public static class SeoEndpoints
 {
+    /// <summary>
+    /// Late-fault sink for this surface's <see cref="ReactiveCompletion.ObserveCompletion{T}"/>
+    /// bridges: a fault that lands AFTER the crawler response has already settled cannot change the
+    /// answer, but discarding it would hide a mesh read that failed on the way out. The logger is
+    /// captured eagerly, because a late fault arrives long after the request scope is gone.
+    /// </summary>
+    private static Action<Exception> LateFault(IMessageHub hub, string route)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(SeoEndpoints));
+        return ex => logger?.LogWarning(
+            ex, "{Route}: faulted after its HTTP response had already settled", route);
+    }
+
     /// <summary>Node types whose top-level mains are sitemap candidates.</summary>
     private static readonly string[] CandidateNodeTypes = ["Store/Plugin", "Store/Catalog", "Space"];
 
@@ -58,7 +72,7 @@ public static class SeoEndpoints
             return BuildSitemap(hub, baseUrl)
                 .Select(xml => Results.Text(xml, "application/xml"))
                 .FirstAsync()
-                .ToTask(ct);
+                .ObserveCompletion(LateFault(hub, "/sitemap.xml"), ct)!;
         }).AllowAnonymous();
 
         MapShareCard(app);
@@ -100,7 +114,7 @@ public static class SeoEndpoints
                     : CardResult(http, renderer, data))
                 .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
                 .FirstAsync()
-                .ToTask(ct);
+                .ObserveCompletion(LateFault(hub, $"/api/og/{nodePath}"), ct)!;
         }).AllowAnonymous();
 
     private static IResult CardResult(HttpContext http, OgCardRenderer renderer, SeoPageData data)

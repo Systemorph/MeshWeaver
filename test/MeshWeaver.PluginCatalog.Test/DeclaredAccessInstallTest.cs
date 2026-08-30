@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph.Configuration;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -176,22 +176,22 @@ public class DeclaredAccessInstallTest(ITestOutputHelper output) : MonolithMeshT
     {
         var source = Source();
         var manifests = await source.ListPackages("HEAD")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         var pkg = manifests.Single(m => m.Id == id);
         var files = await source.FetchPackageFiles(pkg, "HEAD")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         // Authorized by the platform admin: free packages ignore the principal, a priced one
         // requires it to be a global admin (#830).
         return await PackageInstaller.Install(
                 Mesh, pkg, files, "HEAD", authorizingUserId: PlatformAdmin)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await();
     }
 
     /// <summary>Authoritative single-node read straight off storage (never the lagging index).</summary>
     private Task<MeshNode?> Read(string path) =>
         Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(path, Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await();
 
     [Fact(Timeout = 120_000)]
     public async Task FreePackage_LandsPubliclyReadable_ForANonAdminAndAnonymously()
@@ -409,7 +409,7 @@ public class DeclaredAccessInstallTest(ITestOutputHelper output) : MonolithMeshT
                 "the rewound legacy gate must actually withhold the content");
 
         await PackageInstaller.EnsureDeclaredAccess(Mesh, manifest, "FreePlug", logger: null)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
 
         // The policy is healed…
         var policy = await Read($"FreePlug/{PackageInstaller.PartitionPolicyId}");
@@ -443,7 +443,7 @@ public class DeclaredAccessInstallTest(ITestOutputHelper output) : MonolithMeshT
         var before = await Read($"ShippedPolicy/{PackageInstaller.PartitionPolicyId}");
 
         await PackageInstaller.EnsureDeclaredAccess(Mesh, manifest, "ShippedPolicy", logger: null)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
 
         var after = await Read($"ShippedPolicy/{PackageInstaller.PartitionPolicyId}");
         after!.Version.Should().Be(before!.Version,
@@ -455,7 +455,7 @@ public class DeclaredAccessInstallTest(ITestOutputHelper output) : MonolithMeshT
     /// <summary>The manifest as the real source parsed it.</summary>
     private async Task<PackageManifest> Manifest(string id) =>
         (await Source().ListPackages("HEAD")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask())
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await())
         .Single(m => m.Id == id);
 
     /// <summary>Writes a policy node straight to storage, as the pre-#902 installer would have.</summary>
@@ -490,6 +490,6 @@ public class DeclaredAccessInstallTest(ITestOutputHelper output) : MonolithMeshT
             .GetRequiredService<MeshWeaver.Messaging.AccessService>().ImpersonateAsSystem();
         await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
             .CreateOrUpdateNode(node)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
     }
 }

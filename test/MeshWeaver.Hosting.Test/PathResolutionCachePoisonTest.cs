@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -122,13 +121,13 @@ public class PathResolutionCachePoisonTest(ITestOutputHelper output) : HubTestBa
         // 1. First resolve hangs on the dropped Initial and its OWN wait gives up —
         //    exactly the pre-cache, self-healing behaviour of a single failed call.
         await Assert.ThrowsAsync<TimeoutException>(() =>
-            svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(2)).ToTask());
+            svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(2)).Await());
 
         // 2. The hung first query must NOT have poisoned the path: a fresh resolution
         //    runs a new query and resolves. Against the old promise-cache this line
         //    times out (the dead observable is replayed) — that is the bug this pins.
         var resolution = await svc.ResolvePath("A/B")
-            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
 
         Assert.NotNull(resolution);
         Assert.Equal("A/B", resolution!.Prefix);
@@ -143,7 +142,7 @@ public class PathResolutionCachePoisonTest(ITestOutputHelper output) : HubTestBa
         // does NOT invoke the query again (and emits synchronously).
         var (svc, query) = BuildService(_ => InitialWith("B", "A"));
 
-        var first = await svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        var first = await svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
         Assert.Equal("A/B", first!.Prefix);
         var callsAfterFirst = query.Calls;
 
@@ -186,7 +185,7 @@ public class PathResolutionCachePoisonTest(ITestOutputHelper output) : HubTestBa
             partitionProviders: new IPartitionStorageProvider[] { new ExistingWritablePartitionProvider() });
 
         var synthesized = await svc.ResolvePath("Store")
-            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
         Assert.NotNull(synthesized);
         Assert.Equal("Store", synthesized!.Prefix);
         // The fabrication: a bare node with no NodeType — enough to answer Ping, never
@@ -198,7 +197,7 @@ public class PathResolutionCachePoisonTest(ITestOutputHelper output) : HubTestBa
         // (NodeType null) forever — nothing ever invalidates it, because the create event
         // that would have fired already fired while the first query was in flight.
         var real = await svc.ResolvePath("Store")
-            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
         Assert.NotNull(real);
         Assert.Equal("Store", real!.Prefix);
         Assert.Equal("Store/Catalog", real.Node!.NodeType);
@@ -246,7 +245,7 @@ public class PathResolutionCachePoisonTest(ITestOutputHelper output) : HubTestBa
         // the created node. Before the fix this replays the stale ancestor match forever —
         // the "row was written and then answered `No node found` forever" failure mode.
         var fresh = await svc.ResolvePath("A/B")
-            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
         Assert.NotNull(fresh);
         Assert.Equal("A/B", fresh!.Prefix);
         Assert.Null(fresh.Remainder);
@@ -273,7 +272,7 @@ public class PathResolutionCachePoisonTest(ITestOutputHelper output) : HubTestBa
         var feed = new InProcessMeshChangeFeed();
         var (svc, query) = BuildService(_ => InitialWith("B", "A"), changeFeed: feed);
 
-        var first = await svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        var first = await svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
         Assert.Equal("A/B", first!.Prefix);
         var callsAfterFill = query.Calls;
 
@@ -294,7 +293,7 @@ public class PathResolutionCachePoisonTest(ITestOutputHelper output) : HubTestBa
         Assert.Equal(callsAfterFill, query.Calls);
 
         // A NODE-reading caller (grain activation) sees the same entry as a miss and re-queries.
-        var refreshed = await svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        var refreshed = await svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
         Assert.Equal("A/B", refreshed!.Prefix);
         Assert.NotNull(refreshed.Node);
         Assert.True(query.Calls > callsAfterFill, "a node-reading caller must re-query after Updated");
@@ -346,7 +345,7 @@ public class PathResolutionCachePoisonTest(ITestOutputHelper output) : HubTestBa
 
         // But the mid-flight Updated must have marked the committed entry stale for NODE readers:
         // ResolvePath re-queries rather than serving a node snapshot from a pre-update query.
-        var refreshed = await svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        var refreshed = await svc.ResolvePath("A/B").Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
         Assert.Equal("A/B", refreshed!.Prefix);
         Assert.True(query.Calls > callsAfterFill,
             "a node-reading caller must not be served the pre-update node snapshot");
@@ -370,18 +369,18 @@ public class PathResolutionCachePoisonTest(ITestOutputHelper output) : HubTestBa
             _ => Answer(Snapshot(new MeshNode("A")))
         }, changeFeed: feed);
 
-        var shallow = await svc.ResolveRoute("A/B/C").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        var shallow = await svc.ResolveRoute("A/B/C").Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
         Assert.Equal("A", shallow!.Prefix);
 
         // Created(A/B) deepens the resolution of A/B/C — the cached route entry must go.
         feed.Publish(MeshChangeEvent.Created(new MeshNode("B", "A") { NodeType = "Markdown" }));
-        var deeper = await svc.ResolveRoute("A/B/C").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        var deeper = await svc.ResolveRoute("A/B/C").Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
         Assert.Equal("A/B", deeper!.Prefix);
         Assert.True(query.Calls >= 2, "Created must invalidate the route-shape cache");
 
         // Deleted(A/B) shallows it again.
         feed.Publish(MeshChangeEvent.Deleted("A/B"));
-        var shallowAgain = await svc.ResolveRoute("A/B/C").Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        var shallowAgain = await svc.ResolveRoute("A/B/C").Take(1).Timeout(TimeSpan.FromSeconds(5)).Await();
         Assert.Equal("A", shallowAgain!.Prefix);
         Assert.True(query.Calls >= 3, "Deleted must invalidate the route-shape cache");
     }

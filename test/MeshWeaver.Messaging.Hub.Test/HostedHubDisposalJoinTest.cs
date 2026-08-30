@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -71,7 +70,7 @@ public class HostedHubDisposalJoinTest(ITestOutputHelper output) : HubTestBase(o
         constructionEntered.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue(
             "the hosted-hub construction must have started before disposal begins");
 
-        var disposalCompleted = client.DisposalCompleted.Take(1).ToTask();
+        var disposalCompleted = client.DisposalCompleted.Take(1).Await();
         client.Dispose();
 
         // Sanctioned negative wait: the finding IS that nothing happened. There is no positive
@@ -92,7 +91,7 @@ public class HostedHubDisposalJoinTest(ITestOutputHelper output) : HubTestBase(o
         var lateHub = await creation.WaitAsync(TimeSpan.FromSeconds(10));
         lateHub.Should().NotBeNull(
             "the creation was started before disposal, so the contract is to finish it, not refuse it");
-        await lateHub!.DisposalCompleted.Take(1).ToTask().WaitAsync(TimeSpan.FromSeconds(10));
+        await lateHub!.DisposalCompleted.Take(1).Await().WaitAsync(TimeSpan.FromSeconds(10));
     }
 
     /// <summary>
@@ -107,7 +106,7 @@ public class HostedHubDisposalJoinTest(ITestOutputHelper output) : HubTestBase(o
         client.GetHostedHub(new Address("prompt", "1"), c => c, HostedHubCreation.Always)
             .Should().NotBeNull();
 
-        var disposalCompleted = client.DisposalCompleted.Take(1).ToTask();
+        var disposalCompleted = client.DisposalCompleted.Take(1).Await();
         client.Dispose();
 
         await disposalCompleted.WaitAsync(TimeSpan.FromSeconds(5));

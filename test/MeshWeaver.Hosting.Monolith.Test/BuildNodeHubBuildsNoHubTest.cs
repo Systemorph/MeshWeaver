@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -10,6 +9,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -52,7 +52,7 @@ public class BuildNodeHubBuildsNoHubTest(ITestOutputHelper output) : MonolithMes
         // Materialise the root, then READ it through its own node stream — the read is what routes
         // a message to the per-node hub and therefore activates it (the same path the GUI takes;
         // the create alone goes through the mesh router and activates nothing).
-        (await Mesh.EnsureBuildNode().Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask())
+        (await Mesh.EnsureBuildNode().Take(1).Timeout(TimeSpan.FromSeconds(30)).Await())
             .Should().NotBeNull();
         (await ReadNode(BuildNodeType.RootPath).Should().Emit()).Should().NotBeNull();
 

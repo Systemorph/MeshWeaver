@@ -1,12 +1,12 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -63,7 +63,7 @@ public class RecycleSurvivesItsOwnDisposeTest(ITestOutputHelper output) : Monoli
         var recycled = await caller.RecycleNode(path)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .ToTask(ct);
+            .Await(ct);
 
         // 1. The recycle REALLY happened: that instance is terminal, not merely quiet.
         //    DisposalCompleted, not RunLevelChanged: the latter is a BehaviorSubject that COMPLETES
@@ -73,7 +73,7 @@ public class RecycleSurvivesItsOwnDisposeTest(ITestOutputHelper output) : Monoli
         await targetInstance.DisposalCompleted
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .ToTask(ct);
+            .Await(ct);
         targetInstance.RunLevel.Should().Be(MessageHubRunLevel.Dead,
             "the hub the recycle targeted must actually be torn down");
 

@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
@@ -47,13 +46,13 @@ public class ContentCollectionWriteIngestTest(ITestOutputHelper output) : HubTes
             },
             new NoMonitorProvider(new FileSystemStreamProvider(dir)),
             GetHost());
-        await collection.Initialize().FirstAsync().ToTask(ct);
+        await collection.Initialize().FirstAsync().Await(ct);
 
         // Write into a NESTED, freshly-created subdirectory — the exact shape whose inotify event
         // the Linux runner dropped. With the watcher neutered this can ONLY resolve via the
         // collection's own proactive ingest on write.
         using (var stream = new MemoryStream("# Hello ingest"u8.ToArray()))
-            await collection.SaveFile("/sub", "hello.md", stream).ToTask(ct);
+            await collection.SaveFile("/sub", "hello.md", stream).Await(ct);
 
         // GetMarkdown is the SAME content read the file render uses (ContentLayoutArea.RenderFile).
         // Without the fix this stays null (the watcher never fires) and the wait times out — the
@@ -62,7 +61,7 @@ public class ContentCollectionWriteIngestTest(ITestOutputHelper output) : HubTes
             .Where(x => x is not null)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask(ct);
+            .Await(ct);
 
         article.Should().NotBeNull(
             "SaveFileAsync must ingest its own write into markdownStream — the content render must "

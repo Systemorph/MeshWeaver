@@ -1,7 +1,6 @@
 using MeshWeaver.AI;   // IProviderKeyProtector & co keep their ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
 using MeshWeaver.Mesh.Security;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Hosting.AspNetCore.Portal;     // PortalApplication
 using MeshWeaver.Data;                       // IWorkspace.GetMeshNodeStream
@@ -167,7 +166,12 @@ public sealed class EaGraphAuth(
 
         using (access.ImpersonateAsSystem())
             await (existing is null ? meshService.CreateNode(node) : meshService.UpdateNode(node))
-                .FirstAsync().ToTask(ct);
+                .FirstAsync()
+                .ObserveCompletion(
+                    ex => logger?.LogWarning(ex,
+                        "EaGraphAuth: storing the credential for {User} faulted after the write had "
+                        + "already been reported complete", userObjectId),
+                    ct);
     }
 
     private Task<(MeshNode? node, EaCredential? cred)> LoadAsync(string userObjectId, CancellationToken ct)
@@ -191,7 +195,12 @@ public sealed class EaGraphAuth(
             MeshNode? node;
             using (access.ImpersonateAsSystem())
                 node = await ws.GetMeshNodeStream(PathFor(userObjectId))
-                    .Take(1).Timeout(TimeSpan.FromSeconds(10)).FirstAsync().ToTask(ct);
+                    .Take(1).Timeout(TimeSpan.FromSeconds(10)).FirstAsync()
+                    .ObserveCompletion(
+                        ex => logger?.LogWarning(ex,
+                            "EaGraphAuth: the credential read for {User} faulted after the load had "
+                            + "already settled", userObjectId),
+                        ct);
             var cred = node?.Content switch
             {
                 EaCredential e => e,

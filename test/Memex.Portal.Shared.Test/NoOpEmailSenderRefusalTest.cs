@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Email;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -55,7 +55,7 @@ public class NoOpEmailSenderRefusalTest
         IEmailSender sender = new NoOpEmailSender(Configured(enabled: false));
 
         Assert.False(sender.DeliversMail);
-        Assert.True(await sender.SendEmail("x@example.test", "s", "<p>b</p>").FirstAsync().ToTask());
+        Assert.True(await sender.SendEmail("x@example.test", "s", "<p>b</p>").FirstAsync().Await());
     }
 
     /// <summary>
@@ -69,7 +69,7 @@ public class NoOpEmailSenderRefusalTest
         IEmailSender sender = new NoOpEmailSender(Configured(enabled: true));
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => sender.SendEmail("x@example.test", "s", "<p>b</p>").FirstAsync().ToTask());
+            () => sender.SendEmail("x@example.test", "s", "<p>b</p>").FirstAsync().Await());
 
         // The message must name what to provision. "Email is broken" sends an operator hunting;
         // the module name is the whole diagnosis.
@@ -114,7 +114,7 @@ public class NoOpEmailSenderRefusalTest
         var node = new MeshNode("m1", "T") { NodeType = "Email", Name = "m1", Content = email };
         store[node.Path] = email;
 
-        var processed = queue.Processed.Take(1).Timeout(TestBudget).FirstAsync().ToTask();
+        var processed = queue.Processed.Take(1).Timeout(TestBudget).FirstAsync().Await();
         queue.Enqueue(node, email);
         await processed;
 

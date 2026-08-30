@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
@@ -19,6 +18,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -239,7 +239,7 @@ public class StaleStampRootBindingTest(ITestOutputHelper output) : MonolithMeshT
         Output.WriteLine($"install of the broken package returned at +{installMs}ms");
 
         var type = await Mesh.GetWorkspace().GetMeshNodeStream($"{id}/Front")
-            .Where(n => n?.Content is NodeTypeDefinition).FirstAsync().Timeout(StepTimeout).ToTask();
+            .Where(n => n?.Content is NodeTypeDefinition).FirstAsync().Timeout(StepTimeout).Await();
         type.HasLoadableBuild(Mesh.JsonSerializerOptions).Should().BeFalse(
             "the fixture is only meaningful while the type genuinely cannot produce a loadable "
             + "build — if this flips, the test has stopped covering the deterministic window");
@@ -281,9 +281,9 @@ public class StaleStampRootBindingTest(ITestOutputHelper output) : MonolithMeshT
             Version = $"commit-{id}",
         };
         var packageFiles = await source.FetchPackageFiles(manifest, "HEAD")
-            .FirstAsync().Timeout(StepTimeout).ToTask();
+            .FirstAsync().Timeout(StepTimeout).Await();
         await PackageInstaller.Install(Mesh, manifest, packageFiles, "HEAD")
-            .FirstAsync().Timeout(StepTimeout).ToTask();
+            .FirstAsync().Timeout(StepTimeout).Await();
     }
 
     private async Task InstallAndAssertRootServesItsTypesArea(string id, bool withContentAssets)
@@ -329,7 +329,7 @@ public class StaleStampRootBindingTest(ITestOutputHelper output) : MonolithMeshT
                     s.Contains("passed", StringComparison.Ordinal)
                     || s.Contains("Area not found", StringComparison.Ordinal)
                     || s.Contains("This area failed to render", StringComparison.Ordinal)))
-                .FirstAsync().Timeout(StepTimeout).ToTask();
+                .FirstAsync().Timeout(StepTimeout).Await();
             var text = string.Join("\n---\n", Strings(frame));
             Output.WriteLine($"Tests frame at +{sw.ElapsedMilliseconds}ms:\n{text}");
             text.Should().NotContain("Area not found",

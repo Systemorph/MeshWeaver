@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -138,7 +137,7 @@ public class SelfTypedDeclarationPinnedPartitionRepairTest : MonolithMeshTestBas
             .Select(n => n!)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask(ct);
+            .Await(ct);
 
     /// <summary>
     /// The <c>Auth</c> partition as Postgres shapes it. Path-routed traffic reaches the store only

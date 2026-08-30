@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -108,7 +107,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
                 Configuration = $"config => config.WithContentType<{typeId}>()"
             }
         };
-        await SiloMeshService.CreateNode(typeNode).FirstAsync().ToTask(ct);
+        await SiloMeshService.CreateNode(typeNode).FirstAsync().Await(ct);
 
         // 2. Seed the Code child under <type>/Source/.
         var codeNode = new MeshNode("code", $"{typePath}/Source")
@@ -127,7 +126,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
                 Language = "csharp"
             }
         };
-        await SiloMeshService.CreateNode(codeNode).FirstAsync().ToTask(ct);
+        await SiloMeshService.CreateNode(codeNode).FirstAsync().Await(ct);
 
         // 3. Issue GetCompilationPathRequest from the participating client to
         //    the per-NodeType hub address. Routes via Orleans → silo →
@@ -136,7 +135,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
         var compileResp = await client
             .Observe(new GetCompilationPathRequest(/* HEAD */),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
 
         compileResp.Message.Success.Should().BeTrue(compileResp.Message.Error
             ?? "compilation must succeed for valid C# source");
@@ -167,7 +166,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
                 Configuration = $"config => config.WithContentType<{typeId}>()"
             }
         };
-        await SiloMeshService.CreateNode(typeNode).FirstAsync().ToTask(ct);
+        await SiloMeshService.CreateNode(typeNode).FirstAsync().Await(ct);
 
         var codeNode = new MeshNode("code", $"{typePath}/Source")
         {
@@ -179,12 +178,12 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
                 Language = "csharp"
             }
         };
-        await SiloMeshService.CreateNode(codeNode).FirstAsync().ToTask(ct);
+        await SiloMeshService.CreateNode(codeNode).FirstAsync().Await(ct);
 
         var compileResp = await client
             .Observe(new GetCompilationPathRequest(),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
 
         compileResp.Message.Success.Should().BeFalse(
             "invalid source must surface as Success=false, not deadlock");
@@ -236,7 +235,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
                 Configuration = $"config => config.WithContentType<{typeId}>()"
             }
         };
-        await SiloMeshService.CreateNode(typeNode).FirstAsync().ToTask(ct);
+        await SiloMeshService.CreateNode(typeNode).FirstAsync().Await(ct);
 
         var codeNode = new MeshNode("code", $"{typePath}/Source")
         {
@@ -254,7 +253,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
                 Language = "csharp"
             }
         };
-        await SiloMeshService.CreateNode(codeNode).FirstAsync().ToTask(ct);
+        await SiloMeshService.CreateNode(codeNode).FirstAsync().Await(ct);
 
         // 🚨 THE DOCUMENTED PRE-ACTIVATION WAIT. NodeTypeEnrichmentHelpers.cs:294-302 states the
         // contract this test used to violate: "A test that writes to the per-NodeType hub and then
@@ -285,7 +284,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
             Name = "instance1",
             NodeType = typePath,
         };
-        await SiloMeshService.CreateNode(instanceNode).FirstAsync().ToTask(ct);
+        await SiloMeshService.CreateNode(instanceNode).FirstAsync().Await(ct);
         Output.WriteLine($"Instance created at {instancePath}");
 
         // Activate the per-instance grain: GetDataRequest with MeshNodeReference
@@ -295,7 +294,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
         var dataResp = await client
             .Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(instancePath)))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
 
         dataResp.Message.Data.Should().NotBeNull(
             "per-instance grain must activate and serve its own MeshNode — slow-path EnrichWithNodeType + grain activation completed without deadlock");
@@ -356,7 +355,7 @@ public class OrleansCrossSiloCompilationTest(ITestOutputHelper output)
                 Description = "Cross-silo compile-share probe",
                 Configuration = $"config => config.WithContentType<{typeId}>()"
             }
-        }).FirstAsync().ToTask(ct);
+        }).FirstAsync().Await(ct);
 
         await meshService.CreateNode(new MeshNode("code", $"{typePath}/Source")
         {
@@ -372,7 +371,7 @@ public class OrleansCrossSiloCompilationTest(ITestOutputHelper output)
                     """,
                 Language = "csharp"
             }
-        }).FirstAsync().ToTask(ct);
+        }).FirstAsync().Await(ct);
 
         // Trigger the compile. The per-NodeType grain activates on whichever silo
         // Orleans picks; the resulting DLL lands in the FileSystem-backed
@@ -380,7 +379,7 @@ public class OrleansCrossSiloCompilationTest(ITestOutputHelper output)
         var compileResp = await client
             .Observe(new GetCompilationPathRequest(),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
 
         compileResp.Message.Success.Should().BeTrue(compileResp.Message.Error ?? "");
         var assemblyLocation = compileResp.Message.AssemblyLocation;

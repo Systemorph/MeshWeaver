@@ -1,6 +1,5 @@
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
@@ -8,6 +7,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -26,7 +26,7 @@ public class PartitionRootDeletionGuardTest
             Operation = NodeOperation.Delete,
             Node = node,
             AccessContext = userId is null ? null : new AccessContext { ObjectId = userId, Name = userId },
-        }).FirstAsync().ToTask();
+        }).FirstAsync().Await();
 
     /// <summary>The exact shape UserOnboardingService.CreateUser writes: id={user}, namespace='', User.</summary>
     private static MeshNode UserRoot(string id) => new(id) { NodeType = "User", State = MeshNodeState.Active };

@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -8,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PathResolution.Test;
 
@@ -62,7 +62,7 @@ public class PathResolutionCacheTest(ITestOutputHelper output) : MonolithMeshTes
             .Where(predicate)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask();
+            .Await();
 
     /// <summary>
     /// The cache contract the Blazor layer builds on: once a path has resolved,
@@ -219,7 +219,7 @@ public class PathResolutionCacheTest(ITestOutputHelper output) : MonolithMeshTes
         var afterUpdated = await Observable.Interval(TimeSpan.FromMilliseconds(100))
             .StartWith(0L).Take(5)
             .SelectMany(_ => PathResolver.ResolvePath(absent))
-            .ToArray().ToTask();
+            .ToArray().Await();
         afterUpdated.Should().OnlyContain(
             r => r != null && r.Prefix == space && r.Remainder == "never-created",
             "Updated only STALE-MARKS the entry and keeps serving the route shape (#1172) — which "

@@ -1,10 +1,10 @@
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.Logon;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -94,7 +94,7 @@ public class SeedDefaultAppsLogonActionTest
             .TakeUntil(Observable.Timer(TimeSpan.FromMilliseconds(200)))
             .LastAsync()
             .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask();
+            .Await();
 
         settled.Should().NotBeNull();
         UserActivityLayoutAreas.AppRecordSpecs(settled, "alice").Should().NotBeEmpty(
@@ -112,7 +112,7 @@ public class SeedDefaultAppsLogonActionTest
             .Take(2)
             .TakeUntil(Observable.Timer(TimeSpan.FromSeconds(2)))
             .LastAsync()
-            .ToTask();
+            .Await();
 
         UserActivityLayoutAreas.AppRecordSpecs(settled, "alice").Select(s => s.Id)
             .Should().Equal("OnlyThis");

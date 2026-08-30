@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -8,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -51,6 +51,6 @@ internal static class SelfUpdateEventDriver
                 Conclusion = "success",
             },
         };
-        await meshService.CreateOrUpdateNode(node).FirstAsync().ToTask();
+        await meshService.CreateOrUpdateNode(node).FirstAsync().Await();
     }
 }

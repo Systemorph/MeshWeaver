@@ -1,6 +1,6 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Test;
 
@@ -23,13 +23,13 @@ public class InertContentIndexTest
     private static async Task<ContentSearchResult> Anchored(
         IChunkedContentVectorStore? store, IChunkEmbedder? embedder) =>
         await ContentChunkSearch.Search(store, embedder, "benefit obligation", "ACME/content", 20)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
     private static async Task<ContentSearchResult> Grammar(
         IChunkedContentVectorStore? store, IChunkEmbedder? embedder) =>
         await ContentChunkSearch.Search(
                 store, embedder, "namespace:ACME/content scope:subtree benefit obligation", null, 20)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
     [Fact]
     public void IsOff_TrueForNullAndForInert_FalseOnlyWhenBothAreLive()
@@ -76,13 +76,13 @@ public class InertContentIndexTest
     [Fact]
     public async Task InertStore_AnswersEveryReadEmptily_AndDropsWrites()
     {
-        Assert.Null(await _store.GetFileHash("ACME/content", "a.txt").FirstAsync().ToTask());
-        Assert.Equal(0, await _store.GetChunkCount("ACME/content", "a.txt").FirstAsync().ToTask());
-        Assert.Null(await _store.GetChunk("ACME/content", "a.txt", 0).FirstAsync().ToTask());
-        Assert.Empty(await _store.Search("ACME/content", [1f], 5).FirstAsync().ToTask());
-        Assert.Empty(await _store.SearchSubtree("ACME", [1f], 5).FirstAsync().ToTask());
+        Assert.Null(await _store.GetFileHash("ACME/content", "a.txt").FirstAsync().Await());
+        Assert.Equal(0, await _store.GetChunkCount("ACME/content", "a.txt").FirstAsync().Await());
+        Assert.Null(await _store.GetChunk("ACME/content", "a.txt", 0).FirstAsync().Await());
+        Assert.Empty(await _store.Search("ACME/content", [1f], 5).FirstAsync().Await());
+        Assert.Empty(await _store.SearchSubtree("ACME", [1f], 5).FirstAsync().Await());
         // A write completes (uploads proceed) and stores nothing.
-        await _store.ReplaceFileChunks("ACME/content", "a.txt", []).FirstAsync().ToTask();
-        Assert.Equal(0, await _store.GetChunkCount("ACME/content", "a.txt").FirstAsync().ToTask());
+        await _store.ReplaceFileChunks("ACME/content", "a.txt", []).FirstAsync().Await();
+        Assert.Equal(0, await _store.GetChunkCount("ACME/content", "a.txt").FirstAsync().Await());
     }
 }

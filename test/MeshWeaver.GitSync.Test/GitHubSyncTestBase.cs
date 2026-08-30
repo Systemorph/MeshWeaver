@@ -1,7 +1,6 @@
 using MeshWeaver.AI;   // IProviderKeyProtector & co keep their ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
 using MeshWeaver.Mesh.Security;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -69,7 +69,7 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
     protected async Task<GitHubCredential> Connect(string token = "ghp_test_token", string login = "octocat")
     {
         await Credentials.Save(UserId, new GitHubToken(token, null, "bearer", "repo", null), login)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
         return await WaitForCredential();
     }
 
@@ -79,7 +79,7 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
             .Where(c => c is { AccessToken.Length: > 0 })
             .FirstAsync()
             .Timeout(10.Seconds())
-            .ToTask())!;
+            .Await())!;
 
     protected async Task<MeshNode> CreateSpace(string id, string? name = null) =>
         await NodeFactory.CreateNode(new MeshNode(id)
@@ -88,7 +88,7 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
             Name = name ?? id,
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
 
     protected async Task<MeshNode> CreateMarkdown(string path, string name, string body)
     {
@@ -99,7 +99,7 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
             Name = name,
             State = MeshNodeState.Active,
             Content = new MarkdownContent { Content = body },
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
     }
 
     /// <summary>Waits for a node to be readable at <paramref name="path"/> and returns it.</summary>
@@ -109,7 +109,7 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
             .Where(n => n is not null)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask())!;
+            .Await())!;
 
     /// <summary>Waits for the issue node at <paramref name="path"/> to satisfy <paramref name="predicate"/>.</summary>
     protected async Task<GitHubIssue> WaitForIssue(string path, Func<GitHubIssue, bool> predicate) =>
@@ -118,11 +118,11 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
             .Select(i => i!)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask())!;
+            .Await())!;
 
     /// <summary>Confirms a node is absent (stays null over a short window) — for prune assertions.</summary>
     protected async Task<bool> IsAbsent(string path) =>
-        await ReadNode(path).Timeout(10.Seconds()).ToTask() is null;
+        await ReadNode(path).Timeout(10.Seconds()).Await() is null;
 
     /// <summary>Polls the Space's GitHub sync config until it satisfies <paramref name="predicate"/>.</summary>
     protected async Task<GitHubSyncConfig> WaitForConfig(string spacePath, Func<GitHubSyncConfig, bool> predicate) =>
@@ -132,7 +132,7 @@ public abstract class GitHubSyncTestBase(ITestOutputHelper output) : MonolithMes
             .Select(c => c!)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
     protected static string MarkdownBody(MeshNode node) => node.Content switch
     {

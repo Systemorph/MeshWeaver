@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -23,6 +22,7 @@ using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Content.Test;
 
@@ -122,7 +122,7 @@ public class StaleLiveBoundAreaTest(ITestOutputHelper output) : MonolithMeshTest
             .Where(h => h is { RunLevel: <= MessageHubRunLevel.Started } && !ReferenceEquals(h, ended))
             .FirstAsync()
             .Timeout(60.Seconds())
-            .ToTask();
+            .Await();
         reEstablished.Should().NotBeNull(
             "the owner must re-serve this subscription after ending it — a mirror has to learn from "
             + "the END itself that it is orphaned, never from an unrelated later write to the node (#2191)");
@@ -256,7 +256,7 @@ public class StaleLiveBoundAreaTest(ITestOutputHelper output) : MonolithMeshTest
             .Where(h => h is not null)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
         before.Should().NotBeNull(
             "the owner must be serving a sync stream for this subscription — without that the "
             + "'owner-side sync ended' precondition is never established and the test proves nothing");
@@ -270,7 +270,7 @@ public class StaleLiveBoundAreaTest(ITestOutputHelper output) : MonolithMeshTest
             .Where(h => !ReferenceEquals(h, before))
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
         Output.WriteLine(
             $"Owner-side sync ended (now: {(after is null ? "gone" : "a fresh instance")}).");
         return before;

@@ -3,12 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -76,7 +76,7 @@ public class DeadTargetRefusalWindowTest
         for (var i = 0; i < 100; i++)
             await RoutingGrain.RefuseNoSubscriber(
                     Delivery($"d{i}"), address, (m, t) => nacks.Add((m, t)), logger, refusalLog)
-                .ToTask();
+                .Await();
 
         // (b) EVERY sender got its terminal answer — the NACK is never windowed. It is both the
         // requester's fast OnError and the owner-side eviction signal (TargetUnserved).
@@ -111,11 +111,11 @@ public class DeadTargetRefusalWindowTest
         for (var i = 0; i < 5; i++)
             await RoutingGrain.RefuseNoSubscriber(
                     Delivery($"w{i}"), address, (m, t) => nacks.Add((m, t)), logger, refusalLog)
-                .ToTask();
+                .Await();
         clock = clock.AddSeconds(61);
         await RoutingGrain.RefuseNoSubscriber(
                 Delivery("w5"), address, (m, t) => nacks.Add((m, t)), logger, refusalLog)
-            .ToTask();
+            .Await();
 
         nacks.Should().HaveCount(6);
         var errors = logger.Records.Where(r => r.Level == LogLevel.Error).ToList();
@@ -142,7 +142,7 @@ public class DeadTargetRefusalWindowTest
             .Materialize()
             .ToList()
             .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask();
+            .Await();
 
         notifications.Select(n => n.Kind).Should().Equal(
             [NotificationKind.OnNext, NotificationKind.OnCompleted],

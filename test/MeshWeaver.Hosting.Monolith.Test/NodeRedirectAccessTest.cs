@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -83,18 +83,18 @@ public class NodeRedirectAccessTest(ITestOutputHelper output) : MonolithMeshTest
             .SubscribeOn(TaskPoolScheduler.Default)
             .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
     }
 
     private IPathResolver Resolver => Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
     private Task<AddressResolution?> ResolveNav(string path) =>
         Resolver.ResolveNavigationPath(path).FirstAsync().Timeout(TimeSpan.FromSeconds(20))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     private Task<Permission> Permissions(string path, string userId) =>
         Mesh.GetEffectivePermissions(path, userId).FirstAsync().Timeout(TimeSpan.FromSeconds(20))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     /// <summary>
     /// 🚨 <c>SetHostIdentity</c>, not <c>SetCircuitContext</c>. The test host has no Blazor circuit,
@@ -141,7 +141,7 @@ public class NodeRedirectAccessTest(ITestOutputHelper output) : MonolithMeshTest
             var node = await ReaderHub.GetMeshNodeStream(path)
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(20))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             return node is not null;
         }
         catch (Exception ex) when (IsDenial(ex))

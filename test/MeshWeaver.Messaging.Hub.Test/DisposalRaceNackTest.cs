@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -113,7 +112,7 @@ public class DisposalRaceNackTest(ITestOutputHelper output) : HubTestBase(output
             var response = host
                 .Observe<RaceResponse>(request, o => o.WithTarget(victimAddress))
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
 
             // 3. Dispose. The phase machine is starved behind the stall, so the disposal watchdog
             //    tears the hub down out of band and RunLevel reaches Dead with our request still

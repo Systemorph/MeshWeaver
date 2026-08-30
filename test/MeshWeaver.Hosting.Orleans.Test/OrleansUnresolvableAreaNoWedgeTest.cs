@@ -1,7 +1,6 @@
 using System;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -85,7 +84,7 @@ public class OrleansUnresolvableAreaNoWedgeTest(ITestOutputHelper output) : Orle
                 .Materialize()
                 .FirstAsync()
                 .Timeout(15.Seconds())
-                .ToTask();
+                .Await();
         }
         catch (TimeoutException)
         {

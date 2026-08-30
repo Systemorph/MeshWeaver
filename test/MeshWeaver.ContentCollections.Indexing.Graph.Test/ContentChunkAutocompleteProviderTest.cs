@@ -1,10 +1,10 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.Data.Completion;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Graph.Test;
 
@@ -66,7 +66,7 @@ public class ContentChunkAutocompleteProviderTest
         ContentChunkAutocompleteProvider provider, string text, string? contextPath = null) =>
         // FromItems is a progressive snapshot stream that completes when the source completes; the LAST
         // emission is the final, fully-accumulated, score-sorted list.
-        await provider.GetItems(text, contextPath).LastAsync().ToTask();
+        await provider.GetItems(text, contextPath).LastAsync().Await();
 
     [Fact]
     public async Task Query_ResolvesHitToDocumentNodeOfNearestFile()

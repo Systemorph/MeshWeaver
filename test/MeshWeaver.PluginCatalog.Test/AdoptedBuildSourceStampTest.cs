@@ -4,7 +4,6 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -18,6 +17,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Plugin.Packaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -75,7 +75,7 @@ public class AdoptedBuildSourceStampTest(ITestOutputHelper output) : MonolithMes
 
             var adopted = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             adopted.Should().Be(1, "the bundle names a type this mesh holds");
 
             // ── The STAMP ────────────────────────────────────────────────────────────────────
@@ -108,7 +108,7 @@ public class AdoptedBuildSourceStampTest(ITestOutputHelper output) : MonolithMes
             var requested = await Mesh.ObserveNodeTypeRelease(typePath,
                     onError: msg => refusals.Add(msg))
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             requested.Should().BeTrue(
                 "the release trigger must land, or the assertion below is vacuous"
                 + $" — refusals: {string.Join(" | ", refusals)}");
@@ -165,7 +165,7 @@ public class AdoptedBuildSourceStampTest(ITestOutputHelper output) : MonolithMes
                         : curr))
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         var published = await AwaitDefinition(typePath,
             d => d.CurrentSourceVersions is { } csv && csv.ContainsKey(sourcePath),
@@ -182,7 +182,7 @@ public class AdoptedBuildSourceStampTest(ITestOutputHelper output) : MonolithMes
 
             var adopted = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             adopted.Should().Be(1);
 
             var def = await AwaitDefinition(typePath,
@@ -206,7 +206,7 @@ public class AdoptedBuildSourceStampTest(ITestOutputHelper output) : MonolithMes
                 && predicate(d))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(60))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
         node.Should().NotBeNull(because);
         return node!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
     }
@@ -236,7 +236,7 @@ public class AdoptedBuildSourceStampTest(ITestOutputHelper output) : MonolithMes
                 }))
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask();
+            .Await();
     }
 
     private Task<MeshNode> CreateSource(string typePath, string name, string code)
@@ -253,7 +253,7 @@ public class AdoptedBuildSourceStampTest(ITestOutputHelper output) : MonolithMes
                 }))
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask();
+            .Await();
     }
 
     private static string CreateBundleDirectory()

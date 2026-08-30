@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -16,6 +15,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -104,14 +104,14 @@ public class IncrementalUpdateTest(ITestOutputHelper output) : MonolithMeshTestB
             (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-1",
                 V1Files.Select(f => new RepoFile(f.RelativePath, f.Content)).ToList())),
             "https://github.com/acme/plugins");
-        var listed = await listSource.ListPackages("HEAD").FirstAsync().ToTask();
+        var listed = await listSource.ListPackages("HEAD").FirstAsync().Await();
         listed.Should().ContainSingle();
         listed[0].ModuleVersion.Should().Be(V1Module, "the catalog entry carries the manifest's module version");
         listed[0].Version.Should().Be("commit-1", "the commit sha stays for display/traceability");
 
         // ── Full install of v1 stamps the manifest baseline on the install record ──
         var v1 = await PackageInstaller.Install(Mesh, Pkg(V1Module, "commit-1"), V1Files, "commit-1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         v1.Written.Should().Be(5, "5 nodes (manifest.lock is no node)");
 
         var record = await ReadRecord(persistence, options);
@@ -137,7 +137,7 @@ public class IncrementalUpdateTest(ITestOutputHelper output) : MonolithMeshTestB
         // ── Incremental update to v2: only manifest.lock + the changed file travel ──
         var v2Source = new RecordingSource(V2Files);
         var v2 = await CatalogLayoutAreas.InstallOrUpdate(Mesh, v2Source, "commit-2", Pkg(V2Module, "commit-2"), null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         v2.Written.Should().Be(1, "only Notes.md changed");
 
         v2Source.Fetches.Should().HaveCount(2, "one manifest fetch + one changed-files fetch — never a full fetch");
@@ -150,7 +150,7 @@ public class IncrementalUpdateTest(ITestOutputHelper output) : MonolithMeshTestB
         await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
             .SelectMany(_ => persistence.Exists("Widget/Extra"))
             .Where(exists => !exists)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         // Untouched nodes: EXACT same Version + LastModified — no churn, no history row, no
         // re-broadcast, and (for the NodeType) no recompile.
@@ -173,7 +173,7 @@ public class IncrementalUpdateTest(ITestOutputHelper output) : MonolithMeshTestB
         // ── Same module version again: nothing fetched, nothing written, record untouched ──
         var skipSource = new RecordingSource(V2Files);
         var skip = await CatalogLayoutAreas.InstallOrUpdate(Mesh, skipSource, "commit-3", Pkg(V2Module, "commit-3"), null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         skip.Written.Should().Be(0);
         skipSource.Fetches.Should().BeEmpty("an up-to-date module fetches not a single file");
     }
@@ -190,7 +190,7 @@ public class IncrementalUpdateTest(ITestOutputHelper output) : MonolithMeshTestB
 
     private static async Task<MeshNode?> Read(
         IStorageAdapter persistence, System.Text.Json.JsonSerializerOptions options, string path) =>
-        await persistence.Read(path, options).FirstAsync().ToTask();
+        await persistence.Read(path, options).FirstAsync().Await();
 
     // Reads until the persisted Version is unchanged across 4 consecutive samples (~1.2s quiet) —
     // the debounced enrichment persists have settled by then.

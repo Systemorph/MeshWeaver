@@ -3,7 +3,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -70,7 +69,7 @@ public class DataChangeLogTest(ITestOutputHelper output) : HubTestBase(output)
             .Materialize()
             .ToArray()
             .Timeout(10.Seconds())
-            .ToTask();
+            .Await();
 
         notifications.Select(n => n.Kind).Should()
             .Equal([NotificationKind.OnNext, NotificationKind.OnCompleted],
@@ -92,14 +91,14 @@ public class DataChangeLogTest(ITestOutputHelper output) : HubTestBase(output)
         var log = await workspace
             .RequestChange(DataChangeRequest.Update([new ChangeLogRecord("3", null)]))
             .Timeout(10.Seconds())
-            .ToTask();
+            .Await();
 
         log.Status.Should().Be(ActivityStatus.Failed);
         log.Messages.Should().Contain(m =>
             m.LogLevel == LogLevel.Error && m.Message.Contains("Name") && m.Message.Contains("invalid"));
 
         var records = await workspace.GetObservable<ChangeLogRecord>()
-            .FirstAsync().Timeout(5.Seconds()).ToTask();
+            .FirstAsync().Timeout(5.Seconds()).Await();
         records.Should().NotContain(r => r.Id == "3", "a change that fails validation is not applied");
     }
 
