@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Data;
@@ -103,7 +102,16 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         // below — ASP.NET's RequestDelegate signature forces Task at this
         // boundary, but everything else stays observable so a slow query
         // layer can't deadlock by awaiting a result the awaiting thread is
-        // supposed to publish.
+        // supposed to publish. The bridge is ObserveCompletion, NOT Rx's
+        // .ToTask(): the latter resumes this method INLINE on the thread that
+        // signalled — a mesh hub's action block — and then the whole rest of
+        // the request pipeline runs there (forbidden since 2026-08-30).
+        //
+        // No cancellation token: RequestAborted must NOT cut this wait short.
+        // The decision below is what tells the pipeline whether to redirect,
+        // pass through or answer 503, and abandoning it mid-flight would leave
+        // the request with no outcome at all — the LookupTimeout inside
+        // BuildPipeline is the bound that belongs here.
         //
         // Outcome semantics:
         //   • Result = "Redirect" — middleware bounces to /onboarding, doesn't
@@ -112,7 +120,10 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         //     unauthenticated / virtual / excluded path); fall through to next.
         //   • Result = "Unavailable" — identity could not be RESOLVED (not: resolved
         //     to "no account"); answers 503 + Retry-After, doesn't call next.
-        var decision = await BuildPipeline(context).FirstAsync().ToTask();
+        var decision = (await BuildPipeline(context).FirstAsync()
+            .ObserveCompletion(ex => logger.LogWarning(ex,
+                "Onboarding: the identity pipeline for {Path} faulted after the request had "
+                + "already been answered", context.Request.Path)))!;
         var outcome = decision.Outcome;
 
         if (outcome == OnboardingOutcome.Unavailable)

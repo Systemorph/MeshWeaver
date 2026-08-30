@@ -6,6 +6,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.Seo;
 
@@ -85,10 +86,27 @@ public static class SeoResolver
             .Catch<SeoPageData?, Exception>(_ => Observable.Return<SeoPageData?>(null));
     }
 
-    /// <summary>The static-SSR boundary bridge — the only <c>Task</c> on this surface.</summary>
-    public static Task<SeoPageData?> ResolveAsync(IMessageHub hub, string path) =>
-        System.Reactive.Threading.Tasks.TaskObservableExtensions.ToTask(
-            Resolve(hub, path).FirstAsync());
+    /// <summary>
+    /// The static-SSR boundary bridge — the only <c>Task</c> on this surface, and it goes through
+    /// <see cref="ReactiveCompletion.ObserveCompletion{T}"/> rather than Rx's <c>.ToTask()</c>:
+    /// the latter resumes its awaiter INLINE on the signalling thread, which here is whichever mesh
+    /// hub answered the path resolution — so the rest of the Razor render would run on that hub's
+    /// action block (forbidden since 2026-08-30).
+    /// </summary>
+    public static Task<SeoPageData?> ResolveAsync(IMessageHub hub, string path)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(SeoResolver));
+        // Resolve()'s trailing Catch turns every FAULT into a value, so on the fault path it emits
+        // exactly once. FirstAsync is kept because the remaining case it does NOT cover is an
+        // upstream that completes EMPTY: FirstAsync raises there, and ObserveCompletion would
+        // otherwise settle with a null that reads as "no SEO data" — the same answer a private node
+        // gets. Behaviour is unchanged from the .ToTask() this replaced, which raised identically.
+        return Resolve(hub, path)
+            .FirstAsync()
+            .ObserveCompletion(ex => logger?.LogWarning(
+                ex, "SEO resolution for '{Path}' faulted after the head had already been produced", path));
+    }
 
     /// <summary>
     /// The page description for meta tags: the node's Description, else the content's

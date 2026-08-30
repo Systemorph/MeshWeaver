@@ -1,6 +1,5 @@
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
@@ -275,7 +274,11 @@ public class OAuthConnectController(
                     new { error = "server_error", error_description = "Failed to persist the authorization code" }));
             })
             .FirstAsync()
-            .ToTask(ct);
+            .ObserveCompletion(
+                ex => logger.LogWarning(ex,
+                    "OAuth /authorize for client {ClientId} faulted after the response had already been sent",
+                    client_id),
+                ct)!;
     }
 
     /// <summary>
@@ -306,7 +309,8 @@ public class OAuthConnectController(
         // Exchange the code against the mesh-backed store (replica-safe: the code may
         // have been minted by any pod, and the single-use consume is atomic across
         // replicas — first delete wins), then mint the mw_ API token. One reactive
-        // chain, single bridge to Task at .ToTask(ct).
+        // chain, single bridge to Task at .ObserveCompletion(…, ct) — never Rx's .ToTask(), which
+        // resumes the awaiter INLINE on the signalling thread (forbidden since 2026-08-30).
         return CodeStore.ExchangeCode(
                 request.code,
                 request.client_id,
@@ -366,7 +370,11 @@ public class OAuthConnectController(
                     });
             })
             .FirstAsync()
-            .ToTask(ct);
+            .ObserveCompletion(
+                ex => logger.LogWarning(ex,
+                    "OAuth /token for client {ClientId} faulted after the response had already been sent",
+                    request.client_id),
+                ct)!;
     }
 
     /// <summary>
