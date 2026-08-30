@@ -1,4 +1,7 @@
+using System.Reactive;
+using System.Reactive.Subjects;
 using System.Threading;
+using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
 
@@ -32,10 +35,14 @@ public class TeardownHubCreationFreezeTest(ITestOutputHelper output) : HubTestBa
     private record Blocker;
 
     [Fact]
-    public void DisposingRoot_FreezesHubCreation_AcrossTheWholeSubtree_BeforeAsyncShutdownRuns()
+    public async Task DisposingRoot_FreezesHubCreation_AcrossTheWholeSubtree_BeforeAsyncShutdownRuns()
     {
-        using var handlerEntered = new ManualResetEventSlim(false);
-        using var releaseHandler = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate. The handler → test signal is an AsyncSubject the producer
+        // completes and the test awaits through the assertion helpers; the test → handler release
+        // is a volatile flag the deliberately parked turn polls under a bounded SpinUntil, set in
+        // the `finally` below so a failing assertion cannot strand the action block.
+        var handlerEntered = new AsyncSubject<Unit>();
+        var releaseHandler = 0;
 
         var client = GetClient();
         // Independent root so disposing it cannot interfere with the fixture's own hubs.
@@ -46,11 +53,12 @@ public class TeardownHubCreationFreezeTest(ITestOutputHelper output) : HubTestBa
                 .WithTypes(typeof(Blocker))
                 .WithHandler<Blocker>((_, request) =>
                 {
-                    handlerEntered.Set();
+                    handlerEntered.OnNext(Unit.Default);
+                    handlerEntered.OnCompleted();
                     // Deliberately ignores cancellation: keeps the root's action
                     // block busy so the ShutdownRequest posted by Dispose() cannot
-                    // be processed until the test releases the gate.
-                    releaseHandler.Wait(TimeSpan.FromSeconds(30));
+                    // be processed until the test releases the flag.
+                    SpinWait.SpinUntil(() => Volatile.Read(ref releaseHandler) == 1, TimeSpan.FromSeconds(30));
                     return request.Processed();
                 }));
 
@@ -66,7 +74,7 @@ public class TeardownHubCreationFreezeTest(ITestOutputHelper output) : HubTestBa
             // any freeze observed on the descendants came from the synchronous
             // cascade inside Dispose().
             root.Post(new Blocker(), o => o.WithTarget(root.Address));
-            handlerEntered.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue("the blocker handler must be running");
+            await handlerEntered.Should().Within(10.Seconds()).Emit("the blocker handler must be running");
 
             root.Dispose();
 
@@ -85,7 +93,7 @@ public class TeardownHubCreationFreezeTest(ITestOutputHelper output) : HubTestBa
         }
         finally
         {
-            releaseHandler.Set();
+            Volatile.Write(ref releaseHandler, 1);
         }
     }
 }

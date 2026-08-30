@@ -1,6 +1,8 @@
 using System;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -69,7 +71,7 @@ public class WriteWaitsForCommitVerdictTest(ITestOutputHelper output) : Monolith
             .Should().Emit();
 
         var workspace = await WarmMirror(path, ct);
-        using var gate = ParkOwnerMergeTurn(path);
+        using var gate = await ParkOwnerMergeTurn(path);
 
         try
         {
@@ -145,7 +147,7 @@ public class WriteWaitsForCommitVerdictTest(ITestOutputHelper output) : Monolith
 
         var workspace = await WarmMirror(path, ct);
         var registry = Mesh.ServiceProvider.GetRequiredService<LatePatchResponseRegistry>();
-        using var gate = ParkOwnerMergeTurn(path);
+        using var gate = await ParkOwnerMergeTurn(path);
 
         try
         {
@@ -221,7 +223,7 @@ public class WriteWaitsForCommitVerdictTest(ITestOutputHelper output) : Monolith
     /// handler, but its merge provably cannot run, so no PatchDataResponse can arrive inside the
     /// caller's response bound. Same device as LateNackReenqueueTest / QueuedWriteAdvancesOnHandoffTest.
     /// </summary>
-    private OwnerGate ParkOwnerMergeTurn(string path)
+    private async Task<OwnerGate> ParkOwnerMergeTurn(string path)
     {
         var nodeHub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
         nodeHub.Should().NotBeNull("the owner per-node hub must be live before its merge turn is parked");
@@ -231,22 +233,40 @@ public class WriteWaitsForCommitVerdictTest(ITestOutputHelper output) : Monolith
         var gate = new OwnerGate();
         primary.Update((Func<EntityStore?, ChangeItem<EntityStore>?>)(_ =>
         {
-            gate.Entered.Set();
-            gate.Released.Wait(TimeSpan.FromSeconds(120));
+            gate.MarkEntered();
+            SpinWait.SpinUntil(() => gate.IsReleased, TimeSpan.FromSeconds(120));
             return null;
         }), _ => { });
-        gate.Entered.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue(
+        await gate.Entered.Should().Within(10.Seconds()).Emit(
             "the gated turn must be running on the primary stream's executor before the write");
         return gate;
     }
 
+    /// <summary>
+    /// 🚨 No hand-woven gate. <see cref="Entered"/> travels parked-turn → test, so it is an
+    /// <see cref="AsyncSubject{T}"/> the turn completes and the test awaits reactively; the release
+    /// travels back INTO that deliberately parked turn, so it is a volatile flag the turn polls
+    /// under a bounded <c>SpinUntil</c> at the call site. <see cref="Dispose"/> releases, so
+    /// <c>using var gate = await ParkOwnerMergeTurn(...)</c> cannot leave the owner's executor
+    /// parked when an assertion throws.
+    /// </summary>
     private sealed class OwnerGate : IDisposable
     {
-        public ManualResetEventSlim Entered { get; } = new(false);
-        public ManualResetEventSlim Released { get; } = new(false);
-        public void Release() => Released.Set();
-        // Release only — never Dispose the events. The parked turn's thread is still inside
-        // Released.Wait when this runs, and disposing the handle out from under it throws there.
-        public void Dispose() => Released.Set();
+        private readonly AsyncSubject<Unit> entered = new();
+        private int released;
+
+        public IObservable<Unit> Entered => entered;
+        public bool IsReleased => Volatile.Read(ref released) == 1;
+
+        public void MarkEntered()
+        {
+            entered.OnNext(Unit.Default);
+            entered.OnCompleted();
+        }
+
+        public void Release() => Volatile.Write(ref released, 1);
+        // Release only — there is no handle to dispose, and the parked turn's thread may still be
+        // inside its SpinUntil when this runs; it simply observes the flag and returns.
+        public void Dispose() => Release();
     }
 }
