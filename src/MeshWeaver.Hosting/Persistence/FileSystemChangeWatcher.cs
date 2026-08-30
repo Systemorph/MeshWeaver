@@ -15,10 +15,15 @@ namespace MeshWeaver.Hosting.Persistence;
 /// constructs this watcher — the only constructions are <c>FileSystemChangeWatcherTests</c>, and
 /// <c>StorageAdapterMeshQueryProvider</c> mentions it in a comment only. Live synced queries
 /// re-run on the adapters' own in-process change feed (<c>IStorageAdapter.Changes</c>), not on
-/// this class. If it is ever wired into production, its <see cref="FileSystemWatcher"/>/timer
-/// callbacks must route their adapter reads through the mesh-scoped <c>FileSystem</c>
-/// <c>IIoPool</c> (required <c>IoPoolRegistry</c> constructor parameter, like the adapters) so
-/// teardown can cancel and join them — as written its work is invisible to the teardown drain.
+/// this class. Its adapter reads are as tracked as the <c>IStorageAdapter</c> it is given —
+/// with a <c>FileSystemStorageAdapter</c> (which now REQUIRES the mesh-scoped
+/// <c>IoPoolRegistry</c>) those leaves are drainable. What is NOT tracked is the watcher's own
+/// driving machinery: <see cref="FileSystemWatcher"/> event callbacks and the debounce
+/// <see cref="Timer"/> fire on bare ThreadPool threads outside any <c>IIoPool</c> ledger, so the
+/// work they initiate is invisible to the teardown drain until it reaches the adapter. If this
+/// class is ever wired into production, give it the registry (required constructor parameter,
+/// like the adapters) and route those callbacks through the <c>FileSystem</c> pool so teardown
+/// can cancel and join them.
 /// </remarks>
 public class FileSystemChangeWatcher : IDisposable
 {
