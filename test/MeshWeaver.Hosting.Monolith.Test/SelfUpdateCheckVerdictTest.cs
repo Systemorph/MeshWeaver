@@ -12,6 +12,8 @@ using MeshWeaver.GitSync;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 using MeshWeaver.Fixture;
@@ -287,6 +289,18 @@ public class SelfUpdateCheckVerdictTest(ITestOutputHelper output) : MonolithMesh
         await service.StartAsync(CancellationToken.None);
         try
         {
+            // 🚨 Publish only once the watch is LIVE. StartAsync subscribes via SubscribeOn(TaskPool)
+            // and the policy source now waits for a real read of Admin/UpdatePolicy (#2731/#2797), so
+            // StartAsync returns well before BuildCompletionTicks is established — and a publication
+            // that races that subscription is absorbed as the watch's BASELINE rather than seen as a
+            // new build (NewBuildEvents, by design). The startup check line is the positive signal
+            // that the Merge — and therefore the watch — has been subscribed.
+            await logger.Emitted
+                .Where(l => l.Message.Contains("[SelfUpdate] check (", StringComparison.Ordinal))
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Await(TestContext.Current.CancellationToken);
+
             await SelfUpdateEventDriver.PublishBuildAsync(Mesh, "MeshWeaver", 4242);
             await logger.Emitted
                 .Where(l => l.Message.Contains(nameof(SelfUpdateTrigger.BuildCompletion), StringComparison.Ordinal))
@@ -301,5 +315,56 @@ public class SelfUpdateCheckVerdictTest(ITestOutputHelper output) : MonolithMesh
 
         logger.Lines.Should().NotContain(
             l => l.Message.Contains("NO build-completion event", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 🚨 <b>#2731 / #2797 — a PINNED install rolled on every pod restart.</b>
+    ///
+    /// <para><c>CreatePolicySource</c> used to prepend the <em>configured default</em>
+    /// (<c>Continuous</c>) to the policy stream before the persisted node value arrived, and the
+    /// startup pass ran a full <see cref="SelfUpdateHostedService"/> evaluation on that synthetic
+    /// value — ACR listing, candidate selection, and the Deployment PATCH. On memex-cloud, whose
+    /// <c>Admin/UpdatePolicy</c> has read <c>None</c> since 2026-08-28, that rolled the portal
+    /// twice on 2026-08-30; the persisted <c>None</c> arrived a second later as a
+    /// <c>PolicyChange</c> and logged "updates are disabled" AFTER the roll had been issued.</para>
+    ///
+    /// <para>The discriminating signal is the REGISTRY LISTING, not a log-line spelling: the
+    /// <c>None</c> branch of <c>RunOnce</c> returns its verdict without ever listing tags, so
+    /// <c>acr.Calls == 0</c> at the moment the first verdict is reported proves the startup pass
+    /// ran under the PERSISTED policy. Pre-fix this test fails on both assertions — the first
+    /// verdict is the Continuous one and the registry has been listed.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task StartupCheck_OnAPinnedInstall_RunsUnderThePersistedPolicy_NotTheConfiguredDefault()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // The install is pinned by an administrator BEFORE the poller ever starts — the memex-cloud
+        // shape. CreateNode, never GetMeshNodeStream(path).Update: the node does not exist yet, and
+        // a point read of an absent path answers a routing NotFound that terminates the stream.
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateNode(new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
+            {
+                NodeType = UpdatePolicyNodeType.NodeType,
+                Name = "Update Policy",
+                State = MeshNodeState.Active,
+                Content = new UpdatePolicyContent { Policy = UpdatePolicyKind.None },
+            })
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .Await(ct);
+
+        var acr = new CountingTagLister(NewerTag);
+        // The deployment default disagrees with the node — the wrong-policy tell. A pre-fix run
+        // would list NewerTag and patch to it.
+        var logger = await RunOneCheckAsync(acr, new PatchingUpdater(),
+            Options(policy: UpdatePolicyKind.Continuous));
+
+        logger.Checks[0].Message.Should().Contain("disabled",
+            "the FIRST check must be decided by the persisted policy (None), never by the "
+            + "configured default that the install has overridden");
+        acr.Calls.Should().Be(0,
+            "the None branch never lists the registry, so any listing at all proves an evaluation "
+            + "ran under a policy this install never set (#2731/#2797)");
     }
 }
