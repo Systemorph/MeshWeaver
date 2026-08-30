@@ -892,71 +892,10 @@ public static class DataExtensions
                 Error = nodeErr.Message,
                 NodeError = nodeErr,
             };
-            // Start at the PARENT: inside RegisterForDisposal this hub is by definition disposing.
-            if (PostThroughFirstLiveAncestor(hub.Configuration.ParentHub, resp, request) is null)
-                ReportUndeliverableNack(hub, "the OwnerDisposing NACK", request);
+            var parent = hub.Configuration.ParentHub;
+            if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                parent.Post(resp, o => o.ResponseFor(request));
         });
-    }
-
-
-    /// <summary>
-    /// Posts <paramref name="answer"/> as the response to <paramref name="request"/> through the
-    /// FIRST hub at or above <paramref name="from"/> that can still post, walking the parent chain.
-    /// Returns the hub that carried it, or <c>null</c> when the whole chain is past
-    /// <see cref="MessageHubRunLevel.DisposeHostedHubs"/>.
-    ///
-    /// <para>🚨 <b>Why the chain and not just the parent</b> (MeshWeaver#2778). Both NACK sites used
-    /// to try one level up and stop, on the rationale — stated in the #1362 fix — that <i>"during a
-    /// whole-mesh teardown the parent is past that mark too, the post is skipped, and nobody is
-    /// waiting."</i> <b>"Nobody is waiting" is an assumption the code cannot verify, and it is
-    /// wrong.</b> A caller whose wait outlives the start of teardown is still waiting, and it is
-    /// exactly the caller who most needs the answer that is guaranteed not to get it: the silence
-    /// falls precisely when the parent is disposing its hosted children, which is the moment a batch
-    /// of child streams goes down with patches in flight.</para>
-    ///
-    /// <para>The reported case is not a whole-mesh teardown — the parent is at
-    /// <c>DisposeHostedHubs</c> while ITS parent is still <c>Started</c>, so one more level was all
-    /// that was ever needed. Measured twice, in different repos and different subsystems, with the
-    /// same outcome: <c>StreamingCellWriteByteCountTest</c> (~13 distinct disposed streams over ~5 s,
-    /// then a 31 s <c>TimeoutException</c>) and <c>InboundMailTriageTest</c>
-    /// (<c>ADVANCE_WITHOUT_HANDOFF … bound=5000ms</c>, then <c>FAILED … elapsedMs=31045</c>) — a
-    /// caller burning its full budget on a write whose owner went away.</para>
-    ///
-    /// <para>When nothing in the chain can carry it the caller genuinely will hang, so that is
-    /// LOGGED rather than dropped: the silence used to be indistinguishable from a NACK that was
-    /// never minted.</para>
-    /// </summary>
-    internal static IMessageHub? PostThroughFirstLiveAncestor(
-        IMessageHub? from, object answer, IMessageDelivery request)
-    {
-        for (var candidate = from; candidate is not null; candidate = candidate.Configuration.ParentHub)
-        {
-            if (candidate.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
-                continue;
-            candidate.Post(answer, o => o.ResponseFor(request));
-            return candidate;
-        }
-
-        return null;
-    }
-
-    /// <summary>Records that no hub in the chain could carry an answer a caller is waiting for.</summary>
-    private static void ReportUndeliverableNack(IMessageHub hub, string what, IMessageDelivery request)
-    {
-        try
-        {
-            hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger("MeshWeaver.Data.OwnerDisposing")
-                ?.LogWarning(
-                    "{What} for {Request} could not be delivered: every hub from {Hub} up to the "
-                    + "mesh root is past DisposeHostedHubs, so the caller will wait out its full "
-                    + "budget. This is the state MeshWeaver#2778 makes visible rather than silent.",
-                    what, request.Message?.GetType().Name ?? "request", hub.Address);
-        }
-        catch
-        {
-            // A dead ServiceProvider must not turn a diagnostic into a second failure.
-        }
     }
 
     /// <summary>
@@ -2359,10 +2298,14 @@ public static class DataExtensions
         var failure = new DeliveryFailure(request) { ErrorType = ErrorType.ShuttingDown, Message = message };
         try
         {
-            // This hub first while it can still post, then up the chain — never parent-and-stop
-            // (MeshWeaver#2778): the level that can carry the answer is often the grandparent.
-            if (PostThroughFirstLiveAncestor(hub, failure, request) is null)
-                ReportUndeliverableNack(hub, "the silent-read NACK", request);
+            if (hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                hub.Post(failure, o => o.ResponseFor(request));
+                return;
+            }
+            var parent = hub.Configuration.ParentHub;
+            if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                parent.Post(failure, o => o.ResponseFor(request));
         }
         catch (Exception ex)
         {
