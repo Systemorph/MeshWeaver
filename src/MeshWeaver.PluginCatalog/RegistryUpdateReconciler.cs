@@ -26,9 +26,10 @@ namespace MeshWeaver.PluginCatalog;
 /// stamped at install time and nothing ever fired it, which is why a package left at an old version
 /// needed a human to click Provision.</para>
 ///
-/// <para><b>Read the witness, do not wait to be told.</b> There is no cross-process change feed to
-/// wait on — <c>PostgreSqlChangeListener</c> is registered and never started — and the registry is
-/// a DIFFERENT deployment with a different database, so even a durable row is not shared. What IS
+/// <para><b>Read the witness, do not wait to be told.</b> There is no change feed that could carry
+/// the registry's commits here: the <c>PostgreSqlChangeListener</c> feed is live (since #1816) but
+/// is scoped to THIS deployment's database, and the registry is a DIFFERENT deployment with a
+/// different database, so neither a durable row nor a <c>NOTIFY</c> is shared. What IS
 /// shared is the authenticated feed this installation already installs from: <c>GET /api/plugins</c>
 /// returns every package's <see cref="PackageManifest.ModuleVersion"/>, the same content identity
 /// the install records carry. Comparing the two answers "has anything changed" outright, with no

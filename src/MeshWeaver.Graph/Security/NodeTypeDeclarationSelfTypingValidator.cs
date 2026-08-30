@@ -121,9 +121,15 @@ public sealed class NodeTypeDeclarationSelfTypingValidator : INodeValidator
     /// True when <paramref name="content"/> is a <see cref="Configuration.NodeTypeDefinition"/> —
     /// already typed (in-process content), or degraded to the raw JSON a cross-hub write can arrive
     /// as (the same discriminator shape <c>ContentDiscriminatorValidator</c> reads for its own
-    /// <c>$type</c> probe).
+    /// <c>$type</c> probe). Public because it is also the CANDIDATE test of
+    /// <see cref="SelfTypedDeclarationDurableRepair"/>: what counts as "declares a NodeType" must
+    /// be one definition for the guard, the repair's predicate and the repair's candidate set —
+    /// a bare <c>is NodeTypeDefinition</c> on a candidate would silently drop a declaration whose
+    /// content arrived untyped (AGENTS.md: never cast an object payload).
     /// </summary>
-    private static bool IsNodeTypeDeclarationContent(object? content) => content switch
+    /// <param name="content">The node content to classify.</param>
+    /// <returns><see langword="true"/> when the content declares a NodeType.</returns>
+    public static bool IsNodeTypeDeclarationContent(object? content) => content switch
     {
         Configuration.NodeTypeDefinition => true,
         JsonElement je when je.ValueKind == JsonValueKind.Object

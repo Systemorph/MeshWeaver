@@ -199,6 +199,12 @@ manufactured by every deploy. Two residual silent-loss windows remain:
 > Only its implied next step is superseded. And the design has one hard constraint attached from
 > #2426: the subscriber lifetime must be **derived** (expiry, or eviction on a genuinely terminal
 > `NotFound`), never dependent on an `UnsubscribeRequest` a restarting portal never sends.
+>
+> **The design is written:** [Durable Streams Are Mesh Nodes](/Doc/Architecture/DurableStreamsViaMeshNodes).
+> Its finding is that the stream carries three kinds of traffic and none of them wants a durable
+> *provider* — data sync is already node-backed, a request wants a fast transient NACK, and the
+> cross-silo change broadcast (the one user whose loss is permanent) moves onto the database's own
+> `LISTEN/NOTIFY` feed, which every pod already runs.
 
 Plus one deployment-shaped residual: **the `AzureTables` / Azure Container Apps route still runs a
 memory PubSubStore**, and it is a multi-silo shape. Anyone taking that route to production must pass
