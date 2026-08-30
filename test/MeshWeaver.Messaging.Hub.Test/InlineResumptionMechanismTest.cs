@@ -65,17 +65,18 @@ public class InlineResumptionMechanismTest
         var signalling = 0;
         var producer = new Thread(() =>
         {
-            signalling = Environment.CurrentManagedThreadId;
+            Volatile.Write(ref signalling, Environment.CurrentManagedThreadId);
             subject.OnNext(1);
             subject.OnCompleted();
         }) { IsBackground = true, Name = "InlineResumptionMechanismTest.producer" };
         producer.Start();
         // No Join: in the inline cases the waiter completes INSIDE OnCompleted, and a task
         // continuation runs synchronously on the completing thread — so this very method resumes
-        // on the producer, and a Join here would be a thread joining itself. `signalling` is written
-        // before the signal that completes `waiter`, so it is visible once the await returns.
+        // on the producer, and a Join here would be a thread joining itself. `signalling` is
+        // published before the signal that completes `waiter` (the completion's interlocked state
+        // change already orders it); the volatile pair makes that hand-off explicit.
         await waiter;
-        return (signalling, resumed);
+        return (Volatile.Read(ref signalling), resumed);
     }
 
     /// <summary>
