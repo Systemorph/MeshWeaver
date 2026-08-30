@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Concurrency;
@@ -51,6 +52,19 @@ public sealed class RoutingQuiescence : IDisposable
     private readonly IDisposable connection;
     private int disposed;
 
+    // 🚨 What is in flight, not just HOW MANY. The count alone made the shutdown residual
+    // undiagnosable: #2833 reports one leg outliving the budget and says so itself — "the message
+    // names no target, sender, or delivery id and carries no exception or stack", so the confidence
+    // was "high on the class of defect, low on the specific leg". A leg that cannot be named cannot
+    // be found, and this participant only runs at silo stop, so the occurrence is not reproducible
+    // on demand: whatever the log did not say is lost until the next shutdown.
+    //
+    // Instance state on a mesh-scoped singleton (never static), and a ConcurrentDictionary because
+    // legs enter and leave from many threads — the one sanctioned mutable collection, as an
+    // instance field.
+    private readonly ConcurrentDictionary<long, string> inFlightLabels = new();
+    private long ticket;
+
     /// <summary>Initializes a new instance of the <see cref="RoutingQuiescence"/> class.</summary>
     public RoutingQuiescence()
     {
@@ -81,10 +95,43 @@ public sealed class RoutingQuiescence : IDisposable
     /// TERMINATES — landed, NACK'd, or faulted — never when it was merely dispatched. A double
     /// dispose does not double-decrement.
     /// </summary>
-    public IDisposable Track()
+    public IDisposable Track() => Track("unlabelled");
+
+    /// <summary>
+    /// Registers one piece of routing work as in flight, under a label that identifies it if it
+    /// fails to land. Dispose the returned handle when it TERMINATES — landed, NACK'd, or faulted —
+    /// never when it was merely dispatched. A double dispose does not double-decrement.
+    ///
+    /// <para>🚨 Pass something that identifies the LEG — a target path, a delivery id, a transport
+    /// — because this label is the only thing the shutdown residual can name (#2833). The count
+    /// tells you a leg is stuck; the label tells you which.</para>
+    /// </summary>
+    /// <param name="label">Identity of the work, e.g. <c>"pod-hub → acme/Foo (delivery abc123)"</c>.</param>
+    /// <returns>A handle whose disposal marks the work terminated.</returns>
+    public IDisposable Track(string label)
     {
+        var id = Interlocked.Increment(ref ticket);
+        inFlightLabels[id] = label;
         Push(1);
-        return Disposable.Create(() => Push(-1));
+        return Disposable.Create(() =>
+        {
+            inFlightLabels.TryRemove(id, out _);
+            Push(-1);
+        });
+    }
+
+    /// <summary>
+    /// A snapshot of the labels of the work currently in flight, capped so a saturated silo cannot
+    /// turn its own shutdown log into a flood. The cap is on the REPORT, not on the tracking.
+    /// </summary>
+    /// <param name="max">Maximum labels to return.</param>
+    /// <returns>Up to <paramref name="max"/> labels, and a count of any remainder.</returns>
+    public (IReadOnlyList<string> Labels, int NotShown) InFlightSample(int max = 10)
+    {
+        var all = inFlightLabels.Values.ToArray();
+        return all.Length <= max
+            ? (all, 0)
+            : (all.Take(max).ToArray(), all.Length - max);
     }
 
     // 🚨 Tolerant of a straggler AFTER the mesh is gone. This singleton is disposed with the
@@ -244,13 +291,24 @@ public sealed class RoutingQuiescenceSiloParticipant
                     // the budget.
                     .Catch<Unit, TimeoutException>(_ => quiescence.InFlightChanges
                         .Take(1)
-                        .Do(residual => logger.LogError(
-                            "RoutingQuiescence: {Residual} route leg(s) did not land within {Budget} — "
-                            + "the silo is proceeding to deactivate its grains over them. Each will now "
-                            + "fail on its own bound against a stopping transport, and its NACK may be "
-                            + "undeliverable. A leg that cannot land in {Budget} is stuck; find it, do "
-                            + "not widen the budget.",
-                            residual, budget, budget))
+                        .Do(residual =>
+                        {
+                            // 🚨 Name the legs. This participant runs ONLY at silo stop, so an
+                            // occurrence is not reproducible on demand — whatever this line does not
+                            // say is lost until the next shutdown. #2833 is exactly that: one leg
+                            // outlived the budget and the report could say nothing about which,
+                            // leaving "high confidence on the class, low on the specific leg".
+                            var (labels, notShown) = quiescence.InFlightSample();
+                            logger.LogError(
+                                "RoutingQuiescence: {Residual} route leg(s) did not land within {Budget} — "
+                                + "the silo is proceeding to deactivate its grains over them. Each will now "
+                                + "fail on its own bound against a stopping transport, and its NACK may be "
+                                + "undeliverable. A leg that cannot land in {Budget} is stuck; find it, do "
+                                + "not widen the budget. Stuck leg(s): {StuckLegs}{More}",
+                                residual, budget, budget,
+                                labels.Count == 0 ? "(none recorded)" : string.Join(" | ", labels),
+                                notShown == 0 ? string.Empty : $" (+{notShown} more)");
+                        })
                         .Select(_ => Unit.Default));
 
                 // The host's own shutdown budget can expire mid-hold (HostOptions.ShutdownTimeout).
@@ -261,10 +319,19 @@ public sealed class RoutingQuiescenceSiloParticipant
                         cancellationToken.Register(() => observer.OnNext(Unit.Default)))
                     .Take(1)
                     .SelectMany(_ => quiescence.InFlightChanges.Take(1))
-                    .Do(residual => logger.LogWarning(
-                        "RoutingQuiescence: the host's shutdown budget expired with {Residual} route "
-                        + "leg(s) still in flight after {Elapsed} ms — releasing the silo stop over them.",
-                        residual, Stopwatch.GetElapsedTime(started).TotalMilliseconds))
+                    .Do(residual =>
+                    {
+                        // Same reasoning as the budget-expiry arm: this is the other way the hold
+                        // ends over live work, and it is just as unreproducible.
+                        var (labels, notShown) = quiescence.InFlightSample();
+                        logger.LogWarning(
+                            "RoutingQuiescence: the host's shutdown budget expired with {Residual} route "
+                            + "leg(s) still in flight after {Elapsed} ms — releasing the silo stop over "
+                            + "them. Still in flight: {StuckLegs}{More}",
+                            residual, Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                            labels.Count == 0 ? "(none recorded)" : string.Join(" | ", labels),
+                            notShown == 0 ? string.Empty : $" (+{notShown} more)");
+                    })
                     .Select(_ => Unit.Default);
 
                 return landed.Amb(hostGaveUp);
