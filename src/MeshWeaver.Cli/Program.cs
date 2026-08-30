@@ -273,4 +273,40 @@ static string? PromptForToken()
     return sb.ToString().Trim();
 }
 
+// --- build ------------------------------------------------------------------
+// 🚨 `build` does NOT talk to the portal REST API, so it does not use Run(client, …) above: it
+// pulls an image and runs the platform's builder inside it. See Doc/Architecture/InMeshBuildAndTest.
+{
+    var build = new Command("build", "Build and test artefacts inside a MeshWeaver image.");
+
+    var pathArg = new Argument<string>("path")
+    { Description = "Path to the plugin repo (the directory mounted as /repo)." };
+    var imageOpt = new Option<string>("--image")
+    { Description = "Image to build against, e.g. meshweaver.azurecr.io/mw-plugin-test:<tag>. Pulled and pinned by digest.", Required = true };
+    var bakeOpt = new Option<string?>("--bake-output")
+    { Description = "Directory for the bake (bundles + framework-mvid.txt). Default: a temp dir." };
+    var extOpt = new Option<string?>("--external-modules")
+    { Description = "Directory of external module DLLs to mount at /ext." };
+    var shaOpt = new Option<string?>("--source-sha")
+    { Description = "Commit stamped into the bake, so a bundle records the source it came from." };
+    var allowOpt = new Option<string?>("--allow")
+    { Description = "Allow-file relative to the plugin path (default: plugin-gate.allow, used only if present)." };
+
+    var plugin = new Command("plugin", "Build a plugin: bake its packages, then test the BAKED bytes.")
+    { pathArg, imageOpt, bakeOpt, extOpt, shaOpt, allowOpt };
+
+    plugin.SetAction((result, ct) => new BuildPluginCommand(Console.Out, Console.Error).RunAsync(
+        new BuildPluginOptions(
+            result.GetValue(pathArg)!,
+            result.GetValue(imageOpt)!,
+            result.GetValue(bakeOpt),
+            result.GetValue(extOpt),
+            result.GetValue(shaOpt),
+            result.GetValue(allowOpt)),
+        ct));
+
+    build.Subcommands.Add(plugin);
+    root.Subcommands.Add(build);
+}
+
 return await root.Parse(args).InvokeAsync();
