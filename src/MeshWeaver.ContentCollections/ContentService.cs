@@ -187,7 +187,20 @@ public class ContentService : IContentService
 
         return factory.Create(config)
             .Take(1)
-            .Select(provider => new ContentCollection(config, provider, hub))
+            .Select(provider =>
+            {
+                var collection = new ContentCollection(config, provider, hub);
+                // 🚨 The collection DIES WITH THE HUB it resolves services from. Without this,
+                // nothing ever disposed it: this service is not IDisposable, its per-name cache
+                // outlives every consumer, and the file-system watcher AttachMonitor hangs on the
+                // provider kept firing after the hub's scope was gone — IngestContentFile then
+                // resolved IoPoolRegistry from a disposed LifetimeScope on the watcher's native
+                // callback thread (the teardown-straggler class the defensive catches in
+                // ContentCollection describe). RegisterForDisposal is late-safe: a collection
+                // created while the hub is already disposing is disposed immediately.
+                hub.RegisterForDisposal(collection);
+                return collection;
+            })
             .SelectMany(collection => collection.Initialize().Select(_ => (ContentCollection?)collection));
     }
 

@@ -938,13 +938,48 @@ public static class PluginGateRunner
             Mesh.DisposeAndJoin(
                 message => output.WriteLine($"[teardown] {message}"),
                 TimeSpan.FromSeconds(30));
+            var leakedIoLeaves = 0;
             try
             {
-                ServiceProvider.GetRequiredService<IoPoolRegistry>().DrainAll();
+                leakedIoLeaves = ServiceProvider.GetRequiredService<IoPoolRegistry>()
+                    .DrainAll(out var residualByPool);
+                if (residualByPool.Count > 0)
+                    output.WriteLine(
+                        $"[teardown] pooled I/O leaves survived the drain: {string.Join(", ", residualByPool)}");
             }
             catch (Exception ex)
             {
                 output.WriteLine($"[teardown] pool drain failed: {ex.Message}");
+            }
+            // The async half of teardown, then the TERMINAL SIGNAL — the phase everything that
+            // deferred itself to "after the drains" is waiting on: the collectible NodeType ALC
+            // unloads (MeshDataSource.UnloadNodeAssemblyContexts) and the hosted hubs' lifetime
+            // scopes (TeardownOrderedScopeDisposal). Without it those run only when the container
+            // below disposes them mid-teardown — the unordered shape whose stragglers used to kill
+            // this very tool with exit 139. Block-joins are the sanctioned run-boundary exception,
+            // and both are bounded and loud.
+            var asyncDisposeClean = true;
+            try
+            {
+                var queue = ServiceProvider.GetService<AsyncDisposeQueue>();
+                asyncDisposeClean = queue is null
+                    || queue.DrainAsync(TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
+                if (!asyncDisposeClean)
+                    output.WriteLine("[teardown] async dispose queue did not quiesce within 30s");
+            }
+            catch (Exception ex)
+            {
+                asyncDisposeClean = false;
+                output.WriteLine($"[teardown] async dispose queue drain failed: {ex.Message}");
+            }
+            try
+            {
+                ServiceProvider.GetService<MeshTeardownSignal>()
+                    ?.SignalCompleted(new TeardownReport(leakedIoLeaves, asyncDisposeClean));
+            }
+            catch (Exception ex)
+            {
+                output.WriteLine($"[teardown] teardown signal failed: {ex.Message}");
             }
             (ServiceProvider as IDisposable)?.Dispose();
         }
