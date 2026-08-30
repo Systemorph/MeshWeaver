@@ -65,15 +65,22 @@ public class ModuleGenerationsGcHostedServiceTest : IDisposable
             {
                 entered.OnNext(Unit.Default);
                 entered.OnCompleted();
-                // The CIFS stall, simulated on the pool thread: parked until the pooled leaf's
-                // token cancels — exactly the state memex-cloud's PID 1 sat in (#2684). The gate
-                // exists only to stand in for the blocked SMB round-trip; the property under test
-                // is that nothing on the host side ever waits on it.
-                using var woken = new ManualResetEventSlim(false);
-                using var reg = ct.Register(woken.Set);
-                woken.Wait();
-                unwound.OnNext(Unit.Default);
-                unwound.OnCompleted();
+                // The CIFS stall, simulated on the pool thread: the collector makes no progress
+                // until the pooled leaf's token cancels — the state memex-cloud's PID 1 sat in
+                // (#2684). Deliberately a cooperative spin, NOT a kernel wait: a blocking bridge
+                // in a test is the #2013 defect class (BlockingBridgeInTestRatchetGuard), and the
+                // property under test is precisely that nothing on the host side ever waits on
+                // this thread. The 30 s ceiling means even a broken cancellation path cannot park
+                // the thread past this test's own Timeout assertions.
+                var stall = System.Diagnostics.Stopwatch.StartNew();
+                var spin = new SpinWait();
+                while (!ct.IsCancellationRequested && stall.Elapsed < TimeSpan.FromSeconds(30))
+                    spin.SpinOnce();
+                if (ct.IsCancellationRequested)
+                {
+                    unwound.OnNext(Unit.Default);
+                    unwound.OnCompleted();
+                }
                 return 0;
             });
 
