@@ -605,29 +605,17 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     || PathMatcher.ShouldNotify(mainPath!, basePath, effectiveScope))
                 .SelectMany(mainPath => persistence.Read(mainPath!, options)
                     .Take(1)
-                    .Catch<MeshNode?, Exception>(ex =>
-                    {
-                        // Surface as warning so silent swallow-and-return-null
-                        // doesn't make TimeoutException disappear into "node
-                        // dropped by Where(!= null)" — visible cause when a
-                        // query mysteriously returns fewer rows than expected.
-                        logger?.LogWarning(ex,
-                            "[SourceActivity.ReadMain] swallowed for path={Path}; returning null",
-                            mainPath);
-                        return Observable.Return<MeshNode?>(null);
-                    }))
+                    // Surface as warning so silent swallow-and-return-null doesn't make
+                    // TimeoutException disappear into "node dropped by Where(!= null)" — visible
+                    // cause when a query mysteriously returns fewer rows than expected. Teardown
+                    // cancellation is NOT swallowed: it terminates the walk (see SwallowedReadOrStop).
+                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "SourceActivity.ReadMain", mainPath!)))
                 .Where(node => node != null)
                 .Select(node => node!)
                 .Where(node => _evaluator.Matches(node, parsedQuery)
                     && !IsExcludedByContext(node, context)
                     && !IsExcludedByIsMain(node, parsedQuery))
-                .Catch<MeshNode, Exception>(ex =>
-                {
-                    logger?.LogWarning(ex,
-                        "[StorageAdapterMeshQueryProvider.SourceActivity] pipeline threw query=[{Query}] basePath={BasePath}",
-                        string.Join(" | ", request.EffectiveQueries), basePath);
-                    return Observable.Empty<MeshNode>();
-                })
+                .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "SourceActivity", request, basePath))
                 .Cast<object>();
         }
 
@@ -650,24 +638,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 .Where(path => emittedFrontier.Add(path))
                 .SelectMany(path => persistence.Read(path, options)
                     .Take(1)
-                    .Catch<MeshNode?, Exception>(ex =>
-                    {
-                        logger?.LogWarning(ex,
-                            "[NextLevel.Read] swallowed for path={Path}; returning null", path);
-                        return Observable.Return<MeshNode?>(null);
-                    }))
+                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "NextLevel.Read", path)))
                 .Where(node => node != null)
                 .Select(node => node!)
                 .Where(node => _evaluator.Matches(node, parsedQuery)
                     && !IsExcludedByContext(node, context)
                     && !IsExcludedByIsMain(node, parsedQuery))
-                .Catch<MeshNode, Exception>(ex =>
-                {
-                    logger?.LogWarning(ex,
-                        "[StorageAdapterMeshQueryProvider.NextLevel] pipeline threw query=[{Query}] basePath={BasePath}",
-                        string.Join(" | ", request.EffectiveQueries), basePath);
-                    return Observable.Empty<MeshNode>();
-                })
+                .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "NextLevel", request, basePath))
                 .Cast<object>();
         }
 
@@ -707,13 +684,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 && !IsExcludedByContext(node, context)
                 && !IsExcludedByIsMain(node, parsedQuery))
             .Do(node => { if (!string.IsNullOrEmpty(node.Path)) emittedPaths.Add(node.Path); })
-            .Catch<MeshNode, Exception>(ex =>
-            {
-                logger?.LogWarning(ex,
-                    "[StorageAdapterMeshQueryProvider.ExactScope] pipeline threw query=[{Query}] basePath={BasePath}",
-                    string.Join(" | ", request.EffectiveQueries), basePath);
-                return Observable.Empty<MeshNode>();
-            });
+            .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "ExactScope", request, basePath));
 
         // Children / Descendants / Hierarchy / Subtree / AncestorsAndSelf scopes —
         // walk via the adapter. Each scope expands to a list of (root, scope)
@@ -771,28 +742,16 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             .SelectMany(path =>
                 persistence.Read(path, options)
                     .Take(1)
-                    .Catch<MeshNode?, Exception>(ex =>
-                    {
-                        // Surface swallowed read errors at warning level so a
-                        // timeout / RLS-deny / corrupt-row doesn't silently
-                        // drop the node out of the result set.
-                        logger?.LogWarning(ex,
-                            "[MatchScope.Read] swallowed for path={Path}; returning null",
-                            path);
-                        return Observable.Return<MeshNode?>(null);
-                    }))
+                    // Surface swallowed read errors at warning level so a timeout / RLS-deny /
+                    // corrupt-row doesn't silently drop the node out of the result set. Teardown
+                    // cancellation is NOT swallowed: it terminates the walk (see SwallowedReadOrStop).
+                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "MatchScope.Read", path)))
             .Where(node => node != null)
             .Select(node => node!)
             .Where(node => _evaluator.Matches(node, parsedQuery)
                 && !IsExcludedByContext(node, context)
                 && !IsExcludedByIsMain(node, parsedQuery))
-            .Catch<MeshNode, Exception>(ex =>
-            {
-                logger?.LogWarning(ex,
-                    "[StorageAdapterMeshQueryProvider.MatchScope] pipeline threw query=[{Query}] basePath={BasePath}",
-                    string.Join(" | ", request.EffectiveQueries), basePath);
-                return Observable.Empty<MeshNode>();
-            });
+            .Catch<MeshNode, Exception>(ex => PipelineFaultOrStopped<MeshNode>(ex, "MatchScope", request, basePath));
 
         // Sequential composition: exact-path probes complete first (populating
         // emittedPaths), then scope-walk filters via the shared HashSet. The
@@ -812,6 +771,52 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     {
         var recursive = scope != QueryScope.Children;
         return WalkLevel(string.IsNullOrEmpty(basePath) ? null : basePath, recursive);
+    }
+
+    /// <summary>
+    /// 🚨 Cancellation is NOT a swallowed read error, and must never be handled as one path's miss.
+    /// It arrives when the adapter's I/O pool has been drained at mesh teardown — from then on every
+    /// pooled <c>Read</c> is refused with an <see cref="OperationCanceledException"/> — and the only
+    /// correct response is to STOP the walk. The per-path swallow used to catch it, log a
+    /// Warning-with-exception, return <c>null</c> and move on to the next path: a synchronous storm of
+    /// one fault record per remaining path (2,342 in ONE CI teardown of a samples-graph walk), which
+    /// exhausted the fault-record budget (100 per 10 s) and suppressed every genuine fault logged in
+    /// the following ten seconds. Before the FileSystem pool became drainable those same stragglers
+    /// ran unsupervised on the unbounded pool instead — the issue #613 teardown-crash shape — so this
+    /// is the same defect seen from the other side, and terminating the walk is what closes it.
+    /// </summary>
+    private static bool IsTeardownCancellation(Exception ex) => ex is OperationCanceledException;
+
+    /// <summary>
+    /// The per-path read catch: a genuine read fault (timeout / RLS-deny / corrupt row) is surfaced
+    /// at Warning and the node dropped (<c>null</c>) so the rest of the result set survives; a
+    /// teardown cancellation propagates so the walk terminates — see <see cref="IsTeardownCancellation"/>.
+    /// </summary>
+    private IObservable<MeshNode?> SwallowedReadOrStop(Exception ex, string site, string path)
+    {
+        if (IsTeardownCancellation(ex))
+            return Observable.Throw<MeshNode?>(ex);
+        logger?.LogWarning(ex, "[{Site}] swallowed for path={Path}; returning null", site, path);
+        return Observable.Return<MeshNode?>(null);
+    }
+
+    /// <summary>
+    /// The pipeline-level catch: a fault is surfaced at Warning; a teardown cancellation is the
+    /// expected end of a walk whose pool has been drained — recorded at Debug (it is not a fault, and
+    /// a Warning-with-exception here would still feed the fault sink once per in-flight query at every
+    /// teardown) — and either way the query answers empty. See <see cref="IsTeardownCancellation"/>.
+    /// </summary>
+    private IObservable<T> PipelineFaultOrStopped<T>(Exception ex, string site, MeshQueryRequest request, string basePath)
+    {
+        if (IsTeardownCancellation(ex))
+            logger?.LogDebug(
+                "[StorageAdapterMeshQueryProvider.{Site}] stopped — the adapter's I/O pool was drained (mesh teardown) query=[{Query}] basePath={BasePath}",
+                site, string.Join(" | ", request.EffectiveQueries), basePath);
+        else
+            logger?.LogWarning(ex,
+                "[StorageAdapterMeshQueryProvider.{Site}] pipeline threw query=[{Query}] basePath={BasePath}",
+                site, string.Join(" | ", request.EffectiveQueries), basePath);
+        return Observable.Empty<T>();
     }
 
     private IObservable<string> WalkLevel(string? parent, bool recursive)
@@ -847,6 +852,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             })
             .Catch<string, Exception>(ex =>
             {
+                // A drained pool cancels the listing exactly like a read — propagate so the walk
+                // stops at this level instead of continuing over dead siblings (see IsTeardownCancellation).
+                if (IsTeardownCancellation(ex))
+                    return Observable.Throw<string>(ex);
                 logger?.LogWarning(ex, "[StorageAdapterMeshQueryProvider.WalkLevel] parent={Parent} failed", parent);
                 return Observable.Empty<string>();
             });
