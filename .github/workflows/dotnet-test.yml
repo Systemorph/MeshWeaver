@@ -1077,8 +1077,14 @@ jobs:
             echo "$label: ${#classargs[@]} of ${#allclasses[@]} classes"
           fi
           started=$SECONDS
+          # The run is not dark (maintainer, 2026-08-30: "we are completely in the dark in the test
+          # runs"): a timestamped line says which host starts now, -showLiveOutput streams the test
+          # bases' TEST START / TEST END lines as they happen instead of holding them for the file,
+          # and -longRunning names any test still running after 60s WHILE it runs — so a wedge is
+          # readable in the job log before the 8m cap kills the host.
+          echo "[CI] $(date -u +%H:%M:%S) ▶ $label starting (${#classargs[@]:-all} class(es))"
           ( cd "$dir" && timeout --signal=TERM --kill-after=30s 8m \
-              dotnet "$name.dll" -trx "TestResults/$trxname.trx" "${classargs[@]}" )
+              dotnet "$name.dll" -trx "TestResults/$trxname.trx" -showLiveOutput -longRunning 60 "${classargs[@]}" )
           rc=$?
           # Wall-clock for THIS unit. This is the number shard-assign.sh's weight table is
           # made of, so record it rather than making the next person reconstruct it from
