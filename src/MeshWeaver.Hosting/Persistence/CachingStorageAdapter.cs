@@ -31,7 +31,7 @@ public class CachingStorageAdapter : IStorageAdapter
     // obvious to whoever runs the portal.
     private readonly Parsers.IFileFormatParser[] _contributedParsers;
     private readonly FileFormatParserRegistry _parserRegistry;
-    private readonly IoPoolRegistry? _ioPoolRegistry;
+    private readonly IoPoolRegistry _ioPoolRegistry;
     private readonly ILogger<CachingStorageAdapter>? _logger;
     // The Read leaf is bridged to IObservable through this pool — never via a
     // bare Observable.FromAsync, which deadlocks under a blocking subscriber.
@@ -64,23 +64,30 @@ public class CachingStorageAdapter : IStorageAdapter
     /// paths into an in-memory snapshot (file bytes are read lazily on first access).
     /// </summary>
     /// <param name="baseDirectory">Root directory to cache; created if it does not exist. Resolved to an absolute path.</param>
+    /// <param name="ioPoolRegistry">
+    /// REQUIRED mesh-scoped registry resolving the file-system <c>IIoPool</c> that bridges reads to
+    /// observables — forwarded to every throwaway inner <see cref="FileSystemStorageAdapter"/> this
+    /// decorator constructs per write/read call. See that adapter's constructor for why there is no
+    /// unbounded fallback (the ledgerless pool is invisible to the teardown drain — issue #613).
+    /// </param>
     /// <param name="writeOptionsModifier">Optional transform applied to the <c>JsonSerializerOptions</c> used when writing nodes through the inner file-system adapter.</param>
-    /// <param name="ioPoolRegistry">Optional registry used to resolve the file-system <c>IIoPool</c> that bridges blocking reads to observables; falls back to an unbounded pool when null.</param>
     /// <param name="logger">Optional logger for surfacing unparseable cached files.</param>
+    /// <param name="contributedParsers">Module-contributed file-format parsers (see the field comment above).</param>
     public CachingStorageAdapter(
         string baseDirectory,
+        IoPoolRegistry ioPoolRegistry,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
-        IoPoolRegistry? ioPoolRegistry = null,
         ILogger<CachingStorageAdapter>? logger = null,
         IEnumerable<Parsers.IFileFormatParser>? contributedParsers = null)
     {
+        ArgumentNullException.ThrowIfNull(ioPoolRegistry);
         _contributedParsers = (contributedParsers ?? []).ToArray();
         _parserRegistry = new FileFormatParserRegistry(contributedParsers: _contributedParsers);
         _baseDirectory = Path.GetFullPath(baseDirectory);
         _writeOptionsModifier = writeOptionsModifier;
         _ioPoolRegistry = ioPoolRegistry;
         _logger = logger;
-        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+        _ioPool = ioPoolRegistry.Get(IoPoolNames.FileSystem);
         _changes = new IsolatedChangeFeed(logger, "caching-file-system");
         Directory.CreateDirectory(_baseDirectory);
         _snapshot = new DirectorySnapshot(_baseDirectory);
@@ -250,7 +257,7 @@ public class CachingStorageAdapter : IStorageAdapter
     /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger, _contributedParsers);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _ioPoolRegistry, _writeOptionsModifier, _logger, _contributedParsers);
         return innerAdapter.Write(node, options)
             .Do(written =>
             {
@@ -275,7 +282,7 @@ public class CachingStorageAdapter : IStorageAdapter
         // Cast to the interface: WriteIfVersion is a DEFAULT interface member on the file-system
         // adapter (it does not override it), so it is only reachable through IStorageAdapter.
         IStorageAdapter innerAdapter =
-            new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger, _contributedParsers);
+            new FileSystemStorageAdapter(_baseDirectory, _ioPoolRegistry, _writeOptionsModifier, _logger, _contributedParsers);
         return innerAdapter.WriteIfVersion(node, expectedVersion, options)
             .Do(applied =>
             {
@@ -288,7 +295,7 @@ public class CachingStorageAdapter : IStorageAdapter
     /// <inheritdoc />
     public IObservable<string> Delete(string path)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger, _contributedParsers);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _ioPoolRegistry, _writeOptionsModifier, _logger, _contributedParsers);
         return innerAdapter.Delete(path)
             .Do(deletedPath =>
             {
@@ -497,7 +504,7 @@ public class CachingStorageAdapter : IStorageAdapter
     public IObservable<Unit> SavePartitionObjects(
         string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger, _contributedParsers);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _ioPoolRegistry, _writeOptionsModifier, _logger, _contributedParsers);
         return innerAdapter.SavePartitionObjects(nodePath, subPath, objects, options)
             .Do(_ => RefreshCacheForPartition(nodePath, subPath));
     }
@@ -505,7 +512,7 @@ public class CachingStorageAdapter : IStorageAdapter
     /// <inheritdoc />
     public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
     {
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry, _logger, _contributedParsers);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _ioPoolRegistry, _writeOptionsModifier, _logger, _contributedParsers);
         return innerAdapter.DeletePartitionObjects(nodePath, subPath);
     }
 

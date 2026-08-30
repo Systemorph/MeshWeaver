@@ -44,9 +44,12 @@ public class PartitionObjectsSubscriberIndependenceTest
             File.WriteAllText(Path.Combine(partitionDir, $"item{i:D2}.json"),
                 $$"""{"Name":"object {{i}}"}""");
 
+        // The adapter REQUIRES a registry (no unbounded fallback — issue #613); a local
+        // instance disposed with the test stands in for the mesh-scoped one.
+        using var ioPools = new MeshWeaver.Mesh.Threading.IoPoolRegistry();
         try
         {
-            var adapter = new FileSystemStorageAdapter(baseDir);
+            var adapter = new FileSystemStorageAdapter(baseDir, ioPools);
             var options = new JsonSerializerOptions();
 
             Exception? error = null;

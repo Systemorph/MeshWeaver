@@ -31,6 +31,10 @@ public class FileSystemChangeFeedTest : IDisposable
     private readonly string _dir = Path.Combine(
         Path.GetTempPath(), "mw-fs-changefeed-" + Guid.NewGuid().ToString("N"));
 
+    // The adapters REQUIRE a registry (no unbounded fallback — issue #613); a per-class
+    // instance disposed with the test stands in for the mesh-scoped one.
+    private readonly MeshWeaver.Mesh.Threading.IoPoolRegistry _ioPools = new();
+
     private static readonly JsonSerializerOptions Options = new();
 
     private static MeshNode Node(string path) => MeshNode.FromPath(path) with
@@ -42,7 +46,7 @@ public class FileSystemChangeFeedTest : IDisposable
     [Fact]
     public async Task FileSystemAdapter_PublishesChanges_OnWriteAndDelete()
     {
-        IStorageAdapter adapter = new FileSystemStorageAdapter(_dir);
+        IStorageAdapter adapter = new FileSystemStorageAdapter(_dir, _ioPools);
         var seen = new List<DataChangeNotification>();
         using var sub = adapter.Changes.Subscribe(seen.Add);
 
@@ -64,7 +68,7 @@ public class FileSystemChangeFeedTest : IDisposable
     {
         // The caching decorator writes through a THROWAWAY inner file-system adapter per call, so
         // it must publish from its own feed — nobody can subscribe the inner one.
-        IStorageAdapter adapter = new CachingStorageAdapter(_dir);
+        IStorageAdapter adapter = new CachingStorageAdapter(_dir, _ioPools);
         var seen = new List<DataChangeNotification>();
         using var sub = adapter.Changes.Subscribe(seen.Add);
 
@@ -81,6 +85,7 @@ public class FileSystemChangeFeedTest : IDisposable
 
     public void Dispose()
     {
+        _ioPools.Dispose();
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
     }
 }

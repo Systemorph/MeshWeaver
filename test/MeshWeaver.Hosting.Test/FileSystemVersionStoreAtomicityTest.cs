@@ -54,11 +54,16 @@ public class FileSystemVersionStoreAtomicityTest : IDisposable
     private readonly string _dir = Path.Combine(
         Path.GetTempPath(), "MeshWeaverVersionAtomicity", $"t_{Guid.NewGuid():N}");
 
+    // The store REQUIRES a registry (no unbounded fallback — issue #613); a per-class
+    // instance disposed with the test stands in for the mesh-scoped one.
+    private readonly MeshWeaver.Mesh.Threading.IoPoolRegistry _ioPools = new();
+
     public FileSystemVersionStoreAtomicityTest() => Directory.CreateDirectory(_dir);
 
     public void Dispose()
     {
         GC.SuppressFinalize(this);
+        _ioPools.Dispose();
         try { if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
     }
 
@@ -75,7 +80,7 @@ public class FileSystemVersionStoreAtomicityTest : IDisposable
     [Fact(Timeout = 60000)]
     public async Task AnEnumeratedSnapshotIsAlwaysReadable()
     {
-        var store = new FileSystemVersionStore(_dir);
+        var store = new FileSystemVersionStore(_dir, _ioPools);
 
         var writesDone = false;
         var observations = 0;
@@ -139,7 +144,7 @@ public class FileSystemVersionStoreAtomicityTest : IDisposable
     [Fact(Timeout = 60000)]
     public async Task WritingLeavesNoTemporaryFileBehind()
     {
-        var store = new FileSystemVersionStore(_dir);
+        var store = new FileSystemVersionStore(_dir, _ioPools);
         await store.WriteVersion(Snapshot(1), JsonOptions).FirstAsync();
 
         var files = Directory.GetFiles(Path.Combine(_dir, ".versions", "test"));

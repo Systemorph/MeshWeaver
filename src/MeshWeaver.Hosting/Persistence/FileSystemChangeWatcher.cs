@@ -10,6 +10,16 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Watches a directory for file system changes and publishes notifications to <see cref="IObserver{T}"/> of <see cref="DataChangeNotification"/>.
 /// This enables reactive updates when files are modified externally (e.g., by another process or editor).
 /// </summary>
+/// <remarks>
+/// 🚨 NOT on the production path (verified 2026-08-30): nothing in <c>src/</c> registers or
+/// constructs this watcher — the only constructions are <c>FileSystemChangeWatcherTests</c>, and
+/// <c>StorageAdapterMeshQueryProvider</c> mentions it in a comment only. Live synced queries
+/// re-run on the adapters' own in-process change feed (<c>IStorageAdapter.Changes</c>), not on
+/// this class. If it is ever wired into production, its <see cref="FileSystemWatcher"/>/timer
+/// callbacks must route their adapter reads through the mesh-scoped <c>FileSystem</c>
+/// <c>IIoPool</c> (required <c>IoPoolRegistry</c> constructor parameter, like the adapters) so
+/// teardown can cancel and join them — as written its work is invisible to the teardown drain.
+/// </remarks>
 public class FileSystemChangeWatcher : IDisposable
 {
     private readonly string _baseDirectory;

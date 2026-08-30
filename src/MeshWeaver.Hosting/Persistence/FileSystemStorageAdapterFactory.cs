@@ -46,11 +46,17 @@ public class FileSystemStorageAdapterFactory : IStorageAdapterFactory
         // A real logger so the change feed can surface a subscriber that throws during fan-out —
         // a null logger restores exactly the silent-failure mode IsolatedChangeFeed exists to kill.
         var logger = serviceProvider.GetService<ILoggerFactory>()?.CreateLogger<FileSystemStorageAdapter>();
+        // 🚨 The mesh-scoped pool registry, resolved LOUDLY — never a silent IoPool.Unbounded
+        // fallback. This factory is the path every config-declared FileSystem data source takes
+        // (the FutuRe sample among them), and dropping the registry here is exactly how all of
+        // that mesh's file I/O ended up on the ledgerless unbounded pool, invisible to the
+        // teardown drain (the issue #613 exit=139 straggler source).
+        var ioPoolRegistry = serviceProvider.GetRequiredIoPoolRegistry();
         // Module-contributed parsers (the AI module's agent parser) — resolved here because this
         // factory is the DI-aware construction site. Without them an `.md` carrying
         // `nodeType: Agent` parses as plain Markdown on every file-system-backed mesh, silently.
         return new FileSystemStorageAdapter(
-            basePath, writeOptionsModifier, logger: logger,
+            basePath, ioPoolRegistry, writeOptionsModifier, logger: logger,
             contributedParsers: serviceProvider.GetServices<Parsers.IFileFormatParser>());
     }
 }

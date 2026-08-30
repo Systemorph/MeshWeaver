@@ -231,7 +231,11 @@ terminates costs one slot and nothing else. See issue #1028.
 
 ## Hidden inside the interfaces
 
-A leaf takes an optional `IIoPool? pool = null` and stores `_pool = pool ?? IoPool.Unbounded`. Each leaf reads uniformly:
+A leaf resolves its pool from the mesh-scoped registry — for a hub-attached leaf via
+`hub.ServiceProvider.GetService<IoPoolRegistry>()`, and for an adapter constructed at a composition
+root via a **required** `IoPoolRegistry` constructor parameter (see the ledgerless-Unbounded rule
+below — an optional parameter with a `?? IoPool.Unbounded` fallback is the shape that let a whole
+mesh's file I/O escape the teardown drain). Each leaf reads uniformly:
 
 ```csharp
 // HTTP leaf (McpRemoteMeshClient) — was Observable.FromAsync(async ct => …).
@@ -247,7 +251,15 @@ public IObservable<MeshNode?> Get(string path)
 => _processPool.InvokeBlocking(ct => RunTestsCore(…));      // MeshPlugin.RunTests
 ```
 
-`IoPool.Unbounded` is a stateless fallback used when a leaf is constructed with `new` outside DI. It still offloads onto the ThreadPool — never *worse* than the bare `Observable.FromAsync` it replaces — but applies no cap. It is an immutable constant, not a cache. Pools come from the mesh-scoped `IoPoolRegistry` (registered by `MeshBuilder.AddIoPools()`), resolved from the owning hub's `ServiceProvider` or injected via the leaf's constructor.
+`IoPool.Unbounded` is a stateless offload onto the ThreadPool with no cap — and, crucially, **no
+ledger**: its `CurrentInFlight` is unconditionally `0`, so I/O on it is invisible to every teardown
+drain and quiescence hold (see "`IoPool.Unbounded` is LEDGERLESS" below). It is an immutable
+constant, not a cache. Pools come from the mesh-scoped `IoPoolRegistry` (registered by
+`MeshBuilder.AddIoPools()`), resolved from the owning hub's `ServiceProvider` or injected via the
+leaf's constructor — and for adapters constructed at composition roots the registry is a
+**required** constructor parameter with a loud failure when the provider lacks one, never an
+optional parameter with a silent `?? IoPool.Unbounded` fallback (that shape is how the FutuRe
+mesh's entire file I/O escaped the teardown drain, issue #613).
 
 ---
 
@@ -428,6 +440,35 @@ So the mesh teardown awaits **all three**, in order, before the scope is dispose
    `DrainAsync` `Complete()`s the block and awaits the remainder (bounded), so it converges even under
    continuous influx — a *version-target* wait would not (the queue is a message stream / endless
    messages). `DrainedVersion` advances once per item, the test hook.
+
+### 🚨 `IoPool.Unbounded` is LEDGERLESS — I/O on it does not exist to this drain
+
+The three-phase drain only covers what it can *see*, and `IoPool.Unbounded` is invisible to it **by
+construction**: its `CurrentInFlight` is unconditionally `0`, its `Invoke` is a bare
+`Observable.FromAsync(io).SubscribeOn(TaskPoolScheduler.Default)`, and it lives outside the
+registry — so `IoPoolRegistry.DrainAll()` never enumerates it, `TotalInFlight`/`WhenDrained` never
+count it, and there is nothing to cancel, dispose, or join. The same blindness applies to every
+other quiescence hold built on the ledgers (e.g. the silo's routing-quiescence hold). Phase 2
+therefore reports a clean drain **while the unbounded I/O is still running** — and that straggler
+is exactly the teardown SIGSEGV shape: a leftover Rx emission enters full hub construction after
+the scope is disposed and faults on a span into the unloaded collectible ALC.
+
+This is not hypothetical. `FileSystemStorageAdapter` took its registry as an *optional* parameter
+with a `?? IoPool.Unbounded` fallback, and every production construction site silently dropped it —
+the storage-adapter factory (the path every config-declared FileSystem data source takes) and both
+`PersistenceExtensions` registration sites. Result: every file-system-backed mesh (the FutuRe
+sample, the one file-system-data-source-backed space) ran **all** of its file I/O on the unbounded
+pool, and issue #613's `exit=139` teardown crash recurred with zero failing tests in the trx —
+the drain had nothing to join.
+
+**The rule.** An adapter or service whose I/O must be drainable takes `IoPoolRegistry` as a
+**REQUIRED constructor parameter** — the compiler then names every dropping site, which an optional
+parameter never does ("check the call sites, not the declaration"). A DI factory or registration
+lambda resolves the registry from the provider and **fails LOUDLY** — a thrown error naming the
+missing registration and how to add it (`AddIoPools()`, which `MeshBuilder` calls by default) —
+never a silent `?? IoPool.Unbounded`. A deliberate `IoPool.Unbounded` use must be written out
+explicitly at the call site with a comment saying why bare-ThreadPool is correct there; a pure test
+convenience is the only acceptable answer, and fixing the test to use a real registry is preferred.
 
 **The only sanctioned `await` is that single three-phase drain at the boundary** — the **mesh teardown**,
 the same in tests and in prod (the silo's mesh disposal at shutdown). Capture the mesh-scoped teardown
