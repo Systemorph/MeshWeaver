@@ -9,7 +9,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// <summary>
 /// Measures — rather than assumes — WHICH waits resume their awaiter on the thread that signalled.
 /// This is the evidence behind the 2026-08-30 ruling (<i>"no ToTask ever"</i>) and behind the choice
-/// of <see cref="ReactiveCompletion.ObserveCompletion{T}"/> as the replacement everywhere.
+/// of <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, System.Threading.CancellationToken)"/> as the replacement everywhere.
 ///
 /// <para>🚨 <b>The trap this exists to stop is a plausible "simplification".</b> The obvious way to
 /// remove a <c>.ToTask()</c> is to await the observable DIRECTLY — <c>await source.FirstAsync()</c>.
