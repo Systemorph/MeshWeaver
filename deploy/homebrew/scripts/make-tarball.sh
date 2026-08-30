@@ -33,7 +33,7 @@ git -C "$repo" archive --format=tar --prefix="memex-local-${version}/" "$ref" \
 # and closes the pipe, tar dies with "stdout: write error", and under pipefail the check reports
 # the CLI as MISSING from a tarball that carries it (main's first tap publish, 2026-08-30).
 entries="$(tar -tzf "$out")"
-if ! grep -qx "memex-local-${version}/deploy/homebrew/bin/memex-local" <<<"$entries"; then
+if ! grep -qxF "memex-local-${version}/deploy/homebrew/bin/memex-local" <<<"$entries"; then
   echo "tarball $out does not contain deploy/homebrew/bin/memex-local" >&2
   exit 1
 fi
