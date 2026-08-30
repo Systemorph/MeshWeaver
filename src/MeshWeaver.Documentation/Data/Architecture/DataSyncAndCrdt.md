@@ -193,7 +193,7 @@ no longer do.
 **Request a Full when unsure.** A subscriber that detects it is out of sync (a
 patch arrived with no base, a patch failed to apply, a write was rejected) calls
 `RequestFreshSnapshot()` — it re-`SubscribeRequest`s the owner, which replies
-with a fresh Full. Gated by `_resyncInFlight` so a burst of confusing patches
+with a fresh Full. Gated by `resyncInFlight` so a burst of confusing patches
 triggers exactly one resubscribe, not a storm.
 
 ### The frame chain, and how to read `Frame loss detected`
@@ -238,6 +238,74 @@ eviction cycle it caused, not a defect of the chain. See also
 [Durable Streams Are Mesh Nodes](/Doc/Architecture/DurableStreamsViaMeshNodes) — the
 version chain **is** the durable stream, which is why no durable stream provider is
 bought to stop these lines.
+
+### The convergence contract — what re-opens the resync gate (#2654)
+
+Detecting a gap is only half the protocol. **The re-ask travels the same leg that just
+lost a frame**, so the design question is what happens when the re-ask, or its answer,
+does not arrive. That is the *whole* of #2654: the detector was right, the recovery was
+not, and the failure was silent — a layout area on its `NamedAreaControl` placeholder
+while the breadcrumb, banner and menus around it rendered fine.
+
+`resyncInFlight` bounds **one re-ask OUTSTANDING**, and it is released by that re-ask's
+**round trip**:
+
+| release | meaning |
+|---|---|
+| the fresh **Full** lands | the mirror has its base — the success case; also resets the did-not-converge counter |
+| the owner's **`SubscribeAck`** | the owner has processed the re-subscribe and done whatever it is going to do |
+| a **verdict** on the request (`DeliveryFailure`, or the hub's own no-response terminal) | the request cannot be answered — `ResyncRefused` |
+
+🚨 **Releasing the gate asks for nothing.** Nothing polls, retries or runs on a timer:
+only the *next frame that proves the mirror still has no base* drives a new re-ask, so
+the rate is bounded by the round trip **and** by the owner actually emitting — the same
+bound `JsonSynchronizationStream.Resubscribe`'s in-flight flag has always lived with.
+Because the owner ACKs before its re-assert reaches the wire, the common case costs at
+most **one redundant round trip** per gap, and that redundant re-ask is itself answered
+with a Full, which ends the cycle.
+
+Three properties this contract needs, each of which was missing:
+
+1. **The re-ask is `Observe`d, never `Post`ed.** `SubscribeRequest` is an
+   `IRequest<SubscribeAck>` and `DataExtensions.HandleSubscribeRequest` answers every one
+   of them, so a verdict always exists — fire-and-forget threw it away. `ResyncRefused`
+   classifies it by its documented meaning: `ShuttingDown` is transient (ride it out),
+   `TargetUnserved` / `Unauthorized` / `Forbidden` are terminal and **fault the stream** so
+   the subscriber sees a failure rather than an eternal placeholder, and everything else —
+   including a bare `NotFound`, which a *live* hub also answers — is a Warning and stays
+   recoverable.
+2. **A mirror holding no cached JSON accepts a Full at any frame version.**
+   `RequestFreshSnapshot` discards the snapshot before re-asking, so there is nothing a
+   rebased Full could clobber, and refusing it leaves the mirror with nothing at all. This
+   matters because an owner that has to *rebuild* the server-side stream to answer (the
+   subscriber was evicted on the router's `TargetUnserved` verdict, #2620; the owner grain
+   recycled) stamps that stream's first Full on a **reset** clock — so §3's monotonicity
+   guard used to throw away the very snapshot the mirror had asked for.
+3. **The gate cannot wait on the chain to notice a lost answer.** A re-assert Full carries
+   the version of the *state* it re-asserts (`BuildReassertFrame`, §6 / #945), not a new
+   one — so it shares a version with the frame before it, and the `BasedOnVersion` chain
+   reads `v4 → Full v4 → v5(basedOn 4)` exactly like `v4 → v5(basedOn 4)`. **Losing a
+   re-assert Full is invisible to the chain.** Measured, not assumed
+   (`StreamResyncConvergenceTest`).
+
+**The operator signal** is `[SYNC_STREAM] Resync has not converged for {StreamId}: asking
+{Owner} for a fresh snapshot again (attempt N)` at **Warning**. Attempt 1 is the ordinary
+recovery and stays at Debug; anything above 1 is a mirror that asked and was not answered.
+That is the line to grep for when reading a portal log — it separates "gaps that were
+answered" (the healthy shape above) from "a stream that keeps asking and never converges".
+
+**What a re-subscribe is owed by the owner.** `CreateSynchronizationStream`'s
+`alreadyServing` branch re-asserts the current snapshot as a Full. When there is nothing to
+assert yet — the initial subscribe is still hydrating, `Current` is null — it returns
+without sending, and that is correct rather than a hole: `Current` and the outbound JSON
+cursor are set by the *same* emission, so a stream with no `Current` has an empty cursor,
+and `ToDataChanged`'s `currentJson is null` branch makes its **first** frame a `Full` by
+construction. The subscriber is therefore always answered with a Full; if that Full is lost
+in transport, the gate above — not the chain — is what recovers it.
+
+Pinned by `StreamResyncConvergenceTest`: the answer lost in transport, the answer arriving
+on a rebased clock, and the re-ask refused as `TargetUnserved`. Each fails on the
+pre-#2654 tree.
 
 ---
 

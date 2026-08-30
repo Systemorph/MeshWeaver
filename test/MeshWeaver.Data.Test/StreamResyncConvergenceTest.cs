@@ -1,0 +1,305 @@
+using System.Linq;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Threading;
+using MeshWeaver.Fixture;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace MeshWeaver.Data.Test;
+
+/// <summary>
+/// THE RESYNC MUST CONVERGE — Systemorph/MeshWeaver#2654.
+///
+/// <para><see cref="StreamFrameLossResyncTest"/> proves the mirror DETECTS a lost frame and asks for
+/// a fresh snapshot. This class proves what happens when that ask does not work out, which is the
+/// half that was missing: the re-ask travels the very leg that just demonstrated it loses frames,
+/// and <c>SynchronizationStream.RequestFreshSnapshot</c> posted it FIRE-AND-FORGET — no NACK arm,
+/// no <c>OnError</c>, no terminal of any kind — behind a gate (<c>resyncInFlight</c>) whose only
+/// release was a <see cref="ChangeType.Full"/> landing.</para>
+///
+/// <para>So every way the answer could fail to arrive latched the mirror SHUT for the rest of its
+/// life. Each later Patch took the "Patch before base Full" branch, <c>RequestFreshSnapshot</c>
+/// no-opped on the gate, and the frame was dropped at Debug: no error, no warning, no recovery —
+/// a layout area on its placeholder forever while the breadcrumb, banner and menus around it
+/// rendered fine. That silence is why 112 <c>Frame loss detected</c> events across 40 streams
+/// produced a test timeout rather than a failure.</para>
+///
+/// <para>Three ways the answer fails, one test each — and each one is a REAL, deliverable verdict of
+/// the layers involved, injected with the same deterministic wire-loss pipeline
+/// <see cref="StreamFrameLossResyncTest"/> uses:</para>
+/// <list type="number">
+/// <item>the fresh snapshot is lost in transport, exactly like the frame that started the resync;</item>
+/// <item>the fresh snapshot arrives but carries a RESET frame clock (the owner had to rebuild the
+/// server-side stream), so the mirror's own monotonicity guard throws it away;</item>
+/// <item>the re-ask is refused with the router's authoritative "nothing serves that address".</item>
+/// </list>
+/// </summary>
+public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    /// <summary>1 after the pipeline ate its one mid-burst Patch. Instance field — per-test lifetime.</summary>
+    private int droppedPatches;
+
+    /// <summary>
+    /// Patch frames the owner has emitted on the mirror's stream. The loss is injected on the
+    /// SECOND one, deliberately: the first must LAND so the mirror's <c>Current</c> advances past
+    /// the base Full's version. Without that, the mirror sits at v0, nothing can be stamped below
+    /// it, and the rebased-clock test asserts nothing.
+    /// </summary>
+    private int patchFramesSeen;
+
+    /// <summary>1 after the pipeline ate the fresh snapshot answering the resync.</summary>
+    private int droppedFreshSnapshots;
+
+    /// <summary>1 after the pipeline rebased the fresh snapshot's frame clock.</summary>
+    private int rebasedFreshSnapshots;
+
+    /// <summary>1 after the pipeline refused the resync's <see cref="SubscribeRequest"/>.</summary>
+    private int refusedResyncRequests;
+
+    /// <summary>
+    /// Fires when the injected failure has actually happened, so the test can post the NEXT write
+    /// without racing it. A <see cref="ReplaySubject{T}"/> because the injection runs on the hub's
+    /// post pipeline and can complete before the test subscribes.
+    /// </summary>
+    private readonly ReplaySubject<Unit> failureInjected = new(1);
+
+    /// <summary>
+    /// The stream carrying the mirror this test is about, learned from its INITIAL Full. Both hubs
+    /// run a data source here, so more than one sync stream is alive; every injection below is
+    /// scoped to this id so the test can never eat a frame of somebody else's stream.
+    /// </summary>
+    private volatile string? mirrorStreamId;
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+        => base.ConfigureHost(configuration)
+            .AddData(data => data.AddSource(ds => ds
+                .WithType<MyData>(t => t.WithKey(d => d.Id))))
+            .AddPostPipeline(p => p.AddPipeline((d, next) =>
+            {
+                if (d.Message is not DataChangedEvent evt)
+                    return next.Invoke(d);
+
+                // Learn the mirror's stream from its initial Full — the first frame it ever gets.
+                if (evt.ChangeType == ChangeType.Full && mirrorStreamId is null)
+                {
+                    mirrorStreamId = evt.StreamId;
+                    return next.Invoke(d);
+                }
+                if (evt.StreamId != mirrorStreamId)
+                    return next.Invoke(d);
+
+                // THE WIRE LOSS that starts the resync: eat exactly one mid-burst Patch — an
+                // Ignored post is dropped by ScheduleNotify, exactly the shape of the at-most-once
+                // transport losing a published frame between owner and mirror. The SECOND one, so
+                // the mirror has applied a real patch first (see patchFramesSeen).
+                if (evt.ChangeType == ChangeType.Patch
+                    && Interlocked.Increment(ref patchFramesSeen) == 2
+                    && Interlocked.Exchange(ref droppedPatches, 1) == 0)
+                    return d.Ignored();
+
+                // …and then THE ANSWER FAILS. Only one of the two arms below is armed per test.
+                if (evt.ChangeType == ChangeType.Full)
+                {
+                    if (eatTheFreshSnapshot
+                        && Interlocked.Exchange(ref droppedFreshSnapshots, 1) == 0)
+                    {
+                        // Signalling HERE is ORDERED, not hopeful: the owner posts its SubscribeAck
+                        // from HandleSubscribeRequest the moment SubscribeToClient returns, while
+                        // the re-assert runs later on the stream's own turn — so by the time this
+                        // frame exists the ack is already on its way and the subscriber's gate is
+                        // opening. The write the test makes next therefore lands on an OPEN gate
+                        // with still no base: the frame that has to earn a second re-ask.
+                        failureInjected.OnNext(Unit.Default);
+                        return d.Ignored();
+                    }
+                    if (rebaseTheFreshSnapshot
+                        && Interlocked.Exchange(ref rebasedFreshSnapshots, 1) == 0)
+                    {
+                        // A RESET frame clock, which is what the owner really produces when it has
+                        // to REBUILD the server-side stream to answer the re-ask (the subscriber
+                        // was evicted on the router's TargetUnserved verdict #2620, or the owner
+                        // grain recycled): the fresh stream's version counter starts from scratch,
+                        // so its first Full is stamped BELOW what the mirror already holds.
+                        var rebased = next.Invoke(d.WithMessage(evt with { Version = 1L }));
+                        failureInjected.OnNext(Unit.Default);
+                        return rebased;
+                    }
+                }
+                return next.Invoke(d);
+            }));
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration)
+            .AddData(data => data.AddSource(ds => ds
+                .WithType<MyData>(t => t.WithKey(d => d.Id))))
+            .AddPostPipeline(p => p.AddPipeline((d, next) =>
+            {
+                // THE REFUSED RE-ASK. The initial subscribe goes through (mirrorStreamId is still
+                // unknown when it is posted); the resync's re-ask carries the SAME stream id and is
+                // answered with the router's authoritative "no hub anywhere serves that address" —
+                // ErrorType.ShuttingDown + TargetUnserved, the exact verdict RoutingGrain produces
+                // for a stream-routed delivery with no live subscriber (#2426/#2546, #2620).
+                if (refuseTheResyncRequest
+                    && d.Message is SubscribeRequest sr
+                    && sr.StreamId == mirrorStreamId
+                    && Interlocked.Exchange(ref refusedResyncRequests, 1) == 0)
+                {
+                    client!.Post(
+                        new DeliveryFailure(d)
+                        {
+                            ErrorType = ErrorType.ShuttingDown,
+                            TargetUnserved = true,
+                            Message = "no live subscriber for the owner address",
+                        },
+                        o => o.ResponseFor(d));
+                    failureInjected.OnNext(Unit.Default);
+                    return d.Ignored();
+                }
+                return next.Invoke(d);
+            }));
+
+    /// <summary>Which failure this test arms; set before the mirror is opened.</summary>
+    private volatile bool eatTheFreshSnapshot;
+    private volatile bool rebaseTheFreshSnapshot;
+    private volatile bool refuseTheResyncRequest;
+
+    /// <summary>The client hub, so the refusal arm can answer its own outgoing request.</summary>
+    private volatile IMessageHub? client;
+
+    /// <summary>
+    /// THE FRESH SNAPSHOT IS LOST TOO — the plain case of #2654, and the one the production log
+    /// shows: a leg that drops a frame drops the answer to the re-ask just as readily.
+    ///
+    /// <para>The owner keeps chaining every frame it sends (<c>ToDataChanged</c>'s
+    /// <c>lastSentVersion</c>), so the very next Patch NAMES the snapshot the mirror never got.
+    /// That is proof, it is an event rather than a timer, and it is the only sound trigger for a
+    /// second re-ask. Before the fix the mirror was BLIND to it: the moment a resync nulls the
+    /// cached JSON nothing applies any more, so the applied-chain check was never reached and every
+    /// later Patch was swallowed at Debug — the mirror never converged.</para>
+    /// </summary>
+    [HubFact]
+    public async Task AFreshSnapshotLostInTransport_StillConverges()
+    {
+        eatTheFreshSnapshot = true;
+        await RunConvergenceScenario();
+        Volatile.Read(ref droppedFreshSnapshots).Should().Be(1,
+            "the pipeline must have eaten the fresh snapshot answering the resync — without that "
+            + "loss the mirror converges on the first re-ask and this test proves nothing");
+    }
+
+    /// <summary>
+    /// THE FRESH SNAPSHOT ARRIVES ON A RESET CLOCK. When the owner cannot match the re-ask to a
+    /// live server-side stream it BUILDS one, and that stream's frame counter starts from scratch —
+    /// so the snapshot the mirror asked for is stamped below the version it already holds and the
+    /// mirror's own monotonicity guard drops it. The guard is right in general (it exists to stop a
+    /// stale point-in-time Full overwriting newer state) and wrong here: <c>RequestFreshSnapshot</c>
+    /// has already DISCARDED the local snapshot, so there is nothing newer to protect — the mirror
+    /// cannot apply anything at all until a Full lands. Pre-fix the guard threw the answer away and
+    /// the gate stayed shut forever.
+    /// </summary>
+    [HubFact]
+    public async Task AFreshSnapshotOnARebasedClock_IsAcceptedAndConverges()
+    {
+        rebaseTheFreshSnapshot = true;
+        await RunConvergenceScenario();
+        Volatile.Read(ref rebasedFreshSnapshots).Should().Be(1,
+            "the pipeline must have rebased the fresh snapshot's frame clock — without that the "
+            + "monotonicity guard is never exercised and this test proves nothing");
+    }
+
+    /// <summary>
+    /// THE RE-ASK IS REFUSED TERMINALLY. <see cref="DeliveryFailure.TargetUnserved"/> is the ROUTER's
+    /// authoritative "no hub anywhere in the cluster serves that address" (#2426/#2546) — the mirror
+    /// is never getting its snapshot. Pre-fix nothing was listening: the re-ask was posted
+    /// fire-and-forget, so the verdict resolved no callback, reached no arm and was simply dropped,
+    /// and the mirror sat silent behind a gate that could no longer open. A subscriber must SEE that
+    /// failure instead of holding a placeholder for a snapshot that is never coming.
+    /// </summary>
+    [HubFact]
+    public async Task ARefusedReAsk_FaultsTheMirrorInsteadOfLatchingItSilently()
+    {
+        refuseTheResyncRequest = true;
+        var host = GetHost();
+        client = GetClient();
+        var accessService = host.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
+
+        var collectionName = host.GetWorkspace().DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+        var clientStream = client.GetWorkspace()
+            .GetRemoteStream<EntityStore>(CreateHostAddress(), new CollectionsReference(collectionName));
+
+        await clientStream.Should().Within(8.Seconds()).Emit();
+
+        for (var i = 1; i <= 3; i++)
+            host.Post(
+                new DataChangeRequest().WithUpdates(new MyData($"doc-{i}", $"value-{i}")),
+                o => o.WithAccessContext(accessService.Context!));
+
+        // The mirror must FAULT. Materialize turns the terminal OnError into a value, so the wait
+        // has a positive signal to hold; pre-fix nothing terminal ever reaches the subscriber and
+        // this times out — the silent latch, made loud.
+        await clientStream
+            .Materialize()
+            .Where(n => n.Kind == System.Reactive.NotificationKind.OnError)
+            .Take(1)
+            .Should().Within(15.Seconds())
+            .Emit("a re-ask the router refused as TargetUnserved is terminal: the mirror must "
+                + "surface the failure, not hold a gate that can no longer open");
+
+        Volatile.Read(ref droppedPatches).Should().Be(1,
+            "the wire loss is what triggers the resync — without it there is no re-ask to refuse");
+        Volatile.Read(ref refusedResyncRequests).Should().Be(1,
+            "the resync's SubscribeRequest must have been refused — otherwise this test asserts nothing");
+    }
+
+    /// <summary>
+    /// Drives the shared shape: a live mirror, a burst whose first Patch the wire eats, the armed
+    /// failure of the resync's answer, and then ONE more write — the frame that proves the mirror
+    /// is still without a base and must earn exactly one new re-ask. Convergence to all four
+    /// documents is the assertion; pre-fix it never happens.
+    /// </summary>
+    private async Task RunConvergenceScenario()
+    {
+        var host = GetHost();
+        client = GetClient();
+        var accessService = host.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
+
+        var collectionName = host.GetWorkspace().DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+        var clientStream = client.GetWorkspace()
+            .GetRemoteStream<EntityStore>(CreateHostAddress(), new CollectionsReference(collectionName));
+
+        // Base Full applied — the mirror is live, and mirrorStreamId is now known.
+        await clientStream.Should().Within(8.Seconds()).Emit();
+
+        for (var i = 1; i <= 3; i++)
+            host.Post(
+                new DataChangeRequest().WithUpdates(new MyData($"doc-{i}", $"value-{i}")),
+                o => o.WithAccessContext(accessService.Context!));
+
+        // Wait for the injected failure itself — the event, never a delay — so the write below is
+        // guaranteed to be a frame the owner sends AFTER the resync's answer went wrong.
+        await failureInjected.Take(1).Should().Within(8.Seconds())
+            .Emit("the resync's answer must actually have been broken before the next write");
+
+        host.Post(
+            new DataChangeRequest().WithUpdates(new MyData("doc-4", "value-4")),
+            o => o.WithAccessContext(accessService.Context!));
+
+        await clientStream
+            .Where(ci => ci.Value?.Collections.GetValueOrDefault(collectionName) is { } coll
+                && coll.Instances.Values.OfType<MyData>()
+                    .Count(d => d.Text?.StartsWith("value-") == true) == 4)
+            .Take(1)
+            .Should().Within(10.Seconds())
+            .Emit("a resync whose answer failed must still converge: the next frame proves the "
+                + "mirror has no base, and that proof — not a timer — earns one new re-ask");
+
+        Volatile.Read(ref droppedPatches).Should().Be(1,
+            "the delivery pipeline must have dropped exactly one mid-burst Patch frame — without "
+            + "the loss there is no resync and this test would assert nothing");
+    }
+}
