@@ -117,9 +117,11 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     private static readonly string[] ProductionRoots = ["src", "tools", "samples", "clients", "memex"];
 
     /// <summary>
-    /// Still carrying a seeded inventory, one wave behind. <c>test/</c> is the bulk of the fleet's
-    /// sites; <c>memex/</c> is the portal tree, swept last by the maintainer's wave order. Each
-    /// moves to <see cref="ProductionRoots"/> when its sweep reaches zero.
+    /// The last tree still carrying a seeded inventory. <c>memex/</c> left this list when its sweep
+    /// reached zero (#2764) and now sits in <see cref="ProductionRoots"/> at zero tolerance —
+    /// verified on the merged tree by ALL THREE detectors here, not just the text marker that
+    /// emptied it: 0 structural bridges, 0 blocking sites, 0 <c>.ToTask(</c>. <c>test/</c> moves the
+    /// same way when its own inventory empties.
     /// </summary>
     private static readonly string[] RatchetedRoots = ["test"];
 

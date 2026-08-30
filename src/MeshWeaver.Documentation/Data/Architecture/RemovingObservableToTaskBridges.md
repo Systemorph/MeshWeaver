@@ -215,7 +215,7 @@ legitimate form (`IoPool`'s sanctioned `SemaphoreSlim` gate, `HubDisposalJoin`'s
 | A hand-rolled bridge in the **unsafe form** (no `RunContinuationsAsynchronously`) | production | **ZERO** — no register, no allow file, no exemption. This *is* the #2377 defect. |
 | A hand-rolled bridge in the **safe form** | production | Only the entries in `SanctionedBridges`, each **verified**. |
 | `.ToTask(` | production | **ZERO**, no allow file. Rx's own bridge is never the safe form, so it is never registrable. |
-| `.ToTask(` | `test/`, `memex/` | Seeded inventory, may only **shrink** — their sweeps land in later waves. |
+| `.ToTask(` | `test/` | Seeded inventory, may only **shrink**. `memex/` left this row when its sweep reached zero (#2764) and is now a production root — checked there by all three detectors, not just the marker that emptied it. |
 | `.Wait()` / `.GetAwaiter().GetResult()` | production | Seeded inventory, may only **shrink** (see below). |
 
 **`SanctionedBridges` is a register, not an allow file.** An allow file lists sites you tolerate and
