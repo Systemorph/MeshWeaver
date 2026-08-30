@@ -49,12 +49,63 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
             ? Path.GetFullPath(options.BakeOutput)
             : Path.Combine(Path.GetTempPath(), $"memex-bake-{Environment.ProcessId}");
         Directory.CreateDirectory(bake);
+        // 🚨 The tester image runs as a NON-ROOT user, so the bake mount must be writable by it —
+        // the `chmod 777 "$OWN_BAKE"` every docker-run gate performs. Proven the hard way on the
+        // verb's first production run (Manufacturing #37): 15/15 NodeTypes compiled, then
+        // `UnauthorizedAccessException: Access to the path '/bake/Manufacturing.zip' is denied`
+        // writing the first bundle. Applied to a caller-supplied directory too: the caller asked
+        // for a bake THERE, and a mount the container cannot write is a promise this command
+        // cannot keep. Windows has no unix mode and no such non-root docker convention; skip.
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(bake,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+
+        // ── dependencies: INSTALL, never build (PluginBuildContract step 2) ─────────────────────
+        // Proven necessary on the verb's first production run: without the external modules the
+        // gate installed 162 files and registered ZERO NodeTypes — every '$type' (AgentConfiguration
+        // first) degraded to an untyped JsonElement, and the gate correctly refused to judge bytes
+        // it never installed. A package with a Skill/Agent subtree needs MeshWeaver.AI REGISTERED,
+        // not merely resolvable.
+        var moduleArgs = new List<string>();
+        var extDir = options.ExternalModulesDir is { Length: > 0 } e ? Path.GetFullPath(e) : null;
+        if (options is { RegistryModules.Length: > 0 })
+        {
+            if (options.RegistryUrl is not { Length: > 0 } || options.RegistryKey is not { Length: > 0 })
+            {
+                await error.WriteLineAsync(
+                    "error: --registry-modules needs --registry-url and a key (MW_REGISTRY_KEY or "
+                    + "--registry-key). A dependency install that silently skips is a gate that "
+                    + "tests nothing, so this refuses rather than proceeding without them.");
+                return 6;
+            }
+            extDir ??= Path.Combine(Path.GetTempPath(), $"memex-ext-{Environment.ProcessId}");
+            var fetched = await FetchRegistryModules(
+                options.RegistryUrl!, options.RegistryKey!, options.RegistryModules!, extDir, ct);
+            if (fetched is null) return 7;
+            moduleArgs.AddRange(fetched);
+        }
+        else if (extDir is not null)
+        {
+            foreach (var dir in Directory.EnumerateDirectories(extDir))
+            {
+                var name = Path.GetFileName(dir);
+                if (File.Exists(Path.Combine(dir, $"{name}.dll")))
+                { moduleArgs.Add("--module"); moduleArgs.Add($"/ext/{name}/{name}.dll"); }
+            }
+        }
+        if (extDir is not null && !OperatingSystem.IsWindows() && Directory.Exists(extDir))
+            File.SetUnixFileMode(extDir, WorldRwx);
 
         // ── stage 1: PRODUCE ───────────────────────────────────────────────────────────────────
-        var compile = await RunInImage(pinned, repo, options,
+        // Module args go to BOTH stages: the compile needs the externals to RESOLVE their types,
+        // the gate needs them to REGISTER them (the node-repo gate passes them to both for exactly
+        // this reason, and dropping either half reintroduces one of the two failures).
+        var compile = await RunInImage(pinned, repo, options, extDir,
             mounts: [$"{bake}:/bake"],
             env: [],
-            args: ["compile", "/repo", ..AllowArgs(repo, options), ..options.ExtraArgs,
+            args: ["compile", "/repo", ..AllowArgs(repo, options), ..moduleArgs, ..options.ExtraArgs,
                    "--output", "/bake", ..SourceShaArgs(options)],
             ct);
         if (compile != 0) return compile;
@@ -69,11 +120,123 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         }
 
         // ── stage 2: CONSUME — stand a mesh up on the bytes stage 1 produced ───────────────────
-        return await RunInImage(pinned, repo, options,
+        return await RunInImage(pinned, repo, options, extDir,
             mounts: [$"{bake}:/seed:ro"],
             env: ["MW_INSTALL_DIFF=1"],
-            args: ["/repo", ..AllowArgs(repo, options), ..options.ExtraArgs, "--seed", "/seed"],
+            args: ["/repo", ..AllowArgs(repo, options), ..moduleArgs, ..options.ExtraArgs, "--seed", "/seed"],
             ct);
+    }
+
+    private const UnixFileMode WorldRwx =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+        UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+        UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
+
+    /// <summary>
+    /// Fetches each named package's sealed bundle from the plugin registry and composes it under
+    /// <paramref name="extDir"/> in the layout the tester consumes (<c>/ext/&lt;name&gt;/&lt;name&gt;.dll</c>).
+    /// The client half of the contract <c>PluginBundleEndpoints</c> serves, and byte-for-byte the
+    /// composition the node-repo gate performs in shell: index → advertised version → bundle zip →
+    /// <c>meshweaver/manifest.json</c> names the entry assembly (single-DLL fallback) →
+    /// <c>meshweaver/modules/</c> copied whole. Returns the <c>--module</c> args, or null on failure
+    /// (each failure already reported, naming the package).
+    /// </summary>
+    private async Task<List<string>?> FetchRegistryModules(
+        string registryUrl, string key, string modules, string extDir, CancellationToken ct)
+    {
+        var args = new List<string>();
+        Directory.CreateDirectory(extDir);
+        using var http = new HttpClient { BaseAddress = new Uri(registryUrl.TrimEnd('/') + "/") };
+        http.DefaultRequestHeaders.Authorization = new("Bearer", key);
+
+        System.Text.Json.JsonDocument index;
+        try
+        {
+            await using var s = await http.GetStreamAsync("api/plugins/bundles/index.json", ct);
+            index = await System.Text.Json.JsonDocument.ParseAsync(s, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            await error.WriteLineAsync($"error: registry index unreadable at {registryUrl}: {ex.Message}");
+            return null;
+        }
+
+        using (index)
+        foreach (var pkg in modules.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            string? version = null;
+            var root = index.RootElement;
+            var bundles = root.TryGetProperty("bundles", out var b) ? b
+                        : root.TryGetProperty("Bundles", out var b2) ? b2 : default;
+            if (bundles.ValueKind == System.Text.Json.JsonValueKind.Array)
+                foreach (var entry in bundles.EnumerateArray())
+                {
+                    var plugin = entry.TryGetProperty("plugin", out var pl) ? pl.GetString()
+                               : entry.TryGetProperty("Plugin", out var pl2) ? pl2.GetString() : null;
+                    if (!string.Equals(plugin, pkg, StringComparison.OrdinalIgnoreCase)) continue;
+                    version = entry.TryGetProperty("version", out var ve) ? ve.GetString()
+                            : entry.TryGetProperty("Version", out var ve2) ? ve2.GetString() : null;
+                    break;
+                }
+            if (version is not { Length: > 0 })
+            {
+                await error.WriteLineAsync(
+                    $"error: the registry at {registryUrl} does not advertise package '{pkg}' to this "
+                    + "key — check the key's grants and the package name.");
+                return null;
+            }
+
+            var zipPath = Path.Combine(extDir, $"{pkg}.bundle.zip");
+            try
+            {
+                await using var body = await http.GetStreamAsync($"api/plugins/bundles/{pkg}/{version}", ct);
+                await using var file = File.Create(zipPath);
+                await body.CopyToAsync(file, ct);
+            }
+            catch (Exception ex)
+            {
+                await error.WriteLineAsync($"error: download failed for {pkg}@{version}: {ex.Message}");
+                return null;
+            }
+
+            var unpack = Path.Combine(extDir, $"unpack-{pkg}");
+            if (Directory.Exists(unpack)) Directory.Delete(unpack, true);
+            System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, unpack);
+            File.Delete(zipPath);
+
+            var manifest = Path.Combine(unpack, "meshweaver", "manifest.json");
+            string? name = null;
+            if (File.Exists(manifest))
+                using (var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest)))
+                    if (doc.RootElement.TryGetProperty("module", out var m)
+                        && m.TryGetProperty("assemblyName", out var an))
+                        name = an.GetString();
+            var modulesDir = Path.Combine(unpack, "meshweaver", "modules");
+            if (name is not { Length: > 0 })
+            {
+                var dlls = Directory.Exists(modulesDir) ? Directory.GetFiles(modulesDir, "*.dll") : [];
+                if (dlls.Length != 1)
+                {
+                    await error.WriteLineAsync(
+                        $"error: {pkg}: cannot identify the entry assembly (no manifest "
+                        + $"module.assemblyName; meshweaver/modules holds {dlls.Length} dll(s)).");
+                    return null;
+                }
+                name = Path.GetFileNameWithoutExtension(dlls[0]);
+            }
+            if (!File.Exists(Path.Combine(modulesDir, $"{name}.dll")))
+            {
+                await error.WriteLineAsync($"error: {pkg}: meshweaver/modules/{name}.dll is missing from the bundle.");
+                return null;
+            }
+            var target = Path.Combine(extDir, name);
+            if (Directory.Exists(target)) Directory.Delete(target, true);
+            Directory.Move(modulesDir, target);
+            Directory.Delete(unpack, true);
+            args.Add("--module"); args.Add($"/ext/{name}/{name}.dll");
+            await output.WriteLineAsync($"external module composed: {name} ({pkg}@{version})");
+        }
+        return args;
     }
 
     private static IEnumerable<string> AllowArgs(string repo, BuildPluginOptions o)
@@ -128,13 +291,14 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
 
     private Task<int> RunInImage(
         string image, string repo, BuildPluginOptions o,
+        string? extDir,
         IEnumerable<string> mounts, IEnumerable<string> env, IEnumerable<string> args,
         CancellationToken ct)
     {
         var docker = new List<string> { "run", "--rm", "-v", $"{repo}:/repo" };
         foreach (var m in mounts) { docker.Add("-v"); docker.Add(m); }
-        if (o.ExternalModulesDir is { Length: > 0 } ext)
-        { docker.Add("-v"); docker.Add($"{Path.GetFullPath(ext)}:/ext"); }
+        if (extDir is { Length: > 0 } ext)
+        { docker.Add("-v"); docker.Add($"{ext}:/ext"); }
         foreach (var e in env) { docker.Add("-e"); docker.Add(e); }
         docker.Add("--entrypoint"); docker.Add("/app/mw-plugin-test");
         docker.Add(image);
@@ -180,5 +344,17 @@ public sealed record BuildPluginOptions(
     string? AllowFile = null,
     IReadOnlyList<string>? Extra = null)
 {
+    // 🚨 init-properties, NOT primary-constructor parameters: adding a parameter to a record's
+    // primary constructor changes the synthesized constructor's ARITY — a binary break the
+    // public-surface gate rejects even though nothing was removed (the "adding is source-compatible
+    // everywhere the compiler looks" trap, third sighting today). Same resolution as Seed's
+    // overload in #2821: extend without touching the existing shape.
+    /// <summary>Registry base URL for the dependency install (PluginBuildContract step 2).</summary>
+    public string? RegistryUrl { get; init; }
+    /// <summary>Space-separated packages to install as built artifacts before building.</summary>
+    public string? RegistryModules { get; init; }
+    /// <summary>The mwi_ instance key; prefer sourcing from $MW_REGISTRY_KEY.</summary>
+    public string? RegistryKey { get; init; }
+
     public IReadOnlyList<string> ExtraArgs => Extra ?? [];
 }
