@@ -82,6 +82,66 @@ Two bugs that make a monitor lie, both hit in one session:
   of a PR with zero checks. Decide readiness by asserting the **required set is present and
   SUCCESS**, never by the absence of failures.
 
+## Reading a RED shard: the exit marker classifies it, the log text does not
+
+A red shard says *why* in exactly one place — the **exit marker** printed by "Fail on non-zero
+project exit". Read that line; do not count words in the log.
+
+```
+[CI] MeshWeaver.Hosting.Monolith.Test exit=1 TESTFAIL (1 failing test(s) recorded in trx —
+     xunit v3 exits with the failure count; the host completed normally) elapsed=402s
+
+[CI] MeshWeaver.Hosting.Monolith.Test (part 1/2) exit=1 MASKED (trx records 2 failing test(s),
+     which does not explain exit=1 — host crashed after streaming results) elapsed=462s
+```
+
+| classification | what the marker CLAIMS | what to do |
+|---|---|---|
+| `TESTFAIL` | ordinary failing tests; the host completed normally | read the named tests — a flake cluster or a real regression |
+| `MASKED` | the exit code is not explained by the trx, so the host is presumed to have died after streaming results | **verify before believing it** — see below |
+| `TIMEOUT` / `SIGNAL` | the host died mid-run | the host, not the test — [Debugging Native Crashes](/Doc/Architecture/DebuggingNativeCrashes) |
+
+**These attribute differently, so the classification has to be right.** A test failure is a problem
+in that test's own path; a crash is a process-level failure that can take unrelated tests down with
+it. Treating a failing test as a crash invents a trunk emergency; treating a crash as a flake hides
+one.
+
+🚨 **`MASKED` is DERIVED, not observed — and it has been wrong.** The marker infers "the host died"
+from `rc != <failures recorded in trx>`, which assumes xUnit v3 exits with the failure *count*. It
+does not always: on 2026-08-30 a `MeshWeaver.Hosting.Monolith.Test` shard recorded 2 failures and
+exited **1**, and the harness called that `MASKED (host crashed after streaming results)` — but the
+assembly had printed its own summary and completed:
+
+```
+=== TEST EXECUTION SUMMARY ===
+   MeshWeaver.Hosting.Monolith.Test  Total: 331, Errors: 0, Failed: 2, Skipped: 0, Not Run: 0, Time: 461.193s
+```
+
+**That line is the decisive evidence, and it outranks the marker.** An assembly that prints its
+execution summary ran to completion, whatever the classification says. A genuine crash looks like
+the *absence* of it — no summary for that assembly, a signal exit, or a non-zero exit with nothing
+recorded at all. (The classifier rule itself is being corrected in #2738; until that lands, and for
+reading any older run, check the summary yourself.)
+
+🚨 **`HOST_CRASHED` appearing in the log is NOT evidence of a crash.** The "Summarize test failures"
+step *echoes its own script*, including the sentence explaining the mechanism —
+*"…a crashed/killed host is NOT covered by this silence: since #2495 it is written INTO the trx as a
+`<project>.HOST_CRASHED` failure by `.github/scripts/record-host-crash.py`…"*. A `grep -c HOST_CRASHED`
+over the log therefore returns hits on runs where **no host crashed at all**, and the count scales
+with the number of steps that echoed the sentence, not with crashes. Measured 2026-08-30: two main
+reds were reported as "2× then 4× HOST_CRASHED" when the markers said one `TESTFAIL` (a
+`SilentReadNackTest` flake) and one `MASKED` that the execution summary then showed was **also just
+failing tests**. Neither run crashed. It is the same family as the monitor traps above — a line a
+*script* printed is not a measurement.
+
+**Then attribute by REACHABILITY before by adjacency.** The merge that happens to sit under a red is
+the first suspect and usually the wrong one. Open the failing test project's `.csproj` and ask
+whether the suspect diff is even on its reference graph: on 2026-08-30 an Orleans silo-stop change
+(#2726) was suspected for a `MeshWeaver.Hosting.Monolith.Test` crash, and
+`MeshWeaver.Hosting.Monolith.Test.csproj` references no Orleans project at all — the monolith host
+runs no Orleans. One `grep` closed it. The same check exonerated a CI/tooling diff (#2721) whose own
+issue body had already said so.
+
 ## 🌍 The i18n mirror — deal with it routinely, not as an incident
 
 Core owns `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json`. MeshWeaver.Plugins
