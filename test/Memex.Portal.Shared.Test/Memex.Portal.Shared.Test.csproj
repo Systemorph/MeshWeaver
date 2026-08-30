@@ -25,7 +25,7 @@
          cancellation raised by the CALLER is reported as a database verdict (#1183). -->
     <!-- LocalMeshApiRoutesTest asserts the headless sidecar maps the same /api/mesh/* verbs the JS
          shells call — an unmapped one there answers the SPA fallback with a 200, not a 404 (#1474). -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <!-- ViewPackModuleTest asserts on each view pack's module attribute, and all of them left
          Memex.Portal.Shared's closure when they flipped to modules/ (#1974) — so the test anchors
          the packs itself rather than riding portal references that no longer exist. Safe here
@@ -39,6 +39,6 @@
          DbVersion.Latest drift shipped a dead image while main stayed green (V53, 2026-08-14). -->
     <!-- OAuthCodeStoreTest runs against a full monolith mesh (the store persists
          authorization codes as mesh nodes — the multi-replica safety contract). -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
   </ItemGroup>
 </Project>

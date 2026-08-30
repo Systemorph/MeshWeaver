@@ -77,7 +77,7 @@ public class TestClusterSizingGuard(ITestOutputHelper output)
                 "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
 
         // Both homes of cluster-building code: this project's tests AND the machinery that moved to
-        // src/MeshWeaver.Hosting.Orleans.TestBase (OrleansTestCluster and friends) so that suites in
+        // test/MeshWeaver.Hosting.Orleans.TestBase (OrleansTestCluster and friends) so that suites in
         // other repositories can build on it. A guard follows its subject — scanning only this
         // directory would have let the builder itself drop the sizing without a red test.
         var homes = new[]
