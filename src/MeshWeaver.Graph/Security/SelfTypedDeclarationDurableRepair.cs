@@ -162,6 +162,19 @@ public sealed class SelfTypedDeclarationDurableRepair : IHostedService
         // on a synchronously-completing store (in-memory) Finally nulls the field before the
         // gate is even armed, and arming a disposed gate disposes the inner subscription on the
         // spot — so a finished sweep leaves this instance referencing NOTHING.
+        // The one line every boot ends with, whichever way the sweep terminates — the
+        // "nothing found" outcome is a count of zero here, never an absent line.
+        void Summarize(string outcome) => logger?.LogInformation(
+            "[SelfTypedDeclarationRepair] sweep {Outcome}: {Count} declaration path(s) [{Paths}] "
+            + "by path routing and inside pinned partition(s) [{Partitions}]: {Read} durable "
+            + "row(s) read, {Retyped} self-typed row(s) retyped",
+            outcome,
+            declarationPaths.Length,
+            string.Join(", ", declarationPaths),
+            string.Join(", ", pinned.Select(p =>
+                $"{p.Definition.Namespace}←{string.Join("|", p.Paths)}")),
+            stats.Read, stats.Retyped);
+
         var gate = new SingleAssignmentDisposable();
         subscription = gate;
         gate.Disposable = lanes
@@ -173,18 +186,17 @@ public sealed class SelfTypedDeclarationDurableRepair : IHostedService
             .Finally(Release)
             .Subscribe(
                 _ => { },
-                ex => logger?.LogWarning(ex,
-                    "[SelfTypedDeclarationRepair] declaration sweep failed; durable self-typed "
-                    + "declaration rows (if any) stay unhealed until the next start"),
-                () => logger?.LogInformation(
-                    "[SelfTypedDeclarationRepair] swept {Count} declaration path(s) [{Paths}] by "
-                    + "path routing and inside pinned partition(s) [{Partitions}]: {Read} durable "
-                    + "row(s) read, {Retyped} self-typed row(s) retyped",
-                    declarationPaths.Length,
-                    string.Join(", ", declarationPaths),
-                    string.Join(", ", pinned.Select(p =>
-                        $"{p.Definition.Namespace}←{string.Join("|", p.Paths)}")),
-                    stats.Read, stats.Retyped));
+                ex =>
+                {
+                    // Unreachable by construction — every lane isolates its own fault (see
+                    // Sweep) — but a fault that does escape must still end with the summary,
+                    // or the sweep would be silent about what it had probed before it died.
+                    logger?.LogWarning(ex,
+                        "[SelfTypedDeclarationRepair] declaration sweep failed; durable "
+                        + "self-typed declaration rows (if any) stay unhealed until the next start");
+                    Summarize("faulted");
+                },
+                () => Summarize("completed"));
 
         return Task.CompletedTask;
     }
@@ -193,7 +205,9 @@ public sealed class SelfTypedDeclarationDurableRepair : IHostedService
     /// One lane of the sweep: every durable row <paramref name="source"/> yields is counted,
     /// filtered with the shared collision predicate, and — when it is a fossil — retyped through
     /// <paramref name="target"/>, the adapter it was read from, so the write lands where the row
-    /// is.
+    /// is. A lane whose READ faults (a backend that cannot answer for one partition) is logged and
+    /// ends empty, so the lanes after it still run — the sweep is per-lane tolerant for the same
+    /// reason it is per-row tolerant: one failing seam must not leave every other row unhealed.
     /// </summary>
     private static IObservable<MeshNode?> Sweep(
         IObservable<MeshNode> source,
@@ -230,7 +244,16 @@ public sealed class SelfTypedDeclarationDurableRepair : IHostedService
                         "[SelfTypedDeclarationRepair] retyping '{Path}' ({Lane}) failed; it stays "
                         + "self-typed and will be retried on the next start", fossil.Path, lane);
                     return Observable.Return<MeshNode?>(null);
-                }));
+                }))
+            // Per-lane tolerance: a read that faults ends THIS lane, not the sweep. Logged, and
+            // retried on the next boot — whatever it would have found still matches the predicate.
+            .Catch<MeshNode?, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[SelfTypedDeclarationRepair] reading declaration rows by {Lane} failed; any "
+                    + "self-typed row there stays unhealed until the next start", lane);
+                return Observable.Empty<MeshNode?>();
+            });
 
     /// <summary>
     /// The partitions the candidate declarations' OWN instance queries are pinned to, each with
