@@ -123,27 +123,94 @@ internal static class PermissionEvaluator
         if (userId == MeshNodeCacheIdentityAddress)
             return Observable.Return(Permission.Read);
 
-        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        // 🚨 Every service the fold needs is resolved HERE, ONCE, on the caller's thread — never
+        // inside a selector (#2679). The fold is long-lived by design (it re-emits on every
+        // AccessAssignment change — see Doc/Architecture/PermissionApi), while the hub's DI scope
+        // is not: a hub deactivating, an area disposing or a pod rolling disposes that scope while
+        // the fold is still subscribed, and a GetRequiredService inside the SelectMany below (the
+        // recursive Public leg, GetRole) then threw Autofac's ObjectDisposedException straight
+        // into the subscriber's render chain on the very next emission. Every dependency travels
+        // in `services` from here on — the Public leg and GetRole included — so a subscribed fold
+        // never touches the scope again.
+        var services = ResolveFoldServices(hub);
+
+        return GetEffectivePermissionsCore(hub, nodePath, userId, services)
+            // The DI-scope half of the teardown contract (Doc/Architecture/ControlledIoPooling →
+            // "The mesh teardown drains THREE things"): a fold that faults with an
+            // ObjectDisposedException while the hub's OWN scope has been disposed is a hub going
+            // away, not a permission failure — the same probe-gated classification
+            // MessageHub.HandleInitialize makes for #2444 and RoutingGrain for #2638. It terminates
+            // as the framework's typed hub-disposal signal (HubDisposingException — "the address
+            // may reactivate; retry"), which every consumer already classifies as benign teardown:
+            // the layout host serves its named transient frame at Debug, MessageService NACKs
+            // ShuttingDown, CheckPermissionOutcome answers Undetermined. 🚨 Probe-gated on purpose:
+            // an ObjectDisposedException from an unrelated disposed dependency on a LIVE scope is a
+            // real defect and still faults the fold as one.
+            .Catch<Permission, Exception>(ex => hub.IsTerminatedByScopeTeardown(ex)
+                ? Observable.Throw<Permission>(new HubDisposingException(
+                    hub.Address, $"the permission fold for '{nodePath}'", ex))
+                : Observable.Throw<Permission>(ex));
+    }
+
+    /// <summary>
+    /// Everything a SUBSCRIBED fold needs, resolved once per
+    /// <see cref="GetEffectivePermissions(IMessageHub,string,string)"/> call on the caller's thread
+    /// (<see cref="ResolveFoldServices"/>) and carried through the recursion. The fold must never
+    /// resolve from <c>hub.ServiceProvider</c> after that point — see #2679.
+    /// </summary>
+    private sealed record FoldServices(
+        IMeshNodeStreamCache Cache,
+        ILogger? Logger,
+        JsonSerializerOptions Options,
+        IReadOnlyList<MeshNode> StaticNodes,
+        IReadOnlyDictionary<string, PartitionAccessPolicy> StaticPolicies,
+        IReadOnlyList<NodeTypeGate> Gates,
+        ImmutableDictionary<string, string> StaticGatedNodes,
+        AccessContext? CapturedContext,
+        AccessContext? CapturedCircuitContext);
+
+    private static FoldServices ResolveFoldServices(IMessageHub hub)
+    {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Mesh.Security.PermissionEvaluator");
-        var staticNodes = CollectStaticAccessAssignments(hub);
-        var staticPolicies = CollectStaticPolicies(hub);
 
         // Type-declared subtree gates (issue #701). EMPTY on every mesh that declares none, and
-        // every branch below short-circuits on that — a deployment without gates runs the exact
-        // fold it ran before, subscribes no extra query and pays nothing.
+        // every branch of the fold short-circuits on that — a deployment without gates runs the
+        // exact fold it ran before, subscribes no extra query and pays nothing.
         var gates = CollectGates(hub);
-        var staticGatedNodes = CollectStaticGatedNodes(hub, gates);
 
-        // 🚨 Capture AccessContext on the CALLER'S thread before any Rx
-        // scheduler hop. AsyncLocal does NOT flow through SubscribeOn/
-        // ObserveOn — when the .Select lambdas below land on TaskPool
-        // (because cache.GetQuery uses SubscribeOn(TaskPoolScheduler)),
-        // accessService.Context is null or contaminated. CircuitContext is
-        // mesh-global so it survives, but Bearer-token Roles claims live in
-        // AccessContext.Roles and we need that snapshot here.
-        var capturedContext = accessService?.Context;
-        var capturedCircuitContext = accessService?.CircuitContext;
+        return new FoldServices(
+            hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>(),
+            hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Mesh.Security.PermissionEvaluator"),
+            hub.JsonSerializerOptions,
+            CollectStaticAccessAssignments(hub),
+            CollectStaticPolicies(hub),
+            gates,
+            CollectStaticGatedNodes(hub, gates),
+            // 🚨 Capture AccessContext on the CALLER'S thread before any Rx
+            // scheduler hop. AsyncLocal does NOT flow through SubscribeOn/
+            // ObserveOn — when the .Select lambdas in the fold land on TaskPool
+            // (because cache.GetQuery uses SubscribeOn(TaskPoolScheduler)),
+            // accessService.Context is null or contaminated. CircuitContext is
+            // mesh-global so it survives, but Bearer-token Roles claims live in
+            // AccessContext.Roles and we need that snapshot here. The Public leg
+            // of the fold evaluates under the SAME captured viewer context — it
+            // is the same viewer's check, and its API-token gate is subsumed by
+            // the outer one (own | pub is gated on the combined value).
+            accessService?.Context,
+            accessService?.CircuitContext);
+    }
+
+    /// <summary>
+    /// The fold proper — every input already resolved into <paramref name="services"/>. Recursion
+    /// (the Public leg) and custom-role lookups stay inside this method and its service-taking
+    /// helpers, so nothing here touches <c>hub.ServiceProvider</c>; <paramref name="hub"/> is
+    /// only the address and options carrier.
+    /// </summary>
+    private static IObservable<Permission> GetEffectivePermissionsCore(
+        IMessageHub hub, string nodePath, string userId, FoldServices services)
+    {
+        var (cache, logger, options, staticNodes, staticPolicies, gates, staticGatedNodes,
+            capturedContext, capturedCircuitContext) = services;
 
         // 🛡️ Hub credential (ImpersonateAsHub): ObjectId is the hub's OWN mesh address, never a
         // user/group identity — no AccessAssignment ever exists for a hub address. A hub
@@ -162,8 +229,8 @@ internal static class PermissionEvaluator
         // synchronously. Emit immediately; then enrich asynchronously with
         // the synced AccessAssignment query (so long-lived subscribers see
         // updates as runtime grants land).
-        var staticOnlyScopeRoles = ComputeStaticOnlyScopeRoles(staticNodes, userId, hub.JsonSerializerOptions);
-        var staticOnlyDeniedScopeRoles = ComputeStaticOnlyDeniedScopeRoles(staticNodes, userId, hub.JsonSerializerOptions);
+        var staticOnlyScopeRoles = ComputeStaticOnlyScopeRoles(staticNodes, userId, options);
+        var staticOnlyDeniedScopeRoles = ComputeStaticOnlyDeniedScopeRoles(staticNodes, userId, options);
         var fast = ComputeRoleState(staticOnlyScopeRoles, nodePath, userId, capturedContext, capturedCircuitContext, staticPolicies, staticOnlyDeniedScopeRoles);
         // A gate declared over a STATIC node resolves synchronously — the declared public surface
         // is readable on the first emission, with no wait on the synced queries (same reasoning as
@@ -174,7 +241,7 @@ internal static class PermissionEvaluator
         var enriched = Observable.CombineLatest(
                 ObserveEffectiveAssignments(hub, cache, nodePath, staticNodes),
                 ObserveScopePolicies(hub, cache, nodePath, staticPolicies),
-                ObserveAllMembershipNodes(hub),
+                ObserveAllMembershipNodes(cache, options),
                 ObserveGatedNodes(hub, cache, gates, staticGatedNodes),
                 (nodes, policies, memberships, gatedNodes) =>
                 {
@@ -183,8 +250,8 @@ internal static class PermissionEvaluator
                     // off the target's scope walk, and possibly in another partition — so the group
                     // set is resolved globally here, then folded into the subjects ComputeScopeRoles
                     // matches on. Consistent with the Postgres rebuild's global group expansion.
-                    var subjects = ResolveUserGroups(userId, memberships, hub.JsonSerializerOptions).Add(userId);
-                    var (granted, denied) = ComputeScopeRoles(subjects, nodes, staticNodes, hub.JsonSerializerOptions);
+                    var subjects = ResolveUserGroups(userId, memberships, options).Add(userId);
+                    var (granted, denied) = ComputeScopeRoles(subjects, nodes, staticNodes, options);
                     return (Granted: granted, Denied: denied, RuntimePolicies: policies, GatedNodes: gatedNodes);
                 })
             .Select(snap =>
@@ -224,18 +291,21 @@ internal static class PermissionEvaluator
                         customRoleIds = (customRoleIds ?? ImmutableHashSet<string>.Empty).Add(rid);
                 }
 
+                // 🚨 This selector runs on EVERY emission of a long-lived fold, so it must not
+                // resolve anything from the hub's scope (#2679): both the custom-role lookup and
+                // the recursive Public leg take the services resolved once at the entry point.
                 IObservable<Permission> rolePerms = customRoleIds is null
                     ? Observable.Return(rolePermsValue)
                     : Observable.Return(rolePermsValue).CombineLatest(
                         customRoleIds
-                            .Select(id => GetRole(hub, id))
+                            .Select(id => GetRole(cache, options, id))
                             .Merge()
                             .Where(r => r is not null)
                             .Aggregate(Permission.None, (acc, r) => acc | r!.Permissions),
                         (builtIn, custom) => builtIn | custom);
 
                 IObservable<Permission> withPublic = (userId != WellKnownUsers.Anonymous && userId != WellKnownUsers.Public)
-                    ? rolePerms.Zip(GetEffectivePermissions(hub, nodePath, WellKnownUsers.Public),
+                    ? rolePerms.Zip(GetEffectivePermissionsCore(hub, nodePath, WellKnownUsers.Public, services),
                         (own, pub) => own | pub)
                     : rolePerms;
 
@@ -271,13 +341,30 @@ internal static class PermissionEvaluator
         if (BuiltInRoles.TryGetValue(roleId, out var builtIn))
             return Observable.Return<Role?>(builtIn);
 
-        return ObserveAllRoleNodes(hub)
+        // Resolved ONCE, at call time on a live hub — the fold's own lookups go through the
+        // service-taking overload below with the cache they already hold (#2679).
+        return GetRole(hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>(), hub.JsonSerializerOptions, roleId);
+    }
+
+    /// <summary>
+    /// <see cref="GetRole(IMessageHub,string)"/> over an already-resolved cache — the overload the
+    /// subscribed fold uses, so a custom-role lookup on a later emission never resolves from a scope
+    /// that may since have been disposed.
+    /// </summary>
+    private static IObservable<Role?> GetRole(IMeshNodeStreamCache cache, JsonSerializerOptions options, string roleId)
+    {
+        if (string.IsNullOrEmpty(roleId))
+            return Observable.Return<Role?>(null);
+        if (BuiltInRoles.TryGetValue(roleId, out var builtIn))
+            return Observable.Return<Role?>(builtIn);
+
+        return ObserveAllRoleNodes(cache, options)
             .Take(1)
             .Select(nodes =>
             {
                 foreach (var node in nodes)
                 {
-                    var r = DeserializeRole(node, hub.JsonSerializerOptions);
+                    var r = DeserializeRole(node, options);
                     if (r != null && string.Equals(r.Id, roleId, StringComparison.Ordinal))
                         return r;
                 }
@@ -287,7 +374,7 @@ internal static class PermissionEvaluator
 
     public static IObservable<Role> GetRoles(IMessageHub hub)
     {
-        return ObserveAllRoleNodes(hub)
+        return ObserveAllRoleNodes(hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>(), hub.JsonSerializerOptions)
             .Take(1)
             .SelectMany(nodes =>
             {
@@ -834,23 +921,20 @@ internal static class PermissionEvaluator
         IMeshNodeStreamCache cache, object queryId, JsonSerializerOptions options, string query)
         => cache.GetQuery(queryId, options, SecurityQueries.Enumeration(query));
 
-    private static IObservable<MeshNode[]> ObserveAllRoleNodes(IMessageHub hub)
-    {
-        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        return SecurityQuery(cache, RoleQueryId, hub.JsonSerializerOptions, SecurityQueries.Roles)
+    // 🚨 Both global queries take the cache they read from rather than the hub they were asked on
+    // (#2679): the fold resolves it ONCE at its entry point, so a later emission — after the hub's
+    // scope has been disposed — never resolves from that scope.
+    private static IObservable<MeshNode[]> ObserveAllRoleNodes(IMeshNodeStreamCache cache, JsonSerializerOptions options)
+        => SecurityQuery(cache, RoleQueryId, options, SecurityQueries.Roles)
             .Select(arr => arr.ToArray());
-    }
 
     /// <summary>
     /// Every <c>GroupMembership</c> node in the mesh, cached process-wide and read as System (like
     /// the other <c>$security-*</c> queries), so group access resolves GLOBALLY — a group and its
     /// members can live in a different partition than the grant (cross-partition licensing).
     /// </summary>
-    private static IObservable<IEnumerable<MeshNode>> ObserveAllMembershipNodes(IMessageHub hub)
-    {
-        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        return SecurityQuery(cache, MembershipQueryId, hub.JsonSerializerOptions, SecurityQueries.Memberships);
-    }
+    private static IObservable<IEnumerable<MeshNode>> ObserveAllMembershipNodes(IMeshNodeStreamCache cache, JsonSerializerOptions options)
+        => SecurityQuery(cache, MembershipQueryId, options, SecurityQueries.Memberships);
 
     #endregion
 

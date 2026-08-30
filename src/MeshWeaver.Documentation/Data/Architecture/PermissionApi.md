@@ -91,6 +91,8 @@ Whenever the user's permissions change *or* the node content changes, the combin
 
 `CheckPermission` collapses to a `bool`, and a fold that *faults* (a storage hiccup, a hub whose DI scope is disposing) surfaces as `OnError` on the stream — not as `false`. If your call site turns any non-`true` into an "Access denied" screen, an entitled user gets told to request permissions they already hold.
 
+The disposing-hub case is a lifecycle event, not a fault, and the fold treats it as one: every service it needs is resolved **once**, at the call, so a long-lived fold keeps answering after its hub's scope is gone (it re-emits on every `AccessAssignment` change — the subscription outlives the render that built it); and if it still faults with an `ObjectDisposedException` while that scope no longer resolves, it terminates with the typed `HubDisposingException` ("the address may reactivate; retry"), which the layout host, `MessageService` and `CheckPermissionOutcome` already classify as benign teardown. An `ObjectDisposedException` from an unrelated disposed dependency on a *live* scope is still a defect and still faults the fold as one — the classification is gated on the scope probe, never on the type alone (issue #2679).
+
 `CheckPermissionOutcome` is the one place that distinction is made: it classifies the verdict as `Granted` / `Denied` / `Undetermined` (carrying the reason). `IsGranted` is `false` on the undetermined leg, so a consumer that ignores the tri-state still fails **closed**. Use it wherever the UI or the caller reports *why* access was refused; never re-derive the difference from a `false` or an exception message upstream.
 
 `Permission.None` is a special case in both overloads: it short-circuits to `true` without consulting the evaluator.

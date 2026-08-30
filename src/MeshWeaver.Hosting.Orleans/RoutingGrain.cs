@@ -98,21 +98,11 @@ internal class RoutingGrain(
     /// already-materialised singleton with no side effects; once the host has disposed its root
     /// <c>LifetimeScope</c> it throws, which is the signal.
     ///
-    /// <para>Mirrors <c>MessageHub.IsServiceScopeDisposed</c> deliberately: one shape, one meaning,
-    /// so a routing turn and a hub init classify the same teardown the same way.</para>
+    /// <para>The probe IS <see cref="ScopeTeardown.IsServiceScopeDisposed"/> — one shape, one
+    /// meaning, so a routing turn, a hub init, a permission fold and a layout error path all
+    /// classify the same teardown the same way.</para>
     /// </summary>
-    private bool IsServiceScopeDisposed()
-    {
-        try
-        {
-            meshHub.ServiceProvider.GetService(typeof(IMessageHub));
-            return false;
-        }
-        catch (ObjectDisposedException)
-        {
-            return true;
-        }
-    }
+    private bool IsServiceScopeDisposed() => meshHub.IsServiceScopeDisposed();
 
     /// <summary>
     /// Routes dispatched but not yet terminated. This is the back-pressure signal that used to be
@@ -1495,9 +1485,7 @@ internal class RoutingGrain(
     /// <param name="scopeDisposed">Probe: does this process's DI container still resolve?</param>
     /// <returns><c>true</c> when the fault is the process's container going away.</returns>
     internal static bool IsScopeTeardown(Exception ex, Func<bool>? scopeDisposed) =>
-        scopeDisposed is not null
-        && ExceptionChain.Contains<ObjectDisposedException>(ex)
-        && scopeDisposed();
+        ScopeTeardown.IsScopeTeardown(ex, scopeDisposed);
 
     /// <summary>
     /// The silo hosting the target is going away — an expected lifecycle event during every roll,
