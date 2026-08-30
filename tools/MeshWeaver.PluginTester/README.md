@@ -20,7 +20,47 @@ mw-compiler compile <root> --output <dir>   # BAKE: build-step compile, NO mesh 
 mw-compiler <checkout-root>                 # GATE: mesh run — render + Tests areas
 mw-compiler <root> --bake-output <dir>      # legacy: the gate's mesh ALSO produces the bundles
 mw-compiler --print-framework-identity      # one-line identity + provenance diagnostic
+mw-compiler build <root> [<pkg>...|all]     # BUILD: compile + test per package, dependency cascade
 ```
+
+## `build` — compile AND test, per package, as a dependency cascade (2026-08-30)
+
+`build` is the build process for node repos. **Build always means compile and run tests.** The
+input is one or many packages, or `all` (the default) for the full rebuild a platform rebuild
+needs; the selection is the named packages plus their transitive `requires` inside the repo.
+
+```
+mw-compiler build <repo-root> [<package>... | all] [--module <dll>]... [--out <dir>] \
+    [--report <file>] [--max-parallel <n>] [--case-timeout <s>] [--no-tests] [--source-sha <sha>]
+```
+
+- **A cascade, not a schedule.** Every package has a result stream; a package OBSERVES the
+  streams of the packages it requires and starts itself the moment the last one completes green.
+  Packages with no edge between them build at the same time (bounded by `--max-parallel`).
+  **On red we break**: a package whose dependency did not end green never starts and is reported
+  `blocked by <dependency>`; **on green we continue**. A failure is reported once, where it
+  happened. A cycle is refused up front and named.
+- **No mesh, no import.** Sources come from the checkout on disk (the same node loader as
+  `compile`), composed exactly as the portal composes a NodeType compile (`NodeSetCompiler`: the
+  same skeleton, the same options, this image's `/app` as the reference set) — and each package
+  compiles against the assemblies its dependency packages just emitted. Grains cannot carry a
+  Roslyn workload; a build process can.
+- **Tests without a mesh.** The `Test/*.cs` convention — static classes whose public static
+  parameterless methods throw on failure — runs straight from the emitted assembly in a
+  collectible load context, each case timed and capped by `--case-timeout`. A case that takes a
+  host (a `Tests` layout-area aggregator, anything needing a hub) is COUNTED and NAMED as
+  `needs-mesh`, never dropped: the gate (`mw-compiler <root> --seed <out>`) still runs those,
+  seeded from `--out` so nothing is compiled twice.
+- **Timings are the point.** Every package reports ready / queued / work, its compile and test
+  splits and per-type compile times; the summary prints the critical path (the chain whose serial
+  length is the wall-clock floor) and the parallel speed-up. `--report` writes all of it as JSON.
+- **Parity flag.** The portal reaches other packages' types by `shared=` source inclusion, never
+  by referencing their emitted assemblies. A type whose emitted assembly turns out to BIND a
+  dependency package's assembly is therefore green here on grounds the portal does not have; the
+  report marks it `binds-dependency-assembly` so that difference is visible, not discovered as a
+  CompileError in production.
+
+Exit codes: `0` every selected package green · `1` any red or blocked · `2` usage · `70` fatal.
 
 ## `compile` — the bake, as a build step
 
