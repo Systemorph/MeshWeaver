@@ -47,8 +47,10 @@ public class PodHubNotHereRefusalTest
     private static readonly Address Sender = new("client", "pod-hub-sender");
 
     private static MeshConfiguration Declaring(params string[] clientHostedTypes) =>
-        new(Array.Empty<MeshNode>(),
-            clientHostedAddressTypes: new HashSet<string>(clientHostedTypes, StringComparer.Ordinal));
+        new(Array.Empty<MeshNode>())
+        {
+            ClientHostedAddressTypes = new HashSet<string>(clientHostedTypes, StringComparer.Ordinal),
+        };
 
     private static IMessageDelivery Delivery(string id, string targetType = "portal") =>
         new MessageDelivery<RawJson>(

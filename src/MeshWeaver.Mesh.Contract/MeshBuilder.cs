@@ -499,8 +499,13 @@ public record MeshBuilder
                     autocompleteExcludedNodeTypes: excludedTypes.Count > 0 ? excludedTypes : null,
                     queryRoutingRules: routingRules,
                     streamRoutedAddressTypes: streamRoutedTypes,
-                    nodeTypeGates: accessConfig.BuildGates(),
-                    clientHostedAddressTypes: clientHostedTypes);
+                    nodeTypeGates: accessConfig.BuildGates())
+                {
+                    // An init property, not a ctor argument — see MeshConfiguration for why a
+                    // trailing optional parameter would still be a binary break for a module that
+                    // is already published.
+                    ClientHostedAddressTypes = clientHostedTypes,
+                };
             })
             // Static nodes registered via AddMeshNodes(...) flow as an
             // IStaticNodeProvider. Application code reads them via

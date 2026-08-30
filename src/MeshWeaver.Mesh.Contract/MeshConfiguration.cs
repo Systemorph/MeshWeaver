@@ -20,8 +20,7 @@ public class MeshConfiguration(
     IReadOnlySet<string>? autocompleteExcludedNodeTypes = null,
     IReadOnlyList<QueryRoutingRule>? queryRoutingRules = null,
     IReadOnlySet<string>? streamRoutedAddressTypes = null,
-    IReadOnlyList<NodeTypeGate>? nodeTypeGates = null,
-    IReadOnlySet<string>? clientHostedAddressTypes = null)
+    IReadOnlyList<NodeTypeGate>? nodeTypeGates = null)
 {
     /// <summary>
     /// Address-type prefixes that route via the cluster-wide Orleans memory
@@ -90,9 +89,13 @@ public class MeshConfiguration(
     /// 30–60 s. Asking the DECLARATION instead separates the two: a client-hosted type keeps its
     /// only transport, and everything else gets a fast, transient NACK the sender rides out. See
     /// <c>Doc/Architecture/DurableStreamsViaMeshNodes</c>.</para>
+    ///
+    /// <para>An <c>init</c> property rather than a primary-constructor parameter, deliberately:
+    /// adding a parameter — even a trailing optional one — changes the constructor's SIGNATURE, and
+    /// an already-published module binds that signature in its IL. Additive here, breaking there.</para>
     /// </summary>
-    public IReadOnlySet<string> ClientHostedAddressTypes { get; } =
-        clientHostedAddressTypes ?? new HashSet<string>(StringComparer.Ordinal);
+    public IReadOnlySet<string> ClientHostedAddressTypes { get; init; } =
+        new HashSet<string>(StringComparer.Ordinal);
 
     // No public Nodes / MeshNodes property. Static nodes registered via
     // MeshBuilder.AddMeshNodes(...) flow through StaticMeshNodeListProvider
