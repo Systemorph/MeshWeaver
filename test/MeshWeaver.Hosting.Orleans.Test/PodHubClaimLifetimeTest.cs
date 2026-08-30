@@ -95,36 +95,23 @@ public class PodHubClaimLifetimeTest
     }
 
     /// <summary>
-    /// Waits for the claim to actually GIVE UP, then reads the attempt count once.
-    ///
-    /// <para>🚨 This used to poll for the count to stop moving — two equal readings 25&#160;ms apart —
-    /// and it was wrong for the same reason <c>StreamAttachTransientRetryTest</c>'s was
-    /// (MeshWeaver#2793, and this helper's comment used to cite that one as precedent). The retry
-    /// hops through the thread-pool scheduler between attempts, so on a loaded shard that hop
-    /// exceeds 25&#160;ms; the poll then reads the count DURING A PAUSE and declares it final.
-    /// Measured on main's merge-queue build for PR #2800: <c>Expected value to be 6 … but found
-    /// 4</c> — and 4 is a number this test would otherwise have to interpret as a real defect.</para>
-    ///
-    /// <para>"Unchanged for 25&#160;ms" was never the condition. The condition is <b>the claim ended</b>,
-    /// and the production code says so itself: the impossibility terminal logs
-    /// <c>"did not land in this process"</c> at Debug from the attach's terminal <c>onError</c>,
-    /// after every permitted attempt is spent. That line is the signal; waiting for it makes the
-    /// count deterministic. The loop bound is a backstop against a hang, not the measurement.</para>
+    /// Bounded wait for the attempt count to STOP moving. There is no completion signal to await
+    /// for a claim that ends, so two consecutive equal readings after the first attempt landed is
+    /// the settled state — the same technique as <c>StreamAttachTransientRetryTest</c>.
     /// </summary>
-    private static async Task<int> WaitUntilSettled(RefusingGrainFactory factory, RecordingLogger logger)
+    private static async Task<int> WaitUntilSettled(RefusingGrainFactory factory)
     {
+        var last = -1;
         for (var i = 0; i < 400; i++)
         {
-            if (logger.Records.Any(r => r.Level == LogLevel.Debug
-                                        && r.Message.Contains("did not land in this process", StringComparison.Ordinal)))
-                return factory.AttachCalls;
             await Task.Delay(25);
+            var now = factory.AttachCalls;
+            if (now > 0 && now == last)
+                return now;
+            last = now;
         }
-
         throw new TimeoutException(
-            "the claim never reported giving up — last observed attempt count "
-            + $"{factory.AttachCalls}. Waiting on the terminal log line rather than on the counter "
-            + "pausing is deliberate (#2793); if this times out the claim really did not end.");
+            $"the claim never settled — last observed attempt count {factory.AttachCalls}");
     }
 
     /// <summary>
@@ -179,7 +166,7 @@ public class PodHubClaimLifetimeTest
         using var routing = Router(factory, sp, logger, canHostGrains: false);
 
         using var registration = routing.RegisterStream(Hub, Ignore);
-        var attempts = await WaitUntilSettled(factory, logger);
+        var attempts = await WaitUntilSettled(factory);
 
         attempts.Should().Be(OrleansRoutingService.PodHubAttachRetries + 1,
             "an Orleans client cannot host a grain, so the claim is impossible rather than slow — "
