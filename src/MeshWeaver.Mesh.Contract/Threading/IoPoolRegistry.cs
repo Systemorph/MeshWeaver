@@ -161,9 +161,13 @@ public sealed class IoPoolRegistry : IDisposable
         var residuals = new List<PoolResidual>();
         foreach (var kvp in _pools)
         {
+            // Read the sites BEFORE the drain returns nothing to name: Drain() joins, so by the
+            // time it hands back a residual the surviving leaves are exactly the ones still
+            // registered — but a leaf that unwinds during the join must not be reported, so this
+            // is read after Drain and reflects what is genuinely still running.
             var residual = kvp.Value.Drain();
             if (residual != 0)
-                residuals.Add(new PoolResidual(kvp.Key, residual));
+                residuals.Add(new PoolResidual(kvp.Key, residual) { Sites = kvp.Value.PendingLeafSites });
             if (residual != 0)
                 // 🚨 "IoPoolDrain", not "IoPoolSiloTeardown" (Copilot review, PR #2598): DrainAll()
                 // is the generic mesh-teardown phase 2 (MeshTeardownExtensions AND
@@ -174,7 +178,10 @@ public sealed class IoPoolRegistry : IDisposable
                 _logger?.LogWarning(
                     "IoPoolDrain: pool '{PoolName}' did not finish {Residual} leaf(es) within "
                     + "the drain budget — a leaf ignored its cancellation token; fix the leaf, do not "
-                    + "widen the budget.", kvp.Key, residual);
+                    + "widen the budget. Still running: {Sites}", kvp.Key, residual,
+                    kvp.Value.PendingLeafSites.Count == 0
+                        ? "(no site captured)"
+                        : string.Join(" | ", kvp.Value.PendingLeafSites));
             leaked += residual;
         }
         byPool = residuals;
@@ -188,8 +195,24 @@ public sealed class IoPoolRegistry : IDisposable
     /// </summary>
     public readonly record struct PoolResidual(string Pool, int Residual)
     {
+        /// <summary>
+        /// The call sites of the leaves that did not unwind — a lambda's compiler-generated name
+        /// carries its ENCLOSING method, so this points at the operation to fix. Empty when the
+        /// pool could not offer them.
+        ///
+        /// <para>🚨 Without this the residual is an anonymous <c>AgentStore=1</c>: enough to know a
+        /// pool did not drain, never enough to act. #2480 added the POOL NAME and stopped one level
+        /// short — measured 2026-08-30, three dirty teardowns in 20 loaded runs of
+        /// MeshWeaver.AI.Test named AgentStore, Query and FileSystem on different runs, and none of
+        /// the three could be chased any further.</para>
+        /// </summary>
+        public IReadOnlyList<string> Sites { get; init; } = [];
+
         /// <inheritdoc />
-        public override string ToString() => $"{Pool}={Residual}";
+        public override string ToString() =>
+            Sites.Count == 0
+                ? $"{Pool}={Residual}"
+                : $"{Pool}={Residual} [{string.Join(" | ", Sites)}]";
     }
 
     /// <summary>Disposes every created pool and clears the registry; called when the mesh is torn down.</summary>
