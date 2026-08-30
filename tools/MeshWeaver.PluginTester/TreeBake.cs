@@ -235,7 +235,20 @@ public static class TreeBake
     /// module's types, reported the resulting misses as CONTENT errors, and named nothing about a
     /// reference. Loud here, once, beats five red NodeTypes and a fleet that will not roll.</para>
     /// </summary>
-    private static IReadOnlyList<InstalledModuleAssembly> LoadExternalModules(Options options)
+    /// <summary>
+    /// The compiler's NuGet hook is synchronous by contract (<see cref="NodeSetCompiler.Compile"/>
+    /// takes a plain delegate), and the resolver is genuinely async, so this is the ONE place the
+    /// bake lane blocks on it. Shared with the build verb so the production blocking-bridge
+    /// inventory keeps counting exactly one site, here.
+    /// </summary>
+    internal static Func<IReadOnlyList<NuGetPackageReference>, CancellationToken, IReadOnlyList<string>>
+        BlockingNuGetResolution(INuGetAssemblyResolver resolver) =>
+        (refs, ct) => resolver
+            .ResolveAsync(refs, targetFramework: null, ct)
+            .GetAwaiter().GetResult()
+            .AssemblyPaths;
+
+    internal static IReadOnlyList<InstalledModuleAssembly> LoadExternalModules(Options options)
     {
         var paths = options.ModuleAssemblyPaths;
         if (paths.Count == 0)
@@ -274,7 +287,7 @@ public static class TreeBake
     /// <summary>Installed module simple name → implementation MVID ("N"). Deliberately the same
     /// projection the mesh makes (<c>NodeTypeCompilationHelpers.ModuleMvidsOf</c>): producer and
     /// consumer have to compute one id for one build, or every bundle is declined.</summary>
-    private static IReadOnlyDictionary<string, string> ModuleMvidsOf(
+    internal static IReadOnlyDictionary<string, string> ModuleMvidsOf(
         IReadOnlyList<InstalledModuleAssembly> modules)
     {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -340,10 +353,7 @@ public static class TreeBake
                     // The ONE Task bridge in the bake, at a console build step — never on a hub
                     // scheduler. NuGet restore is genuine network IO with no reactive surface;
                     // the runtime bridges it through the IoPool for the same reason.
-                    resolveNuGet: (refs, ct) => nugetResolver
-                        .ResolveAsync(refs, targetFramework: null, ct)
-                        .GetAwaiter().GetResult()
-                        .AssemblyPaths,
+                    resolveNuGet: BlockingNuGetResolution(nugetResolver),
                     logger: options.Logger);
 
                 // 🚨 The RAW resolved set, not the post-filter compile set — the mesh-driven bake
@@ -408,7 +418,7 @@ public static class TreeBake
         return new Report(frameworkIdentity, results.ToImmutable(), bundles);
     }
 
-    private static ImmutableArray<string> WriteBundles(
+    internal static ImmutableArray<string> WriteBundles(
         Options options,
         IReadOnlyList<PackageManifest> packages,
         RepoSnapshot snapshot,
