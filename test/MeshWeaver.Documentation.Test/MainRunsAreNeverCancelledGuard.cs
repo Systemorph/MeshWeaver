@@ -93,6 +93,62 @@ public class MainRunsAreNeverCancelledGuard
     }
 
     /// <summary>
+    /// 🅿️ EVERY COMMIT THAT LANDS ON MAIN GETS ITS OWN CONCURRENCY GROUP.
+    ///
+    /// <para>🚨 <c>cancel-in-progress: false</c> is NOT sufficient, which is why this test exists
+    /// beside the one above rather than inside it. GitHub keeps exactly ONE PENDING run per
+    /// concurrency group: <c>false</c> protects the run that is already executing, but a third
+    /// arrival still EVICTS the queued one, and an evicted run reports <c>cancelled</c> having
+    /// never run a single step. So while the guard above was green, three commits were cancelled
+    /// on main inside twenty minutes (2026-08-30: dca02bdd7, 57de73c45, 637ee3921 — each cancelled
+    /// 1-2 seconds after the next push was created), producing exactly the two failures the guard
+    /// above says it prevents: nothing built the tree that landed, and CD published nothing.</para>
+    ///
+    /// <para>The invariant is therefore about the GROUP, not the flag: two different main commits
+    /// must never share a group, so they can never contend for that single slot. A PR must keep
+    /// sharing one, because superseding a PR branch is the saving worth having.</para>
+    /// </summary>
+    [Fact]
+    public void BuildAndTest_GivesEveryMainCommitItsOwnGroup_SoNoneCanBeEvicted()
+    {
+        var body = File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
+
+        var group = Regex.Match(body, @"^\s*group:\s*(?<value>.+?)\s*$", RegexOptions.Multiline);
+        Assert.True(group.Success,
+            $"{Workflow} no longer declares a concurrency group — this guard can no longer see it.");
+
+        var expression = group.Groups["value"].Value;
+
+        string GroupFor(string eventName, string @ref, string sha) => EvaluateValue(expression,
+            new Dictionary<string, string>
+            {
+                ["github.event_name"] = eventName,
+                ["github.ref"] = @ref,
+                ["github.sha"] = sha,
+                ["github.run_id"] = "1001",
+            });
+
+        var first = GroupFor("push", "refs/heads/main", "aaaaaaaaaaaa");
+        var second = GroupFor("push", "refs/heads/main", "bbbbbbbbbbbb");
+
+        Assert.True(first != second,
+            $"{Workflow} puts every main commit in ONE concurrency group ('{expression}' yields "
+            + $"'{first}' for two different commits). GitHub holds a single PENDING run per group, "
+            + "so a burst of merges evicts the queued ones and they report 'cancelled' without "
+            + "running a step — the tree that landed is never built, and CD never sees the "
+            + "'Consolidate test results' success it gates delivery on. cancel-in-progress: false "
+            + "does not prevent this; only a per-commit group does.");
+
+        var pr1 = GroupFor("pull_request", "refs/pull/2447/merge", "aaaaaaaaaaaa");
+        var pr2 = GroupFor("pull_request", "refs/pull/2447/merge", "bbbbbbbbbbbb");
+
+        Assert.True(pr1 == pr2,
+            $"{Workflow} now gives each PR COMMIT its own group ('{expression}'), which disables "
+            + "superseding on PR branches — that is #2316's ~28% runner saving handed back. A PR's "
+            + "group must depend on the ref only.");
+    }
+
+    /// <summary>
     /// 🚨 The evaluator is code, so it gets the same treatment every gate here does: rows that
     /// prove it can return BOTH answers, including the inverted expression that defeated the
     /// original substring check, and the shapes a "tidy-up" would most plausibly introduce.
@@ -154,6 +210,25 @@ public class MainRunsAreNeverCancelledGuard
         return Truthy(value);
     }
 
+    /// <summary>
+    /// The same parse as <see cref="Evaluate"/>, but returning the VALUE rather than its
+    /// truthiness — what a <c>group:</c> expression selects. Interpolated back into the literal
+    /// text around it, so the comparison is on the group string GitHub would actually key on.
+    /// </summary>
+    private static string EvaluateValue(string raw, IReadOnlyDictionary<string, string> context)
+        => Regex.Replace(raw.Trim(), @"\$\{\{(?<inner>.*?)\}\}", match =>
+        {
+            var tokens = Tokenize(match.Groups["inner"].Value);
+            var position = 0;
+            var value = ParseOr(tokens, ref position, context);
+            if (position != tokens.Count)
+                throw new InvalidOperationException(
+                    $"could not fully parse the group expression '{raw}' (stopped at token "
+                    + $"{position} of {tokens.Count}). Extend this evaluator deliberately rather "
+                    + "than letting the guard pass on an expression it does not understand.");
+            return value as string ?? value.ToString()!;
+        }, RegexOptions.Singleline);
+
     private static List<string> Tokenize(string text)
     {
         var tokens = new List<string>();
@@ -205,7 +280,11 @@ public class MainRunsAreNeverCancelledGuard
         {
             position++;
             var right = ParseAnd(tokens, ref position, context);
-            left = Truthy(left) || Truthy(right);
+            // 🚨 Actions' `||` returns an OPERAND, not a bool: `a || b` is `a` when `a` is truthy,
+            // else `b`. Collapsing it to a bool was harmless while this evaluator only ever read
+            // `cancel-in-progress` (which Truthy()s the result anyway) — but `group` SELECTS a
+            // string with exactly these operators, so the value has to survive.
+            left = Truthy(left) ? left : right;
         }
         return left;
     }
@@ -217,7 +296,8 @@ public class MainRunsAreNeverCancelledGuard
         {
             position++;
             var right = ParseComparison(tokens, ref position, context);
-            left = Truthy(left) && Truthy(right);
+            // Actions' `&&` returns an OPERAND too: `a && b` is `b` when `a` is truthy, else `a`.
+            left = Truthy(left) ? right : left;
         }
         return left;
     }

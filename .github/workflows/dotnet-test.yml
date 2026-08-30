@@ -152,12 +152,28 @@ on:
 # deliberate act — usually the hand-bisect above — and must never be cancelled by an
 # unrelated push landing on main.
 concurrency:
-  # PR runs group by `refs/pull/N/merge`, main pushes by `refs/heads/main` — i.e. both
-  # group by ref, and only a manual dispatch needs its own group. Kept on ONE line: in a
-  # folded (`>-`) scalar, continuation lines indented deeper than the first are preserved
-  # literally rather than folded, so a "tidier" multi-line version silently changes the
-  # string rather than just its layout.
-  group: build-test-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  # PR runs group by `refs/pull/N/merge`; a manual dispatch gets its own group; and a push to
+  # `main` groups by its own COMMIT. Kept on ONE line: in a folded (`>-`) scalar, continuation
+  # lines indented deeper than the first are preserved literally rather than folded, so a
+  # "tidier" multi-line version silently changes the string rather than just its layout.
+  #
+  # 🚨 MAIN GROUPS BY SHA, NOT BY REF — `cancel-in-progress: false` was NOT enough (#2412 was
+  # incomplete). GitHub keeps exactly ONE PENDING run per concurrency group: `false` protects the
+  # run that is already EXECUTING, but a third arrival still EVICTS the queued one, and an evicted
+  # run reports `cancelled` having never run a step. Grouping every main commit under one ref
+  # therefore reintroduced both failures the note below exists to prevent, silently.
+  #
+  # Measured 2026-08-30 (one merge burst, and `run_started_at` == `created_at` even while a run
+  # is only queued, which is what makes this read as "cancelled mid-run"):
+  #   dca02bdd7 queued 11:42:10 → cancelled 11:53:02, 1s after dfdd2d01c was created
+  #   57de73c45 queued 11:54:57 → cancelled 12:08:54, 2s after 637ee3921 was created
+  #   637ee3921 queued 12:08:52 → cancelled 12:09:16, 1s after 0c584a2d5 was created
+  # Three landed commits untested, and CD published nothing for any of them: ACR's newest image
+  # stayed several commits behind while three CD runs reported green with every job `skipped`.
+  #
+  # A per-SHA group cannot contend with anything, so every commit that lands on main gets its own
+  # full run — which is precisely the cost the note below says is deliberately accepted.
+  group: build-test-${{ github.event_name == 'workflow_dispatch' && github.run_id || (github.ref == 'refs/heads/main' && github.sha || github.ref) }}
   # 🚨 NEVER cancel a run on `main` (#2412). Superseding is safe on a PR branch — the later
   # push tests a strict successor of what was cancelled, and that is where #2316's ~28% of
   # runner demand is saved. On `main` it is neither safe nor recoverable, for two reasons:
@@ -176,6 +192,10 @@ concurrency:
   # Measured the day this was written: main's five consecutive runs between 20:28 and 20:38
   # were ALL `cancelled`, each by the next merge. The cost of this line is one full run per
   # merge to main; that is the price of every landed commit being both tested and shippable.
+  #
+  # 🚨 This line is now the BELT, not the braces: with main grouped by SHA above, no two main runs
+  # ever share a group, so there is nothing for it to cancel. It stays because it is the statement
+  # of intent, and because it still governs any future ref that groups by name.
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
 
 # publish-unit-test-result-action runs per shard AND in the collector — both need
