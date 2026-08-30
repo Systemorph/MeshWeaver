@@ -308,10 +308,12 @@ static string? PromptForToken()
             result.GetValue(bakeOpt),
             result.GetValue(extOpt),
             result.GetValue(shaOpt),
-            result.GetValue(allowOpt),
-            result.GetValue(regUrlOpt),
-            result.GetValue(regModulesOpt),
-            result.GetValue(regKeyOpt) ?? Environment.GetEnvironmentVariable("MW_REGISTRY_KEY")),
+            result.GetValue(allowOpt))
+        {
+            RegistryUrl = result.GetValue(regUrlOpt),
+            RegistryModules = result.GetValue(regModulesOpt),
+            RegistryKey = result.GetValue(regKeyOpt) ?? Environment.GetEnvironmentVariable("MW_REGISTRY_KEY"),
+        },
         ct));
 
     build.Subcommands.Add(plugin);

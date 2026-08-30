@@ -342,10 +342,19 @@ public sealed record BuildPluginOptions(
     string? ExternalModulesDir = null,
     string? SourceSha = null,
     string? AllowFile = null,
-    string? RegistryUrl = null,
-    string? RegistryModules = null,
-    string? RegistryKey = null,
     IReadOnlyList<string>? Extra = null)
 {
+    // 🚨 init-properties, NOT primary-constructor parameters: adding a parameter to a record's
+    // primary constructor changes the synthesized constructor's ARITY — a binary break the
+    // public-surface gate rejects even though nothing was removed (the "adding is source-compatible
+    // everywhere the compiler looks" trap, third sighting today). Same resolution as Seed's
+    // overload in #2821: extend without touching the existing shape.
+    /// <summary>Registry base URL for the dependency install (PluginBuildContract step 2).</summary>
+    public string? RegistryUrl { get; init; }
+    /// <summary>Space-separated packages to install as built artifacts before building.</summary>
+    public string? RegistryModules { get; init; }
+    /// <summary>The mwi_ instance key; prefer sourcing from $MW_REGISTRY_KEY.</summary>
+    public string? RegistryKey { get; init; }
+
     public IReadOnlyList<string> ExtraArgs => Extra ?? [];
 }
