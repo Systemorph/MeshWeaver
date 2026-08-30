@@ -114,14 +114,14 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// Held at ZERO for every bridge shape. The only tolerated bridges are the sanctioned
     /// IMPLEMENTATIONS in <see cref="SanctionedBridges"/>, and those are verified, not listed.
     /// </summary>
-    private static readonly string[] ProductionRoots = ["src", "tools", "samples", "clients"];
+    private static readonly string[] ProductionRoots = ["src", "tools", "samples", "clients", "memex"];
 
     /// <summary>
     /// Still carrying a seeded inventory, one wave behind. <c>test/</c> is the bulk of the fleet's
     /// sites; <c>memex/</c> is the portal tree, swept last by the maintainer's wave order. Each
     /// moves to <see cref="ProductionRoots"/> when its sweep reaches zero.
     /// </summary>
-    private static readonly string[] RatchetedRoots = ["test", "memex"];
+    private static readonly string[] RatchetedRoots = ["test"];
 
     /// <summary>
     /// Rx's bridge as it appears in source.
@@ -164,7 +164,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// including by the trick of adding a new file's line. Lower it whenever you delete or lower an
     /// entry.
     /// </summary>
-    private const int TotalBudget = 1548;
+    private const int TotalBudget = 2;
 
     /// <summary>The seeded inventory's size for <see cref="NoNewBlockingBridgeInProductionCode"/>.</summary>
     private const int ProductionBlockingTotalBudget = 9;

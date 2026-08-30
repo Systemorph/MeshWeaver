@@ -207,7 +207,7 @@ initializer (`GenericUnpartitionedDataSource.GetInitialValueAsync` and its parti
 twin) composes per-type-source `Initialize` calls via `SelectMany` + `Aggregate`, then
 bridges to `Task<EntityStore>` exactly **once** at the
 `StreamConfiguration<T>.WithInitialization(...)` edge (that overload consumes a
-`Func<…, Task<TStream>>`; the bridge is the single `.FirstAsync().ToTask(...)` there).
+`Func<…, Task<TStream>>`; the settle is the single `.FirstAsync().ObserveCompletion(...)` there — `.ToTask()` is forbidden, 2026-08-30).
 
 | Type source | Init source | Bridge inside `Initialize` |
 |---|---|---|
