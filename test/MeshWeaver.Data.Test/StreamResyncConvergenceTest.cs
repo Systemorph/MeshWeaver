@@ -190,12 +190,18 @@ public class StreamResyncConvergenceTest(ITestOutputHelper output) : HubTestBase
     /// THE FRESH SNAPSHOT IS LOST TOO — the plain case of #2654, and the one the production log
     /// shows: a leg that drops a frame drops the answer to the re-ask just as readily.
     ///
-    /// <para>The owner keeps chaining every frame it sends (<c>ToDataChanged</c>'s
-    /// <c>lastSentVersion</c>), so the very next Patch NAMES the snapshot the mirror never got.
-    /// That is proof, it is an event rather than a timer, and it is the only sound trigger for a
-    /// second re-ask. Before the fix the mirror was BLIND to it: the moment a resync nulls the
-    /// cached JSON nothing applies any more, so the applied-chain check was never reached and every
-    /// later Patch was swallowed at Debug — the mirror never converged.</para>
+    /// <para>🚨 The frame chain CANNOT catch this, which is why the recovery had to come from the
+    /// request's round trip instead. <c>BuildReassertFrame</c> stamps the re-assert with the version
+    /// of the STATE it re-asserts (#945), not a new one, so the Full shares a version with the frame
+    /// before it and the chain reads <c>v4 → Full v4 → v5(basedOn 4)</c> exactly like
+    /// <c>v4 → v5(basedOn 4)</c>. An earlier draft of this fix watched the seen-chain through the
+    /// resync window and this test is what proved it blind.</para>
+    ///
+    /// <para>What DOES recover it: the owner ACKs the re-subscribe, which releases the gate, and the
+    /// next write's Patch then finds the mirror still without a base and earns exactly one new
+    /// re-ask — an event, never a timer. Pre-fix the gate could only be released by a Full, so the
+    /// Full's loss shut it permanently: every later Patch was swallowed at Debug and the mirror
+    /// never converged.</para>
     /// </summary>
     [HubFact]
     public async Task AFreshSnapshotLostInTransport_StillConverges()
