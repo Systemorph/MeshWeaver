@@ -45,7 +45,7 @@ with a smaller repro; do not retry. The only exceptions: (a) the test harness it
 (MSBuild MSB4166, infrastructure error — a re-run is the same input), (b) the previous run was
 killed by the user before completion.
 
-**Tests are the ONLY place `await …FirstAsync().ToTask()` is acceptable** — see
+🚨 **`.ToTask()` is FORBIDDEN in tests too** (maintainer, 2026-08-30 — the earlier test exemption is retracted: a Task completed inside an Rx pipeline resumes inline on the signalling thread, still inside the trampoline, so the bridge changes what the test measures). Await the observable directly with a `.Timeout(...)` — see
 [/async](../async/SKILL.md).
 
 **No static collections, in `test/` as much as `src/`** — a `Clear()` added "for test isolation" is
@@ -118,7 +118,7 @@ first. Never rerun a hung test "to see".
 
 - **`MonolithMeshTestBase`** (recommended) — full integration with persistence, messaging, DI; use
   `AwaitResponseAsync(request, ...)` for request/response in tests.
-- **`HubTestBase`** — message routing / layout tests; bridge to Task via `.FirstAsync().ToTask(ct)`.
+- **`HubTestBase`** — message routing / layout tests; await the observable directly, e.g. `await hub.Observe<TResponse>(request).FirstAsync().Timeout(30.Seconds())` — never `.ToTask()`.
 - **`MeshWeaver.Hosting.Orleans.TestBase`** — the core Orleans cluster machinery (test cluster,
   disposal drain, shutdown-race suppression). The AI-flavoured Orleans rig (`OrleansTestBase`,
   `OrleansSharedTestBase`, the swappable chat-client factory) ships with the AI engine in

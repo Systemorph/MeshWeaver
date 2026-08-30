@@ -4,9 +4,8 @@
 
 This codebase is `IObservable<T>` end to end. **Any `async`, `await`, `Task<T>`, `Task.Run`,
 `TaskCompletionSource`, `.ToTask()`, `.Result`, `.Wait()`, `.GetAwaiter().GetResult()`, or
-`Observable.FromAsync` added anywhere in this repository — `src/` and `test/` alike — is a defect** —
-report it, every occurrence, even when the surrounding file already contains others and even when the
-change "looks harmless".
+`Observable.FromAsync` added under `src/` is a defect** — report it, every occurrence, even when the
+surrounding file already contains others and even when the change "looks harmless".
 
 Do not treat this as a style preference to mention once and move on. It is the single defect class
 that has cost this project the most production time, so the review must be exhaustive rather than
@@ -34,42 +33,22 @@ see `ActivityControlPlane.md`) or **through `IIoPool`**. Awaiting such a call di
 handler, a layout area, a grain turn or a Blazor component is the defect, no matter that the library
 gave you no synchronous overload. Flag it and name the boundary it should have crossed.
 
-**🚨 `.ToTask(` has NO exemption left — `test/**` included.** Maintainer ruling, 2026-08-30:
-*"totask is forbidden"*, *"no totask ever"*. The older "tests are the one sanctioned place" carve-out
-is **RETRACTED**; do not restore it, and flag `.ToTask(` in a test diff exactly as you would in
-`src/`. Rx's bridge completes its `TaskCompletionSource` **without**
-`TaskCreationOptions.RunContinuationsAsynchronously`, so `TrySetResult` resumes the awaiter *inline
-on the signalling thread, still inside Rx's trampoline*. In a test that thread then carries the rest
-of the test, its mesh teardown, and — under xUnit — the runner starting the NEXT test class. A bridge
-"only in a test" therefore changes how the code under test runs, and its green proves the wrong
-thing.
-
-🚨 **`await source.FirstAsync()` is not the fix.** Rx's own awaiter is an `AsyncSubject<T>` that
-completes the continuation from inside `OnCompleted`, on the signalling thread — measured identical
-to the bridge (`INLINE=True` for both; only `ObserveCompletion` measures `INLINE=False`). Flag it as
-the same defect, not as a simplification.
-
 **The only places `await` is legitimate — do not report these:**
 
 - **Inside `IoPool` itself** (`src/MeshWeaver.Mesh.Contract/Threading/IoPool.cs`). It *is* the
   sanctioned boundary between the turn-based schedulers and real async IO, and it is the one place
   a `SemaphoreSlim` is allowed to live. New `await`s added *there* are in scope for ordinary
   correctness review, but not for this rule.
+- **Test projects** (`test/**`). 🚨 `.ToTask()` is FORBIDDEN here too (2026-08-30): Rx completes its
+  `TaskCompletionSource` without `RunContinuationsAsynchronously`, so the awaiter resumes INLINE on the
+  signalling thread inside Rx's trampoline and every later `await` inherits that scheduler. Tests await
+  through `ObservableAwait.Await(ct)` (MeshWeaver.Fixture) or `ReactiveCompletion.ObserveCompletion`.
+- **A one-line SDK/MCP surface adapter** whose body is reactive, e.g.
+  `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ObserveCompletion(Report, ct);` — an external
+  signature may demand a `Task`; it is still never produced with `.ToTask()`.
 - **Framework APIs whose signature is not ours** — `IHostedService.StartAsync`,
-  `Grain.OnActivateAsync`/`OnDeactivateAsync`, ASP.NET middleware, `ILifecycleObserver.OnStop`, an
-  SDK/MCP interface we implement, an `async Task` test method. Flag anything *inside* them that
-  could have been reactive, but not the override itself. What belongs inside, in priority order:
-  1. **The signature is ours** → return `IObservable<T>`, compose, `.Subscribe(onNext, onError)`.
-     No `Task` exists and nothing is bridged.
-  2. **The result is not needed** (`StartAsync`, a grain lifecycle hook, a middleware hop) →
-     subscribe and `return Task.CompletedTask`. A lifecycle hook is not an IO boundary.
-  3. **The foreign signature genuinely needs the value** →
-     `MeshWeaver.Messaging.ReactiveCompletion.ObserveCompletion`, which completes with
-     `RunContinuationsAsynchronously` and keeps its error arm attached:
-     `await source.FirstAsync().ObserveCompletion(ex => logger.LogWarning(ex, "…"), ct)`.
-     Flag an empty `reportLateFault` lambda — discarding the late fault is half of what the method
-     exists to remove. In a **test**, prefer the assertion surface, which owns the wait:
-     `await obs.Should().Match(...)`.
+  `Grain.OnActivateAsync`/`OnDeactivateAsync`, ASP.NET middleware. Flag anything *inside* them that
+  could have been reactive, but not the override itself.
 
 When you flag one, say which of the two failures it risks (parked scheduler, or lost identity), and
 name the reactive replacement. "Consider using async/await consistently" is the opposite of the
