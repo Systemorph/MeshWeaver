@@ -1044,7 +1044,5 @@
   "presentation.unmarkedTitle": "Shown again",
   "presentation.unmarkedBody": "This is no longer hidden while presentation mode is on.",
   "presentation.signInRequiredTitle": "Sign-in required",
-  "presentation.signInRequiredBody": "Presentation mode is a personal setting, so you have to be signed in to use it.",
-  "chat.modelStreamStalled": "The language model '{0}' stopped responding: the connection stayed open but no further data arrived, so the round was aborted. This is an upstream stall at the model endpoint, not a problem with your request \u2014 submit again to retry, or pick a different model.",
-  "chat.modelStreamFaulted": "The language model '{0}' ended its response with a provider error. This is a fault at the upstream model provider, not a problem with your request \u2014 submit again to retry, or pick a different model."
+  "presentation.signInRequiredBody": "Presentation mode is a personal setting, so you have to be signed in to use it."
 }
