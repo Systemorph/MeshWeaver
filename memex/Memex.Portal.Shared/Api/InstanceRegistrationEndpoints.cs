@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -71,6 +70,11 @@ public static class InstanceRegistrationEndpoints
                 return Observable.Return((IResult)Results.Json(
                     new { error = ex.Message }, statusCode: StatusCodes.Status502BadGateway));
             })
-            .FirstAsync().ToTask(ct);
+            .FirstAsync()
+            .ObserveCompletion(
+                ex => logger?.LogWarning(ex,
+                    "Instance registration for '{InstanceId}' faulted after the response had already been sent",
+                    body.InstanceId),
+                ct)!;
     }
 }

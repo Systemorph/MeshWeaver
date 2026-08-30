@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -129,10 +128,13 @@ public static class GitHubConnectEndpoints
                 return Fail("could not resolve your mesh user id (retry after a normal browser login)");
 
             var redirectUri = BuildRedirectUri(http);
-            // Reactive end-to-end; bridge to Task ONCE at the HTTP boundary via FirstAsync().ToTask()
-            // — the sanctioned edge pattern (see OAuthConnectController.ExchangeToken). NO hand-woven
-            // TaskCompletionSource/Subscribe. The credential write's AccessContext is carried through
-            // the framework's .Subscribe / IoPool boundary from the request context the middleware set.
+            // Reactive end-to-end; bridge to Task ONCE at the HTTP boundary via
+            // FirstAsync().ObserveCompletion(…) — the sanctioned edge pattern (see
+            // OAuthConnectController.ExchangeToken). NEVER Rx's .ToTask(), which resumes the awaiter
+            // INLINE on the signalling thread, so the rest of this request would run on a mesh hub's
+            // action block (forbidden since 2026-08-30). NO hand-woven TaskCompletionSource/Subscribe.
+            // The credential write's AccessContext is carried through the framework's
+            // .Subscribe / IoPool boundary from the request context the middleware set.
             return await oauth.ExchangeCode(code!, redirectUri)
                 .SelectMany(token => oauth.GetLogin(token.AccessToken)
                     .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
@@ -149,7 +151,11 @@ public static class GitHubConnectEndpoints
                     return Observable.Return((IResult)Results.Redirect(SafeReturn(returnPath, "github-error", ex.Message)));
                 })
                 .FirstAsync()
-                .ToTask(http.RequestAborted);
+                .ObserveCompletion(
+                    ex => logger.LogWarning(ex,
+                        "GitHub connect for {User} faulted after the redirect had already been sent",
+                        userId),
+                    http.RequestAborted);
         }).RequireAuthorization();
 
         return endpoints;

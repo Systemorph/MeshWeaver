@@ -1,11 +1,11 @@
 using System;
 using System.IO;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Api;
 using MeshWeaver.GitSync;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -97,7 +97,9 @@ public static class GitHubWebhookEndpoints
 
             // Process() reads the payload synchronously into materialized records before returning
             // its observable, so the JsonDocument may be disposed once this handler returns. Bridge
-            // to Task ONCE here at the HTTP boundary; a processing failure is logged, never 500-thrown.
+            // to Task ONCE here at the HTTP boundary, through ObserveCompletion rather than Rx's
+            // .ToTask() (which resumes inline on the signalling thread — forbidden since
+            // 2026-08-30); a processing failure is logged, never 500-thrown.
             var updated = await processor.Process(eventType, doc.RootElement)
                 .Catch((Exception ex) =>
                 {
@@ -105,7 +107,11 @@ public static class GitHubWebhookEndpoints
                     return Observable.Return(0);
                 })
                 .FirstAsync()
-                .ToTask(http.RequestAborted);
+                .ObserveCompletion(
+                    ex => logger.LogWarning(ex,
+                        "GitHub webhook processing for event {Event} faulted after the response had "
+                        + "already been sent", eventType),
+                    http.RequestAborted);
 
             return Results.Ok(new { ok = true, updated });
         });

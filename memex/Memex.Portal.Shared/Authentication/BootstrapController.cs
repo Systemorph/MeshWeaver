@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.AspNetCore.Mvc;
@@ -60,7 +59,12 @@ public class BootstrapController(
         {
             try
             {
-                await obs.FirstAsync().ToTask(HttpContext.RequestAborted);
+                await obs.FirstAsync()
+                    .ObserveCompletion(
+                        ex => logger.LogWarning(ex,
+                            "Bootstrap: {Step} for '{User}' faulted after the step had already "
+                            + "settled", step, user),
+                        HttpContext.RequestAborted);
                 logger.LogInformation("Bootstrap: {Step} OK for '{User}'", step, user);
                 return true;
             }
@@ -143,10 +147,15 @@ public class BootstrapController(
                     }),
                     _ => keys.Mint(owner, name?.Trim() ?? owner, email?.Trim() ?? "",
                         description?.Trim() ?? "bootstrap-minted"))
-                .FirstAsync().ToTask(HttpContext.RequestAborted);
+                .FirstAsync()
+                .ObserveCompletion(
+                    ex => logger.LogWarning(ex,
+                        "Bootstrap: minting a registration key for '{Owner}' faulted after the "
+                        + "response had already been sent", owner),
+                    HttpContext.RequestAborted);
 
             // The raw key IS the response body — shown once, never stored, same contract as the tab.
-            return Ok(result.RawKey);
+            return Ok(result!.RawKey);
         }
         catch (Exception ex)
         {
