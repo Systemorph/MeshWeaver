@@ -258,11 +258,16 @@ public class SelfUpdateHostedService : IHostedService
     /// <list type="number">
     /// <item>Seed <c>Admin/UpdatePolicy</c> if absent (storm-safe, via a query — never a point-read
     /// of a maybe-absent node); a seeding fault retries at the polling cadence.</item>
-    /// <item>The live node stream. The default policy is prepended exactly ONCE — after the seed
-    /// (so the first tick can never point-write a not-yet-existing node), before the first live
-    /// emission. A stream fault retries INSIDE the StartWith, so a retry re-establishes the read
-    /// SILENTLY: it never re-emits the default, and therefore can never flip a Stable/None install
-    /// back to default-policy polling (Copilot review on #611).</item>
+    /// <item>The live node stream, and NOTHING ELSE. 🚨 The configured default is never emitted
+    /// here (MeshWeaver#2731/#2797): it used to be prepended once, before the first live emission,
+    /// and that one synthetic value drove a full <see cref="RunOnce"/> — ACR listing, candidate
+    /// selection and the Deployment PATCH — under a policy the install had never set. On a pinned
+    /// (<c>None</c>) install, EVERY pod (re)start therefore rolled the portal to the newest tag,
+    /// with the persisted <c>None</c> arriving a second later as a <c>PolicyChange</c> that
+    /// dutifully logged "updates are disabled" AFTER the roll had been issued. Stage 1 guarantees
+    /// the node EXISTS, so the live read is the first emission on its own — the poller now waits
+    /// for a policy it has actually read instead of guessing one. A stream fault retries inside
+    /// the RetryWhen, so a retry re-establishes the read silently (Copilot review on #611).</item>
     /// </list>
     /// Retries are delayed, Rx-composed resubscribes at the polling cadence — not a hot retry loop,
     /// not a watchdog. <c>DistinctUntilChanged</c> sits outermost so only a REAL policy change (or
@@ -277,8 +282,7 @@ public class SelfUpdateHostedService : IHostedService
             .Take(1)
             .SelectMany(_ => Observable
                 .Defer(ReadPolicyStream)
-                .RetryWhen(ResubscribeAfterRetryInterval("policy stream"))
-                .StartWith(new UpdatePolicyContent { Policy = _options.DefaultPolicy }))
+                .RetryWhen(ResubscribeAfterRetryInterval("policy stream")))
             .DistinctUntilChanged(c => (c.Policy, c.RequireCiGreen)); // <-- re-switch only on a REAL policy change
     }
 
@@ -292,6 +296,12 @@ public class SelfUpdateHostedService : IHostedService
         var workspace = _hub.GetWorkspace();
         var jsonOptions = _hub.JsonSerializerOptions;
         return workspace.GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+            // 🚨 An ABSENT node is not a policy (MeshWeaver#2731/#2797). UpdatePolicyContent.Policy
+            // defaults to Continuous and UpdatePolicyKind.Continuous is enum 0, so parsing a null
+            // node yields "roll to the newest tag" — the exact verdict a pinned install must never
+            // reach. Stage 1 has already guaranteed the node exists, so a null here is the stream
+            // not having loaded it yet: wait for the real one rather than deciding without it.
+            .Where(node => node is not null)
             .Select(node => UpdatePolicyNodeType.Parse(node, jsonOptions));
     }
 

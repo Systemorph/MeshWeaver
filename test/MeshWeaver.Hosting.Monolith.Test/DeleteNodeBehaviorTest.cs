@@ -33,9 +33,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// on a blocked delete, and on success every path really is gone.
 ///
 /// Fully reactive: a <see cref="DeleteNodeRequest"/> round-trip is observed via
-/// <c>client.Observe(req).Should().Within(...).Emit()</c> — the blocking assertion
-/// is a synchronous Subscribe + ManualResetEventSlim (no Rx→Task bridge), so it
-/// does not starve the handler's response continuation.
+/// <c>client.Observe(req).Should().Within(...).Emit()</c> — the assertion subscribes
+/// synchronously and is <c>await</c>ed (no hand-woven gate, no Rx→Task bridge), so it
+/// neither parks a thread nor starves the handler's response continuation.
 /// </summary>
 public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {

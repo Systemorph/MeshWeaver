@@ -80,17 +80,21 @@ public class QueryInRenderDeadlockTest(ITestOutputHelper output) : HubTestBase(o
             // on its own action block). If THIS subscribe is running on that hub's turn, the ping sits
             // in the inbox behind us and cannot be dequeued until we return — but we are (below)
             // waiting for it: the deadlock. Off the turn (the fix), the hub is free to answer it.
-            var pong = new ManualResetEventSlim(false);
+            // 🚨 A volatile flag, not a hand-woven gate: blocking the subscribing thread IS the
+            // subject here, but nothing needs a kernel handle to express it, and there is no
+            // observable→blocking bridge either. SpinUntil answers the same question the event's
+            // Wait(timeout) did — "did the round-trip resolve inside the budget" — as a bool.
+            var pong = 0;
             using var sub = host.Stream.Hub
                 .Observe(new PingRequest(), o => o.WithTarget(host.Stream.Hub.Address))
                 .Take(1)
-                .Subscribe(_ => pong.Set());
+                .Subscribe(_ => Volatile.Write(ref pong, 1));
 
             // Blocks the SUBSCRIBING thread until the round-trip resolves — the sync-over-mesh shape a
             // query-in-render collapses to when it is on the wrong scheduler. Bounded so a genuinely
             // wedged hub surfaces as "area never rendered" (null control → the .Within deadline fails
             // the test) instead of hanging the whole run.
-            var answered = pong.Wait(TimeSpan.FromSeconds(15));
+            var answered = SpinWait.SpinUntil(() => Volatile.Read(ref pong) == 1, TimeSpan.FromSeconds(15));
 
             observer.OnNext(answered
                 ? (UiControl?)Controls.Markdown("QUERY_IN_RENDER_RESOLVED")

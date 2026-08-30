@@ -19,20 +19,26 @@ namespace MeshWeaver.Documentation.Test;
 /// where the owning hub serialises every writer); concurrency bounding and one-shot init belong to
 /// <c>IIoPool</c> (<c>pool.Run(...)</c> held in an INSTANCE <c>PromiseCache</c>).</para>
 ///
-/// <para><b>Two tiers, deliberately different in strength</b> — the shape #2762 established, and
-/// for the same reason: an allow file lists sites you tolerate and grows by appending a line,
-/// whereas a VERIFIED register fails when an entry's subject moves or is fixed, and tells the next
-/// author to delete it.</para>
-/// <list type="bullet">
-///   <item><see cref="ProductionRoots"/> — ZERO, with no allow file. The only permitted gates are
-///   the <see cref="SanctionedGates"/> entries, each re-checked against the tree on every run.</item>
-///   <item><see cref="RatchetedRoots"/> — <c>test/</c> carries a seeded inventory that may only
-///   SHRINK. Measured 2026-08-30: 81 sites across 24 files, every one a
-///   <c>ManualResetEventSlim</c>, 30 of them in <c>IoPoolTest.cs</c>. The sweep lands in a later
-///   wave; this freezes the debt so it cannot grow while that wave is written. When it empties,
-///   move <c>test</c> into <see cref="ProductionRoots"/> in the SAME change and delete the
-///   allow file — its own header says so.</item>
-/// </list>
+/// <para><b>ONE tier as of 2026-08-30 — the allow file is GONE.</b> #2762's shape had two: a
+/// verified register for production, and a seeded inventory for <c>test/</c> that could only
+/// shrink. It was seeded at <b>79 sites across 23 files</b>, every one a
+/// <c>ManualResetEventSlim</c>, 32 of them in <c>IoPoolTest.cs</c>. All 79 were converted in one
+/// sweep and <c>test/HandWovenGateSites.allow</c> was deleted, so <c>test</c> now sits in
+/// <see cref="ProductionRoots"/> alongside everything else and is held at ZERO with no escape
+/// hatch. Nothing to append a line to is the strongest form this rule has.</para>
+///
+/// <para><b>What the sweep replaced them with</b>, so the next author does not reach for an event
+/// again. A signal a PRODUCER raises and a test consumes becomes an
+/// <c>AsyncSubject&lt;Unit&gt;</c> the producer completes (<c>OnNext</c> then <c>OnCompleted</c>),
+/// awaited through the house assertion helpers (<c>await x.Should().Within(...).Emit(because)</c>,
+/// or <c>NotEmit(within)</c> for the negative) — never <c>.Wait()</c> on an observable, which only
+/// trades this ratchet for <see cref="BlockingBridgeInTestRatchetGuard"/>. A RELEASE travelling the
+/// other way — into a worker a test deliberately parks, because "a leaf that ignores its
+/// cancellation token" or "a wedged action block" IS the subject — becomes a volatile
+/// <c>int</c> the parked worker polls under a bounded
+/// <c>SpinWait.SpinUntil(predicate, budget)</c>, written in a <c>finally</c> so an assertion that
+/// throws first cannot strand that worker (the exact leak <c>IoPoolResidualNamesItsPoolTest</c>
+/// produced: a two-minute pool-thread hold bleeding into the next test).</para>
 ///
 /// <para>🚨 This guard is proven by MUTATION, not by passing — see
 /// <see cref="TheScannerSeesWhatItClaimsTo"/>, which plants a tree and runs the REAL scan over it.
@@ -41,18 +47,12 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class HandWovenGateRatchetGuard
 {
-    private const string AllowFileName = "HandWovenGateSites.allow";
-
-    /// <summary>Held at ZERO. The only gates here are the verified <see cref="SanctionedGates"/>.</summary>
-    private static readonly string[] ProductionRoots = ["src", "tools", "samples", "clients", "memex"];
-
-    /// <summary>Still carrying a seeded inventory; may only shrink.</summary>
-    private static readonly string[] RatchetedRoots = ["test"];
-
     /// <summary>
-    /// The sum of the seeded inventory. Lower it by exactly what you delete, in the same change.
+    /// Every root, held at ZERO with no allow file anywhere. The only permitted gates are the
+    /// <see cref="SanctionedGates"/> entries, each re-checked against the tree on every run.
     /// </summary>
-    private const int TotalBudget = 79;
+    private static readonly string[] ProductionRoots =
+        ["src", "tools", "samples", "clients", "memex", "test"];
 
     /// <summary>
     /// The primitives that park a thread. <c>Monitor.Wait</c> is included because it is the same
@@ -99,12 +99,18 @@ public class HandWovenGateRatchetGuard
             .ToList();
 
         Assert.True(offenders.Count == 0,
-            "🚨 A hand-woven concurrency gate in production code parks a thread — on a hub action "
-            + "block or a grain turn that is the deadlock the mesh cannot recover from. Serialize "
+            "🚨 A hand-woven concurrency gate parks a thread — on a hub action block or a grain "
+            + "turn that is the deadlock the mesh cannot recover from, and in a TEST it strands a "
+            + "blocked worker whenever an assertion throws before the release runs. Serialize "
             + "through the hub (a Subject + .Select(Run).Concat(), or GetMeshNodeStream(path)"
             + ".Update, where the owner serialises writers); bound concurrency through IIoPool "
-            + "(pool.Run(...) in an INSTANCE PromiseCache). Do NOT add an allow entry — there is no "
-            + "allow file for these roots.\n"
+            + "(pool.Run(...) in an INSTANCE PromiseCache). IN A TEST: a producer→test signal is an "
+            + "AsyncSubject<Unit> the producer completes, awaited through the assertion helpers "
+            + "(await x.Should().Within(...).Emit() / .NotEmit(within)) — never .Wait() on an "
+            + "observable, which just trips BlockingBridgeInTestRatchetGuard instead; a release "
+            + "INTO a worker the test deliberately parks is a volatile int polled under a bounded "
+            + "SpinWait.SpinUntil, written in a `finally`. Do NOT add an allow entry — there is no "
+            + "allow file, for any root.\n"
             + string.Join("\n", offenders.Select(o => $"  {o.Path} ({o.Count})")));
     }
 
@@ -116,8 +122,8 @@ public class HandWovenGateRatchetGuard
         {
             var full = Path.Combine(root, file);
             Assert.True(File.Exists(full),
-                $"{AllowFileName}'s sanctioned register names {file}, which no longer exists. An "
-                + "entry that outlives its subject is a hole nobody can see — delete it.");
+                $"The sanctioned register names {file}, which no longer exists. An entry that "
+                + "outlives its subject is a hole nobody can see — delete it.");
             Assert.True(CountIn(full) > 0,
                 $"{file} is registered as a sanctioned hand-woven gate but no longer contains one. "
                 + $"Delete the entry — it now exempts nothing. Reason on file: {why}");
@@ -136,38 +142,26 @@ public class HandWovenGateRatchetGuard
         }
     }
 
+    /// <summary>
+    /// 🚨 The allow file must STAY deleted. A ratchet that empties and is then quietly re-seeded is
+    /// how a cleared inventory grows back, and <see cref="SourceScan.ReadAllowFile"/> is explicit
+    /// that a REGENERATED allow file blesses whatever is in the tree. There is nothing left to
+    /// tolerate — <c>test</c> is in <see cref="ProductionRoots"/> — so the file's re-appearance is
+    /// itself the defect, and it fails here rather than silently widening the rule.
+    /// </summary>
     [Fact]
-    public void TheTestTreeInventoryOnlyShrinks()
+    public void TheTestTreeAllowFileStaysDeleted()
     {
         var root = SourceScan.FindRepoRoot();
-        var allowed = SourceScan.ReadAllowFile(
-            Path.Combine(root, "test", AllowFileName), AllowFileName);
+        var allow = Path.Combine(root, "test", "HandWovenGateSites.allow");
 
-        var actual = SourceScan.SourceFiles(root, RatchetedRoots)
-            .Select(f => (Path: SourceScan.Relative(root, f), Count: CountIn(f)))
-            .Where(x => x.Count > 0)
-            .ToDictionary(x => x.Path, x => x.Count, StringComparer.Ordinal);
-
-        var newFiles = actual.Keys.Where(k => !allowed.ContainsKey(k)).OrderBy(k => k).ToList();
-        Assert.True(newFiles.Count == 0,
-            "🚨 NEW hand-woven gate(s) in the test tree. Wait on the condition reactively instead — "
-            + "an AsyncSubject<Unit> the producer completes, awaited through the assertion helpers — "
-            + "and release it in a `finally` so a failing assertion cannot strand a blocked worker "
-            + "(that is exactly how IoPoolResidualNamesItsPoolTest leaked a pool thread). Do NOT add "
-            + "a line to " + AllowFileName + ".\n"
-            + string.Join("\n", newFiles.Select(f => $"  NEW  {f} ({actual[f]})")));
-
-        var grew = actual
-            .Where(kv => allowed.TryGetValue(kv.Key, out var b) && kv.Value > b)
-            .OrderBy(kv => kv.Key).ToList();
-        Assert.True(grew.Count == 0,
-            "🚨 A file's hand-woven gate count GREW. The inventory may only shrink.\n"
-            + string.Join("\n", grew.Select(kv => $"  {kv.Key}: {allowed[kv.Key]} -> {kv.Value}")));
-
-        var total = actual.Values.Sum();
-        Assert.True(total <= TotalBudget,
-            $"🚨 TOTAL {total} > {TotalBudget} budgeted — the inventory GREW. Lower TotalBudget by "
-            + "exactly what you delete, in the same change.");
+        Assert.False(File.Exists(allow),
+            "test/HandWovenGateSites.allow is back. It was deleted when the last of its 79 seeded "
+            + "sites was converted, and `test` moved into ProductionRoots in the same change — so "
+            + "nothing reads this file any more and its only possible effect is to make a new gate "
+            + "look sanctioned to a human reader. Convert the site instead: an AsyncSubject<Unit> "
+            + "for a producer→test signal, a volatile int polled under a bounded SpinUntil (released "
+            + "in a `finally`) for a release into a deliberately parked worker.");
     }
 
     /// <summary>

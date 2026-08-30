@@ -65,17 +65,22 @@ public class PartitionObjectsSubscriberIndependenceTest
                 SynchronizationContext.SetSynchronizationContext(ctx);
                 try
                 {
-                    using var done = new ManualResetEventSlim(false);
+                    // 🚨 A volatile flag, not a hand-woven gate. Blocking this thread without
+                    // pumping IS the subject, and SpinUntil expresses it with no kernel handle
+                    // to dispose — and, like the event it replaces, it never runs a queued
+                    // continuation, which is the property the assertion below rests on.
+                    var done = 0;
                     using var subscription = adapter
                         .GetPartitionObjects("Test/Node", "Data", options)
                         .Subscribe(
                             _ => Interlocked.Increment(ref received),
-                            ex => { error = ex; done.Set(); },
-                            () => done.Set());
+                            ex => { error = ex; Volatile.Write(ref done, 1); },
+                            () => Volatile.Write(ref done, 1));
 
                     // The blocked wait — the pump must complete WITHOUT this
                     // thread's context ever executing a continuation.
-                    pumpCompletedWhileBlocked = done.Wait(TimeSpan.FromSeconds(15));
+                    pumpCompletedWhileBlocked = SpinWait.SpinUntil(
+                        () => Volatile.Read(ref done) == 1, TimeSpan.FromSeconds(15));
                 }
                 finally
                 {

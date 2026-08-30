@@ -4,8 +4,10 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
@@ -121,8 +123,24 @@ public class LiveQueryHandoffDropTest
     private sealed class GatedAdapter(InMemoryStorageAdapter inner, SnapshotThenDeliverFeed feed)
         : IStorageAdapter
     {
-        public readonly ManualResetEventSlim ReadEntered = new(false);
-        public readonly ManualResetEventSlim ReleaseRead = new(true);
+        /// <summary>
+        /// 🚨 No hand-woven gate. The walk → test signal is an <see cref="AsyncSubject{T}"/> the
+        /// walk completes and the test awaits reactively; the test → walk release is a volatile
+        /// flag the parked walk polls under a bounded SpinUntil. Parking the walk IS the subject
+        /// here, so the park stays — what goes is the kernel handle and the disposal it needed.
+        /// </summary>
+        private readonly AsyncSubject<Unit> readEntered = new();
+        private int releaseRead = 1;
+
+        /// <summary>Completes once the gated walk has parked.</summary>
+        public IObservable<Unit> ReadEntered => readEntered;
+
+        /// <summary>Closes the gate, so the next matching walk parks.</summary>
+        public void HoldRead() => Volatile.Write(ref releaseRead, 0);
+
+        /// <summary>Opens the gate; idempotent, so a `finally` can always call it.</summary>
+        public void ReleaseRead() => Volatile.Write(ref releaseRead, 1);
+
         /// <summary>Holds the FIRST walk of the query's own base path only — later reads run free.</summary>
         public string? GateOn;
         private int gateArmed = 1;
@@ -147,8 +165,9 @@ public class LiveQueryHandoffDropTest
             {
                 if (!string.Equals(parentPath, GateOn, StringComparison.OrdinalIgnoreCase)) return;
                 if (Interlocked.Exchange(ref gateArmed, 0) != 1) return;
-                ReadEntered.Set();
-                if (!ReleaseRead.Wait(TimeSpan.FromSeconds(10)))
+                readEntered.OnNext(Unit.Default);
+                readEntered.OnCompleted();
+                if (!SpinWait.SpinUntil(() => Volatile.Read(ref releaseRead) == 1, TimeSpan.FromSeconds(10)))
                     Volatile.Write(ref gateTimedOut, 1);
             });
 
@@ -193,23 +212,32 @@ public class LiveQueryHandoffDropTest
     /// stay at 30 s and both stay FAIL-FAST: falling through silently would run the gated scenario
     /// against a still-cold pipeline and let it misreport its own timeout as a dropped row.</para>
     /// </summary>
-    private static void WarmUpJitAndTypeLoad()
+    private static async Task WarmUpJitAndTypeLoad()
     {
         var warmInner = new InMemoryStorageAdapter();
         var warmProvider = new StorageAdapterMeshQueryProvider(warmInner);
-        // Disposed deterministically (not left to Wait()'s lazily-allocated kernel WaitHandle to
-        // finalize) — this helper is also exercised repeatedly by ad-hoc repro loops, and an
-        // undisposed ManualResetEventSlim leaks its handle once Wait() forces it into existence.
-        using var warmInitial = new ManualResetEventSlim(false);
-        using var warmLive = new ManualResetEventSlim(false);
+        // 🚨 AsyncSubjects, not events: nothing to dispose, nothing that can leak a kernel handle,
+        // and the waits below are reactive rather than parked on the calling thread. (This helper
+        // is also exercised repeatedly by ad-hoc repro loops, which is what made the undisposed
+        // ManualResetEventSlim handle visible in the first place.)
+        var warmInitial = new AsyncSubject<Unit>();
+        var warmLive = new AsyncSubject<Unit>();
         using (warmProvider
                    .Query<MeshNode>(
                        MeshQueryRequest.FromQueries(["path:warmup/_Usage scope:children"], "system-security"),
                        Options)
                    .Subscribe(c =>
                    {
-                       if (c.ChangeType == QueryChangeType.Initial) warmInitial.Set();
-                       else warmLive.Set();
+                       if (c.ChangeType == QueryChangeType.Initial)
+                       {
+                           warmInitial.OnNext(Unit.Default);
+                           warmInitial.OnCompleted();
+                       }
+                       else
+                       {
+                           warmLive.OnNext(Unit.Default);
+                           warmLive.OnCompleted();
+                       }
                    }))
         {
             // Generous, uncontested-by-design budget: this phase primes the JIT, it does not pin
@@ -218,21 +246,21 @@ public class LiveQueryHandoffDropTest
             // would run the gated scenario below against a STILL-cold pipeline and could then
             // misreport its own timeout as "dropped row" — exactly the misleading signal this
             // warm-up exists to prevent.
-            Assert.True(warmInitial.Wait(TimeSpan.FromSeconds(30)),
+            await warmInitial.Should().Within(30.Seconds()).Emit(
                 "warm-up: Initial never arrived — the environment is too degraded to even JIT-prime "
                 + "this pipeline, so the gated assertions below cannot be trusted either");
             warmInner.Write(new MeshNode("x", "warmup/_Usage") { NodeType = "TokenUsage" }, Options)
                 .Subscribe();
-            Assert.True(warmLive.Wait(TimeSpan.FromSeconds(30)),
+            await warmLive.Should().Within(30.Seconds()).Emit(
                 "warm-up: live update never arrived — the environment is too degraded to even "
                 + "JIT-prime this pipeline, so the gated assertions below cannot be trusted either");
         }
     }
 
     [Fact]
-    public void A_notification_snapshotted_before_Initial_and_delivered_after_still_reaches_the_query()
+    public async Task A_notification_snapshotted_before_Initial_and_delivered_after_still_reaches_the_query()
     {
-        WarmUpJitAndTypeLoad();
+        await WarmUpJitAndTypeLoad();
 
         var inner = new InMemoryStorageAdapter();
         var feed = new SnapshotThenDeliverFeed();
@@ -240,13 +268,15 @@ public class LiveQueryHandoffDropTest
         var provider = new StorageAdapterMeshQueryProvider(adapter);
 
         var changes = new List<QueryResultChange<MeshNode>>();
-        var initial = new ManualResetEventSlim(false);
-        var added = new ManualResetEventSlim(false);
+        // 🚨 Signals the subscriber thread produces and this test consumes — AsyncSubjects the
+        // producer completes, awaited through the assertion helpers; no hand-woven gate.
+        var initial = new AsyncSubject<Unit>();
+        var added = new AsyncSubject<Unit>();
 
         // Hold the query's own scope walk open so the Initial snapshot cannot be established
         // until we say so.
         adapter.GateOn = Base;
-        adapter.ReleaseRead.Reset();
+        adapter.HoldRead();
 
         // 🚨 Subscribe OFF the test thread. The provider's scope walk runs inline on the
         // subscribing thread, so parking it from the test thread would park the test itself.
@@ -259,9 +289,16 @@ public class LiveQueryHandoffDropTest
                 .Subscribe(c =>
                 {
                     lock (changes) changes.Add(c);
-                    if (c.ChangeType == QueryChangeType.Initial) initial.Set();
+                    if (c.ChangeType == QueryChangeType.Initial)
+                    {
+                        initial.OnNext(Unit.Default);
+                        initial.OnCompleted();
+                    }
                     else if (c.Items.Any(n => string.Equals(n.Path, ChildPath, StringComparison.OrdinalIgnoreCase)))
-                        added.Set();
+                    {
+                        added.OnNext(Unit.Default);
+                        added.OnCompleted();
+                    }
                 }))
         { IsBackground = true };
         subscriber.Start();
@@ -269,7 +306,7 @@ public class LiveQueryHandoffDropTest
         try
         {
             // The query's ONE feed subscription is attached and its scope walk is parked.
-            Assert.True(adapter.ReadEntered.Wait(TimeSpan.FromSeconds(10)),
+            await adapter.ReadEntered.Should().Within(10.Seconds()).Emit(
                 "the query never started its scope walk");
 
             // The write COMMITS to the store (so any re-query can see it) …
@@ -282,8 +319,8 @@ public class LiveQueryHandoffDropTest
 
             // Now let the Initial land. Its rows were read before the write, so it is EMPTY — the
             // query's only route to the row is the notification whose snapshot we already hold.
-            adapter.ReleaseRead.Set();
-            Assert.True(initial.Wait(TimeSpan.FromSeconds(10)), "the query never emitted its Initial");
+            adapter.ReleaseRead();
+            await initial.Should().Within(10.Seconds()).Emit("the query never emitted its Initial");
 
             // 🚨 The gate must have been RELEASED, not given up on. A timed-out gate lets the walk
             // continue by itself, which un-pins the Initial from the notification's snapshot — the
@@ -302,7 +339,7 @@ public class LiveQueryHandoffDropTest
             // two-subscription handoff dropped on the floor.
             deliver();
 
-            Assert.True(added.Wait(TimeSpan.FromSeconds(10)),
+            await added.Should().Within(10.Seconds()).Emit(
                 "a change notification whose fan-out snapshot predates the Initial, delivered after "
                 + "it, must still reach the live re-query. Dropping it loses the row PERMANENTLY: "
                 + "nothing re-triggers the query, so the subscription never learns of a node a "
@@ -310,7 +347,7 @@ public class LiveQueryHandoffDropTest
         }
         finally
         {
-            adapter.ReleaseRead.Set();
+            adapter.ReleaseRead();
             subscriber.Join(TimeSpan.FromSeconds(10));
             sub?.Dispose();
         }

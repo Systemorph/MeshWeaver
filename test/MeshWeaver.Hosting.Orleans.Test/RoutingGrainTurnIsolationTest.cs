@@ -140,7 +140,10 @@ internal sealed class StallingPathResolver(PathResolutionService inner) : IPathR
     /// </summary>
     private static readonly TimeSpan MaxStall = TimeSpan.FromSeconds(60);
 
-    private readonly ManualResetEventSlim released = new(false);
+    // 🚨 A volatile flag, not a hand-woven gate. The stall itself IS the injected fault, so the
+    // park stays — what goes is the kernel handle. `Release`/`Dispose` just flip the flag, and the
+    // bounded SpinUntil below can never outlive MaxStall even if neither is ever called.
+    private int released;
     private int stallsEntered;
     private int stallsCompleted;
 
@@ -151,7 +154,7 @@ internal sealed class StallingPathResolver(PathResolutionService inner) : IPathR
     internal int StallsCompleted => Volatile.Read(ref stallsCompleted);
 
     /// <summary>Unblocks every stalled leg so nothing holds a thread or a pool permit into teardown.</summary>
-    internal void Release() => released.Set();
+    internal void Release() => Volatile.Write(ref released, 1);
 
     public IObservable<AddressResolution?> ResolvePath(string path) => Stall(path) ?? inner.ResolvePath(path);
 
@@ -168,7 +171,7 @@ internal sealed class StallingPathResolver(PathResolutionService inner) : IPathR
             // 🚨 Deliberate fault INJECTION, not a wait-for-propagation sleep: this models a leaf
             // whose synchronous prologue never returns (the prod wedge). Pre-fix this runs on the
             // routing grain's activation thread and the whole silo stops routing.
-            released.Wait(MaxStall);
+            SpinWait.SpinUntil(() => Volatile.Read(ref released) == 1, MaxStall);
             Interlocked.Increment(ref stallsCompleted);
             // Unwind as an ordinary NotFound so the release path is clean.
             observer.OnNext(null);
@@ -177,7 +180,7 @@ internal sealed class StallingPathResolver(PathResolutionService inner) : IPathR
         });
     }
 
-    public void Dispose() => released.Set();
+    public void Dispose() => Release();
 }
 
 /// <summary>
