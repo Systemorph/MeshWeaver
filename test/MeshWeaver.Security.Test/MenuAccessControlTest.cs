@@ -18,8 +18,8 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
@@ -169,7 +169,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         Func<Task> act = () => MenuStream(client, nodeAddress, NodeMenuItemsExtensions.NodeMenuContext)
             .FirstAsync()
             .Timeout(15.Seconds())
-            .ToTask();
+            .Await();
         var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
         ex.Message.Should().Contain("Access denied",
             "user with no roles should be denied Read access on the hub");

@@ -5,7 +5,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -16,6 +15,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -124,10 +124,10 @@ public class InstallReleaseOrderingTest(ITestOutputHelper output) : MonolithMesh
             SourceFolder = PackageId,
             Version = "commit-kit",
         };
-        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().Await();
 
         var result = await PackageInstaller.Install(Mesh, manifest, files, "HEAD")
-            .FirstAsync().Timeout(StepTimeout).ToTask();
+            .FirstAsync().Timeout(StepTimeout).Await();
         result.Written.Should().Be(Repo.Count);
 
         // PRECONDITION, asserted so its failure reads as itself: SettleRetypedRoot only recycles a
@@ -140,7 +140,7 @@ public class InstallReleaseOrderingTest(ITestOutputHelper output) : MonolithMesh
             // same reason MayPublishIntoRoot reads it this way.
             .Select(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
             .Where(def => def?.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
-            .FirstAsync().Timeout(StepTimeout).ToTask();
+            .FirstAsync().Timeout(StepTimeout).Await();
         // Print the ORDER before asserting anything about it. An ordering test that fails without
         // naming the sequence it saw costs a full investigation per sighting (#1811), and the
         // precondition below is exactly where the reader is left with nothing: it fires BEFORE the
@@ -225,7 +225,7 @@ public class InstallReleaseOrderingTest(ITestOutputHelper output) : MonolithMesh
             .Where(d => d?.RequestedReleaseAt is not null)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask();
+            .Await();
         return def!.RequestedReleaseAt!.Value;
     }
 }

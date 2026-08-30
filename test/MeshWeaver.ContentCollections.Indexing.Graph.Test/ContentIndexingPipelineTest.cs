@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text;
 using MeshWeaver.ContentCollections;
@@ -11,6 +10,7 @@ using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Graph.Test;
 
@@ -72,12 +72,12 @@ public class ContentIndexingPipelineTest(ITestOutputHelper output) : MonolithMes
     {
         var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
         var collection = await contentService.GetCollection(Collection)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
         var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
         var fileName = Path.GetFileName(filePath);
         using var ms = new MemoryStream(bytes);
-        await collection!.SaveFile(dir, fileName, ms).ToTask(TestContext.Current.CancellationToken);
+        await collection!.SaveFile(dir, fileName, ms).Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>Reads the Document node back, polling until the typed content lands (write is debounced/persisted).</summary>
@@ -88,7 +88,7 @@ public class ContentIndexingPipelineTest(ITestOutputHelper output) : MonolithMes
             .Where(n => n?.Content is Document)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     /// <summary>The store the pipeline wrote chunks into.</summary>
     private IChunkedContentVectorStore Store =>
@@ -127,7 +127,7 @@ public class ContentIndexingPipelineTest(ITestOutputHelper output) : MonolithMes
         // 3) Chunks landed in the store under the (collection, file) key (proves the embed/store branch
         //    ran inside the Activity). The Document node above is the LAST step of the Activity body,
         //    so its presence already proves the upload→Activity→IndexFile chain ran to completion.
-        var storedHash = await Store.GetFileHash(Collection, filePath).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var storedHash = await Store.GetFileHash(Collection, filePath).FirstAsync().Await(TestContext.Current.CancellationToken);
         storedHash.Should().Be(Sha256Hex(bytes));
     }
 
@@ -146,7 +146,7 @@ public class ContentIndexingPipelineTest(ITestOutputHelper output) : MonolithMes
 
         // Re-index-all (the mount-a-fresh-DB operation) — walks every file and indexes it.
         var activityPath = await observer.ReindexAll([Collection])
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
 
         // The re-index-all Activity reached terminal Succeeded.
         var activity = await WaitForActivityStatus(activityPath, ActivityStatus.Succeeded);
@@ -155,7 +155,7 @@ public class ContentIndexingPipelineTest(ITestOutputHelper output) : MonolithMes
         // Both files are indexed: their hashes are recorded and a Document node exists for each.
         foreach (var (path, bytes) in files)
         {
-            var hash = await Store.GetFileHash(Collection, path).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            var hash = await Store.GetFileHash(Collection, path).FirstAsync().Await(TestContext.Current.CancellationToken);
             hash.Should().Be(Sha256Hex(bytes), "{0} should be indexed", path);
 
             var doc = await ReadDocumentNode(DocumentPaths.For(Collection, path));
@@ -169,7 +169,7 @@ public class ContentIndexingPipelineTest(ITestOutputHelper output) : MonolithMes
             versionsBefore[path] = (await ReadDocumentNode(DocumentPaths.For(Collection, path)))!.Version;
 
         var secondActivityPath = await observer.ReindexAll([Collection])
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
         var secondActivity = await WaitForActivityStatus(secondActivityPath, ActivityStatus.Succeeded);
         secondActivity.Status.Should().Be(ActivityStatus.Succeeded);
 
@@ -233,14 +233,14 @@ public class ContentIndexingPipelineTest(ITestOutputHelper output) : MonolithMes
     private async Task<long> ReindexAndCountWrites(ContentIndexingObserver observer)
     {
         var activityPath = await observer.ReindexAll([Collection])
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
         await WaitForActivityStatus(activityPath, ActivityStatus.Succeeded);
         // Terminal status is the LAST write the runner makes, so the node is settled here.
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(activityPath)
             .Where(n => (n?.Content as ActivityLog)?.Status == ActivityStatus.Succeeded)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
         return node.Version;
     }
 
@@ -251,7 +251,7 @@ public class ContentIndexingPipelineTest(ITestOutputHelper output) : MonolithMes
             .Select(log => log!)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     // ----- deterministic test doubles (chunk/summarize leaves, NOT the sink) -----
 

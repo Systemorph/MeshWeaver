@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -52,7 +52,7 @@ public class BuildCoordinationRetryTest
                 Scheduler.Immediate,
                 logger: null)
             .FirstAsync()
-            .ToTask();
+            .Await();
 
         result.Should().Be("granted");
         attempts.Should().Equal(new[] { 1, 2, 3 });
@@ -75,7 +75,7 @@ public class BuildCoordinationRetryTest
                 Scheduler.Immediate,
                 logger: null)
             .FirstAsync()
-            .ToTask();
+            .Await();
 
         var thrown = await act.Should().ThrowAsync<BuildCoordinationUnreachableException>();
         // The refusal NAMES what it could not reach, and says it is a refusal — the bare
@@ -101,7 +101,7 @@ public class BuildCoordinationRetryTest
                 Scheduler.Immediate,
                 logger: null)
             .FirstAsync()
-            .ToTask();
+            .Await();
 
         await act.Should().ThrowAsync<BuildCoordinationUnreachableException>();
         attempts.Should().ContainSingle();
@@ -123,7 +123,7 @@ public class BuildCoordinationRetryTest
                 Scheduler.Immediate,
                 logger: null)
             .FirstAsync()
-            .ToTask();
+            .Await();
 
         var thrown = await act.Should().ThrowAsync<InvalidOperationException>();
         thrown.Which.Message.Should().Be("malformed BuildState");
@@ -148,7 +148,7 @@ public class BuildCoordinationRetryTest
                 Scheduler.Immediate,
                 logger: null)
             .FirstAsync()
-            .ToTask();
+            .Await();
 
         result.Should().Be("granted");
         attempts.Should().Equal(new[] { 1, 2 });

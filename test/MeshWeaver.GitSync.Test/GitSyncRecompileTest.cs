@@ -1,9 +1,9 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -41,14 +41,14 @@ public class GitSyncRecompileTest(ITestOutputHelper output) : GitHubSyncTestBase
             Name = "Widget",
             State = MeshNodeState.Active,
             Content = new NodeTypeDefinition { Configuration = "config => config" },
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
         await NodeFactory.CreateNode(new MeshNode("Helper", $"{space}/Widget/Source")
         {
             NodeType = CodeNodeType.NodeType,
             Name = "Helper",
             State = MeshNodeState.Active,
             Content = new CodeConfiguration { Code = "public static class WidgetHelper { }", Language = "csharp" },
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
         await NodeFactory.CreateNode(new MeshNode("Consumer", space)
         {
             NodeType = MeshNode.NodeTypePath,
@@ -59,28 +59,28 @@ public class GitSyncRecompileTest(ITestOutputHelper output) : GitHubSyncTestBase
                 Configuration = "config => config",
                 Sources = ["namespace:Source scope:subtree", $"shared=@{space}/Widget/Source"],
             },
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
         await CreateMarkdown($"{space}/Notes", "Notes", "hello");
 
         var repo = "https://github.com/test/space-recompile";
         await Sync.SaveConfig(space, repo, "main", subdirectory: null,
                 createBranchIfMissing: true, createRepoIfMissing: true,
                 direction: SyncDirection.Bidirectional, sourceId: null, twoWay: false)
-            .Timeout(30.Seconds()).ToTask();
-        var commit = await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
+        var commit = await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
         await WaitForConfig(space, c => c.LastSyncCommitSha == commit.CommitSha);
 
         // Baseline import: the FIRST re-import has no per-node manifest, so it writes every node —
         // including both type nodes, which therefore get release-requested here. Wait for those
         // baseline triggers to LAND so each test's before-snapshot is stable.
-        await Sync.ReimportAtCommit(space, "main", UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(space, "main", UserId).Timeout(90.Seconds()).Await();
         await WaitForRelease($"{space}/Widget", after: null);
         await WaitForRelease($"{space}/Consumer", after: null);
         return (space, repo);
     }
 
     private async Task<DateTimeOffset?> ReleaseRequestedAt(string typePath) =>
-        (await ReadNode(typePath).Timeout(30.Seconds()).ToTask())
+        (await ReadNode(typePath).Timeout(30.Seconds()).Await())
             ?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.RequestedReleaseAt;
 
     /// <summary>Waits until the type's release trigger has ADVANCED past <paramref name="after"/>
@@ -93,7 +93,7 @@ public class GitSyncRecompileTest(ITestOutputHelper output) : GitHubSyncTestBase
             .Select(at => at!.Value)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
     /// <summary>Replaces one file's content in the fake repo and pushes the tree as the new HEAD.</summary>
     private async Task PushEdit(string repo, string pathSuffix, Func<string, string> edit)
@@ -112,7 +112,7 @@ public class GitSyncRecompileTest(ITestOutputHelper output) : GitHubSyncTestBase
             AuthorName = "test",
             AuthorEmail = "test@test",
             AccessToken = "x",
-        }).Timeout(30.Seconds()).ToTask();
+        }).Timeout(30.Seconds()).Await();
     }
 
     [Fact(Timeout = 180000)]
@@ -124,7 +124,7 @@ public class GitSyncRecompileTest(ITestOutputHelper output) : GitHubSyncTestBase
 
         // Change ONLY the shared source file in the repo, then sync.
         await PushEdit(repo, "Helper.cs", content => content + "\n// touched by the update");
-        var result = await Sync.ReimportAtCommit(space, "main", UserId).Timeout(90.Seconds()).ToTask();
+        var result = await Sync.ReimportAtCommit(space, "main", UserId).Timeout(90.Seconds()).Await();
 
         // The import wrote exactly the changed source node…
         result.WrittenPaths.Should().Equal([$"{space}/Widget/Source/Helper"],
@@ -144,7 +144,7 @@ public class GitSyncRecompileTest(ITestOutputHelper output) : GitHubSyncTestBase
 
         // Change ONLY the markdown node, then sync.
         await PushEdit(repo, "Notes.md", content => content.Replace("hello", "hello again"));
-        var result = await Sync.ReimportAtCommit(space, "main", UserId).Timeout(90.Seconds()).ToTask();
+        var result = await Sync.ReimportAtCommit(space, "main", UserId).Timeout(90.Seconds()).Await();
 
         result.WrittenPaths.Should().Equal([$"{space}/Notes"]);
         // Negative: give a (wrong) release request time to land, then confirm neither type moved.

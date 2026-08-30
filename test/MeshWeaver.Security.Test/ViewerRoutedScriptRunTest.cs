@@ -1,7 +1,6 @@
 #pragma warning disable CS1591
 
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -164,7 +164,7 @@ public class ViewerRoutedScriptRunTest(ITestOutputHelper output) : MonolithMeshT
                 .Where(node => node is not null)
                 .FirstAsync()
                 .Timeout(30.Seconds())
-                .ToTask();
+                .Await();
 
             activity!.CreatedBy.Should().Be(OrdinaryUser,
                 "the run's Activity belongs to the user who started it");

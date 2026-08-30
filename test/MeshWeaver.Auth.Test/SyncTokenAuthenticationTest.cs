@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Data;
@@ -15,6 +14,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Auth.Test;
 
@@ -218,8 +218,8 @@ public class SyncTokenAuthenticationTest(ITestOutputHelper output) : MonolithMes
 
         // Both are STARTED before either finishes — a sequential A-then-B would only prove that a
         // second reader finds an existing node, never that the create COLLISION resolves to one key.
-        var raceA = replicaA.Resolve().FirstAsync().ToTask();
-        var raceB = replicaB.Resolve().FirstAsync().ToTask();
+        var raceA = replicaA.Resolve().FirstAsync().Await();
+        var raceB = replicaB.Resolve().FirstAsync().Await();
         var raced = await Task.WhenAll(raceA, raceB);
         var fromA = raced[0];
         var fromB = raced[1];

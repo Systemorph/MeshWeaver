@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -116,7 +115,7 @@ public class MeshNodeTypeSourceCreateAnnounceTest(ITestOutputHelper output) : Hu
         await Observable.Interval(50.Milliseconds()).StartWith(0L)
             .Select(_ => seen.ToArray())
             .Where(events => events.Any(e => e.Path == hubPath && e.Kind == MeshChangeKind.Created))
-            .FirstAsync().Timeout(20.Seconds()).ToTask();
+            .FirstAsync().Timeout(20.Seconds()).Await();
 
         seen.Should().Contain(e => e.Path == hubPath && e.Kind == MeshChangeKind.Created,
             "a genuinely new node's create-flush write is a CREATE like any other, and the "

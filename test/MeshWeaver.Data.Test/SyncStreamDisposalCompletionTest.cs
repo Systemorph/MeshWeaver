@@ -1,7 +1,6 @@
 using System;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
@@ -118,7 +117,7 @@ public class SyncStreamDisposalCompletionTest(ITestOutputHelper output) : HubTes
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
             .Timeout(10.Seconds())
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         activeSubscriberCompleted.Should().BeTrue(
             "disposing the hub disposes the stream, which must complete its active subscribers");

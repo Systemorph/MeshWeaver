@@ -1,6 +1,6 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Test;
 
@@ -29,7 +29,7 @@ public class ContentSearchHitContractTest
         }).Wait();
 
     private async Task<ContentSearchResult> Search(string query) =>
-        await ContentChunkSearch.SearchContent(_store, _embedder, query, 50).FirstAsync().ToTask();
+        await ContentChunkSearch.SearchContent(_store, _embedder, query, 50).FirstAsync().Await();
 
     [Fact]
     public async Task Hit_DocumentPath_RoundTripsToDocumentPathsFor()

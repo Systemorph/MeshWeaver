@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -17,6 +16,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -64,13 +64,13 @@ public class PluginDependencyOrderTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     private static async Task<IReadOnlyList<PackageManifest>> Catalog() =>
-        await Source().ListPackages("HEAD").FirstAsync().ToTask();
+        await Source().ListPackages("HEAD").FirstAsync().Await();
 
     private async Task<InstallResult> Install(PackageManifest pkg)
     {
-        var files = await Source().FetchPackageFiles(pkg, "HEAD").FirstAsync().ToTask();
+        var files = await Source().FetchPackageFiles(pkg, "HEAD").FirstAsync().Await();
         return await PackageInstaller.Install(Mesh, pkg, files, "commit-deps")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).Await();
     }
 
     /// <summary>
@@ -322,7 +322,7 @@ public class PluginDependencyOrderTest(ITestOutputHelper output) : MonolithMeshT
         Func<string, string, string?, string, IObservable<RepoSnapshot>> fetch =
             (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-sharing", SharingRepo));
         var source = new NodeRepoPackageSource(fetch, "https://github.com/acme/plugins");
-        var catalog = await source.ListPackages("HEAD").FirstAsync().ToTask();
+        var catalog = await source.ListPackages("HEAD").FirstAsync().Await();
 
         var app = catalog.Single(p => p.Id == "App");
         app.Requires.Should().Equal(["Lib@^1.0.0"]);
@@ -334,9 +334,9 @@ public class PluginDependencyOrderTest(ITestOutputHelper output) : MonolithMeshT
 
         foreach (var pkg in closure)
         {
-            var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().ToTask();
+            var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().Await();
             await PackageInstaller.Install(Mesh, pkg, files, "commit-sharing")
-                .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+                .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await();
         }
 
         // The dependent's own record has a member of the DEPENDENCY's type. Ok here means Roslyn

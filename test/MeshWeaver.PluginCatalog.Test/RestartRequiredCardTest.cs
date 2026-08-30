@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -18,6 +17,7 @@ using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -104,10 +104,10 @@ public class RestartRequiredCardTest(ITestOutputHelper output) : MonolithMeshTes
             WriteFile(repo, $"catalog/{PackageId}/package.json",
                 $$"""{"id":"{{PackageId}}","name":"Package A","kind":"content","targetPartition":"PartA","version":"1.0.0"}""");
             WriteFile(repo, $"catalog/{PackageId}/A.md", "# A");
-            await git.Run(repo, ["init"]).FirstAsync().ToTask();
-            await git.Run(repo, ["add", "-A"]).FirstAsync().ToTask();
+            await git.Run(repo, ["init"]).FirstAsync().Await();
+            await git.Run(repo, ["add", "-A"]).FirstAsync().Await();
             await git.Run(repo, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"])
-                .FirstAsync().ToTask();
+                .FirstAsync().Await();
 
             await NodeFactory.CreateNode(MeshNode.FromPath(CatalogPath) with
             {
@@ -145,7 +145,7 @@ public class RestartRequiredCardTest(ITestOutputHelper output) : MonolithMeshTes
                     [($"{ModuleName}.dll", [1, 2, 3, 4])],
                     packagePath: $"{PackageInstaller.InstalledPartition}/{PackageId}",
                     version: "1.0.0")
-                .FirstAsync().ToTask();
+                .FirstAsync().Await();
 
             // 3. …and the card now says so, on the surface the person who installed it is looking at.
             await CardTextStream(stream, cardArea)
@@ -191,7 +191,7 @@ public class RestartRequiredCardTest(ITestOutputHelper output) : MonolithMeshTes
 
     private static async Task<IReadOnlyList<string>> CardTexts(
         ISynchronizationStream<JsonElement> stream, string cardArea) =>
-        await CardTextStream(stream, cardArea).FirstAsync().ToTask();
+        await CardTextStream(stream, cardArea).FirstAsync().Await();
 
     private static string CreateTempRepo()
     {

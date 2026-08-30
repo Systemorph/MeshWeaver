@@ -6,7 +6,6 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,6 +16,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -84,7 +84,7 @@ public class FrameworkReleaseBroadcasterTest
 
         var outcome = await broadcaster
             .Broadcast(new[] { "Systemorph/A", "Systemorph/B" })
-            .Timeout(TimeSpan.FromSeconds(5)).ToTask();
+            .Timeout(TimeSpan.FromSeconds(5)).Await();
 
         Assert.Equal(0, outcome.Succeeded);
         Assert.Equal(2, outcome.Failed);
@@ -108,7 +108,7 @@ public class FrameworkReleaseBroadcasterTest
             Options.Create(new FrameworkBroadcastOptions()));
 
         var outcome = await broadcaster.Broadcast(Array.Empty<string>())
-            .Timeout(TimeSpan.FromSeconds(5)).ToTask();
+            .Timeout(TimeSpan.FromSeconds(5)).Await();
 
         Assert.Empty(outcome.Results);
     }
@@ -146,7 +146,7 @@ public class FrameworkReleaseBroadcasterTest
             })));
 
         var outcome = await broadcaster.BroadcastToConfigured("3.0.0-rc8.ci.5083")
-            .Timeout(TimeSpan.FromSeconds(10)).ToTask();
+            .Timeout(TimeSpan.FromSeconds(10)).Await();
 
         Assert.Equal(2, outcome.Succeeded);
         Assert.Equal(0, outcome.Failed);
@@ -174,7 +174,7 @@ public class FrameworkReleaseBroadcasterTest
         var broadcaster = NewInertBroadcaster(log, Configuration(
             (WebhookInbox.TargetsConfigSection + ":0", FrameworkBroadcastOptions.PlatformBuildsTarget)));
 
-        await broadcaster.Broadcast([]).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        await broadcaster.Broadcast([]).Timeout(TimeSpan.FromSeconds(5)).Await();
 
         var warning = Assert.Single(log.Entries, e => e.Level == LogLevel.Warning);
         Assert.Contains(FrameworkBroadcastOptions.SubscribersEnvKeyPrefix, warning.Message, StringComparison.Ordinal);
@@ -192,7 +192,7 @@ public class FrameworkReleaseBroadcasterTest
         var broadcaster = NewInertBroadcaster(log, Configuration(
             (WebhookInbox.TargetsConfigSection + ":0", "Store/Payments")));
 
-        await broadcaster.Broadcast([]).Timeout(TimeSpan.FromSeconds(5)).ToTask();
+        await broadcaster.Broadcast([]).Timeout(TimeSpan.FromSeconds(5)).Await();
 
         Assert.DoesNotContain(log.Entries, e => e.Level >= LogLevel.Warning);
         Assert.Contains(log.Entries, e => e.Level == LogLevel.Information);
@@ -242,7 +242,7 @@ public class FrameworkReleaseBroadcasterTest
 
         var outcome = await broadcaster
             .Broadcast(new[] { "Systemorph/ok", "Systemorph/gone", "Systemorph/boom" }, "3.0.0-rc8.ci.5083")
-            .Timeout(TimeSpan.FromSeconds(10)).ToTask();
+            .Timeout(TimeSpan.FromSeconds(10)).Await();
 
         // All three were attempted despite the middle two failing.
         Assert.Equal(3, outcome.Results.Length);

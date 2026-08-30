@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -13,6 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -52,7 +52,7 @@ public class NodeTypeBatchBakeDiscoveryInvariantTest(ITestOutputHelper output) :
             .ResolveSources(MeshService, Access, definitions, definitions.Keys.ToList(), Logger)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .ToTask();
+            .Await();
 
     /// <summary>
     /// 🚨 The invariant. A type DECLARES source queries, discovery resolves NOTHING for it, and the

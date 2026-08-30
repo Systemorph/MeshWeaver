@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -63,7 +62,7 @@ public class RecycleAnnouncementTest(ITestOutputHelper output) : HubTestBase(out
         // The announcement necessarily precedes the teardown, so the hub's own completion signal is
         // the exact "the recycle has happened" event to wait on — no poll, no sleep, no watchdog.
         await recycled.DisposalCompleted.FirstOrDefaultAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         announcements.Should().Be(1,
             "a recycle must give its live subscribers exactly one goodbye — none strands them on a "
@@ -91,7 +90,7 @@ public class RecycleAnnouncementTest(ITestOutputHelper output) : HubTestBase(out
         // reactivate the very activation being retired.
         direct.Dispose();
         await direct.DisposalCompleted.FirstOrDefaultAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         announcements.Should().Be(0,
             "only a message-routed DisposeRequest is a RECYCLE — an address that is coming back. A "

@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using Memex.Portal.Shared;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -10,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Hosting.Internal;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -87,7 +87,7 @@ public class ModuleGcOffReadinessPathTest
             var removed = await gc.Completed
                 .Timeout(TimeSpan.FromSeconds(30))
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             Assert.Equal(1, removed);
             Assert.False(Directory.Exists(orphan),
                 "the post-start pass must still reclaim the orphan — off the readiness path is "

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -581,7 +581,7 @@ public class CreateOrUpdateNodeRequestTest(ITestOutputHelper output)
         var stable = 0;
         for (var i = 0; i < 100 && stable < 4; i++)
         {
-            var current = await storage.Read(path, Mesh.JsonSerializerOptions).FirstAsync().ToTask();
+            var current = await storage.Read(path, Mesh.JsonSerializerOptions).FirstAsync().Await();
             stable = current is not null && last is not null
                      && current.Version == last.Version
                      && (predicate is null || predicate(current))

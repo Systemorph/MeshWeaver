@@ -5,12 +5,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Plugin.Packaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginTester.Test;
 
@@ -129,7 +129,7 @@ public class BakeGateSplitTest(ITestOutputHelper output)
                 SourceSha = "deadbeef",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().ToTask();
+            }).FirstAsync().Await();
             output.WriteLine("── gate consuming the bake ──");
             output.WriteLine(seededLog.ToString());
             Assert.Null(seeded.FatalError);
@@ -150,7 +150,7 @@ public class BakeGateSplitTest(ITestOutputHelper output)
                 SourceSha = "deadbeef",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().ToTask();
+            }).FirstAsync().Await();
             output.WriteLine("── gate compiling for itself (the control) ──");
             output.WriteLine(controlLog.ToString());
             Assert.Null(control.FatalError);

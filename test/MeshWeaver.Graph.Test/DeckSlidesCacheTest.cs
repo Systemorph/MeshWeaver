@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -97,7 +97,7 @@ public class DeckSlidesCacheTest(ITestOutputHelper output) : MonolithMeshTestBas
             .Where(c => c.ChangeType == QueryChangeType.Initial && c.Items.Count(n => SlideNodeType.Matches(n.NodeType)) >= expectedCount)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
     private DeckSlidesCache MakeCache(IMeshService mesh) =>
         new(() => mesh,
@@ -112,8 +112,8 @@ public class DeckSlidesCacheTest(ITestOutputHelper output) : MonolithMeshTestBas
         var mesh = MakeCountingMesh();
         var cache = MakeCache(mesh);
 
-        var firstTask = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).ToTask();
-        var secondTask = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).ToTask();
+        var firstTask = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await();
+        var secondTask = cache.GetOrderedSlides("DeckA").FirstAsync().Timeout(30.Seconds()).Await();
         var results = await Task.WhenAll(firstTask, secondTask);
 
         mesh.Subscriptions.Values.Sum().Should().Be(1,
@@ -207,7 +207,7 @@ public class DeckSlidesCacheTest(ITestOutputHelper output) : MonolithMeshTestBas
                 JsonOptions,
                 accessService: null)
             .Where(list => list.Select(n => n.Path).SequenceEqual(["DeckC/s1", "DeckC/s2"]))
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         mesh.Subscriptions.Keys.Should().ContainSingle().Which.Should().Be("namespace:DeckC",
             "the sibling query must not carry an equality nodeType filter");

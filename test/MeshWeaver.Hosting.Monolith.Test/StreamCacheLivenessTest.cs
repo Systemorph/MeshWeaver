@@ -1,13 +1,13 @@
 using System;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -96,7 +96,7 @@ public class StreamCacheLivenessTest(ITestOutputHelper output) : MonolithMeshTes
             .Select(x => (object?)x.Value)
             .IsEmpty()
             .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         terminal.Should().BeTrue(
             "a stream reduced from a dead source has no value to give and must say so by "
@@ -147,7 +147,7 @@ public class StreamCacheLivenessTest(ITestOutputHelper output) : MonolithMeshTes
                         || cached.Hub?.RunLevel > MessageHubRunLevel.Started)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"[TEST] cascade reached the cached child: RunLevel={cached!.Hub?.RunLevel}");
 
         // Off the test thread and bounded: a regression is an unbounded spin, and the point of
@@ -155,7 +155,7 @@ public class StreamCacheLivenessTest(ITestOutputHelper output) : MonolithMeshTes
         var resolved = await Observable
             .Start(() => workspace.GetStream(new MeshNodeReference()), NewThreadScheduler.Default)
             .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         Assert.NotNull(resolved);
         Output.WriteLine("[TEST] GetStream returned instead of spinning");
@@ -164,7 +164,7 @@ public class StreamCacheLivenessTest(ITestOutputHelper output) : MonolithMeshTes
             .Select(x => (object?)x.Value)
             .IsEmpty()
             .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         terminal.Should().BeTrue(
             "the only stream a dead source can produce is a completed one — handing it back is "

@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -18,6 +17,7 @@ using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Persistence.Test;
 
@@ -103,7 +103,7 @@ public class QueryWalkTeardownCancellationTest : MonolithMeshTestBase
         => MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{Partition} scope:subtree"))
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask();
+            .Await();
 
     public override async ValueTask DisposeAsync()
     {

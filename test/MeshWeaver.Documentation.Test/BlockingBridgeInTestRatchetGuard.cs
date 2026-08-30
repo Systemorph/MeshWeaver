@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -108,7 +109,7 @@ public class BlockingBridgeInTestRatchetGuard(ITestOutputHelper output)
             if (!allowed.TryGetValue(file, out var budget))
                 failures.Add(
                     $"  NEW SITE   {file} ({count}) — await the stream instead "
-                    + "(`await source.Should().Emit()` / `.FirstAsync().ToTask(ct)`), or subscribe and "
+                    + "(`await source.Should().Emit()` / `.FirstAsync().Await(ct)`), or subscribe and "
                     + "collect on ImmediateScheduler. Do NOT add a line to " + AllowFileName + ".");
             else if (count > budget)
                 failures.Add(

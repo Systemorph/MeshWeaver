@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Reactive.Assertions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Reactive.Assertions.Test;
 

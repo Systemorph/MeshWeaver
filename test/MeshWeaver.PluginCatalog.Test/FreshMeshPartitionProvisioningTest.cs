@@ -4,7 +4,6 @@ using System;
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -58,7 +58,7 @@ public class FreshMeshPartitionProvisioningTest(ITestOutputHelper output) : Mono
         };
         var files = new[] { new PackageFile("fresh-pack/Doc.md", "# Doc\n\nFresh-mesh install.") };
 
-        var result = await PackageInstaller.Install(Mesh, manifest, files, "HEAD").FirstAsync().ToTask();
+        var result = await PackageInstaller.Install(Mesh, manifest, files, "HEAD").FirstAsync().Await();
         result.Written.Should().Be(1);
 
         // The installer must have run the standard ensure-partition mechanism for BOTH the
@@ -77,7 +77,7 @@ public class FreshMeshPartitionProvisioningTest(ITestOutputHelper output) : Mono
         // The install record itself landed (in-memory backend accepts the write regardless).
         var record = await Mesh.GetWorkspace()
             .GetMeshNodeStream($"{PackageInstaller.InstalledPartition}/fresh-pack")
-            .Where(n => n is not null).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Where(n => n is not null).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         record!.NodeType.Should().Be(PackageInstaller.PackageNodeType);
     }
 

@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -15,6 +14,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Persistence.Test;
 
@@ -60,7 +60,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             .Where(_ => notifications.Any(predicate))
             .FirstAsync()
             .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
-            .ToTask();
+            .Await();
 
     /// <summary>
     /// Prime the watcher by writing probe files into a sibling subdirectory
@@ -92,7 +92,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             .Where(_ => notifications.Any(n => n.Path.Contains(marker)))
             .FirstAsync()
             .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
-            .ToTask();
+            .Await();
     }
 
     /// <summary>
@@ -128,7 +128,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
             .Where(_ => notifications.Any(n => n.Path.Contains(marker)))
             .FirstAsync()
             .Timeout(TimeSpan.FromMilliseconds(timeoutMs))
-            .ToTask();
+            .Await();
     }
 
     public override void Dispose()

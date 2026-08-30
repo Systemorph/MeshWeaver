@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -67,7 +67,7 @@ public class GitModuleReplicaTest(ITestOutputHelper output) : GitHubSyncTestBase
 
         // 1. SPARSE — moduleA at c1, and moduleB must be absent from that worktree.
         var a1 = await Replica.Materialize("demo/repo", bare, sha1, "moduleA")
-            .Timeout(90.Seconds()).ToTask();
+            .Timeout(90.Seconds()).Await();
 
         File.Exists(Path.Combine(a1.AbsolutePath, "a.cs")).Should().BeTrue(
             "the requested module must be materialised");
@@ -84,7 +84,7 @@ public class GitModuleReplicaTest(ITestOutputHelper output) : GitHubSyncTestBase
         await File.WriteAllTextAsync(sentinel, "still here");
 
         var a1Again = await Replica.Materialize("demo/repo", bare, sha1, "moduleA")
-            .Timeout(90.Seconds()).ToTask();
+            .Timeout(90.Seconds()).Await();
 
         a1Again.AbsolutePath.Should().Be(a1.AbsolutePath);
         File.Exists(sentinel).Should().BeTrue(
@@ -93,13 +93,13 @@ public class GitModuleReplicaTest(ITestOutputHelper output) : GitHubSyncTestBase
 
         // 3. A DIFFERENT COMMIT gets its own worktree, with that commit's content.
         var a2 = await Replica.Materialize("demo/repo", bare, sha2, "moduleA")
-            .Timeout(90.Seconds()).ToTask();
+            .Timeout(90.Seconds()).Await();
 
         a2.AbsolutePath.Should().NotBe(a1.AbsolutePath);
         (await File.ReadAllTextAsync(Path.Combine(a2.AbsolutePath, "a.cs"))).Should().Contain("A v2");
 
         // 4. PRUNE keeps only what it is told to keep.
-        var removed = await Replica.Prune("demo/repo", [sha2]).Timeout(90.Seconds()).ToTask();
+        var removed = await Replica.Prune("demo/repo", [sha2]).Timeout(90.Seconds()).Await();
 
         removed.Should().Be(1, "exactly the superseded commit's worktree is removed");
         Directory.Exists(a1.AbsolutePath).Should().BeFalse("the pruned worktree is gone from disk");
@@ -137,7 +137,7 @@ public class GitModuleReplicaTest(ITestOutputHelper output) : GitHubSyncTestBase
     /// <summary>Runs git and returns stdout — the SHA-reading calls need the output, not just success.</summary>
     private async Task<string> RunGit(string dir, params string[] args)
     {
-        var r = await Git.Run(dir, args).Timeout(30.Seconds()).ToTask();
+        var r = await Git.Run(dir, args).Timeout(30.Seconds()).Await();
         Assert.True(r.Ok, $"git {string.Join(' ', args)} failed (exit {r.ExitCode}): {r.Message}");
         return r.StdOut;
     }

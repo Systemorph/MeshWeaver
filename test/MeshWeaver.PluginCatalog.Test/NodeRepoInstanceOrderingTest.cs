@@ -3,7 +3,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -13,6 +12,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -68,11 +68,11 @@ public class NodeRepoInstanceOrderingTest(ITestOutputHelper output) : MonolithMe
             SourceFolder = "Pack",
             Version = "commit-order",
         };
-        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().Await();
         files.Count.Should().Be(5);
 
         var result = await PackageInstaller.Install(Mesh, manifest, files, "commit-order")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).Await();
         result.Written.Should().Be(5,
             "every node must land — the type before its instances, on a mesh that never saw the type");
 

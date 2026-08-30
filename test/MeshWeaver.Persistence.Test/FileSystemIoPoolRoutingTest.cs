@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Persistence.Test;
 
@@ -57,7 +57,7 @@ public class FileSystemIoPoolRoutingTest : IDisposable
         await adapter.Write(
                 MeshNode.FromPath("probe/alpha") with { NodeType = "Markdown", Name = "IoPool probe" },
                 Options)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var pool = registry.Get(IoPoolNames.FileSystem);
         // Test-only TCS (never in src/): parks the pool's single slot until released. WaitAsync(ct)
@@ -67,7 +67,7 @@ public class FileSystemIoPoolRoutingTest : IDisposable
         {
             await gate.Task.WaitAsync(ct).ConfigureAwait(false);
             return 0;
-        }).FirstAsync().ToTask();
+        }).FirstAsync().Await();
 
         // Positive half of the proof: the LEDGER sees the held slot. This counter is exactly what
         // teardown's DrainAll/WhenDrained join on — and what Unbounded can never report.
@@ -75,11 +75,11 @@ public class FileSystemIoPoolRoutingTest : IDisposable
             .Where(_ => pool.CurrentInFlight == 1)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask();
+            .Await();
 
         // The Read is scheduled onto the adapter's pool at CALL time (IoPoolExtensions.Run is
         // eager), so with the registry's only FileSystem slot held it must queue…
-        var readTask = adapter.Read("probe/alpha", Options).FirstAsync().ToTask();
+        var readTask = adapter.Read("probe/alpha", Options).FirstAsync().Await();
 
         // …and must NOT complete while the slot is held. Sanctioned negative window ("did not
         // run" has no positive signal to filter for): on the pre-fix Unbounded fallback the read

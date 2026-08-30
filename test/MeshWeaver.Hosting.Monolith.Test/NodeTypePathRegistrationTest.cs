@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -137,7 +137,7 @@ public class NodeTypePathRegistrationTest(ITestOutputHelper output) : MonolithMe
         // The MESH workspace is not the node's owner — this read crosses the cache seam.
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null)
-            .FirstAsync().Timeout(Timeout).ToTask();
+            .FirstAsync().Timeout(Timeout).Await();
 
         node.ContentAs<StampedProduct>(Mesh.JsonSerializerOptions)?.Name.Should().Be("Gadget",
             "a cross-hub read must yield the real content, not a blank record");

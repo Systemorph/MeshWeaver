@@ -17,8 +17,8 @@ using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
@@ -175,7 +175,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
                     Output.WriteLine($"[Host AutoSave] Change detected! Sending DataChangeRequest for Title={content.Title}");
                     initialJson = currentJson;
 
-                    await host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(content), o => o.WithTarget(host.Hub.Address)).FirstAsync().ToTask();
+                    await host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(content), o => o.WithTarget(host.Hub.Address)).FirstAsync().Await();
                 }));
     }
 
@@ -257,7 +257,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
             .Where(e => e is not null && e.Title == newTitle)
             .FirstAsync()
             .Timeout(10.Seconds())
-            .ToTask();
+            .Await();
         Output.WriteLine($"Updated entity from stream: Title={updatedEntity?.Title ?? "null"}");
 
         updatedEntity.Should().NotBeNull();
@@ -309,7 +309,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
             .Where(e => e is not null && e.DueDate == newDate)
             .FirstAsync()
             .Timeout(10.Seconds())
-            .ToTask();
+            .Await();
         Output.WriteLine($"Updated DueDate from stream: {updatedEntity?.DueDate}");
 
         updatedEntity.Should().NotBeNull();
@@ -378,7 +378,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
                 && t.GetString() == "Test Edit")
             .FirstAsync()
             .Timeout(10.Seconds())
-            .ToTask();
+            .Await();
 
         // Check if still in edit mode
         var controlAfterEdit = await layoutStream

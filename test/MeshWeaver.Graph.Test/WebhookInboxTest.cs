@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -36,14 +36,14 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         Observable.Using(
                 () => Access.ImpersonateAsSystem(),
                 _ => MeshService.CreateOrUpdateNode(node))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
     private Task<MeshNode?> Find(string path) =>
         Observable.Using(
                 () => Access.ImpersonateAsSystem(),
                 _ => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}")).Take(1)
                     .Select(c => c.Items.FirstOrDefault(n => n.Path == path)))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
     private Task<MeshNode> CreateTarget(string path) =>
         WriteAsSystem(new MeshNode(path)
@@ -69,7 +69,7 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var result = await WebhookInbox.Deliver(
                 Mesh, ["Payments"], "Payments", "application/json", StripeHeaders,
                 """{"type":"checkout.session.completed"}""")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         result.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
         result.NodePath.Should().StartWith($"Payments/{WebhookInbox.InboxContainer}/");
@@ -94,22 +94,22 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         // Exists but not allowlisted → refused.
         (await WebhookInbox.Deliver(Mesh, [], "Existing", null, [], "{}")
-                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask())
+                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await())
             .Status.Should().Be(WebhookInbox.DeliveryStatus.UnknownTarget);
 
         // Allowlisted but no node at the path → refused (the satellite would be ownerless).
         (await WebhookInbox.Deliver(Mesh, ["Ghost"], "Ghost", null, [], "{}")
-                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask())
+                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await())
             .Status.Should().Be(WebhookInbox.DeliveryStatus.UnknownTarget);
 
         // Path-shape games never resolve to an allowlisted target.
         (await WebhookInbox.Deliver(Mesh, ["Existing"], "Existing/../Other", null, [], "{}")
-                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask())
+                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await())
             .Status.Should().Be(WebhookInbox.DeliveryStatus.UnknownTarget);
 
         // Slash normalization DOES resolve ("/Existing/" ≡ "Existing").
         (await WebhookInbox.Deliver(Mesh, ["Existing"], "/Existing/", null, [], "{}")
-                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask())
+                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await())
             .Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
     }
 
@@ -119,7 +119,7 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         await CreateTarget("Sized");
         var huge = new string('x', WebhookInbox.MaxBodyBytes + 1);
         (await WebhookInbox.Deliver(Mesh, ["Sized"], "Sized", null, [], huge)
-                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask())
+                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await())
             .Status.Should().Be(WebhookInbox.DeliveryStatus.TooLarge);
     }
 
@@ -128,9 +128,9 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     {
         await CreateTarget("Multi");
         var first = await WebhookInbox.Deliver(Mesh, ["Multi"], "Multi", null, [], "{\"n\":1}")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         var second = await WebhookInbox.Deliver(Mesh, ["Multi"], "Multi", null, [], "{\"n\":2}")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         first.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
         second.Status.Should().Be(WebhookInbox.DeliveryStatus.Accepted);
         second.NodePath.Should().NotBe(first.NodePath);

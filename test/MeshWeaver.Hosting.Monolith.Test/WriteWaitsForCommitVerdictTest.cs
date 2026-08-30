@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -11,6 +10,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -100,7 +100,7 @@ public class WriteWaitsForCommitVerdictTest(ITestOutputHelper output) : Monolith
 
             await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
                 .Where(_ => completed || error is not null)
-                .FirstAsync().Timeout(60.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(60.Seconds()).Await(ct);
 
             error.Should().BeNull("the owner accepted the write, so the caller must see a success");
             completed.Should().BeTrue("the owner's commit is the caller's success terminal");
@@ -111,7 +111,7 @@ public class WriteWaitsForCommitVerdictTest(ITestOutputHelper output) : Monolith
             var persisted = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
                 .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
                 .Where(n => n is not null && n!.Name == "committed")
-                .FirstAsync().Timeout(45.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(45.Seconds()).Await(ct);
             persisted!.Name.Should().Be("committed",
                 "the success the caller was given must correspond to a write that actually landed");
         }
@@ -161,7 +161,7 @@ public class WriteWaitsForCommitVerdictTest(ITestOutputHelper output) : Monolith
             var requestId = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
                 .Select(_ => registry.ArmedRequestIds.FirstOrDefault())
                 .Where(rid => rid is not null)
-                .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(30.Seconds()).Await(ct);
             Output.WriteLine($"[patch] armed late watch for request {requestId}");
 
             await Task.Delay(PastTheResponseBound, ct);
@@ -185,7 +185,7 @@ public class WriteWaitsForCommitVerdictTest(ITestOutputHelper output) : Monolith
 
             await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
                 .Where(_ => error is not null || completed)
-                .FirstAsync().Timeout(60.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(60.Seconds()).Await(ct);
 
             completed.Should().BeFalse("a refused write must not complete as a success");
             terminal.Should().BeNull("a refused write must not hand the caller an optimistic value");
@@ -211,7 +211,7 @@ public class WriteWaitsForCommitVerdictTest(ITestOutputHelper output) : Monolith
         var workspace = Mesh.GetWorkspace();
         var warm = await workspace.GetMeshNodeStream(path)
             .Where(n => n is not null)
-            .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(30.Seconds()).Await(ct);
         warm.Name.Should().Be("initial");
         return workspace;
     }

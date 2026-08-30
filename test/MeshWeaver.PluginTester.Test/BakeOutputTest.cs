@@ -4,13 +4,13 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginTester;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginTester.Test;
 
@@ -67,7 +67,7 @@ public class BakeOutputTest(ITestOutputHelper output)
                     SourceSha = "test-sha-0001",
                 })
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
 
             report.FatalError.Should().BeNull($"the run must complete; log:\n{log}");
             report.ExitCode.Should().Be(0, $"the fixture is green; log:\n{log}");

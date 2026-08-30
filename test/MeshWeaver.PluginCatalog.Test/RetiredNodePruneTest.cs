@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -16,6 +15,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -130,7 +130,7 @@ public class RetiredNodePruneTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // ── v1: full install stamps the manifest baseline, including the now-doomed Thing ──
         var v1 = await PackageInstaller.Install(Mesh, Pkg(V1Module, "commit-1"), V1Files, "commit-1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         v1.Written.Should().Be(4, "4 nodes: root, Thing, Thing/Source/Thing, Source/Shared");
 
         var nt = await Mesh.GetMeshNodeStream("Widget/Thing")
@@ -139,13 +139,13 @@ public class RetiredNodePruneTest(ITestOutputHelper output) : MonolithMeshTestBa
                 && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error);
         ((NodeTypeDefinition)nt.Content!).CompilationStatus.Should().Be(CompilationStatus.Ok);
 
-        (await persistence.Exists("Widget/Thing").FirstAsync().ToTask()).Should().BeTrue();
-        (await persistence.Exists("Widget/Thing/Source/Thing").FirstAsync().ToTask()).Should().BeTrue();
+        (await persistence.Exists("Widget/Thing").FirstAsync().Await()).Should().BeTrue();
+        (await persistence.Exists("Widget/Thing/Source/Thing").FirstAsync().Await()).Should().BeTrue();
 
         // ── v2: the repo retires Thing AND touches the shared Source/ in the same update ──
         var v2Source = new RecordingSource(V2Files);
         var v2 = await CatalogLayoutAreas.InstallOrUpdate(Mesh, v2Source, "commit-2", Pkg(V2Module, "commit-2"), null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         // Pin that this really is the full-install FALLBACK, not the ordinary delta path: the
         // incremental attempt fetches the manifest first, discovers the shared-Source conflict and
@@ -160,11 +160,11 @@ public class RetiredNodePruneTest(ITestOutputHelper output) : MonolithMeshTestBa
         await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
             .SelectMany(_ => persistence.Exists("Widget/Thing"))
             .Where(exists => !exists)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
         await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
             .SelectMany(_ => persistence.Exists("Widget/Thing/Source/Thing"))
             .Where(exists => !exists)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
 
         // The record's baseline no longer names the retired files either — the NEXT update's diff
         // must not think Thing is still installed.
@@ -175,7 +175,7 @@ public class RetiredNodePruneTest(ITestOutputHelper output) : MonolithMeshTestBa
         record.InstalledFiles!.Should().NotContainKey("Widget/Thing/Source/Thing.cs");
 
         // The surviving root is untouched in content — only Thing left, nothing else broke.
-        (await persistence.Exists("Widget").FirstAsync().ToTask()).Should().BeTrue();
+        (await persistence.Exists("Widget").FirstAsync().Await()).Should().BeTrue();
     }
 
     [Fact(Timeout = 120_000)]
@@ -188,7 +188,7 @@ public class RetiredNodePruneTest(ITestOutputHelper output) : MonolithMeshTestBa
         // NEVER through the package installer (compile history is never shipped by a repo; it is
         // written directly by MeshDataSource.TryCreateReleaseNode against the type's own path). ──
         await PackageInstaller.Install(Mesh, Pkg(V1Module, "commit-1"), V1Files, "commit-1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         await Mesh.GetMeshNodeStream("Widget/Thing")
             .Should().Within(90.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition d
@@ -201,23 +201,23 @@ public class RetiredNodePruneTest(ITestOutputHelper output) : MonolithMeshTestBa
             State = MeshNodeState.Active,
             Content = "# compiled at v1",
         };
-        await meshService.CreateNode(release).FirstAsync().ToTask();
-        (await persistence.Exists("Widget/Thing/Release/v1-abc123").FirstAsync().ToTask()).Should().BeTrue(
+        await meshService.CreateNode(release).FirstAsync().Await();
+        (await persistence.Exists("Widget/Thing/Release/v1-abc123").FirstAsync().Await()).Should().BeTrue(
             "the planted release-history node must actually be there before the prune runs");
 
         // ── v2: the repo retires Thing (and its compile history is never part of any manifest —
         // the diff never names it, so ONLY a recursive delete of Thing's subtree removes it) ──
         var v2Source = new RecordingSource(V2Files);
         await CatalogLayoutAreas.InstallOrUpdate(Mesh, v2Source, "commit-2", Pkg(V2Module, "commit-2"), null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         // The RED-adjacent proof for the coordinator's concern: pruning Thing must take its
         // Release history with it, not leave it orphaned under a now-nonexistent parent.
         await Observable.Interval(TimeSpan.FromMilliseconds(200)).StartWith(0L)
             .SelectMany(_ => persistence.Exists("Widget/Thing"))
             .Where(exists => !exists)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
-        (await persistence.Exists("Widget/Thing/Release/v1-abc123").FirstAsync().ToTask()).Should().BeFalse(
+            .FirstAsync().Timeout(30.Seconds()).Await();
+        (await persistence.Exists("Widget/Thing/Release/v1-abc123").FirstAsync().Await()).Should().BeFalse(
             "the retired type's Release history must be pruned WITH it (recursive delete), " +
             "not left orphaned under a path nothing owns any more");
     }
@@ -226,7 +226,7 @@ public class RetiredNodePruneTest(ITestOutputHelper output) : MonolithMeshTestBa
         IStorageAdapter persistence, System.Text.Json.JsonSerializerOptions options)
     {
         var node = await persistence.Read($"{PackageInstaller.InstalledPartition}/Widget", options)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         node.Should().NotBeNull();
         var manifest = node!.ContentAs<PackageManifest>(options);
         manifest.Should().NotBeNull();

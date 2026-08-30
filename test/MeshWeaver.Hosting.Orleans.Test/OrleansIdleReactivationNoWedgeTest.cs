@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,6 +7,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -47,7 +47,7 @@ public class OrleansIdleReactivationNoWedgeTest(ITestOutputHelper output) : Orle
         var response = await client.Observe(
                 new CreateNodeRequest(new MeshNode(id, "TestUser") { Name = "Original", NodeType = "Markdown" }),
                 o => o.WithTarget(new Address("TestUser")))
-            .FirstAsync().ToTask().WaitAsync(45.Seconds());
+            .FirstAsync().Await().WaitAsync(45.Seconds());
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         return response.Message.Node!.Path!;
     }
@@ -64,7 +64,7 @@ public class OrleansIdleReactivationNoWedgeTest(ITestOutputHelper output) : Orle
         var path = await CreateNode(client, "reactivate");
 
         // 1. Warm read — activates the node grain and opens the cache entry.
-        var warm = await ReadNode(client, path).FirstAsync().ToTask().WaitAsync(45.Seconds());
+        var warm = await ReadNode(client, path).FirstAsync().Await().WaitAsync(45.Seconds());
         warm!.Path.Should().Be(path);
         Output.WriteLine($"[warm] {path} read, grain active");
 
@@ -82,7 +82,7 @@ public class OrleansIdleReactivationNoWedgeTest(ITestOutputHelper output) : Orle
         for (var attempt = 1; attempt <= 4; attempt++)
         {
             var reactivated = await ReadNode(client, path)
-                .FirstAsync().ToTask()
+                .FirstAsync().Await()
                 .WaitAsync(30.Seconds());   // a wedge (poisoned breaker / lost reactivation) trips this
             reactivated!.Path.Should().Be(path,
                 $"read #{attempt} after deactivation must transparently reactivate the grain and return the node");
@@ -102,18 +102,18 @@ public class OrleansIdleReactivationNoWedgeTest(ITestOutputHelper output) : Orle
         var client = GetClient();
         var path = await CreateNode(client, "healthy");
 
-        await ReadNode(client, path).FirstAsync().ToTask().WaitAsync(45.Seconds());
+        await ReadNode(client, path).FirstAsync().Await().WaitAsync(45.Seconds());
         Fixture.CleanupSiloHubsWithPrefix(path);
 
         // First read into the window: reactivates (or the grain already finished). Either way it
         // must produce the node, not throw the transient reject.
-        var first = await ReadNode(client, path).FirstAsync().ToTask().WaitAsync(30.Seconds());
+        var first = await ReadNode(client, path).FirstAsync().Await().WaitAsync(30.Seconds());
         first!.Path.Should().Be(path);
 
         // Immediate re-read — if the first read had poisoned the negative cache with the transient
         // reject, THIS read would replay that error instantly (a DeliveryFailureException, NOT a
         // TimeoutException) instead of returning the node.
-        var again = await ReadNode(client, path).FirstAsync().ToTask().WaitAsync(15.Seconds());
+        var again = await ReadNode(client, path).FirstAsync().Await().WaitAsync(15.Seconds());
         again!.Path.Should().Be(path,
             "an immediate re-read after reactivation must return the node — a poisoned negative-cache "
             + "window from a transient reject would instead replay the raw Orleans reject");

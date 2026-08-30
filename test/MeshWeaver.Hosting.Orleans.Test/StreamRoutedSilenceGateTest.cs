@@ -3,7 +3,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -63,7 +62,7 @@ public class StreamRoutedSilenceGateTest(ITestOutputHelper output) : OrleansShar
         Func<Task> post = () => sender
             .Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(ghost))
             .FirstAsync()
-            .ToTask()
+            .Await()
             .WaitAsync(30.Seconds());
 
         var thrown = await post.Should().ThrowAsync<Exception>(
@@ -99,7 +98,7 @@ public class StreamRoutedSilenceGateTest(ITestOutputHelper output) : OrleansShar
         var response = await sender
             .Observe(new PingRequest(), o => o.WithTarget(receiver.Address))
             .FirstAsync()
-            .ToTask()
+            .Await()
             .WaitAsync(30.Seconds());
 
         response.Message.Should().NotBeNull(

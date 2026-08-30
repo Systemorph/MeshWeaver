@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -76,7 +76,7 @@ public class MissingEvaluatorFailsClosedTest(ITestOutputHelper output) : Monolit
         Func<Task> act = () => client
             .Observe(new GetDataRequest(new UnifiedReference("data:")),
                 o => o.WithTarget(new Address(NodePath)))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var ex = (await act.Should().ThrowAsync<DeliveryFailureException>(
             "a gate with no evaluator reached no verdict, so it must refuse — silently allowing was "
@@ -101,7 +101,7 @@ public class MissingEvaluatorFailsClosedTest(ITestOutputHelper output) : Monolit
         Func<Task> act = () => client
             .Observe(new GetDataRequest(new UnifiedReference("data:")),
                 o => o.WithTarget(new Address(NodePath)))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
 
@@ -155,7 +155,7 @@ public class DeclaredUnsecuredMeshStillServesTest(ITestOutputHelper output) : Mo
             await client
                 .Observe(new GetDataRequest(new UnifiedReference("data:")),
                     o => o.WithTarget(new Address(NodePath)))
-                .FirstAsync().ToTask();
+                .FirstAsync().Await();
         }
         catch (DeliveryFailureException ex)
         {

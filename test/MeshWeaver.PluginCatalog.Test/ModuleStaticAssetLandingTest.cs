@@ -4,11 +4,11 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.PluginCatalog;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -47,7 +47,7 @@ public class ModuleStaticAssetLandingTest : IDisposable
                     ("wwwroot/Acme.Views.styles.css", "CSS"u8.ToArray()),
                     ("wwwroot/leaflet/leaflet.js", "JS"u8.ToArray()),
                 ])
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var entry = ModuleActivationSidecar.Read(root).Entries.Single();
         var dir = ModuleLandingService.ModuleDirectoryFor(root, "Acme.Views", entry);
@@ -87,7 +87,7 @@ public class ModuleStaticAssetLandingTest : IDisposable
                 "Acme.Views", [("Acme.Views.dll", [1])],
                 PrebuiltAssemblySeeder.LiveFrameworkMvid,
                 staticAssets: [("../escape.js", [9])])
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         await Assert.ThrowsAsync<ArgumentException>(act);
         var modules = Path.Combine(root, "modules");

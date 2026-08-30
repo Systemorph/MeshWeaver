@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -97,13 +97,13 @@ public class CommercialPackageAuthorizationTest(ITestOutputHelper output) : Mono
         PackageInstaller.Install(
                 Mesh, manifest, [new PackageFile($"{manifest.Id}/Doc.md", $"# {manifest.Id}")], "HEAD",
                 authorizingUserId: authorizingUserId)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await();
 
     /// <summary>Authoritative single-node read straight off storage (never the lagging index).</summary>
     private Task<MeshNode?> Read(string path) =>
         Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(path, Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await();
 
     [Fact(Timeout = 180_000)]
     public async Task FreePackage_InstallsForANonAdmin_AndUnattended()
@@ -204,7 +204,7 @@ public class CommercialPackageAuthorizationTest(ITestOutputHelper output) : Mono
         var freeSource = new SingleFileSource(free);
         var freeResult = await CatalogLayoutAreas
             .InstallOrUpdate(Mesh, freeSource, "HEAD", free, null, authorizingUserId: null)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await();
         freeResult.Written.Should().BeGreaterThan(0, "a free package auto-updates unattended");
 
         // A commercial package whose record names nobody (the pre-#830 shape, and the shape a
@@ -213,7 +213,7 @@ public class CommercialPackageAuthorizationTest(ITestOutputHelper output) : Mono
         var paidSource = new SingleFileSource(paid);
         var refused = await Record.ExceptionAsync(() => CatalogLayoutAreas
             .InstallOrUpdate(Mesh, paidSource, "HEAD", paid, null, authorizingUserId: null)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await());
         refused.Should().BeOfType<PackageAuthorizationException>();
         paidSource.Fetches.Should().Be(0,
             "the refusal must precede the work — not one file may travel for a package that may "
@@ -222,13 +222,13 @@ public class CommercialPackageAuthorizationTest(ITestOutputHelper output) : Mono
         // The same call, authorized by the record's admin, goes through.
         var applied = await CatalogLayoutAreas
             .InstallOrUpdate(Mesh, paidSource, "HEAD", paid, null, authorizingUserId: PlatformAdmin)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await();
         applied.Written.Should().BeGreaterThan(0);
 
         // And a principal who is not (or is no longer) an admin cannot keep it updating.
         var revoked = await Record.ExceptionAsync(() => CatalogLayoutAreas
             .InstallOrUpdate(Mesh, paidSource, "HEAD", paid, null, authorizingUserId: PlainUser)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await());
         revoked.Should().BeOfType<PackageAuthorizationException>(
             "the authorizer is re-verified on every update, not trusted from the record alone");
     }

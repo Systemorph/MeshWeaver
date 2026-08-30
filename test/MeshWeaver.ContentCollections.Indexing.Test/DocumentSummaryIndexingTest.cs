@@ -1,10 +1,10 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Test;
 
@@ -52,7 +52,7 @@ public class DocumentSummaryIndexingTest : IDisposable
 
     private async Task<IndexResult> Index(string filePath, string fileName) =>
         await _service.IndexFile(Collection, filePath, fileName, File.ReadAllBytes(filePath))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
     private static string ExtractedText(string filePath) =>
         File.ReadAllText(filePath, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
@@ -74,8 +74,8 @@ public class DocumentSummaryIndexingTest : IDisposable
         result.ChunkCount.Should().BeGreaterThan(1);
 
         // Chunks were stored (the chunk branch ran alongside the document branch).
-        var stored = await _store.Search(Collection, await _embedder.Embed("vector").FirstAsync().ToTask(), 1000)
-            .FirstAsync().ToTask();
+        var stored = await _store.Search(Collection, await _embedder.Embed("vector").FirstAsync().Await(), 1000)
+            .FirstAsync().Await();
         stored.Should().HaveCount(result.ChunkCount);
 
         // Exactly ONE summary + ONE document write for the whole file (never per chunk).

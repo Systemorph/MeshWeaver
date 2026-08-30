@@ -4,10 +4,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.GitSync;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -57,7 +57,7 @@ public class NodeRepoPluginListingTest
     [Fact(Timeout = 60_000)]
     public async Task ListsSpaceAndStorePluginRoots_WithStorefrontFields()
     {
-        var packages = await Source().ListPackages("HEAD").FirstAsync().ToTask();
+        var packages = await Source().ListPackages("HEAD").FirstAsync().Await();
 
         packages.Select(p => p.Id).Should()
             .Equal("AgenticEngineering", "Chess", "Reinsurance", "Store", "Widget");

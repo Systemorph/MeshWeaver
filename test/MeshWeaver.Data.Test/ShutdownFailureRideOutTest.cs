@@ -1,7 +1,6 @@
 using System;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
@@ -65,7 +64,7 @@ public class ShutdownFailureRideOutTest(ITestOutputHelper output) : HubTestBase(
             .Materialize()
             .FirstAsync()
             .Timeout(20.Seconds())
-            .ToTask(ct);
+            .Await(ct);
 
         // 1. The transient shutdown reject — must be ridden out.
         DeliverFailure(host, stream, ErrorType.ShuttingDown, TransientRejectMessage);

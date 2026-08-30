@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -47,7 +46,7 @@ public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : Or
                     NodeType = "Markdown",
                 }),
                 o => o.WithTarget(new Address("TestUser")))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         Output.WriteLine($"[test] CreateNode succeeded: {pathA}");
 
@@ -72,7 +71,7 @@ public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : Or
         //    cross-grain write boundary this test exercises.
         var updated = await creator.GetMeshNodeStream(pathA)
             .Update(n => n with { Name = "A1" })
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
         updated.Name.Should().Be("A1");
         Output.WriteLine("[update] stream.Update succeeded");
 
@@ -96,7 +95,7 @@ public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : Or
         var resp = await client.Observe(
                 new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(path)))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
         var node = resp.Message?.Data as MeshNode;
         if (node == null && resp.Message?.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(client.JsonSerializerOptions);

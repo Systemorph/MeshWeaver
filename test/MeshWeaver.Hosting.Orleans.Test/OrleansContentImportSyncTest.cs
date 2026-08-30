@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
@@ -14,6 +13,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.TestingHost;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -57,7 +57,7 @@ public class OrleansContentImportSyncTest(ITestOutputHelper output)
         Directory.CreateDirectory(SourceDir);
         await File.WriteAllBytesAsync(Path.Combine(SourceDir, "logo.png"), BinaryAsset, Ct);
 
-        var results = await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().ToTask(Ct);
+        var results = await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().Await(Ct);
         var mine = results.FirstOrDefault(r => r.Partition == Partition);
         Output.WriteLine($"import: partition={mine?.Partition} outcome={mine?.Outcome} count={mine?.Count}");
         mine.Should().NotBeNull("the content source partition must be imported");

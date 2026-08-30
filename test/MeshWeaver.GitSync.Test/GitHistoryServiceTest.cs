@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -55,10 +55,10 @@ public class GitHistoryServiceTest(ITestOutputHelper output) : GitHubSyncTestBas
         await RunGit(seed, "push", "origin", "main");
 
         // Clone via the service (local path = no auth).
-        await WorkingTrees.CloneOrUpdate(UserId, "demo", bare, "main", token: null).Timeout(60.Seconds()).ToTask();
+        await WorkingTrees.CloneOrUpdate(UserId, "demo", bare, "main", token: null).Timeout(60.Seconds()).Await();
 
         // Log: newest commit first, fully populated.
-        var log = await WorkingTrees.Log(UserId, "demo").Timeout(30.Seconds()).ToTask();
+        var log = await WorkingTrees.Log(UserId, "demo").Timeout(30.Seconds()).Await();
         Assert.True(log.Count >= 2, $"expected >= 2 commits, got {log.Count}");
         Assert.Equal("second commit", log[0].Subject);
         Assert.Equal("first commit", log[1].Subject);
@@ -69,32 +69,32 @@ public class GitHistoryServiceTest(ITestOutputHelper output) : GitHubSyncTestBas
         var head = log[0].Hash;
 
         // CommitChanges: README modified (M), docs/new.txt added (A).
-        var changes = await WorkingTrees.CommitChanges(UserId, "demo", head).Timeout(30.Seconds()).ToTask();
+        var changes = await WorkingTrees.CommitChanges(UserId, "demo", head).Timeout(30.Seconds()).Await();
         Assert.Contains(changes, c => c.Path == "README.md" && c.Status == "M");
         Assert.Contains(changes, c => c.Path == "docs/new.txt" && c.Status == "A");
 
         // ShowFile: content at HEAD vs its parent, and "" for paths absent at the revision.
-        Assert.Equal("# v2", (await WorkingTrees.ShowFile(UserId, "demo", head, "README.md").Timeout(30.Seconds()).ToTask()).Trim());
-        Assert.Equal("# v1", (await WorkingTrees.ShowFile(UserId, "demo", $"{head}^", "README.md").Timeout(30.Seconds()).ToTask()).Trim());
-        Assert.Equal("", await WorkingTrees.ShowFile(UserId, "demo", head, "does/not/exist.txt").Timeout(30.Seconds()).ToTask());
+        Assert.Equal("# v2", (await WorkingTrees.ShowFile(UserId, "demo", head, "README.md").Timeout(30.Seconds()).Await()).Trim());
+        Assert.Equal("# v1", (await WorkingTrees.ShowFile(UserId, "demo", $"{head}^", "README.md").Timeout(30.Seconds()).Await()).Trim());
+        Assert.Equal("", await WorkingTrees.ShowFile(UserId, "demo", head, "does/not/exist.txt").Timeout(30.Seconds()).Await());
         // docs/new.txt did not exist at the parent → empty (the "added" side of a diff).
-        Assert.Equal("", await WorkingTrees.ShowFile(UserId, "demo", $"{head}^", "docs/new.txt").Timeout(30.Seconds()).ToTask());
+        Assert.Equal("", await WorkingTrees.ShowFile(UserId, "demo", $"{head}^", "docs/new.txt").Timeout(30.Seconds()).Await());
 
         // Hardening: a GENUINE git failure must PROPAGATE — never be masked as "". Running against a
         // directory that exists but is NOT a checkout yields "not a git repository", which is a real
         // fault (distinct from the "path absent at this revision" case that legitimately returns "").
         Directory.CreateDirectory(WorkingTrees.PathFor(UserId, "notarepo"));
         await Assert.ThrowsAsync<GitWorkingTreeException>(() => WorkingTrees
-            .ShowFile(UserId, "notarepo", "HEAD", "README.md").FirstAsync().ToTask());
+            .ShowFile(UserId, "notarepo", "HEAD", "README.md").FirstAsync().Await());
 
         // Argument-injection guards: a rev/hash/path starting with '-' (or a blank hash) is rejected
         // before it reaches git, so it can't be parsed as a flag.
         await Assert.ThrowsAsync<GitWorkingTreeException>(() => WorkingTrees
-            .ShowFile(UserId, "demo", "--upload-pack=x", "README.md").FirstAsync().ToTask());
+            .ShowFile(UserId, "demo", "--upload-pack=x", "README.md").FirstAsync().Await());
         await Assert.ThrowsAsync<GitWorkingTreeException>(() => WorkingTrees
-            .CommitChanges(UserId, "demo", "--output=/tmp/x").FirstAsync().ToTask());
+            .CommitChanges(UserId, "demo", "--output=/tmp/x").FirstAsync().Await());
         await Assert.ThrowsAsync<GitWorkingTreeException>(() => WorkingTrees
-            .CommitChanges(UserId, "demo", "   ").FirstAsync().ToTask());
+            .CommitChanges(UserId, "demo", "   ").FirstAsync().Await());
     }
 
     [Fact(Timeout = 60000)]
@@ -111,17 +111,17 @@ public class GitHistoryServiceTest(ITestOutputHelper output) : GitHubSyncTestBas
         await RunGit(seed, "remote", "add", "origin", bare);
         await RunGit(seed, "push", "origin", "main");
 
-        await WorkingTrees.CloneOrUpdate(UserId, "demo", bare, "main", token: null).Timeout(60.Seconds()).ToTask();
+        await WorkingTrees.CloneOrUpdate(UserId, "demo", bare, "main", token: null).Timeout(60.Seconds()).Await();
 
         // Edit the working copy without committing.
-        await WorkingTrees.WriteFile(UserId, "demo", "README.md", "# edited\n").Timeout(30.Seconds()).ToTask();
+        await WorkingTrees.WriteFile(UserId, "demo", "README.md", "# edited\n").Timeout(30.Seconds()).Await();
 
-        var status = await WorkingTrees.Status(UserId, "demo").Timeout(30.Seconds()).ToTask();
+        var status = await WorkingTrees.Status(UserId, "demo").Timeout(30.Seconds()).Await();
         Assert.Contains(status.Changes, c => c.Path == "README.md");
 
         // The diff pane's two sides: HEAD (committed) vs the on-disk working copy.
-        var head = (await WorkingTrees.ShowFile(UserId, "demo", "HEAD", "README.md").Timeout(30.Seconds()).ToTask()).Trim();
-        var work = (await WorkingTrees.ReadFile(UserId, "demo", "README.md").Timeout(30.Seconds()).ToTask()).Trim();
+        var head = (await WorkingTrees.ShowFile(UserId, "demo", "HEAD", "README.md").Timeout(30.Seconds()).Await()).Trim();
+        var work = (await WorkingTrees.ReadFile(UserId, "demo", "README.md").Timeout(30.Seconds()).Await()).Trim();
         Assert.Equal("# base", head);
         Assert.Equal("# edited", work);
     }
@@ -135,7 +135,7 @@ public class GitHistoryServiceTest(ITestOutputHelper output) : GitHubSyncTestBas
 
     private async Task RunGit(string dir, params string[] args)
     {
-        var r = await Git.Run(dir, args).Timeout(30.Seconds()).ToTask();
+        var r = await Git.Run(dir, args).Timeout(30.Seconds()).Await();
         Assert.True(r.Ok, $"git {string.Join(' ', args)} failed (exit {r.ExitCode}): {r.Message}");
     }
 }

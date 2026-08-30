@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Graph.Configuration;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -97,7 +97,7 @@ public class NodeTypeDeclarationSelfTypingTest(ITestOutputHelper output) : Monol
             .Where(items => items.Any(n => n.Path == "directoryprobe"))
             .FirstAsync()
             .Timeout(60.Seconds())
-            .ToTask(ct);
+            .Await(ct);
 
         var notUsers = new List<string>();
         foreach (var row in rows)

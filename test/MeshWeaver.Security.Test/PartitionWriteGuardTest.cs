@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -13,6 +12,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -286,7 +286,7 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
                 State = MeshNodeState.Active,
             };
 
-            Func<Task> act = () => NodeFactory.CreateNode(node).FirstAsync().ToTask();
+            Func<Task> act = () => NodeFactory.CreateNode(node).FirstAsync().Await();
 
             (await act.Should().ThrowAsync<UnauthorizedAccessException>())
                 .Which.Message.Should().Contain("NO access grants",
@@ -330,7 +330,7 @@ public class PartitionWriteGuardTest(ITestOutputHelper output) : MonolithMeshTes
                 MainNode = userId, // triggers RLS self-access grant
             };
 
-            Func<Task> act = () => NodeFactory.CreateNode(node).FirstAsync().ToTask();
+            Func<Task> act = () => NodeFactory.CreateNode(node).FirstAsync().Await();
 
             (await act.Should().ThrowAsync<UnauthorizedAccessException>(
                     "the partition write guard must block standalone content in the User mirror even when RLS grants"))

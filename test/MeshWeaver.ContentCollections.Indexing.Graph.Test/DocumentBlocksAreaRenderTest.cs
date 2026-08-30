@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.Data;
@@ -51,7 +50,7 @@ public class DocumentBlocksAreaRenderTest(ITestOutputHelper output) : MonolithMe
                 Collection, FilePath, index, text, ContentHash: "deadbeef", Embedding: null))
             .ToArray();
         await Store.ReplaceFileChunks(Collection, FilePath, chunks)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -101,7 +100,7 @@ public class DocumentBlocksAreaRenderTest(ITestOutputHelper output) : MonolithMe
             Content = legacyContent,
         };
         var created = await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
-            .CreateNode(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .CreateNode(node).FirstAsync().Await(TestContext.Current.CancellationToken);
         created.Should().NotBeNull();
 
         // The block reader renders the FIRST chunk's text (the excerpt) …
@@ -120,7 +119,7 @@ public class DocumentBlocksAreaRenderTest(ITestOutputHelper output) : MonolithMe
         var service = Mesh.ServiceProvider.GetRequiredService<ContentIndexingService>();
         var result = await service
             .IndexFile(Collection, FilePath, FilePath, System.Text.Encoding.UTF8.GetBytes(body))
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
         result.Status.Should().Be(IndexStatus.Indexed);
 
         var path = DocumentPaths.For(Collection, FilePath);

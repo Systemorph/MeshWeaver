@@ -5,7 +5,6 @@ using System.Linq;
 using System.Net.Sockets;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence.Query;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Reactive.Testing;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -247,7 +247,7 @@ public class MeshQueryTransientRetryTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask();
+            .Await();
 
         subscribeCount.Should().Be(2, "the fan-in retries the transient connect fault once");
         change.ChangeType.Should().Be(QueryChangeType.Initial);
@@ -274,7 +274,7 @@ public class MeshQueryTransientRetryTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown", Limit = 10 }, Options)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask();
+            .Await();
 
         await act.Should().ThrowAsync<DbException>();
         subscribeCount.Should().Be(1 + TransientStorageFaults.DefaultMaxRetries);

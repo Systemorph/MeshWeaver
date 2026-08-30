@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -9,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -166,7 +166,7 @@ public class ColdHandleRecycleStarvationTest(ITestOutputHelper output) : Monolit
             .GetMeshNodeStream(path)
             .Update(node => node with { Name = "Updated" })
             .FirstAsync()
-            .ToTask(ct);
+            .Await(ct);
 
         // Nothing to release: the gate closes itself when the child finishes quiescing, and the
         // owner's fresh activation becomes reachable. WITHOUT the fix the subscriber has by then

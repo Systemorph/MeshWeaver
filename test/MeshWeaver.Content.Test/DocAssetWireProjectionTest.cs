@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -19,6 +18,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Content.Test;
 
@@ -120,7 +120,7 @@ public class DocAssetWireProjectionTest(ITestOutputHelper output) : MonolithMesh
         contentService.AddConfiguration(qualified);
 
         var collection = await contentService.GetCollection(qualified.Name)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask(Ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(Ct);
         collection.Should().NotBeNull(
             "a collection whose provider factory threw resolves as null — which is how the route "
             + "answered 'Content read failed' for every doc image");
@@ -128,7 +128,7 @@ public class DocAssetWireProjectionTest(ITestOutputHelper output) : MonolithMesh
         collection!.GetContentType(file).Should().Be("image/svg+xml");
 
         var bytes = await collection.GetContentBytes(file)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask(Ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(Ct);
         bytes.Should().NotBeNull($"{nodePath}/{file} ships as an embedded resource");
         bytes!.Length.Should().BePositive();
         Encoding.UTF8.GetString(bytes).Should().Contain("<svg",
@@ -184,7 +184,7 @@ public class DocAssetWireProjectionTest(ITestOutputHelper output) : MonolithMesh
         contentService.AddConfiguration(qualified);
 
         var collection = await contentService.GetCollection(qualified.Name)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask(Ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(Ct);
         collection.Should().NotBeNull(
             "the collection must now be constructible — the ArgumentException from the missing "
             + "AssemblyName is what made every read of it fail, whatever file was asked for");
@@ -192,7 +192,7 @@ public class DocAssetWireProjectionTest(ITestOutputHelper output) : MonolithMesh
         // The collection's OWN asset is servable, which is what proves the config is usable rather
         // than merely non-throwing.
         var icon = await collection!.GetContentBytes("icon.svg")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask(Ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(Ct);
         icon.Should().NotBeNull("Content/AI/icon.svg ships in this collection");
     }
 

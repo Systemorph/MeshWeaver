@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Reactive.Concurrency;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -9,6 +8,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -122,7 +122,7 @@ public class OrleansDirectoryInstabilityClassificationTest
                 logger: NullLogger.Instance,
                 backoff: NoBackoff,
                 scheduler: Scheduler.Immediate)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         calls.Should().Be(3,
             "the directory settles within seconds of a membership change, so re-resolving is the "

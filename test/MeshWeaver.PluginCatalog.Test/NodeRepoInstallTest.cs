@@ -3,7 +3,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -62,7 +62,7 @@ public class NodeRepoInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         // List: exactly the one `<Plugin>/index.json` Space root (README, the nested non-index
         // json, and the legacy top-level `Legacy.json` are not plugins).
-        var packages = await source.ListPackages("HEAD").FirstAsync().ToTask();
+        var packages = await source.ListPackages("HEAD").FirstAsync().Await();
         packages.Count.Should().Be(1);
         var widget = packages[0];
         widget.Id.Should().Be("Widget");
@@ -72,11 +72,11 @@ public class NodeRepoInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Fetch: the plugin's own files only (everything under `Widget/`, root included) —
         // README/Notes/Legacy excluded.
-        var files = await source.FetchPackageFiles(widget, "HEAD").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(widget, "HEAD").FirstAsync().Await();
         files.Count.Should().Be(3);
 
         // Install: 3 nodes written at their CANONICAL paths.
-        var result = await PackageInstaller.Install(Mesh, widget, files, "commit-abc").FirstAsync().ToTask();
+        var result = await PackageInstaller.Install(Mesh, widget, files, "commit-abc").FirstAsync().Await();
         result.Total.Should().Be(3);
         result.Written.Should().Be(3);
 
@@ -94,12 +94,12 @@ public class NodeRepoInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Re-install the unchanged repo → nothing written (checksum), despite the compile having
         // enriched the NodeType node.
-        var second = await PackageInstaller.Install(Mesh, widget, files, "commit-abc").FirstAsync().ToTask();
+        var second = await PackageInstaller.Install(Mesh, widget, files, "commit-abc").FirstAsync().Await();
         second.Written.Should().Be(0, "an unchanged node-repo re-install must not rewrite any node");
     }
 
     private async Task<MeshNode> Read(string path) =>
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n?.Content is not null)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
 }

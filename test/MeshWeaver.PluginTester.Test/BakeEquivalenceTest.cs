@@ -6,7 +6,6 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Text;
@@ -14,6 +13,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Plugin.Packaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginTester.Test;
 
@@ -219,7 +219,7 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
                 SourceSha = "deadbeef",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().ToTask();
+            }).FirstAsync().Await();
             output.WriteLine("── mesh-driven bake ──");
             output.WriteLine(meshLog.ToString());
             Assert.Null(meshReport.FatalError);

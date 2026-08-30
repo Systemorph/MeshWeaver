@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -9,6 +8,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -69,13 +69,13 @@ public class GitHubWebhookRepoRenameTest(ITestOutputHelper output) : GitHubSyncT
         var a = "GhRa" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(a, "Rename Source Space");
         await CreateMarkdown($"{a}/Welcome", "Welcome", "# Welcome\n\nContent from the renamed repo.");
-        await Sync.SaveConfig(a, oldUrl, "main", null, true, true).Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SaveConfig(a, oldUrl, "main", null, true, true).Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
 
         // Space B syncs the same repository by its OLD name and has never imported.
         var b = "GhRb" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(b, "Rename Target Space");
-        await Sync.SaveConfig(b, oldUrl, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(b, oldUrl, "main", null, true, true).Timeout(30.Seconds()).Await();
 
         // The webhook request is ANONYMOUS (its authorization is the verified HMAC) — drop every
         // ambient identity so the processor's own System impersonation is what carries the reads.
@@ -88,12 +88,12 @@ public class GitHubWebhookRepoRenameTest(ITestOutputHelper output) : GitHubSyncT
         {
             // Nothing has imported yet — without this the assertion below could pass on content that
             // was never moved by this delivery.
-            Assert.Null(await ReadNode($"{b}/Welcome").Timeout(30.Seconds()).ToTask());
+            Assert.Null(await ReadNode($"{b}/Welcome").Timeout(30.Seconds()).Await());
 
             // The payload carries the repository's CURRENT name. Against the string-only matcher this
             // matches NO config and imports nothing.
             recorded = await Webhooks.Process("workflow_run", GreenBuild("Systemorph/Course-Renamed"))
-                .Timeout(60.Seconds()).ToTask();
+                .Timeout(60.Seconds()).Await();
         }
         finally
         {
@@ -133,7 +133,7 @@ public class GitHubWebhookRepoRenameTest(ITestOutputHelper output) : GitHubSyncT
         var space = "GhRu" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(space, "Unmatched Space");
         await Sync.SaveConfig(space, "https://github.com/test/only-this-repo", "main", null, true, true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         var payload = JsonDocument.Parse("""
         {
@@ -143,7 +143,7 @@ public class GitHubWebhookRepoRenameTest(ITestOutputHelper output) : GitHubSyncT
         }
         """).RootElement;
 
-        Assert.Equal(0, await Webhooks.Process("issues", payload).Timeout(60.Seconds()).ToTask());
+        Assert.Equal(0, await Webhooks.Process("issues", payload).Timeout(60.Seconds()).Await());
 
         var zeroMatch = await WaitForRecord(e =>
             e.Level >= LogLevel.Warning && e.Message.Contains("someone/never-configured"));
@@ -172,7 +172,7 @@ public class GitHubWebhookRepoRenameTest(ITestOutputHelper output) : GitHubSyncT
         var space = "GhRc" + Guid.NewGuid().ToString("N")[..8];
         await CreateSpace(space, "Case Space");
         await Sync.SaveConfig(space, "https://github.com/Test/Case-Repo", "main", null, true, true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         var before = Fake.CanonicalLookups;
         var payload = JsonDocument.Parse("""
@@ -187,7 +187,7 @@ public class GitHubWebhookRepoRenameTest(ITestOutputHelper output) : GitHubSyncT
         }
         """).RootElement;
 
-        Assert.Equal(1, await Webhooks.Process("issues", payload).Timeout(60.Seconds()).ToTask());
+        Assert.Equal(1, await Webhooks.Process("issues", payload).Timeout(60.Seconds()).Await());
         var issue = await WaitForIssue(IssueService.IssuePath(space, 11), i => i.Number == 11);
         Assert.Equal("Case-insensitive", issue.Title);
 
@@ -212,11 +212,11 @@ public class GitHubWebhookRepoRenameTest(ITestOutputHelper output) : GitHubSyncT
 
         var before = Fake.CanonicalLookups;
         Assert.Equal("test/second-name",
-            (await resolver.Resolve(url, UserId).Timeout(30.Seconds()).ToTask())?.ToString());
+            (await resolver.Resolve(url, UserId).Timeout(30.Seconds()).Await())?.ToString());
         // A second ask inside the TTL is served from the cache — this is what keeps the fallback off
         // the per-delivery path.
         Assert.Equal("test/second-name",
-            (await resolver.Resolve(url, UserId).Timeout(30.Seconds()).ToTask())?.ToString());
+            (await resolver.Resolve(url, UserId).Timeout(30.Seconds()).Await())?.ToString());
         Assert.Equal(before + 1, Fake.CanonicalLookups);
 
         // The repository is renamed AGAIN. Inside the TTL the cache still answers with the old fact —
@@ -224,13 +224,13 @@ public class GitHubWebhookRepoRenameTest(ITestOutputHelper output) : GitHubSyncT
         Fake.Rename(url, "https://github.com/test/third-name");
         clock.Advance(GitHubRepoIdentityResolver.Ttl - TimeSpan.FromMinutes(1));
         Assert.Equal("test/second-name",
-            (await resolver.Resolve(url, UserId).Timeout(30.Seconds()).ToTask())?.ToString());
+            (await resolver.Resolve(url, UserId).Timeout(30.Seconds()).Await())?.ToString());
         Assert.Equal(before + 1, Fake.CanonicalLookups);
 
         // Past the TTL it is re-resolved — the entry expires rather than latching.
         clock.Advance(TimeSpan.FromMinutes(2));
         Assert.Equal("test/third-name",
-            (await resolver.Resolve(url, UserId).Timeout(30.Seconds()).ToTask())?.ToString());
+            (await resolver.Resolve(url, UserId).Timeout(30.Seconds()).Await())?.ToString());
         Assert.Equal(before + 2, Fake.CanonicalLookups);
     }
 
@@ -300,7 +300,7 @@ public class GitHubWebhookRepoRenameTest(ITestOutputHelper output) : GitHubSyncT
             .Select(e => e!)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
     /// <summary>A clock the test moves by hand, so TTL expiry is asserted rather than waited for.</summary>
     private sealed class TestClock(DateTimeOffset start) : TimeProvider
