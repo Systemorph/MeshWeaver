@@ -23,21 +23,26 @@ namespace MeshWeaver.Data.Test;
 /// <see cref="DeliveryFailure.TargetUnserved"/> verdict reaching the owner, which disposes that
 /// subscriber's server-side stream (20,718 error lines in 3 h on memex-cloud before it did).</para>
 ///
-/// <para>🚨 <b>Why this test exists NOW.</b> That verdict used to have exactly one producer — the
-/// stream leg's no-live-subscriber refusal, which stamps it beside
-/// <see cref="ErrorType.NotFound"/> — so the handler could afford a redundant
-/// <c>ErrorType == NotFound</c> test beside the stamp. Since
-/// <c>RoutingGrain.AnswerPodHubNotHere</c> the router reaches the same conclusion ONE HOP EARLIER,
-/// through Orleans' grain directory, and reports it as the TRANSIENT
-/// <see cref="ErrorType.ShuttingDown"/> — because a hub whose owner is mid-roll must not have its
-/// subscriber's mirrors torn down. Had the ErrorType test survived, that verdict would have been
-/// inert here and every dead circuit in the fleet would have leaked its server-side streams again.
-/// The two facts are complementary, not contradictory: the SUBSCRIBER rides the transient verdict
-/// out and re-asks; the OWNER drops the half it can no longer push to.</para>
+/// <para>🚨 <b>The stamp says WHOSE delivery this is; the ErrorType says WHAT TO DO — #2756.</b>
+/// The verdict used to have exactly one producer — the stream leg's no-live-subscriber refusal,
+/// which stamps it beside <see cref="ErrorType.NotFound"/>. Since
+/// <c>RoutingGrain.AnswerPodHubNotHere</c> the router reaches a similar conclusion ONE HOP EARLIER,
+/// through Orleans' grain directory, but reports it as the TRANSIENT
+/// <see cref="ErrorType.ShuttingDown"/> — the owner may simply be mid-roll, or waiting for its
+/// pod-hub claim to land.</para>
+///
+/// <para>#2745 gated the eviction on the STAMP ALONE, reasoning the two verdicts were
+/// complementary: the subscriber rides the transient one out while the owner drops its half. They
+/// are not. <c>JsonSynchronizationStream</c> rides <c>ShuttingDown</c> out by RE-ARMING rather than
+/// re-subscribing, so an owner that evicts on it disposes the server-side half of a subscription
+/// whose other half is deliberately sitting still. That turned main RED on
+/// <c>ObservableQueryTests.ObserveQuery_EmitsRemovedOnDeletedNode</c>, where both halves share one
+/// process and the eviction wins the race. The leak this handler closes (#2426/#2546) is a
+/// subscriber whose PROCESS IS GONE — the terminal verdict — and only that one may evict.</para>
 ///
 /// <para><b>Fails on unfixed code:</b>
-/// <see cref="ATransientUnservedVerdict_EvictsTheOwnersServerSideStream"/> — with the
-/// <c>ErrorType == NotFound</c> test in place the eviction counter never leaves zero.</para>
+/// <see cref="ATransientUnservedVerdict_LeavesTheOwnersServerSideStreamAlone"/> — with the
+/// stamp-alone gate the transient verdict evicts and the subscription is destroyed.</para>
 ///
 /// <para>See <c>Doc/Architecture/DurableStreamsViaMeshNodes</c> and
 /// <c>Doc/Architecture/ErrorPropagationAndWedges</c>.</para>
@@ -93,6 +98,10 @@ public class UnservedVerdictEvictionTest(ITestOutputHelper output) : HubTestBase
             TargetUnserved = true,
         };
 
+    /// <summary>Marker the owner writes AFTER the transient verdict — its arrival on the client is
+    /// the proof that the server-side stream was not evicted.</summary>
+    private const string SurvivedTheVerdict = "survived-the-transient-verdict";
+
     private static Task<int> EvictedAsync(Workspace workspace) =>
         Observable.Interval(50.Milliseconds())
             .StartWith(0L)
@@ -103,21 +112,45 @@ public class UnservedVerdictEvictionTest(ITestOutputHelper output) : HubTestBase
             .ToTask(TestContext.Current.CancellationToken);
 
     /// <summary>
-    /// 🚨 THE PIN. The transient verdict the retired stream leg's replacement produces must still
-    /// end the fan-out at its source.
+    /// 🚨 THE PIN (#2756). A TRANSIENT unserved verdict must leave the server-side stream intact:
+    /// the subscriber rides <c>ShuttingDown</c> out by re-arming, not by re-subscribing, so an
+    /// eviction here destroys the half it is waiting for.
     /// </summary>
     [HubFact]
-    public async Task ATransientUnservedVerdict_EvictsTheOwnersServerSideStream()
+    public async Task ATransientUnservedVerdict_LeavesTheOwnersServerSideStreamAlone()
     {
         var (host, client, hostWorkspace) = await ServingClientAsync();
 
         host.Post(RouterVerdict(host, client.Address, ErrorType.ShuttingDown),
             o => o.WithTarget(host.Address));
 
-        (await EvictedAsync(hostWorkspace)).Should().BeGreaterThanOrEqualTo(1,
-            "the eviction gate is the router's TargetUnserved STAMP — the only component that asks "
-            + "the cluster — and never the ErrorType beside it. Gating on NotFound made the pod-hub "
-            + "refusal inert and left every dead circuit fanning out forever (#2426/#2546)");
+        // 🚨 The assertion is a POSITIVE signal, not an elapsed window: change the data on the
+        // OWNER and require the change to reach the client's mirror. That can only happen over the
+        // server-side stream this verdict must not have evicted — so the wait is on the property
+        // itself, and a regression fails as a timeout rather than passing before the verdict was
+        // even handled. (A counter check alone would do the latter: it can be read as zero long
+        // before the delivery reaches the handler.)
+        var hostUnits = await hostWorkspace.GetStream<BusinessUnit>()!
+            .Should().Within(10.Seconds()).Emit();
+        var updated = hostUnits!.First() with { DisplayName = SurvivedTheVerdict };
+        host.Post(new DataChangeRequest { Updates = [updated] });
+
+        var clientWorkspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
+        var mirrored = await clientWorkspace
+            .GetObservable<BusinessUnit>(updated.SystemName)
+            .Should().Within(10.Seconds())
+            .Match(x => x!.DisplayName == SurvivedTheVerdict);
+        mirrored.Should().Be(updated,
+            "ShuttingDown is the platform's transient verdict — JsonSynchronizationStream rides it "
+            + "out and RE-ARMS rather than re-subscribing. Evicting on it disposes the server-side "
+            + "half of a live subscription whose other half is deliberately waiting, so the owner's "
+            + "next change never arrives (#2756, which turned main red on "
+            + "ObservableQueryTests.ObserveQuery_EmitsRemovedOnDeletedNode)");
+
+        // Only now is the counter meaningful: the update above proves the verdict was delivered
+        // and handled, so a zero here is a decision, not a race.
+        hostWorkspace.ClientSubscriptionsEvicted.Should().Be(0,
+            "no eviction may be recorded for a transient verdict");
     }
 
     /// <summary>
