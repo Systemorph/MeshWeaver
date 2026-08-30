@@ -55,6 +55,12 @@ public class AdoptedBuildProvenanceTest
             LatestAssemblyCollection = "assemblies",
             LatestAssemblyPath = "adopted/Crm.Migration.dll",
             LatestAssemblyMvid = "ed21acce00000000",
+            // 🚨 …and the type had COMPILED here before, so it carries a CompiledSources snapshot
+            // that MATCHES the live one. Seed does not clear it. Without this line the fixture
+            // models only a never-compiled type, CompiledSources is null for free, and the refusal
+            // row's "the staleness question stays open" assertion passes without exercising
+            // anything — which is exactly how it read green while the defect was live.
+            CompiledSources = LiveSources,
         };
 
     /// <summary>
@@ -75,8 +81,11 @@ public class AdoptedBuildProvenanceTest
             "the bundle states which sources it was built from and they are not the live ones — "
             + "that is the case this whole mechanism exists to catch");
         result.CompiledSources.Should().BeNull(
-            "stamping CompiledSources is precisely the lie: it makes IsDirty false by "
-            + "construction, which is what let a stale adopted build read as current");
+            "🚨 the PRIOR snapshot has to be CLEARED, not merely left unstamped: this type compiled "
+            + "here before, so it arrives carrying a CompiledSources that MATCHES the live sources "
+            + "(Seed never clears it). Leaving it reads IsDirty=false beside "
+            + "BuildProvenance=AdoptionRefused — 'my compiled sources are current' about bytes that "
+            + "were explicitly rejected, which is the same unearned claim one step along");
         result.IsDirty.Should().BeTrue(
             "the staleness question must be left visibly OPEN, not answered by the adoption");
         result.CompilationStatus.Should().Be(CompilationStatus.Pending,
@@ -119,7 +128,12 @@ public class AdoptedBuildProvenanceTest
         result.BuildProvenance.Should().Be(BuildProvenance.AdoptionRefused,
             "the verdict is the same — what changes is only whether the rejected bytes keep serving");
         result.CompiledSources.Should().BeNull(
-            "the staleness question stays open on both branches; the stamp is the lie either way");
+            "the staleness question stays open on BOTH branches — and it matters most here, where "
+            + "the compile that would refresh it is refused by design, so this record is the one "
+            + "the node is LEFT in until a human rebakes");
+        result.IsDirty.Should().BeTrue(
+            "a refused adoption must never read as 'sources current', least of all on the mesh "
+            + "that cannot produce fresh ones");
 
         result.LatestAssemblyPath.Should().Be("adopted/Crm.Migration.dll");
         result.LatestAssemblyCollection.Should().Be("assemblies",

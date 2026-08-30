@@ -1025,6 +1025,16 @@ internal static class NodeTypeCompilationHelpers
             RequestedSourceStampAt = null,
             CompilationStatus = CompilationStatus.Pending,
             BuildProvenance = BuildProvenance.AdoptionRefused,
+            // 🚨 CLEARED, not merely "not stamped". Seed does NOT clear CompiledSources, so a type
+            // that had previously COMPILED here carries a snapshot matching CurrentSourceVersions
+            // straight into the refusal — and IsDirty would read FALSE while BuildProvenance reads
+            // AdoptionRefused. That contradictory record is the same unearned claim this function
+            // exists to remove, one step along: "my compiled sources are current" about bytes that
+            // were explicitly rejected. It matters most exactly where it is least visible — if the
+            // compile dispatched below never completes (the process dies, or RequirePrebuilt parks
+            // it), that false !IsDirty is the state the node is LEFT in. ApplyCompileFailure sets
+            // the same field to null for the same reason.
+            CompiledSources = null,
         };
 
         // 🚨 …AND WHETHER THE REJECTED BYTES KEEP SERVING IS CONDITIONAL ON THIS MESH BEING ABLE TO
