@@ -75,10 +75,6 @@ public static class ProjectFile
     /// <param name="GlobalUsings">Namespaces the SDK would have emitted as <c>global using</c>.</param>
     /// <param name="Properties">Every evaluated property, for diagnosis.</param>
     /// <param name="UnexecutedTargets">Names of <c>Target</c> elements this evaluator did not run.</param>
-    /// <param name="RazorItems">Every <c>.razor</c>/<c>.cshtml</c> the Razor SDK would compile, ordered.</param>
-    /// <param name="RazorLangVersion">The <c>RazorLangVersion</c> the generator is given.</param>
-    /// <param name="RazorConfiguration">The <c>RazorConfiguration</c> the generator is given.</param>
-    /// <param name="SupportLocalizedComponentNames">The <c>SupportLocalizedComponentNames</c> setting.</param>
     public sealed record Model(
         string ProjectPath,
         string Sdk,
@@ -100,12 +96,29 @@ public static class ProjectFile
         ImmutableArray<PackageRef> PackageReferences,
         ImmutableArray<string> GlobalUsings,
         ImmutableDictionary<string, string> Properties,
-        ImmutableArray<string> UnexecutedTargets,
-        ImmutableArray<RazorItem> RazorItems,
-        string RazorLangVersion,
-        string RazorConfiguration,
-        bool SupportLocalizedComponentNames)
+        ImmutableArray<string> UnexecutedTargets)
     {
+        /// <summary>
+        /// Every <c>.razor</c>/<c>.cshtml</c> the Razor SDK would compile, ordered.
+        ///
+        /// <para>🚨 These four are <c>init</c> PROPERTIES, not primary-constructor parameters.
+        /// Adding a parameter — even with a default — REPLACES the record's constructor signature,
+        /// which <c>scripts/check-record-signatures.py</c> refuses for exactly the right reason:
+        /// every assembly compiled against the old arity calls a constructor that no longer
+        /// exists. Defaulted to empty so a model built without them is still safe to enumerate
+        /// (a default <c>ImmutableArray</c> throws).</para>
+        /// </summary>
+        public ImmutableArray<RazorItem> RazorItems { get; init; } = [];
+
+        /// <summary>The <c>RazorLangVersion</c> the generator is given.</summary>
+        public string RazorLangVersion { get; init; } = DefaultRazorLangVersion;
+
+        /// <summary>The <c>RazorConfiguration</c> the generator is given.</summary>
+        public string RazorConfiguration { get; init; } = DefaultRazorConfiguration;
+
+        /// <summary>The <c>SupportLocalizedComponentNames</c> setting.</summary>
+        public bool SupportLocalizedComponentNames { get; init; }
+
         /// <summary>The project's own directory.</summary>
         public string Directory => Path.GetDirectoryName(ProjectPath)!;
     }
@@ -579,11 +592,13 @@ public static class ProjectFile
                     .Select(p => new PackageRef(p.Id, p.Version ?? _packageVersions.GetValueOrDefault(p.Id)))],
                 globalUsings,
                 _properties.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
-                [.. _unexecutedTargets],
-                razorItems,
-                Prop("RazorLangVersion") is { Length: > 0 } rlv ? rlv : DefaultRazorLangVersion,
-                Prop("RazorConfiguration") is { Length: > 0 } rc ? rc : DefaultRazorConfiguration,
-                IsTrue(Prop("SupportLocalizedComponentNames")));
+                [.. _unexecutedTargets])
+            {
+                RazorItems = razorItems,
+                RazorLangVersion = Prop("RazorLangVersion") is { Length: > 0 } rlv ? rlv : DefaultRazorLangVersion,
+                RazorConfiguration = Prop("RazorConfiguration") is { Length: > 0 } rc ? rc : DefaultRazorConfiguration,
+                SupportLocalizedComponentNames = IsTrue(Prop("SupportLocalizedComponentNames")),
+            };
         }
 
         /// <summary>

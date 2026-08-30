@@ -118,7 +118,6 @@ public static class ProjectBuild
     /// <param name="AssemblyPath">The emitted DLL, when the emit succeeded.</param>
     /// <param name="UnresolvedPackages">Packages neither the container nor <c>--extra-refs</c> supplies.</param>
     /// <param name="Failure">Why the project is red, when it is.</param>
-    /// <param name="RazorCount">How many <c>.razor</c>/<c>.cshtml</c> files the Razor generator compiled.</param>
     public sealed record ProjectResult(
         string ProjectPath,
         string AssemblyName,
@@ -128,9 +127,19 @@ public static class ProjectBuild
         int Warnings,
         string? AssemblyPath,
         ImmutableArray<string> UnresolvedPackages,
-        string? Failure,
-        int RazorCount = 0)
+        string? Failure)
     {
+        /// <summary>
+        /// How many <c>.razor</c>/<c>.cshtml</c> documents the Razor generator produced.
+        ///
+        /// <para>🚨 An <c>init</c> PROPERTY, not a primary-constructor parameter. Adding a
+        /// parameter — even with a default — REPLACES the record's constructor signature, and
+        /// <c>scripts/check-record-signatures.py</c> refuses that for exactly the reason it should:
+        /// every assembly compiled against the old arity calls a constructor that no longer
+        /// exists.</para>
+        /// </summary>
+        public int RazorCount { get; init; }
+
         /// <summary>Compiled, emitted, and within the warning policy.</summary>
         public bool IsGreen => Failure is null && AssemblyPath is not null;
     }
@@ -635,7 +644,7 @@ public static class ProjectBuild
             sink.Error($"[{name}] RED — {errors} error(s), {warnings} warning(s) in {clock.Elapsed.TotalMilliseconds:F0} ms");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, errors, warnings, null, [],
-                $"{errors} compile error(s)", razorGenerated);
+                $"{errors} compile error(s)") { RazorCount = razorGenerated };
         }
         if (warnings > 0 && !options.AllowWarnings)
         {
@@ -668,7 +677,8 @@ public static class ProjectBuild
                 + $", {warnings} warning(s), "
                 + $"{artifact.Length} bytes in {clock.Elapsed.TotalMilliseconds:F0} ms → {artifact.DllPath}");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
-                model.CompileItems.Length, 0, warnings, artifact.DllPath, [], null, razorGenerated);
+                model.CompileItems.Length, 0, warnings, artifact.DllPath, [], null)
+            { RazorCount = razorGenerated };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
