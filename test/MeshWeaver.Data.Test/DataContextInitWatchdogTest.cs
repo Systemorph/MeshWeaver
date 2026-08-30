@@ -138,22 +138,54 @@ public class DataContextInitFaultedTest(ITestOutputHelper output) : HubTestBase(
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => configuration.WithTypes(typeof(ProbeRequest), typeof(ProbeResponse));
 
+    /// <summary>
+    /// The hub's own request budget — the latency a request that FELL THROUGH the faulted arm
+    /// would wait out. Derived from the mechanism, not from a feeling of "fast": the rejection
+    /// handler answers in milliseconds, so any headroom below this separates the two outcomes
+    /// while leaving a loaded runner far more room than it needs.
+    /// </summary>
+    private static readonly TimeSpan HubRequestBudget = TimeSpan.FromSeconds(30);
+
     [Fact(Timeout = 60000)]
     public async Task FaultedInit_ReachesTerminalFailedState_AndAnswersFast()
     {
         var host = GetHost();
         var client = GetClient();
 
+        // 🚨 ONE bound was doing TWO jobs, and they want opposite values (#2700).
+        //
+        // This test asserts both "a faulted init is ANSWERED at all" (liveness — wants a generous
+        // bound, so a timeout means NEVER) and "…AndAnswersFast" (latency — wants a tight one).
+        // A single 15 s wait conflated them: a loaded runner pushed the rejection past it, the
+        // wait produced a TimeoutException, and the assertion read that as "the gate is shut" —
+        // the defect's own signature, for a defect that was not there. It ejected core #2803 from
+        // the merge queue at 17:32Z (a PR touching only Mesh.Contract/Security and an operator
+        // script, which cannot reach a DataContext). Simply widening to 60 s would have deleted
+        // the latency half instead — the test would still pass if the answer took 55 s, which is
+        // precisely what its name says it guards.
+        //
+        // So they are separated. The WAIT is generous, and the ELAPSED time is asserted on its
+        // own against a threshold derived from the mechanism rather than from a feeling of
+        // "fast": the rejection handler answers in milliseconds, whereas the failure mode — the
+        // faulted arm skipping the settle body — leaves the request to fall through to the hub's
+        // own request budget. Anything at or beyond that budget IS the fall-through.
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var act = () => client
             .Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
 
         var ex = (await act.Should().ThrowAsync<Exception>(
             "a hub whose data-source init threw must answer requests with an error")).Which;
+        stopwatch.Stop();
 
         ex.Should().NotBeOfType<TimeoutException>(
-            "a faulted init must be answered FAST by the rejection handler — a timeout means "
-            + "the faulted arm skipped the settle body and left the gate shut");
+            "a faulted init must be ANSWERED by the rejection handler — a timeout at a 60 s bound "
+            + "means the faulted arm skipped the settle body and left the gate shut for good");
+
+        stopwatch.Elapsed.Should().BeLessThan(HubRequestBudget,
+            $"the rejection handler answers in milliseconds; this took {stopwatch.Elapsed.TotalSeconds:F1}s, "
+            + $"at or beyond the hub's own {HubRequestBudget.TotalSeconds:F0}s request budget — which is what a "
+            + "request that FELL THROUGH the faulted arm looks like, rather than one it rejected");
         ex.ToString().Should().Contain("initialization failed",
             "the rejection must be reported as an initialization failure");
 
