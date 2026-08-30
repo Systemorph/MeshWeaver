@@ -40,6 +40,7 @@ from pathlib import Path
 
 WORKFLOW = ".github/workflows/main-cd.yml"
 STEP_ID = "release"
+DECIDE_STEP_ID = "decide"
 
 SHORT_SHA = "aaf95af"
 VERSION = "3.0.0-rc8.ci.6360"
@@ -99,6 +100,23 @@ def fixture(tagged: bool) -> list[dict]:
 
 
 # ── extraction ──────────────────────────────────────────────────────────────────────────────
+# ── the stub `gh` ───────────────────────────────────────────────────────────────────────────
+# 🚨 THIS IS A SAFETY DEVICE, not a convenience. The `decide` step posts a heal COMMENT to the
+# CD-failure issue on a reconcile attempt, and `run_step` inherits the caller's environment —
+# so on a developer machine with a live `gh` login, running this harness POSTS REAL COMMENTS TO
+# REAL ISSUES. That is not hypothetical: it happened while these cases were being written, three
+# times, to Systemorph/MeshWeaver#2810, and the comments had to be deleted by hand.
+#
+# A test harness must not be able to mutate anything outside its temp directory. The stub records
+# what was asked and answers nothing, so the step's control flow is unchanged and its side effect
+# is not. The credentials are cleared as well (below) — either alone would do, and one of them
+# will still be there after someone edits the other.
+GH_STUB = """#!/usr/bin/env bash
+echo "gh $*" >> "$GH_CALLS"
+exit 0
+"""
+
+
 def extract_step(root: Path, step_id: str) -> str:
     import yaml
 
@@ -136,15 +154,33 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         binp.mkdir()
         (binp / "az").write_text(AZ_STUB)
         (binp / "az").chmod(0o755)
+        (binp / "gh").write_text(GH_STUB)
+        (binp / "gh").chmod(0o755)
+        calls = tmp / "gh_calls"
+        calls.touch()
         fx = tmp / "fixture.json"
         fx.write_text(json.dumps(rows if rows is not None else []))
         out = tmp / "github_output"
         out.touch()
+        # The runner provides these to every step; a step that writes its decision to the job
+        # summary (the `decide` step does) dies on `set -u` without them. Supplying them here is
+        # not indulgence — omitting them would make the harness fail for a reason that has nothing
+        # to do with the logic under test, which is how a harness gets disabled.
+        summary = tmp / "github_step_summary"
+        summary.touch()
 
         e = dict(os.environ)
         e["PATH"] = f"{binp}:{e['PATH']}"
         e["AZ_FIXTURE"] = str(fx)
         e["GITHUB_OUTPUT"] = str(out)
+        e["GITHUB_STEP_SUMMARY"] = str(summary)
+        e.setdefault("GITHUB_REPOSITORY", "Systemorph/MeshWeaver")
+        e["GH_CALLS"] = str(calls)
+        # Belt AND braces: the stub above shadows `gh` on PATH, and these leave a real `gh` — if one
+        # is ever reached another way — with no credential to write with.
+        for cred in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"):
+            e[cred] = ""
+        e["GH_CONFIG_DIR"] = str(tmp / "gh-config")
         if az_fail:
             e["AZ_FAIL"] = "1"
         else:
@@ -152,7 +188,65 @@ def run_step(body: str, env: dict[str, str], rows: list[dict] | None, az_fail: b
         e.update(env)
 
         p = subprocess.run(["bash", "-c", body], env=e, capture_output=True, text=True)
-        return p.returncode, p.stdout + p.stderr, out.read_text()
+        # The job summary is part of what a decision step SAYS, so a case asserting on the
+        # decision's wording must be able to see it.
+        return p.returncode, p.stdout + p.stderr + summary.read_text(), out.read_text()
+
+
+
+# ── the DECIDE step: the path that only runs when main goes quiet ────────────────────────────
+def run_decide_cases(root, case) -> None:
+    """
+    🚨 <b>#2643 — a code path gated on INACTIVITY gets no coverage from ordinary traffic.</b>
+
+    `decide` chooses between building an image set and re-asserting the content bake
+    (`bake_only`). The bake-only branch is reached only on a reconcile that finds a COMPLETE image
+    set and nothing to build — i.e. only when nobody is pushing. On a busy trunk it never runs; its
+    first execution was in production at 22:12 on a Friday, and it then failed nine times out of
+    nine over 33 h before anyone noticed, because every fix-verifying push took the other branch.
+
+    #2642 fixed the specific defect and this harness executes THAT step. What it did not do is
+    remove the shape: the branch is still only exercised by silence. These cases exercise it on
+    every run instead — the deliberate exercise the issue asks for, without waiting for the trunk
+    to fall quiet or adding a dispatch input nobody remembers to use.
+
+    The inputs are the ones the step reads from `env:`, so this drives the real decision logic
+    rather than a restatement of it.
+    """
+    body = extract_step(root, DECIDE_STEP_ID)
+
+    # A stub is only evidence about what it stubs; the same rule as the release step. If the
+    # branch under test stops writing this output, every case below would pass vacuously.
+    if "bake_only=true" not in body:
+        die(
+            f"step `{DECIDE_STEP_ID}` no longer writes `bake_only=true` — the branch these cases "
+            "exercise is gone or renamed, so they would pass having tested nothing. Update the "
+            "harness with the step."
+        )
+
+    # A RECONCILE (not a push): no workflow_run payload, so the step takes the reconcile path.
+    reconcile = {
+        "GREEN": "true", "PENDING": "false", "CONCL": "success",
+        "SHORT": "abc1234", "REASON": "reconcile", "RELEVANT": "true",
+        "AGE_MIN": "120", "FRESH_AGE_MIN": "120", "BATCH_WINDOW": "",
+        "MAX_ATTEMPTS": "3", "RUN_URL": "https://example.invalid/run",
+        "GH_TOKEN": "", "COMPLETE": "true",
+    }
+
+    rc, log, outputs = run_step(body, reconcile, None)
+    case("a reconcile with a COMPLETE image set takes the bake-only branch",
+         rc == 0 and "bake_only=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    case("...and it does NOT also publish an image set",
+         "publish=true" not in outputs.replace("publish=true\n", "publish=true\n") or "publish=false" in outputs,
+         f"out={outputs!r}")
+    case("...and it says WHY, in the decision log",
+         "complete image set" in log, f"log={log}")
+
+    # The neighbour that must NOT be confused with it: an INCOMPLETE set on the same event is a
+    # real build. If these two ever collapse into one, delivery either stops or doubles.
+    rc, log, outputs = run_step(body, {**reconcile, "COMPLETE": "false"}, None)
+    case("an INCOMPLETE image set on the same event still builds",
+         rc == 0 and "bake_only=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
 
 
 def main() -> int:
@@ -218,10 +312,14 @@ def main() -> int:
          rc != 0 and "unknown release" in log, f"rc={rc} log={log}")
 
     print()
+    print(f"── step `{DECIDE_STEP_ID}` ──")
+    run_decide_cases(root, case)
+
+    print()
     if failures:
         print(f"::error::{len(failures)} case(s) failed: {', '.join(failures)}")
         return 1
-    print(f"all cases passed against {WORKFLOW} step `{STEP_ID}` (extracted, not copied)")
+    print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{DECIDE_STEP_ID}` (extracted, not copied)")
     return 0
 
 
