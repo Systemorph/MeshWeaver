@@ -95,16 +95,33 @@ project exit". Read that line; do not count words in the log.
      which does not explain exit=1 — host crashed after streaming results) elapsed=462s
 ```
 
-| classification | what happened | what to do |
+| classification | what the marker CLAIMS | what to do |
 |---|---|---|
-| `TESTFAIL` | ordinary failing tests; **the host completed normally** | read the named tests — a flake cluster or a real regression |
-| `MASKED` | the exit code is not explained by the trx — **the host died after streaming results** | a crash: read the trx `HOST_CRASHED` entry and [Debugging Native Crashes](/Doc/Architecture/DebuggingNativeCrashes) |
-| `TIMEOUT` / `SIGNAL` | the host died mid-run | same — the host, not the test |
+| `TESTFAIL` | ordinary failing tests; the host completed normally | read the named tests — a flake cluster or a real regression |
+| `MASKED` | the exit code is not explained by the trx, so the host is presumed to have died after streaming results | **verify before believing it** — see below |
+| `TIMEOUT` / `SIGNAL` | the host died mid-run | the host, not the test — [Debugging Native Crashes](/Doc/Architecture/DebuggingNativeCrashes) |
 
-**These are different defects and they attribute differently.** `TESTFAIL` on one test is a problem
-in that test's own path; `MASKED` is a process-level failure that can take unrelated tests down with
-it. Treating a `TESTFAIL` as a crash invents a trunk emergency; treating a `MASKED` as a flake hides
+**These attribute differently, so the classification has to be right.** A test failure is a problem
+in that test's own path; a crash is a process-level failure that can take unrelated tests down with
+it. Treating a failing test as a crash invents a trunk emergency; treating a crash as a flake hides
 one.
+
+🚨 **`MASKED` is DERIVED, not observed — and it has been wrong.** The marker infers "the host died"
+from `rc != <failures recorded in trx>`, which assumes xUnit v3 exits with the failure *count*. It
+does not always: on 2026-08-30 a `MeshWeaver.Hosting.Monolith.Test` shard recorded 2 failures and
+exited **1**, and the harness called that `MASKED (host crashed after streaming results)` — but the
+assembly had printed its own summary and completed:
+
+```
+=== TEST EXECUTION SUMMARY ===
+   MeshWeaver.Hosting.Monolith.Test  Total: 331, Errors: 0, Failed: 2, Skipped: 0, Not Run: 0, Time: 461.193s
+```
+
+**That line is the decisive evidence, and it outranks the marker.** An assembly that prints its
+execution summary ran to completion, whatever the classification says. A genuine crash looks like
+the *absence* of it — no summary for that assembly, a signal exit, or a non-zero exit with nothing
+recorded at all. (The classifier rule itself is being corrected in #2738; until that lands, and for
+reading any older run, check the summary yourself.)
 
 🚨 **`HOST_CRASHED` appearing in the log is NOT evidence of a crash.** The "Summarize test failures"
 step *echoes its own script*, including the sentence explaining the mechanism —
@@ -113,8 +130,9 @@ step *echoes its own script*, including the sentence explaining the mechanism �
 over the log therefore returns hits on runs where **no host crashed at all**, and the count scales
 with the number of steps that echoed the sentence, not with crashes. Measured 2026-08-30: two main
 reds were reported as "2× then 4× HOST_CRASHED" when the markers said one `TESTFAIL` (a
-`SilentReadNackTest` flake) and one genuine `MASKED`. It is the same family as the monitor traps
-above — a line a *script* printed is not a measurement.
+`SilentReadNackTest` flake) and one `MASKED` that the execution summary then showed was **also just
+failing tests**. Neither run crashed. It is the same family as the monitor traps above — a line a
+*script* printed is not a measurement.
 
 **Then attribute by REACHABILITY before by adjacency.** The merge that happens to sit under a red is
 the first suspect and usually the wrong one. Open the failing test project's `.csproj` and ask
