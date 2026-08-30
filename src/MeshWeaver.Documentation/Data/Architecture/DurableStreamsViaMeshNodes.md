@@ -256,8 +256,8 @@ checked against it:
 | classification of lifecycle faults as transient | **landed** — #2518, #2645, #2647 | row 1 needs nothing else |
 | this design | **this page** | records the direction on #1742, #2320, #2322, #2406 |
 | stale "listener never started" comments corrected | **landed with this page** | see below |
-| pod-hub claim: indefinite, derived lifetime, `Warning` where grains can be hosted | **landed** — #2738 | closed the #1742 residual *"a claim that fails to land degrades silently"*; core only |
-| routing: transient NACK on `PodHubNotHere`; fallback gated on declared client-hosted types | **landed** — #2738 | closed #2320, #2322, #2406 as *made unreachable*. Shipped with slice 1 rather than after a clean roll — see *The N+2 gate* above for why the two together satisfy it by construction |
+| pod-hub claim: indefinite, derived lifetime, `Warning` where grains can be hosted | **landed** — #2745 | closed the #1742 residual *"a claim that fails to land degrades silently"*; core only |
+| routing: transient NACK on `PodHubNotHere`; fallback gated on declared client-hosted types | **landed** — #2745 | closed #2320, #2322, #2406 as *made unreachable*. Shipped with slice 1 rather than after a clean roll — see *The N+2 gate* above for why the two together satisfy it by construction |
 | owner-side eviction re-gated on the `TargetUnserved` STAMP alone | **landed with the slice above** | required by it: gating on `NotFound` would have made the new verdict inert and re-opened #2426/#2546 |
 | `DataChangeNotification.NodeType/Version` + `StorageChangeFeedRelay` | next | **core first**; the relay must tolerate a payload without the new fields |
 | `notify_mesh_node_changes()` emits `nodeType`, `version` | after the core slice | PostgreSql adapter (MeshWeaver.Plugins); a schema-initializer revision, re-applied by the existing DROP-then-CREATE |
