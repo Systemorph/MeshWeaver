@@ -278,10 +278,12 @@ public static class BuildCoordinationExtensions
     ///
     /// <para>🚨 This is a subscription to THIS cluster's MIRROR of the build root, so it only ever
     /// emits for a GO this cluster has been told about. A builder in another process publishes to
-    /// the same durable row but no change feed crosses the process boundary (the PG <c>LISTEN</c>
-    /// session is not started in the partitioned wiring), so a mirror activated before that write
-    /// never learns. Anything that must not hang on the answer reads
-    /// <see cref="ReadBuildGo"/> — the durable witness — rather than waiting to be told (#1440).</para>
+    /// the same durable row, and the PG <c>LISTEN/NOTIFY</c> feed does cross the process boundary
+    /// (since #1816 the partitioned wiring starts the session; <c>ChangeListenerWiringTests</c>
+    /// pins it) — but a <c>NOTIFY</c> is delivered only to a LIVE session and is never replayed,
+    /// so a mirror activated AFTER that write is still never told. Anything that must not hang on
+    /// the answer reads <see cref="ReadBuildGo"/> — the durable witness — rather than waiting to
+    /// be told (#1440; the design is Doc/Architecture/DurableStreamsViaMeshNodes).</para>
     /// </summary>
     /// <param name="hub">The calling hub.</param>
     /// <param name="frameworkVersion">The fingerprint to wait for.</param>

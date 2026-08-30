@@ -269,9 +269,10 @@ public static class BuildNodeType
     ///
     /// <list type="number">
     /// <item>Read the claim LOCK (<see cref="ClaimPath"/>). It is the only witness a second cluster
-    /// also sees — Orleans membership is per-cluster by construction, and no change feed crosses the
-    /// process boundary (the PG <c>LISTEN</c> session is not started in the partitioned wiring), so
-    /// a mirror can be arbitrarily far behind another cluster's grant and will never be told.</item>
+    /// also sees — Orleans membership is per-cluster by construction, and the PG <c>LISTEN/NOTIFY</c>
+    /// feed (live in the partitioned wiring since #1816) delivers only to a session that was
+    /// already listening when the row committed, never as a replay — so a mirror can be
+    /// arbitrarily far behind another cluster's grant and will never be told.</item>
     /// <item>Decide with <see cref="Arbitrate"/> over the LOCK's holder state and THIS cluster's
     /// pending registrations. Registrations come from the mirror because a candidate that registered
     /// milliseconds ago has not reached storage yet — and a cluster can only ever grant one of its
