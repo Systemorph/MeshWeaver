@@ -320,6 +320,48 @@ static string? PromptForToken()
         ct));
 
     build.Subcommands.Add(plugin);
+
+    // --- build project ------------------------------------------------------
+    // 🚨 NO dotnet SDK and NO NuGet on the path: the .csproj is evaluated without MSBuild and every
+    // reference is resolved from the image's /app. See Doc/Architecture/InMeshBuildAndTest.
+    var projPathArg = new Argument<string>("path")
+    { Description = "Path to the .csproj (or a directory holding exactly one)." };
+    var projImageOpt = new Option<string?>("--image")
+    { Description = "Image to build against; pulled and pinned by digest. Omit only when this command is itself running inside a MeshWeaver image." };
+    var projOutOpt = new Option<string?>("--output", "-o")
+    { Description = "Where the emitted assemblies land. Default: a temp dir." };
+    var projRootOpt = new Option<string?>("--root")
+    { Description = "Directory mounted as /repo. Default: the nearest Directory.Build.props ancestor." };
+    var projRefsOpt = new Option<string[]>("--extra-refs")
+    { Description = "Directory of libraries ADDITIONAL to the platform (a PackageReference the image does not supply). Repeatable.", Arity = ArgumentArity.ZeroOrMore };
+    var projAcceptOpt = new Option<string[]>("--accept")
+    { Description = "Acknowledge one construct the evaluator cannot reproduce (e.g. target:<Name>, embedded-resource, conditions). Repeatable.", Arity = ArgumentArity.ZeroOrMore };
+    var projNoWarnOpt = new Option<bool>("--no-warn")
+    { Description = "Fail the build on any warning (default true). Pass --no-warn=false or --allow-warnings to opt out.", DefaultValueFactory = _ => true };
+    var projAllowWarnOpt = new Option<bool>("--allow-warnings")
+    { Description = "Alias for --no-warn=false." };
+    var projNoPullOpt = new Option<bool>("--no-pull")
+    { Description = "Use the image the docker daemon already has instead of pulling it (for a locally built image)." };
+
+    var project = new Command("project",
+        "Compile a .csproj against a MeshWeaver image's own assemblies — no dotnet SDK, no NuGet restore.")
+    { projPathArg, projImageOpt, projOutOpt, projRootOpt, projRefsOpt, projAcceptOpt, projNoWarnOpt, projAllowWarnOpt, projNoPullOpt };
+
+    project.SetAction((result, ct) => new BuildProjectCommand(Console.Out, Console.Error).RunAsync(
+        new BuildProjectOptions
+        {
+            ProjectPath = result.GetValue(projPathArg)!,
+            Image = result.GetValue(projImageOpt),
+            Output = result.GetValue(projOutOpt),
+            SourceRoot = result.GetValue(projRootOpt),
+            ExtraReferenceDirectories = result.GetValue(projRefsOpt) ?? [],
+            Accept = result.GetValue(projAcceptOpt) ?? [],
+            AllowWarnings = result.GetValue(projAllowWarnOpt) || !result.GetValue(projNoWarnOpt),
+            NoPull = result.GetValue(projNoPullOpt),
+        },
+        ct));
+
+    build.Subcommands.Add(project);
     root.Subcommands.Add(build);
 }
 

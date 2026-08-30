@@ -18,6 +18,16 @@
          same generated skeleton the runtime compiles, or it does not register as a node
          provider at all. -->
     <InternalsVisibleTo Include="MeshWeaver.Plugin.Build" />
+    <!-- `mw-plugin-test build-project` compiles a .csproj against the container's own assemblies
+         (no SDK, no NuGet) and shares the EMIT rather than writing a second one:
+         EmitPipeline.EmitCompilationToDirectory + EmittedArtifact are the verified write, and a
+         builder that re-implemented them would re-acquire the #1412 failure this assembly exists
+         to prevent. 🚨 It does NOT use CreateCompilationOptions — those feed
+         GeneratedInputIdentity.OptionsFingerprint, and a project's settings must never reach the
+         key every cached NodeType assembly is filed under. -->
+    <!-- 🚨 The ASSEMBLY name, not the project name: tools/MeshWeaver.PluginTester emits
+         mw-plugin-test.dll, and an IVT naming the project grants nothing at all. -->
+    <InternalsVisibleTo Include="mw-plugin-test" />
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
