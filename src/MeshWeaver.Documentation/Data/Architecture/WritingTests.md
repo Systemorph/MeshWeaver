@@ -101,6 +101,28 @@ Before writing a test, review the invariants every test must respect:
 
 ---
 
+## In-mesh tests and the build process (node repos)
+
+A NodeType in a node repo ships its tests as `<Type>/Test/*.cs` — **static classes whose public
+static parameterless methods throw on failure** — and a `Tests` layout area that lists them. Since
+2026-08-30 those run through the container the platform build produced, not through xUnit:
+
+```
+mw-plugin-test build <repo-root> [<package>... | all]
+```
+
+**Build means compile and run tests**, per package, as a dependency cascade: a package observes
+the result streams of the packages it requires and starts itself when the last one is green; on
+red the dependents are blocked by name, on green they continue; independent packages build in
+parallel; every package reports its timings. Sources come from the checkout on disk and compile
+against the image's `/app` plus the assemblies the dependency packages just emitted — no mesh
+import, no `$(MeshWeaverRoot)` source checkout, no `MeshWeaver.Fixture`. Cases that need a host
+are counted as `needs-mesh` and run by the gate, seeded from the build's output. See
+`tools/MeshWeaver.PluginTester/README.md` (`build`).
+
+`MeshWeaver.Fixture` and the two TestBase assemblies are this repo's OWN test support: they live
+under `test/` and are never packed or published.
+
 ## The Canonical Test Base
 
 Every monolith test inherits `MonolithMeshTestBase`. The shape is always the same:
