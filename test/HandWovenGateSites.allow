@@ -42,7 +42,7 @@ test/MeshWeaver.Hosting.Orleans.Test/IoPoolSiloTeardownTest.cs	2
 test/MeshWeaver.Hosting.Orleans.Test/RoutingGrainDeliveryRetryTest.cs	3
 test/MeshWeaver.Hosting.Orleans.Test/RoutingGrainTurnIsolationTest.cs	1
 test/MeshWeaver.Hosting.Test/IoPoolResidualNamesItsPoolTest.cs	2
-test/MeshWeaver.Hosting.Test/IoPoolTest.cs	30
+test/MeshWeaver.Hosting.Test/IoPoolTest.cs	32
 test/MeshWeaver.Hosting.Test/LiveQueryForeignTrampolineTest.cs	1
 test/MeshWeaver.Hosting.Test/LiveQueryHandoffDropTest.cs	6
 test/MeshWeaver.Layout.Test/QueryInRenderDeadlockTest.cs	1

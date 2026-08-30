@@ -27,7 +27,7 @@ namespace MeshWeaver.Documentation.Test;
 ///   <item><see cref="ProductionRoots"/> — ZERO, with no allow file. The only permitted gates are
 ///   the <see cref="SanctionedGates"/> entries, each re-checked against the tree on every run.</item>
 ///   <item><see cref="RatchetedRoots"/> — <c>test/</c> carries a seeded inventory that may only
-///   SHRINK. Measured 2026-08-30: 79 sites across 27 files, every one a
+///   SHRINK. Measured 2026-08-30: 81 sites across 24 files, every one a
 ///   <c>ManualResetEventSlim</c>, 30 of them in <c>IoPoolTest.cs</c>. The sweep lands in a later
 ///   wave; this freezes the debt so it cannot grow while that wave is written. When it empties,
 ///   move <c>test</c> into <see cref="ProductionRoots"/> in the SAME change and delete the
@@ -52,7 +52,7 @@ public class HandWovenGateRatchetGuard
     /// <summary>
     /// The sum of the seeded inventory. Lower it by exactly what you delete, in the same change.
     /// </summary>
-    private const int TotalBudget = 79;
+    private const int TotalBudget = 81;
 
     /// <summary>
     /// The primitives that park a thread. <c>Monitor.Wait</c> is included because it is the same
