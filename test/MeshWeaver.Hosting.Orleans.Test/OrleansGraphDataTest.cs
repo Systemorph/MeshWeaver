@@ -21,7 +21,6 @@ using Orleans.TestingHost;
 using Orleans.TestingHost.InProcess;
 using Xunit;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 // TODO: needs custom shared fixture — uses GraphDataSiloConfigurator with
@@ -86,7 +85,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         // First ping to ensure Organization grain is activated and compiled
         var pingResponse = await portal
-            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().ToTask(new CancellationTokenSource(45.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().Await(new CancellationTokenSource(45.Seconds()).Token);
         Output.WriteLine($"Ping response: {pingResponse.Message.GetType().Name}");
 
         var workspace = portal.GetWorkspace();
@@ -108,7 +107,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
         var organizationAddress = AddressExtensions.CreateAppAddress("Kernel");
 
         var pingResponse = await portal
-            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().ToTask(new CancellationTokenSource(45.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().Await(new CancellationTokenSource(45.Seconds()).Token);
         Output.WriteLine($"Ping response: {pingResponse.Message.GetType().Name}");
 
         var workspace = portal.GetWorkspace();
@@ -136,7 +135,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         // Check the path resolution (verifies both persistence and catalog are working)
         var pathResolver = siloServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await pathResolver.ResolvePath("app/Kernel").FirstAsync().ToTask();
+        var resolution = await pathResolver.ResolvePath("app/Kernel").FirstAsync().Await();
         Output.WriteLine($"ResolvePathAsync('app/Kernel'): Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
         resolution.Should().NotBeNull("app/Kernel path should resolve");
     }
@@ -149,7 +148,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         Output.WriteLine("Sending PingRequest to Organization via Orleans routing...");
         var response = await portal
-            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().ToTask(new CancellationTokenSource(45.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().Await(new CancellationTokenSource(45.Seconds()).Token);
 
         Output.WriteLine($"Received response: {response.Message.GetType().Name}");
         response.Should().NotBeNull();

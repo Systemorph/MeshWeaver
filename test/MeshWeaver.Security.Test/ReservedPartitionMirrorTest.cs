@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -7,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -51,7 +51,7 @@ public class ReservedPartitionMirrorTest(ITestOutputHelper output) : MonolithMes
         };
         var ctx = new NodeValidationContext { Operation = NodeOperation.Delete, Node = node };
 
-        var result = await validator.Validate(ctx).FirstAsync().ToTask();
+        var result = await validator.Validate(ctx).FirstAsync().Await();
 
         Assert.True(result.IsValid, "removing an errant admin grant on the Auth mirror must be allowed");
     }

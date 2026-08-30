@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.AI;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Graph.Test;
 
@@ -23,7 +23,7 @@ public class ChatClientImageDescriberTest
         var chat = new RecordingChatClient("A bar chart of quarterly revenue.");
         var describer = new ChatClientImageDescriber(() => chat, new IoPoolRegistry());
 
-        var description = await describer.Describe(SampleBytes, "chart.jpg").FirstAsync().ToTask();
+        var description = await describer.Describe(SampleBytes, "chart.jpg").FirstAsync().Await();
 
         description.Should().Be("A bar chart of quarterly revenue.");
         chat.LastPrompt.Should().Contain("chart.jpg", "the file name is a prompt hint");
@@ -37,7 +37,7 @@ public class ChatClientImageDescriberTest
     {
         var describer = new ChatClientImageDescriber(() => null, new IoPoolRegistry());
 
-        var description = await describer.Describe(SampleBytes, "chart.png").FirstAsync().ToTask();
+        var description = await describer.Describe(SampleBytes, "chart.png").FirstAsync().Await();
 
         description.Should().BeEmpty("no vision model available → the image indexes as no-text");
     }
@@ -48,7 +48,7 @@ public class ChatClientImageDescriberTest
         var chat = new RecordingChatClient("unused", onInvoke: () => throw new InvalidOperationException("boom"));
         var describer = new ChatClientImageDescriber(() => chat, new IoPoolRegistry());
 
-        var description = await describer.Describe(SampleBytes, "chart.png").FirstAsync().ToTask();
+        var description = await describer.Describe(SampleBytes, "chart.png").FirstAsync().Await();
 
         description.Should().BeEmpty("a failed describe call must not fail the indexing activity");
     }

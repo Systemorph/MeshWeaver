@@ -238,6 +238,37 @@ internal static class PermissionEvaluator
         fast = (fast.RoleIds, fast.PermissionCap,
             fast.PublicGrant | GateGrant(gates, staticGatedNodes, nodePath));
 
+        // 🚨 THREE OF THESE FOUR LEGS MUST NEVER BE `StartWith`-SEEDED (issue #2742). CombineLatest
+        // emits nothing until every source has, so a leg that starves parks the whole fold — and
+        // seeding it empty is the obvious cure, already applied to ObserveGatedNodes below. It does
+        // NOT generalise, and the rule that decides it is MONOTONICITY:
+        //
+        //   a leg may carry an empty seed ⟺ its contribution is purely ADDITIVE.
+        //
+        // ObserveGatedNodes is the only one that qualifies — GateGrant never subtracts, so an
+        // as-yet-unseen gated node simply has no public surface and the pre-load window is strictly
+        // more restrictive. Every other leg carries SUBTRACTION as well:
+        //
+        //   • ObserveEffectiveAssignments — ComputeScopeRoles derives Denied from the SAME nodes as
+        //     Granted, so an empty seed drops runtime DENIALS of roles that survive it (a static
+        //     grant, the self-partition Admin) → fail-OPEN. It also drops every runtime GRANT,
+        //     which is what almost every real grant is: the first emission is then Permission.None,
+        //     and because AccessControlPipeline takes the fold's FIRST emission as its verdict
+        //     (CheckPermissionOutcome → TakeDecisionOutsideGate → Take(1)), a cold scope answers an
+        //     entitled user "Access denied" — the false, actionable-looking verdict #974 exists to
+        //     prevent. A hang is a bad answer; a wrong answer is worse.
+        //   • ObserveScopePolicies — PermissionCap and BreaksInheritance are RESTRICTIONS, so their
+        //     ABSENCE widens: an empty seed falls back to the static policy map, whose missing entry
+        //     means cap = ~0 and inheritance unbroken → fail-OPEN.
+        //   • ObserveAllMembershipNodes — the subject set decides which DENIALS match as much as
+        //     which grants do, so an empty seed drops a group deny while keeping the viewer's direct
+        //     grant → fail-OPEN.
+        //
+        // So the fold's liveness cannot be bought with a seed: there is no permissive seed that is
+        // not a hole and no conservative seed that is not a spurious denial. A starving leg's only
+        // sound terminal is an ERROR, which the fold already propagates as Undetermined →
+        // ErrorType.Unavailable. Pinned by PermissionFoldLegSeedGuardTest; reasoned out in
+        // Doc/Architecture/AccessControl → "The convergence contract".
         var enriched = Observable.CombineLatest(
                 ObserveEffectiveAssignments(hub, cache, nodePath, staticNodes),
                 ObserveScopePolicies(hub, cache, nodePath, staticPolicies),

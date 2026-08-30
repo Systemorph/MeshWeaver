@@ -1,10 +1,10 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -48,7 +48,7 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
             AuthorName = "Mesh Weaver",
             AuthorEmail = "mesh@weaver.test",
             AccessToken = "",
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
 
         Assert.Equal(2, result.FilesWritten);
         Assert.Equal(1, result.FilesDeleted); // stale.json vanished
@@ -60,10 +60,10 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
         Assert.Equal("# fresh\n", await File.ReadAllTextAsync(Path.Combine(check, "Edu/fresh.md")));
         Assert.False(File.Exists(Path.Combine(check, "Edu/stale.json")));
         // The reported SHA is the remote head.
-        var head = await Git.Run(check, ["rev-parse", "HEAD"]).Timeout(30.Seconds()).ToTask();
+        var head = await Git.Run(check, ["rev-parse", "HEAD"]).Timeout(30.Seconds()).Await();
         Assert.Equal(head.StdOut.Trim(), result.CommitSha);
         // The commit records the requested author.
-        var author = await Git.Run(check, ["log", "-1", "--pretty=%an <%ae>"]).Timeout(30.Seconds()).ToTask();
+        var author = await Git.Run(check, ["log", "-1", "--pretty=%an <%ae>"]).Timeout(30.Seconds()).Await();
         Assert.Equal("Mesh Weaver <mesh@weaver.test>", author.StdOut.Trim());
     }
 
@@ -85,13 +85,13 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
             AuthorName = "T",
             AuthorEmail = "t@t.dev",
             AccessToken = "",
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
 
         var check = await CloneForInspection(temp, bare);
         Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(check, "Space/content/clip.mp4")));
 
         // And the fetch classifies it binary again — full loop, bytes intact.
-        var snapshot = await Client.Fetch(FileUrl(bare), "main", "Space", "").Timeout(60.Seconds()).ToTask();
+        var snapshot = await Client.Fetch(FileUrl(bare), "main", "Space", "").Timeout(60.Seconds()).Await();
         var clip = Assert.Single(snapshot.Files, f => f.Path == "content/clip.mp4");
         Assert.True(clip.IsBinary);
         Assert.Equal(bytes, clip.Bytes);
@@ -113,12 +113,12 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
             AuthorName = "T",
             AuthorEmail = "t@t.dev",
             AccessToken = "",
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
 
         // The new branch carries the default branch's history (mergeable, not an orphan).
         var check = await CloneForInspection(temp, bare, "sync/export");
         Assert.True(File.Exists(Path.Combine(check, "README.md")), "default-branch content preserved");
-        var mergeBase = await Git.Run(check, ["merge-base", "origin/main", "HEAD"]).Timeout(30.Seconds()).ToTask();
+        var mergeBase = await Git.Run(check, ["merge-base", "origin/main", "HEAD"]).Timeout(30.Seconds()).Await();
         Assert.True(mergeBase.Ok, "the sync branch shares an ancestor with main");
     }
 
@@ -140,7 +140,7 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
             AuthorName = "T",
             AuthorEmail = "t@t.dev",
             AccessToken = "",
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
 
         Assert.Equal(1, result.FilesWritten);
         var check = await CloneForInspection(temp, bare);
@@ -163,7 +163,7 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
             AuthorEmail = "t@t.dev",
             AccessToken = "",
             CreateBranchIfMissing = false,
-        }).Timeout(60.Seconds()).ToTask());
+        }).Timeout(60.Seconds()).Await());
     }
 
     [Fact(Timeout = 120000)]
@@ -186,13 +186,13 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
             AuthorName = "T",
             AuthorEmail = "t@t.dev",
             AccessToken = "",
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
 
-        var atBranch = await Client.Fetch(FileUrl(bare), "main", "Docs", "").Timeout(60.Seconds()).ToTask();
+        var atBranch = await Client.Fetch(FileUrl(bare), "main", "Docs", "").Timeout(60.Seconds()).Await();
         Assert.Equal("version 2", Assert.Single(atBranch.Files, f => f.Path == "a.md").Content);
         Assert.NotEqual(shaV1, atBranch.CommitSha);
 
-        var atSha = await Client.Fetch(FileUrl(bare), shaV1, "Docs", "").Timeout(60.Seconds()).ToTask();
+        var atSha = await Client.Fetch(FileUrl(bare), shaV1, "Docs", "").Timeout(60.Seconds()).Await();
         Assert.Equal(shaV1, atSha.CommitSha);
         Assert.Equal("version 1", Assert.Single(atSha.Files, f => f.Path == "a.md").Content);
     }
@@ -208,7 +208,7 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
 
         var snapshot = await Client
             .Fetch(FileUrl(bare), "main", "Plugins", "", p => p.EndsWith("/index.json", StringComparison.Ordinal))
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
 
         Assert.Equal(2, snapshot.Files.Count);
         Assert.All(snapshot.Files, f => Assert.EndsWith("index.json", f.Path));
@@ -228,7 +228,7 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
         await RunGit(seed, "-c", "user.email=t@t.dev", "-c", "user.name=T", "commit", "-m", "branch");
         await RunGit(seed, "push", "-q", "origin", "deadbee");
 
-        var snapshot = await Client.Fetch(FileUrl(bare), "deadbee", "Docs", "").Timeout(60.Seconds()).ToTask();
+        var snapshot = await Client.Fetch(FileUrl(bare), "deadbee", "Docs", "").Timeout(60.Seconds()).Await();
         Assert.Equal("on deadbee", Assert.Single(snapshot.Files).Content);
     }
 
@@ -248,7 +248,7 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
                 AuthorName = "T",
                 AuthorEmail = "t@t.dev",
                 AccessToken = "",
-            }).Timeout(60.Seconds()).ToTask());
+            }).Timeout(60.Seconds()).Await());
     }
 
     // ── local-remote plumbing ────────────────────────────────────────────────
@@ -292,7 +292,7 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
 
     private async Task<string> RemoteHead(string temp, string bare)
     {
-        var r = await Git.Run(temp, ["-C", bare, "rev-parse", "refs/heads/main"]).Timeout(30.Seconds()).ToTask();
+        var r = await Git.Run(temp, ["-C", bare, "rev-parse", "refs/heads/main"]).Timeout(30.Seconds()).Await();
         Assert.True(r.Ok, r.Message);
         return r.StdOut.Trim();
     }
@@ -306,7 +306,7 @@ public class GitProtocolRepoClientTest(ITestOutputHelper output) : GitHubSyncTes
 
     private async Task RunGit(string dir, params string[] args)
     {
-        var r = await Git.Run(dir, args).Timeout(30.Seconds()).ToTask();
+        var r = await Git.Run(dir, args).Timeout(30.Seconds()).Await();
         Assert.True(r.Ok, $"git {string.Join(' ', args)} failed (exit {r.ExitCode}): {r.Message}");
     }
 }

@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -9,6 +8,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -45,7 +45,7 @@ public class ColdReactivationPatchReadYourWriteTest(ITestOutputHelper output) : 
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
             .Where(n => n is not null)
-            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(10.Seconds()).Await(ct);
 
         // Recycle: dispose the per-node hub — the next write must reactivate it COLD.
         var nodeHub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
@@ -66,7 +66,7 @@ public class ColdReactivationPatchReadYourWriteTest(ITestOutputHelper output) : 
                 .Select(_ => true)
                 .Catch<bool, Exception>(_ => Observable.Return(false)))
             .Where(ok => ok)
-            .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(30.Seconds()).Await(ct);
         Output.WriteLine($"[write] update acked with marker {marker}");
 
         // Read-your-write: a successful cross-hub Update against the reactivated hub
@@ -76,7 +76,7 @@ public class ColdReactivationPatchReadYourWriteTest(ITestOutputHelper output) : 
         var persisted = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
             .Where(n => n is not null && n.Name == marker)
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(15.Seconds()).Await(ct);
         persisted!.Name.Should().Be(marker,
             "a write acknowledged against a cold-reactivated per-node hub must be applied "
             + "and durable — never dropped by the merge/load race with the ack watcher "

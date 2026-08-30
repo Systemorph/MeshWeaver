@@ -1,12 +1,12 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -46,7 +46,7 @@ public class SourceSnapshotEstablishmentTest
         var cachedFirst = Observable.Return(SourceSnapshot.Established(Array.Empty<MeshNode>()));
 
         var snapshot = await NodeCompileShaping.RaceSourceSnapshot(probe, cachedFirst)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await(ct);
 
         snapshot.IsEstablished.Should().BeFalse(
             "one of the source queries did not answer, so NOTHING is known about the source set — "
@@ -72,7 +72,7 @@ public class SourceSnapshotEstablishmentTest
             .Select(_ => SourceSnapshot.Established(new[] { Source("Acme/Scope/Source/self") }));
 
         var snapshot = await NodeCompileShaping.RaceSourceSnapshot(probe, cachedFirst)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await(ct);
 
         snapshot.IsEstablished.Should().BeTrue(
             "the healthy leg established the set — a failure on the OTHER leg must not turn a "

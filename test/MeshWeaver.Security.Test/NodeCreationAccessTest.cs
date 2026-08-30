@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -14,6 +13,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -58,7 +58,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         try
         {
             // Act & Assert - CreateNode should throw UnauthorizedAccessException
-            Func<Task> act = () => NodeFactory.CreateNode(node).FirstAsync().ToTask();
+            Func<Task> act = () => NodeFactory.CreateNode(node).FirstAsync().Await();
             var exception = await act.Should().ThrowAsync<UnauthorizedAccessException>();
             exception.Which.Message.Should().Contain("Access denied", "Should indicate authorization failure");
             Output.WriteLine($"Exception thrown as expected: {exception.Which.Message}");
@@ -263,7 +263,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
                 NodeType = MarkdownNodeType.NodeType
             };
 
-            Func<Task> act = () => NodeFactory.CreateNode(threadNode).FirstAsync().ToTask();
+            Func<Task> act = () => NodeFactory.CreateNode(threadNode).FirstAsync().Await();
 
             // Assert
             await act.Should().ThrowAsync<UnauthorizedAccessException>(

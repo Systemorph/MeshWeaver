@@ -12,10 +12,14 @@ namespace MeshWeaver.Mesh.Security;
 ///     the permission. A DEFINITIVE negative: the grants were read and they do not cover this
 ///     (path, permission).</description></item>
 ///   <item><description><b>Undetermined</b> (<see cref="UndeterminedReason"/> non-null) — the fold
-///     FAULTED, so no verdict exists. The caller must report unavailability, NEVER a denial and
-///     NEVER a grant. <see cref="IsGranted"/> is <c>false</c> here so a consumer that ignores the
-///     tri-state still fails CLOSED — but a consumer that reports it as "Access denied" is
-///     lying.</description></item>
+///     reached NO verdict: it FAULTED, or it TERMINATED WITHOUT EMITTING (issue #2742 — one leg of
+///     the <c>CombineLatest</c> completed without a value, which empties the whole fold). The
+///     caller must report unavailability, NEVER a denial and NEVER a grant. <see cref="IsGranted"/>
+///     is <c>false</c> here so a consumer that ignores the tri-state still fails CLOSED — but a
+///     consumer that reports it as "Access denied" is lying. 🚨 The silent variant only fails
+///     closed because it is MATERIALISED as this outcome: leaving the check observable EMPTY is not
+///     a refusal, it is an ALLOW, because every consumer reads "no outcome" as "nothing objected".
+///     </description></item>
 /// </list></para>
 ///
 /// <para><b>Why the distinction has to live at the fold.</b> Only the fold knows whether it

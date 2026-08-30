@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
@@ -15,6 +14,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Auth.Test;
 
@@ -79,7 +79,7 @@ public class DevAuthControllerNewUserTests(ITestOutputHelper output) : MonolithM
                 .Take(1)
                 .Catch((Exception _) => Observable.Return<MeshNode?>(null)))
             .Where(n => n is not null && n.NodeType == "User" && n.Content is not null)
-            .Take(1).Timeout(TimeSpan.FromSeconds(20)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(20)).Await();
         node!.Id.Should().Be(personId, "onboarding wrote the partition-root User node at the bare id path");
     }
 
@@ -97,7 +97,7 @@ public class DevAuthControllerNewUserTests(ITestOutputHelper output) : MonolithM
             .Where(n => n is not null && string.Equals(n.NodeType, "User", StringComparison.OrdinalIgnoreCase))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask();
+            .Await();
 
         var ex = await Assert.ThrowsAnyAsync<Exception>(() => read);
         ex.Should().BeOfType<DeliveryFailureException>(

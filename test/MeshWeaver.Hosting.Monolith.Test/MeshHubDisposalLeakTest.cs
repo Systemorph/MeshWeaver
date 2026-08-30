@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -16,6 +15,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Diagnostics.Runtime;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -134,7 +134,7 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask();
+            .Await();
 
         var sp = ServiceProvider;
         ServiceProvider = null!;

@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
@@ -19,6 +18,7 @@ using Microsoft.Extensions.Logging;
 using Xunit;
 using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.GitSync;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -176,7 +176,7 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
             var applied = await updater.Patched
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
             applied.Should().Be(FakeAcrTagLister.CiTag);
 
             // …and it really went THROUGH the failing write, not around it.
@@ -215,7 +215,7 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
             var firstTag = await updater.Patched
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
             firstTag.Should().Be(FakeAcrTagLister.CiTag);
 
             // 2. LATER processes an UpdatePolicy change: flip the (now-seeded) node to Stable via
@@ -233,13 +233,13 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
                 })
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
 
             var stableTag = await updater.Patched
                 .Where(tag => tag == FakeAcrTagLister.StableTag)
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
             stableTag.Should().Be(FakeAcrTagLister.StableTag);
 
             // The recovery really went through the injected fault + at least one resubscription.
@@ -275,7 +275,7 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
             })
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(ct);
+            .Await(ct);
 
         var service = new MidLifeFaultService(
             Mesh, acr, updater, options,
@@ -292,7 +292,7 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
             // SubscribeOn(TaskPool), so it returns before the build-completion watch is established,
             // and a publication racing that subscription is absorbed as the watch's BASELINE rather
             // than seen as a new build. Waiting for the first patch proves the watch is live.
-            await updater.Patched.FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask(ct);
+            await updater.Patched.FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await(ct);
 
             await SelfUpdateEventDriver.PublishBuildAsync(Mesh, "MeshWeaver", runNumber: 1);
             // ONE publication is ONE check now — the old "two patches" wait was a proxy for "the
@@ -302,7 +302,7 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
                 .Where(tag => tag == FakeAcrTagLister.StableTag)
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
             var beforeFault = updater.Tags.Count;
 
             // Fault the LIVE read mid-life — the prod shape (hub-cache subscription drops while the
@@ -324,7 +324,7 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
                 .Where(tag => tag == FakeAcrTagLister.StableTag)
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
-                .ToTask(ct);
+                .Await(ct);
 
             // The wrong-policy window is GONE: nothing after the fault may run under the default
             // (Continuous ⇒ CiTag). Every post-fault patch is the Stable pick.

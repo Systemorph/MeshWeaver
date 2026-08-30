@@ -5,7 +5,6 @@ using Xunit;
 
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Messaging.Hub.Test;
 
 public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
@@ -107,7 +106,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         // A non-mesh hub must still dispose on a message-routed DisposeRequest.
         try
         {
-            await victim.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(10.Seconds());
+            await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(10.Seconds());
         }
         catch
         {
@@ -166,7 +165,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         await Task.Delay(15);
 
         victim.Dispose();
-        await victim.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(30.Seconds());
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(30.Seconds());
 
         floodStop.Cancel();
         await flood;
@@ -225,7 +224,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         victim.Dispose();
 
         // The phased path is starved; only the watchdog (8s) can complete this.
-        await victim.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(20.Seconds());
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(20.Seconds());
         disposeSw.Stop();
 
         // Sanity: this repro must actually exercise the starved path, not a fast phased dispose.

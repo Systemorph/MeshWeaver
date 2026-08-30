@@ -1,7 +1,7 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -65,7 +65,11 @@ public static class ReleaseGateEndpoints
                         statusCode: StatusCodes.Status401Unauthorized))
                     : Answer(http, version))
             .FirstAsync()
-            .ToTask(ct);
+            .ObserveCompletion(
+                ex => logger?.LogWarning(ex,
+                    "Release gate for version '{Version}' faulted after the response had already been sent",
+                    version),
+                ct)!;
     }
 
 

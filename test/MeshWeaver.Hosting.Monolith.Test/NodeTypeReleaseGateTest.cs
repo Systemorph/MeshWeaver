@@ -1,7 +1,6 @@
 using System;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -15,6 +14,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -64,7 +64,7 @@ public class NodeTypeReleaseGateTest(ITestOutputHelper output) : MonolithMeshTes
     private async Task SeedAsSystem(MeshNode node, CancellationToken ct)
     {
         using (Access.ImpersonateAsSystem())
-            await MeshService.CreateNode(node).FirstAsync().ToTask(ct);
+            await MeshService.CreateNode(node).FirstAsync().Await(ct);
     }
 
     private static MeshNode NodeType(string id, string ns, string description) =>
@@ -154,12 +154,12 @@ public class NodeTypeReleaseGateTest(ITestOutputHelper output) : MonolithMeshTes
         using (Access.SwitchAccessContext(new AccessContext { ObjectId = "rel-viewer", Name = "rel-viewer" }))
             Mesh.RequestNodeTypeRelease(typePath, force: true, onError: e => refusals.OnNext(e));
 
-        var refusal = await refusals.FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+        var refusal = await refusals.FirstAsync().Timeout(15.Seconds()).Await(ct);
         refusal.Should().Contain("Compile", "the refusal must explain the missing permission");
 
         // The gate returns BEFORE flipping the trigger — so RequestedReleaseAt must stay null.
         var node = await Workspace.GetMeshNodeStream(typePath).Where(n => n is not null)
-            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(10.Seconds()).Await(ct);
         ((NodeTypeDefinition)node.Content!).RequestedReleaseAt.Should().BeNull(
             "a refused request must NOT flip the release trigger — no release work may start");
     }
@@ -202,7 +202,7 @@ public class NodeTypeReleaseGateTest(ITestOutputHelper output) : MonolithMeshTes
         using (Access.ImpersonateAsSystem())
             releaseCount = (await MeshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{typePath}/Release scope:subtree"))
-                .FirstAsync().Timeout(15.Seconds()).ToTask(ct)).Items.Count;
+                .FirstAsync().Timeout(15.Seconds()).Await(ct)).Items.Count;
         releaseCount.Should().Be(0,
             "a compile failure must leave NO Release MeshNode — never a partial release");
     }
@@ -215,7 +215,7 @@ public class NodeTypeReleaseGateTest(ITestOutputHelper output) : MonolithMeshTes
 
         // The user has NO Update on the read-only partition...
         var userPerms = await Mesh.GetEffectivePermissions(typePath, "ro-user")
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
         userPerms.Should().NotHaveFlag(Permission.Update,
             "the read-only _Policy must deny Update to ordinary users — the premise of the test");
 

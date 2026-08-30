@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -28,12 +28,12 @@ public class EventLogTest
         var a = Created("A");
         feed.Publish(a);
         feed.Publish(Created("B"));
-        Assert.Equal(2, (await store.ReadFrom(0).FirstAsync().ToTask()).Count);
+        Assert.Equal(2, (await store.ReadFrom(0).FirstAsync().Await()).Count);
 
         // Re-publishing the SAME event (same Path/Kind/Version) does not add a row.
         feed.Publish(a);
-        Assert.Equal(2, (await store.ReadFrom(0).FirstAsync().ToTask()).Count);
-        Assert.Equal(2, await store.MaxSeq().FirstAsync().ToTask());
+        Assert.Equal(2, (await store.ReadFrom(0).FirstAsync().Await()).Count);
+        Assert.Equal(2, await store.MaxSeq().FirstAsync().Await());
     }
 
     [Fact]
@@ -43,8 +43,8 @@ public class EventLogTest
         var store = new InMemoryEventLogStore();
 
         // Two events already durably logged (as if written before this consumer existed).
-        await store.Append(Created("A")).ToTask();
-        await store.Append(Created("B")).ToTask();
+        await store.Append(Created("A")).Await();
+        await store.Append(Created("B")).Await();
 
         // A fresh subscriber (stands in for the runner) attached AFTER those were logged.
         var received = new List<string>();
@@ -55,7 +55,7 @@ public class EventLogTest
 
         Assert.Contains("A", received);
         Assert.Contains("B", received);
-        Assert.Equal(2, await store.GetCursor(EventLogReplayService.RunnerConsumerId).FirstAsync().ToTask());
+        Assert.Equal(2, await store.GetCursor(EventLogReplayService.RunnerConsumerId).FirstAsync().Await());
 
         // A second replay (e.g. another restart) with the cursor already at 2 redelivers nothing.
         received.Clear();
@@ -73,7 +73,7 @@ public class EventLogTest
         // remainder unreplayed forever. The drain must paginate until the whole backlog is delivered.
         const int count = 1201;
         for (var i = 0; i < count; i++)
-            await store.Append(Created($"N{i}")).ToTask();
+            await store.Append(Created($"N{i}")).Await();
 
         var received = new List<string>();
         using var sub = feed.Subscribe(c => received.Add(c.Path));
@@ -81,6 +81,6 @@ public class EventLogTest
         await new EventLogReplayService(feed, store).StartAsync(default);
 
         Assert.Equal(count, received.Count);   // every page drained, not just the first 500
-        Assert.Equal(count, await store.GetCursor(EventLogReplayService.RunnerConsumerId).FirstAsync().ToTask());
+        Assert.Equal(count, await store.GetCursor(EventLogReplayService.RunnerConsumerId).FirstAsync().Await());
     }
 }

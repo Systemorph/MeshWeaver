@@ -1,7 +1,7 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.ContentCollections.Indexing;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Test;
 
@@ -34,10 +34,10 @@ public class ChunkNavigationStoreTest
     }
 
     private async Task<ContentChunk?> GetChunk(int index) =>
-        await _store.GetChunk(Collection, FilePath, index).FirstAsync().ToTask();
+        await _store.GetChunk(Collection, FilePath, index).FirstAsync().Await();
 
     private async Task<int> GetCount(string filePath) =>
-        await _store.GetChunkCount(Collection, filePath).FirstAsync().ToTask();
+        await _store.GetChunkCount(Collection, filePath).FirstAsync().Await();
 
     [Fact]
     public async Task GetChunk_ReturnsChunkAtIndex()
@@ -71,7 +71,7 @@ public class ChunkNavigationStoreTest
         Seed(3);
 
         var chunk = await _store.GetChunk(Collection, "reports/never-indexed.txt", 0)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         chunk.Should().BeNull();
     }
 

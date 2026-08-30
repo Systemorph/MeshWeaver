@@ -6,12 +6,12 @@ using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -189,7 +189,7 @@ public class HierarchicalPathDeletionTests
         Func<Task> act = () => HierarchicalPathDeletion
             .DeleteSubtree("a", new[] { "a/b" }, fake.Delete)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(10))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
             .WithMessage("*primed failure for 'a/b'*");
@@ -212,7 +212,7 @@ public class HierarchicalPathDeletionTests
                 "root/branchB", "root/branchB/leafB"
             }, fake.Delete)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(10))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
             .WithMessage("*primed failure for 'root/branchA/leafA'*");
@@ -237,7 +237,7 @@ public class HierarchicalPathDeletionTests
             await HierarchicalPathDeletion
                 .DeleteSubtree("a", new[] { "a/b", "a/b/c" }, fake.Delete)
                 .FirstAsync().Timeout(TimeSpan.FromSeconds(10))
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             Assert.Fail("Expected an InvalidOperationException");
         }
         catch (InvalidOperationException ex)

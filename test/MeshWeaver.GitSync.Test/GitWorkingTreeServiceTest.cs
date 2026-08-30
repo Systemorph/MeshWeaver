@@ -1,10 +1,10 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -49,26 +49,26 @@ public class GitWorkingTreeServiceTest(ITestOutputHelper output) : GitHubSyncTes
 
         // Clone via the service (local path = no auth).
         var tree = await WorkingTrees.CloneOrUpdate(UserId, "demo", bare, "main", token: null)
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
         Assert.Equal("main", tree.Branch);
         Assert.StartsWith(workspaceRoot, tree.Path);
         Assert.True(File.Exists(Path.Combine(tree.Path, "README.md")));
 
         // Edit through the editor surface, then confirm the tree is dirty.
-        await WorkingTrees.WriteFile(UserId, "demo", "docs/new.txt", "hello").Timeout(30.Seconds()).ToTask();
-        var status = await WorkingTrees.Status(UserId, "demo").Timeout(30.Seconds()).ToTask();
+        await WorkingTrees.WriteFile(UserId, "demo", "docs/new.txt", "hello").Timeout(30.Seconds()).Await();
+        var status = await WorkingTrees.Status(UserId, "demo").Timeout(30.Seconds()).Await();
         Assert.Equal("main", status.Branch);
         Assert.False(status.IsClean);
         Assert.Contains(status.Changes, c => c.Path.EndsWith("new.txt"));
 
         // Commit + push.
         var commit = await WorkingTrees.Commit(UserId, "demo", "add new.txt", "Test", "t@t.dev")
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
         Assert.True(commit.Ok, commit.Message);
-        await WorkingTrees.Push(UserId, "demo", "main", token: null).Timeout(30.Seconds()).ToTask();
+        await WorkingTrees.Push(UserId, "demo", "main", token: null).Timeout(30.Seconds()).Await();
 
         // After committing, the tree is clean again.
-        var after = await WorkingTrees.Status(UserId, "demo").Timeout(30.Seconds()).ToTask();
+        var after = await WorkingTrees.Status(UserId, "demo").Timeout(30.Seconds()).Await();
         Assert.True(after.IsClean);
 
         // Prove the push reached the remote: a fresh clone of the bare repo has the new file.
@@ -91,9 +91,9 @@ public class GitWorkingTreeServiceTest(ITestOutputHelper output) : GitHubSyncTes
         await RunGit(seed, "remote", "add", "origin", bare);
         await RunGit(seed, "push", "origin", "main");
 
-        var first = await WorkingTrees.CloneOrUpdate(UserId, "demo", bare, "main", null).Timeout(60.Seconds()).ToTask();
+        var first = await WorkingTrees.CloneOrUpdate(UserId, "demo", bare, "main", null).Timeout(60.Seconds()).Await();
         // A second call on the existing checkout fetches + fast-forwards rather than failing on a non-empty dir.
-        var second = await WorkingTrees.CloneOrUpdate(UserId, "demo", bare, "main", null).Timeout(60.Seconds()).ToTask();
+        var second = await WorkingTrees.CloneOrUpdate(UserId, "demo", bare, "main", null).Timeout(60.Seconds()).Await();
         Assert.Equal(first.Path, second.Path);
         Assert.Equal("main", second.Branch);
     }
@@ -103,14 +103,14 @@ public class GitWorkingTreeServiceTest(ITestOutputHelper output) : GitHubSyncTes
     {
         // No GitHub credential connected for this user → Checkout surfaces a typed error.
         await Assert.ThrowsAsync<GitWorkingTreeException>(() =>
-            WorkingTrees.Checkout(UserId, "Systemorph/MeshWeaver").FirstAsync().ToTask());
+            WorkingTrees.Checkout(UserId, "Systemorph/MeshWeaver").FirstAsync().Await());
     }
 
     [Fact(Timeout = 60000)]
     public async Task WriteFile_OutsideTree_IsRejected()
     {
         await Assert.ThrowsAsync<GitWorkingTreeException>(() =>
-            WorkingTrees.WriteFile(UserId, "demo", "../escape.txt", "x").FirstAsync().ToTask());
+            WorkingTrees.WriteFile(UserId, "demo", "../escape.txt", "x").FirstAsync().Await());
     }
 
     private static string NewTempDir()
@@ -122,7 +122,7 @@ public class GitWorkingTreeServiceTest(ITestOutputHelper output) : GitHubSyncTes
 
     private async Task RunGit(string dir, params string[] args)
     {
-        var r = await Git.Run(dir, args).Timeout(30.Seconds()).ToTask();
+        var r = await Git.Run(dir, args).Timeout(30.Seconds()).Await();
         Assert.True(r.Ok, $"git {string.Join(' ', args)} failed (exit {r.ExitCode}): {r.Message}");
     }
 }

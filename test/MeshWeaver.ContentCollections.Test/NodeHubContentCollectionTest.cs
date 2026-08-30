@@ -5,7 +5,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
@@ -85,7 +84,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         var hub = GetClient();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
 
-        var collection = await contentService.GetCollection("content").FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var collection = await contentService.GetCollection("content").FirstAsync().Await(TestContext.Current.CancellationToken);
         collection.Should().NotBeNull("content collection should resolve to a usable IContentCollection");
     }
 
@@ -95,21 +94,21 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         var hub = GetClient();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
 
-        var collection = await contentService.GetCollection("content").FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var collection = await contentService.GetCollection("content").FirstAsync().Await(TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
         // Create a test file
         var testContent = "Hello from unit test"u8.ToArray();
         using var stream = new MemoryStream(testContent);
-        await collection!.SaveFile("/", "test.txt", stream).ToTask(TestContext.Current.CancellationToken);
+        await collection!.SaveFile("/", "test.txt", stream).Await(TestContext.Current.CancellationToken);
 
         // Verify it was saved
         var ct = TestContext.Current.CancellationToken;
-        var items = await collection.GetCollectionItems("/").ToList().FirstAsync().ToTask(ct);
+        var items = await collection.GetCollectionItems("/").ToList().FirstAsync().Await(ct);
         items.Should().Contain(i => i.Name == "test.txt");
 
         // Clean up
-        await collection.DeleteFile("/test.txt").ToTask(ct);
+        await collection.DeleteFile("/test.txt").Await(ct);
     }
 
     [Fact]
@@ -157,13 +156,13 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         var client = GetClient();
         var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
         var ct = TestContext.Current.CancellationToken;
-        var collection = await contentService.GetCollection("content").FirstAsync().ToTask(ct);
+        var collection = await contentService.GetCollection("content").FirstAsync().Await(ct);
         collection.Should().NotBeNull();
 
         // A nested file so folder and file rendering are distinguishable.
         var bytes = "# Hello from the collection area"u8.ToArray();
         using (var stream = new MemoryStream(bytes))
-            await collection!.SaveFile("/sub", "hello.md", stream).ToTask(ct);
+            await collection!.SaveFile("/sub", "hello.md", stream).Await(ct);
 
         try
         {
@@ -194,7 +193,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         }
         finally
         {
-            await collection!.DeleteFile("/sub/hello.md").ToTask(ct);
+            await collection!.DeleteFile("/sub/hello.md").Await(ct);
         }
     }
 
@@ -213,14 +212,14 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         var client = GetClient();
         var contentService = client.ServiceProvider.GetRequiredService<IContentService>();
         var ct = TestContext.Current.CancellationToken;
-        var collection = await contentService.GetCollection("content").FirstAsync().ToTask(ct);
+        var collection = await contentService.GetCollection("content").FirstAsync().Await(ct);
         collection.Should().NotBeNull();
 
         // A folder AND a file whose names both contain a space — the exact shape the browser
         // percent-encodes into "Data%20Extraction/my%20report.md".
         var bytes = "# Quarterly report with a space in its name"u8.ToArray();
         using (var stream = new MemoryStream(bytes))
-            await collection!.SaveFile("/Data Extraction", "my report.md", stream).ToTask(ct);
+            await collection!.SaveFile("/Data Extraction", "my report.md", stream).Await(ct);
 
         try
         {
@@ -263,7 +262,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         }
         finally
         {
-            await collection!.DeleteFile("/Data Extraction/my report.md").ToTask(ct);
+            await collection!.DeleteFile("/Data Extraction/my report.md").Await(ct);
         }
     }
 }

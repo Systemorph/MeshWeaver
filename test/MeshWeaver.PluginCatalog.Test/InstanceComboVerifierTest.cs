@@ -6,12 +6,12 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -513,7 +513,7 @@ public class InstanceComboVerifierTest
                 gate.Run)
             .Verify(combo, ImageRef, workRoot)
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     private static string TempDir() =>
         Path.Combine(Path.GetTempPath(), "mw-combo-verify-fixture-" + Guid.NewGuid().ToString("N"));

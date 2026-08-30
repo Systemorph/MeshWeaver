@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -46,7 +46,7 @@ public class GitCliProcessDrainTest(ITestOutputHelper output) : GitHubSyncTestBa
     {
         var repo = await SeedRepo("crlf.txt", "alpha\r\nbeta\r\ngamma\r\n");
 
-        var r = await Git.Run(repo, ["cat-file", "-p", "HEAD:crlf.txt"]).Timeout(30.Seconds()).ToTask();
+        var r = await Git.Run(repo, ["cat-file", "-p", "HEAD:crlf.txt"]).Timeout(30.Seconds()).Await();
 
         Assert.True(r.Ok, $"cat-file failed (exit {r.ExitCode}): {r.Message}");
         // The trailing separator is trimmed by GitCli (unchanged behaviour); the INTERIOR CRLFs are
@@ -68,7 +68,7 @@ public class GitCliProcessDrainTest(ITestOutputHelper output) : GitHubSyncTestBa
         var expected = content.ToString();
         var repo = await SeedRepo("big.txt", expected);
 
-        var r = await Git.Run(repo, ["cat-file", "-p", "HEAD:big.txt"]).Timeout(90.Seconds()).ToTask();
+        var r = await Git.Run(repo, ["cat-file", "-p", "HEAD:big.txt"]).Timeout(90.Seconds()).Await();
 
         Assert.True(r.Ok, $"cat-file failed (exit {r.ExitCode}): {r.Message}");
         Assert.Equal(expected.Length - 1, r.StdOut.Length);   // -1: GitCli trims the trailing '\n'
@@ -86,7 +86,7 @@ public class GitCliProcessDrainTest(ITestOutputHelper output) : GitHubSyncTestBa
         var repo = await SeedRepo("only.txt", "hello\n");
 
         var r = await Git.Run(repo, ["cat-file", "-p", "HEAD:does-not-exist.txt"])
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         Assert.False(r.Ok);
         Assert.NotEqual(0, r.ExitCode);
@@ -136,7 +136,7 @@ public class GitCliProcessDrainTest(ITestOutputHelper output) : GitHubSyncTestBa
 
     private async Task RunGit(string dir, params string[] args)
     {
-        var r = await Git.Run(dir, args).Timeout(30.Seconds()).ToTask();
+        var r = await Git.Run(dir, args).Timeout(30.Seconds()).Await();
         Assert.True(r.Ok, $"git {string.Join(' ', args)} failed (exit {r.ExitCode}): {r.Message}");
     }
 }

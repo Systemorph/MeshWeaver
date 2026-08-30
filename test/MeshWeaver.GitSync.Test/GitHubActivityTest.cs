@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -23,10 +23,10 @@ public class GitHubActivityTest(ITestOutputHelper output) : GitHubSyncTestBase(o
         await CreateSpace(space, "Activity Space");
         await CreateMarkdown($"{space}/Page", "Page", "# page");
         await Sync.SaveConfig(space, "https://github.com/test/act-space", "main", null, true, true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         // The unified API: create + run the activity, returns the activity path.
-        var activityPath = await Mesh.CommitToGitHub(space, UserId).Timeout(90.Seconds()).ToTask();
+        var activityPath = await Mesh.CommitToGitHub(space, UserId).Timeout(90.Seconds()).Await();
         Assert.StartsWith($"{space}/_Activity/", activityPath);
 
         // Wait on the activity node's terminal Status (never a sleep — timeout would mean deadlock).
@@ -46,10 +46,10 @@ public class GitHubActivityTest(ITestOutputHelper output) : GitHubSyncTestBase(o
         await CreateSpace(space, "Activity Space 2");
         await CreateMarkdown($"{space}/Page", "Page", "# page");
         await Sync.SaveConfig(space, "https://github.com/test/act-space2", "main", null, true, true)
-            .Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
 
-        var activityPath = await Mesh.CheckBranchStateOnGitHub(space, UserId).Timeout(90.Seconds()).ToTask();
+        var activityPath = await Mesh.CheckBranchStateOnGitHub(space, UserId).Timeout(90.Seconds()).Await();
         var log = await WaitForActivity(activityPath, l => l.Status != ActivityStatus.Running);
         Assert.Equal(ActivityStatus.Succeeded, log.Status);
         Assert.Contains(log.Messages, m => m.Message.Contains("up to date"));
@@ -63,19 +63,19 @@ public class GitHubActivityTest(ITestOutputHelper output) : GitHubSyncTestBase(o
         await CreateSpace(space, "Activity Space 3");
         await CreateMarkdown($"{space}/Page", "Page", "# page");
         await Sync.SaveConfig(space, "https://github.com/test/act-space3", "main", null, true, true)
-            .Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(space, UserId).Timeout(60.Seconds()).Await();
 
-        var draft = await PullRequests.CreateDraft(space, "main", "main").Timeout(60.Seconds()).ToTask();
+        var draft = await PullRequests.CreateDraft(space, "main", "main").Timeout(60.Seconds()).Await();
 
-        var activityPath = await Mesh.OpenPullRequestOnGitHub(space, draft.Path, UserId).Timeout(90.Seconds()).ToTask();
+        var activityPath = await Mesh.OpenPullRequestOnGitHub(space, draft.Path, UserId).Timeout(90.Seconds()).Await();
         var log = await WaitForActivity(activityPath, l => l.Status != ActivityStatus.Running);
         Assert.Equal(ActivityStatus.Succeeded, log.Status);
 
         // The PR node received the immutable handle written by the underlying Submit.
         var pr = await PullRequests.WatchPullRequest(draft.Path)
             .Where(p => p is { Number: not null })
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
         Assert.NotNull(pr!.Number);
         Assert.Contains("/pull/", pr.Url!);
     }
@@ -114,7 +114,7 @@ public class GitHubActivityTest(ITestOutputHelper output) : GitHubSyncTestBase(o
             .Select(p => p!)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
     private async Task<ActivityLog> WaitForActivity(string activityPath, Func<ActivityLog, bool> predicate) =>
         await Mesh.GetWorkspace().GetMeshNodeStream(activityPath)
@@ -123,5 +123,5 @@ public class GitHubActivityTest(ITestOutputHelper output) : GitHubSyncTestBase(o
             .Select(l => l!)
             .FirstAsync()
             .Timeout(60.Seconds())
-            .ToTask();
+            .Await();
 }

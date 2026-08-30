@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -15,6 +14,7 @@ using MeshWeaver.GitSync;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Options;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -76,7 +76,7 @@ public class GitHubAppTokenServiceTest
             InstallationOwner = "Systemorph",
         }, handler);
 
-        var token = await service.GetInstallationToken().FirstAsync().ToTask();
+        var token = await service.GetInstallationToken().FirstAsync().Await();
         Assert.Equal("ghs_installation_token", token);
 
         // Discovery picked the Systemorph installation (77), not the first-listed other org.
@@ -86,7 +86,7 @@ public class GitHubAppTokenServiceTest
         Assert.All(handler.AuthTokens, t => Assert.Equal(3, t.Split('.').Length));
 
         // Second call replays the cached token — no additional mint round-trip.
-        var again = await service.GetInstallationToken().FirstAsync().ToTask();
+        var again = await service.GetInstallationToken().FirstAsync().Await();
         Assert.Equal(token, again);
         Assert.Equal(1, handler.TokenRequests);
     }
@@ -96,7 +96,7 @@ public class GitHubAppTokenServiceTest
     {
         var service = NewService(new GitHubAppOptions());
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.GetInstallationToken().FirstAsync().ToTask());
+            () => service.GetInstallationToken().FirstAsync().Await());
         // The error must name the missing configuration keys.
         Assert.Contains("GitHub:App:ClientId", ex.Message);
     }

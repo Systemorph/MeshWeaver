@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -51,7 +51,7 @@ public class OwnerDisposalNackTest(ITestOutputHelper output) : MonolithMeshTestB
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
             .Where(n => n is not null)
-            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(10.Seconds()).Await(ct);
 
         var nodeHub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
         nodeHub.Should().NotBeNull();
@@ -87,7 +87,7 @@ public class OwnerDisposalNackTest(ITestOutputHelper output) : MonolithMeshTestB
             var respTask = RequestHub.Observe(
                     new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson)),
                     o => o.WithTarget(new Address(path)))
-                .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(10.Seconds()).Await(ct);
             await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
                 .Should().Within(10.Seconds()).Emit();
 

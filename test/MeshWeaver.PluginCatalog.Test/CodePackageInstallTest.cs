@@ -4,7 +4,6 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -16,6 +15,7 @@ using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -43,17 +43,17 @@ public class CodePackageInstallTest(ITestOutputHelper output) : MonolithMeshTest
             WriteFile(repo, "catalog/widget-type/Source/Widget.cs",
                 "public record Widget { public string Title { get; init; } = string.Empty; }");
 
-            await git.Run(repo, ["init"]).FirstAsync().ToTask();
-            await git.Run(repo, ["add", "-A"]).FirstAsync().ToTask();
+            await git.Run(repo, ["init"]).FirstAsync().Await();
+            await git.Run(repo, ["add", "-A"]).FirstAsync().Await();
             await git.Run(repo, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"])
-                .FirstAsync().ToTask();
+                .FirstAsync().Await();
 
             var source = new GitPackageSource(git, repo, "catalog");
-            var pkg = (await source.ListPackages("HEAD").FirstAsync().ToTask()).First(p => p.Id == "widget-type");
+            var pkg = (await source.ListPackages("HEAD").FirstAsync().Await()).First(p => p.Id == "widget-type");
             pkg.Kind.Should().Be(PackageKind.Code);
-            var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().ToTask();
+            var files = await source.FetchPackageFiles(pkg, "HEAD").FirstAsync().Await();
 
-            var result = await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().ToTask();
+            var result = await PackageInstaller.Install(Mesh, pkg, files, "HEAD").FirstAsync().Await();
             result.Total.Should().Be(2); // the NodeType node + one Source Code node
             result.Written.Should().Be(2); // both freshly written on first install
 

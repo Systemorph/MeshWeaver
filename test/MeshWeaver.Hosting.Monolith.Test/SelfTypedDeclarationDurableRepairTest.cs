@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -168,7 +167,7 @@ public class SelfTypedDeclarationDurableRepairTest : MonolithMeshTestBase
                 string.Equals(n.Path, "fossilprobe", StringComparison.OrdinalIgnoreCase)))
             .FirstAsync()
             .Timeout(60.Seconds())
-            .ToTask(ct);
+            .Await(ct);
 
         rows.Should().NotContain(
             n => string.Equals(n.Path, "User", StringComparison.OrdinalIgnoreCase),
@@ -198,5 +197,5 @@ public class SelfTypedDeclarationDurableRepairTest : MonolithMeshTestBase
             .Select(n => n!)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask(ct);
+            .Await(ct);
 }

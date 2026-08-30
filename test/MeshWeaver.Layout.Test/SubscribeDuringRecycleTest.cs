@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -100,7 +99,7 @@ public class SubscribeDuringRecycleTest(ITestOutputHelper output) : HubTestBase(
                 new SubscribeRequest(Guid.NewGuid().ToString("N"), new LayoutAreaReference(StaticView)),
                 o => o.WithTarget(AreaAddress))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => ack);
         Output.WriteLine($"NACK: errorType={failure.Failure?.ErrorType} message={failure.Failure?.Message}");

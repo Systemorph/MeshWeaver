@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
@@ -54,7 +53,7 @@ public class RequestFateTrailOutlivesTheCallbackTest(ITestOutputHelper output) :
                 .Observe<SlowResponse>(new SlowRequest(), o => o.WithTarget(CreateHostAddress()))
                 .Timeout(TimeSpan.FromMilliseconds(300))
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
         }
         catch (TimeoutException)
         {

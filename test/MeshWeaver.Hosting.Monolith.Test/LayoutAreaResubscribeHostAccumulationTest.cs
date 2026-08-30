@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,6 +12,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -100,7 +100,7 @@ public class LayoutAreaResubscribeHostAccumulationTest(ITestOutputHelper output)
             var revision = i;
             await workspace.GetMeshNodeStream(path)
                 .Update(cur => cur with { Description = $"rev{revision}" })
-                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
             await Task.Delay(Settle);
             fullsPerWrite[i] = Volatile.Read(ref fulls);
         }

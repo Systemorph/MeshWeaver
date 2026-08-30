@@ -2,13 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Persistence.Test;
 
@@ -74,7 +74,7 @@ public class LegacyUserPartitionRepairTest : IDisposable
         SeedLegacyFile("User/Alice.json", LegacyAliceJson);
         var persistence = CreateService();
 
-        var root = await persistence.Read("Alice", _options).FirstAsync().ToTask();
+        var root = await persistence.Read("Alice", _options).FirstAsync().Await();
 
         root.Should().NotBeNull();
         root!.Path.Should().Be("Alice");
@@ -89,13 +89,13 @@ public class LegacyUserPartitionRepairTest : IDisposable
             .Should().BeTrue("a repaired user must be able to write their own partition");
 
         var grant = await persistence
-            .Read(LegacyUserPartitionRepair.SelfAdminGrantPath("Alice"), _options).FirstAsync().ToTask();
+            .Read(LegacyUserPartitionRepair.SelfAdminGrantPath("Alice"), _options).FirstAsync().Await();
         grant.Should().NotBeNull();
         grant!.NodeType.Should().Be("AccessAssignment");
         grant.MainNode.Should().Be("Alice");
 
         // Idempotent: the next read serves the durable root without re-repairing.
-        var again = await persistence.Read("Alice", _options).FirstAsync().ToTask();
+        var again = await persistence.Read("Alice", _options).FirstAsync().Await();
         again.Should().NotBeNull();
         again!.Path.Should().Be("Alice");
     }
@@ -112,7 +112,7 @@ public class LegacyUserPartitionRepairTest : IDisposable
             """{ "$type": "MeshNode", "id": "Alice", "path": "Alice", "mainNode": "Alice", "name": "Alice", "version": 1, "state": "Active" }""");
         var persistence = CreateService();
 
-        var root = await persistence.Read("Alice", _options).FirstAsync().ToTask();
+        var root = await persistence.Read("Alice", _options).FirstAsync().Await();
 
         root.Should().NotBeNull();
         root!.NodeType.Should().Be("User", "the stub upgrades from the legacy twin");
@@ -131,7 +131,7 @@ public class LegacyUserPartitionRepairTest : IDisposable
             """{ "$type": "MeshNode", "id": "Space", "path": "Space", "mainNode": "Space", "name": "Space", "version": 1, "state": "Active" }""");
         var persistence = CreateService();
 
-        var node = await persistence.Read("Space", _options).FirstAsync().ToTask();
+        var node = await persistence.Read("Space", _options).FirstAsync().Await();
 
         node.Should().NotBeNull("a stub with no legacy user twin is returned untouched");
         node!.NodeType.Should().BeNull();
@@ -154,11 +154,11 @@ public class LegacyUserPartitionRepairTest : IDisposable
             """);
         var persistence = CreateService();
 
-        var root = await persistence.Read("Alice", _options).FirstAsync().ToTask();
+        var root = await persistence.Read("Alice", _options).FirstAsync().Await();
         root.Should().NotBeNull();
 
         var grant = await persistence
-            .Read(LegacyUserPartitionRepair.SelfAdminGrantPath("Alice"), _options).FirstAsync().ToTask();
+            .Read(LegacyUserPartitionRepair.SelfAdminGrantPath("Alice"), _options).FirstAsync().Await();
         grant!.Name.Should().Be("Custom Grant", "the repair must never clobber an existing assignment");
     }
 
@@ -170,7 +170,7 @@ public class LegacyUserPartitionRepairTest : IDisposable
             """{ "id": "Config", "namespace": "User", "nodeType": "Markdown", "content": "not a user" }""");
         var persistence = CreateService();
 
-        var node = await persistence.Read("Config", _options).FirstAsync().ToTask();
+        var node = await persistence.Read("Config", _options).FirstAsync().Await();
 
         node.Should().BeNull("only nodeType User under the legacy namespace is a user partition");
         File.Exists(Path.Combine(_dir, "Config.json")).Should().BeFalse();
@@ -180,7 +180,7 @@ public class LegacyUserPartitionRepairTest : IDisposable
     public async Task MissingPartitionsStayNull()
     {
         var persistence = CreateService();
-        var node = await persistence.Read("Nobody", _options).FirstAsync().ToTask();
+        var node = await persistence.Read("Nobody", _options).FirstAsync().Await();
         node.Should().BeNull();
     }
 
@@ -190,7 +190,7 @@ public class LegacyUserPartitionRepairTest : IDisposable
         SeedLegacyFile("User/Alice.json", LegacyAliceJson);
         var persistence = CreateService();
 
-        var node = await persistence.Read("Some/Nested/Path", _options).FirstAsync().ToTask();
+        var node = await persistence.Read("Some/Nested/Path", _options).FirstAsync().Await();
 
         node.Should().BeNull();
         File.Exists(Path.Combine(_dir, "Alice.json")).Should().BeFalse("only a bare partition-root read repairs");
@@ -273,7 +273,7 @@ public class LegacyUserPartitionRepairTest : IDisposable
                 new ThrowsInsideLegacyPartitionAdapter(new FileSystemStorageAdapter(_dir, _ioPools)))]);
 
         // Before the existence guard this FAULTED with the 42P01 surrogate instead of answering.
-        var node = await persistence.Read("Skill", _options).FirstAsync().ToTask();
+        var node = await persistence.Read("Skill", _options).FirstAsync().Await();
 
         node.Should().BeNull("a root miss on a store with no legacy partition is simply a miss");
     }

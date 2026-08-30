@@ -4,9 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -264,7 +264,7 @@ public class PackageEntitlementAnchorTest
     public async Task NoConfiguredSourcesIsUnconfiguredRatherThanAuthoritative()
     {
         var anchor = new PackageOriginAnchor(() => [], TimeSpan.Zero, () => DateTimeOffset.UnixEpoch);
-        var snapshot = await anchor.Read().FirstAsync().ToTask();
+        var snapshot = await anchor.Read().FirstAsync().Await();
 
         snapshot.State.Should().Be(AnchorState.Unconfigured);
         snapshot.IsComplete.Should().BeFalse(
@@ -278,7 +278,7 @@ public class PackageEntitlementAnchorTest
     public async Task ASuccessfulReadIsAuthoritative()
     {
         var anchor = Anchor(Listing(PlatformSource, Manifest(Package, "1.4.0")));
-        var snapshot = await anchor.Read().FirstAsync().ToTask();
+        var snapshot = await anchor.Read().FirstAsync().Await();
 
         snapshot.State.Should().Be(AnchorState.Authoritative);
         snapshot.IsComplete.Should().BeTrue();
@@ -295,7 +295,7 @@ public class PackageEntitlementAnchorTest
     public async Task AFailingSourceDegradesRatherThanFaults()
     {
         var anchor = Anchor(Failing(PlatformSource, "GitHub said 502"));
-        var snapshot = await anchor.Read().FirstAsync().ToTask();
+        var snapshot = await anchor.Read().FirstAsync().Await();
 
         snapshot.State.Should().Be(AnchorState.Unreachable,
             "nothing was listed and nothing had ever been observed");
@@ -324,10 +324,10 @@ public class PackageEntitlementAnchorTest
             // would pass by reading the cached snapshot and prove nothing.
             TimeSpan.Zero, () => DateTimeOffset.UnixEpoch);
 
-        (await anchor.Read().FirstAsync().ToTask()).SourceOf(Package).Should().Be(PlatformSource);
+        (await anchor.Read().FirstAsync().Await()).SourceOf(Package).Should().Be(PlatformSource);
 
         failing = true;
-        var degraded = await anchor.Read().FirstAsync().ToTask();
+        var degraded = await anchor.Read().FirstAsync().Await();
 
         degraded.State.Should().Be(AnchorState.Stale);
         degraded.IsComplete.Should().BeFalse("an ABSENCE from a partial read proves nothing");
@@ -354,12 +354,12 @@ public class PackageEntitlementAnchorTest
             },
             TimeSpan.FromSeconds(60), () => now);
 
-        await anchor.Read().FirstAsync().ToTask();
-        await anchor.Read().FirstAsync().ToTask();
+        await anchor.Read().FirstAsync().Await();
+        await anchor.Read().FirstAsync().Await();
         reads.Should().Be(1, "an authoritative listing inside the window is reused");
 
         now = now.AddMinutes(5);
-        var afterExpiry = await anchor.Read().FirstAsync().ToTask();
+        var afterExpiry = await anchor.Read().FirstAsync().Await();
         reads.Should().Be(2, "the window's expiry asks the sources again");
         afterExpiry.IsComplete.Should().BeTrue(
             "…and the answer is an authoritative snapshot, never a refusal — a cache TTL is not an "

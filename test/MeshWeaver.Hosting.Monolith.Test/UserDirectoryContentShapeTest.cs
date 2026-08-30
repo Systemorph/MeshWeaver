@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
@@ -13,6 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -79,7 +79,7 @@ public class UserDirectoryContentShapeTest(ITestOutputHelper output) : MonolithM
         using var cache = new UserIdentityCache(
             MeshService, Mesh, Mesh.ServiceProvider.GetRequiredService<ILogger<UserIdentityCache>>());
 
-        var lookup = await cache.WhenDetermined(email).Timeout(60.Seconds()).FirstAsync().ToTask(ct);
+        var lookup = await cache.WhenDetermined(email).Timeout(60.Seconds()).FirstAsync().Await(ct);
         Output.WriteLine(
             $"{shape}: content={lookup.Node?.Content?.GetType().Name ?? "(none)"} "
             + $"node={lookup.Node?.Path ?? "(null)"}");

@@ -1,7 +1,6 @@
 using System;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +8,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -75,7 +75,7 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
             .Materialize()
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(20))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         firstNotification.Kind.Should().Be(NotificationKind.OnError,
             "the stream must surface OnError (not spin) when the target address routes to NotFound. " +
@@ -123,7 +123,7 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
             .Materialize()
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(20))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         firstNotification.Exception.Should().BeNull(
             $"expected data from {address}/Overview, got error: {firstNotification.Exception?.Message}");

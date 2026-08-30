@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Query.Test;
 
@@ -126,14 +126,14 @@ public class SyncedQueryFaultRecoveryTest(ITestOutputHelper output) : MonolithMe
 
         // 1. The transient fault reaches the subscriber — it is surfaced, never swallowed.
         var first = await Record.ExceptionAsync(() =>
-            workspace.GetQuery(id, query).FirstAsync().Timeout(Budget).ToTask());
+            workspace.GetQuery(id, query).FirstAsync().Timeout(Budget).Await());
 
         first.Should().NotBeNull("the transient upstream fault must be surfaced to the subscriber");
         provider.MarkerSubscribeCount.Should().Be(1);
 
         // 2. The next caller must reach the (now healthy) upstream. Before the fix this replayed
         //    the latched TimeoutException instantly and MarkerSubscribeCount stayed at 1 forever.
-        var second = await workspace.GetQuery(id, query).FirstAsync().Timeout(Budget).ToTask();
+        var second = await workspace.GetQuery(id, query).FirstAsync().Timeout(Budget).Await();
 
         second.Should().NotBeNull();
         provider.MarkerSubscribeCount.Should().Be(2,
@@ -161,10 +161,10 @@ public class SyncedQueryFaultRecoveryTest(ITestOutputHelper output) : MonolithMe
         var before = provider.MarkerSubscribeCount;
 
         var first = await Record.ExceptionAsync(() =>
-            cache.GetQuery(id, options, query).FirstAsync().Timeout(Budget).ToTask());
+            cache.GetQuery(id, options, query).FirstAsync().Timeout(Budget).Await());
         first.Should().NotBeNull();
 
-        var second = await cache.GetQuery(id, options, query).FirstAsync().Timeout(Budget).ToTask();
+        var second = await cache.GetQuery(id, options, query).FirstAsync().Timeout(Budget).Await();
 
         second.Should().NotBeNull();
         provider.MarkerSubscribeCount.Should().Be(before + 2,

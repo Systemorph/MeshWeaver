@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -16,6 +15,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -128,13 +128,13 @@ public class PackageContentAssetInstallTest(ITestOutputHelper output) : Monolith
     public async Task MergedPackage_PublishesItsCommittedBinaries_IntoTheServedContentCollection()
     {
         var source = Source();
-        var package = (await source.ListPackages("HEAD").FirstAsync().ToTask()).Single();
+        var package = (await source.ListPackages("HEAD").FirstAsync().Await()).Single();
         package.Id.Should().Be(PackageId);
 
         // ── Link 1: the SOURCE must hand the bytes on. Before the fix these arrived with
         //    Content = "" and Binary dropped — the "content = 0 chars" the issue measured on
         //    POST /api/plugins/files.
-        var files = await source.FetchPackageFiles(package, "HEAD").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(package, "HEAD").FirstAsync().Await();
 
         var clip = files.Single(f => f.RelativePath == $"{PackageId}/content/videos/clip.mp4");
         clip.IsBinary.Should().BeTrue("a committed video must travel as bytes, never as an empty string");
@@ -146,7 +146,7 @@ public class PackageContentAssetInstallTest(ITestOutputHelper output) : Monolith
 
         // ── Link 2: the INSTALL must land them where the portal serves them.
         var result = await PackageInstaller.Install(Mesh, package, files, "commit-848")
-            .FirstAsync().Timeout(StepTimeout).ToTask();
+            .FirstAsync().Timeout(StepTimeout).Await();
 
         // Content assets are NOT nodes: only index.json + Lesson.md count. (They used to be dropped
         // with a "No parser for …clip.mp4" warning; now they are routed, not skipped.)
@@ -174,7 +174,7 @@ public class PackageContentAssetInstallTest(ITestOutputHelper output) : Monolith
         // Re-installing the unchanged package is idempotent for content too: same bytes, same place,
         // and nothing else in the collection is disturbed.
         await PackageInstaller.Install(Mesh, package, files, "commit-848")
-            .FirstAsync().Timeout(StepTimeout).ToTask();
+            .FirstAsync().Timeout(StepTimeout).Await();
         ReadAsset(collectionRoot, "videos/clip.mp4").Should().Equal(VideoBytes);
     }
 
@@ -188,11 +188,11 @@ public class PackageContentAssetInstallTest(ITestOutputHelper output) : Monolith
     public async Task Install_DoesNotPruneContentTheRepoNeverTracked()
     {
         var source = Source();
-        var package = (await source.ListPackages("HEAD").FirstAsync().ToTask()).Single();
-        var files = await source.FetchPackageFiles(package, "HEAD").FirstAsync().ToTask();
+        var package = (await source.ListPackages("HEAD").FirstAsync().Await()).Single();
+        var files = await source.FetchPackageFiles(package, "HEAD").FirstAsync().Await();
 
         await PackageInstaller.Install(Mesh, package, files, "commit-848")
-            .FirstAsync().Timeout(StepTimeout).ToTask();
+            .FirstAsync().Timeout(StepTimeout).Await();
 
         // Stand in for a hand-uploaded asset the repo has never carried.
         var collectionRoot = Path.Combine(_contentRoot, PackageId);
@@ -202,7 +202,7 @@ public class PackageContentAssetInstallTest(ITestOutputHelper output) : Monolith
         File.WriteAllBytes(uploadedPath, uploaded);
 
         await PackageInstaller.Install(Mesh, package, files, "commit-848")
-            .FirstAsync().Timeout(StepTimeout).ToTask();
+            .FirstAsync().Timeout(StepTimeout).Await();
 
         File.Exists(uploadedPath).Should().BeTrue(
             "an install publishes what the package ships; it never prunes what it does not");
@@ -221,5 +221,5 @@ public class PackageContentAssetInstallTest(ITestOutputHelper output) : Monolith
     private async Task<MeshNode> Read(string path) =>
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n?.Content is not null)
-            .FirstAsync().Timeout(StepTimeout).ToTask();
+            .FirstAsync().Timeout(StepTimeout).Await();
 }

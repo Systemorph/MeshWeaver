@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -74,7 +74,7 @@ public class PostCreationNodeIsAnnouncedTest(ITestOutputHelper output) : Monolit
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Select(_ => seen.ToArray())
             .Where(events => events.Any(e => e.Path == ExtraPath))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
 
         var events = seen.ToArray();
         foreach (var e in events)
@@ -104,7 +104,7 @@ public class PostCreationNodeIsAnnouncedTest(ITestOutputHelper output) : Monolit
         var beforeCreate = await Mesh.GetWorkspace().GetMeshNodeStream(ExtraPath)
             .Take(1).Timeout(TimeSpan.FromSeconds(5))
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         beforeCreate.Should().BeNull("the additional node is genuinely absent at this point");
 
         var parentPath = $"{TestPartition}/announce-probe-reach";
@@ -116,7 +116,7 @@ public class PostCreationNodeIsAnnouncedTest(ITestOutputHelper output) : Monolit
 
         var afterCreate = await Mesh.GetWorkspace().GetMeshNodeStream(ExtraPath)
             .Where(n => n is not null).Select(n => n!)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
 
         afterCreate.Path.Should().Be(ExtraPath,
             "a node written by a post-creation handler that was probed while absent must not stay "

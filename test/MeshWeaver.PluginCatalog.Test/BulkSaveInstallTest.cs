@@ -7,7 +7,6 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -22,6 +21,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -81,11 +81,11 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
             SourceFolder = "BulkPack",
             Version = "commit-bulk",
         };
-        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().Await();
         files.Count.Should().Be(7);
 
         var result = await PackageInstaller.Install(Mesh, manifest, files, "commit-bulk")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).Await();
 
         // Correctness: everything landed, and WrittenPaths names all seven nodes.
         result.Total.Should().Be(7);
@@ -120,7 +120,7 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
         // bulk batches (the decisions run against the single ReadMany snapshot).
         var batchCountAfterInstall = _recorder.WriteManyBatches.Count;
         var second = await PackageInstaller.Install(Mesh, manifest, files, "commit-bulk")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).Await();
         second.Written.Should().Be(0, "an unchanged node-repo re-install must not rewrite any node");
         _recorder.WriteManyBatches.Count.Should().Be(batchCountAfterInstall,
             "a re-install of the unchanged snapshot must not send any bulk batch");
@@ -141,7 +141,7 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
             SourceFolder = "BulkPack",
             Version = "commit-fallback",
         };
-        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().Await();
 
         // Existence is UNKNOWN when the bulk read fails — bulk routing must be disabled
         // entirely (an empty-snapshot fallback would bulk-write nodes that may already exist,
@@ -150,7 +150,7 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
         // authoritative read — the pre-bulk installer's exact write-on-failure behavior.
         _recorder.FailReadMany = true;
         var result = await PackageInstaller.Install(Mesh, manifest, files, "commit-fallback")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).Await();
         _recorder.FailReadMany = false;
 
         result.Written.Should().Be(7, "the degraded install still lands every node");
@@ -197,7 +197,7 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
             SourceFolder = "BulkPack",
             Version = "commit-refused",
         };
-        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().Await();
 
         // Another writer got there first — at a version the install's version-0 bulk write
         // cannot beat. This is the ONLY thing the test arranges; everything else is the
@@ -212,7 +212,7 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
         };
 
         var result = await PackageInstaller.Install(Mesh, manifest, files, "commit-refused")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).Await();
         _recorder.WriteManyBatches.SelectMany(b => b).Should().Contain("BulkPack/Lesson2",
             "this test is only meaningful while that node travels the bulk path");
         result.Total.Should().Be(7);
@@ -231,7 +231,7 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
             .Timeout(TimeSpan.FromSeconds(15))
             .Catch((Exception _) => ((IStorageAdapter)_recorder)
                 .Read("BulkPack/Lesson2", Mesh.JsonSerializerOptions).Select(n => n!))
-            .ToTask();
+            .Await();
         stored.Name.Should().NotBe("Foreign Lesson",
             "an install that reports a node as written must have written it — a refused bulk write "
             + "left the foreign row in place and said nothing");
@@ -241,7 +241,7 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
         // 2. …and the re-install of the unchanged snapshot writes NOTHING. This is the exact
         // signal the plugin gate reports, and it can only hold if install #1 really landed.
         var second = await PackageInstaller.Install(Mesh, manifest, files, "commit-refused")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).Await();
         second.WrittenPaths.Should().BeEmpty(
             "the re-install must find the package's own content durable — a node the first "
             + "install only CLAIMED to write is written here instead, which is what the gate sees");
@@ -281,14 +281,14 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
             SourceFolder = "BulkPack",
             Version = "commit-announce",
         };
-        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().Await();
 
         var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
         var announced = new ConcurrentBag<string>();
         using var subscription = changeFeed.Subscribe(c => announced.Add(c.Path));
 
         var result = await PackageInstaller.Install(Mesh, manifest, files, "commit-announce")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).Await();
 
         result.Written.Should().Be(7);
         // The bulk buckets are the whole point — pin them explicitly so a regression that
@@ -338,29 +338,29 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
                 (_, _, _, _) => Observable.Return(
                     new RepoSnapshot("commit-root", Repo.Take(1).ToList())),
                 "https://github.com/acme/bulk")
-            .FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+            .FetchPackageFiles(manifest, "HEAD").FirstAsync().Await();
         await PackageInstaller.Install(Mesh, manifest, rootOnly, "commit-root")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).Await();
 
         // PROBE the absent child — the poisoning step. It must not find anything (that is the
         // point), and whatever the resolver caches here is what the install has to invalidate.
         var beforeInstall = await Mesh.GetWorkspace().GetMeshNodeStream("BulkPack/Thing")
             .Take(1).Timeout(TimeSpan.FromSeconds(5))
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         beforeInstall.Should().BeNull("the child is genuinely absent at this point");
 
         // Now the full package — BulkPack/Thing travels the BULK path.
-        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().Await();
         await PackageInstaller.Install(Mesh, manifest, files, "commit-reach")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90)).Await();
         _recorder.WriteManyBatches.SelectMany(b => b).Should().Contain("BulkPack/Thing",
             "this test is only meaningful while that node travels the bulk path");
 
         // …and it must be REACHABLE, without restarting anything.
         var afterInstall = await Mesh.GetWorkspace().GetMeshNodeStream("BulkPack/Thing")
             .Where(n => n is not null).Select(n => n!)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
         afterInstall.NodeType.Should().Be("NodeType",
             "a bulk-installed node that was probed while absent must not stay unreachable — "
             + "that is the fresh-mesh install outage this pins");
@@ -369,7 +369,7 @@ public class BulkSaveInstallTest(ITestOutputHelper output) : MonolithMeshTestBas
     private async Task<MeshNode> Read(string path) =>
         await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null).Select(n => n!)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
     /// <summary>
     /// Pass-through <see cref="IStorageAdapter"/> that records every <see cref="WriteMany"/>

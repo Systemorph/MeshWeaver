@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -60,7 +60,7 @@ public class SyncedQueryChangeFeedStarvationTest(ITestOutputHelper output) : Mon
         var folder = $"{TestPartition}/live-{Guid.NewGuid():N}";
         await NodeFactory
             .CreateNode(new MeshNode("one", folder) { Name = "one", NodeType = "Markdown" })
-            .FirstAsync().Timeout(Bound).ToTask();
+            .FirstAsync().Timeout(Bound).Await();
 
         // 🚨 ORDER IS THE POINT: the dead pipeline attaches BEFORE the listing opens its own, so a
         // plain-Subject fan-out aborts before ever reaching the listing.
@@ -74,16 +74,16 @@ public class SyncedQueryChangeFeedStarvationTest(ITestOutputHelper output) : Mon
         // late Initial could carry "two" and the test would pass without ever exercising a delta.
         var seeded = await listing
             .Where(nodes => nodes.Any(n => n.Path == $"{folder}/one"))
-            .FirstAsync().Timeout(Bound).ToTask();
+            .FirstAsync().Timeout(Bound).Await();
         seeded.Select(n => n.Path).Should().Contain($"{folder}/one");
 
         var next = listing
             .Where(nodes => nodes.Any(n => n.Path == $"{folder}/two"))
-            .FirstAsync().Timeout(Bound).ToTask();
+            .FirstAsync().Timeout(Bound).Await();
 
         await NodeFactory
             .CreateNode(new MeshNode("two", folder) { Name = "two", NodeType = "Markdown" })
-            .FirstAsync().Timeout(Bound).ToTask();
+            .FirstAsync().Timeout(Bound).Await();
 
         (await next).Select(n => n.Path).Should().Contain([$"{folder}/one", $"{folder}/two"],
             "the create completed, so an Added was OWED to every live subscriber of the change "

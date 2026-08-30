@@ -1,10 +1,10 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -41,7 +41,7 @@ public class ActivityWriteTrackerTest
         var write = tracker.Begin("alice/_UserActivity/Doc_Page");
         tracker.Count.Should().Be(1);
 
-        var drain = tracker.Drain().FirstAsync().ToTask();
+        var drain = tracker.Drain().FirstAsync().Await();
 
         // Still running: the drain must be pending, not completed.
         var early = await Task.WhenAny(drain, Task.Delay(300));
@@ -97,7 +97,7 @@ public class ActivityWriteTrackerTest
         var first = tracker.Begin("alice/_UserActivity/Same");
         var second = tracker.Begin("alice/_UserActivity/Same");
 
-        var drain = tracker.Drain().FirstAsync().ToTask();
+        var drain = tracker.Drain().FirstAsync().Await();
         first.Dispose();
 
         var early = await Task.WhenAny(drain, Task.Delay(300));
@@ -188,7 +188,7 @@ public class ActivityWriteTrackerTest
     {
         var tracker = new ActivityWriteTracker();
         // Subscribed BEFORE the write starts — the documented usage.
-        var settled = tracker.WhenSettled("alice/_UserActivity/Doc_Page").FirstAsync().ToTask();
+        var settled = tracker.WhenSettled("alice/_UserActivity/Doc_Page").FirstAsync().Await();
 
         var early = await Task.WhenAny(settled, Task.Delay(200));
         early.Should().NotBe(settled, "the write has not even started — completing here is the false pass");
@@ -217,7 +217,7 @@ public class ActivityWriteTrackerTest
         // Drain: completes at once on an idle tracker — correct for shutdown, wrong as a write signal.
         await tracker.Drain().Timeout(TimeSpan.FromSeconds(2)).FirstAsync();
 
-        var settled = tracker.WhenSettled("alice/_UserActivity/NeverStarted").FirstAsync().ToTask();
+        var settled = tracker.WhenSettled("alice/_UserActivity/NeverStarted").FirstAsync().Await();
         var raced = await Task.WhenAny(settled, Task.Delay(300));
         raced.Should().NotBe(settled,
             "an unstarted write must never report settled — that is the whole difference from Drain");
@@ -231,7 +231,7 @@ public class ActivityWriteTrackerTest
     public async Task WhenSettled_IgnoresOtherPaths()
     {
         var tracker = new ActivityWriteTracker();
-        var settled = tracker.WhenSettled("alice/_UserActivity/Mine").FirstAsync().ToTask();
+        var settled = tracker.WhenSettled("alice/_UserActivity/Mine").FirstAsync().Await();
 
         var other = tracker.Begin("bob/_UserActivity/Theirs");
         other.Dispose();
@@ -252,7 +252,7 @@ public class ActivityWriteTrackerTest
     public async Task WhenSettled_WaitsForEveryConcurrentWriteToTheSamePath()
     {
         var tracker = new ActivityWriteTracker();
-        var settled = tracker.WhenSettled("alice/_UserActivity/Same").FirstAsync().ToTask();
+        var settled = tracker.WhenSettled("alice/_UserActivity/Same").FirstAsync().Await();
 
         var first = tracker.Begin("alice/_UserActivity/Same");
         var second = tracker.Begin("alice/_UserActivity/Same");
@@ -289,8 +289,8 @@ public class ActivityWriteTrackerTest
         const string path = "charlie/_UserActivity/charlie_doc";
         var tracker = new ActivityWriteTracker();
 
-        var settledOnce = tracker.WhenSettled(path).FirstAsync().ToTask();
-        var settledFive = tracker.WhenSettled(path, writes: 5).FirstAsync().ToTask();
+        var settledOnce = tracker.WhenSettled(path).FirstAsync().Await();
+        var settledFive = tracker.WhenSettled(path, writes: 5).FirstAsync().Await();
 
         // Write 1, complete before write 2 starts — deliberately NO overlap.
         tracker.Begin(path).Dispose();
@@ -321,7 +321,7 @@ public class ActivityWriteTrackerTest
     {
         const string path = "charlie/_UserActivity/charlie_doc";
         var tracker = new ActivityWriteTracker();
-        var settled = tracker.WhenSettled(path, writes: 5).FirstAsync().ToTask();
+        var settled = tracker.WhenSettled(path, writes: 5).FirstAsync().Await();
 
         var writes = Enumerable.Range(0, 5).Select(_ => tracker.Begin(path)).ToArray();
         tracker.Count.Should().Be(5);
@@ -346,7 +346,7 @@ public class ActivityWriteTrackerTest
     {
         const string path = "charlie/_UserActivity/charlie_doc";
         var tracker = new ActivityWriteTracker();
-        var settled = tracker.WhenSettled(path, writes: 4).FirstAsync().ToTask();
+        var settled = tracker.WhenSettled(path, writes: 4).FirstAsync().Await();
 
         var first = tracker.Begin(path);
         var second = tracker.Begin(path);         // overlaps the first
@@ -380,7 +380,7 @@ public class ActivityWriteTrackerTest
         // Drain: completes at once on an idle tracker — correct for shutdown, wrong as a write signal.
         await tracker.Drain().Timeout(TimeSpan.FromSeconds(2)).FirstAsync();
 
-        var settled = tracker.WhenSettled(path, writes: 5).FirstAsync().ToTask();
+        var settled = tracker.WhenSettled(path, writes: 5).FirstAsync().Await();
 
         var raced = await Task.WhenAny(settled, Task.Delay(300));
         raced.Should().NotBe(settled, "not one of the five writes has started");
@@ -399,7 +399,7 @@ public class ActivityWriteTrackerTest
     public async Task WhenSettled_WithCount_IgnoresOtherPaths()
     {
         var tracker = new ActivityWriteTracker();
-        var settled = tracker.WhenSettled("alice/_UserActivity/Mine", writes: 2).FirstAsync().ToTask();
+        var settled = tracker.WhenSettled("alice/_UserActivity/Mine", writes: 2).FirstAsync().Await();
 
         for (var i = 0; i < 5; i++)
             tracker.Begin("bob/_UserActivity/Theirs").Dispose();
@@ -425,7 +425,7 @@ public class ActivityWriteTrackerTest
         var tracker = new ActivityWriteTracker();
 
         var running = tracker.Begin(path);                    // started BEFORE the subscription
-        var settled = tracker.WhenSettled(path, writes: 2).FirstAsync().ToTask();
+        var settled = tracker.WhenSettled(path, writes: 2).FirstAsync().Await();
 
         tracker.Begin(path).Dispose();                        // the second write
         var early = await Task.WhenAny(settled, Task.Delay(200));

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,6 +15,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -99,7 +99,7 @@ public class NodeTypeCompileParkTest(ITestOutputHelper output) : MonolithMeshTes
         for (var i = 0; i < 25; i++)
         {
             var enriched = await resolver.ResolveConfiguration(instance)
-                .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(30.Seconds()).Await(ct);
             enriched.Should().NotBeNull();
         }
         parkRegistry.GetCompileAttemptCount(NodeTypePath)
@@ -158,7 +158,7 @@ public class NodeTypeCompileParkTest(ITestOutputHelper output) : MonolithMeshTes
 
         // RETRY via the REAL tool surface — the exact call that wedged on memex.
         var resultJson = await new MeshOperations(Mesh).Compile(typePath)
-            .FirstAsync().Timeout(150.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(150.Seconds()).Await(ct);
         Output.WriteLine($"Compile tool returned: {resultJson}");
 
         using (var result = JsonDocument.Parse(resultJson))
@@ -197,8 +197,14 @@ public class NodeTypeCompileParkTest(ITestOutputHelper output) : MonolithMeshTes
             return curr with { Content = def with { Configuration = ValidConfiguration } };
         }).Should().Within(30.Seconds()).Emit();
 
+        // 🚨 REGRESSION GUARD (do NOT add a "wait for the node to carry the fix" here).
+        // Recycle must itself land its release-request stamp BEFORE it disposes the hub. It
+        // used to fire-and-forget that write and post the DisposeRequest immediately, leaving
+        // the two ordered only by both being issued inside the caller's turn — so when the
+        // dispose won, the reactivated hub recompiled the PRE-FIX source, matched zero Code
+        // nodes and re-settled at Error while staying parked. Waiting here would re-hide that.
         var recycleJson = await new MeshOperations(Mesh).Recycle(typePath)
-            .FirstAsync().Timeout(60.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(60.Seconds()).Await(ct);
         Output.WriteLine($"Recycle tool returned: {recycleJson}");
         using (var result = JsonDocument.Parse(recycleJson))
             result.RootElement.GetProperty("status").GetString().Should().Be("Recycled");
@@ -341,7 +347,7 @@ public class NodeTypeCompileParkTest(ITestOutputHelper output) : MonolithMeshTes
         await NodeFactory.CreateNode(instance).Should().Emit();
         var resolver = Mesh.ServiceProvider.GetRequiredService<INodeConfigurationResolver>();
         for (var i = 0; i < 10; i++)
-            (await resolver.ResolveConfiguration(instance).FirstAsync().Timeout(30.Seconds()).ToTask(ct))
+            (await resolver.ResolveConfiguration(instance).FirstAsync().Timeout(30.Seconds()).Await(ct))
                 .Should().NotBeNull();
         parkRegistry.GetCompileAttemptCount(typePath).Should().Be(attemptsAtPark,
             "an UNCHANGED broken source must not re-run Roslyn — retry only if the sources changed");
@@ -567,6 +573,6 @@ public class NodeTypeCompileParkTest(ITestOutputHelper output) : MonolithMeshTes
             .Where(n => n is not null)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(20))
-            .ToTask(ct);
+            .Await(ct);
     }
 }

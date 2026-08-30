@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -9,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -31,7 +31,7 @@ public class HomeConfigReactiveTest(ITestOutputHelper output) : MonolithMeshTest
 
         // Absent → the shipped defaults (FirstLevel + Flat + LastAccessed).
         var first = await HomeConfigNodeType.Observe(workspace, options, configPath)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
         first.Should().Be(HomeConfigNodeType.Defaults);
 
         // An admin creates the config node with NON-default settings.
@@ -46,12 +46,12 @@ public class HomeConfigReactiveTest(ITestOutputHelper output) : MonolithMeshTest
                 Render = HomeCatalogRender.Grouped,
                 DefaultSort = HomeCatalogSort.Alphabetical,
             },
-        }).FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
+        }).FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
 
         // Observe re-emits the edited config live — every open home would update without a deploy.
         var updated = await HomeConfigNodeType.Observe(workspace, options, configPath)
             .Where(c => c.Render == HomeCatalogRender.Grouped)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
         updated.Scope.Should().Be(HomeCatalogScope.Subtree);
         updated.DefaultSort.Should().Be(HomeCatalogSort.Alphabetical);
     }

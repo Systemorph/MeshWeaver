@@ -1,12 +1,12 @@
 using System.Threading;
 using System.Threading.Tasks;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -63,19 +63,19 @@ public class CompilePermissionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task EffectivePermissions_EditorHasCompile_ViewerDoesNot()
     {
         var editor = await Mesh.GetEffectivePermissions("Space/Project", "CompileEditor")
-            .FirstAsync().ToTask(TestTimeout);
+            .FirstAsync().Await(TestTimeout);
         editor.Should().HaveFlag(Permission.Compile);
 
         var admin = await Mesh.GetEffectivePermissions("Space/Project", "CompileAdmin")
-            .FirstAsync().ToTask(TestTimeout);
+            .FirstAsync().Await(TestTimeout);
         admin.Should().HaveFlag(Permission.Compile);
 
         var viewer = await Mesh.GetEffectivePermissions("Space/Project", "CompileViewer")
-            .FirstAsync().ToTask(TestTimeout);
+            .FirstAsync().Await(TestTimeout);
         viewer.Should().NotHaveFlag(Permission.Compile);
 
         var commenter = await Mesh.GetEffectivePermissions("Space/Project", "CompileCommenter")
-            .FirstAsync().ToTask(TestTimeout);
+            .FirstAsync().Await(TestTimeout);
         commenter.Should().NotHaveFlag(Permission.Compile);
     }
 
@@ -83,7 +83,7 @@ public class CompilePermissionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task System_HasCompile()
     {
         var system = await Mesh.GetEffectivePermissions("Space/Project", WellKnownUsers.System)
-            .FirstAsync().ToTask(TestTimeout);
+            .FirstAsync().Await(TestTimeout);
         system.Should().HaveFlag(Permission.Compile);
         system.Should().HaveFlag(Permission.Sync);
     }

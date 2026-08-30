@@ -3,7 +3,6 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
@@ -67,7 +66,7 @@ public class ContentCollectionClaimApplyRaceTest(ITestOutputHelper output) : Hub
             },
             provider,
             GetHost());
-        await collection.Initialize().FirstAsync().ToTask(ct);
+        await collection.Initialize().FirstAsync().Await(ct);
 
         // 1. The watcher's Created event, delivered while the file is still 0 bytes — the FIRST
         //    ingest triggered for this path. Its (empty) read completes immediately, and the
@@ -81,7 +80,7 @@ public class ContentCollectionClaimApplyRaceTest(ITestOutputHelper output) : Hub
         // 2. The write completes and SaveFile's own read-your-writes ingest reads the COMPLETE
         //    file — a strictly LATER trigger — and provably applies it.
         using (var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(RealContent)))
-            await collection.SaveFile("/sub", "hello.md", stream).ToTask(ct);
+            await collection.SaveFile("/sub", "hello.md", stream).Await(ct);
 
         var complete = await collection.GetMarkdown("sub/hello.md")
             .Should().Within(30.Seconds())

@@ -13,7 +13,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
@@ -63,7 +62,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBa
         };
 
         // Act — standard CreateNodeRequest (same as Thread creation)
-        var response = await client.Observe(new CreateNodeRequest(tokenNode), o => o.WithTarget(meshAddress)).FirstAsync().ToTask(ct);
+        var response = await client.Observe(new CreateNodeRequest(tokenNode), o => o.WithTarget(meshAddress)).FirstAsync().Await(ct);
 
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         response.Message.Node.Should().NotBeNull();
@@ -84,7 +83,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBa
 
         try
         {
-            var response = await client.Observe(new ValidateTokenRequest(fakeToken), o => o.WithTarget(new Address("ApiToken", hashPrefix))).FirstAsync().ToTask(ct);
+            var response = await client.Observe(new ValidateTokenRequest(fakeToken), o => o.WithTarget(new Address("ApiToken", hashPrefix))).FirstAsync().Await(ct);
 
             // Either the response says failure, or the grain couldn't activate (token not found)
             if (response.Message != null)

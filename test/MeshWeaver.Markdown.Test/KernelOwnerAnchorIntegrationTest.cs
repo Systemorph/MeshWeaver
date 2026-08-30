@@ -2,7 +2,6 @@ using System;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -15,6 +14,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Markdown.Test;
 
@@ -161,7 +161,7 @@ public class KernelOwnerAnchorIntegrationTest(ITestOutputHelper output) : Monoli
 
             // The viewer has Read (Viewer role) on the doc partition but NOT Create — RLS denies.
             Func<Task> create = async () =>
-                await meshService.CreateNode(docAnchoredActivity).FirstAsync().ToTask();
+                await meshService.CreateNode(docAnchoredActivity).FirstAsync().Await();
 
             await create.Should().ThrowAsync<UnauthorizedAccessException>(
                 "a non-owner viewer (Read but not Create on the doc partition) cannot anchor the "

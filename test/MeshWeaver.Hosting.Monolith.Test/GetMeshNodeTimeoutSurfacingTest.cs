@@ -1,12 +1,12 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -48,7 +48,7 @@ public class GetMeshNodeTimeoutSurfacingTest(ITestOutputHelper output) : Monolit
         var silent = CreateSilentHub();
         var path = silent.Address.ToString();
 
-        Func<Task> act = () => silent.GetMeshNode(path, ReadBudget).FirstAsync().ToTask();
+        Func<Task> act = () => silent.GetMeshNode(path, ReadBudget).FirstAsync().Await();
 
         var ex = (await act.Should().ThrowAsync<TimeoutException>(
             "a read that never got its reply must surface, not resolve to the same null "
@@ -76,7 +76,7 @@ public class GetMeshNodeTimeoutSurfacingTest(ITestOutputHelper output) : Monolit
         var silent = CreateSilentHub();
         var path = silent.Address.ToString();
 
-        Func<Task> act = () => silent.GetMeshNode(path, ReadBudget).FirstAsync().ToTask();
+        Func<Task> act = () => silent.GetMeshNode(path, ReadBudget).FirstAsync().Await();
         var ex = (await act.Should().ThrowAsync<TimeoutException>()).Which;
 
         Output.WriteLine($"Surfaced: {ex.Message}");
@@ -111,7 +111,7 @@ public class GetMeshNodeTimeoutSurfacingTest(ITestOutputHelper output) : Monolit
         var node = await silent
             .GetMeshNode(path, ReadBudget, ReadTimeoutBehavior.EmitNull)
             .FirstAsync()
-            .ToTask();
+            .Await();
 
         node.Should().BeNull(
             "the explicit opt-in keeps the legacy lenient behaviour for callers that documented it");

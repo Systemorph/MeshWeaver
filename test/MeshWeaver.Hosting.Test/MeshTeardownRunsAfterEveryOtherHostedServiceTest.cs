@@ -1,12 +1,12 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -62,7 +62,7 @@ public class MeshTeardownRunsAfterEveryOtherHostedServiceTest
             .Where(level => level >= MessageHubRunLevel.Started)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         await host.StopAsync();
 

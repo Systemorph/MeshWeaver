@@ -6,13 +6,13 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -413,7 +413,7 @@ public class InstanceComboAssemblerTest
         new InstanceComboAssembler(repos.Fetch, IoPool.Unbounded, options)
             .Assemble(combo, workRoot)
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     private static InstanceCombo Combo(params ModuleCoordinate[] modules) => new()
     {

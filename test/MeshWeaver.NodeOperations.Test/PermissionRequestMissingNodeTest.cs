@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.NodeOperations.Test;
 
@@ -58,7 +58,7 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
         Func<Task> act = async () => await RequestHub.Observe<GetPermissionResponse>(
                 new GetPermissionRequest(),
                 o => o.WithTarget(new Address(missingPath)))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var ex = await act.Should().ThrowAsync<DeliveryFailureException>(
             "the routing service must surface 'node missing' as a deterministic " +
@@ -87,7 +87,7 @@ public class PermissionRequestMissingNodeTest(ITestOutputHelper output)
         Func<Task> act = async () => await RequestHub.Observe<GetPermissionResponse>(
                 new GetPermissionRequest(),
                 o => o.WithTarget(new Address(deepMissingPath)))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var ex = await act.Should().ThrowAsync<DeliveryFailureException>(
             "deeply nested missing satellite paths must error in bounded time " +

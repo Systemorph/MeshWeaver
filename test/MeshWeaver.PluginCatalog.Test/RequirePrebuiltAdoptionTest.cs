@@ -5,7 +5,6 @@ using System.Net;
 using System.Net.Http;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -16,6 +15,7 @@ using MeshWeaver.Mesh;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 #pragma warning disable CS1591
 
@@ -104,7 +104,7 @@ public class RequirePrebuiltAdoptionTest(ITestOutputHelper output) : MonolithMes
 
     private static async Task<PrebuiltRequiredException> ShouldRefuse(IObservable<int> adoption)
     {
-        var act = () => adoption.FirstAsync().ToTask();
+        var act = () => adoption.FirstAsync().Await();
         return (await act.Should().ThrowAsync<PrebuiltRequiredException>()).Which;
     }
 

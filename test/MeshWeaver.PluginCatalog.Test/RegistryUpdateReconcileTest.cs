@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -109,16 +109,16 @@ public class RegistryUpdateReconcileTest(ITestOutputHelper output) : MonolithMes
     {
         await PackageInstaller.Install(
                 Mesh, Pkg(ModuleV1), FilesAt(ModuleV1, "# Notes v1", "c1"), "c1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var source = new FeedSource([Pkg(ModuleV2)], FilesAt(ModuleV2, "# Notes v2", "c2"));
 
         await PackageUpdateReconciler.ReconcileInstalled(
                 Mesh, source, "HEAD", [Pkg(ModuleV2)],
                 "Served by registry 'test'", null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
-        var record = await ReadRecord().ToTask();
+        var record = await ReadRecord().Await();
         record.Should().NotBeNull();
         record!.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)!.ModuleVersion
             .Should().Be(ModuleV2,
@@ -141,14 +141,14 @@ public class RegistryUpdateReconcileTest(ITestOutputHelper output) : MonolithMes
     {
         await PackageInstaller.Install(
                 Mesh, Pkg(ModuleV1), FilesAt(ModuleV1, "# Notes v1", "c1"), "c1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var source = new FeedSource([Pkg(ModuleV1)], FilesAt(ModuleV1, "# Notes v1", "c2"));
 
         await PackageUpdateReconciler.ReconcileInstalled(
                 Mesh, source, "HEAD", [Pkg(ModuleV1)],
                 "Served by registry 'test'", null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         source.Fetches.Should().BeEmpty(
             "the module version matched, so the decision was made without fetching a single file — "
@@ -169,17 +169,17 @@ public class RegistryUpdateReconcileTest(ITestOutputHelper output) : MonolithMes
 
         await PackageInstaller.Install(
                 Mesh, Pkg(ModuleV1), FilesAt(ModuleV1, "# Notes v1", "c1"), "c1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var source = new FeedSource([Pkg(ModuleV2)], FilesAt(ModuleV2, "# Notes v2", "c2"));
 
         await PackageUpdateReconciler.ReconcileInstalled(
                 Mesh, source, "HEAD", [Pkg(ModuleV2)], "Served by registry 'test'", null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         source.Fetches.Should().BeEmpty("no opt-in ⇒ nothing is installed, so nothing is fetched");
 
-        var record = await ReadRecord().ToTask();
+        var record = await ReadRecord().Await();
         record!.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)!.ModuleVersion
             .Should().Be(ModuleV1, "the installed content is untouched — the user is reminded instead");
     }
@@ -196,10 +196,10 @@ public class RegistryUpdateReconcileTest(ITestOutputHelper output) : MonolithMes
         await PackageUpdateReconciler.ReconcileInstalled(
                 Mesh, source, "HEAD", [Pkg(ModuleV2)],
                 "Served by registry 'test'", null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         source.Fetches.Should().BeEmpty("nothing is installed here, so there is nothing to reconcile");
-        (await ReadRecord().ToTask()).Should().BeNull("a reconcile must never INSTALL a new package");
+        (await ReadRecord().Await()).Should().BeNull("a reconcile must never INSTALL a new package");
     }
 
     /// <summary>
@@ -228,9 +228,9 @@ public class RegistryUpdateReconcileTest(ITestOutputHelper output) : MonolithMes
             .ToList();
 
         await PackageInstaller.Install(Mesh, noIdentity, withoutLock, "c1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
-        var record = await ReadRecord().ToTask();
+        var record = await ReadRecord().Await();
         record!.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)!.ModuleVersion
             .Should().BeNullOrEmpty("the fixture only means anything if the record really has no hash");
 
@@ -238,7 +238,7 @@ public class RegistryUpdateReconcileTest(ITestOutputHelper output) : MonolithMes
 
         await PackageUpdateReconciler.ReconcileInstalled(
                 Mesh, source, "HEAD", [noIdentity], "Served by registry 'test'", null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         source.Fetches.Should().BeEmpty(
             "there is no content identity to compare, so 'has it changed' is unanswerable — "

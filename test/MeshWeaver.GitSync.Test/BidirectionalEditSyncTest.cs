@@ -1,11 +1,11 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -32,20 +32,20 @@ public class BidirectionalEditSyncTest(ITestOutputHelper output) : GitHubSyncTes
         var repo = "https://github.com/test/bidi-mesh";
         await CreateSpace(a, "Bidi Mesh");
         await CreateMarkdown($"{a}/Page", "Page", "# v1\n\noriginal on mesh.");
-        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
 
         // Initial export — the mirror carries v1.
-        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
         Assert.Contains("original on mesh.", GitFile(repo, "Page.md"));
 
         // EDIT on the mesh side, through the documented mutation path.
         await Mesh.GetWorkspace().GetMeshNodeStream($"{a}/Page")
             .Update(n => n with { Content = new MarkdownContent { Content = "# v2\n\nedited on mesh." } })
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
         await WaitForBody($"{a}/Page", b => b.Contains("edited on mesh."));
 
         // Re-export — the edit lands in the mirror as a NEW commit and v1 is gone.
-        var c2 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        var c2 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
         Assert.NotEqual(c1.CommitSha, c2.CommitSha);
         var git = GitFile(repo, "Page.md");
         Assert.Contains("edited on mesh.", git);
@@ -60,8 +60,8 @@ public class BidirectionalEditSyncTest(ITestOutputHelper output) : GitHubSyncTes
         var repo = "https://github.com/test/bidi-git";
         await CreateSpace(a, "Bidi Git");
         await CreateMarkdown($"{a}/Page", "Page", "# v1\n\noriginal in mesh.");
-        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
 
         // EDIT on the git side: rewrite Page.md's body, keep the rest of the tree, push a new commit.
         var edited = Fake.Tree(repo)
@@ -79,10 +79,10 @@ public class BidirectionalEditSyncTest(ITestOutputHelper output) : GitHubSyncTes
             AuthorName = "Git Author",
             AuthorEmail = "git-author@test",
             AccessToken = "ghp_test_token",
-        }).Timeout(30.Seconds()).ToTask();
+        }).Timeout(30.Seconds()).Await();
 
         // Import that commit — the mesh node reflects the git-side edit.
-        await Sync.ReimportAtCommit(a, gitCommit.CommitSha, UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(a, gitCommit.CommitSha, UserId).Timeout(90.Seconds()).Await();
         await WaitForBody($"{a}/Page", b => b.Contains("edited in git."));
         Assert.DoesNotContain("original in mesh.", MarkdownBody(await WaitForNode($"{a}/Page")));
     }
@@ -96,5 +96,5 @@ public class BidirectionalEditSyncTest(ITestOutputHelper output) : GitHubSyncTes
         await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .SelectMany(_ => ReadNode(path))
             .Where(n => n is not null && predicate(MarkdownBody(n!)))
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .FirstAsync().Timeout(30.Seconds()).Await();
 }
