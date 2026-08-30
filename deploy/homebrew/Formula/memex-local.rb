@@ -17,6 +17,7 @@
 # upgrade). Install from there:
 #
 #   brew tap systemorph/memex
+#   brew trust systemorph/memex     # Homebrew refuses an untrusted third-party tap's formulae (measured 2026-08-30)
 #   brew install memex-local
 #   memex-local registry https://memex.meshweaver.cloud   # consume the cloud registry (free tier; --key mwr_… for a plan)
 #   memex-local up
