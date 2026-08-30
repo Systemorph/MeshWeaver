@@ -242,7 +242,14 @@ public static class AccessControlPipeline
                                     Message = recycling
                                 },
                                 o => o.ResponseFor(delivery));
-                        return Observable.Return(delivery.Failed(recycling, ErrorType.ShuttingDown));
+                        // 🚨 Forwarded, NOT Failed — the SAME shape both sibling branches use, and
+                        // for the same reason. The authoritative typed DeliveryFailure has just been
+                        // posted; returning a Failed delivery on top of it makes ReportFailure post a
+                        // SECOND, unclassified one for the same request (that is what
+                        // MessageService.FailureAlreadyReported exists to suppress, and this path has
+                        // no marker to carry). Two answers to one correlation is strictly worse than
+                        // the misclassification this fix removes.
+                        return Observable.Return(delivery.Forwarded());
                     }
 
                     logger?.LogWarning(ex,
