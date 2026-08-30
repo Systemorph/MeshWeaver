@@ -171,6 +171,15 @@ and it does not care what anything is named — rename `ToTask` to `First` and i
    callbacks extracted into a named type. Catching it twice is deliberate: a detector you can defeat
    by extracting a class is a spelling again.
 
+**The lesson recurs one level down.** The first version of those detectors matched
+`new TaskCompletionSource` — and missed `new System.Threading.Tasks.TaskCompletionSource<T>(…)` and
+the target-typed `TaskCompletionSource<T> x = new(…)`. Missing a *construction* is worse than missing
+a call site: the safe-form classifier asks "do **all** constructions carry
+`RunContinuationsAsynchronously`?", so a construction the regex cannot see makes the answer
+vacuously *yes* and the zero rule passes having checked nothing. Caught in review; every spelling is
+now covered and pinned by fixtures. **When you write a structural detector, enumerate the spellings
+of each part you match — including the ones the compiler lets you omit.**
+
 ### 🚨🚨 Where the line is: this bans BRIDGING, never the `Task` type
 
 Getting this boundary wrong would make the rule unshippable, so it is stated in the guard and

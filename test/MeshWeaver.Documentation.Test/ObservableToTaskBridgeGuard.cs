@@ -225,8 +225,37 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
             + "overload that maps faults to values would retire this entry."),
     ];
 
+    /// <summary>
+    /// A <c>TaskCompletionSource</c> being CONSTRUCTED, in every spelling C# allows.
+    ///
+    /// <para>🚨 The optional qualifier chain is not decoration. A bare
+    /// <c>new\s+TaskCompletionSource</c> would miss
+    /// <c>new System.Threading.Tasks.TaskCompletionSource&lt;T&gt;(…)</c> and
+    /// <c>new global::System.Threading.Tasks.TaskCompletionSource&lt;T&gt;(…)</c> — and missing a
+    /// construction is worse than missing a call site, because
+    /// <see cref="IsSafeForm"/> would then classify a file carrying an UNSAFE qualified
+    /// construction as safe, having checked nothing. That is the same
+    /// spelling-instead-of-the-thing hole this whole class exists to close, one level down; found
+    /// in review of the change that introduced it, and pinned by the fully-qualified fixture in
+    /// <see cref="TheScannerCatchesAHandRolledBridgeInAProductionRoot"/>.</para>
+    /// </summary>
     private static readonly Regex TcsConstruction =
-        new(@"new\s+TaskCompletionSource\s*(?:<[^;{}()]*>)?\s*\(", RegexOptions.Compiled);
+        new(@"new\s+(?:global::)?(?:[A-Za-z_]\w*\s*\.\s*)*TaskCompletionSource\s*(?:<[^;{}()]*>)?\s*\(",
+            RegexOptions.Compiled);
+
+    /// <summary>
+    /// The target-typed spelling: <c>TaskCompletionSource&lt;T&gt; x = new(…)</c>, where the type is
+    /// on the LEFT and <c>new</c> carries no name at all. <see cref="TcsConstruction"/> cannot see
+    /// it by construction, so a file could otherwise hide an unsafe completion source behind
+    /// <c>= new()</c>.
+    /// </summary>
+    private static readonly Regex TcsTargetTypedConstruction =
+        new(@"\bTaskCompletionSource\s*(?:<[^;{}()]*>)?\s+[A-Za-z_]\w*\s*=\s*new\s*\(",
+            RegexOptions.Compiled);
+
+    /// <summary>Every completion-source construction in <paramref name="code"/>, both spellings.</summary>
+    private static IEnumerable<Match> TcsConstructions(string code) =>
+        TcsConstruction.Matches(code).Concat(TcsTargetTypedConstruction.Matches(code));
 
     private static readonly Regex SettleCall =
         new(@"\b(?:TrySetResult|TrySetException|TrySetCanceled|SetResult|SetException)\s*\(",
@@ -456,6 +485,42 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
                 }
                 """);
 
+            // 🚨 The same bridge in spellings a bare `new TaskCompletionSource` regex cannot see:
+            // fully qualified, and target-typed with the type on the LEFT. Raised in review of the
+            // change that introduced these detectors — missing a CONSTRUCTION is worse than missing
+            // a call, because the safe-form classifier would then pass the file having checked
+            // nothing.
+            File.WriteAllText(Path.Combine(src, "QualifiedUnsafeBridge.cs"),
+                """
+                using System;
+
+                public static class QualifiedUnsafeBridge
+                {
+                    public static System.Threading.Tasks.Task<T> Await<T>(IObservable<T> source)
+                    {
+                        var completion = new System.Threading.Tasks.TaskCompletionSource<T>();
+                        source.Subscribe(v => completion.TrySetResult(v));
+                        return completion.Task;
+                    }
+                }
+                """);
+
+            File.WriteAllText(Path.Combine(src, "TargetTypedUnsafeBridge.cs"),
+                """
+                using System;
+                using System.Threading.Tasks;
+
+                public static class TargetTypedUnsafeBridge
+                {
+                    public static Task<T> Await<T>(IObservable<T> source)
+                    {
+                        TaskCompletionSource<T> completion = new();
+                        source.Subscribe(v => completion.TrySetResult(v));
+                        return completion.Task;
+                    }
+                }
+                """);
+
             // A Task-returning method over an IObservable that does NOT hand-roll the wait. This is
             // HubDisposalJoin.JoinDisposalAsync's shape, and it must not be flagged — if it were,
             // the rule would be banning the Task type rather than the bridge.
@@ -486,6 +551,21 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
             Assert.True(found.ContainsKey("src/Fixture/SafeBridge.cs"),
                 "The scanner missed the SAFE hand-rolled bridge. Both tiers depend on finding it: "
                 + "the safe form is still a bridge, and is allowed only by the register.");
+
+            foreach (var qualified in new[] { "QualifiedUnsafeBridge", "TargetTypedUnsafeBridge" })
+            {
+                Assert.True(found.ContainsKey($"src/Fixture/{qualified}.cs"),
+                    $"🚨 The scanner missed {qualified}.cs — a hand-rolled bridge written in a "
+                    + "spelling the construction regex does not cover (fully qualified, or "
+                    + "target-typed with the type on the left). That is a spelling escape hatch in "
+                    + "the very rule that exists to end spelling escape hatches.");
+
+                Assert.False(IsSafeForm(Path.Combine(src, $"{qualified}.cs")),
+                    $"🚨 The safe-form classifier called {qualified}.cs SAFE. It is not — its "
+                    + "completion source omits RunContinuationsAsynchronously. A construction the "
+                    + "regex cannot see is vacuously 'all safe', so the unsafe-form rule would pass "
+                    + "having checked nothing.");
+            }
 
             Assert.False(found.ContainsKey("src/Fixture/Consumer.cs"),
                 "🚨 The scanner flagged a Task-returning method that merely CONSUMES the sanctioned "
@@ -737,7 +817,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
                 continue;
 
             var close = MatchingClose(code, open);
-            if (close < 0 || !TcsConstruction.IsMatch(BodyAfter(code, close)))
+            if (close < 0 || !TcsConstructions(BodyAfter(code, close)).Any())
                 continue;
 
             yield return new BridgeSite(string.Empty, LineOf(code, m.Index),
@@ -775,7 +855,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
         if (text is null) return true; // unreadable is not evidence of a defect
 
         var code = SourceScan.MaskCommentsAndStrings(text);
-        return TcsConstruction.Matches(code).All(m =>
+        return TcsConstructions(code).All(m =>
             BalancedRegion(code, m.Index + m.Length - 1)
                 .Contains("RunContinuationsAsynchronously", StringComparison.Ordinal));
     }
