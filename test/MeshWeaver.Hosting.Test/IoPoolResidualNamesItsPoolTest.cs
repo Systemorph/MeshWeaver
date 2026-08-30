@@ -47,7 +47,7 @@ public class IoPoolResidualNamesItsPoolTest
     /// pinned separately by <see cref="TheDefaultDrainBudget_IsTheProductionContract"/>.</para>
     /// </summary>
     [Fact(Timeout = 180_000)]
-    public void DrainAll_reportsTheResidual_againstTheNameOfThePoolThatLeaked()
+    public async Task DrainAll_reportsTheResidual_againstTheNameOfThePoolThatLeaked()
     {
         // A millisecond budget: the SAME code path through the SAME DrainAll, three orders of
         // magnitude less waiting. The subject is the residual naming its pool, not the 30 s value.
@@ -55,47 +55,29 @@ public class IoPoolResidualNamesItsPoolTest
             new IoPoolOptions { DrainTimeout = TimeSpan.FromMilliseconds(250) });
         var pool = registry.Get(IoPoolNames.Query);
 
-        // 🚨 SIGNALS ARE OBSERVABLES, not ManualResetEventSlim. /async names a hand-woven gate as
-        // the same defect class as await on a turn-based scheduler, and the ONE sanctioned blocking
-        // primitive in this repo is the SemaphoreSlim sealed inside IoPool itself.
+        // 🚨 NO HAND-WOVEN GATE AND NO BLOCKING BRIDGE. The first version of this used
+        // ManualResetEventSlim (a hand-woven gate — /async bans it); the second traded that for
+        // AsyncSubject + .Wait(), which is an observable→blocking bridge and trips
+        // BlockingBridgeInTestRatchetGuard. Satisfying one guard by violating another is not a fix.
+        // What the test actually needs is: (a) know the leaf started, (b) have it outlive the drain
+        // budget. Neither needs a signal back INTO the leaf.
         var entered = new AsyncSubject<Unit>();
-        var release = new AsyncSubject<Unit>();
 
         pool.InvokeBlocking(_ =>
         {
             entered.OnNext(Unit.Default);
             entered.OnCompleted();
-            // 🚨 The ONLY block in this test, and it is the SUBJECT: a leaf that ignores its
-            // cancellation token and outlives the drain budget IS the residual condition being
-            // pinned. Bounded so a failing run cannot wedge the shard — the drain returns long
-            // before this, and the finally below releases it either way.
-            release.Timeout(TimeSpan.FromSeconds(30))
-                .Catch(Observable.Return(Unit.Default))
-                .Wait();
+            // The SUBJECT of the test: a leaf that ignores its cancellation token. Sleeping IS
+            // ignoring it — and with a 250 ms drain budget this outlives it four times over while
+            // costing the suite nothing, because the drain returns without waiting for the leaf.
+            Thread.Sleep(TimeSpan.FromSeconds(1));
             return 0;
         }).Subscribe(_ => { }, _ => { });
 
-        // Reactive wait for the precondition: the leaf must be running before the drain starts.
-        entered.Timeout(TimeSpan.FromSeconds(10))
-            .Catch<Unit, Exception>(_ => Observable.Throw<Unit>(
-                new InvalidOperationException("the leaf never started — the drain would measure nothing")))
-            .Wait();
+        // The precondition, through the sanctioned test bridge — no .Wait(), no gate.
+        await entered.Timeout(TimeSpan.FromSeconds(10)).Await(TestContext.Current.CancellationToken);
 
-        // 🚨 The release is UNCONDITIONAL. It was previously the statement after this await, so
-        // when the await threw (its token IS the method-timeout token) the blocked leaf was never
-        // freed: it held a pool thread for its full two minutes and `using` disposed over live
-        // work — the residual escaping from the test written to prove residuals are reported.
-        var total = 0;
-        IReadOnlyList<IoPoolRegistry.PoolResidual> byPool = [];
-        try
-        {
-            total = registry.DrainAll(out byPool);
-        }
-        finally
-        {
-            release.OnNext(Unit.Default);
-            release.OnCompleted();
-        }
+        var total = registry.DrainAll(out var byPool);
 
         total.Should().BeGreaterThan(0,
             "the leaf ignored its token and outlived the budget — that is a residual");
