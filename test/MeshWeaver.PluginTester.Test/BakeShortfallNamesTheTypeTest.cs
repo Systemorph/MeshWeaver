@@ -31,7 +31,6 @@ public class BakeShortfallNamesTheTypeTest
             declared,
             requested: declared,
             covered: Set("Crm/Board", "Store/Plugin"),
-            adopted: 2,
             directory: "/bake");
 
         Assert.NotNull(verdict);
@@ -46,7 +45,7 @@ public class BakeShortfallNamesTheTypeTest
     {
         var declared = Set("Crm/Board", "Crm/Client");
         Assert.Null(BakeSeedConsumer.DescribeShortfall(
-            declared, requested: declared, covered: declared, adopted: 2, directory: "/bake"));
+            declared, requested: declared, covered: declared, directory: "/bake"));
     }
 
     [Fact]
@@ -57,7 +56,6 @@ public class BakeShortfallNamesTheTypeTest
             declared: Set("Crm/Board", "Other/Type"),
             requested: Set("Crm/Board"),
             covered: Set("Crm/Board"),
-            adopted: 1,
             directory: "/bake");
         Assert.Null(verdict);
     }
@@ -69,7 +67,6 @@ public class BakeShortfallNamesTheTypeTest
             declared: Set("Crm/Board"),
             requested: Set("Something/Else"),
             covered: Set(),
-            adopted: 0,
             directory: "/bake");
         Assert.NotNull(verdict);
         Assert.Contains("NONE of which this run installed", verdict);
@@ -82,12 +79,48 @@ public class BakeShortfallNamesTheTypeTest
         // point of the change, and precisely what a count-based verdict conflated.
         var declared = Set("A/One", "B/Two", "C/Three");
         var missingB = BakeSeedConsumer.DescribeShortfall(
-            declared, declared, Set("A/One", "C/Three"), adopted: 2, directory: "/bake");
+            declared, declared, Set("A/One", "C/Three"), directory: "/bake");
         var missingC = BakeSeedConsumer.DescribeShortfall(
-            declared, declared, Set("A/One", "B/Two"), adopted: 2, directory: "/bake");
+            declared, declared, Set("A/One", "B/Two"), directory: "/bake");
 
         Assert.Contains("DECLINED: B/Two", missingB);
         Assert.Contains("DECLINED: C/Three", missingC);
         Assert.NotEqual(missingB, missingC);
+    }
+
+    [Fact]
+    public void A_path_seeded_under_two_packages_is_counted_ONCE()
+    {
+        // #2697: `Adopted` summed the seeder's per-call counts, so a path covered under two
+        // packages counted twice and the verdict could read "adopted 92 of 90" — a number larger
+        // than the total it is a fraction of. The count is now derived from the same sets the
+        // DECLINED list comes from, so it cannot exceed the denominator however many times the
+        // seeder acted.
+        var declared = Set("A/One", "B/Two");
+        var covered = Set("A/One", "B/Two");
+
+        // Whatever the seeder DID (two packages both seeding both paths = 4 events), the verdict
+        // is silent because every expected path is covered...
+        Assert.Null(BakeSeedConsumer.DescribeShortfall(
+            declared, requested: declared, covered: covered, directory: "/bake"));
+
+        // ...and where there IS a shortfall, adopted + declined == expected, by construction.
+        var verdict = BakeSeedConsumer.DescribeShortfall(
+            declared, requested: declared, covered: Set("A/One"), directory: "/bake");
+        Assert.Contains("adopted 1 of 2", verdict);
+        Assert.Contains("1 were DECLINED", verdict);
+    }
+
+    [Fact]
+    public void AdoptedAmong_counts_the_intersection_not_the_events()
+    {
+        // The pure seam the property rests on: only paths that are declared AND requested AND
+        // covered count, each exactly once.
+        Assert.Equal(2, BakeSeedConsumer.AdoptedAmong(
+            declared: Set("A/One", "B/Two", "C/Three"),
+            requested: Set("A/One", "B/Two"),
+            covered: Set("A/One", "B/Two", "C/Three")));
+        Assert.Equal(0, BakeSeedConsumer.AdoptedAmong(
+            declared: Set("A/One"), requested: Set("B/Two"), covered: Set("A/One", "B/Two")));
     }
 }
