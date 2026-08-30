@@ -58,9 +58,9 @@ namespace MeshWeaver.PluginCatalog;
 /// replicas landing different modules share no path, cannot lose each other's entry, and never
 /// contend for one file's SMB lease.</para>
 ///
-/// <para><b>…except boot-time GC against a CONCURRENT landing (#2303).</b> A landing's two writes
+/// <para><b>…except a GC pass against a CONCURRENT landing (#2303).</b> A landing's two writes
 /// (move the bytes, then <see cref="ModuleActivationSidecar.WriteEntry"/>) are not atomic across
-/// replicas, so another replica's <see cref="CollectGarbage(string, Microsoft.Extensions.Logging.ILogger?, TimeSpan?, DateTime?)"/> can observe the new generation
+/// replicas, so another replica's <see cref="CollectGarbage(string, Microsoft.Extensions.Logging.ILogger?, TimeSpan?, DateTime?, CancellationToken)"/> can observe the new generation
 /// directory before the entry that claims it exists and delete it as "unreferenced" — leaving a
 /// real activation entry pointing at nothing a moment later. See
 /// <see cref="DefaultGarbageMinAge"/> for the race and the grace-period fix.</para>
@@ -79,7 +79,7 @@ public sealed class ModuleLandingService : IDisposable
 
     /// <summary>
     /// How long an UNREFERENCED directory under <c>modules/</c> must sit before
-    /// <see cref="CollectGarbage(string, Microsoft.Extensions.Logging.ILogger?, TimeSpan?, DateTime?)"/> treats it as truly orphaned rather than the first half of a
+    /// <see cref="CollectGarbage(string, Microsoft.Extensions.Logging.ILogger?, TimeSpan?, DateTime?, CancellationToken)"/> treats it as truly orphaned rather than the first half of a
     /// landing this replica has not seen the SECOND half of yet — the race behind #2303.
     ///
     /// <para>🚨 <b>The race.</b> A landing is two writes on the shared <c>/data</c> volume,
@@ -111,7 +111,7 @@ public sealed class ModuleLandingService : IDisposable
     public static readonly TimeSpan DefaultGarbageMinAge = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Boot-time garbage collection over <c>modules/</c>: deletes generation directories
+    /// Garbage collection over <c>modules/</c>: deletes generation directories
     /// (<c>&lt;name&gt;@&lt;id&gt;</c>) no activation entry references, leftover
     /// <c>.staging-*</c>, <c>.trash-*</c> from an earlier pass's interrupted delete, and the
     /// retired <c>.pending-*</c> folders of the abandoned deferred-swap scheme — but (except for
@@ -128,7 +128,7 @@ public sealed class ModuleLandingService : IDisposable
     /// set deleted the very bytes the entry references — the dangling activation entries #2509
     /// measured on both prods. So any read fault skips every generation delete this pass
     /// (transient <c>.staging-/.pending-/.trash-</c> folders still collect — nothing references
-    /// those by design); a later boot re-reads and sweeps then. Unreadable is never unreferenced.</para>
+    /// those by design); a later pass re-reads and sweeps then. Unreadable is never unreferenced.</para>
     ///
     /// <para>🚨 <b>Removal is atomic per directory (#2509).</b> A generation is first renamed to a
     /// <c>.trash-*</c> sibling — one atomic rename, after which it no longer exists as far as
@@ -139,6 +139,18 @@ public sealed class ModuleLandingService : IDisposable
     /// 'OpenAI'</c> shape of the 2026-08-27 outage. With rename-first, a refused rename (held open
     /// on SMB) leaves the directory fully intact, and an interrupted delete leaves only a
     /// <c>.trash-*</c> folder a later pass finishes. There is no half-deleted state either way.</para>
+    ///
+    /// <para>🚨 <b>Housekeeping — never a readiness step (#2684).</b> On an Azure Files (CIFS)
+    /// <c>/data</c> this is one SMB round-trip per file, which is MINUTES for a handful of
+    /// orphaned generations — and it reclaims nothing the portal needs in order to SERVE. It used
+    /// to run synchronously in the portal's boot path, before the host listened, so rollout time
+    /// became a function of how much garbage the previous generation left on a network volume:
+    /// the pass blew the 300 s startup probe, the kill could not land on a process parked in
+    /// uninterruptible IO (<c>Dsl</c>, <c>wchan=wait_for_response</c>), and the roll looped. It now
+    /// runs from <see cref="ModuleGenerationsGcHostedService"/> once <c>ApplicationStarted</c> has
+    /// fired, on the file-system <c>IIoPool</c>, and observes <paramref name="cancellationToken"/>
+    /// between directories so a mesh teardown is never parked behind a slow unlink. Nothing here
+    /// gates <c>/health</c> or <c>/alive</c>.</para>
     /// </summary>
     /// <param name="baseDirectory">The deployment root whose <c>modules/</c> folder is swept.</param>
     /// <param name="logger">Diagnostics — every removal and every age-deferred skip is logged.</param>
@@ -147,19 +159,26 @@ public sealed class ModuleLandingService : IDisposable
     /// <param name="nowUtc">The reference "now" the age check compares against. Defaults to
     /// <see cref="DateTime.UtcNow"/>; a test seam so the race and its fix are provable without a
     /// real sleep.</param>
+    /// <param name="cancellationToken">Observed BETWEEN directories — the unit of atomic removal.
+    /// A cancelled pass stops before its next rename and returns what it removed so far; whatever
+    /// is left (an intact orphan, or a <c>.trash-*</c> whose delete did not finish) is a later
+    /// pass's job by construction. This is the pool's token when the pass runs through
+    /// <c>IIoPool</c>, so a mesh teardown cancels the sweep instead of waiting on it.</param>
     /// <returns>How many directories were removed — where "removed" means gone from the
     /// <c>modules/</c> namespace (a rename into <c>.trash-*</c> counts even when the final delete
     /// is finished by a later pass).</returns>
     public static int CollectGarbage(
-        string baseDirectory, ILogger? logger = null, TimeSpan? minAge = null, DateTime? nowUtc = null)
-        => CollectGarbage(baseDirectory, logger, minAge, nowUtc, deleteDirectory: null);
+        string baseDirectory, ILogger? logger = null, TimeSpan? minAge = null, DateTime? nowUtc = null,
+        CancellationToken cancellationToken = default)
+        => CollectGarbage(baseDirectory, logger, minAge, nowUtc, deleteDirectory: null, cancellationToken);
 
     /// <summary>The implementation behind <see cref="CollectGarbage(string, ILogger?, TimeSpan?,
-    /// DateTime?)"/> with the delete operation as a seam, so the interrupted-delete path — the one
-    /// that used to leave a half-gutted generation — is provable in a test without a real SMB lock.</summary>
+    /// DateTime?, CancellationToken)"/> with the delete operation as a seam, so the interrupted-delete
+    /// path — the one that used to leave a half-gutted generation — is provable in a test without a
+    /// real SMB lock.</summary>
     internal static int CollectGarbage(
         string baseDirectory, ILogger? logger, TimeSpan? minAge, DateTime? nowUtc,
-        Action<string>? deleteDirectory)
+        Action<string>? deleteDirectory, CancellationToken cancellationToken = default)
     {
         var modulesRoot = Path.Combine(baseDirectory, "modules");
         if (!Directory.Exists(modulesRoot))
@@ -184,6 +203,16 @@ public sealed class ModuleLandingService : IDisposable
         var removed = 0;
         foreach (var dir in Directory.EnumerateDirectories(modulesRoot))
         {
+            // 🚨 Between directories, never mid-removal: a rename is atomic, and a .trash-* whose
+            // delete was cut short is exactly the state a later pass already finishes (#2509). The
+            // token is the IIoPool's (#2684) — a teardown drain must not wait out a slow unlink.
+            if (cancellationToken.IsCancellationRequested)
+            {
+                logger?.LogInformation(
+                    "Modules GC: cancelled after removing {Removed} directory(ies) — the rest is a "
+                    + "later pass's job.", removed);
+                break;
+            }
             var leaf = Path.GetFileName(dir);
             var isTrash = leaf.StartsWith(".trash-", StringComparison.OrdinalIgnoreCase);
             var isTransient = isTrash
@@ -198,7 +227,7 @@ public sealed class ModuleLandingService : IDisposable
                     logger?.LogWarning(
                         "Modules GC: {Faults} activation entry file(s) could not be read, so the "
                         + "reference set is incomplete — SKIPPING every generation delete this pass "
-                        + "(unreadable is never unreferenced, #2509). A later boot re-reads and "
+                        + "(unreadable is never unreferenced, #2509). A later pass re-reads and "
                         + "sweeps.", readFaults);
                 reportedUnreliable = true;
                 continue;
@@ -221,7 +250,7 @@ public sealed class ModuleLandingService : IDisposable
             if (isOrphanGeneration)
             {
                 // Atomic removal (#2509): one rename takes the generation out of the modules/
-                // namespace; a refusal (held open on SMB) leaves it FULLY intact for the next boot.
+                // namespace; a refusal (held open on SMB) leaves it FULLY intact for a later pass.
                 var trash = Path.Combine(modulesRoot,
                     $".trash-{leaf}-{Guid.NewGuid():N}"[..(".trash-".Length + leaf.Length + 9)]);
                 try
@@ -232,7 +261,7 @@ public sealed class ModuleLandingService : IDisposable
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
-                    // Held open by a still-running pod — intact, the next boot collects it.
+                    // Held open by a still-running pod — intact, a later pass collects it.
                     logger?.LogDebug("Modules GC: {Dir} is in use, skipped ({Reason})", leaf, e.Message);
                     continue;
                 }
@@ -514,8 +543,8 @@ public sealed class ModuleLandingService : IDisposable
         // volume: an open file refuses deletion on SMB (the 409s), and the boot-time deferred
         // apply raced the OTHER pods of a rolling restart — deletes half-succeeded and 13 of 15
         // module closures were reduced to their entry DLL (2026-08-20). Old generations are
-        // garbage-collected at boot (CollectGarbage), skip-on-locked, once no entry references
-        // them.
+        // garbage-collected by the post-start GC pass (ModuleGenerationsGcHostedService →
+        // CollectGarbage), skip-on-locked, once no entry references them.
         var modulesRoot = Path.Combine(baseDirectory, "modules");
         var generation = $"{name}@{Guid.NewGuid():N}"[..(name.Length + 9)];
         var target = Path.Combine(modulesRoot, generation);
@@ -610,7 +639,7 @@ public sealed class ModuleLandingService : IDisposable
                 + "publish-laid-out module folders are managed by the deployment, not uninstall.");
 
         // The generation pointer is CLEARED on uninstall — a disabled entry must not keep its
-        // directory 'referenced', or boot GC could never reclaim it. Written to THIS module's own
+        // directory 'referenced', or the GC pass could never reclaim it. Written to THIS module's own
         // file, never through the shared index (#2090): an uninstall racing another module's
         // landing used to drop whichever entry lost.
         ModuleActivationSidecar.WriteEntry(baseDirectory,
@@ -619,7 +648,8 @@ public sealed class ModuleLandingService : IDisposable
 
         // Best-effort immediate delete: on a shared volume the files of a LOADED module refuse
         // deletion (SMB keeps them open) — that is fine, the cleared pointer above makes the
-        // next boot's CollectGarbage reclaim the generation once no pod holds it.
+        // next GC pass (ModuleGenerationsGcHostedService, after a pod's ApplicationStarted)
+        // reclaim the generation once no pod holds it.
         var targets = new List<string> { Path.Combine(baseDirectory, "modules", name) };
         if (!string.IsNullOrWhiteSpace(existing.Directory))
             targets.Add(Path.Combine(baseDirectory, "modules", existing.Directory!));
@@ -632,7 +662,7 @@ public sealed class ModuleLandingService : IDisposable
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 logger?.LogDebug(
-                    "Uninstall of '{Name}': {Dir} is in use, boot GC reclaims it ({Reason})",
+                    "Uninstall of '{Name}': {Dir} is in use, the next GC pass reclaims it ({Reason})",
                     name, Path.GetFileName(target), e.Message);
             }
         }
