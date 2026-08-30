@@ -55,7 +55,25 @@ public class SubscribeErrorArmRatchetGuard
     private static readonly string[] ScannedRoots = ["src", "memex"];
 
     /// <summary>
-    /// 🚨 Seeded EXACTLY from the tree on 2026-08-30. MAY ONLY DECREASE.
+    /// 🚨 <b>This count UNDERCOUNTS, deliberately, and the number must not be read as complete.</b>
+    ///
+    /// <para>A single-argument <c>Subscribe(Foo)</c> where <c>Foo</c> is a method group has exactly
+    /// the same defect as <c>Subscribe(x =&gt; Foo(x))</c> — it binds to
+    /// <c>Subscribe(Action&lt;T&gt;)</c> and rethrows the same way. But
+    /// <c>Subscribe(someObserver)</c>, which is FINE (an <c>IObserver</c> carries its own
+    /// <c>OnError</c>), is syntactically identical: one identifier. Nothing in the text
+    /// distinguishes them, and only the compiler knows which overload binds.</para>
+    ///
+    /// <para>So this guard flags only the case it can be SURE of — a single argument that is
+    /// visibly a lambda — and accepts false negatives rather than crying wolf on every
+    /// <c>Subscribe(stream)</c> in the tree. A real example it misses sits at
+    /// <c>MeshNodeStreamCache.cs:613</c>: <c>?.Subscribe(OnMeshChange)</c>, a method group on a
+    /// long-lived change feed. Closing that gap needs a Roslyn symbol lookup, not a regex; until
+    /// then the honest description of the baseline is "at least this many".</para>
+    /// </summary>
+
+    /// <summary>
+    /// 🚨 Seeded from the tree on 2026-08-30 (95), lowered to 94 by this change's conversion of the idle sweep. MAY ONLY DECREASE.
     ///
     /// <para>Unlike the timeout-literal ratchet, this one carries <b>no transitional margin</b>.
     /// There the rule post-dated the branches it would fail, so a margin protected authors from a
@@ -63,7 +81,7 @@ public class SubscribeErrorArmRatchetGuard
     /// required the error arm — so a bare subscription arriving from a branch cut yesterday is a
     /// TRUE positive, and the right outcome is that it is seen.</para>
     /// </summary>
-    private const int Baseline = 95;
+    private const int Baseline = 94;
 
     private static readonly Regex SubscribeCall = new(@"\.Subscribe\s*\(", RegexOptions.Compiled);
 
