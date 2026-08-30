@@ -10,7 +10,6 @@
 // Returns: MirrorResult (Status, NodesImported, NodesSkipped, Paths…).
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using MeshWeaver.Mesh;
@@ -52,11 +51,18 @@ Log.LogInformation(
 
 // Post to the mesh hub — MirrorRequest's handler is registered there
 // (AddMirrorHandler) and runs MirrorOperations internally.
+// 🚨 ObserveCompletion, never Rx's own observable-to-Task bridge (maintainer, 2026-08-30:
+// "no ToTask ever"). This script runs INSIDE the portal, and Rx's bridge resumes its awaiter
+// inline on the mesh hub's own action-block thread — the rest of this script would then run
+// there. FirstAsync (not Take(1)): an empty completion must keep FAULTING, because the line
+// below dereferences response.Message and ObserveCompletion would otherwise settle with null.
 var response = await Mesh
     .Observe<MirrorResult>(request, o => o.WithTarget(new Address("mesh")))
-    .Take(1)
+    .FirstAsync()
     .Timeout(TimeSpan.FromMinutes(10))
-    .ToTask(Ct);
+    .ObserveCompletion(
+        ex => Log.LogWarning(ex, "Mirror response faulted AFTER the wait settled — reported, not orphaned"),
+        Ct);
 
 var result = response.Message;
 Log.LogInformation(

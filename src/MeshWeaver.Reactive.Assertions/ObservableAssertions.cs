@@ -1,5 +1,5 @@
+using System.Diagnostics;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 
 namespace MeshWeaver.Reactive.Assertions;
 
@@ -7,8 +7,9 @@ namespace MeshWeaver.Reactive.Assertions;
 /// Entry points for fluent assertions on <see cref="IObservable{T}"/>.
 /// <para>
 /// Reactive code is best tested reactively. Instead of hand-rolling a blocking wait, the terminal
-/// assertions bridge the stream to a <see cref="System.Threading.Tasks.Task"/> at the test edge
-/// (the sanctioned <c>.FirstAsync()</c>/<c>.ToTask()</c> bridge) and you <c>await</c> them:
+/// assertions subscribe, wait for the relevant emission through
+/// <see cref="ReactiveWait"/> (never an Rx-to-Task bridge — see that type), and you
+/// <c>await</c> them:
 /// </para>
 /// <example>
 /// <code>
@@ -41,12 +42,14 @@ public static class ObservableAssertionExtensions
 /// Fluent assertions over a reactive stream. Each terminal method subscribes, waits (up to the
 /// timeout) for the relevant emission, and asserts — so test bodies stay declarative.
 /// <para>
-/// The wait is the sanctioned test-edge Rx→Task bridge: the source is subscribed synchronously off the
-/// ambient sync-context, filtered, <c>Take(1)</c>'d, bounded with <c>Timeout</c>, and bridged via <c>.ToTask()</c> —
-/// never a thread-blocking <see cref="System.Threading.ManualResetEventSlim"/> + <c>Wait</c>. Each terminal
-/// assertion returns a <see cref="System.Threading.Tasks.Task"/> the test body <c>await</c>s; the bridge
-/// lives in the assertion, never the test body. <c>Within(...)</c> stays synchronous — it only configures
-/// the timeout for the rest of the chain.
+/// The source is subscribed synchronously off the ambient sync-context, filtered, <c>Take(1)</c>'d,
+/// bounded with <c>Timeout</c>, and awaited through <see cref="ReactiveWait"/> — never a
+/// thread-blocking <see cref="System.Threading.ManualResetEventSlim"/> + <c>Wait</c>, and never
+/// Rx's own observable-to-Task bridge (maintainer, 2026-08-30: <i>"no ToTask ever"</i>), which
+/// resumes the awaiting test INLINE on the signalling thread. Each terminal assertion returns a
+/// <see cref="System.Threading.Tasks.Task"/> the test body <c>await</c>s; the wait lives in the
+/// assertion, never the test body. <c>Within(...)</c> stays synchronous — it only configures the
+/// timeout for the rest of the chain.
 /// </para>
 /// <para>
 /// 🚨 The subscribe happens SYNCHRONOUSLY, on the calling thread, before the returned
@@ -128,11 +131,16 @@ public class ObservableAssertions<T>
         {
             // Same sentinel discipline as WaitForFirst: only the WAIT's own timeout maps
             // to "did not"; a source-thrown TimeoutException surfaces via "errored:".
-            await SubscribeHereOffSyncContext(_subject)
-                .IgnoreElements()
-                .Timeout(_timeout, Observable.Defer(() =>
-                    Observable.Throw<T>(new AssertionWaitTimeoutException())))
-                .ToTask();
+            // 🚨 No .FirstAsync() here: IgnoreElements() completes EMPTY on success, and an empty
+            // completion is exactly what this assertion is waiting for. ReactiveWait settles on
+            // the completion itself (with default), so the success path no longer has to travel
+            // as an exception — which is what Rx's own bridge did, reporting a healthy completed
+            // stream as "it errored: Sequence contains no elements".
+            await ReactiveWait.First(
+                SubscribeHereOffSyncContext(_subject)
+                    .IgnoreElements()
+                    .Timeout(_timeout, Observable.Defer(() =>
+                        Observable.Throw<T>(new AssertionWaitTimeoutException()))));
         }
         catch (AssertionWaitTimeoutException)
         {
@@ -162,8 +170,12 @@ public class ObservableAssertions<T>
             // failure; if the window elapses with nothing (Timeout), the source completes empty,
             // or the source errors before emitting, the assertion holds — mirroring the original
             // "no positive signal => pass" semantics.
-            observed = await SubscribeHereOffSyncContext(_subject)
-                .Take(1).Timeout(within).ToTask();
+            // 🚨 FirstAsync(), not Take(1): the catch below treats ANY exception as "nothing was
+            // emitted", so an empty completion must keep FAULTING rather than settling with
+            // default — otherwise `emitted` would be set for a stream that emitted nothing and
+            // this negative assertion would invert.
+            observed = (await ReactiveWait.First(
+                SubscribeHereOffSyncContext(_subject).FirstAsync().Timeout(within)))!;
             emitted = true;
         }
         catch
@@ -212,12 +224,12 @@ public class ObservableAssertions<T>
             // run 31407254207: an Interval-based poll "completed" — Interval never completes).
             // ToList reports empty completion as DATA (an empty list), so the only exceptions
             // left in flight are the sentinel and genuine source errors.
-            matched = await SubscribeHereOffSyncContext(source)
-                .Take(1)
-                .ToList()
-                .Timeout(_timeout, Observable.Defer(() =>
-                    Observable.Throw<IList<T>>(new AssertionWaitTimeoutException())))
-                .ToTask();
+            matched = (await ReactiveWait.First(
+                SubscribeHereOffSyncContext(source)
+                    .Take(1)
+                    .ToList()
+                    .Timeout(_timeout, Observable.Defer(() =>
+                        Observable.Throw<IList<T>>(new AssertionWaitTimeoutException())))))!;
         }
         catch (AssertionWaitTimeoutException)
         {

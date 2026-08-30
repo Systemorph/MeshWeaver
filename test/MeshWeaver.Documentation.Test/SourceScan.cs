@@ -42,13 +42,22 @@ internal static class SourceScan
     public static bool IsExcluded(string root, string path) =>
         Relative(root, path).Split('/').Any(s => ExcludedSegments.Contains(s, StringComparer.OrdinalIgnoreCase));
 
-    /// <summary>Every C#/Razor source file under the named roots, build output excluded.</summary>
+    /// <summary>
+    /// Every C#/Razor/script source file under the named roots, build output excluded.
+    ///
+    /// <para>🚨 <c>.csx</c> is in the list, and it is the one that is easy to forget. A script
+    /// template such as <c>src/MeshWeaver.Graph/Templates/Mirror.csx</c> is REAL PRODUCTION CODE
+    /// that compiles at RUNTIME in the portal and is invisible to <c>dotnet build</c> — the blind
+    /// spot AGENTS.md names ("green CI does NOT mean the mesh compiles"). A ratchet that scanned
+    /// only <c>.cs</c> would report a tree as clean while the same defect sat in a file no compiler
+    /// ever looks at. Two <c>.ToTask(</c> sites were found in exactly that position.</para>
+    /// </summary>
     public static IEnumerable<string> SourceFiles(string root, IEnumerable<string> scannedRoots) =>
         scannedRoots
             .Select(r => Path.Combine(root, r))
             .Where(Directory.Exists)
             .SelectMany(dir => Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-            .Where(f => Path.GetExtension(f) is ".cs" or ".razor")
+            .Where(f => Path.GetExtension(f) is ".cs" or ".razor" or ".csx")
             .Where(f => !IsExcluded(root, f));
 
     /// <summary>

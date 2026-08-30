@@ -1,5 +1,5 @@
+using System.Diagnostics;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
@@ -65,7 +65,8 @@ public static class PermissionTestExtensions
         // DevLogin admin context the test had set, and the delete failed
         // with "Delete permission denied".
         if (until == null)
-            return await hub.GetEffectivePermissions(path, userId).FirstAsync().ToTask(ct);
+            return await hub.GetEffectivePermissions(path, userId).FirstAsync()
+                .ObserveCompletion(ReportLateFault, ct);
 
         // Wait for the predicate to match. SecurityService.GetEffectivePermissions
         // is a hot observable backed by per-scope synced AccessAssignment
@@ -81,7 +82,7 @@ public static class PermissionTestExtensions
             .Where(until)
             .Timeout(t)
             .FirstAsync()
-            .ToTask(ct);
+            .ObserveCompletion(ReportLateFault, ct);
     }
 
     /// <summary>
@@ -119,6 +120,22 @@ public static class PermissionTestExtensions
             .Where(p => p.HasFlag(permission))
             .Timeout(t)
             .FirstAsync()
-            .ToTask(ct);
+            .ObserveCompletion(ReportLateFault, ct);
     }
+
+    /// <summary>
+    /// Late-fault sink for the waits above. 🚨 These wait through
+    /// <see cref="ReactiveCompletion.ObserveCompletion{T}"/>, never an Rx-to-Task bridge
+    /// (maintainer, 2026-08-30: "no ToTask ever"): Rx's own bridge completes its
+    /// <c>TaskCompletionSource</c> from inside the pipeline without
+    /// <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/>, so the awaiting test
+    /// resumes INLINE on the permission stream's signalling thread, still inside Rx's
+    /// trampoline, and the rest of the test body inherits it. A permission stream is hot and
+    /// long-lived, so a fault CAN arrive after the wait settled — it is traced rather than
+    /// discarded, which is the other half of what ObserveCompletion exists for.
+    /// </summary>
+    private static void ReportLateFault(Exception ex)
+        => Trace.TraceError(
+            "PermissionTestExtensions: the permission stream faulted AFTER the wait settled — "
+            + "reported, not orphaned: {0}: {1}", ex.GetType().Name, ex.Message);
 }

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -67,6 +68,53 @@ public class MeshConfiguration(
     /// </summary>
     public static readonly IReadOnlySet<string> DefaultStreamRoutedAddressTypes =
         new HashSet<string>(StringComparer.Ordinal) { "portal", "client", "cache", "mesh" };
+
+    /// <summary>
+    /// Address-type prefixes whose hubs are hosted in an Orleans CLIENT process — a process that
+    /// cannot host a grain, so the cluster can never reach those hubs by a directed
+    /// <c>IPodHubGrain.Deliver</c> call and the Orleans memory stream is not a fallback but the
+    /// only transport there is. Declared via <c>MeshBuilder.AddClientHostedAddressType</c>.
+    ///
+    /// <para>🚨 <b>EMPTY by default, and empty in production.</b> No production process hosts mesh
+    /// hubs as an Orleans client — <c>UseOrleansMeshClient</c> has only test-fixture callers, the
+    /// distributed portal is a co-hosted silo, and the monolith / <c>LocalMesh</c> / bake host run
+    /// no Orleans at all. The Orleans TEST rig does host hubs on a client — one of every built-in
+    /// stream-routed type — and declares all of them here.</para>
+    ///
+    /// <para><b>Why a DECLARATION and not an inference.</b> <c>RoutingGrain.BuildPodHubRoute</c>
+    /// used to take the stream fallback whenever the pod-hub grain answered
+    /// <c>PodHubNotHereException</c> — a condition that means BOTH "the owner is an Orleans client"
+    /// and "the owner is a silo whose claim has not landed yet". Publishing on the second reading
+    /// is what kept #2320 / #2322 / #2406 reachable: a publish into a stream with no live
+    /// subscriber SUCCEEDS and discards, and a publish into a wedged queue grain stalls for
+    /// 30–60 s. Asking the DECLARATION instead separates the two: a client-hosted type keeps its
+    /// only transport, and everything else gets a fast, transient NACK the sender rides out. See
+    /// <c>Doc/Architecture/DurableStreamsViaMeshNodes</c>.</para>
+    ///
+    /// <para>An <c>init</c> property rather than a primary-constructor parameter, deliberately:
+    /// adding a parameter — even a trailing optional one — changes the constructor's SIGNATURE, and
+    /// an already-published module binds that signature in its IL. Additive here, breaking there.</para>
+    ///
+    /// <para>🚨 <b>SNAPSHOTTED into an immutable set on assignment</b>, not stored by reference.
+    /// <c>MeshBuilder</c> hands over its own live <c>HashSet</c>, and an <c>IReadOnlySet</c> that is
+    /// really a <c>HashSet</c> can be cast back and written to — either way a routing decision would
+    /// depend on when it was asked. This set decides whether a delivery is carried or NACK'd, so it
+    /// is fixed at construction and cannot move afterwards.</para>
+    /// </summary>
+    public IReadOnlySet<string> ClientHostedAddressTypes
+    {
+        get => clientHostedAddressTypes;
+        init => clientHostedAddressTypes = value is null or { Count: 0 }
+            ? EmptyAddressTypes
+            : ImmutableHashSet.CreateRange(StringComparer.Ordinal, value);
+    }
+
+    private readonly IReadOnlySet<string> clientHostedAddressTypes = EmptyAddressTypes;
+
+    /// <summary>Immutable, read-only, initialised once and never written — the sanctioned
+    /// <c>static readonly</c> shape (see NoStaticState.md).</summary>
+    private static readonly ImmutableHashSet<string> EmptyAddressTypes =
+        ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
 
     // No public Nodes / MeshNodes property. Static nodes registered via
     // MeshBuilder.AddMeshNodes(...) flow through StaticMeshNodeListProvider
