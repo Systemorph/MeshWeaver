@@ -22,6 +22,11 @@ public static class NotificationRuleNodeType
     public static TBuilder AddNotificationRuleType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
+        // 🚨 The discriminator has to be known to EVERY hub, not only to the per-node hub the
+        // data source above configures (MeshWeaver#2729). A reader elsewhere in the mesh whose
+        // TypeRegistry lacks it gets a raw JsonElement and therefore a SILENT null: the value
+        // renders empty and reactive waits time out, with no exception anywhere to grep for.
+        builder.ConfigureHub(config => config.WithType<NotificationRule>(nameof(NotificationRule)));
         return builder;
     }
 

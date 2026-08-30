@@ -284,9 +284,11 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
         await service.StartAsync(CancellationToken.None);
         try
         {
-            // Startup: the default (Continuous) drives the ONE startup pass until the live Stable
-            // emission arrives (by-design fallback window), then Stable-only patches. Checks are
-            // event-driven now, so the second Stable patch is driven by a build completion rather
+            // Startup runs under the PERSISTED policy (Stable), never the configured default —
+            // the default is no longer prepended to the policy stream at all (#2731/#2797), so the
+            // old "by-design fallback window" in which a pinned install could be patched from the
+            // wrong policy is gone from the startup pass as well as from the retry. Checks are
+            // event-driven, so the second Stable patch is driven by a build completion rather
             // than by waiting out a timer.
             // 🚨 The startup pass must be OBSERVED before publishing: StartAsync subscribes via
             // SubscribeOn(TaskPool), so it returns before the build-completion watch is established,
@@ -331,6 +333,11 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
             var afterFault = updater.Tags.Skip(beforeFault).ToList();
             afterFault.Should().NotBeEmpty();
             afterFault.Should().OnlyContain(tag => tag == FakeAcrTagLister.StableTag);
+
+            // ...and neither may the STARTUP pass (#2731/#2797). Asserted over EVERY patch, so the
+            // window this test was written to close is now closed at both ends.
+            updater.Tags.Should().OnlyContain(tag => tag == FakeAcrTagLister.StableTag,
+                "the poller must never evaluate under a policy the install has not persisted");
         }
         finally
         {
