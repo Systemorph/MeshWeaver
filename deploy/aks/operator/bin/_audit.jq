@@ -39,6 +39,13 @@ def only(a; b): [a[] | select(. as $x | (b | index($x)) == null)] | unique;
 def norm: walk(if type == "number" then tostring else . end);
 def compact: tojson | if length > 120 then .[:117] + "…" else . end;
 
+# 🚨 lifecycle values are REDACTED to their shape. Every other compared pod-spec field carries
+# placement and sizing (replicas, selectors, quantities, probe numbers) — but a lifecycle hook
+# holds COMMAND LINES, and a command line can embed anything, tokens included. The comparison uses
+# the full value; the report shows the structure with every string scalar replaced, which is enough
+# to see THAT a hook was patched and WHERE without quoting what it runs.
+def redact($f): if ($f | endswith(".lifecycle")) then walk(if type == "string" then "…" else . end) else . end;
+
 def container($c): ((.spec.template.spec.containers // []) | map(select(.name == $c)) | .[0]);
 def env_names: (.env // []) | map(.name);
 def env_from: (.envFrom // []) | map(.secretRef.name // .configMapRef.name // empty);
@@ -86,7 +93,8 @@ def annotations: (.spec.template.metadata.annotations // {}) | keys;
     {field: "containers[\($container)].startupProbe.failureThreshold", live: ($lc.startupProbe.failureThreshold // 3), manifest: ($mc.startupProbe.failureThreshold // 3)}
   ]
   | map(select((.live | norm) != (.manifest | norm)))
-  | map({field, live: (.live | compact), manifest: (.manifest | compact)})) as $podSpecDiffs
+  | map(.field as $f
+      | {field: $f, live: (.live | redact($f) | compact), manifest: (.manifest | redact($f) | compact)})) as $podSpecDiffs
 
 # ── the chart's ConfigMaps ─────────────────────────────────────────────────────────────────────
 | ($m | map(select(.kind == "ConfigMap")) | map(

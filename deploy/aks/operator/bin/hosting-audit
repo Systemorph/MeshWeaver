@@ -28,7 +28,10 @@
 #     renders that the pod lacks is the same edit from the other side), envFrom, volumes, mounts,
 #     containers, pod annotations, and the pod-spec fields a `kubectl patch` reaches: replicas,
 #     nodeSelector, tolerations, affinity, serviceAccountName, terminationGracePeriodSeconds, the
-#     portal container's resources, lifecycle and startup-probe budget;
+#     portal container's resources, lifecycle and startup-probe budget. Pod-spec DIFFS carry the
+#     two values (placement and sizing, not secrets) — except lifecycle hooks, whose string
+#     scalars are REDACTED to their shape: a hook holds command lines, and a command line can
+#     embed anything;
 #   * the chart's ConfigMaps: keys that exist only live, only in the manifest, or whose VALUE differs;
 #   * Secrets the live pod reads (envFrom, secretKeyRef, secret volumes) that are neither
 #     chart-managed nor CSI-synced;
