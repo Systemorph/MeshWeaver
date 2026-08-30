@@ -69,8 +69,14 @@ activation budget: hung pages, failed liveness probes, dropped silos.
   cannot see.** Extension methods on `MessageHubConfiguration` / `IMessageHub`, `Controls.*`,
   `host.*` helpers, content base types — before you delete one: `grep -rn "<Symbol>" samples/*/Data`
   **plus the node repos' content trees**, AND search the live mesh (`search_chunks`), which may hold
-  callers the repo has already dropped. Port or delete them in the SAME change. A clean
-  `-c Release -warnaserror` build proves nothing here.
+  callers the repo has already dropped. 🚨 **`"searched": false` in the answer is a sweep FAILURE,
+  not a pass** (#2741) — the deployment has no embedding provider, so nothing was searched. This is
+  the same shape as the `LspDiagnosticsForNode` trap below, and it bit for the same reason: the
+  envelope used to answer `{"count":0,"results":[]}`, which is byte-identical to "I searched and
+  found no callers", and `count` is the field everyone reads. It now carries **no `count` at all**
+  when nothing was searched, so the absent field is the tell. Sweep on a deployment whose index is
+  live, or stop — do not delete on an unrun sweep. Port or delete callers in the SAME change. A
+  clean `-c Release -warnaserror` build proves nothing here.
 - **Before prod, sweep every NodeType green.** `Search('nodeType:NodeType')` →
   `LspDiagnosticsForNode` per type → fix roots first (a red upstream makes every dependent
   `UpstreamFailed`) → re-sweep until all read `Ok`. 🚨 **`ok:false` with a `status` other than

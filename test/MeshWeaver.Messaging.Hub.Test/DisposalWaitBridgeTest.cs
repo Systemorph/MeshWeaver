@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Reactive.Subjects;
@@ -258,5 +259,112 @@ public class DisposalWaitBridgeTest
     {
         var signal = new Subject<Unit>();
         Assert.Throws<ArgumentNullException>(() => { _ = signal.ObserveCompletion(null!); });
+    }
+
+    /// <summary>
+    /// 🚨 <b>#2772 — the opt-in that gives a cancelled caller its resource back.</b>
+    ///
+    /// <para><c>ObserveCompletion</c> deliberately does NOT dispose its subscription: that is what
+    /// keeps the error arm attached so a LATE fault is still reported. But it silently changed
+    /// cancellation semantics for every site converted from <c>.ToTask(ct)</c>, which DID dispose —
+    /// and Rx cancels <c>IoPool.InvokeObservable</c>'s <c>subscriberCt</c> on subscription
+    /// disposal. Under the default, a caller that has given up keeps its pool permit for the whole
+    /// duration of work nobody is waiting for, and it is invisible: nothing faults, nothing logs,
+    /// the slot is simply not available.</para>
+    ///
+    /// <para>The subscription's disposal is asserted through the SOURCE, not through a flag this
+    /// test sets: <see cref="Observable.Create{TResult}(System.Func{IObserver{TResult}, IDisposable})"/>'s
+    /// returned disposable runs if and only if Rx tears the subscription down, which is the exact
+    /// signal that reaches a pooled operation.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CancelSourceTrue_DisposesTheSubscription_SoCancellationReachesTheSource()
+    {
+        // The producer→test signal is an AsyncSubject the PRODUCER completes — the house shape for
+        // this (AGENTS.md), and it also gives the failure a sentence instead of a bare timeout.
+        var disposed = new AsyncSubject<Unit>();
+        var source = Observable.Create<Unit>(_ => Disposable.Create(() =>
+        {
+            disposed.OnNext(Unit.Default);
+            disposed.OnCompleted();
+        }));
+
+        // Never an empty reporter — the contract forbids it, and an ignored late fault here would
+        // hide the very thing this file exists to keep observable.
+        Exception? late = null;
+        using var cts = new CancellationTokenSource();
+        var wait = source.ObserveCompletion(ex => late = ex, cancelSource: true, cts.Token);
+
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
+        await disposed.Should().Within(10.Seconds()).Emit(
+            "cancelling an opted-in wait must dispose the subscription — that disposal IS what "
+            + "cancels Rx's subscriberCt and releases an IoPool permit (#2772)");
+        late.Should().BeNull("the source only ever completes by disposal, so nothing may be reported");
+    }
+
+    /// <summary>
+    /// The other direction, and the one that must not regress: the DEFAULT stays non-disposing, so
+    /// a fault arriving after a cancelled wait still reaches the reporter. Making
+    /// <c>cancelSource: true</c> the default would trade this away everywhere at once — the whole
+    /// reason this bridge exists instead of <c>.ToTask()</c>.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CancelSourceDefault_KeepsTheSubscription_SoALateFaultIsStillReported()
+    {
+        var subject = new Subject<Unit>();
+        Exception? seen = null;
+        var reported = new AsyncSubject<Unit>();
+
+        using var cts = new CancellationTokenSource();
+        var wait = subject.ObserveCompletion(
+            ex => { seen = ex; reported.OnNext(Unit.Default); reported.OnCompleted(); },
+            cts.Token);
+
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
+
+        // The wait is over; the source is not. Pre-fix AND post-fix this fault must be reported —
+        // if it is ever lost here, the default has silently flipped.
+        var boom = new InvalidOperationException("late");
+        subject.OnError(boom);
+
+        await reported.Should().Within(10.Seconds()).Emit(
+            "the DEFAULT keeps the subscription attached, so a fault arriving after a cancelled wait "
+            + "is still reported — if this ever goes silent, the default has flipped");
+        seen.Should().BeSameAs(boom);
+    }
+
+    /// <summary>
+    /// The race the <c>SingleAssignmentDisposable</c> exists for: the token fires while
+    /// <c>Subscribe</c> is still in flight, so the handle is assigned to an ALREADY-cancelled
+    /// registration. Assigning to a disposed SAD disposes the value immediately — without that, the
+    /// source would keep running with nobody waiting, which is the exact leak this option removes.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CancelSourceTrue_DisposesEvenWhenTheTokenFiresDuringSubscribe()
+    {
+        var disposed = new AsyncSubject<Unit>();
+        using var cts = new CancellationTokenSource();
+
+        var source = Observable.Create<Unit>(_ =>
+        {
+            cts.Cancel();                       // inside Subscribe, before the handle is assigned
+            return Disposable.Create(() =>
+            {
+                disposed.OnNext(Unit.Default);
+                disposed.OnCompleted();
+            });
+        });
+
+        Exception? late = null;
+        var wait = source.ObserveCompletion(ex => late = ex, cancelSource: true, cts.Token);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
+        await disposed.Should().Within(10.Seconds()).Emit(
+            "a token that fires DURING Subscribe must still reach the source: the handle is assigned "
+            + "to an already-disposed SingleAssignmentDisposable, which disposes it on assignment");
+        late.Should().BeNull("nothing faults here — a report would mean the SAD race took another route");
     }
 }

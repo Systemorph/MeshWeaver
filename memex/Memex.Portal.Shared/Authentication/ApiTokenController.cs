@@ -22,7 +22,7 @@ public class ApiTokenController(IServiceProvider serviceProvider) : ControllerBa
 
     /// <summary>
     /// Where a fault that arrives AFTER the action's response has already settled goes. Every
-    /// <see cref="ReactiveCompletion.ObserveCompletion{T}"/> bridge below needs one — a discarded
+    /// <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, System.Threading.CancellationToken)"/> bridge below needs one — a discarded
     /// late fault is half of what that method exists to remove.
     /// </summary>
     private ILogger LateFaultLogger => serviceProvider.GetRequiredService<ILoggerFactory>()

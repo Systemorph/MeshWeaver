@@ -14,7 +14,7 @@ namespace MeshWeaver.Fixture;
 /// code can't accidentally take a reference.
 ///
 /// <para>🚨 <b>Every wait here goes through
-/// <see cref="ReactiveCompletion.ObserveCompletion{T}"/> — never an Rx-to-Task bridge</b>
+/// <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, System.Threading.CancellationToken)"/> — never an Rx-to-Task bridge</b>
 /// (maintainer, 2026-08-30: <i>"no ToTask ever"</i>; the old "tests are the sanctioned edge"
 /// exemption is RETRACTED). Rx's own bridge completes its <c>TaskCompletionSource</c> from INSIDE
 /// the pipeline without <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/>, so the
@@ -184,7 +184,7 @@ public static class IStorageAdapterTestExtensions
     /// <summary>
     /// Late-fault sink for every wait above — a fault that arrives AFTER the wait already
     /// settled, which a <see cref="Task"/> cannot represent. Never empty: an ignored late fault
-    /// is half of what <see cref="ReactiveCompletion.ObserveCompletion{T}"/> exists to remove,
+    /// is half of what <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, System.Threading.CancellationToken)"/> exists to remove,
     /// and an unobserved one detonates on the finalizer as
     /// <see cref="TaskScheduler.UnobservedTaskException"/>, which xUnit v3 escalates to a
     /// Catastrophic failure that poisons the NEXT test class.

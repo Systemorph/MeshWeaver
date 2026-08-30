@@ -78,7 +78,7 @@ public interface IIoPool
     /// reactive-SDK counterpart to <see cref="InvokeStream{T}"/>; the wait lives here,
     /// in the pool — never at the call site.</para>
     ///
-    /// <para>🚨 <b>The wait is <see cref="ReactiveCompletion.ObserveCompletion{T}"/>, never Rx's
+    /// <para>🚨 <b>The wait is <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, bool, System.Threading.CancellationToken)"/>, never Rx's
     /// own observable-to-<see cref="Task"/> bridge</b> (maintainer, 2026-08-30: <i>"no ToTask
     /// ever"</i> — this pool used to be the one sanctioned exception, and is no longer). Rx's
     /// bridge completes its <see cref="TaskCompletionSource{TResult}"/> from inside the pipeline
