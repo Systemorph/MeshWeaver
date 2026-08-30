@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,6 +14,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.TestingHost;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -77,7 +77,7 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
                 Description = "Deliberately non-compiling NodeType (Orleans).",
                 Configuration = "config => this is not valid C# at all ((("
             }
-        }).FirstAsync().ToTask(ct);
+        }).FirstAsync().Await(ct);
 
         // First touch of the NodeType stream kicks the compile; wait for the
         // terminal Error state (cold Roslyn compile budget).
@@ -86,7 +86,7 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
                 && d.CompilationStatus == CompilationStatus.Error)
             .FirstAsync()
             .Timeout(90.Seconds())
-            .ToTask(ct);
+            .Await(ct);
         Output.WriteLine("NodeType compile settled at Error.");
 
         // 2. An instance of the broken type.
@@ -96,7 +96,7 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
             Name = "broken-instance",
             NodeType = typePath,
             State = MeshNodeState.Active
-        }).FirstAsync().ToTask(ct);
+        }).FirstAsync().Await(ct);
         Output.WriteLine("Instance created.");
 
         // 3a. LIVENESS: the grain must ACTIVATE (overlay hub) and answer what it
@@ -106,7 +106,7 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
                 o => o.WithTarget(new Address(instancePath)))
             .FirstAsync()
             .Timeout(60.Seconds())
-            .ToTask(ct);
+            .Await(ct);
         Output.WriteLine("Ping answered — overlay hub activated on the grain.");
 
         // 3b. THE CONTRACT: a request the broken type would have handled must be
@@ -119,7 +119,7 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
             .Where(n => n.Kind is NotificationKind.OnError or NotificationKind.OnNext)
             .FirstAsync()
             .Timeout(60.Seconds())
-            .ToTask(ct);
+            .Await(ct);
 
         Output.WriteLine($"Notification: {notification.Kind} " +
             (notification.Kind == NotificationKind.OnError
@@ -164,14 +164,14 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
                 Description = "Deliberately non-compiling NodeType (Orleans subscribe wedge).",
                 Configuration = "config => this is not valid C# at all ((("
             }
-        }).FirstAsync().ToTask(ct);
+        }).FirstAsync().Await(ct);
 
         await SiloMesh.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n?.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Error)
             .FirstAsync()
             .Timeout(90.Seconds())
-            .ToTask(ct);
+            .Await(ct);
         Output.WriteLine("NodeType compile settled at Error.");
 
         var instancePath = $"{typePath}/broken-sub-instance";
@@ -180,7 +180,7 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
             Name = "broken-sub-instance",
             NodeType = typePath,
             State = MeshNodeState.Active
-        }).FirstAsync().ToTask(ct);
+        }).FirstAsync().Await(ct);
         Output.WriteLine("Instance created.");
 
         // THE GUI PATH — subscribe to a layout area on the broken instance.
@@ -219,7 +219,7 @@ public class OrleansBrokenNodeTypeAccessTest(ITestOutputHelper output)
                     || (n.Kind == NotificationKind.OnNext && RendersCompilationError(n.Value.Value)))
                 .FirstAsync()
                 .Timeout(45.Seconds())
-                .ToTask(ct);
+                .Await(ct);
         }
         catch (TimeoutException)
         {

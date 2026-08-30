@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -18,6 +17,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -127,7 +127,7 @@ public class ModuleAutoDiscoveryTest(ITestOutputHelper output) : MonolithMeshTes
         // import runs offline against the stub repo instead of needing a real App.
         await Mesh.ServiceProvider.GetRequiredService<GitHubCredentialService>()
             .Save(WellKnownUsers.System, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
 
         // A signed-in user is in scope for the whole scan — the shape a webhook-behind-a-session or
         // an admin-triggered rescan has. They must still end up with no grant on the new partition.
@@ -221,7 +221,7 @@ public class ModuleAutoDiscoveryTest(ITestOutputHelper output) : MonolithMeshTes
             Name = "Somebody's own Planning",
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
 
         var record = await Discovery.Scan(Source(autoSync: true), "main")
             .Should().Within(240.Seconds()).Emit();
@@ -341,7 +341,7 @@ public class ModuleAutoDiscoveryTest(ITestOutputHelper output) : MonolithMeshTes
         return await Observable.Using(
                 () => access.ImpersonateAsSystem(),
                 _ => storage.Read(path, Mesh.JsonSerializerOptions))
-            .Take(1).Timeout(30.Seconds()).ToTask();
+            .Take(1).Timeout(30.Seconds()).Await();
     }
 
     private async Task<IReadOnlyList<string>> AccessGrantPaths(string partition)
@@ -354,7 +354,7 @@ public class ModuleAutoDiscoveryTest(ITestOutputHelper output) : MonolithMeshTes
             .Take(1)
             .Catch<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths), Exception>(
                 _ => Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], [])))
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
         return children.NodePaths?.ToList() ?? [];
     }
 }

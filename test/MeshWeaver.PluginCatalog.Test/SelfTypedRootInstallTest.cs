@@ -3,7 +3,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -15,6 +14,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -51,7 +51,7 @@ public class SelfTypedRootInstallTest(ITestOutputHelper output) : MonolithMeshTe
             (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-shop", Repo));
         var source = new NodeRepoPackageSource(fetch, "https://github.com/acme/shop");
 
-        var packages = await source.ListPackages("HEAD").FirstAsync().ToTask();
+        var packages = await source.ListPackages("HEAD").FirstAsync().Await();
         // The self-typed root is NOT a listed root type (only Space / Store/Plugin /
         // Store/Catalog are) — synthesize the manifest the way a curated registry entry would.
         packages.Should().BeEmpty();
@@ -64,20 +64,20 @@ public class SelfTypedRootInstallTest(ITestOutputHelper output) : MonolithMeshTe
             SourceFolder = "Shop",
             Version = "commit-shop",
         };
-        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().Await();
 
         var result = await PackageInstaller.Install(Mesh, manifest, files, "HEAD")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
         result.Written.Should().Be(4);
 
         // The root landed, TYPED — the in-package type node existed before the root's create.
         var root = await Mesh.GetWorkspace().GetMeshNodeStream("Shop")
-            .Where(n => n is not null).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Where(n => n is not null).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         root!.NodeType.Should().Be("Shop/Front");
 
         // The satellite landed under its (existing) owner.
         var grant = await Mesh.GetWorkspace().GetMeshNodeStream("Shop/_Access/Anonymous_Access")
-            .Where(n => n is not null).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Where(n => n is not null).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         grant!.MainNode.Should().Be("Shop");
     }
 
@@ -106,17 +106,17 @@ public class SelfTypedRootInstallTest(ITestOutputHelper output) : MonolithMeshTe
             SourceFolder = "Shop2",
             Version = "commit-shop2",
         };
-        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().ToTask();
+        var files = await source.FetchPackageFiles(manifest, "HEAD").FirstAsync().Await();
 
         var first = await PackageInstaller.Install(Mesh, manifest, files, "HEAD")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
         first.Written.Should().Be(3);
 
         // (a) The retype is visible via the STORAGE ADAPTER at completion — the exact read the
         //     next install's PlaceholderNeeded performs.
         var persistence = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var persisted = await persistence.Read("Shop2", Mesh.JsonSerializerOptions)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
         persisted.Should().NotBeNull("install completion must be a happens-before for persistence");
         persisted!.NodeType.Should().Be("Shop2/Front2",
             "the root's final type — not the Space placeholder — must be the persisted state the "
@@ -124,7 +124,7 @@ public class SelfTypedRootInstallTest(ITestOutputHelper output) : MonolithMeshTe
 
         // (b) The back-to-back re-install of the unchanged snapshot writes NOTHING.
         var second = await PackageInstaller.Install(Mesh, manifest, files, "HEAD")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
         second.Written.Should().Be(0,
             $"an unchanged re-install must be a no-op; wrote: [{string.Join(", ", second.WrittenPaths)}]");
     }

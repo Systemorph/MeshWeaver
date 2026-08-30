@@ -1,6 +1,5 @@
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -129,7 +129,7 @@ public class ActivityOwnerCredentialTest(ITestOutputHelper output) : MonolithMes
         // followed (Append + terminal Finish) is attributed to the owner — NOT to
         // the leaked intruder identity that was ambient on the hop thread.
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n is not null).FirstAsync().Timeout(10.Seconds()).ToTask();
+            .Where(n => n is not null).FirstAsync().Timeout(10.Seconds()).Await();
         Assert.Equal(Owner, node!.CreatedBy);
         Assert.NotEqual(NonOwner, node.LastModifiedBy);
         Assert.Equal(Owner, node.LastModifiedBy);
@@ -175,11 +175,11 @@ public class ActivityOwnerCredentialTest(ITestOutputHelper output) : MonolithMes
         // satellite rule delegates the activity's Update to the MainNode); the
         // OWNER does have it.
         var nonOwnerPerm = await Mesh.GetEffectivePermissions(TestPartition, NonOwner)
-            .FirstAsync().Timeout(10.Seconds()).ToTask();
+            .FirstAsync().Timeout(10.Seconds()).Await();
         Assert.False(nonOwnerPerm.HasFlag(Permission.Update),
             "the non-owner must not have Update on the partition for this RLS test to be meaningful");
         var ownerPerm = await Mesh.GetEffectivePermissions(TestPartition, Owner)
-            .FirstAsync().Timeout(10.Seconds()).ToTask();
+            .FirstAsync().Timeout(10.Seconds()).Await();
         Assert.True(ownerPerm.HasFlag(Permission.Update),
             "the owner must have Update on the partition (positive-control precondition)");
 
@@ -197,11 +197,11 @@ public class ActivityOwnerCredentialTest(ITestOutputHelper output) : MonolithMes
                     Messages = log.Messages.Add(new LogMessage("OWNER-OK", Microsoft.Extensions.Logging.LogLevel.Information))
                 }
             };
-        }).FirstAsync().Timeout(10.Seconds()).ToTask();
+        }).FirstAsync().Timeout(10.Seconds()).Await();
         await workspace.GetMeshNodeStream(activityPath)
             .Select(n => n?.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions, null))
             .Where(l => l is not null && l.Messages.Any(m => m.Message == "OWNER-OK"))
-            .FirstAsync().Timeout(10.Seconds()).ToTask();
+            .FirstAsync().Timeout(10.Seconds()).Await();
 
         // The non-owner attempts a write to the activity. The owning partition's
         // RLS must reject it — the live node must NOT reflect the intruder's
@@ -220,7 +220,7 @@ public class ActivityOwnerCredentialTest(ITestOutputHelper output) : MonolithMes
                         Messages = log.Messages.Add(new LogMessage("INTRUDER", Microsoft.Extensions.Logging.LogLevel.Warning))
                     }
                 };
-            }).FirstAsync().Timeout(10.Seconds()).ToTask();
+            }).FirstAsync().Timeout(10.Seconds()).Await();
         }
         catch
         {
@@ -234,7 +234,7 @@ public class ActivityOwnerCredentialTest(ITestOutputHelper output) : MonolithMes
         // System-backed internally, so this observes the true persisted node):
         // the intruder line never landed.
         var node = await workspace.GetMeshNodeStream(activityPath)
-            .Where(n => n is not null).FirstAsync().Timeout(10.Seconds()).ToTask();
+            .Where(n => n is not null).FirstAsync().Timeout(10.Seconds()).Await();
         var log = node!.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions, null);
         Assert.NotNull(log);
         Assert.DoesNotContain(log!.Messages, m => m.Message == "INTRUDER");
@@ -247,7 +247,7 @@ public class ActivityOwnerCredentialTest(ITestOutputHelper output) : MonolithMes
             .Select(p => p!)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
     // The MeshNode content read seam opens under System internally (the cache's
     // hydration identity), so the read identity is not the gate here — we are
@@ -259,5 +259,5 @@ public class ActivityOwnerCredentialTest(ITestOutputHelper output) : MonolithMes
             .Select(l => l!)
             .FirstAsync()
             .Timeout(45.Seconds())
-            .ToTask();
+            .Await();
 }

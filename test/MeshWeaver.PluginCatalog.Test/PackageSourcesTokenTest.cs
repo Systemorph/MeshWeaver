@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -19,6 +18,7 @@ using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -70,7 +70,7 @@ public class PackageSourcesAppTokenTest(ITestOutputHelper output) : MonolithMesh
 
         // Listing must succeed WITHOUT throwing an empty-credential exception, and the client must
         // have been handed the App-minted installation token — never the old empty string.
-        var packages = await source!.ListPackages("main").FirstAsync().ToTask();
+        var packages = await source!.ListPackages("main").FirstAsync().Await();
         Assert.Empty(packages); // the fake returns an empty snapshot; the point is that it did not throw
 
         Assert.Equal("ghs_registry_installation_token", client.LastToken);
@@ -110,7 +110,7 @@ public class PackageSourcesAnonymousTokenTest(ITestOutputHelper output) : Monoli
             Mesh, "https://github.com/acme/public-plugins", sourceSubdir: null, nodeRepo: true);
 
         Assert.NotNull(source);
-        var packages = await source!.ListPackages("main").FirstAsync().ToTask();
+        var packages = await source!.ListPackages("main").FirstAsync().Await();
         Assert.Empty(packages);
         Assert.Equal(string.Empty, client.LastToken); // anonymous access, no throw
     }

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -13,6 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.TestingHost;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -55,7 +55,7 @@ public class OrleansStaticRepoImportTest(ITestOutputHelper output)
                 .Timeout(30.Seconds())
                 .Catch((Exception _) => Observable.Return<MeshNode?>(null))
                 .FirstAsync()
-                .ToTask(ct);
+                .Await(ct);
     }
 
     private static string? MarkdownOf(MeshNode? n) => (n?.Content as MarkdownContent)?.Content;
@@ -66,7 +66,7 @@ public class OrleansStaticRepoImportTest(ITestOutputHelper output)
         var ct = Ct;
         Source.Body = "ORIGINAL body";
 
-        var results = await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().ToTask(ct);
+        var results = await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().Await(ct);
         foreach (var r in results)
             Output.WriteLine($"import: partition={r.Partition} outcome={r.Outcome} count={r.Count}");
 
@@ -90,7 +90,7 @@ public class OrleansStaticRepoImportTest(ITestOutputHelper output)
 
         // v1: import a page WITH content.
         Source.Body = "ORIGINAL body";
-        await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().ToTask(ct);
+        await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().Await(ct);
         (await ReadWhen($"{Partition}/Page1", n => MarkdownOf(n)?.Contains("ORIGINAL") == true, ct))
             .Should().NotBeNull();
 
@@ -98,13 +98,13 @@ public class OrleansStaticRepoImportTest(ITestOutputHelper output)
         using (access.ImpersonateAsSystem())
             await Mesh.GetWorkspace().GetMeshNodeStream($"{Partition}/Page1")
                 .Update(n => n with { Content = null })
-                .Take(1).Timeout(30.Seconds()).ToTask(ct);
+                .Take(1).Timeout(30.Seconds()).Await(ct);
         (await ReadWhen($"{Partition}/Page1", n => n.Content is null, ct))
             .Should().NotBeNull("blanking must leave a content-NULL Page1 (the backfill shadow)");
 
         // v2: changed body → new fingerprint → re-import → upsert must REPAIR the NULL content.
         Source.Body = "REPAIRED body";
-        await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().ToTask(ct);
+        await StaticRepoImporter.ImportAll(Mesh).ToList().FirstAsync().Await(ct);
 
         var repaired = await ReadWhen($"{Partition}/Page1",
             n => MarkdownOf(n)?.Contains("REPAIRED") == true, ct);

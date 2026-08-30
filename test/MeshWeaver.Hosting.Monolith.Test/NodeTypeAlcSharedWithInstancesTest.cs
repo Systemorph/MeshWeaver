@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -207,7 +207,7 @@ public class NodeTypeAlcSharedWithInstancesTest(ITestOutputHelper output) : Mono
         await nodeTypeHub.DisposalCompleted
             .FirstOrDefaultAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
         var after = await RenderProbeAsync(client, instancePath, "second");
 

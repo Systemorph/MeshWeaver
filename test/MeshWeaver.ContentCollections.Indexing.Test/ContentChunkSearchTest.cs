@@ -1,6 +1,6 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Test;
 
@@ -41,10 +41,10 @@ public class ContentChunkSearchTest
         }).Wait();
 
     private async Task<ContentSearchResult> Search(string query, string? defaultNs = null) =>
-        await ContentChunkSearch.SearchContent(_store, _embedder, query, 50, defaultNs).FirstAsync().ToTask();
+        await ContentChunkSearch.SearchContent(_store, _embedder, query, 50, defaultNs).FirstAsync().Await();
 
     private async Task<ContentSearchResult> Anchored(string query, string anchor) =>
-        await ContentChunkSearch.Search(_store, _embedder, query, anchor, 50).FirstAsync().ToTask();
+        await ContentChunkSearch.Search(_store, _embedder, query, anchor, 50).FirstAsync().Await();
 
     private static IEnumerable<string> Collections(ContentSearchResult r) =>
         r.Hits.Select(h => h.CollectionPath);
@@ -60,7 +60,7 @@ public class ContentChunkSearchTest
     public async Task SearchSubtree_MatchesCollectionAndDescendants_NotAncestorsOrSiblings()
     {
         var hits = await _store.SearchSubtree("ACME/content", _embedder.Embed("alpha").Wait(), 50)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         AssertSet(hits.Select(h => h.CollectionPath), "ACME/content", "ACME/content/sub");
     }
@@ -69,7 +69,7 @@ public class ContentChunkSearchTest
     public async Task SearchSubtree_ExactCollectionWithNoChildren_ReturnsOnlyThatCollection()
     {
         var hits = await _store.SearchSubtree("OTHER/content", _embedder.Embed("delta").Wait(), 50)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         AssertSet(hits.Select(h => h.CollectionPath), "OTHER/content");
     }
@@ -149,7 +149,7 @@ public class ContentChunkSearchTest
     public async Task Grammar_NoStore_ReturnsNotEnabledMessage_NoThrow()
     {
         var result = await ContentChunkSearch.SearchContent(null, null, "namespace:ACME/content alpha")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         result.Hits.Should().BeEmpty();
         result.Message.Should().Contain("not enabled");

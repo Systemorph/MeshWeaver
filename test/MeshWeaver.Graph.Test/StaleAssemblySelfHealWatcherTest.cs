@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using Microsoft.Reactive.Testing;
 using MeshWeaver.Fixture;
@@ -93,7 +92,7 @@ public class StaleAssemblySelfHealWatcherTest(ITestOutputHelper output) : HubTes
     /// <summary>Bounded wait for the real dispose signal — <c>false</c> means it never fired within the window.</summary>
     private static async Task<bool> DisposedWithinAsync(IObservable<bool> disposed, TimeSpan window)
     {
-        try { return await disposed.FirstAsync().Timeout(window).ToTask(); }
+        try { return await disposed.FirstAsync().Timeout(window).Await(); }
         catch (TimeoutException) { return false; }
     }
 

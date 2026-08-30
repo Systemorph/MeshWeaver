@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -77,7 +76,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
         using (access.ImpersonateAsSystem())
             await meshService.CreateOrUpdateNode(
                 new MeshNode(space) { Name = "Timer Space", NodeType = "Markdown" })
-                .FirstAsync().ToTask();
+                .FirstAsync().Await();
 
         var subscription = new EventSubscription
         {
@@ -89,7 +88,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
             Role = "Editor",
         };
         using (access.ImpersonateAsSystem())
-            await EventSubscriptionOps.CreateSubscription(meshService, subscription).FirstAsync().ToTask();
+            await EventSubscriptionOps.CreateSubscription(meshService, subscription).FirstAsync().Await();
 
         // ── the negative half ───────────────────────────────────────────────────────────────
         // Give the runner ample time to observe the new subscription and schedule it, then assert
@@ -137,7 +136,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
         using (access.ImpersonateAsSystem())
             await meshService.CreateOrUpdateNode(
                 new MeshNode(space) { Name = "Late Timer Space", NodeType = "Markdown" })
-                .FirstAsync().ToTask();
+                .FirstAsync().Await();
 
         // Written with NO runner alive — the "due during downtime" shape.
         var subscription = new EventSubscription
@@ -150,7 +149,7 @@ public class OrleansEventSubscriptionTimerTest(ITestOutputHelper output) : Orlea
             Role = "Editor",
         };
         using (access.ImpersonateAsSystem())
-            await EventSubscriptionOps.CreateSubscription(meshService, subscription).FirstAsync().ToTask();
+            await EventSubscriptionOps.CreateSubscription(meshService, subscription).FirstAsync().Await();
 
         using var runner = StartRunner();
 

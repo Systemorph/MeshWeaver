@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -57,7 +56,7 @@ public class DataContextDisposeDuringInitTest(ITestOutputHelper output) : HubTes
         // Dispose while the data source is still initializing — the transient-probe lifecycle
         // ($model-probe is created, read once, disposed; dispose-during-init is a NORMAL path).
         host.Dispose();
-        await host.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).ToTask();
+        await host.DisposalCompleted.FirstAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
 
         // Sanctioned negative wait (WritingTests.md: "wait to confirm nothing happened"): run
         // PAST the watchdog deadline to prove it does not fire post-mortem. There is no

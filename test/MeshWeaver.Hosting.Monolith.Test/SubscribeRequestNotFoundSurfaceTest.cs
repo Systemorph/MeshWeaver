@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -15,6 +14,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -99,7 +99,7 @@ public class SubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output) : Mon
                 .Materialize()
                 .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(20))
-                .ToTask();
+                .Await();
         }
         catch (TimeoutException)
         {

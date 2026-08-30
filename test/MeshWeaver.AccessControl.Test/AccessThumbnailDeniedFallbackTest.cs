@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -11,6 +10,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.AccessControl.Test;
 
@@ -68,7 +68,7 @@ public class AccessThumbnailDeniedFallbackTest(ITestOutputHelper output) : Monol
                 .Where(n => n is not null)
                 .FirstAsync()
                 .Timeout(10.Seconds())
-                .ToTask();
+                .Await();
         }
         catch (Exception ex)
         {

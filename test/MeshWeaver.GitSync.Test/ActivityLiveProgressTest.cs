@@ -1,13 +1,13 @@
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -106,7 +106,7 @@ public class ActivityLiveProgressTest(ITestOutputHelper output) : GitHubSyncTest
                         .Timeout(30.Seconds())
                         .Select(_ => Unit.Default);
                 })
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
 
         var log = await WaitForActivity(activityPath, l => l.Status != ActivityStatus.Running);
         Assert.Equal(ActivityStatus.Succeeded, log.Status);
@@ -138,7 +138,7 @@ public class ActivityLiveProgressTest(ITestOutputHelper output) : GitHubSyncTest
                         })
                         .Select(_ => Unit.Default);
                 })
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
 
         var log = await WaitForActivity(activityPath, l => l.Status != ActivityStatus.Running);
         Assert.Equal(ActivityStatus.Succeeded, log.Status);
@@ -189,7 +189,7 @@ public class ActivityLiveProgressTest(ITestOutputHelper output) : GitHubSyncTest
         var activityPath = await Mesh.RunActivity(
                 space, ActivityCategory.Import, "Off-turn probe",
                 ctx => Observable.Return(Unit.Default))
-            .Timeout(60.Seconds()).ToTask();
+            .Timeout(60.Seconds()).Await();
 
         Assert.True(recorder.PooledSubscribes > before,
             "the activity execution did not go through IPooledSubscribeScheduler — ScheduleOffHubTurn "
@@ -223,5 +223,5 @@ public class ActivityLiveProgressTest(ITestOutputHelper output) : GitHubSyncTest
             .Select(l => l!)
             .FirstAsync()
             .Timeout(60.Seconds())
-            .ToTask();
+            .Await();
 }

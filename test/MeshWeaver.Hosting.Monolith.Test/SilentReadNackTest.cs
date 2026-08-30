@@ -1,12 +1,12 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -119,7 +119,7 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Catch<object?, Exception>(ex => Observable.Return<object?>(ex))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         // 🔻 ORDER BY CAUSATION, NOT BY WAITING — and post the recycle from the SAME hub that
         // issued the read, so the two are ordered by that hub's own FIFO rather than by a race
@@ -295,7 +295,7 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
         var started = DateTime.UtcNow;
         var read = reader.GetMeshNode(path, TimeSpan.FromSeconds(30))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         // Same ordering as above, caused the same way: the recycle is posted from the hub that
         // issued the read, so its FIFO puts the read at the owner first.
@@ -369,7 +369,7 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .Catch<object?, TimeoutException>(_ => Observable.Return<object?>(null))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         var result = await probe;
         Output.WriteLine($"[TEST] answer within 5s: {result?.ToString() ?? "<none — correct>"}");

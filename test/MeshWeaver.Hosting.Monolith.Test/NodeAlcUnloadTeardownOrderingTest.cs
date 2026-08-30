@@ -3,7 +3,6 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.Loader;
 using System.Threading;
 using MeshWeaver.Graph;
@@ -18,6 +17,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -264,7 +264,7 @@ public class NodeAlcUnloadTeardownOrderingTest(ITestOutputHelper output) : Monol
             .Where(_ => orderLog.Marks.Contains(expectedMark))
             .FirstAsync()
             .Timeout(TeardownBudget)
-            .ToTask();
+            .Await();
 
         Mesh.IsDisposing.Should().BeFalse(
             "the reclaim must happen while the mesh is still running — if it only arrived because " +
@@ -302,7 +302,7 @@ public class NodeAlcUnloadTeardownOrderingTest(ITestOutputHelper output) : Monol
             .Where(node => node is not null)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
         StampRealUnloads(orderLog);
 
@@ -318,7 +318,7 @@ public class NodeAlcUnloadTeardownOrderingTest(ITestOutputHelper output) : Monol
             .Where(_ => probePool.CurrentInFlight > 0)
             .FirstAsync()
             .Timeout(10.Seconds())
-            .ToTask();
+            .Await();
 
         // The production teardown sequence, inlined from
         // MeshTeardownExtensions.WaitForDisposalAndIoDrainAsync so the DrainAll boundary can be
@@ -328,7 +328,7 @@ public class NodeAlcUnloadTeardownOrderingTest(ITestOutputHelper output) : Monol
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
             .Timeout(TeardownBudget)
-            .ToTask();
+            .Await();
 
         var leakedIoLeaves = ioPools.DrainAll();
         orderLog.Mark(DrainAllReturnedMark);

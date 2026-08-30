@@ -3,12 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Orleans.Providers.Streams.Common;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -110,7 +110,7 @@ public class OversizedStreamMessageRefusedTest
                 postFailureToSender: (m, t) => nacks.Add((m, t)),
                 logger: logger,
                 timeout: Timeout)
-            .ToTask();
+            .Await();
 
         posted.Should().Be(0,
             "a message Orleans' pooled cache provably cannot accept must never be published — "
@@ -180,7 +180,7 @@ public class OversizedStreamMessageRefusedTest
                 postFailureToSender: (m, t) => nacks.Add((m, t)),
                 logger: new RecordingLogger(),
                 timeout: Timeout)
-            .ToTask();
+            .Await();
 
         var nack = nacks.Should().ContainSingle(
             "the producer must fail fast rather than wait out a timeout on an undeliverable "
@@ -212,7 +212,7 @@ public class OversizedStreamMessageRefusedTest
                 postFailureToSender: (m, t) => nacks.Add((m, t)),
                 logger: logger,
                 timeout: Timeout)
-            .ToTask();
+            .Await();
 
         posted.Should().Be(1, "everything under Orleans' block size is delivered exactly as before");
         nacks.Should().BeEmpty("a delivered post must never NACK the sender");

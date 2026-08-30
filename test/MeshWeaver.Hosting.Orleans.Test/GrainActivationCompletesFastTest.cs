@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -69,7 +68,7 @@ public class GrainActivationCompletesFastTest(ITestOutputHelper output)
                 .Observe(new GetDataRequest(new MeshNodeReference()),
                     o => o.WithTarget(new Address(nonexistentPath)))
                 .FirstAsync()
-                .ToTask(ct);
+                .Await(ct);
         };
 
         // Two acceptable outcomes — both prove the fix:

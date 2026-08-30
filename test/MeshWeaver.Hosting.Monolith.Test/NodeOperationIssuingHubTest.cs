@@ -3,7 +3,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -11,6 +10,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -67,14 +67,14 @@ public class NodeOperationIssuingHubTest(ITestOutputHelper output) : MonolithMes
 
         // The exact shape of InstanceAutoRegistrationService / RegistryTokenResolver: a one-shot
         // GetMeshNode read on the DI root mesh hub. Must resolve — and off the router.
-        var read = await Mesh.GetMeshNode(path).FirstAsync().ToTask();
+        var read = await Mesh.GetMeshNode(path).FirstAsync().Await();
         read.Should().NotBeNull("the read must still resolve after the off-router retarget");
         read!.Path.Should().Be(path);
 
         // The DeliveryFailure arm: a MISSING node's read (the default-install ledger on a fresh
         // instance) answers with a routing failure — which must land on the issuing hub, never mesh.
         var missing = await Mesh.GetMeshNode($"{TestPartition}/missing-{Guid.NewGuid():N}")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         missing.Should().BeNull("a genuinely absent node resolves to null");
 
         // ── Write-shaped seam: the target-less CreateOrUpdate the boot services post ────
@@ -90,7 +90,7 @@ public class NodeOperationIssuingHubTest(ITestOutputHelper output) : MonolithMes
         };
         var upsert = await Mesh.NodeOperationIssuingHub()
             .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
         upsert.Message.Success.Should().BeTrue(
             "the upsert must genuinely succeed — a rejected op would prove nothing about where work runs");
         RouterTrafficRule.RoleOf(upsert.Target?.Type, upsert.Sender?.Type, upsert.Message)

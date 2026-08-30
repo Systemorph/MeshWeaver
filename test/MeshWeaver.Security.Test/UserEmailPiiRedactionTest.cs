@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Security;
@@ -9,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -49,7 +49,7 @@ public class UserEmailPiiRedactionTest(ITestOutputHelper output) : MonolithMeshT
     {
         var bob = new AccessContext { ObjectId = "Bob", Name = "Bob" };
         var projected = await UserPiiRedaction.RedactEmailForReader(Mesh, UserNode(), bob)
-            .FirstAsync().ToTask(Ct);
+            .FirstAsync().Await(Ct);
 
         ReadUser(projected)!.Email.Should().BeNull("a non-owner non-admin reader must not see the PII email");
         // Name / display identity is NOT redacted.
@@ -64,7 +64,7 @@ public class UserEmailPiiRedactionTest(ITestOutputHelper output) : MonolithMeshT
     {
         var owner = new AccessContext { ObjectId = OwnerId, Name = OwnerId };
         var projected = await UserPiiRedaction.RedactEmailForReader(Mesh, UserNode(), owner)
-            .FirstAsync().ToTask(Ct);
+            .FirstAsync().Await(Ct);
 
         ReadUser(projected)!.Email.Should().Be(OwnerEmail);
     }
@@ -75,7 +75,7 @@ public class UserEmailPiiRedactionTest(ITestOutputHelper output) : MonolithMeshT
     {
         var admin = new AccessContext { ObjectId = AdminUserId, Name = AdminUserId };
         var projected = await UserPiiRedaction.RedactEmailForReader(Mesh, UserNode(), admin)
-            .FirstAsync().ToTask(Ct);
+            .FirstAsync().Await(Ct);
 
         ReadUser(projected)!.Email.Should().Be(OwnerEmail);
     }
@@ -85,7 +85,7 @@ public class UserEmailPiiRedactionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Anonymous_EmailRedacted()
     {
         var projected = await UserPiiRedaction.RedactEmailForReader(Mesh, UserNode(), viewer: null)
-            .FirstAsync().ToTask(Ct);
+            .FirstAsync().Await(Ct);
 
         ReadUser(projected)!.Email.Should().BeNull();
     }
@@ -100,7 +100,7 @@ public class UserEmailPiiRedactionTest(ITestOutputHelper output) : MonolithMeshT
         var bob = new AccessContext { ObjectId = "Bob", Name = "Bob" };
 
         var projected = await UserPiiRedaction.RedactEmailForReader(Mesh, stored, bob)
-            .FirstAsync().ToTask(Ct);
+            .FirstAsync().Await(Ct);
 
         // The projection returned a redacted COPY; the original (stored) node keeps the real email,
         // so the content.email login lookup under System identity is unaffected.
@@ -110,7 +110,7 @@ public class UserEmailPiiRedactionTest(ITestOutputHelper output) : MonolithMeshT
         // A non-User node is never touched (short-circuits on NodeType, returning the same instance).
         var markdown = new MeshNode("Page") { Name = "A Page", NodeType = "Markdown" };
         var passthrough = await UserPiiRedaction.RedactEmailForReader(Mesh, markdown, bob)
-            .FirstAsync().ToTask(Ct);
+            .FirstAsync().Await(Ct);
         passthrough.Should().BeSameAs(markdown);
     }
 }

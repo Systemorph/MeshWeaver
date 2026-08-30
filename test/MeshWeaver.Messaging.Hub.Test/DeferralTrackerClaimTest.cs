@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -89,13 +88,13 @@ public class DeferralTrackerClaimTest(ITestOutputHelper output) : HubTestBase(ou
             .Select(i => (Task)client
                 .Observe(new ParkRequest(i), o => o.WithTarget(host.Address))
                 .FirstAsync()
-                .ToTask())
+                .Await())
             .ToArray();
 
         // The probe passes both gate predicates, so it runs on the host's turn loop only after every
         // ParkRequest posted before it has been deferred. No sleep, no poll.
         await client.Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
-            .FirstAsync().Timeout(30.Seconds()).ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
 
         // Both gates go dead at once. FailGate takes gateStateLock only to mark the gate; the
         // backlog drain runs outside it, so these two drains genuinely overlap.

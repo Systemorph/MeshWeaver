@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Concurrency;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +8,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -58,7 +58,7 @@ public class RoutingGrainDeliveryRetryTest
                 logger: NullLogger.Instance,
                 backoff: NoBackoff,
                 scheduler: Scheduler.Immediate)
-            .ToTask();
+            .Await();
 
         // 3 = two transient rejections retried + the success on the reactivated grain.
         // "it should create a new instance thereafter."
@@ -84,7 +84,7 @@ public class RoutingGrainDeliveryRetryTest
                     maxRetries: 4,
                     backoff: NoBackoff,
                     scheduler: Scheduler.Immediate)
-                .ToTask());
+                .Await());
 
         Assert.Equal(5, calls); // initial attempt + maxRetries (4)
     }
@@ -106,7 +106,7 @@ public class RoutingGrainDeliveryRetryTest
                     logger: NullLogger.Instance,
                     backoff: NoBackoff,
                     scheduler: Scheduler.Immediate)
-                .ToTask());
+                .Await());
 
         Assert.Equal(1, calls); // a non-transient fault must surface immediately, never be retried
     }

@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -8,6 +7,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -79,7 +79,7 @@ public class GetMeshNodeShuttingDownIsNotAbsentTest(ITestOutputHelper output)
         var read = Mesh
             .GetMeshNode(address.ToString(), TimeSpan.FromSeconds(3))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         // The whole point: a Throw-mode caller must NOT be handed null. Null is what "node not
         // found" means, and a recycling node is present — that conflation is what made the CI
@@ -149,7 +149,7 @@ public class GetMeshNodeShuttingDownIsNotAbsentTest(ITestOutputHelper output)
         var result = await Mesh
             .GetMeshNode(address.ToString(), TimeSpan.FromSeconds(10))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         result.Should().NotBeNull(
             "the recycle completed well inside the budget, so the read must deliver the node "
@@ -195,7 +195,7 @@ public class GetMeshNodeShuttingDownIsNotAbsentTest(ITestOutputHelper output)
             .GetMeshNodeOutcome(address.ToString(), TimeSpan.FromSeconds(2),
                 ReadTimeoutBehavior.EmitNull)
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         outcome.Status.Should().Be(NodeReadStatus.Unavailable,
             "a full-budget recycle is indeterminate — NEVER Absent (recycling ≠ gone), and for an "

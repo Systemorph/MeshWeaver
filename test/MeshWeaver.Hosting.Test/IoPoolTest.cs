@@ -5,9 +5,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -76,7 +76,7 @@ public class IoPoolTest
             + "hung OrderedRouteDispatcherTest for its full 30 s budget on CI");
 
         // …and Disposed fires only once the leaf has actually unwound.
-        var residual = await pool.Disposed.Timeout(Timeout10).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var residual = await pool.Disposed.Timeout(Timeout10).FirstAsync().Await(TestContext.Current.CancellationToken);
         residual.Should().Be(0, "the leaf observed the cancel and unwound — the join is real");
         observedCancellation.Should().BeTrue("Dispose must CANCEL in-flight work, not merely stop accepting new work");
         pool.CurrentInFlight.Should().Be(0);
@@ -106,7 +106,7 @@ public class IoPoolTest
             "Disposed must not fire while the leaf is still running");
 
         release.Set();
-        await pool.Disposed.Timeout(Timeout10).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await pool.Disposed.Timeout(Timeout10).FirstAsync().Await(TestContext.Current.CancellationToken);
         fired.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
 
         var late = -1;
@@ -144,7 +144,7 @@ public class IoPoolTest
             "one pool finishing is not every pool finishing");
 
         releaseB.Set();
-        var total = await registry.Disposed.Timeout(Timeout10).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var total = await registry.Disposed.Timeout(Timeout10).FirstAsync().Await(TestContext.Current.CancellationToken);
         total.Should().Be(0, "both pools joined — the silo may release");
     }
 
@@ -162,13 +162,13 @@ public class IoPoolTest
         var registry = new IoPoolRegistry();
         registry.Get("before");          // one real pool, so disposal has something to do
         registry.Dispose();
-        await registry.Disposed.Timeout(Timeout10).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await registry.Disposed.Timeout(Timeout10).FirstAsync().Await(TestContext.Current.CancellationToken);
 
         // A name never seen before disposal — the case that used to mint a live pool.
         var late = registry.Get("after-disposal");
         var ran = false;
         var act = async () => await late.Invoke(_ => { ran = true; return Task.FromResult(1); })
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         ran.Should().BeFalse("work must not run on a pool handed out after teardown began");
@@ -195,17 +195,17 @@ public class IoPoolTest
 
         var ran = false;
         var act = async () => await pool.Invoke(_ => { ran = true; return Task.FromResult(1); })
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
         (await act.Should().ThrowAsync<OperationCanceledException>())
             .Which.Should().NotBeOfType<ObjectDisposedException>();
         ran.Should().BeFalse("the work must not run on a disposed pool");
 
         var blocking = async () => await pool.InvokeBlocking(_ => 1)
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
         await blocking.Should().ThrowAsync<OperationCanceledException>();
 
         var through = async () => await pool.SubscribeThroughPool(Observable.Return(1))
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
         await through.Should().ThrowAsync<OperationCanceledException>();
     }
 
@@ -265,7 +265,7 @@ public class IoPoolTest
             await release.Task;          // hold the slot until the test releases
             Interlocked.Decrement(ref current);
             return c;
-        }).ToTask();
+        }).Await();
 
         var tasks = Enumerable.Range(0, total).Select(_ => Run()).ToArray();
 
@@ -311,7 +311,7 @@ public class IoPoolTest
                 release.Wait(ct);        // blocks a real scheduler thread
                 Interlocked.Decrement(ref current);
                 return c;
-            }).ToTask()).ToArray();
+            }).Await()).ToArray();
 
         SpinWait.SpinUntil(() => Volatile.Read(ref current) == cap, Timeout5)
             .Should().BeTrue("the dedicated scheduler should admit exactly the cap concurrently");
@@ -441,13 +441,13 @@ public class IoPoolTest
         using var pool = new IoPool(1);
 
         Func<Task> faulting = () =>
-            pool.Invoke<int>(_ => throw new InvalidOperationException("boom")).ToTask();
+            pool.Invoke<int>(_ => throw new InvalidOperationException("boom")).Await();
         await faulting.Should().ThrowAsync<InvalidOperationException>();
 
         pool.CurrentInFlight.Should().Be(0, "the finally must release the slot even on error");
 
         // The single slot is free again, so a follow-up op runs.
-        var ok = await pool.Invoke(_ => Task.FromResult(42)).ToTask();
+        var ok = await pool.Invoke(_ => Task.FromResult(42)).Await();
         ok.Should().Be(42);
     }
 
@@ -505,7 +505,7 @@ public class IoPoolTest
         // Drain is TERMINAL (it cancels the pool token) — new work issued after Drain is
         // cancelled immediately; there is no in-flight leaf left to reference an unloading ALC.
         Func<Task> afterDrain = () =>
-            pool.Invoke(_ => Task.FromResult(7)).ToTask(TestContext.Current.CancellationToken);
+            pool.Invoke(_ => Task.FromResult(7)).Await(TestContext.Current.CancellationToken);
         await afterDrain.Should().ThrowAsync<OperationCanceledException>();
 
         // Idempotent: a second Drain is a safe no-op join.
@@ -706,7 +706,7 @@ public class IoPoolTest
 
         string? observed = null;
         await pool.Invoke(_ => { observed = baton.Value; return Task.FromResult(0); })
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         observed.Should().Be("owner-identity",
             "the caller's AsyncLocal (the AccessContext baton) must flow into the pooled body — " +
@@ -721,7 +721,7 @@ public class IoPoolTest
 
         string? observed = null;
         await pool.InvokeBlocking(_ => { observed = baton.Value; return 0; })
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         observed.Should().Be("owner-identity",
             "InvokeBlocking must also carry the caller's identity into the blocking body");
@@ -734,7 +734,7 @@ public class IoPoolTest
 
         string? observed = null;
         await IoPool.Unbounded.Invoke(_ => { observed = baton.Value; return Task.FromResult(0); })
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         observed.Should().Be("owner-identity",
             "the Unbounded fallback must carry the caller's identity into the pooled body too");

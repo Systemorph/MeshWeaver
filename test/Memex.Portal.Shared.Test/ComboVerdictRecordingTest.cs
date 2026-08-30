@@ -4,7 +4,6 @@ using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
@@ -18,6 +17,7 @@ using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshWeaver.Hosting.SelfUpdate;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -283,14 +283,14 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
             })
             .FirstAsync()
             .Timeout(Budget)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
     }
 
     private Task Record(ComboVerification verdict) =>
         UpdatePolicyNodeType.RecordVerification(Mesh, verdict)
             .FirstAsync()
             .Timeout(Budget)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     /// <summary>The first reconciled content matching <paramref name="predicate"/> — the
     /// wait-on-the-condition read (never a bare first emission, which can predate the write).</summary>
@@ -306,7 +306,7 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
             .Where(predicate)
             .FirstAsync()
             .Timeout(Budget)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     private static ComboVerification GreenVerdict(string tag) => new()
     {

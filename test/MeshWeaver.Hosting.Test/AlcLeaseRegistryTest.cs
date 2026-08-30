@@ -1,8 +1,8 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.Loader;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -83,7 +83,7 @@ public class AlcLeaseRegistryTest
         var lease = registry.Enter(context);
         var pending = registry.UnloadWhenQuiesced(context, TimeSpan.FromSeconds(30))
             .Timeout(TimeSpan.FromSeconds(20))
-            .ToTask();
+            .Await();
 
         // Still held: the unload must be waiting, not done.
         unloaded().Should().BeFalse();
@@ -101,7 +101,7 @@ public class AlcLeaseRegistryTest
         var (context, unloaded) = Collectible(nameof(A_lease_taken_while_the_unload_is_pending_still_holds_it_off));
 
         var first = registry.Enter(context);
-        var pending = registry.UnloadWhenQuiesced(context, TimeSpan.FromMilliseconds(400)).ToTask();
+        var pending = registry.UnloadWhenQuiesced(context, TimeSpan.FromMilliseconds(400)).Await();
 
         // Hand over: a second caller enters before the first leaves, so the count never reaches 0.
         var second = registry.Enter(context);

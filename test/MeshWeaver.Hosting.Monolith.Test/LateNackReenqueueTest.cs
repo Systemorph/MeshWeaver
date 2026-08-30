@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -57,7 +57,7 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
             .Where(n => n is not null)
-            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(10.Seconds()).Await(ct);
 
         var nodeHub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
         nodeHub.Should().NotBeNull();
@@ -101,7 +101,7 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
             var registry = Mesh.ServiceProvider.GetRequiredService<LatePatchResponseRegistry>();
             await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
                 .Where(_ => registry.ArmedCount > 0)
-                .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(30.Seconds()).Await(ct);
 
             // Fence: the patch handler has provably run on the owner (registered the
             // disposal NACK) before the dispose below.
@@ -122,7 +122,7 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
             var persisted = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
                 .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
                 .Where(n => n is not null && n.Name == marker)
-                .FirstAsync().Timeout(45.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(45.Seconds()).Await(ct);
             persisted!.Name.Should().Be(marker,
                 "a write whose owner NACKed OwnerDisposing must be re-enqueued and applied on "
                 + "the fresh activation — never silently lost");
@@ -131,7 +131,7 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
             // makes "saved" mean the owner committed, on the late path as much as the early one.
             await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
                 .Where(_ => callerTerminal is not null || callerError is not null)
-                .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(30.Seconds()).Await(ct);
             callerError.Should().BeNull("the re-enqueued attempt landed, so the caller must see a success");
             callerTerminal!.Name.Should().Be(marker,
                 "the caller's terminal is the verdict of the attempt that actually committed");

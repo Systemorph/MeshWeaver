@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Test;
 
@@ -53,7 +53,7 @@ public class ImageDescriptionIndexingTest : IDisposable
 
     private async Task<IndexResult> Index(ContentIndexingService service, string filePath, string fileName) =>
         await service.IndexFile(Collection, filePath, fileName, File.ReadAllBytes(filePath))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
     [Fact]
     public async Task Image_WithDescriber_EmbedsDescriptionAndWritesDocumentSummary()
@@ -71,8 +71,8 @@ public class ImageDescriptionIndexingTest : IDisposable
         _summarizer.Calls.Should().Be(0);
 
         // The stored chunk carries the description → the image is now vector-searchable.
-        var stored = await _store.Search(Collection, await _embedder.Embed("chart").FirstAsync().ToTask(), 1000)
-            .FirstAsync().ToTask();
+        var stored = await _store.Search(Collection, await _embedder.Embed("chart").FirstAsync().Await(), 1000)
+            .FirstAsync().Await();
         stored.Should().HaveCount(result.ChunkCount);
         stored.Should().Contain(c => c.Text.Contains("quarterly revenue"));
 

@@ -4,7 +4,6 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Api;
@@ -19,6 +18,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -81,7 +81,7 @@ public class PluginBundleAnchorTest(ITestOutputHelper output) : MonolithMeshTest
             .Select(r => r.RawKey)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .ToTask();
+            .Await();
 
     private Task<InstallResult> InstallPackage(string id, string? source) =>
         PackageInstaller.Install(
@@ -101,7 +101,7 @@ public class PluginBundleAnchorTest(ITestOutputHelper output) : MonolithMeshTest
                 "HEAD")
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(120))
-            .ToTask();
+            .Await();
 
     /// <summary>Removes the install record through the installer's own sanctioned route — the
     /// CACHE, deleted, leaving the installed content and its partition exactly where they were.</summary>
@@ -109,7 +109,7 @@ public class PluginBundleAnchorTest(ITestOutputHelper output) : MonolithMeshTest
         PackageInstaller.RemoveInstalledRecord(Mesh, id)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
-            .ToTask();
+            .Await();
 
     // ── the host, with a stub ANCHOR ──────────────────────────────────────────────────────────
 

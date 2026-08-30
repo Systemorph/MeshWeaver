@@ -15,8 +15,8 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
-using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
@@ -84,7 +84,7 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             nodeAddress, new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
 
-        Func<Task> act = () => stream.FirstAsync().Timeout(3.Seconds()).ToTask();
+        Func<Task> act = () => stream.FirstAsync().Timeout(3.Seconds()).Await();
 
         var ex = (await act.Should().ThrowAsync<DeliveryFailureException>()).Which;
         ex.Message.Should().Contain("Access denied");

@@ -5,13 +5,13 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.PluginCatalog;
 using MeshWeaver.PluginTester;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginTester.Test;
 
@@ -128,7 +128,7 @@ public class GateDiscoveryEqualsBakeDiscoveryTest(ITestOutputHelper output)
         {
             // ── the BAKER's discovery: exactly what TreeBake.BakeAll folds over (`compilable`) ──
             var snapshot = LocalNodeRepo.LoadSync(repo);
-            var packages = await LocalNodeRepo.DiscoverPackages(snapshot).FirstAsync().ToTask();
+            var packages = await LocalNodeRepo.DiscoverPackages(snapshot).FirstAsync().Await();
             var skipped = new List<string>();
             var bakeDiscovered = TreeNodeLoader
                 .Load(snapshot, packages, (path, reason) => skipped.Add($"{path}: {reason}"))
@@ -144,7 +144,7 @@ public class GateDiscoveryEqualsBakeDiscoveryTest(ITestOutputHelper output)
             var gateDiscovered = new List<string>();
             foreach (var package in packages)
             {
-                var files = await source.FetchPackageFiles(package, "HEAD").FirstAsync().ToTask();
+                var files = await source.FetchPackageFiles(package, "HEAD").FirstAsync().Await();
                 gateDiscovered.AddRange(
                     PluginGateRunner.DiscoverNodeTypes(package, files).Select(t => t.Path));
             }
@@ -188,10 +188,10 @@ public class GateDiscoveryEqualsBakeDiscoveryTest(ITestOutputHelper output)
         try
         {
             var snapshot = LocalNodeRepo.LoadSync(repo);
-            var packages = await LocalNodeRepo.DiscoverPackages(snapshot).FirstAsync().ToTask();
+            var packages = await LocalNodeRepo.DiscoverPackages(snapshot).FirstAsync().Await();
             var source = new NodeRepoPackageSource(
                 (_, _, _, _) => Observable.Return(snapshot), repoUrl: "local");
-            var files = await source.FetchPackageFiles(packages[0], "HEAD").FirstAsync().ToTask();
+            var files = await source.FetchPackageFiles(packages[0], "HEAD").FirstAsync().Await();
             var gate = PluginGateRunner.DiscoverNodeTypes(packages[0], files);
 
             // The count IS the assertion — `0 type(s)` was the silent pass.

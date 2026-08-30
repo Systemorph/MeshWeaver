@@ -1,10 +1,10 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -38,9 +38,9 @@ public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBa
 
         var repo = "https://github.com/test/space-a";
         await Sync.SaveConfig(a, repo, "main", subdirectory: null, createBranchIfMissing: true, createRepoIfMissing: true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
-        var pushed = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        var pushed = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
         Assert.False(string.IsNullOrEmpty(pushed.CommitSha));
         Assert.True(pushed.FilesWritten >= 3);
 
@@ -55,7 +55,7 @@ public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBa
         // Import into a fresh Space B and assert the content round-trips.
         var b = "GhB" + Guid.NewGuid().ToString("N")[..8];
         await Sync.ImportFromGitHub(repo, "main", b, "Space B", subdirectory: null, UserId)
-            .Timeout(90.Seconds()).ToTask();
+            .Timeout(90.Seconds()).Await();
 
         Assert.Contains("Hello world.", MarkdownBody(await WaitForNode($"{b}/Welcome")));
         Assert.Contains("Intro body.", MarkdownBody(await WaitForNode($"{b}/Docs/Intro")));
@@ -82,11 +82,11 @@ public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBa
                 Notes = "Speak slowly.",
                 Background = "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
             },
-        }).Timeout(60.Seconds()).ToTask();
+        }).Timeout(60.Seconds()).Await();
 
         var repo = "https://github.com/test/deck-a";
-        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
-        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
+        await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
 
         // The slide mirrors as canonical .md whose frontmatter carries the slide metadata.
         var file = Fake.Tree(repo).FirstOrDefault(f => f.Path == "S01.md");
@@ -100,7 +100,7 @@ public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBa
         // Import into a fresh Space — the Slide must round-trip typed, not downgrade to Markdown.
         var b = "GhE" + Guid.NewGuid().ToString("N")[..8];
         await Sync.ImportFromGitHub(repo, "main", b, "Deck B", subdirectory: null, UserId)
-            .Timeout(90.Seconds()).ToTask();
+            .Timeout(90.Seconds()).Await();
 
         var slideNode = await WaitForNode($"{b}/S01");
         Assert.Equal("Slide", slideNode.NodeType);
@@ -120,17 +120,17 @@ public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBa
         await CreateSpace(a, "Space R");
         await CreateMarkdown($"{a}/Welcome", "Welcome", "# Welcome\n\nv1.");
         var repo = "https://github.com/test/space-r";
-        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(a, repo, "main", null, true, true).Timeout(30.Seconds()).Await();
 
-        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();      // commit 1: Welcome
+        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();      // commit 1: Welcome
 
         await CreateMarkdown($"{a}/Extra", "Extra", "# Extra\n\nadded later.");
-        var c2 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();      // commit 2: Welcome + Extra
+        var c2 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();      // commit 2: Welcome + Extra
         Assert.NotEqual(c1.CommitSha, c2.CommitSha);
         Assert.NotNull(await WaitForNode($"{a}/Extra"));
 
         // Re-import the Space at commit 1 → Extra is pruned (mirror to that state).
-        await Sync.ReimportAtCommit(a, c1.CommitSha, UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(a, c1.CommitSha, UserId).Timeout(90.Seconds()).Await();
         Assert.True(await IsAbsent($"{a}/Extra"));
         Assert.NotNull(await WaitForNode($"{a}/Welcome"));
 
@@ -146,9 +146,9 @@ public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBa
         await CreateSpace(a);
         await CreateMarkdown($"{a}/Page", "Page", "# Page");
         var repo = "https://github.com/test/space-c";
-        await Sync.SaveConfig(a, repo, "develop", null, true, true).Timeout(30.Seconds()).ToTask();
+        await Sync.SaveConfig(a, repo, "develop", null, true, true).Timeout(30.Seconds()).Await();
 
-        var pushed = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        var pushed = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
 
         var cfg = await WaitForConfig(a, c => c.LastSyncCommitSha == pushed.CommitSha);
         Assert.Equal("develop", cfg.Branch);

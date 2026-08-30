@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh.Services;
@@ -8,6 +7,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Runtime;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -47,13 +47,13 @@ public class RoutingQuiescenceClusterTest(ITestOutputHelper output)
         try
         {
             // Precondition: nothing in flight before the delivery is dispatched.
-            (await quiescence.InFlightChanges.FirstAsync().ToTask(Token())).Should().Be(0);
+            (await quiescence.InFlightChanges.FirstAsync().Await(Token())).Should().Be(0);
 
             client.Post(new PingRequest(),
                 o => o.WithTarget(new Address(StallingPathResolver.StallPartition, "held-2638")));
 
             // The grain claimed the gauge at dispatch — before the leg even reached its subscribe.
-            await quiescence.InFlightChanges.Where(n => n >= 1).FirstAsync().ToTask(Token());
+            await quiescence.InFlightChanges.Where(n => n >= 1).FirstAsync().Await(Token());
 
             // …and the leg is provably parked inside its resolve (the standard interval-poll for a
             // source that is not itself observable).
@@ -61,9 +61,9 @@ public class RoutingQuiescenceClusterTest(ITestOutputHelper output)
                 .StartWith(0L)
                 .Where(_ => resolver!.StallsEntered > 0)
                 .FirstAsync()
-                .ToTask(Token());
+                .Await(Token());
 
-            (await quiescence.InFlightChanges.FirstAsync().ToTask(Token())).Should().BeGreaterThanOrEqualTo(1,
+            (await quiescence.InFlightChanges.FirstAsync().Await(Token())).Should().BeGreaterThanOrEqualTo(1,
                 "a leg parked in path resolution is accepted routing work the silo stop must wait for");
             Output.WriteLine("route leg in flight and stalled — the silo gauge reads it");
         }
@@ -75,7 +75,7 @@ public class RoutingQuiescenceClusterTest(ITestOutputHelper output)
 
         // The leg terminates (NotFound → the sender is NACK'd) and the gauge returns to zero:
         // termination, not dispatch, is what releases the slot.
-        await quiescence.InFlightChanges.Where(n => n == 0).FirstAsync().ToTask(Token());
+        await quiescence.InFlightChanges.Where(n => n == 0).FirstAsync().Await(Token());
         Output.WriteLine("route leg terminated — the silo gauge is idle again");
     }
 

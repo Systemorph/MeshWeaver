@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -77,7 +76,7 @@ public class DisposalStallWatchdogTest : HubTestBase
 
         var started = DateTime.UtcNow;
         root.Dispose();
-        await root.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(120.Seconds());
+        await root.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(120.Seconds());
         var elapsed = DateTime.UtcNow - started;
 
         // The premise of the test, asserted rather than assumed: the teardown really did outlast
@@ -124,7 +123,7 @@ public class DisposalStallWatchdogTest : HubTestBase
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
         victim.Dispose();
-        await victim.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(60.Seconds());
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(60.Seconds());
 
         var deadlock = capture.Entries.FirstOrDefault();
         deadlock.Should().NotBeNull(

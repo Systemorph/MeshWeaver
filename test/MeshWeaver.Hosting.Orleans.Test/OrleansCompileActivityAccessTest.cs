@@ -4,7 +4,6 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -85,7 +84,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
     {
         using (SiloAccessService.ImpersonateAsSystem())
         {
-            await SiloMeshService.CreateNode(node).FirstAsync().ToTask(ct);
+            await SiloMeshService.CreateNode(node).FirstAsync().Await(ct);
         }
     }
 
@@ -150,7 +149,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         var dataResp = await client
             .Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
         Output.WriteLine($"Background activation read: Data={dataResp.Message.Data?.GetType().Name ?? "(null)"}");
 
         // 3. Wait long enough for any kickoff-driven compile to fire and settle.
@@ -187,7 +186,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         await client
             .Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
 
         // Robust negative (WritingTests.md): the activity count must NEVER grow
         // past the first one. A second kickoff would push it beyond firstCount —
@@ -284,7 +283,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
                         RequestedReleaseForce = true
                     }
                 };
-            }).FirstAsync().ToTask(ct);
+            }).FirstAsync().Await(ct);
         }
         Output.WriteLine($"RequestedReleaseAt set on {typePath} as TestUser");
 
@@ -308,7 +307,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
                 && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
             .Take(1)
             .Timeout(60.Seconds())
-            .ToTask(ct);
+            .Await(ct);
         var settledDef = settledNode.Content as NodeTypeDefinition;
 
         settledDef.Should().NotBeNull(
@@ -338,7 +337,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"namespace:{activityNamespace} scope:subtree"))
                 .FirstAsync()
-                .ToTask(ct);
+                .Await(ct);
             var activities = snapshot.Items.ToList();
             Output.WriteLine($"Success path — _Activity rows: {activities.Count}");
             // Note: end-to-end identity preservation through the watcher Subscribe
@@ -377,7 +376,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             .Throttle(quietWindow)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(ct);
+            .Await(ct);
         Output.WriteLine($"Post-settle Version stabilised at {stableVersion} " +
             $"(quiet {quietWindow.TotalSeconds}s — chain quiesced, no runaway watcher).");
     }
@@ -491,7 +490,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
                             RequestedReleaseForce = true
                         }
                     };
-                }).FirstAsync().ToTask(ct);
+                }).FirstAsync().Await(ct);
             }
         }
         catch (Exception ex)
@@ -588,7 +587,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // first-build compile (InstallCompileWatcher → Pending → dispatch).
         await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(20.Seconds()).Await(ct);
         Output.WriteLine("First (activating) read returned; compile kicked off.");
 
         // PROBE: a second request to the SAME grain must come back promptly while
@@ -597,7 +596,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // here at 10s.
         var probe = await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(10.Seconds()).Await(ct);
         probe.Message.Should().NotBeNull(
             "the NodeType grain must answer a second request promptly WHILE its " +
             "first-build compile runs on the Activity hub — the action-block pump " +
@@ -610,7 +609,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         var settled = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
-            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+            .Take(1).Timeout(60.Seconds()).Await(ct);
         ((NodeTypeDefinition)settled.Content!).CompilationStatus.Should().Be(
             CompilationStatus.Ok, "a clean dynamic NodeType must finish compiling");
         Output.WriteLine("NodeType settled Ok.");
@@ -618,7 +617,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // Post-settle: the grain is still responsive — no lingering wedge.
         var after = await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(10.Seconds()).Await(ct);
         after.Message.Should().NotBeNull(
             "the grain stays responsive after the compile settles");
     }
@@ -701,7 +700,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         var client = GetClient($"stranded-{Guid.NewGuid():N}", userId: "TestUser");
         await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(20.Seconds()).Await(ct);
         Output.WriteLine("Grain activated; recovery kickoff should have re-triggered the compile.");
 
         // The stranded NodeType must un-strand and settle Ok. Without the
@@ -712,7 +711,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         var settled = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
-            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+            .Take(1).Timeout(60.Seconds()).Await(ct);
         var settledDef = (NodeTypeDefinition)settled.Content!;
         Output.WriteLine($"Settled status: {settledDef.CompilationStatus}, " +
             $"error: {settledDef.CompilationError ?? "(none)"}");
@@ -781,14 +780,14 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         var client = GetClient($"stranded-recent-{Guid.NewGuid():N}", userId: "TestUser");
         await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(20.Seconds()).Await(ct);
 
         var siloHub = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
             .GetRequiredService<IMessageHub>();
         var settled = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
-            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+            .Take(1).Timeout(60.Seconds()).Await(ct);
         var settledDef = (NodeTypeDefinition)settled.Content!;
         Output.WriteLine($"Settled status: {settledDef.CompilationStatus}");
 
@@ -859,7 +858,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         var client = GetClient($"selfdl-{Guid.NewGuid():N}", userId: "TestUser");
         await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(20.Seconds()).Await(ct);
         Output.WriteLine("Activated NodeType grain under TestUser context.");
 
         // The NodeType MUST settle to terminal Ok (a clean dynamic type compiles).
@@ -870,7 +869,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         var settled = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
-            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+            .Take(1).Timeout(60.Seconds()).Await(ct);
         ((NodeTypeDefinition)settled.Content!).CompilationStatus.Should().Be(
             CompilationStatus.Ok,
             "the NodeType must compile + settle Ok under user-context activation; " +
@@ -879,7 +878,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // And the grain is still responsive — the watcher didn't block the pump.
         var after = await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(10.Seconds()).Await(ct);
         after.Message.Should().NotBeNull("the grain stays responsive after user-context activation");
     }
 
@@ -955,13 +954,13 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         //    assembly stamped with the LIVE framework version.
         await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(typePath)))
-            .FirstAsync().Timeout(20.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(20.Seconds()).Await(ct);
         var firstOk = await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Ok
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
                 && !string.IsNullOrEmpty(d.CompiledFrameworkVersion))
-            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+            .Take(1).Timeout(60.Seconds()).Await(ct);
         var liveFv = ((NodeTypeDefinition)firstOk.Content!).CompiledFrameworkVersion!;
         Output.WriteLine($"First compile Ok; live framework version = {liveFv}");
 
@@ -978,12 +977,12 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             {
                 if (curr?.Content is not NodeTypeDefinition cd) return curr!;
                 return curr with { Content = cd with { CompiledFrameworkVersion = bogusFv } };
-            }).FirstAsync().ToTask(ct);
+            }).FirstAsync().Await(ct);
         }
         // Confirm the bogus version is the live persisted state before we activate.
         await siloHub.GetWorkspace().GetMeshNodeStream(typePath)
             .Where(n => n.Content is NodeTypeDefinition d && d.CompiledFrameworkVersion == bogusFv)
-            .Take(1).Timeout(20.Seconds()).ToTask(ct);
+            .Take(1).Timeout(20.Seconds()).Await(ct);
         Output.WriteLine($"Stamped bogus framework version {bogusFv} (simulated redeploy)");
 
         // 3. Activate a FRESH instance of the type. Its enrichment reads the
@@ -1000,7 +999,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         }, ct);
         await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(instancePath)))
-            .FirstAsync().Timeout(90.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(90.Seconds()).Await(ct);
         Output.WriteLine($"Activated instance {instancePath} — self-heal should have fired.");
 
         // 4. The self-heal must have recompiled the NodeType and re-stamped the
@@ -1010,7 +1009,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             .Where(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Ok
                 && d.CompiledFrameworkVersion == liveFv)
-            .Take(1).Timeout(60.Seconds()).ToTask(ct);
+            .Take(1).Timeout(60.Seconds()).Await(ct);
         ((NodeTypeDefinition)healed.Content!).CompiledFrameworkVersion.Should().Be(liveFv,
             "framework-stale enrichment must self-heal: TriggerRecompileAndRetry flips " +
             "the NodeType to Pending, the watcher rebuilds it against the CURRENT framework, " +
@@ -1022,7 +1021,7 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // 5. The instance grain stays responsive after the heal.
         var after = await client.Observe(new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(instancePath)))
-            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(10.Seconds()).Await(ct);
         after.Message.Should().NotBeNull("the instance stays responsive after the self-heal recompile");
     }
 }

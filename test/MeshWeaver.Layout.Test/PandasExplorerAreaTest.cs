@@ -1,7 +1,6 @@
 using System;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -98,14 +97,14 @@ public class PandasExplorerAreaTest : HubTestBase
         var grid = await stream.GetControlStream($"{Area}/grid/table")
             .Where(c => c is DataGridControl { Columns.Count: 4 })
             .Select(c => (DataGridControl)c!)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         Assert.Equal(4, grid.Columns.Count);
 
         // The initial render actually contacted the participant with a `render` command.
         var recorder = ServiceProvider.GetRequiredService<PandasCommandRecorder>();
         await recorder.Commands.Where(c => c.Command == "render")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
     }
 
     [HubFact]
@@ -117,7 +116,7 @@ public class PandasExplorerAreaTest : HubTestBase
             .GetRemoteStream<JsonElement, LayoutAreaReference>(CreateHostAddress(), reference);
 
         await stream.GetControlStream($"{Area}/toolbar/load")
-            .Where(c => c is not null).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Where(c => c is not null).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         var recorder = ServiceProvider.GetRequiredService<PandasCommandRecorder>();
         client.Post(new ClickedEvent($"{Area}/toolbar/load", stream.StreamId),
@@ -127,7 +126,7 @@ public class PandasExplorerAreaTest : HubTestBase
         // itself; the participant reads the node over the mesh. Hosted without a node instance, the
         // area falls back to the default source path.
         var load = await recorder.Commands.Where(c => c.Command == "load")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
         Assert.Equal(PandasExplorer.DefaultSourcePath, load.Path);
         Assert.Null(load.Data);
     }
@@ -142,7 +141,7 @@ public class PandasExplorerAreaTest : HubTestBase
 
         // Wait for the toolbar button to render before clicking it.
         await stream.GetControlStream($"{Area}/toolbar/groupby")
-            .Where(c => c is not null).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Where(c => c is not null).FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         var recorder = ServiceProvider.GetRequiredService<PandasCommandRecorder>();
         client.Post(new ClickedEvent($"{Area}/toolbar/groupby", stream.StreamId),
@@ -150,7 +149,7 @@ public class PandasExplorerAreaTest : HubTestBase
 
         // The click drove a real groupby command, carrying the seeded group-by column.
         var groupBy = await recorder.Commands.Where(c => c.Command == "groupby")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
         Assert.Equal("region", groupBy.By);
         Assert.Equal("sum", groupBy.Agg);
     }
@@ -183,7 +182,7 @@ public class PandasExplorerNoParticipantTest(ITestOutputHelper output) : HubTest
         var notice = await stream.GetControlStream($"{Area}/grid/status")
             .Where(c => c is MarkdownControl m && (m.Markdown?.ToString() ?? "").Contains("No Python pandas node"))
             .Select(c => (MarkdownControl)c!)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         Assert.Contains("py/pandas", notice.Markdown?.ToString() ?? "");
     }

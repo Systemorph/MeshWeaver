@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -202,7 +201,7 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
             .Where(_ => aliceObserved.Count >= 5 && bobObserved.Count >= 5)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask(ct);
+            .Await(ct);
 
         aliceObserved.Should().OnlyContain(id => id == "alice",
             because: "the wrap captured 'alice' at wrap construction time and restores it on " +
@@ -248,7 +247,7 @@ public class AccessContextSurvivesSubscribeTest : IDisposable
             .Where(_ => inner.HasObservers)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask(ct);
+            .Await(ct);
         await Task.Run(() => inner.OnNext(2), ct);
         var result = await observed.Task.WaitAsync(5.Seconds(), ct);
 

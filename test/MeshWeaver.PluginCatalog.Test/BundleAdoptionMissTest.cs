@@ -6,7 +6,6 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -16,6 +15,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -104,7 +104,7 @@ public class BundleAdoptionMissTest(ITestOutputHelper output) : MonolithMeshTest
         registry.IndexJson = Index(PrebuiltAssemblySeeder.LiveFrameworkMvid, ("Other", "1.0.0"));
 
         var adopted = await new PluginBundleClient(Mesh, RegistryUrl)
-            .Adopt("Store").FirstAsync().ToTask();
+            .Adopt("Store").FirstAsync().Await();
 
         // The RETURN is deliberately unchanged — adoption must never fail an install.
         adopted.Should().Be(0);
@@ -129,7 +129,7 @@ public class BundleAdoptionMissTest(ITestOutputHelper output) : MonolithMeshTest
     {
         registry.IndexJson = Index(Guid.NewGuid().ToString("N"), ("Store", "1.0.0"));
 
-        (await new PluginBundleClient(Mesh, RegistryUrl).Adopt("Store").FirstAsync().ToTask())
+        (await new PluginBundleClient(Mesh, RegistryUrl).Adopt("Store").FirstAsync().Await())
             .Should().Be(0);
 
         Ledger.Misses.Should().ContainSingle()
@@ -147,7 +147,7 @@ public class BundleAdoptionMissTest(ITestOutputHelper output) : MonolithMeshTest
         registry.IndexJson = Index(PrebuiltAssemblySeeder.LiveFrameworkMvid, ("Store", "1.0.0"));
         registry.DownloadStatus = HttpStatusCode.NotFound;
 
-        (await new PluginBundleClient(Mesh, RegistryUrl).Adopt("Store").FirstAsync().ToTask())
+        (await new PluginBundleClient(Mesh, RegistryUrl).Adopt("Store").FirstAsync().Await())
             .Should().Be(0);
         Ledger.Misses.Should().ContainSingle()
             .Which.Kind.Should().Be(BundleAdoptionKind.NotServed);
@@ -159,7 +159,7 @@ public class BundleAdoptionMissTest(ITestOutputHelper output) : MonolithMeshTest
         registry.IndexJson = Index(PrebuiltAssemblySeeder.LiveFrameworkMvid, ("Store", "1.0.0"));
         registry.DownloadStatus = HttpStatusCode.ServiceUnavailable;
 
-        (await new PluginBundleClient(Mesh, RegistryUrl).Adopt("Store").FirstAsync().ToTask())
+        (await new PluginBundleClient(Mesh, RegistryUrl).Adopt("Store").FirstAsync().Await())
             .Should().Be(0);
         Ledger.Misses.Should().ContainSingle()
             .Which.Kind.Should().Be(BundleAdoptionKind.FetchFailed);

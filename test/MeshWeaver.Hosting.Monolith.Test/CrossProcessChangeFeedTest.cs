@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -256,7 +255,7 @@ public class CrossProcessChangeFeedTest(ITestOutputHelper output) : MonolithMesh
         // moved. A phantom mint (#1432) or a re-adoption loop (#223) would show up here as a
         // version above the durable one, or as writes that keep arriving.
         var writesAfterEcho = await Settle(() => AdapterA.WriteCount(path));
-        var live = await own.FirstAsync().ToTask();
+        var live = await own.FirstAsync().Await();
 
         live.Version.Should().Be(durable.Version,
             "the echo of our own write must be suppressed — adopting it would mint durable+1, a "

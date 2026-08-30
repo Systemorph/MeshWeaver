@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -216,7 +215,7 @@ public class SiloShutdownActivationGateTest : TestBase
         factory.Clear();
 
         // Passes DeliverMessage's gate — the host is still running at this point.
-        await routing.DeliverMessage(NewDelivery()).FirstAsync().ToTask();
+        await routing.DeliverMessage(NewDelivery()).FirstAsync().Await();
 
         lifetime.StopApplication();
         // Release the held dispatch. The seam now runs with the host stopping.

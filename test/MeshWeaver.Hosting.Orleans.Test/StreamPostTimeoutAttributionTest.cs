@@ -1,13 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Reactive.Testing;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -99,7 +99,7 @@ public class StreamPostTimeoutAttributionTest
                 postFailureToSender: (m, t) => nacks.Add((m, t)),
                 logger: logger,
                 timeout: Guard)
-            .ToTask();
+            .Await();
 
         var line = logger.Records.Should().ContainSingle().Subject;
         line.Message.Should().NotContain("did not complete within 00:01:00",

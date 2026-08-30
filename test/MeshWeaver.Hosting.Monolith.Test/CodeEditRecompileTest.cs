@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,6 +16,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -646,7 +646,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // The deliberate compile-tool retry still FORCES a fresh run (RequestedReleaseForce) —
         // the anti-replay contract: it must report THIS run, never the previous run's snapshot.
         var resultJson = await new MeshOperations(Mesh).Compile(typePath)
-            .FirstAsync().Timeout(150.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(150.Seconds()).Await(ct);
         Output.WriteLine($"Compile tool returned: {resultJson}");
 
         using (var result = JsonDocument.Parse(resultJson))
@@ -714,7 +714,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // Compile with UNCHANGED sources.
         var resultJson = await new MeshOperations(Mesh).Compile(typePath)
-            .FirstAsync().Timeout(150.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(150.Seconds()).Await(ct);
         Output.WriteLine($"Compile tool returned: {resultJson}");
 
         using (var result = JsonDocument.Parse(resultJson))
@@ -764,7 +764,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             .Select(_ => SourceSnapshot.Established(new[] { source }));
 
         var snapshot = await NodeCompileShaping.RaceSourceSnapshot(probe, cachedFirst)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await(ct);
 
         snapshot.IsEstablished.Should().BeTrue();
         snapshot.Sources.Should().NotBeEmpty(
@@ -789,7 +789,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var cachedFirst = Observable.Return(SourceSnapshot.Established(Array.Empty<MeshNode>()));
 
         var snapshot = await NodeCompileShaping.RaceSourceSnapshot(probe, cachedFirst)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await(ct);
 
         snapshot.IsEstablished.Should().BeTrue(
             "neither leg reported a FAILED query — the sources genuinely do not exist, which is a "
@@ -816,7 +816,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var cachedFirst = Observable.Return(SourceSnapshot.Established(new[] { source }));
 
         var snapshot = await NodeCompileShaping.RaceSourceSnapshot(probe, cachedFirst)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(5)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(5)).Await(ct);
 
         snapshot.Sources.Should().ContainSingle(
             "a healthy cached query's non-empty first answer settles the snapshot immediately — "
@@ -911,7 +911,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                     $"namespace:{typePath}/Source scope:subtree nodeType:Code"))
                 .Take(1))
             .Where(r => r.Items.Count > 0)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).ToTask(ct);
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await(ct);
 
         // 4. The fresh re-trigger (RequestedReleaseAt + Force — exactly what WaitForLatestRelease's
         //    diagnostic sends). It un-parks, dispatches a REAL fresh compile, and that compile's

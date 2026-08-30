@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -15,6 +14,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -88,13 +88,13 @@ public class BuildCompletionSubscriptionTest(ITestOutputHelper output) : Monolit
     {
         // Install v1 so there IS an install record to compare against.
         await PackageInstaller.Install(Mesh, Pkg(ModuleV1), FilesAt(ModuleV1, "# Notes v1", "c1"), "c1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         // A green build lands, but the module's content hash is UNCHANGED — the same situation as a
         // doc-only commit elsewhere in the repo, or a re-run of the same tree.
         var source = new RecordingSource(FilesAt(ModuleV1, "# Notes v1", "c2"));
         var result = await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "c2", Pkg(ModuleV1), null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         result.Written.Should().Be(0, "an unchanged module must write nothing");
         source.Fetches.Should().BeEmpty(
@@ -106,11 +106,11 @@ public class BuildCompletionSubscriptionTest(ITestOutputHelper output) : Monolit
     public async Task AGreenBuildThatChangedTheModuleFetchesOnlyTheChangedFiles()
     {
         await PackageInstaller.Install(Mesh, Pkg(ModuleV1), FilesAt(ModuleV1, "# Notes v1", "c1"), "c1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var source = new RecordingSource(FilesAt(ModuleV2, "# Notes v2 — updated", "c2"));
         var result = await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "c2", Pkg(ModuleV2), null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         result.Written.Should().BeGreaterThan(0, "the module changed, so something must land");
 
@@ -203,7 +203,7 @@ public class BuildCompletionSubscriptionTest(ITestOutputHelper output) : Monolit
     public async Task AnOptedInRecordStaysOptedInThroughAnUpdate()
     {
         await PackageInstaller.Install(Mesh, Pkg(ModuleV1), FilesAt(ModuleV1, "# Notes v1", "c1"), "c1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var recordPath = $"{PackageInstaller.InstalledPartition}/Gadget";
         await Mesh.GetWorkspace().GetMeshNodeStream(recordPath)
@@ -212,7 +212,7 @@ public class BuildCompletionSubscriptionTest(ITestOutputHelper output) : Monolit
                 Content = (n.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions) ?? new PackageManifest())
                     with { AutoUpdate = true }
             })
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         // Wait until the flag is STORAGE-visible — that is the read the re-stamp's carry-forward
         // does, and the hub write can flush a beat later than the stream emission.
@@ -220,17 +220,17 @@ public class BuildCompletionSubscriptionTest(ITestOutputHelper output) : Monolit
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(recordPath, Mesh.JsonSerializerOptions))
             .Where(n => n?.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)?.AutoUpdate == true)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         var source = new RecordingSource(FilesAt(ModuleV2, "# Notes v2 — updated", "c2"));
         await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "c2", Pkg(ModuleV2), null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         // The re-stamp really happened (baseline moved to v2) AND the opt-in survived it.
         var record = await Mesh.GetWorkspace().GetMeshNodeStream(recordPath)
             .Select(n => n?.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions))
             .Where(m => m is not null && m.ModuleVersion == ModuleV2)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         record!.AutoUpdate.Should().BeTrue(
             "the update re-stamped the baseline from the policy-less catalog manifest — the record's "
             + "own opt-in must be carried forward, not rebuilt as false");
@@ -245,22 +245,22 @@ public class BuildCompletionSubscriptionTest(ITestOutputHelper output) : Monolit
     public async Task AClaimedNodeSurvivesAnUpdateUntouched()
     {
         await PackageInstaller.Install(Mesh, Pkg(ModuleV1), FilesAt(ModuleV1, "# Notes v1", "c1"), "c1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         // The user modifies the node and CLAIMS it — the documented way to take a node over.
         await Mesh.GetWorkspace().GetMeshNodeStream("Gadget/Notes")
             .Update(n => n with { SyncBehavior = SyncBehavior.ExcludeThisOnly })
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         // v2 changes exactly that node (the root is byte-identical between the manifests).
         var source = new RecordingSource(FilesAt(ModuleV2, "# Notes v2 — updated", "c2"));
         var result = await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "c2", Pkg(ModuleV2), null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         result.Written.Should().Be(0, "the only changed node is claimed, so nothing may land");
         var node = await Mesh.GetWorkspace().GetMeshNodeStream("Gadget/Notes")
             .Where(n => n?.Content is not null)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         node!.Content!.ToString().Should().Contain("v1",
             "the claimed node keeps the user's copy — the repo's v2 must not overwrite it");
     }
@@ -276,20 +276,20 @@ public class BuildCompletionSubscriptionTest(ITestOutputHelper output) : Monolit
     public async Task AClaimedNodeSurvivesThePrune()
     {
         await PackageInstaller.Install(Mesh, Pkg(ModuleV1), FilesAt(ModuleV1, "# Notes v1", "c1"), "c1")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         await Mesh.GetWorkspace().GetMeshNodeStream("Gadget/Notes")
             .Update(n => n with { SyncBehavior = SyncBehavior.ExcludeThisOnly })
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
 
         // v2's manifest no longer lists Notes.md at all → the diff marks it removed.
         var source = new RecordingSource(FilesWithoutNotes(ModuleV2, "c2"));
         await CatalogLayoutAreas.InstallOrUpdate(Mesh, source, "c2", Pkg(ModuleV2), null)
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var node = await Mesh.GetWorkspace().GetMeshNodeStream("Gadget/Notes")
             .Where(n => n?.Content is not null)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).Await();
         node.Should().NotBeNull("a claimed node must survive the removed-file prune");
     }
 

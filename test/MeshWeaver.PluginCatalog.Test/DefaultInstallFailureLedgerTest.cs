@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -106,7 +106,7 @@ public class DefaultInstallFailureLedgerTest(ITestOutputHelper output) : Monolit
     {
         // PASS 1 — the boot pass itself (the hosted service's own AsyncSubject; no polling).
         var first = await Installer().Completed
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await();
 
         Output.WriteLine($"pass 1: {first}");
 
@@ -135,7 +135,7 @@ public class DefaultInstallFailureLedgerTest(ITestOutputHelper output) : Monolit
 
         // PASS 2 — the repair. The delivered package is left alone; the failed one is re-attempted.
         var second = await Installer().RunDefaultInstall()
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await();
 
         Output.WriteLine($"pass 2: {second}");
 
@@ -165,5 +165,5 @@ public class DefaultInstallFailureLedgerTest(ITestOutputHelper output) : Monolit
         Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(LedgerPath, Mesh.JsonSerializerOptions)
             .Select(n => n?.ContentAs<DefaultInstallLedger>(Mesh.JsonSerializerOptions))
-            .Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await();
 }

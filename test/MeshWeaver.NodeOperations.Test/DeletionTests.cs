@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -11,6 +10,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.NodeOperations.Test;
 
@@ -124,7 +124,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     public async Task Delete_NonExistentNode_Throws()
     {
         // Act & Assert — deleting a non-existent node should throw
-        Func<Task> act = async () => await NodeFactory.DeleteNode("nonexistent/path/that/does/not/exist").FirstAsync().ToTask();
+        Func<Task> act = async () => await NodeFactory.DeleteNode("nonexistent/path/that/does/not/exist").FirstAsync().Await();
         await act.Should().ThrowAsync<System.Exception>();
     }
 

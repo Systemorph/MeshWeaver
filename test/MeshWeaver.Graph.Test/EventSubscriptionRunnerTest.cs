@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -9,6 +8,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -564,7 +564,7 @@ public class EventSubscriptionRunnerTest(ITestOutputHelper output) : MonolithMes
         using (accessService.ImpersonateAsSystem())
             await Mesh.GetWorkspace().GetMeshNodeStream(watchId)
                 .Update(n => n with { Content = new WatchedContent { Status = "Idle" } })
-                .Timeout(30.Seconds()).ToTask();
+                .Timeout(30.Seconds()).Await();
 
         var final = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
             .Select(n => n?.Content as EventSubscription)

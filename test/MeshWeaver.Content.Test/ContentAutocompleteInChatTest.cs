@@ -3,7 +3,6 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Reactive;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Completion;
@@ -19,6 +18,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Content.Test;
 
@@ -100,7 +100,7 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
 
         // Verify we can instantiate at least one collection
         var firstConfig = configs.First();
-        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().ToTask();
+        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().Await();
         collection.Should().NotBeNull($"collection '{firstConfig.Name}' should be instantiatable");
         Output.WriteLine($"Instantiated collection: {collection!.Collection} ({collection.DisplayName})");
     }
@@ -114,10 +114,10 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         configs.Should().NotBeEmpty();
 
         var firstConfig = configs.First();
-        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().ToTask();
+        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().Await();
         collection.Should().NotBeNull();
 
-        var files = await collection!.GetFiles("/").ToList().FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var files = await collection!.GetFiles("/").ToList().FirstAsync().Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"Collection '{collection.Collection}' has {files.Count} files:");
         foreach (var f in files.Take(10))
             Output.WriteLine($"  - {f.Path} ({f.Name})");
@@ -139,7 +139,7 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
             var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
             var configs = contentService.GetAllCollectionConfigs();
             configs.Should().NotBeEmpty();
-            var collection = await contentService.GetCollection(configs.First().Name).FirstAsync().ToTask();
+            var collection = await contentService.GetCollection(configs.First().Name).FirstAsync().Await();
             collection.Should().NotBeNull();
             return;
         }
@@ -168,17 +168,17 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         configs.Should().NotBeEmpty();
 
         var firstConfig = configs.First();
-        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().ToTask();
+        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().Await();
         collection.Should().NotBeNull();
 
-        var folders = await collection!.GetFolders("/").ToList().FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var folders = await collection!.GetFolders("/").ToList().FirstAsync().Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"Root folders in '{collection.Collection}': {string.Join(", ", folders.Select(f => f.Name))}");
 
         // If there are folders, verify we can browse into them
         if (folders.Count > 0)
         {
             var firstFolder = folders.First();
-            var subItems = await collection.GetCollectionItems($"/{firstFolder.Name}").ToList().FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            var subItems = await collection.GetCollectionItems($"/{firstFolder.Name}").ToList().FirstAsync().Await(TestContext.Current.CancellationToken);
             Output.WriteLine($"Items in '{firstFolder.Name}': {subItems.Count}");
             subItems.Should().NotBeNull();
         }
@@ -208,12 +208,12 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         configs.Should().NotBeEmpty();
 
         var firstConfig = configs.First();
-        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().ToTask();
+        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().Await();
         collection.Should().NotBeNull();
 
         // After user selects "content:", they should see files and/or folders
-        var files = await collection!.GetFiles("/").ToList().FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        var folders = await collection.GetFolders("/").ToList().FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var files = await collection!.GetFiles("/").ToList().FirstAsync().Await(TestContext.Current.CancellationToken);
+        var folders = await collection.GetFolders("/").ToList().FirstAsync().Await(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Items after '{firstConfig.Name}:' -> {files.Count} files, {folders.Count} folders");
         (files.Count + folders.Count).Should().BeGreaterThan(0,
@@ -230,10 +230,10 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
 
         foreach (var config in configs)
         {
-            var collection = await contentService.GetCollection(config.Name).FirstAsync().ToTask();
+            var collection = await contentService.GetCollection(config.Name).FirstAsync().Await();
             if (collection == null) continue;
 
-            var files = await collection.GetFiles("/").ToList().FirstAsync().ToTask(TestContext.Current.CancellationToken);
+            var files = await collection.GetFiles("/").ToList().FirstAsync().Await(TestContext.Current.CancellationToken);
             foreach (var file in files.Take(5))
             {
                 var filePath = file.Path.TrimStart('/');
@@ -256,10 +256,10 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
         var configs = contentService.GetAllCollectionConfigs();
         var firstConfig = configs.First();
-        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().ToTask();
+        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().Await();
         collection.Should().NotBeNull();
 
-        var allFiles = await collection!.GetFiles("/").ToList().FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var allFiles = await collection!.GetFiles("/").ToList().FirstAsync().Await(TestContext.Current.CancellationToken);
         if (allFiles.Count == 0)
         {
             Output.WriteLine("No files in collection — skipping filter test");
@@ -287,10 +287,10 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
         var configs = contentService.GetAllCollectionConfigs();
         var firstConfig = configs.First();
-        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().ToTask();
+        var collection = await contentService.GetCollection(firstConfig.Name).FirstAsync().Await();
         collection.Should().NotBeNull();
 
-        var rootFolders = await collection!.GetFolders("/").ToList().FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var rootFolders = await collection!.GetFolders("/").ToList().FirstAsync().Await(TestContext.Current.CancellationToken);
         if (rootFolders.Count == 0)
         {
             Output.WriteLine("No folders in root — skipping scoping test");
@@ -298,8 +298,8 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
         }
 
         var folder = rootFolders.First();
-        var subFiles = await collection.GetFiles($"/{folder.Name}").ToList().FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        var subFolders = await collection.GetFolders($"/{folder.Name}").ToList().FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var subFiles = await collection.GetFiles($"/{folder.Name}").ToList().FirstAsync().Await(TestContext.Current.CancellationToken);
+        var subFolders = await collection.GetFolders($"/{folder.Name}").ToList().FirstAsync().Await(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Browsing '{folder.Name}/': {subFiles.Count} files, {subFolders.Count} folders");
 

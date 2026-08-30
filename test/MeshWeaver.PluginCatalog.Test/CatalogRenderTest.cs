@@ -4,7 +4,6 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -17,6 +16,7 @@ using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -50,10 +50,10 @@ public class CatalogRenderTest(ITestOutputHelper output) : MonolithMeshTestBase(
             WriteFile(repo, "catalog/pack-b/package.json",
                 """{"id":"pack-b","name":"Package B","description":"second","kind":"content","targetPartition":"PartB","version":"2.0.0"}""");
             WriteFile(repo, "catalog/pack-b/B.md", "# B");
-            await git.Run(repo, ["init"]).FirstAsync().ToTask();
-            await git.Run(repo, ["add", "-A"]).FirstAsync().ToTask();
+            await git.Run(repo, ["init"]).FirstAsync().Await();
+            await git.Run(repo, ["add", "-A"]).FirstAsync().Await();
             await git.Run(repo, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"])
-                .FirstAsync().ToTask();
+                .FirstAsync().Await();
 
             // A catalog node pointed at the repo's catalog/ subdir. Created as a child (a partition
             // ROOT must be a Space; a custom node type can't be a root), under the admin partition.

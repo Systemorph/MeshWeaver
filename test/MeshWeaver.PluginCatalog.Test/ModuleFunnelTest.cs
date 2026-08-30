@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.GitSync;
@@ -18,6 +17,7 @@ using MeshWeaver.Plugin.Packaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using PackagingManifest = MeshWeaver.Plugin.Packaging.PluginManifest;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -117,7 +117,7 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var landed = await client
             .LandFromBundle("SocialMedia", "MeshWeaver.Social", "Plugins/SocialMedia", "1.2.0",
                 ModuleBundle(foreignBuild, minMeshVersion: "0.0.1"))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         landed.Should().Be(1);
         var list = ModuleActivationSidecar.Read(landingRoot);
@@ -150,7 +150,7 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var landed = await client
             .LandFromBundle("SocialMedia", "MeshWeaver.Social", "Plugins/SocialMedia", "1.2.0",
                 ModuleBundle(LiveFrameworkMvid, minMeshVersion: "999.0.0"))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         landed.Should().Be(0);
         Directory.Exists(Path.Combine(landingRoot, "modules", "MeshWeaver.Social"))
@@ -183,11 +183,11 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             new("SocialMedia/Notes.md", "# Social"),
         ];
 
-        await PackageInstaller.Install(Mesh, manifest, files, "c1").FirstAsync().ToTask();
+        await PackageInstaller.Install(Mesh, manifest, files, "c1").FirstAsync().Await();
 
         var record = await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read($"{PackageInstaller.InstalledPartition}/SocialMedia", Mesh.JsonSerializerOptions)
-            .Take(1).ToTask();
+            .Take(1).Await();
 
         record.Should().NotBeNull();
         var content = record!.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)!;
@@ -215,7 +215,7 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             ])),
             "https://example.invalid/repo");
 
-        var packages = await source.ListPackages("HEAD").FirstAsync().ToTask();
+        var packages = await source.ListPackages("HEAD").FirstAsync().Await();
 
         var social = packages.Single(p => p.Id == "SocialMedia");
         social.Module.Should().Be("MeshWeaver.Social");

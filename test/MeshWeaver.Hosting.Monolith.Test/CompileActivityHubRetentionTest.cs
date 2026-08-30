@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -14,6 +13,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -143,7 +143,7 @@ public class CompileActivityHubRetentionTest(ITestOutputHelper output) : Monolit
                     : node)
                 .FirstAsync()
                 .Timeout(30.Seconds())
-                .ToTask();
+                .Await();
 
             var settled = await WhenCompiled(TypePath, lastSucceeded);
             lastSucceeded = settled.LastCompileSucceededAt;
@@ -187,7 +187,7 @@ public class CompileActivityHubRetentionTest(ITestOutputHelper output) : Monolit
             //     snapshot instead of the latest one. The emitted value is discarded either way,
             //     but a fallback that silently disagrees with the variable it names is a trap.
             .Timeout(IdleWindow + 120.Seconds(), Observable.Defer(() => Observable.Return(remaining)))
-            .ToTask();
+            .Await();
         clock.Stop();
 
         Output.WriteLine(
@@ -251,5 +251,5 @@ public class CompileActivityHubRetentionTest(ITestOutputHelper output) : Monolit
             .Select(d => d!)
             .Take(1)
             .Timeout(120.Seconds())
-            .ToTask();
+            .Await();
 }

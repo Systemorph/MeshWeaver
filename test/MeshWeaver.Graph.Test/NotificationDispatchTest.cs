@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -9,6 +8,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -50,7 +50,7 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
                 type: NotificationType.AccessGranted,
                 targetNodePath: "TeamSpace",
                 createdBy: "admin")
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
         await Mesh.GetWorkspace()
             .GetQuery($"notif|{recipient}", $"path:{recipient}/_Notification scope:children nodeType:Notification")
@@ -78,9 +78,9 @@ public class NotificationDispatchTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Dispatch a suppressed AccessGranted, then a still-enabled Approvals as the ordered control.
         await NotificationService.Dispatch(Mesh, recipient, recipient,
-                "Access", "granted", NotificationType.AccessGranted, "TeamSpace", "admin").Timeout(30.Seconds()).ToTask();
+                "Access", "granted", NotificationType.AccessGranted, "TeamSpace", "admin").Timeout(30.Seconds()).Await();
         await NotificationService.Dispatch(Mesh, recipient, recipient,
-                "Approval Requested", "please approve", NotificationType.ApprovalRequired, "Doc/X", "admin").Timeout(30.Seconds()).ToTask();
+                "Approval Requested", "please approve", NotificationType.ApprovalRequired, "Doc/X", "admin").Timeout(30.Seconds()).Await();
 
         // The control (Approvals) bell arrives...
         var nodes = await Mesh.GetWorkspace()
