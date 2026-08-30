@@ -59,6 +59,19 @@ public record MeshWeaverInstance
     /// <summary>Owner- or admin-set kill switch. A disabled instance fails authentication even
     /// while its grants remain, so access can be cut without losing the grant history.</summary>
     public bool IsDisabled { get; init; }
+
+    /// <summary>
+    /// The instance's LICENCE — a plan id from the registry's ladder (<c>Admin/Tiers/*</c>, read as
+    /// <see cref="PlanTierRanks"/>). Set at registration (open registration → the baseline; a
+    /// registration key minted for a plan → that plan) and PROMOTED by a global admin on this
+    /// record, never by editing grant strings. Absent or blank reads as the baseline plan
+    /// (<see cref="PlanTierRanks.BaselinePlan"/>) and never as "everything": a record that predates
+    /// the field is a free instance, not an unlimited one (#2804). The registry decides every
+    /// package it serves against this plan and the package's declared tier
+    /// (<see cref="PlanTierRanks.CoversInstance"/>); a <see cref="PluginGrant"/> entry says WHICH
+    /// sources and packages, and can at most cap the plan, never raise it.
+    /// </summary>
+    public string? Plan { get; init; }
 }
 
 /// <summary>

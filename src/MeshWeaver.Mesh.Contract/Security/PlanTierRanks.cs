@@ -93,6 +93,66 @@ public sealed record PlanTierRanks(
         return RankOf(packageTier) is { } package && package <= plan;
     }
 
+    /// <summary>
+    /// The plan an instance stands on when its record names none — the free tier. The one id the
+    /// rule below understands WITHOUT a ladder: a registry that seeds no tier nodes (a local
+    /// self-registry, the e2e stub) still serves its free and untiered packages, and refuses every
+    /// paid tier, because "free" ranks at the baseline by definition.
+    /// </summary>
+    public const string BaselinePlan = "free";
+
+    /// <summary>
+    /// Whether an INSTANCE on <paramref name="instancePlan"/> may pull a package declaring
+    /// <paramref name="packageTier"/> — the licence rule every registry surface decides with
+    /// (#2804). This is <see cref="Covers"/> with the one difference that closes the hole: a
+    /// blank plan is never "every tier", it is <see cref="BaselinePlan"/>. Everything else is the
+    /// ladder rule — an all-access plan covers everything, an unknown plan or an unknown package
+    /// tier licenses nothing, a package with no tier is the platform baseline.
+    /// </summary>
+    /// <param name="instancePlan">The plan on the instance record; blank = the baseline.</param>
+    /// <param name="packageTier">The package's declared tier; blank = baseline.</param>
+    /// <remarks>
+    /// An instance plan the ladder does not know reads as the BASELINE — free and untiered
+    /// packages, nothing above. That is the fail-closed direction for a plan (a typo, or a plan
+    /// this registry has not seeded, can never widen a licence) without turning it into an outage:
+    /// "nothing at all, not even the Store" is not a safer answer than "free", it is a broken
+    /// portal. A package tier the ladder does not know is still covered by nothing.
+    /// </remarks>
+    public bool CoversInstance(string? instancePlan, string? packageTier)
+    {
+        var plan = Canonical(instancePlan) is { Length: > 0 } named ? named : BaselinePlan;
+        if (IsAllAccess(plan))
+            return true;
+        var planRank = RankOf(plan) ?? BaselineRank;       // unknown or unladdered plan: the baseline
+        var package = Canonical(packageTier);
+        if (package.Length == 0 || package == BaselinePlan)
+            return BaselineRank <= planRank;               // a baseline package, ladder or not
+        return RankOf(package) is { } packageRank && packageRank <= planRank;
+    }
+
+    /// <summary>
+    /// The plan a grant entry actually decides with: the instance's plan, NARROWED by the entry's
+    /// own cap when it names one. A cap can only lower the plan — it is how an admin licenses a
+    /// pro instance's access to one source at the free level — and it can never raise it, which
+    /// is what made <c>Plugins/*@pro</c> on a free instance a licence the instance never bought.
+    /// A blank cap is no cap; an unknown cap, like an unknown plan, reads as the baseline — the
+    /// narrowest level there is (<see cref="CoversInstance"/>).
+    /// </summary>
+    public string? Narrower(string? instancePlan, string? cap)
+    {
+        var capId = Canonical(cap);
+        if (capId.Length == 0)
+            return instancePlan;
+        var plan = Canonical(instancePlan) is { Length: > 0 } named ? named : BaselinePlan;
+        if (IsAllAccess(capId))
+            return plan;                                   // an all-access cap caps nothing
+        if (IsAllAccess(plan))
+            return capId;
+        var planRank = RankOf(plan) ?? BaselineRank;
+        var capRank = RankOf(capId) ?? BaselineRank;
+        return capRank < planRank ? capId : plan;
+    }
+
     /// <summary>The comparison form of a plan id — trimmed, lower-case; empty for blank.</summary>
     public static string Canonical(string? tier) => (tier ?? "").Trim().ToLowerInvariant();
 }

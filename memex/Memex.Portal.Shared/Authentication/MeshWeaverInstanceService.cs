@@ -105,6 +105,10 @@ public sealed class MeshWeaverInstanceService(
                 KeyHash = hash,
                 KeyIssuedAt = DateTimeOffset.UtcNow,
                 CreatedAt = DateTimeOffset.UtcNow,
+                // The LICENCE lives here, on the record (#2804): the plan the registration key was
+                // minted for, else the baseline. Never blank — a blank would still read as the
+                // baseline, but a record that names its plan is one an admin can read at a glance.
+                Plan = PlanTierRanks.Canonical(tier) is { Length: > 0 } plan ? plan : PlanTierRanks.BaselinePlan,
             };
 
             var instanceNode = new MeshNode(instanceId, $"{userId}/{InstanceNamespace}")
@@ -240,8 +244,11 @@ public sealed class MeshWeaverInstanceService(
                 .ToList();
 
     /// <summary>
-    /// The plan-scoped seed a registration with plan <paramref name="tier"/> adds: one
-    /// <c>&lt;source&gt;/*@&lt;plan&gt;</c> entry per configured source (<c>PluginCatalog:Sources:N:Name</c>).
+    /// The seed a registration with plan <paramref name="tier"/> adds: one <c>&lt;source&gt;/*</c>
+    /// entry per configured source (<c>PluginCatalog:Sources:N:Name</c>) — WHICH sources the
+    /// instance may see. At what level is the instance's own <see cref="MeshWeaverInstance.Plan"/>
+    /// (#2804), so the entries carry no <c>@plan</c> suffix: a suffix here would be a cap equal to
+    /// the plan, which is no cap, and a plan written in two places is a plan that drifts.
     /// Empty for no plan — and, loudly, for a plan on a registry that configures no sources: a
     /// key "for Pro customers" that seeds nothing is a registration that installs nothing, and
     /// that must be legible in the log rather than discovered on the first boot.
@@ -268,8 +275,7 @@ public sealed class MeshWeaverInstanceService(
         {
             Source = source,
             PackageId = PluginGrantEntry.AllPackages,
-            Tier = plan,
-            IssuedVia = $"registration key (plan {plan})",
+            IssuedVia = $"registration (plan {plan})",
             IssuedAt = now,
         }).ToList();
     }

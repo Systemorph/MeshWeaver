@@ -23,19 +23,19 @@ namespace Memex.Portal.Shared.Test;
 /// <summary>
 /// 🚨 <b>AN INSTANCE ON THE WRONG PLAN CANNOT PULL A PACKAGE ABOVE IT.</b>
 ///
-/// <para>The Store sells plans and every package declares the plan it belongs to; a grant entry can
-/// now name a plan (<c>Plugins/*@free</c>) and licenses only the packages that plan covers. This
-/// fixture pins that boundary where it is enforced — on the registry's bundle routes, over a real
+/// <para>The Store sells plans and every package declares the plan it belongs to; the instance's
+/// record carries its plan (#2804) and the registry serves only the packages that plan covers,
+/// from the sources the instance is granted. This fixture pins that boundary where it is enforced — on the registry's bundle routes, over a real
 /// HTTP pipeline, with the production <see cref="InstanceRegistryAuthenticator"/> resolving the
 /// caller's grant AND the plan ladder off this mesh's <c>Admin/Tiers</c> nodes. Nothing is mocked:
-/// the instances are registered through <see cref="MeshWeaverInstanceService.Register"/> with a
-/// plan-scoped default grant, the packages are installed by <see cref="PackageInstaller"/> with
+/// the instances are registered through <see cref="MeshWeaverInstanceService.Register"/> on a plan
+/// with a plan-less whole-source default grant, the packages are installed by <see cref="PackageInstaller"/> with
 /// their declared tier, and the tier nodes are written the way the Store seeds them.</para>
 ///
 /// <para>Both directions, as always: the free-plan instance still gets the free package (a gate
-/// that refuses everyone is not a licence), the pro-plan instance gets both, and a plan-scoped grant
-/// on a registry with NO tier nodes licenses nothing — a ladder that cannot be read must fail
-/// closed, never open.</para>
+/// that refuses everyone is not a licence), the pro-plan instance gets both, and on a registry with
+/// NO tier nodes a paid plan reads as the baseline — free flows, nothing above it does; a ladder
+/// that cannot be read must never widen a licence.</para>
 /// </summary>
 public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -85,13 +85,21 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
                         $"{MeshWeaverInstanceService.DefaultGrantsConfigKey}:{i}", entry)))
                 .Build());
 
-    private Task<string> RegisterInstance(string instanceId, params string[] defaultGrants) =>
+    /// <summary>Registers an instance ON <paramref name="tier"/> (null = the baseline, exactly what
+    /// open registration yields) with plan-less default grants — the plan lives on the record
+    /// (#2804), the grant says only which sources.</summary>
+    private Task<string> RegisterInstance(string instanceId, string? tier, params string[] defaultGrants) =>
         InstanceService(defaultGrants)
-            .Register("plan-owner", "Plan Owner", "owner@test.com", instanceId, instanceId)
+            .Register("plan-owner", "Plan Owner", "owner@test.com", instanceId, instanceId, tier: tier)
             .Select(r => r.RawKey)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(60))
             .Await();
+
+    /// <summary>Where <see cref="MeshWeaverInstanceService.Register"/> puts the record: the owner's
+    /// partition.</summary>
+    private static string InstancePath(string instanceId) =>
+        $"plan-owner/{MeshWeaverInstanceService.InstanceNamespace}/{instanceId}";
 
     /// <summary>Installs a package the production way, carrying the plan it declares — the
     /// <c>content.tier</c> a node-repo source reads off the package root.</summary>
@@ -149,8 +157,9 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton<IMessageHub>(Mesh);
-        builder.Services.AddSingleton(new InstanceRegistryAuthenticator(
-            Mesh, Mesh.ServiceProvider.GetRequiredService<ILogger<InstanceRegistryAuthenticator>>()));
+        // The mesh's OWN authenticator, not a private one: a promotion invalidates the verdict
+        // cached on the mesh-scoped singleton, which is the one production endpoints resolve.
+        builder.Services.AddSingleton(Mesh.ServiceProvider.GetRequiredService<InstanceRegistryAuthenticator>());
         var app = builder.Build();
         app.MapPluginBundles();
         await app.StartAsync();
@@ -188,8 +197,8 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
         await SeedLadder();
         await InstallPackage(FreeApp, "free");
         await InstallPackage(ProApp, "pro");
-        var freeKey = await RegisterInstance(FreeInstance, $"{Source}/*@free");
-        var proKey = await RegisterInstance(ProInstance, $"{Source}/*@pro");
+        var freeKey = await RegisterInstance(FreeInstance, "free", $"{Source}/*");
+        var proKey = await RegisterInstance(ProInstance, "pro", $"{Source}/*");
 
         var app = await StartBundleHost();
         await using var _ = app;
@@ -222,24 +231,90 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
-    /// 🚨 No ladder, no licence. A registry without tier nodes cannot rank anything, so a
-    /// plan-scoped grant licenses NOTHING there — the fail-closed half of the rule, pinned so a
-    /// missing Store seed can never read as "every plan is all-access".
+    /// 🚨 No ladder, no widening. A registry without tier nodes cannot rank a paid plan, so an
+    /// instance on `pro` reads as the BASELINE there: the free package flows (a local self-registry
+    /// serves its free packages ladder or not), the pro one does not — pinned so a missing Store
+    /// seed can never read as "every plan is all-access".
     /// </summary>
     [Fact(Timeout = 300_000)]
-    public async Task WithoutTierNodes_APlanScopedGrantPullsNothing()
+    public async Task WithoutTierNodes_APaidPlanReadsAsTheBaseline()
     {
         await InstallPackage(FreeApp, "free");
-        var freeKey = await RegisterInstance(FreeInstance, $"{Source}/*@free");
+        await InstallPackage(ProApp, "pro");
+        var proKey = await RegisterInstance(ProInstance, "pro", $"{Source}/*");
 
         var app = await StartBundleHost();
         await using var _ = app;
 
-        using var index = await Get(app, IndexRoute, freeKey);
-        index.StatusCode.Should().Be(HttpStatusCode.OK, "the caller authenticates — it is entitled to nothing");
-        (await IndexedPlugins(index)).Should().BeEmpty(
-            "a plan the registry cannot rank licenses nothing, even the package's own tier");
-        using var refused = await Get(app, BundleRoute(FreeApp), freeKey);
+        // No ladder: "pro" cannot be ranked, so the pro package is not covered even for an instance
+        // that names that plan — while the baseline still flows, because "free" ranks at the
+        // baseline by definition (a local self-registry serves its free packages ladder or not).
+        using var index = await Get(app, IndexRoute, proKey);
+        index.StatusCode.Should().Be(HttpStatusCode.OK, "the caller authenticates");
+        var sees = await IndexedPlugins(index);
+        sees.Should().Contain(FreeApp, "the baseline needs no ladder");
+        sees.Should().NotContain(ProApp, "a tier the registry cannot rank is covered by nothing");
+        using var refused = await Get(app, BundleRoute(ProApp), proKey);
         refused.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    /// <summary>
+    /// 🚨 THE HOLE #2804 CLOSES. Every instance registered before the plan lane carries plan-less
+    /// grant entries (memex-cloud: <c>Plugins/*</c>), and "a plan-less entry covers every tier"
+    /// let them pull pro and enterprise bundles. Now the licence is the INSTANCE's plan, and an
+    /// instance whose record names none is on the baseline — free, not unlimited.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ALegacyPlanLessGrant_IsCappedByTheInstancePlan()
+    {
+        await SeedLadder();
+        await InstallPackage(FreeApp, "free");
+        await InstallPackage(ProApp, "pro");
+        var legacyKey = await RegisterInstance(FreeInstance, null, $"{Source}/*");
+
+        var app = await StartBundleHost();
+        await using var _ = app;
+
+        using var index = await Get(app, IndexRoute, legacyKey);
+        var sees = await IndexedPlugins(index);
+        sees.Should().Contain(FreeApp, "the baseline plan covers the free package");
+        sees.Should().NotContain(ProApp, "a plan-less grant on an instance with no plan is a FREE licence, not an unlimited one");
+        using var refused = await Get(app, BundleRoute(ProApp), legacyKey);
+        using var absent = await Get(app, BundleRoute(AbsentApp), legacyKey);
+        refused.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await refused.Content.ReadAsByteArrayAsync())
+            .Should().Equal(await absent.Content.ReadAsByteArrayAsync(), "indistinguishable from not-found");
+    }
+
+    /// <summary>
+    /// 🚨 PROMOTION IS ONE FIELD, AND IT TAKES EFFECT AT ONCE. A global admin sets the plan on the
+    /// instance record; the same process forgets its cached verdict, so the very next request is
+    /// decided with the new plan — no grant string edited, no cache window waited out.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task PromotingTheInstance_WidensTheNextRequest()
+    {
+        await SeedLadder();
+        await InstallPackage(FreeApp, "free");
+        await InstallPackage(ProApp, "pro");
+        var key = await RegisterInstance(FreeInstance, "free", $"{Source}/*");
+
+        var app = await StartBundleHost();
+        await using var _ = app;
+
+        using var before = await Get(app, BundleRoute(ProApp), key);
+        before.StatusCode.Should().Be(HttpStatusCode.NotFound, "on the free plan the pro package is not deployable");
+
+        // The promotion: the plan service the admin tab calls, against the record's own path. The
+        // bundle host above resolves through the mesh's registered authenticator, whose cache the
+        // promotion invalidates — so the next request already sees `pro`.
+        var plans = Mesh.ServiceProvider.GetRequiredService<InstancePlanService>();
+        await plans.SetPlan(InstancePath(FreeInstance), "pro")
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
+
+        using var after = await Get(app, BundleRoute(ProApp), key);
+        after.StatusCode.Should().Be(HttpStatusCode.OK, "the promoted instance pulls the pro package on its next request");
+        using var index = await Get(app, IndexRoute, key);
+        (await IndexedPlugins(index)).Should().Contain([FreeApp, ProApp]);
     }
 }

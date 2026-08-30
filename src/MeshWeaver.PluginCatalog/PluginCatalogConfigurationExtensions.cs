@@ -81,6 +81,9 @@ public static class PluginCatalogConfigurationExtensions
                 // read once per minute, on the caller, by the authenticator above. Mesh-scoped so
                 // the cache dies with the mesh.
                 .AddSingleton<PlanTierLadder>()
+                // The plan on the instance record — promoted by a global admin, read by every
+                // registry decision (#2804).
+                .AddSingleton<InstancePlanService>()
                 // Registration bootstrap keys (mwr_) — minted on the admin surface, validated by
                 // the /api/instances/register endpoint. Mesh-scoped like everything above.
                 .AddSingleton<RegistrationKeyService>()

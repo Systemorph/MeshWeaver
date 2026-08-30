@@ -36,14 +36,48 @@ public class SyncAccessTokenTest
     }
 
     [Fact]
-    public void TheTokenCarriesTheDistinguishingPrefix()
-        => Assert.StartsWith("mwa_", Mint(), StringComparison.Ordinal);
+    public void TheTokenIsAStandardJwt()
+    {
+        // header.payload.signature, HS256 declared in the header, the key named by `kid` — so any
+        // JWT tooling can read one and a second issuer can share the verifier (#2483).
+        var parts = Mint().Split('.');
+        Assert.Equal(3, parts.Length);
+        var header = System.Text.Json.JsonDocument.Parse(Base64Url(parts[0])).RootElement;
+        Assert.Equal(SyncAccessToken.Algorithm, header.GetProperty("alg").GetString());
+        Assert.Equal("JWT", header.GetProperty("typ").GetString());
+        Assert.Equal(SyncAccessToken.KeyId(Key), header.GetProperty("kid").GetString());
+        var payload = System.Text.Json.JsonDocument.Parse(Base64Url(parts[1])).RootElement;
+        Assert.Equal("manufacturing-ci", payload.GetProperty("sub").GetString());
+        Assert.Equal(SyncAccessToken.Audience, payload.GetProperty("aud").GetString());
+        Assert.Equal(Now.ToUnixTimeSeconds(), payload.GetProperty("iat").GetInt64());
+    }
+
+    [Fact]
+    public void AlgNoneIsRefused_TheHeaderNeverChoosesTheAlgorithm()
+    {
+        // The classic JWT forgery: strip the signature and declare `none`. The verifier honours
+        // only the algorithm THIS registry mints with, never the one the token asks for.
+        var parts = Mint().Split('.');
+        var noneHeader = Encode(System.Text.Encoding.UTF8.GetBytes("{\"alg\":\"none\",\"typ\":\"JWT\"}"));
+        Assert.Null(SyncAccessToken.Verify($"{noneHeader}.{parts[1]}.", Now, Key));
+        Assert.Null(SyncAccessToken.Verify($"{noneHeader}.{parts[1]}.{parts[2]}", Now, Key));
+    }
+
+    private static byte[] Base64Url(string segment)
+    {
+        var padded = segment.Replace('-', '+').Replace('_', '/');
+        return Convert.FromBase64String(padded.PadRight((padded.Length + 3) / 4 * 4, '='));
+    }
+
+    private static string Encode(byte[] bytes) =>
+        Convert.ToBase64String(bytes).Replace("+", "-").Replace("/", "_").TrimEnd('=');
 
     [Fact]
     public void PrefixesAreDisjoint_SoNoValidatorAcceptsAnothersCredential()
     {
-        // mwa_ (access) vs mwi_ (instance) vs mwr_ (registration) vs mw_ (personal). The instance
-        // extractor must not see a token, and the token extractor must not see an instance key.
+        // A JWT (three segments) vs mwi_ (instance) vs mwr_ (registration) vs mw_ (personal). The
+        // instance extractor must not see a token, and the token extractor must not see an
+        // instance key — recognition is by shape, and the shapes are disjoint.
         var token = Mint();
         var instanceKey = InstanceKeys.Generate();
 
@@ -70,9 +104,8 @@ public class SyncAccessTokenTest
     {
         // The whole point of signing: the scope and the instance id cannot be edited by the holder.
         var token = Mint(scope: ["Plugins/Publish"]);
-        var body = token["mwa_".Length..];
-        var dot = body.IndexOf('.');
-        var forged = "mwa_" + body[..dot].Replace('a', 'b') + body[dot..];
+        var parts = token.Split('.');
+        var forged = $"{parts[0]}.{parts[1].Replace('a', 'b')}.{parts[2]}";
 
         Assert.NotEqual(token, forged);
         Assert.Null(SyncAccessToken.Verify(forged, Now, Key));
@@ -81,12 +114,13 @@ public class SyncAccessTokenTest
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("mwa_")]
-    [InlineData("mwa_nodot")]
-    [InlineData("mwa_.onlysignature")]
-    [InlineData("mwa_payloadonly.")]
+    [InlineData("nodot")]
+    [InlineData("one.dot")]
+    [InlineData("..")]
+    [InlineData("a..c")]
     [InlineData("not-a-token-at-all")]
-    [InlineData("mwa_!!!not-base64!!!.@@@")]
+    [InlineData("!!!.@@@.###")]
+    [InlineData("eyJhbGciOiJIUzI1NiJ9.e30.notasignature")]
     public void MalformedTokensAreRejectedRatherThanThrowing(string candidate)
         => Assert.Null(SyncAccessToken.Verify(candidate, Now, Key));
 
