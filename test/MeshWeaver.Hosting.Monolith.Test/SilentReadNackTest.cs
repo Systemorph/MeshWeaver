@@ -144,20 +144,22 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
         switch (result)
         {
             case DeliveryFailureException { Failure: { } failure }:
+            {
                 failure.ErrorType.Should().Be(ErrorType.ShuttingDown,
                     "the owner is going away — this is retry-worthy, NOT an absence");
-            AnsweredByTheOwner(failure.Message ?? string.Empty, path).Should().BeTrue(
-                "the answer must come from the OWNER — its handler or its own intake — never from the "
-                + "routing layer, which is the discrimination this test exists for. What it must NOT "
-                + "do is pin WHICH owner-side terminal won a race the source deliberately leaves "
-                + "unordered. Got: " + failure.Message);
-            failure.Message.Should().Contain("shutting down",
-                "MeshNodeStreamCache.IsTransientOwnerFailure classifies by this marker; without it a "
-                + "long-lived stream consumer tears down instead of riding the recycle out");
-            failure.Message.Should().NotContain("No node found",
-                "that phrase turns a retryable stall into a PROVABLE absence (MeshNodeStreamCache"
-                + ".IsMissingNodeFailure) — the exact confusion this NACK exists to avoid");
+                AnsweredByTheOwner(failure.Message ?? string.Empty, path).Should().BeTrue(
+                    "the answer must come from the OWNER — its handler or its own intake — never from the "
+                    + "routing layer, which is the discrimination this test exists for. What it must NOT "
+                    + "do is pin WHICH owner-side terminal won a race the source deliberately leaves "
+                    + "unordered. Got: " + failure.Message);
+                failure.Message.Should().Contain("shutting down",
+                    "MeshNodeStreamCache.IsTransientOwnerFailure classifies by this marker; without it a "
+                    + "long-lived stream consumer tears down instead of riding the recycle out");
+                failure.Message.Should().NotContain("No node found",
+                    "that phrase turns a retryable stall into a PROVABLE absence (MeshNodeStreamCache"
+                    + ".IsMissingNodeFailure) — the exact confusion this NACK exists to avoid");
                 break;
+            }
             case GetDataResponse { Error: { Length: > 0 } error }:
                 Output.WriteLine($"[TEST] the fault arm won the race and answered terminally: {error}");
                 break;
@@ -179,7 +181,7 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
         // caller — all three go through NackSilentRead, so all three produce a DeliveryFailure with
         // ErrorType.ShuttingDown, this exact prefix, and the same retry instruction. Only the free
         // text differs. What the old assertion was FOR — "a routing NACK must not be able to
-        // satisfy this" — is what these two lines actually establish: the routing layer's failures
+        // satisfy this" — is what the checks in this arm actually establish: the routing layer's failures
         // carry ErrorType.NotFound or a bare exception message (RoutingServiceBase), never this
         // prefix and never the retry sentence.
     }
