@@ -14,6 +14,18 @@
 # Counts are produced by the guard's own scanner, with comments and string literals masked — so a
 # doc comment quoting the banned shape (this repo does that at length, on purpose, to explain WHY
 # it is banned) is not a site and must never be edited to satisfy a textual scan.
+#
+# 🚨 SEED AGAINST main's TIP, NOT YOUR BRANCH POINT. CI checks out the MERGE REF (main merged
+# into the PR head), so a file main gained after you branched is present when the guard runs but
+# absent from a seed taken locally — and the guard correctly reports it as a NEW SITE, reddening
+# a PR whose own diff never touched it. That is not a false positive; it is the seed being stale.
+# This file was re-seeded for exactly that reason after main gained
+# PodHubNotHereRefusalTest.cs and RecycledHubRefusalTest.cs mid-review. Merge main, re-run the
+# seed, and lower TotalBudget to match.
+#
+# The sweep PRs that only REMOVE sites deliberately do NOT touch this file: the guard reports a
+# shrunken count as `STALE (please tidy)` rather than failing, so concurrent batches never
+# collide here. One tidy PR reconciles the inventory at the end.
 memex/Memex.Portal.Shared/Api/InstanceRegistrationEndpoints.cs	1
 memex/Memex.Portal.Shared/Api/InstanceTokenEndpoints.cs	1
 memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs	4
@@ -88,6 +100,7 @@ test/MeshWeaver.Data.Test/ShutdownFailureRideOutTest.cs	1
 test/MeshWeaver.Data.Test/SyncHubGoneStreamDroppedTest.cs	1
 test/MeshWeaver.Data.Test/SyncStreamDisposalCompletionTest.cs	1
 test/MeshWeaver.Data.Test/TeardownPendingSubscribeGracefulTest.cs	2
+test/MeshWeaver.Data.Test/UnservedVerdictEvictionTest.cs	1
 test/MeshWeaver.GitSync.Test/ActivityErrorSurfacingTest.cs	8
 test/MeshWeaver.GitSync.Test/ActivityLiveProgressTest.cs	4
 test/MeshWeaver.GitSync.Test/ActivityOwnerCredentialTest.cs	9
@@ -222,6 +235,7 @@ test/MeshWeaver.Hosting.Orleans.Test/OrleansUnresolvableAreaNoWedgeTest.cs	1
 test/MeshWeaver.Hosting.Orleans.Test/OrleansUnresolvableNodeNoWedgeTest.cs	7
 test/MeshWeaver.Hosting.Orleans.Test/OversizedStreamMessageRefusedTest.cs	3
 test/MeshWeaver.Hosting.Orleans.Test/PartitionRootActivationTest.cs	1
+test/MeshWeaver.Hosting.Orleans.Test/PodHubNotHereRefusalTest.cs	4
 test/MeshWeaver.Hosting.Orleans.Test/RoutingGrainDeliveryRetryTest.cs	3
 test/MeshWeaver.Hosting.Orleans.Test/RoutingGrainPodHubDeliveryRetryTest.cs	3
 test/MeshWeaver.Hosting.Orleans.Test/RoutingGrainStreamPostBoundTest.cs	2
