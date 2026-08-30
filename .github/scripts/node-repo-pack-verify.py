@@ -165,6 +165,37 @@ def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
     return (1 if errors else 0), errors, notes
 
 
+def read_markers(directory: Path) -> set[str]:
+    """The modules with a well-formed built marker (`module-built-<module>` artifacts, merged)."""
+    found: set[str] = set()
+    if not directory.is_dir():
+        return found
+    for path in sorted(directory.rglob("*.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        module = doc.get("module") if isinstance(doc, dict) else None
+        if isinstance(module, str) and module and path.stem == module:
+            found.add(module)
+    return found
+
+
+def bundles_built(expected: list[str], built: set[str], declared: set[str] | None) -> tuple[bool, str]:
+    """(every selected bundle exists as an artifact, one line saying so). Independent of the
+    receipts and of the pack job's result on purpose: this is the claim a caller's gate depends on
+    when it only COMPOSES the bundles, and a red suite or a failed hand-over must not turn it
+    false. A sibling call's markers are set aside the same way as its receipts."""
+    want = set(expected)
+    if declared is not None:
+        built = {m for m in built if m in declared}
+    missing = sorted(want - built)
+    if missing:
+        return False, (f"bundles-built: false — {len(missing)} of {len(want)} selected bundle(s) "
+                       f"never became an artifact: " + ", ".join(missing))
+    return True, f"bundles-built: true — {len(want)} of {len(want)} selected bundle(s) exist as artifacts"
+
+
 def parse_declared(text: str) -> set[str] | None:
     """The caller's `modules:` input as it reaches the workflow — a JSON list of entries carrying
     `module`, a JSON list of names, or a whitespace-separated list. Empty ⇒ None (no filter)."""
@@ -290,6 +321,27 @@ def self_test() -> int:
         check("no receipts at all is a FAILURE, never a pass",
               code == 1 and any("no receipt directory" in e for e in errors), f"{errors}")
 
+        print("the built markers — 'the bundle exists' stays true through a red suite:")
+        b = Path(tmp) / "built"
+        b.mkdir()
+        for m in three:
+            (b / f"{m}.json").write_text(json.dumps({"module": m}), encoding="utf-8")
+        ok, line = bundles_built(three, read_markers(b), None)
+        check("every selected bundle has a marker ⇒ bundles-built true", ok and "true" in line, line)
+        code, errors, _ = run(d, three, "failure")
+        ok, _ = bundles_built(three, read_markers(b), None)
+        check("…and a FAILED pack job (its suite went red) keeps bundles-built TRUE while the "
+              "lane itself still fails", ok and code == 1, f"{errors}")
+        (b / "MeshWeaver.Mcp.json").unlink()
+        ok, line = bundles_built(three, read_markers(b), None)
+        check("a selected bundle with NO marker ⇒ bundles-built false, naming it",
+              not ok and "MeshWeaver.Mcp" in line, line)
+        (b / "MeshWeaver.Ghost.json").write_text(json.dumps({"module": "MeshWeaver.Ghost"}), encoding="utf-8")
+        ok, _ = bundles_built(["MeshWeaver.AI", "MeshWeaver.Teams"], read_markers(b), set(three))
+        check("a sibling call's marker is set aside like its receipt", ok)
+        ok, _ = bundles_built([], set(), None)
+        check("an empty selection has every bundle it needs ⇒ true", ok)
+
         print("the legitimate empty selection — and its own mutation:")
         empty = Path(tmp) / "empty"
         empty.mkdir()
@@ -320,7 +372,7 @@ def self_test() -> int:
               "skipped module bundle.")
         return 1
     print("\n✓ node-repo-pack-verify self-test: 2 green-run assertions, 10 mutations that must go "
-          "red, the two sibling-call receipts (well-formed and corrupt) that must NOT, and 5 empty-selection cases including the "
+          "red, the two sibling-call receipts (well-formed and corrupt) that must NOT, 5 built-marker cases, and 5 empty-selection cases including the "
           "scope=full contradiction lock — all green.")
     return 0
 
@@ -339,6 +391,11 @@ def main() -> int:
                    help="the caller's own `modules:` input (JSON entries or names). Receipts for "
                         "modules outside it belong to a sibling call in the same run and are set "
                         "aside, not counted. Empty ⇒ every receipt is this call's.")
+    p.add_argument("--built", default="",
+                   help="directory the module-built-* markers were merged into; with --github-output, "
+                        "writes bundles_built=true|false — the receipt-independent 'bundle exists' claim")
+    p.add_argument("--github-output", default="", dest="github_output",
+                   help="the $GITHUB_OUTPUT file to append bundles_built to")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     args = p.parse_args()
     if args.self_test:
@@ -352,6 +409,13 @@ def main() -> int:
     code, errors, notes = verify(expected, receipts, broken, args.pack_result,
                                  directory.is_dir(), args.scope, parse_declared(args.declared))
 
+    ok, line = bundles_built(expected, read_markers(Path(args.built)) if args.built else set(),
+                             parse_declared(args.declared))
+    if args.built:
+        notes.append(line)
+        if args.github_output:
+            with open(args.github_output, "a", encoding="utf-8") as fh:
+                fh.write(f"bundles_built={'true' if ok else 'false'}\n")
     for note in notes:
         print(f"✓ {note}")
     for error in errors:

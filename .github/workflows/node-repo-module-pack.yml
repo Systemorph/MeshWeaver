@@ -176,6 +176,17 @@ on:
       content-app-private-key:
         description: Private key (PEM) of that App.
         required: false
+    outputs:
+      bundles-built:
+        description: >
+          "true" when EVERY selected module bundle exists as an artifact — the module-built-<module>
+          markers, dropped right after the bundle upload and BEFORE the tests. This is the claim a
+          caller's gate should depend on when it only COMPOSES the bundles: a red suite in this call
+          must not read as "bundle missing" there (Plugins #937 — one AI flake turned both required
+          gates red). The lane's own stable context (`All selected bundles built`) still asserts the
+          receipts AND the pack job's result, so a failed suite keeps the lane red wherever the lane
+          itself is required.
+        value: ${{ jobs.verify.outputs.bundles-built }}
 
 jobs:
   # ─────────────────────── WHICH BUNDLES THIS DIFF CAN REACH ───────────────────────
@@ -411,26 +422,6 @@ jobs:
           -p:Version=${{ steps.identity.outputs.version }}
           ${REFS:+-p:MeshWeaverRefs=$REFS}
 
-      # 🚨 Only when THIS diff reaches the module (or on a full run): a floor-only entry — built
-      # because the caller's gates compose it — carries test=false from the selection, and its
-      # suite is skipped rather than answering a question nobody asked. The AI engine's suite
-      # (~13 min, 1,600 tests) ran on every PR that never touched AI until 2026-08-29.
-      - name: Run the module's tests, when it ships any
-        if: ${{ matrix.entry.test != false }}
-        env:
-          PROJECT: ${{ matrix.entry.project }}
-        run: |
-          set -euo pipefail
-          # A module's tests relocate WITH it (the Approvals precedent). Conventional sibling:
-          # src/<Module>.Test. Absent is fine; present and red is not.
-          tests="$(dirname "$PROJECT").Test"
-          if [ -d "$tests" ]; then
-            dotnet test "$tests" -c Release -warnaserror \
-              -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
-          else
-            echo "no test project at $tests — nothing to run"
-          fi
-
       # Publish materializes the module's PACKAGE dependencies beside the entry DLL — the SDK's
       # own answer to the runtime closure (framework-trimmed packages excluded, everything else
       # included), which the pack step's --deps-closure derivation selects from. A
@@ -513,6 +504,49 @@ jobs:
           path: ${{ runner.temp }}/bundles/*.module.nupkg
           if-no-files-found: error
 
+      # ───────────── THE BUILT MARKER — "the bundle exists", and nothing more ─────────────
+      # Dropped the moment the bundle artifact is up, BEFORE the tests and the hand-over, so a
+      # caller whose gates only COMPOSE this bundle can depend on the workflow's `bundles-built`
+      # output instead of this job's result: a red suite here must not read as "bundle missing"
+      # there. The receipt further down stays LAST — it still means the whole leg, tests and
+      # publish included, got here.
+      - name: Drop the built marker
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/built"
+          jq -n --arg p "${{ matrix.entry.package }}" --arg m "${{ matrix.entry.module }}" \
+                --arg v "${{ steps.identity.outputs.version }}" \
+             '{package:$p, module:$m, version:$v}' \
+             > "$RUNNER_TEMP/built/${{ matrix.entry.module }}.json"
+      - name: Upload the built marker
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-built-${{ matrix.entry.module }}
+          path: ${{ runner.temp }}/built/*.json
+          if-no-files-found: error
+
+      # 🚨 Only when THIS diff reaches the module (or on a full run): a floor-only entry — built
+      # because the caller's gates compose it — carries test=false from the selection, and its
+      # suite is skipped rather than answering a question nobody asked. The AI engine's suite
+      # (~13 min, 1,600 tests) ran on every PR that never touched AI until 2026-08-29.
+      # Runs AFTER the bundle artifact and its built marker exist and BEFORE the hand-over: a
+      # failing suite never publishes — and never un-builds.
+      - name: Run the module's tests, when it ships any
+        if: ${{ matrix.entry.test != false }}
+        env:
+          PROJECT: ${{ matrix.entry.project }}
+        run: |
+          set -euo pipefail
+          # A module's tests relocate WITH it (the Approvals precedent). Conventional sibling:
+          # src/<Module>.Test. Absent is fine; present and red is not.
+          tests="$(dirname "$PROJECT").Test"
+          if [ -d "$tests" ]; then
+            dotnet test "$tests" -c Release -warnaserror \
+              -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
+          else
+            echo "no test project at $tests — nothing to run"
+          fi
+
       # 🚨 The hand-over. Without it a module that has LEFT the platform repo is packed, versioned,
       # inspected — and reaches nobody, because a registry serves only bytes it holds. A missing
       # token here FAILS the job rather than skipping quietly: "published nothing" and "published
@@ -583,6 +617,8 @@ jobs:
     needs: [select, pack]
     if: always()
     runs-on: ubuntu-latest
+    outputs:
+      bundles-built: ${{ steps.verify.outputs.bundles_built }}
     steps:
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
@@ -602,7 +638,15 @@ jobs:
           pattern: module-pack-receipt-*
           merge-multiple: true
           path: ${{ runner.temp }}/receipts
+      - name: Collect the built markers
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          pattern: module-built-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/built
       - name: Exactly the selected bundles were built
+        id: verify
         env:
           EXPECTED: ${{ needs.select.outputs.selected }}
           PACK_RESULT: ${{ needs.pack.result }}
@@ -622,6 +666,7 @@ jobs:
             echo "::error title=Module bundles incomplete::the scope is FULL, so every one of the \
           $declared declared module(s) must be packed — but the selection named $COUNT. The \
           selection and the caller's matrix disagree."
+            echo "bundles_built=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           # 🚨 `select` itself failing must not read as "nothing was selected" — that would turn a
@@ -630,6 +675,7 @@ jobs:
             echo "::error title=Module bundles incomplete::the selection job reported \
           '${{ needs.select.result }}' — no module bundle was chosen, so none was built. Read that \
           job; nothing below can be trusted."
+            echo "bundles_built=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           # 🚨 `--declared`: artifacts are RUN-wide, so when a repo calls this workflow twice in
@@ -640,4 +686,6 @@ jobs:
             --receipts "$RUNNER_TEMP/receipts" \
             --pack-result "$PACK_RESULT" \
             --scope "$SCOPE" \
-            --declared "$DECLARED"
+            --declared "$DECLARED" \
+            --built "$RUNNER_TEMP/built" \
+            --github-output "$GITHUB_OUTPUT"
