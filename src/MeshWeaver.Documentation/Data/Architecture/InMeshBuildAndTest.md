@@ -260,14 +260,62 @@ answers "everything" satisfies rule 3 trivially and rebuilds the world; one that
 is a gate that tests nothing. Both look identical on a green day. Whatever replaces it must keep
 that self-test **and run it in CI**.
 
+## What retires: the compiled test scaffolding
+
+**Maintainer, 2026-08-30: *"we want to discontinue fixture project overall."***
+
+That is the concrete consequence of the three rules, not a separate initiative. `MeshWeaver.Fixture`
+and the two `TestBase` projects exist **only** to let compiled xUnit projects stand a mesh up
+in-process. In-mesh tests do not need one: the portal is already running, and the gate creates a
+`GateProbe` instance to execute a NodeType's `Tests` area on. When the tests move, the scaffolding
+has no callers left.
+
+**The footprint, measured:**
+
+| | `.csproj` referencing it |
+|---|---|
+| core | **26** |
+| Plugins | **39** |
+| **total** | **65** |
+
+`test/MeshWeaver.Fixture/` is `BaseFixture`, `HubTestBase`, `ServiceSetup`, `HubFactAttribute`,
+`AutoTestLoggingAttribute`, `FreshThread`, `FaultRecordBudget`, and the `IMeshQuery` /
+`IStorageAdapter` test extensions — all of it machinery for constructing and tearing down a mesh
+around a `[Fact]`. Alongside it sit `MeshWeaver.Hosting.Monolith.TestBase` (31 of the Plugins
+references) and `MeshWeaver.Hosting.Orleans.TestBase`.
+
+🚨 **This is the cross-repo coupling, and it dissolves rather than being ported.** Those 39 Plugins
+projects reach into a core checkout through `$(MeshWeaverRoot)` *because* their tests are compiled.
+An in-mesh test has no `ProjectReference` to anything — its source lives on a node and compiles in
+the portal — so retiring the fixture removes the reason the two repos are wired together at build
+time at all.
+
+**The order matters, and it is the opposite of tempting.** Do not delete the fixture and then find
+homes for its 65 dependents. Retire it *behind* the tests:
+
+1. move a project's tests to an in-mesh `Tests` area and prove they fail for the same reasons —
+   mutation-proved, not observed green;
+2. delete the compiled project;
+3. when a fixture file has no callers left, delete it;
+4. the project disappears when its last file does.
+
+🚨 **A compiled test project deleted before its in-mesh replacement exists is coverage lost in
+silence** — and this repo has spent the whole of 2026-08-30 on guards, assertions and classifiers
+that passed while checking nothing. The fixture's retirement is measured by *tests that still fail
+when the code breaks*, never by the reference count reaching zero.
+
+**And some of the 65 will not move**, for the same reasons modules do not: a test that exercises
+static assets, native interop, or a portal host has nothing to hang a `Tests` area on. Those want an
+explicit exemption recorded here, not a quiet `ProjectReference` that survives because nobody
+noticed it.
+
 ## What blocks "any plugin" today
 
 1. **44 module test projects** with no in-mesh equivalent. Each needs its module's source expressible
    as node source, or an explicit exemption on one of the grounds above.
-2. **The cross-repo `ProjectReference` web.** 31 `.csproj` files in Plugins reference core's
-   `MeshWeaver.Hosting.Monolith.TestBase` through `$(MeshWeaverRoot)`. That coupling exists *because*
-   the tests are compiled; in-mesh tests need no such reference, so it dissolves rather than being
-   ported.
+2. **The cross-repo `ProjectReference` web** — 65 projects reaching for `MeshWeaver.Fixture` and the
+   `TestBase` pair across `$(MeshWeaverRoot)`. See *What retires* above: it dissolves with the
+   fixture rather than being ported.
 3. **No in-mesh unit-test surface for non-NodeType code.** The `Tests` area contract is defined per
    NodeType. A module has no node to hang a `Tests` area on, so the first real piece of work is
    deciding what that surface is.
