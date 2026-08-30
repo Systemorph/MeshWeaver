@@ -31,6 +31,10 @@ public class LegacyUserPartitionRepairTest : IDisposable
 
     private readonly string _dir = Directory.CreateTempSubdirectory("legacy-user-repair").FullName;
 
+    // The adapter REQUIRES a registry (no unbounded fallback — issue #613); a per-class
+    // instance disposed with the test stands in for the mesh-scoped one.
+    private readonly MeshWeaver.Mesh.Threading.IoPoolRegistry _ioPools = new();
+
     // String enums like the hub options (state: "Active" must parse the same way it does live).
     private readonly JsonSerializerOptions _options = new(JsonSerializerDefaults.Web)
     {
@@ -38,7 +42,7 @@ public class LegacyUserPartitionRepairTest : IDisposable
     };
 
     private PersistenceService CreateService()
-        => new([new TestProvider(new FileSystemStorageAdapter(_dir))]);
+        => new([new TestProvider(new FileSystemStorageAdapter(_dir, _ioPools))]);
 
     private void SeedLegacyFile(string relativePath, string json)
     {
@@ -266,7 +270,7 @@ public class LegacyUserPartitionRepairTest : IDisposable
     {
         var persistence = new PersistenceService(
             [new NoLegacyPartitionProvider(
-                new ThrowsInsideLegacyPartitionAdapter(new FileSystemStorageAdapter(_dir)))]);
+                new ThrowsInsideLegacyPartitionAdapter(new FileSystemStorageAdapter(_dir, _ioPools)))]);
 
         // Before the existence guard this FAULTED with the 42P01 surrogate instead of answering.
         var node = await persistence.Read("Skill", _options).FirstAsync().ToTask();
@@ -276,6 +280,7 @@ public class LegacyUserPartitionRepairTest : IDisposable
 
     public void Dispose()
     {
+        _ioPools.Dispose();
         try
         {
             Directory.Delete(_dir, recursive: true);

@@ -26,7 +26,15 @@ public class CodeNodeRoundTripTests : IDisposable
     private static readonly JsonSerializerOptions Options = new();
     private readonly string _dir = Directory.CreateTempSubdirectory("mw-code-roundtrip-").FullName;
 
-    public void Dispose() => Directory.Delete(_dir, recursive: true);
+    // The adapter REQUIRES a registry (no unbounded fallback — issue #613); a per-class
+    // instance disposed with the test stands in for the mesh-scoped one.
+    private readonly MeshWeaver.Mesh.Threading.IoPoolRegistry _ioPools = new();
+
+    public void Dispose()
+    {
+        _ioPools.Dispose();
+        Directory.Delete(_dir, recursive: true);
+    }
 
     private static MeshNode CodeNode(string id, CodeConfiguration config) =>
         new(id, "Scripts") { Name = id, NodeType = "Code", Content = config };
@@ -85,7 +93,7 @@ public class CodeNodeRoundTripTests : IDisposable
     [Fact]
     public async Task ExecutableCodeNode_RoundTripsLosslessly_AsJson()
     {
-        var adapter = new FileSystemStorageAdapter(_dir);
+        var adapter = new FileSystemStorageAdapter(_dir, _ioPools);
         var node = CodeNode("exec", new CodeConfiguration
         {
             Code = "Console.WriteLine(\"hi\"); 1+1",
@@ -111,7 +119,7 @@ public class CodeNodeRoundTripTests : IDisposable
     [Fact]
     public async Task PureSourceCodeNode_KeepsItsCsFileForm()
     {
-        var adapter = new FileSystemStorageAdapter(_dir);
+        var adapter = new FileSystemStorageAdapter(_dir, _ioPools);
         var node = CodeNode("model", new CodeConfiguration { Code = "public record Person(string Name);" });
 
         await adapter.Write(node, Options).FirstAsync();
@@ -131,7 +139,7 @@ public class CodeNodeRoundTripTests : IDisposable
         // the next write (now carrying executable state) must flip it to .json AND remove the
         // stale .cs — the read side prefers .cs over .json, so a leftover .cs would shadow the
         // new file with the metadata-stripped version forever.
-        var adapter = new FileSystemStorageAdapter(_dir);
+        var adapter = new FileSystemStorageAdapter(_dir, _ioPools);
         await adapter.Write(CodeNode("cell", new CodeConfiguration { Code = "1+1" }), Options).FirstAsync();
         Assert.True(File.Exists(Path.Combine(_dir, "Scripts", "cell.cs")));
 

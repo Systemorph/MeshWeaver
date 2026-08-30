@@ -36,16 +36,23 @@ public class FileSystemVersionStore : IVersionQuery
     /// given data directory.
     /// </summary>
     /// <param name="baseDirectory">Data directory whose <c>.versions</c> subfolder holds the snapshots.</param>
+    /// <param name="ioPoolRegistry">
+    /// REQUIRED mesh-scoped registry; the <c>FileSystem</c> pool bridges async file I/O to
+    /// <c>IObservable</c>. No <see cref="IoPool.Unbounded"/> fallback — the unbounded pool is
+    /// ledgerless (<c>CurrentInFlight</c> is unconditionally 0), so a version write routed onto it
+    /// is invisible to the teardown drain (the issue #613 straggler source). See
+    /// <see cref="FileSystemStorageAdapter"/>'s constructor for the full rationale.
+    /// </param>
     /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing snapshots (e.g., to enable WriteIndented).</param>
-    /// <param name="ioPoolRegistry">Optional I/O pool registry; the <c>FileSystem</c> pool bridges async file I/O to <c>IObservable</c>. When <c>null</c>, the unbounded pool is used.</param>
     public FileSystemVersionStore(
         string baseDirectory,
-        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
-        IoPoolRegistry? ioPoolRegistry = null)
+        IoPoolRegistry ioPoolRegistry,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
     {
+        ArgumentNullException.ThrowIfNull(ioPoolRegistry);
         _versionsDirectory = Path.Combine(baseDirectory, ".versions");
         _writeOptionsModifier = writeOptionsModifier;
-        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+        _ioPool = ioPoolRegistry.Get(IoPoolNames.FileSystem);
     }
 
     /// <summary>

@@ -37,7 +37,11 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     private FileSystemStorageAdapter CreateStorageAdapter()
     {
         Directory.CreateDirectory(_testDirectory);
-        return new FileSystemStorageAdapter(_testDirectory);
+        // The mesh's own registry (registered by MeshBuilder.AddIoPools), so the adapter's file
+        // I/O is joined by the same teardown drain production uses — issue #613.
+        return new FileSystemStorageAdapter(
+            _testDirectory,
+            Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Threading.IoPoolRegistry>());
     }
 
     /// <summary>

@@ -8,6 +8,7 @@ using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -382,6 +383,26 @@ public static class PersistenceExtensions
     }
 
     /// <summary>
+    /// Resolves the mesh-scoped <see cref="IoPoolRegistry"/> from the provider, failing LOUDLY
+    /// when none is registered — never falling back to <see cref="IoPool.Unbounded"/>. The
+    /// unbounded pool is ledgerless by construction (<c>CurrentInFlight</c> is unconditionally 0),
+    /// so I/O routed onto it is invisible to <c>IoPoolRegistry.DrainAll()</c> and the silo
+    /// teardown join: a straggler file read can then enter hub construction while the mesh is
+    /// tearing down and fault on an unloaded collectible ALC (the issue #613 exit=139 family).
+    /// A missing registration is a wiring bug to surface at construction time, not to paper over.
+    /// </summary>
+    internal static IoPoolRegistry GetRequiredIoPoolRegistry(this IServiceProvider serviceProvider)
+        => serviceProvider.GetService<IoPoolRegistry>()
+           ?? throw new InvalidOperationException(
+               $"No {nameof(IoPoolRegistry)} is registered in this service provider. File-system " +
+               $"persistence bridges its file I/O through the mesh-scoped '{IoPoolNames.FileSystem}' " +
+               "pool so mesh teardown can cancel and join it; silently falling back to the " +
+               "ledgerless unbounded pool would make that I/O invisible to the teardown drain " +
+               "(the issue #613 teardown-crash straggler source). Register the pools via " +
+               $"{nameof(IoPoolServiceCollectionExtensions)}.{nameof(IoPoolServiceCollectionExtensions.AddIoPools)}() " +
+               "— MeshBuilder does this by default — before adding file-system persistence.");
+
+    /// <summary>
     /// Adds file system persistence that reads directly from disk.
     /// Uses the hub's JsonSerializerOptions for proper type polymorphism.
     /// </summary>
@@ -395,10 +416,16 @@ public static class PersistenceExtensions
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
     {
         // Factory, not an eager instance: module-contributed parsers (the AI module's agent
-        // parser) can only be resolved from the provider, and without them every `.md` carrying
-        // `nodeType: Agent` degrades to a plain Markdown node with no error anywhere.
+        // parser) and the mesh-scoped IoPoolRegistry can only be resolved from the provider.
+        // Without the parsers every `.md` carrying `nodeType: Agent` degrades to a plain Markdown
+        // node with no error anywhere; without the registry the adapter's file I/O would run on
+        // the ledgerless unbounded pool, invisible to the teardown drain (issue #613) — so the
+        // registry is resolved LOUDLY, and the logger keeps the change feed's fan-out faults visible.
         services.AddSingleton<IStorageAdapter>(sp => new FileSystemStorageAdapter(
-            baseDirectory, writeOptionsModifier,
+            baseDirectory,
+            sp.GetRequiredIoPoolRegistry(),
+            writeOptionsModifier,
+            logger: sp.GetService<ILoggerFactory>()?.CreateLogger<FileSystemStorageAdapter>(),
             contributedParsers: sp.GetServices<Parsers.IFileFormatParser>()));
 
         // Register common services and wrapper services
@@ -419,8 +446,11 @@ public static class PersistenceExtensions
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<IStorageAdapter>(sp => new CachingStorageAdapter(
-                baseDirectory, writeOptionsModifier,
-                logger: sp.GetService<Microsoft.Extensions.Logging.ILogger<CachingStorageAdapter>>()));
+                baseDirectory,
+                sp.GetRequiredIoPoolRegistry(),
+                writeOptionsModifier,
+                logger: sp.GetService<Microsoft.Extensions.Logging.ILogger<CachingStorageAdapter>>(),
+                contributedParsers: sp.GetServices<Parsers.IFileFormatParser>()));
             return services.AddCoreAndWrapperServices();
         });
         return builder.RegisterMeshQueryCoreOnMeshHub();
@@ -538,11 +568,21 @@ public static class PersistenceExtensions
                 priority: 150));
 
         // One shared FileSystemStorageAdapter + wildcard provider — handles every
-        // first-segment partition rooted at baseDirectory. No factory, no per-segment
-        // store provisioning.
-        var fsAdapter = new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier);
-        services.AddSingleton(fsAdapter);
-        services.AddSingleton<IPartitionStorageProvider>(new FileSystemPartitionStorageProvider(fsAdapter));
+        // first-segment partition rooted at baseDirectory. No per-segment store
+        // provisioning. A DI factory (not an eager instance) because the mesh-scoped
+        // IoPoolRegistry, the logger and the module-contributed parsers only exist on
+        // the provider — the former eager `new` here dropped ALL three, so every read
+        // and write of a partitioned file-system mesh ran on the ledgerless unbounded
+        // pool (invisible to the teardown drain, issue #613) and change-feed fan-out
+        // faults were swallowed silently.
+        services.AddSingleton(sp => new FileSystemStorageAdapter(
+            baseDirectory,
+            sp.GetRequiredIoPoolRegistry(),
+            writeOptionsModifier,
+            logger: sp.GetService<ILoggerFactory>()?.CreateLogger<FileSystemStorageAdapter>(),
+            contributedParsers: sp.GetServices<Parsers.IFileFormatParser>()));
+        services.AddSingleton<IPartitionStorageProvider>(sp =>
+            new FileSystemPartitionStorageProvider(sp.GetRequiredService<FileSystemStorageAdapter>()));
 
         // Default IAssemblyStore so dynamic NodeType compiles can persist their
         // bytes cross-silo; see RegisterDefaultAssemblyStore for the rationale.
@@ -728,7 +768,7 @@ public static class PersistenceExtensions
             var inner = sp.GetKeyedService<IStorageAdapter>(InnerStorageAdapterKey)
                         ?? sp.GetService<IStorageAdapter>();
             if (inner is FileSystemStorageAdapter fsAdapter)
-                return new FileSystemVersionStore(fsAdapter.BaseDirectory);
+                return new FileSystemVersionStore(fsAdapter.BaseDirectory, sp.GetRequiredIoPoolRegistry());
             return new NoOpVersionQuery();
         });
 

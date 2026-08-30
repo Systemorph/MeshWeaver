@@ -61,20 +61,31 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// Creates a new FileSystemStorageAdapter.
     /// </summary>
     /// <param name="baseDirectory">Base directory for file storage</param>
+    /// <param name="ioPoolRegistry">
+    /// REQUIRED mesh-scoped registry — the <c>FileSystem</c> pool bridges async file I/O to
+    /// <c>IObservable</c>. 🚨 This parameter used to be optional with an <see cref="IoPool.Unbounded"/>
+    /// fallback, and every construction site silently dropped it: the FutuRe sample (the one
+    /// file-system-data-source-backed space) ran ALL of its file I/O on the ledgerless unbounded pool,
+    /// whose <c>CurrentInFlight</c> is unconditionally 0 — invisible to <c>IoPoolRegistry.DrainAll()</c>
+    /// and the silo teardown join, so a straggler Read could enter hub construction during teardown and
+    /// fault on an unloaded collectible ALC (the issue #613 exit=139 family). Required-by-constructor
+    /// makes the compiler name every dropping site; there is deliberately no unbounded opt-out.
+    /// </param>
     /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing (e.g., to enable WriteIndented)</param>
-    /// <param name="ioPoolRegistry">Optional I/O pool registry; the <c>FileSystem</c> pool bridges async file I/O to <c>IObservable</c>. When <c>null</c>, the unbounded pool is used.</param>
     /// <param name="logger">Optional logger — the change feed uses it to surface a subscriber that throws during fan-out (without it, the isolation would swallow the fault silently).</param>
+    /// <param name="contributedParsers">Module-contributed file-format parsers (see the field comment above — without them agent files silently degrade).</param>
     public FileSystemStorageAdapter(
         string baseDirectory,
+        IoPoolRegistry ioPoolRegistry,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null,
-        IoPoolRegistry? ioPoolRegistry = null,
         Microsoft.Extensions.Logging.ILogger? logger = null,
         IEnumerable<Parsers.IFileFormatParser>? contributedParsers = null)
     {
+        ArgumentNullException.ThrowIfNull(ioPoolRegistry);
         _parserRegistry = new FileFormatParserRegistry(contributedParsers: contributedParsers);
         _baseDirectory = baseDirectory;
         _writeOptionsModifier = writeOptionsModifier;
-        _ioPool = ioPoolRegistry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+        _ioPool = ioPoolRegistry.Get(IoPoolNames.FileSystem);
         _changes = new IsolatedChangeFeed(logger, "file-system");
         Directory.CreateDirectory(baseDirectory);
     }
