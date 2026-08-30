@@ -27,8 +27,12 @@ namespace MeshWeaver.Hosting.Test;
 /// failures by message text, and a casual reword silently restores #2727 (nothing fails to
 /// compile; the caller merely stops retrying).</para>
 /// </summary>
-public class RecycledHubRefusalTest(ITestOutputHelper output) : HubTestBase(output)
+public class RecycledHubRefusalTest : HubTestBase
 {
+    private readonly ITestOutputHelper output;
+
+    public RecycledHubRefusalTest(ITestOutputHelper output) : base(output) => this.output = output;
+
     private static ObjectDisposedException DisposedScope() =>
         new("LifetimeScope",
             "Instances cannot be resolved and nested lifetimes cannot be created from this "
