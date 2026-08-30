@@ -456,9 +456,14 @@ public async Task MeshNodeCache_Identity_CannotWrite()
 {
     using (accessService.SwitchAccessContext(new AccessContext { ObjectId = "cache/mesh-node-cache" }))
     {
-        var act = () => meshService.CreateNode(someNode).ToTask();
-        await act.Should().ThrowAsync<UnauthorizedAccessException>()
-            .Where(ex => ex.Message.Contains("Access denied"));
+        // 🚨 Materialize, not act.Should().ThrowAsync() over an Rx ToTask bridge:
+        // ToTask is forbidden repo-wide (2026-08-30), and folding OnError into a
+        // value keeps the ORIGINAL exception type assertable. The write is cold, so
+        // the assertion's Subscribe IS the write.
+        var error = await meshService.CreateNode(someNode).Take(1).Materialize()
+            .Should().Match(n => n.Kind == NotificationKind.OnError);
+        error.Exception.Should().BeOfType<UnauthorizedAccessException>();
+        error.Exception!.Message.Should().Contain("Access denied");
     }
 }
 ```

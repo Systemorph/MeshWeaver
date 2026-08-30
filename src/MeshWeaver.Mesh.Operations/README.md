@@ -27,8 +27,14 @@ platform, and this had to stop travelling with it.
 ## Everything returns `IObservable<T>`
 
 Never `Task<T>`. The mesh is an actor-hub system: `await` on hub-backed work deadlocks the
-single-threaded action block. Callers subscribe (`.Subscribe(onNext, onError)`) or bridge at an
-external boundary (`.FirstAsync().ToTask()` in an MCP/REST adapter) — never inside hub flow. See
+single-threaded action block. Callers subscribe (`.Subscribe(onNext, onError)`) — and where an
+external signature (an MCP/REST adapter) genuinely hands back a `Task<T>`, they bridge with
+`.FirstAsync().ObserveCompletion(reportLateFault, ct)`, never inside hub flow.
+
+🚨 **Never `.ToTask()`** — forbidden repo-wide as of 2026-08-30, `test/**` included — and never a
+bare `await someObservable` either: Rx's bridge and Rx's own awaiter both resume the caller inline on
+the thread that signalled. `ReactiveCompletion.ObserveCompletion` completes with
+`RunContinuationsAsynchronously` and keeps its error arm attached. See
 `Doc/Architecture/AsynchronousCalls`.
 
 ## Reading a node that may not be there

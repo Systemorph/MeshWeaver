@@ -101,7 +101,7 @@ The rebuilt suite makes each test single-variable, and demands a leak before bel
 ```csharp
 // ── Control: without the policy the slide MUST reach the listener. ──
 probe.Reset();
-await renderer.Render(WithoutPolicy(html)).FirstAsync().ToTask();
+await renderer.Render(WithoutPolicy(html)).Should().Emit();
 var leaked = probe.Connections;
 leaked.Should().BeGreaterThan(0,
     "the control must demonstrate the vector is real — a slide CAN otherwise make the "
@@ -110,7 +110,7 @@ leaked.Should().BeGreaterThan(0,
 
 // ── Protected: the composed document must reach nothing. ──
 probe.Reset();
-var pdf = await renderer.Render(html).FirstAsync().ToTask();
+var pdf = await renderer.Render(html).Should().Emit();
 probe.Connections.Should().Be(0, "…this is the SSRF surface…");
 ```
 

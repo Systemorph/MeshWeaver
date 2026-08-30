@@ -189,8 +189,10 @@ The ordering traps that produce this shape:
 - **The Orleans silo is itself a hosted service**, so it stops before the mesh drains:
   `silo stops → grains deactivate → every Unload() → only THEN the mesh drains`.
   `IoPoolSiloTeardown` subscribes at `ServiceLifecycleStage.First` ⇒ **stops LAST**, and composes
-  `registry.Disposed` into **one** `.ToTask()` at the `ILifecycleObserver` boundary — the only
-  sanctioned place a Task appears.
+  `registry.Disposed` into **one** `ReactiveCompletion.ObserveCompletion(reportLateFault, ct)` at
+  the `ILifecycleObserver` boundary — the only sanctioned place a Task appears, and never Rx's
+  `.ToTask()` (forbidden repo-wide, 2026-08-30): that bridge resumes its caller INLINE on the
+  signalling thread — here, the very lifecycle thread the unload is waiting on.
 - **A blocking `Dispose()` is not the fix.** Making `IoPool.Dispose()` join first *hangs* — `using
   var pool = …` in an async method runs Dispose on a ThreadPool thread and blocks it for the whole
   `DrainTimeout`. An 18-core dev box hides it completely. The shape that works:

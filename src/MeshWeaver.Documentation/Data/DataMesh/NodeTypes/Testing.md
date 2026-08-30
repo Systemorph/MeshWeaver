@@ -169,7 +169,7 @@ See `TodoViewsTest.CreateArea_WithTypeParam_ShouldRenderCreateForm` for a comple
 
 ## Archetype 2 — request/response and simulation
 
-When your node type registers a custom handler — for example `config.WithHandler<RunSimulationRequest>(HandleRunSimulation)` in `Source/MyHub.cs` — test it through the test base's `AwaitResponseAsync<TResponse>(request, o => o.WithTarget(address), hub: client)` (the sanctioned `hub.Observe(...).FirstAsync().ToTask(ct)` bridge — `AwaitResponse` itself is `[Obsolete]` and deadlocks). This exercises the real routing and serialization path, not a mocked seam.
+When your node type registers a custom handler — for example `config.WithHandler<RunSimulationRequest>(HandleRunSimulation)` in `Source/MyHub.cs` — test it through the test base's `AwaitResponseAsync<TResponse>(request, o => o.WithTarget(address), hub: client)`, or assert on the observable directly — `await client.Observe(request, o => o.WithTarget(address)).Should().Emit()`, which owns the wait. Do **not** hand-roll `hub.Observe(...).FirstAsync().ToTask(ct)`: `.ToTask()` is forbidden repo-wide as of 2026-08-30, `test/**` included, and `AwaitResponse` itself is `[Obsolete]` and deadlocks. Either sanctioned form exercises the real routing and serialization path, not a mocked seam.
 
 ```csharp
 [Fact(Timeout = 15_000)]

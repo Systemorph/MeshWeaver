@@ -465,9 +465,17 @@ The pattern inside scripts (and inside any worker hub doing long-running work):
   await Mesh.GetWorkspace()
       .GetMeshNodeStream("rbuergi/downstream-job")
       .Where(n => (n?.Content as JobContent)?.Status == JobStatus.Succeeded)
-      .Take(1)
-      .ToTask(Ct);                          // ← cancels via Activity Control Plane
+      .FirstAsync()                         // ← not .Take(1): an empty completion must FAULT
+      .ObserveCompletion(                   //   rather than settle silently
+          ex => Log.LogWarning(ex, "downstream watch faulted AFTER the wait settled"),
+          Ct);                              // ← cancels via Activity Control Plane
   ```
+
+  🚨 `ObserveCompletion` (`MeshWeaver.Messaging`, imported by default in scripts), never
+  `.ToTask(Ct)` — forbidden repo-wide as of 2026-08-30 — and never a bare `await someObservable`
+  either. Rx's bridge and Rx's own awaiter both resume the rest of the script INLINE on the mesh
+  thread that signalled; `ObserveCompletion` completes with `RunContinuationsAsynchronously`, so the
+  hub thread is released the moment it signals.
 
 - For compute-heavy steps with no natural log lines, an `Observable.Interval` heartbeat keeps the user informed:
 
@@ -548,16 +556,24 @@ var md       = (src?.Content as MarkdownContent)?.Content ?? "";
 Log.LogInformation("Resolving branding");
 var branding = await Mesh.GetWorkspace()
     .GetMeshNodeStream(inputs.BrandNodePath)
-    .Where(n => n is not null).Take(1)
+    .Where(n => n is not null)
     .Select(n => (n!.Content as CorporateIdentity).ToOptions())
-    .ToTask(Ct);   // top-level await is OK in a kernel Script
+    .FirstAsync()
+    // A top-level await is fine in a kernel Script; the BRIDGE is what is constrained —
+    // ObserveCompletion, never Rx's ToTask and never a bare `await someObservable`.
+    .ObserveCompletion(
+        ex => Log.LogWarning(ex, "branding read faulted AFTER the wait settled"),
+        Ct);
 
 Log.LogInformation("Rendering");
 var doc   = new DocumentBuilder().Build(src!.Name, [(src.Name, md)], inputs.Options, branding);
 // The PDF renderer composes the document into print HTML and prints it with the headless
 // browser, so it returns a COLD IObservable<byte[]> — the work runs on subscription.
 var bytes = await Mesh.ServiceProvider.GetRequiredService<PdfDocumentRenderer>()
-    .Render(doc).FirstAsync().ToTask(Ct);
+    .Render(doc).FirstAsync()
+    .ObserveCompletion(
+        ex => Log.LogWarning(ex, "PDF render faulted AFTER the wait settled"),
+        Ct);
 
 Log.LogInformation("Writing {Bytes} bytes to content collection", bytes.Length);
 var outputPath = $"{inputs.TargetCollection}/{Sanitize(src.Name)}.pdf";
