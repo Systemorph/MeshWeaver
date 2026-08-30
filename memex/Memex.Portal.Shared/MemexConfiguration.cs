@@ -422,6 +422,15 @@ public static class MemexConfiguration
             // unhandled 500 on the FIRST sign-in, naming the URL instead of the key to fix. Named
             // here at boot instead.
             MicrosoftTenant.Validate(configuration[MicrosoftTenant.ConfigurationKey]);
+            // 🚨 Fail fast on an install that CLAIMS mail it cannot send (#2636, #2637):
+            // Email:Enabled=true with the section incomplete. Same two rules as the tenant guard
+            // above — a blank/disabled section is "never configured" and passes (aborting on an
+            // unconfigured optional integration is the #2510 failure), while enabled-but-incomplete
+            // is a real misconfiguration and is named here. On memex it produced a portal that
+            // served perfectly, reported mail as ON, and dropped every invitation and notification
+            // into a queue nobody watches. Inert configuration data only — nothing is resolved and
+            // no credential is constructed, which is the property #2510 turned on.
+            EmailConfigurationGuard.Validate(configuration);
             if (contentStorageConfig != null)
             {
                 // Resolve relative path to absolute
