@@ -111,7 +111,11 @@ jobs:
           cp "$RUNNER_TEMP/formula/memex-local.rb" "$(brew --repo memex-ci/local)/Formula/"
           brew install --formula memex-ci/local/memex-local
           # Positive signal: the wrapper is on PATH and runs THIS version, not a cached bottle.
-          memex-local version | tee /dev/stderr | grep -q "memex-local 0.2"
+          # 🚨 Capture, then grep — never `memex-local … | grep -q`. grep -q exits on its first
+          # match and closes the pipe; the CLI's next printf then dies with EPIPE ("write error:
+          # Broken pipe"), and under pipefail the step fails on a command that had succeeded.
+          out="$(memex-local version)"; echo "$out"
+          grep -q "memex-local 0.2" <<<"$out"
 
       - name: brew test + audit
         run: |
@@ -129,12 +133,15 @@ jobs:
           MEMEX_LOCAL_HOME: ${{ runner.temp }}/memex-home
         run: |
           set -euo pipefail
-          memex-local help | grep -q "USAGE"
-          memex-local doctor | tee "$RUNNER_TEMP/doctor.txt"
+          # Every check captures first and greps the capture (see the install step: a `| grep -q`
+          # on the CLI's stdout is an EPIPE waiting to happen).
+          memex-local help > "$RUNNER_TEMP/help.txt"
+          grep -q "USAGE" "$RUNNER_TEMP/help.txt"
+          memex-local doctor > "$RUNNER_TEMP/doctor.txt"; cat "$RUNNER_TEMP/doctor.txt"
           grep -q "chart:" "$RUNNER_TEMP/doctor.txt"      # the vendored chart resolved
           grep -q "SELF-REGISTRY" "$RUNNER_TEMP/doctor.txt"
           memex-local registry https://memex.example.test --key mwr_ci-gate-key --id ci-gate
-          memex-local registry status | tee "$RUNNER_TEMP/registry.txt"
+          memex-local registry status > "$RUNNER_TEMP/registry.txt"; cat "$RUNNER_TEMP/registry.txt"
           grep -q "REGISTRY MODE" "$RUNNER_TEMP/registry.txt"
           grep -q "ci-gate" "$RUNNER_TEMP/registry.txt"
           if grep -q "mwr_ci-gate-key" "$RUNNER_TEMP/registry.txt"; then
@@ -142,7 +149,8 @@ jobs:
           fi
           [ "$(stat -f '%Lp' "$MEMEX_LOCAL_HOME/registry.yaml")" = "600" ]
           memex-local registry off
-          memex-local registry status | grep -q "SELF-REGISTRY"
+          memex-local registry status > "$RUNNER_TEMP/registry-off.txt"
+          grep -q "SELF-REGISTRY" "$RUNNER_TEMP/registry-off.txt"
           # An instance key must be refused by NAME, not by a 401 on first boot.
           if memex-local registry https://memex.example.test --key mwi_not-a-registration-key 2>"$RUNNER_TEMP/err.txt"; then
             echo "::error::an instance key was accepted as a registration key"; exit 1
