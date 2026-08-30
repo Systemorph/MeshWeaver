@@ -144,10 +144,10 @@ with the same tick as a passed one. So:
   any verdict is trusted. `chart-drift` learned this on 2026-08-17, when a provisioned-but-dead
   credential passed an emptiness test and every run afterwards died at checkout while the gate
   reported its inputs were fine;
-- the checker's **self-test runs first** and fails the job. Sixteen cases prove it fires on each
-  defect — a changed word, dropped emphasis, a missing block, a removed marker, a renamed slot, an
-  undeclared slot invented in `AGENTS.md`, prose moved *into* a slot to dodge the comparison — and
-  stays silent on each legitimate difference, including a re-wrap;
+- the checker's **self-test runs first** and fails the job. Eighteen cases prove it fires on each
+  defect — a changed word, dropped emphasis, a missing block, a removed or unbalanced marker, a
+  renamed slot, an undeclared slot invented in `AGENTS.md`, prose moved *into* a slot to dodge the
+  comparison — and stays silent on each legitimate difference, including a re-wrap;
 - there is no `continue-on-error:`, no input-shaped `if:`, and no path filter;
 - every unreadable input is a failure. An unfetchable repo, a hub whose own copy is missing, an
   empty register and an unparseable register are each red, because a gate that reports "no drift"

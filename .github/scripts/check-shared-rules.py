@@ -108,9 +108,17 @@ def canonicalise(region: str, block_id: str, declared_slots: list[str]) -> tuple
     exactly like a changed word — only the slot's CONTENT is exempt.
     """
     seen: list[str] = []
-    unmatched_open = SLOT_OPEN.sub("", SLOT.sub("", region))
-    if SLOT_OPEN.search(unmatched_open) or SLOT_CLOSE.search(unmatched_open):
-        raise Problem(f"block '{block_id}' has an unbalanced <!--slot:…--> / <!--/slot--> pair")
+    # Remove the well-formed pairs; anything of either shape still standing is unbalanced.
+    # (Do NOT also strip the leftovers before testing — that was this check's first form, and it
+    # made the open-marker half of the condition dead: it deleted the very markers it then looked
+    # for, so a stray <!--slot:x--> with no close reached the comparison unreported.)
+    residual = SLOT.sub("", region)
+    stray_open = SLOT_OPEN.search(residual)
+    stray_close = SLOT_CLOSE.search(residual)
+    if stray_open or stray_close:
+        which = f"<!--slot:{stray_open.group(1)}--> with no <!--/slot-->" if stray_open \
+            else "<!--/slot--> with no opening <!--slot:…-->"
+        raise Problem(f"block '{block_id}' has an unbalanced slot marker: {which}")
 
     contents: dict[str, str] = {}
 
@@ -365,6 +373,11 @@ def self_test() -> int:
             _HUB + "<!-- shared-rule:begin ghost -->x<!-- shared-rule:end ghost -->\n",
             True,
         ),
+        # The two below are why the balance check does not strip what it is about to look for.
+        # An earlier form of it did, which made the open-marker half dead: a stray opener was
+        # deleted and then searched for, so it was never reported.
+        ("slot opener with no closer", _HUB.replace("<!--/slot-->", ""), True),
+        ("slot closer with no opener", _HUB.replace("<!--slot:home-->", ""), True),
     ]
 
     bad = 0
