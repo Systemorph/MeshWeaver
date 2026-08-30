@@ -1,5 +1,7 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -68,19 +70,23 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
         var primary = nodeHub!.GetWorkspace().DataContext
             .GetDataSourceForType(typeof(MeshNode))!
             .GetStreamForPartition(null)!;
-        using var gateEntered = new ManualResetEventSlim(false);
-        using var releaseGate = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate. The turn → test signal is an AsyncSubject the parked turn
+        // completes; the release travels back INTO that deliberately parked executor turn, so it
+        // is a volatile flag polled under a bounded SpinUntil and written in the `finally` below.
+        var gateEntered = new AsyncSubject<Unit>();
+        var releaseGate = 0;
         primary.Update((Func<EntityStore?, ChangeItem<EntityStore>?>)(_ =>
         {
-            gateEntered.Set();
-            releaseGate.Wait(TimeSpan.FromSeconds(60));
+            gateEntered.OnNext(Unit.Default);
+            gateEntered.OnCompleted();
+            SpinWait.SpinUntil(() => Volatile.Read(ref releaseGate) == 1, TimeSpan.FromSeconds(60));
             return null;
         }), _ => { });
-        gateEntered.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue(
-            "the gated turn must be running on the primary stream's executor before the write");
-
         try
         {
+            await gateEntered.Should().Within(10.Seconds()).Emit(
+                "the gated turn must be running on the primary stream's executor before the write");
+
             // Cross-hub cache write — the production mirror path (UpdateRemote via the
             // per-path queue). With the owner's merge parked, no verdict can arrive inside the
             // caller's response bound, so the caller is NOT settled here (#2661): it stays open
@@ -138,7 +144,7 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
         }
         finally
         {
-            releaseGate.Set();
+            Volatile.Write(ref releaseGate, 1);
         }
     }
 }

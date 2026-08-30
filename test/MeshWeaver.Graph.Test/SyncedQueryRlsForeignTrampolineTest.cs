@@ -81,7 +81,10 @@ public class SyncedQueryRlsForeignTrampolineTest
         // point: it reproduces the delivery thread a live upstream emission actually arrives on.
         var upstream = Observable.Return<IEnumerable<MeshNode>>(snapshot);
 
-        using var arrived = new ManualResetEventSlim(false);
+        // 🚨 A volatile flag, not a hand-woven gate. Blocking the trampoline frame IS the subject
+        // (see below); a flag polled under a bounded SpinUntil says exactly that, with no kernel
+        // handle to dispose and no observable→blocking bridge.
+        var arrived = 0;
         IEnumerable<MeshNode>? filtered = null;
         var insideTrampoline = false;
 
@@ -92,13 +95,13 @@ public class SyncedQueryRlsForeignTrampolineTest
             insideTrampoline = !CurrentThreadScheduler.IsScheduleRequired;
             using var sub = SyncedQueryDataSourceExtensions
                 .FilterByReadPermission(upstream, _ => Observable.Return(granted))
-                .Subscribe(result => { filtered = result; arrived.Set(); });
+                .Subscribe(result => { filtered = result; Volatile.Write(ref arrived, 1); });
 
             // 🚨 Blocking HERE is the point, not a shortcut: the stranded iteration could only ever
             // run after this frame returns to the trampoline that owns it, so a caller that waits
             // for its own snapshot is the shape that deadlocked. A budget generous enough that only
             // a never-scheduled iteration can exhaust it — this work is microseconds.
-            Assert.True(arrived.Wait(TimeSpan.FromSeconds(5)),
+            Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref arrived) == 1, TimeSpan.FromSeconds(5)),
                 $"the filtered snapshot never arrived for {nodeCount} node(s) — the per-node "
                 + "iteration was queued on the caller's trampoline instead of running inline, so it "
                 + "can never run (#2087)");

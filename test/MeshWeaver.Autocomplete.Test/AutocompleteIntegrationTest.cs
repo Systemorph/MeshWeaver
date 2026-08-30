@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Reactive;
@@ -424,7 +426,7 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
     /// Not a pass/fail check — just timing diagnostics.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public void TimingAnalysis_OrchestratorScenarios_RecordsLatencies()
+    public async Task TimingAnalysis_OrchestratorScenarios_RecordsLatencies()
     {
         var scenarios = new (string Label, string Query, string? Context)[]
         {
@@ -443,7 +445,7 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
         foreach (var (label, query, context) in scenarios)
         {
             var (firstBatchMs, perCategoryMs, completedMs) =
-                MeasureCompletionTimings(query, context);
+                await MeasureCompletionTimings(query, context);
 
             var perCategory = string.Join(", ",
                 perCategoryMs.Select(kv => $"{kv.Key}={kv.Value:F0}"));
@@ -453,7 +455,7 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
         }
     }
 
-    private (double FirstBatchMs, IDictionary<string, double> PerCategoryMs, double CompletedMs)
+    private async Task<(double FirstBatchMs, IDictionary<string, double> PerCategoryMs, double CompletedMs)>
         MeasureCompletionTimings(string query, string? context)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -461,10 +463,19 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
         var completedMs = -1.0;
         var perCategory = new Dictionary<string, double>();
 
-        // Pure synchronous Subscribe + gate — measures the live observable's batch
-        // timings without bridging through a Task ("nothing async ever"). The gate
-        // releases on OnCompleted/OnError; a 15s cap matches the previous WaitAsync.
-        using var gate = new System.Threading.ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate: `finished` is an AsyncSubject the subscription completes and the
+        // helper awaits reactively. Every timing is still stamped INSIDE the callbacks, off
+        // `sw.Elapsed`, so what is measured is unchanged — only the waiting is. A 15 s cap matches
+        // the previous bound, and NotEmit/Emit are not used here because a scenario that produces
+        // nothing is diagnostics, not a failure.
+        var finished = new AsyncSubject<Unit>();
+        void Finish()
+        {
+            completedMs = sw.Elapsed.TotalMilliseconds;
+            finished.OnNext(Unit.Default);
+            finished.OnCompleted();
+        }
+
         using (Orchestrator.GetCompletions(query, context).Subscribe(
             batch =>
             {
@@ -473,10 +484,12 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
                 if (!perCategory.ContainsKey(batch.Category))
                     perCategory[batch.Category] = t;
             },
-            _ => { completedMs = sw.Elapsed.TotalMilliseconds; gate.Set(); },
-            () => { completedMs = sw.Elapsed.TotalMilliseconds; gate.Set(); }))
+            _ => Finish(),
+            Finish))
         {
-            gate.Wait(TimeSpan.FromSeconds(15));
+            await finished
+                .Timeout(TimeSpan.FromSeconds(15), Observable.Return(Unit.Default))
+                .Await(TestContext.Current.CancellationToken);
         }
 
         return (firstBatchMs, perCategory, completedMs);
