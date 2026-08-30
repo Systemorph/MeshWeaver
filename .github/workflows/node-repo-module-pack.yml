@@ -542,8 +542,24 @@ jobs:
         if: ${{ matrix.entry.test != false }}
         env:
           PROJECT: ${{ matrix.entry.project }}
+          # 🚨 THE TRAIL A FLAKE LEAVES. A red here on a diff that cannot reach the module is a
+          # timing failure of the mesh under the runner's load, and the failure block alone cannot
+          # say where the flow stopped (seven distinct AI.Test failures, one sentence each —
+          # MeshWeaver.Plugins#941). So the run WRITES the evidence and the step below keeps it:
+          #   • per-test file logs (MESHWEAVER_TEST_FILE_LOGS — Warning level, one file per test);
+          #   • the MonolithMeshTestBase phase trace (/tmp/meshweaver-test-trace.log: INIT/TEST/
+          #     DISPOSE phases per class, pid-tagged — a crash's last lines name the class);
+          #   • the teardown-straggler captures (written beside the test assembly);
+          #   • a mini dump when the host dies on a signal (exit 139 = SIGSEGV = use-after-unload).
+          # None of it changes timing: the file logs are the same records the console gets, and
+          # the dump is written only by a crash.
+          MESHWEAVER_TEST_FILE_LOGS: "1"
+          DOTNET_DbgEnableMiniDump: "1"
+          DOTNET_DbgMiniDumpType: "2"
+          DOTNET_DbgMiniDumpName: /tmp/coredumps/%e-%p.dmp
         run: |
           set -euo pipefail
+          mkdir -p /tmp/coredumps
           # A module's tests relocate WITH it (the Approvals precedent). Conventional sibling:
           # src/<Module>.Test. Absent is fine; present and red is not.
           tests="$(dirname "$PROJECT").Test"
@@ -553,6 +569,39 @@ jobs:
           else
             echo "no test project at $tests — nothing to run"
           fi
+
+      # 🚨 Only on FAILURE, and only what a diagnosis needs: the failing suite's per-test logs, the
+      # phase trace, the straggler captures and any dump. A green run uploads nothing — the point
+      # is that the ONE red run in five leaves something to read instead of a re-run button.
+      - name: Keep the failing suite's evidence
+        if: ${{ failure() && matrix.entry.test != false }}
+        env:
+          PROJECT: ${{ matrix.entry.project }}
+        run: |
+          set -uo pipefail
+          tests="$(dirname "$PROJECT").Test"
+          out="$RUNNER_TEMP/test-evidence"; mkdir -p "$out"
+          find "$tests" -path '*/test-logs/*.log' -print0 2>/dev/null | while IFS= read -r -d '' f; do
+            cp "$f" "$out/" || true
+          done
+          [ -f /tmp/meshweaver-test-trace.log ] && cp /tmp/meshweaver-test-trace.log "$out/_meshweaver-test-trace.log" || true
+          [ -f /tmp/meshweaver-msg-trace.log ] && cp /tmp/meshweaver-msg-trace.log "$out/_meshweaver-msg-trace.log" || true
+          if compgen -G '/tmp/coredumps/*.dmp' > /dev/null; then
+            # The runtime writes a dump 0600; make it readable for the upload.
+            sudo chmod a+r /tmp/coredumps/*.dmp || true
+            cp /tmp/coredumps/*.dmp "$out/" || true
+            dotnet --list-runtimes > "$out/_runtimes.txt" 2>/dev/null || true
+          fi
+          echo "kept $(ls "$out" | wc -l | tr -d ' ') file(s):"; ls -la "$out" | head -40
+      - name: Upload the failing suite's evidence
+        if: ${{ failure() && matrix.entry.test != false }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-evidence-${{ matrix.entry.module }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/test-evidence
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 9
 
       # 🚨 The hand-over. Without it a module that has LEFT the platform repo is packed, versioned,
       # inspected — and reaches nobody, because a registry serves only bytes it holds. A missing

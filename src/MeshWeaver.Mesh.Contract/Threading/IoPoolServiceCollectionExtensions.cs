@@ -41,6 +41,12 @@ public static class IoPoolServiceCollectionExtensions
         // TeardownReport. Subscribe to this (never to DisposalCompleted alone) before
         // disposing the scope / unloading node ALCs / starting the next mesh.
         services.TryAddSingleton<MeshTeardownSignal>();
+        // Closes a hosted hub's OWN lifetime scope in teardown ORDER: now on a live mesh, after the
+        // drains above (DrainAll → AsyncDisposeQueue → the signal) while the mesh is tearing down.
+        // HostedHubsCollection sits BELOW this assembly and resolves the abstraction; without it a
+        // child scope closed on the hub's DisposalCompleted alone went down UNDER the pooled leaves
+        // and query pipelines still resolving from it (the ObjectDisposedException straggler class).
+        services.TryAddSingleton<IHubScopeDisposalSequencer, TeardownOrderedScopeDisposal>();
         // Mesh-scoped, so in-flight activity runs are counted per mesh and the counter dies with
         // it (NoStaticState). Teardown quiesces on this — see ActivityTracker.
         services.TryAddSingleton<ActivityTracker>();

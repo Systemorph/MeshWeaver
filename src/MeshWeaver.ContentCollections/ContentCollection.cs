@@ -192,9 +192,32 @@ public class ContentCollection : IDisposable
 
 
 
-    /// <summary>Stops the change monitor and disposes the underlying markdown synchronization stream.</summary>
+    /// <summary>
+    /// True once <see cref="Dispose"/> has run — the file-system watcher is stopped and the
+    /// markdown stream is closed, so no callback of this collection can touch the hub's services
+    /// any more. Exposed so the disposal wiring is assertable (a collection whose hub died must
+    /// read <c>true</c>).
+    /// </summary>
+    public bool IsDisposed { get; private set; }
+
+    /// <summary>
+    /// Stops the change monitor and disposes the underlying markdown synchronization stream.
+    ///
+    /// <para>🚨 The collection is registered on its HUB's disposables (see
+    /// <c>ContentService.CreateCollection</c>), so this runs when the hub goes down. Nothing else
+    /// ever called it: the service's per-name cache kept every collection — and its live
+    /// <see cref="System.IO.FileSystemWatcher"/> — for the life of the process, so watcher
+    /// callbacks kept firing after the hub's scope was torn down and resolved services from a
+    /// disposed <c>LifetimeScope</c> on the watcher's native thread (the
+    /// <see cref="ObjectDisposedException"/> teardown-straggler class; the defensive catches in
+    /// <c>IngestContentFile</c> exist because of exactly those). Idempotent: the hub's composite
+    /// and a direct caller may both get here.</para>
+    /// </summary>
     public virtual void Dispose()
     {
+        if (IsDisposed)
+            return;
+        IsDisposed = true;
         monitorDisposable?.Dispose();
         markdownStream.Dispose();
     }

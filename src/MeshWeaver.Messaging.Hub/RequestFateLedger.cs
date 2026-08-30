@@ -62,6 +62,19 @@ internal sealed class RequestFateLedger
 
     private readonly ConcurrentDictionary<string, RequestFate> tracked = new();
 
+    // 🚨 Trails OUTLIVE the callback that opened them, boundedly. A cross-hub write waits on its
+    // owner's reply for UpdateResponseWaitBound (2 s), then hands the wait to the late-patch
+    // watch for another ~30 s — and that first timeout disposes the Observe subscription, which
+    // used to drop the trail. So the one diagnostic that could say WHERE a write stalled (DEFERRED
+    // behind an init gate at the owner; HANDLER_EXIT with no reply; RESPONSE_POSTED to a hub nobody
+    // was awaiting on) was gone 29 s before VERDICT_TIMEOUT asked for it, and the CI failure block
+    // read "the owner produced no terminal" with nothing to chase (MeshWeaver.Plugins#941, seven
+    // distinct tests, one message). Stages keep landing on a recent trail, so the owner-side story
+    // that unfolds AFTER the requester stopped awaiting is still written down.
+    private const int RecentCap = 512;
+    private readonly ConcurrentDictionary<string, RequestFate> recent = new();
+    private readonly ConcurrentQueue<string> recentOrder = new();
+
     /// <summary>
     /// Starts a trail for <paramref name="messageId"/>. Called from the ONE place a hub registers a
     /// pending response callback, so "tracked" and "awaited" are the same set by construction.
@@ -89,7 +102,16 @@ internal sealed class RequestFateLedger
     /// its subscription was disposed. Keeping resolved ids would turn a bounded ledger into a leak.
     /// </summary>
     /// <param name="messageId">The request delivery's id.</param>
-    public void Untrack(string messageId) => tracked.TryRemove(messageId, out _);
+    public void Untrack(string messageId)
+    {
+        if (!tracked.TryRemove(messageId, out var fate))
+            return;
+        // Move, never drop: the trail keeps recording until it ages out of the recent ring.
+        recent[messageId] = fate;
+        recentOrder.Enqueue(messageId);
+        while (recentOrder.Count > RecentCap && recentOrder.TryDequeue(out var oldest))
+            recent.TryRemove(oldest, out _);
+    }
 
     /// <summary>
     /// The trail for <paramref name="messageId"/>, or <c>null</c> when nothing is awaiting it.
@@ -100,9 +122,11 @@ internal sealed class RequestFateLedger
     /// <returns>The live trail, or <c>null</c>.</returns>
     public RequestFate? Find(string? messageId)
     {
-        if (tracked.IsEmpty || messageId is not { Length: > 0 })
+        if (messageId is not { Length: > 0 })
             return null;
-        return tracked.TryGetValue(messageId, out var fate) ? fate : null;
+        if (!tracked.IsEmpty && tracked.TryGetValue(messageId, out var fate))
+            return fate;
+        return !recent.IsEmpty && recent.TryGetValue(messageId, out var late) ? late : null;
     }
 
     /// <summary>
