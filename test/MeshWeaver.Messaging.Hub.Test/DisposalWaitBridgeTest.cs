@@ -280,8 +280,14 @@ public class DisposalWaitBridgeTest
     [Fact(Timeout = 30000)]
     public async Task CancelSourceTrue_DisposesTheSubscription_SoCancellationReachesTheSource()
     {
-        var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var source = Observable.Create<Unit>(_ => Disposable.Create(() => disposed.TrySetResult()));
+        // The producer→test signal is an AsyncSubject the PRODUCER completes — the house shape for
+        // this (AGENTS.md), and it also gives the failure a sentence instead of a bare timeout.
+        var disposed = new AsyncSubject<Unit>();
+        var source = Observable.Create<Unit>(_ => Disposable.Create(() =>
+        {
+            disposed.OnNext(Unit.Default);
+            disposed.OnCompleted();
+        }));
 
         // Never an empty reporter — the contract forbids it, and an ignored late fault here would
         // hide the very thing this file exists to keep observable.
@@ -292,7 +298,9 @@ public class DisposalWaitBridgeTest
         await cts.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
-        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await disposed.Should().Within(10.Seconds()).Emit(
+            "cancelling an opted-in wait must dispose the subscription — that disposal IS what "
+            + "cancels Rx's subscriberCt and releases an IoPool permit (#2772)");
         late.Should().BeNull("the source only ever completes by disposal, so nothing may be reported");
     }
 
@@ -306,10 +314,13 @@ public class DisposalWaitBridgeTest
     public async Task CancelSourceDefault_KeepsTheSubscription_SoALateFaultIsStillReported()
     {
         var subject = new Subject<Unit>();
-        var reported = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Exception? seen = null;
+        var reported = new AsyncSubject<Unit>();
 
         using var cts = new CancellationTokenSource();
-        var wait = subject.ObserveCompletion(ex => reported.TrySetResult(ex), cts.Token);
+        var wait = subject.ObserveCompletion(
+            ex => { seen = ex; reported.OnNext(Unit.Default); reported.OnCompleted(); },
+            cts.Token);
 
         await cts.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
@@ -319,7 +330,9 @@ public class DisposalWaitBridgeTest
         var boom = new InvalidOperationException("late");
         subject.OnError(boom);
 
-        var seen = await reported.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await reported.Should().Within(10.Seconds()).Emit(
+            "the DEFAULT keeps the subscription attached, so a fault arriving after a cancelled wait "
+            + "is still reported — if this ever goes silent, the default has flipped");
         seen.Should().BeSameAs(boom);
     }
 
@@ -332,20 +345,26 @@ public class DisposalWaitBridgeTest
     [Fact(Timeout = 30000)]
     public async Task CancelSourceTrue_DisposesEvenWhenTheTokenFiresDuringSubscribe()
     {
-        var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposed = new AsyncSubject<Unit>();
         using var cts = new CancellationTokenSource();
 
         var source = Observable.Create<Unit>(_ =>
         {
             cts.Cancel();                       // inside Subscribe, before the handle is assigned
-            return Disposable.Create(() => disposed.TrySetResult());
+            return Disposable.Create(() =>
+            {
+                disposed.OnNext(Unit.Default);
+                disposed.OnCompleted();
+            });
         });
 
         Exception? late = null;
         var wait = source.ObserveCompletion(ex => late = ex, cancelSource: true, cts.Token);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait);
-        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await disposed.Should().Within(10.Seconds()).Emit(
+            "a token that fires DURING Subscribe must still reach the source: the handle is assigned "
+            + "to an already-disposed SingleAssignmentDisposable, which disposes it on assignment");
         late.Should().BeNull("nothing faults here — a report would mean the SAD race took another route");
     }
 }
