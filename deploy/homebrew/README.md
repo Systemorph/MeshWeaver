@@ -13,46 +13,64 @@ truth.
 
 ## Install
 
-The default (Option B) image path builds the portal locally, so **you need a
-checkout anyway** — and the CLI is designed to run straight from it. That's the
-supported route today:
-
 ```bash
-# Run straight from the checkout (resolves the chart + share assets from the repo):
-./deploy/homebrew/bin/memex-local up
-
-# …or put it on PATH via a symlink (a `git pull` then updates CLI + chart together):
-ln -s "$PWD/deploy/homebrew/bin/memex-local" ~/.local/bin/memex-local   # (~/.local/bin on PATH)
-memex-local up
+brew tap systemorph/memex          # https://github.com/Systemorph/homebrew-memex
+brew install memex-local
 ```
 
-**Brew route (needs a local tap for now).** Current Homebrew discovers formulae
-only at a tap's root or top-level `Formula/`; this formula lives at the nested
-`deploy/homebrew/Formula/`, so `brew install ./…/memex-local.rb` and a two-arg tap
-of the monorepo are both rejected, and `systemorph/memex` isn't a published tap
-yet. Until `Systemorph/homebrew-memex` exists, build a local tap from the checkout:
+The tap is **published by this repository's own CI**: `.github/workflows/homebrew.yml`
+installs and tests the formula from every PR that touches `deploy/homebrew/**` or
+`deploy/helm/**` (on a macOS runner, under macOS's bash 3.2), and on every merge to
+`main` attaches a tarball of exactly those two directories to a release of the tap and
+commits the formula with its `sha256`. The version is `0.2.<main commit count>`, so
+**`brew upgrade memex-local` follows main**. The formula declares the **exact brew
+toolchain `LocalColimaMac.md` §1 installs** — `colima`, `kubernetes-cli` (kubectl),
+`helm`, `mkcert`, `ollama`, `socket_vmnet` — plus `azure-cli` for the registry-mode
+image pull. It vendors a snapshot of `deploy/helm` so the install works standalone.
+
+The **.NET SDK** (10.0) is *not* a dependency: only the local-build image path (Option B,
+§3) needs it, `depends_on cask:` is rejected by current Homebrew, and the registry-mode
+default pulls the CI-built image instead. Install it separately for Option B
+(`brew install --cask dotnet-sdk` or the standalone installer).
+
+**Developing memex-local itself?** Run it straight from the checkout — it resolves the
+chart + share assets relative to the script — or install a local tap over the template
+formula (`brew tap-new systemorph/memex-dev`, copy `Formula/memex-local.rb` in, `brew
+install --HEAD systemorph/memex-dev/memex-local`). A brew install's wrapper pins
+`MEMEX_CHART_DIR` to the vendored chart; run-from-checkout uses the live `deploy/helm`
+(or `MEMEX_REPO`/`MEMEX_CHART_DIR`) directly.
+
+## Two modes — where the plugins come from
+
+| Mode | `memex-local registry status` says | Plugins | Module binaries (Radzen, Analysis, EntityViews, GoogleMaps, Speech, Mcp…) | Image |
+|---|---|---|---|---|
+| **Registry** (§17, recommended) | `REGISTRY MODE — consumes https://memex.meshweaver.cloud` | installed from the cloud registry, per the instance's **grant** | **land from the registry's bundles** into `/data` | CI-built multi-arch from ACR (`az login`) |
+| **Self-registry** (§16) | `SELF-REGISTRY MODE` | served from a `MeshWeaver.Plugins` **checkout** beside `MEMEX_REPO` | 🚨 **never** — a checkout has source, not assemblies (MeshWeaver#2417); the five required ones are blanked | built from source (Option B) |
+
+Registry mode is one command; a platform admin on the registry mints the key
+(Settings ▸ Administration ▸ Instance grants ▸ Registration keys):
 
 ```bash
-brew tap-new systemorph/memex
-cp deploy/homebrew/Formula/memex-local.rb "$(brew --repo systemorph/memex)/Formula/"
-brew install --HEAD systemorph/memex/memex-local
+memex-local registry https://memex.meshweaver.cloud --key mwr_… [--id my-mac]
+memex-local up        # or `update` on an existing install
 ```
 
-The formula declares the **exact brew toolchain `LocalColimaMac.md` §1 installs**:
-`colima`, `kubernetes-cli` (kubectl), `helm`, `mkcert`, `ollama`, `socket_vmnet`.
-The **.NET SDK** (10.0) is *not* a formula dependency (`depends_on cask:` is rejected
-by current Homebrew, and only the local-build path needs it) — install it separately
-for Option B (`brew install --cask dotnet-sdk` or the standalone installer); the
-`--from-acr` path (Option A) needs no SDK. The formula vendors a snapshot of
-`deploy/helm` into the install so a brew install works standalone; that vendored
-snapshot is refreshed by `brew reinstall`. In **run-from-checkout** mode the live
-`deploy/helm` (or `MEMEX_REPO`/`MEMEX_CHART_DIR`) is used directly.
+`~/.memex-local/registry.yaml` (0600) then carries `pluginCatalog.registryUrl` /
+`instanceId` and the bootstrap key; `helm_deploy` layers it last. On first boot the
+portal presents the key **once**, is issued its own instance key (stored encrypted in
+its database, so it survives every `update`), installs everything it is granted and
+lands the modules; `verify --repair` performs the one activation restart. What it is
+granted is the **registry's** decision — see
+[`PluginRegistry.md`](../../src/MeshWeaver.Documentation/Data/Architecture/PluginRegistry.md).
+`memex-local registry off` returns to serving a checkout.
 
 ## Use
 
 ```bash
-memex-local up                 # full stack, idempotent (default: local arm64 build, Option B)
-memex-local up --from-acr      # pull the multi-arch image from ACR instead (Option A)
+memex-local registry <url> --key mwr_…   # REGISTRY MODE: consume a remote plugin registry (§17)
+memex-local registry status|off          # which mode this install is in / back to self-registry
+memex-local up                 # full stack, idempotent (registry mode: ACR image; else local build)
+memex-local up --from-acr      # pull the multi-arch image from ACR explicitly (Option A)
 memex-local status             # colima / pods / ingress / port-forward / health
 memex-local logs               # tail the portal logs (verbose; see "Full logging")
 memex-local logs --migration   # tail the migration job
