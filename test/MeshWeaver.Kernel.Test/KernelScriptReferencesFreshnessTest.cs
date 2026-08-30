@@ -30,6 +30,18 @@ namespace MeshWeaver.Kernel.Test;
 /// </summary>
 public class KernelScriptReferencesFreshnessTest
 {
+    /// <summary>
+    /// Mirrors <c>MeshScriptEnvironment.IsTestScaffolding</c>, which is what
+    /// <c>KernelScriptReferences</c> filters the script surface by. Kept as a local copy rather
+    /// than made public: widening a production surface so a test can read it is how the surface
+    /// grows, and this predicate is three string comparisons.
+    /// </summary>
+    private static bool IsTestScaffolding(string assemblyName)
+        => assemblyName.Equals("MeshWeaver.Fixture", StringComparison.Ordinal)
+           || assemblyName.EndsWith(".TestBase", StringComparison.Ordinal)
+           || assemblyName.EndsWith(".Test", StringComparison.Ordinal)
+           || assemblyName.EndsWith(".Tests", StringComparison.Ordinal);
+
     [Fact(Timeout = 120_000)]
     public async Task AnAssemblyLoadedAfterTheFirstCall_IsStillInTheReferenceSet()
     {
@@ -55,11 +67,18 @@ public class KernelScriptReferencesFreshnessTest
                 try { return (Path: f, Name: AssemblyName.GetAssemblyName(f)); }
                 catch { return (Path: f, Name: (AssemblyName?)null); }   // native/unmanaged: not a candidate
             })
+            // 🚨 TEST SCAFFOLDING IS NOT A VALID CANDIDATE. MeshScriptEnvironment.IsTestScaffolding
+            // excludes MeshWeaver.Fixture and anything ending .Test/.Tests/.TestBase from the script
+            // surface BY DESIGN (the 2026-08-12 "exports dead in prod" fix). Loading one of those
+            // and then asserting it reaches the reference set asserts the OPPOSITE of the contract:
+            // the test would fail for the wrong reason, and which .dll the directory walk happens to
+            // reach first is exactly the order-sensitivity this test exists to eliminate.
+            .Where(x => x.Name?.Name is { } n && !IsTestScaffolding(n))
             .FirstOrDefault(x => x.Name is not null);
 
         Assert.True(candidate.Name is not null,
-            "this test needs one not-yet-loaded managed assembly next to the test binary to prove "
-            + "freshness; with none it would assert nothing and pass vacuously");
+            "this test needs one not-yet-loaded, NON-scaffolding managed assembly next to the test "
+            + "binary to prove freshness; with none it would assert nothing and pass vacuously");
 
         var late = Assembly.LoadFrom(candidate.Path);
 
