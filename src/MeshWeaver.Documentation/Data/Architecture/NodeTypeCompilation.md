@@ -449,6 +449,26 @@ a valid build of the current sources — the trigger is consumed without dispatc
 `RequestNodeTypeRelease(force: true)` remains the documented escape hatch and always compiles.
 Anything not adopted compiles exactly as before — the "generate" branch is untouched.
 
+🚨 **"Always compiles" has to hold in the compile watcher, not only in the release watcher
+(#2818).** The release watcher bypasses its satisfied-branch on a force and flips the type
+`Pending` — but the on-demand adoption step lives in the *compile* watcher, where every `Pending`
+converges, and until #2818 that step asked the bundle sources again regardless of the force. On any
+mesh whose bundle still resolved, a force re-adopted the very bytes the operator was trying to
+replace and settled "without a Roslyn pass" with a fresh `LastCompileSucceededAt` over the same
+`LatestAssemblyMvid`; it only worked where the bundle had gone missing. This is what left the stale
+prebuilt of #2813 unrecoverable on a node whose source was already fixed. Now a `Pending` that
+carries `RequestedReleaseForce` skips adoption and dispatches (or parks, under `RequirePrebuilt`,
+with the park's named reason), and every terminal stamp — `ApplyCompileSuccess`,
+`ApplyCompileFailure`, `ApplyGateSettle` — sets the flag back to `false`, so a spent force can never
+suppress adoption for a later, unforced trigger. The regression
+(`NodeTypeOnDemandAdoptionTest.AForcedRelease_NeverConsultsTheBundleSources`) asserts the
+discriminating fact — the forced `Pending` never *consults* the consumer — rather than the MVID
+moving, because a force on a type whose bundle does not resolve compiled correctly even before the
+fix. Its third phase found the adjacent gap: the on-demand step judged an adoption "landed" by
+`HasUsableBuild` alone, which a type's PREVIOUS build already satisfies — so a consumer that
+reported an adoption it never wrote back stranded such a type at `Pending`. Landed now also
+requires `CompilationStatus == Ok`, which is what a real `PrebuiltAssemblySeeder.Seed` stamps.
+
 Anything else triggers a recompile. This makes a cold hub start **self-healing**:
 
 | Situation | Why the bare record lies | Caught by |
