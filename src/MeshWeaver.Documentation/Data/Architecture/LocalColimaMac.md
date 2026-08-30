@@ -40,7 +40,7 @@ brew install socket_vmnet
 
 You also need the **.NET SDK** (10.0) to build the portal image — install from [dotnet.microsoft.com](https://dotnet.microsoft.com/download) or `brew install --cask dotnet-sdk`.
 
-> **Prefer one command?** `brew tap systemorph/memex && brew install memex-local` — the `memex-local` CLI automates **every step on this page**, idempotently: `up` / `down` / `status` / `logs` / `update`. The tap is published by this repository's CI on every merge to `main` (`brew upgrade memex-local` follows main). Point it at the cloud plugin registry first (**§17**, `memex-local registry https://memex.meshweaver.cloud` — no key needed, that is the free tier) and it needs neither a source checkout nor the .NET SDK. See `deploy/homebrew/README.md`. The rest of this page is the manual reference the CLI follows 1:1.
+> **Prefer one command?** `brew tap systemorph/memex && brew trust systemorph/memex && brew install memex-local` — the `memex-local` CLI automates **every step on this page**, idempotently: `up` / `down` / `status` / `logs` / `update`. The tap is published by this repository's CI on every merge to `main` (`brew upgrade memex-local` follows main). Point it at the cloud plugin registry first (**§17**, `memex-local registry https://memex.meshweaver.cloud` — no key needed, that is the free tier) and it needs neither a source checkout nor the .NET SDK. See `deploy/homebrew/README.md`. The rest of this page is the manual reference the CLI follows 1:1.
 
 The work splits across three areas, which the rest of this page walks through in order:
 
