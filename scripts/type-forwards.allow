@@ -35,4 +35,3 @@
 # surface; its only consumers are TestBase assemblies and test projects that compile from source.
 # A forwarder is impossible without keeping `namespace MeshWeaver.Fixture` inside a product
 # assembly, which would tell product code to `using MeshWeaver.Fixture` — the wrong direction.
-MeshWeaver.Fixture:MeshWeaver.Fixture.ObservableAwait  #2771 — added by #2750 after v3.0.0-rc8; never shipped
