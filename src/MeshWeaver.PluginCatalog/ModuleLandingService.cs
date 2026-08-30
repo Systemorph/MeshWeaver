@@ -209,7 +209,7 @@ public sealed class ModuleLandingService : IDisposable
             if (cancellationToken.IsCancellationRequested)
             {
                 logger?.LogInformation(
-                    "Modules GC: cancelled after removing {Removed} director(ies) — the rest is a "
+                    "Modules GC: cancelled after removing {Removed} directory(ies) — the rest is a "
                     + "later pass's job.", removed);
                 break;
             }
