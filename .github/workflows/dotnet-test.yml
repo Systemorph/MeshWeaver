@@ -1719,6 +1719,147 @@ jobs:
       env:
         GITHUB_WORKSPACE: ${{ github.workspace }}
 
+  shared-rules:
+    name: "AGENTS.md shared rule blocks"
+    # 🚨 THE GAP THIS CLOSES (MeshWeaver.Plugins#705): every repo's CLAUDE.md is a one-line
+    # `@AGENTS.md` include, so AGENTS.md is not reference material someone consults when they
+    # remember to — it is the instruction file loaded into every agent's context, in that repo,
+    # on every session. Seven repos carry overlapping copies of the same rules, held together by
+    # prose ("everything there applies here unchanged") and by hand-carrying each edit. Nothing
+    # compared them.
+    #
+    # The worked example is four days old. On 2026-08-30 a maintainer directive ("always conserve
+    # work products") was rolled to all seven repos as seven separate PRs — core#2732,
+    # Plugins#954, Education#236, Reinsurance#122, SocialMedia#111, Manufacturing#34, Memex#149.
+    # Had one been missed, or had one drifted the week after, nothing in the estate would have
+    # said so; agents in that repo would simply have been operating under a different rule.
+    #
+    # 🌐 WHY THE SWEEP RUNS HERE AND COVERS EVERYONE, rather than each repo checking itself.
+    # A per-repo self-check CANNOT detect the missed-repo case, structurally: a repo with no pull
+    # request never runs its own gate, so "six of the seven were updated" and "all seven were
+    # updated" produce identical evidence. Only a sweep that reads every repo from one place can
+    # tell those apart. It runs in core because core owns the shared CI and is the platform hub;
+    # it is also the schedule's home (shared-rules.yml) so a drift is caught even in a week when
+    # nobody opens a pull request anywhere.
+    #
+    # ⚖️ THE CONSEQUENCE, CHOSEN DELIBERATELY: this reads the SATELLITES' default branches, so a
+    # drift merged in a satellite turns this red and blocks core merges until it is fixed there.
+    # That is the same coupling the i18n mirror guard already carries (a Plugins PR stays red
+    # until the core catalogue lands) and it is the point rather than a side effect — a rule that
+    # differs between repos means agents behave differently between repos, which is precisely
+    # what must not merge. The remedy is always a one-PR fix in the repo the error NAMES; there
+    # is no bypass, and adding one would make this gate decorative.
+    #
+    # 🛡️ NO SKIP-TRAPDOOR. Six of the seven repos are private, so this gate genuinely needs a
+    # credential — which is exactly the situation AGENTS.md → "A gate NEVER tests its own inputs"
+    # is about, because GitHub paints a skipped job with the same tick as a passed one. So:
+    #   * the credential is ASSERTED and the job fails RED naming what to provision — it never
+    #     asks "is the secret set?" in order to decide whether to run;
+    #   * PRESENT is not VALID (chart-drift learned this on 2026-08-17: a provisioned-but-dead
+    #     PAT passed an emptiness test and every run after died at checkout), so the token is
+    #     PROVEN to read every repo before the comparison is trusted;
+    #   * the checker's own self-test runs FIRST and fails the job — an unproven gate is no gate;
+    #   * no `continue-on-error:` anywhere, and no path filter (an unrelated PR would otherwise
+    #     "pass" by not running);
+    #   * the checker fails closed on every unreadable input, including its own manifest.
+    # The ONE exemption is expressed on the EVENT, never on the secret: a pull request from a
+    # FORK has no access to any secret by GitHub's design, so it cannot mint the token at all.
+    # `collect-results` mirrors that same event predicate rather than inventing a second one.
+    if: ${{ github.event.pull_request.head.repo.fork != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+
+    - name: Assert the cross-repo read credential, or fail naming what to provision
+      env:
+        MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+        MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+      run: |
+        missing=()
+        [ -n "$MESHWEAVER_APP_ID" ] || missing+=("secrets.MESHWEAVER_APP_ID            app id of the org's meshweaver-cloud GitHub App, which is installed on every repo in the fleet")
+        [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY   that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+        if [ ${#missing[@]} -gt 0 ]; then
+          echo "::error::The shared-rule gate cannot read the fleet — provision the following, then re-run:"
+          for m in "${missing[@]}"; do echo "  • $m"; done
+          exit 1
+        fi
+        echo "Credential inputs are present (validity is proven below, not assumed)."
+
+    # Cross-repo reads are a GitHub App installation token minted per run, never a stored PAT:
+    # a PAT has no owner, no expiry anyone watches, and fails indistinguishably from a scope
+    # problem (#1709). Scoped to contents:read on exactly the repos in the register.
+    - name: Mint an installation token for the fleet
+      id: fleet-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+        private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        owner: Systemorph
+        repositories: >-
+          MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex
+        permission-contents: read
+
+    # PRESENT is not VALID. Prove the capability this gate actually needs — reading each repo —
+    # against the real API, and name what a rejection means, because 401/403/404 take very
+    # different fixes and a private repo the token cannot see reports 404, not 403.
+    - name: The token can actually READ every repo in the register
+      env:
+        FLEET_TOKEN: ${{ steps.fleet-token.outputs.token }}
+      run: |
+        set -uo pipefail
+        # 🚨 Read the register into a variable FIRST and assert it. `for repo in $(...)` would
+        # iterate ZERO times if that command failed — the loop would simply end, `bad` would
+        # still be 0, and the step would report every repo readable having contacted none of
+        # them. That is this gate's own defect turned on itself, so the list is proven
+        # non-empty before anything is looped over and counted after.
+        repos=$(python3 -c "import json;print(' '.join(json.load(open('.github/shared-rules.json'))['repos']))") \
+          || { echo "::error::Could not read the repo register from .github/shared-rules.json."; exit 1; }
+        [ -n "$repos" ] || { echo "::error::.github/shared-rules.json lists no repos — nothing to compare."; exit 1; }
+        bad=0
+        seen=0
+        for repo in $repos; do
+          seen=$((seen+1))
+          # `|| code=000` is not noise: `run:` is bash -e, so a TRANSPORT failure (DNS, TLS,
+          # connection refused) would kill the step before the case block — i.e. before the one
+          # sentence this probe exists to print.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $FLEET_TOKEN" \
+            -H "Accept: application/vnd.github.raw" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$repo/contents/AGENTS.md") || code=000
+          case "$code" in
+            200) echo "  ok   $repo" ;;
+            401) echo "::error::$repo -> 401: the App token is invalid or expired."; bad=1 ;;
+            403) echo "::error::$repo -> 403: the token is valid but lacks contents:read here, or is rate-limited."; bad=1 ;;
+            404) echo "::error::$repo -> 404: no AGENTS.md, or the App is not installed on this repo (GitHub reports an invisible private repo as 404, not 403)."; bad=1 ;;
+            000) echo "::error::$repo -> could not reach api.github.com."; bad=1 ;;
+            *)   echo "::error::$repo -> HTTP $code."; bad=1 ;;
+          esac
+        done
+        [ "$bad" = "0" ] || { echo "::error::The gate cannot read the whole fleet, so it cannot report on it. Refusing to pass on partial evidence."; exit 1; }
+        [ "$seen" -ge 2 ] || { echo "::error::The probe examined only $seen repo(s) — the register did not expand. Refusing to report success."; exit 1; }
+
+    # 🚨 The self-test runs FIRST and fails the job. Every case below must be shown to FIRE on
+    # its defect and stay SILENT on its fix before the verdict on the real fleet means anything.
+    # Same posture as check-workflow-shell.py and MeshWeaver.Plugins' affected-modules.py.
+    - name: "Prove the gate is non-vacuous (self-test)"
+      run: python3 .github/scripts/check-shared-rules.py --self-test
+
+    # `--local` for THIS repo so the pull request is judged on the tree it proposes rather than
+    # on the branch it will replace. It is not a skip: core's copy still has to be present,
+    # well-formed and identical to what the register requires.
+    - name: "Every shared rule block is identical across the fleet"
+      env:
+        GITHUB_TOKEN: ${{ steps.fleet-token.outputs.token }}
+      run: |
+        python3 .github/scripts/check-shared-rules.py \
+          --local Systemorph/MeshWeaver=AGENTS.md
+
   collect-results:
     name: "Consolidate test results"
     # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
@@ -1741,7 +1882,13 @@ jobs:
     # (#2370) — a module's IL binds a NAME, so no source build can see it. The gate for exactly
     # that now exists and is proven live, but until this line it could go RED while the PR merged
     # anyway. A gate whose verdict nothing reads is decorative.
-    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell]
+    # shared-rules is a NEEDS on the same principle, applied to the instruction files themselves:
+    # every repo's CLAUDE.md is a one-line `@AGENTS.md` include, so a rule block that differs
+    # between repos means agents BEHAVE differently between repos — silently, on every session,
+    # in a file no build or test reads. MeshWeaver.Plugins#705 measured the divergence; nothing
+    # could see it. A gate whose verdict nothing reads is decorative, so it hangs off the repo's
+    # one required check like every other gate here.
+    needs: [precheck, build, test, doc-gate, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -2055,6 +2202,17 @@ jobs:
       if: needs.workflow-shell.result != 'success'
       run: |
         echo "::error::The 'CI's own shell' gate concluded '${{ needs.workflow-shell.result }}' — see that job. It shellchecks every workflow \`run:\` block, refuses a captured command substitution that swallows BOTH stderr and its exit status (the #2642 shape: a failed call becomes an empty answer that is then read as authoritative), refuses an az \`--query\` that throws on a null field, and EXECUTES main-cd's release-version recovery against a fixture. main-cd.yml is exercised by no other check on this PR."
+        exit 1
+
+    # `!= 'success'` rather than `== 'failure'`, for the same reason as the gate above: a job
+    # that was skipped or cancelled produced no verdict, and no verdict must never read as
+    # passed. The fork clause is the SAME event predicate the gate itself carries — a fork PR
+    # cannot mint the App token by GitHub's design, so the job genuinely does not run there. It
+    # is written on the event and never on the secret, and it is the only exemption.
+    - name: Fail if the shared rule blocks drifted
+      if: github.event.pull_request.head.repo.fork != true && needs.shared-rules.result != 'success'
+      run: |
+        echo "::error::The 'AGENTS.md shared rule blocks' gate concluded '${{ needs.shared-rules.result }}' — see that job, which names the repo and the exact drift. Every repo's CLAUDE.md is a one-line @AGENTS.md include, so a block that differs between repos means agents follow different instructions in each of them. The register is .github/shared-rules.json; the rationale is Doc/Architecture/SharedRuleBlocks. The fix is always a pull request in the repo the error names — never a bypass here."
         exit 1
 
     - name: Fail if the clients gate failed
