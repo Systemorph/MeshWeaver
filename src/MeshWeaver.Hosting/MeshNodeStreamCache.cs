@@ -603,8 +603,35 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // the next natural read — the same lifecycle as _updateQueues' sliding
         // expiry, which this mirrors on the read side). Disposed FIRST in Dispose()
         // so no pass starts after teardown begins.
+        // 🚨 Both arms, and they do DIFFERENT jobs — see #2666. Rx rethrows a throw out of an
+        // onNext delegate onto the scheduler's thread, and an unhandled exception there takes the
+        // xunit runner to Environment.Exit(2): the "Passed! - Failed: 0 and a non-zero exit" shard
+        // this repo has chased repeatedly. A sweep tick resolving anything from a container that is
+        // going away is precisely that shape.
+        //
+        // The per-tick try is what keeps the sweep ALIVE: onError is TERMINAL, so handling a tick's
+        // fault by letting it reach the error arm would stop idle release for the life of the
+        // process — trading "threw once" for "silently stopped forever", which is worse. The error
+        // arm is for the SEQUENCE's own fault, and it only logs, because there is nothing left to
+        // keep alive at that point and a silent death is the thing to avoid.
         idleSweep = Observable.Interval(readStreamSweepInterval)
-            .Subscribe(_ => ReleaseIdleReadStreams());
+            .Subscribe(
+                _ =>
+                {
+                    try
+                    {
+                        ReleaseIdleReadStreams();
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex,
+                            "Idle read-stream sweep threw; skipping this pass. The sweep stays "
+                            + "subscribed — a tick's fault must not end it.");
+                    }
+                },
+                ex => logger.LogWarning(ex,
+                    "Idle read-stream sweep sequence faulted and is no longer running. Read "
+                    + "streams will no longer be evicted on idle in this process."));
 
         // Failure-state reset on the EXISTING invalidation broadcast (see the
         // changeFeedReset field doc). Optional service: minimal test fixtures
