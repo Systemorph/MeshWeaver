@@ -60,6 +60,10 @@ identity (Name, the one-line Description tagline, Icon, Category) stays on the n
 > Grepping this repository for them finds nothing by design. The canonical reference for the repo
 > shape is **`MeshWeaver.Plugins/AGENTS.md`**.
 
+That boundary is also why the installer addresses the gating pass's cover grant as a well-known
+PATH rather than asking the type — see [Install Readability](/Doc/Architecture/InstallReadability) for the two doors
+an install can open, and why waiting on the optional one cost every install 30 seconds.
+
 - **Exception — a `Space` root** is correct only when the root's own content IS a partition-level
   `NodeTypeDefinition` compiling a shared `Source/` model (e.g. `UWDeepfield`, in
   `MeshWeaver.Reinsurance`); retyping it to `Store/Plugin` would kill that compile.

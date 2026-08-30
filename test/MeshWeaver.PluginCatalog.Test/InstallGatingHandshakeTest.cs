@@ -15,11 +15,12 @@ namespace MeshWeaver.PluginCatalog.Test;
 /// <c>Access denied: user 'e2e-admin' lacks Read permission on '{course}'</c> followed by a 180 s
 /// coupon timeout.</para>
 ///
-/// <para>The installer now WAITS for that grant. That makes the grant's PATH a contract between
-/// core (which waits on it) and the plugin (which writes it) — and a contract nothing checks is
-/// one that drifts. If <c>PluginGate</c> ever renames the cover grant, the wait would not fail
-/// loudly; it would silently degrade to the settle timeout on every install and the race would be
-/// back, wearing a "gating did not settle" log line. Hence this pin.</para>
+/// <para>The installer now WATCHES for that grant on every partition it deliberately leaves GATED.
+/// That makes the grant's PATH a contract between core (which watches it) and the plugin (which
+/// writes it) — and a contract nothing checks is one that drifts. If <c>PluginGate</c> ever renames
+/// the cover grant, the watch would not fail loudly; every gated install would spend its detector
+/// budget and report a stall that is really a rename. Hence this pin. The detector's own three
+/// outcomes are pinned in <see cref="GatingDetectorTest"/>.</para>
 /// </summary>
 public class InstallGatingHandshakeTest
 {
