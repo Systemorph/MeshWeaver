@@ -37,7 +37,7 @@ The survey behind this design (three read-only sweeps of core, `MeshWeaver.Plugi
 | Registration | `POST /api/instances/register` with an `mwr_` key minted for a plan, or open (un-keyed → the registry's configured free-plan key); first-boot auto-registration (`InstanceAutoRegistrationService`) | Works; keeps working unchanged in spirit — only where the result lands changes |
 | First-run setup | `InstanceManifest` (`instance.json` on the writable root; `AwaitingStorage → AwaitingModules → Complete`), `InstanceSetupDefaults` (`PostgreSql` preselected, `Plugins/*`, the required modules), `MeshBuilder.IsAwaitingSetup` (#2550) | **Nothing reads `IsAwaitingSetup`** — the host has no setup surface; `memex-local` asks no questions at all |
 | A setup wizard | `Hosting/FleetConsole/Source/SetupDialog.cs` — six steps (Identity · Main database · Main storage · Boot modules · Packages & repos · Review), files a `Hosting/InstanceRequest` | Provisions *another* instance in a fleet, not the one you are on; its module step is a free list with no plan |
-| Environment changes | `Hosting/Deployment` (the full instance shape, ~60 fields, all `[Description]`+`[Translation]`), `HelmValues.Render` (a values file that `hosting-deploy` **refuses unless** it carries `# GENERATED from the Hosting/Deployment record`), `Hosting/InstanceAction` verbs run by the in-cluster `hosting-operator` Job | `Hosting/Deployment/*` is **empty** on every mesh we run. memex-cloud's configuration is hand-maintained in Key Vault (`helm-values-memexcloud`) and a Memex-repo overlay, applied by a hand-dispatched workflow (#2805) |
+| Environment changes | `Hosting/Deployment` (the full instance shape, ~60 fields, all `[Description]`+`[Translation]`), `HelmValues.Render` (a values file that `hosting-deploy` **refuses unless** it carries `# GENERATED from the Hosting/Deployment record`), `Hosting/InstanceAction` verbs run by the in-cluster `hosting-operator` Job | `Hosting/Deployment/*` is **empty** on every mesh we run. memex-cloud's configuration is hand-maintained in Key Vault (`helm-values-memexcloud`) and a Memex-repo overlay, applied by a hand-dispatched workflow (Systemorph/Memex#152) |
 | The app | `Hosting` is a Store package with `app: true`, `entryPoint: Hosting/Console` — it has a home tile | `tier: enterprise` — the one package every instance is supposed to run cannot be installed by a free instance |
 | E2E | Plugins `e2e/{instance-lifecycle,instance-request,setup-dialog}.spec.ts` (dry-run, `.invalid` DNS); core `MeshWeaver.Testcontainers` (#2790, a disposable memex with `WithPostgres`); `memex-local instance up` (mint → migrate → deploy → register → install) | No suite joins install → wizard → registered instance → plan-limited modules → promotion |
 
@@ -244,7 +244,7 @@ route accepts it (legacy `mwi_` on the fetch routes for one release, logged). Te
 within the cache window"*; a JWT verifier test with a forged signature, an expired token, an
 unknown `sub`, and a disabled instance.
 
-### Slice 2 — memex-cloud is described by a record (#2805)
+### Slice 2 — memex-cloud is described by a record (Systemorph/Memex#152)
 
 The first `Hosting/Deployment` record anywhere: `memex-cloud/Deployment` on the registry, absorbing
 the Key Vault values (secrets by **name**) and the Memex-repo overlay; `HelmValues.Render` produces
@@ -274,4 +274,4 @@ partition's record with the plan-aware module picker; the Playwright suite in §
 - [Deployment on AKS](../DeploymentAKS) · [Memex Cloud deployment](../MemexCloudDeployment)
 - [Apps home](../AppsHome) — how an `app: true` package gets its tile
 - [Disposable mesh E2E](../DisposableMeshE2E) — the harness shape the suite in §6 follows
-- Issues: #2804 (licence on the instance), #2805 (memex-cloud record), #2417 (a local install as a registry consumer), #2483 (build principal — the second issuer of the shared verifier), #2550 (the manifest the wizard writes)
+- Issues: #2804 (licence on the instance), Systemorph/Memex#152 (memex-cloud record, transferred from #2805), #2417 (a local install as a registry consumer), #2483 (build principal — the second issuer of the shared verifier), #2550 (the manifest the wizard writes)
