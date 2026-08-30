@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -93,9 +94,27 @@ public class MeshConfiguration(
     /// <para>An <c>init</c> property rather than a primary-constructor parameter, deliberately:
     /// adding a parameter — even a trailing optional one — changes the constructor's SIGNATURE, and
     /// an already-published module binds that signature in its IL. Additive here, breaking there.</para>
+    ///
+    /// <para>🚨 <b>SNAPSHOTTED into an immutable set on assignment</b>, not stored by reference.
+    /// <c>MeshBuilder</c> hands over its own live <c>HashSet</c>, and an <c>IReadOnlySet</c> that is
+    /// really a <c>HashSet</c> can be cast back and written to — either way a routing decision would
+    /// depend on when it was asked. This set decides whether a delivery is carried or NACK'd, so it
+    /// is fixed at construction and cannot move afterwards.</para>
     /// </summary>
-    public IReadOnlySet<string> ClientHostedAddressTypes { get; init; } =
-        new HashSet<string>(StringComparer.Ordinal);
+    public IReadOnlySet<string> ClientHostedAddressTypes
+    {
+        get => clientHostedAddressTypes;
+        init => clientHostedAddressTypes = value is null or { Count: 0 }
+            ? EmptyAddressTypes
+            : ImmutableHashSet.CreateRange(StringComparer.Ordinal, value);
+    }
+
+    private readonly IReadOnlySet<string> clientHostedAddressTypes = EmptyAddressTypes;
+
+    /// <summary>Immutable, read-only, initialised once and never written — the sanctioned
+    /// <c>static readonly</c> shape (see NoStaticState.md).</summary>
+    private static readonly ImmutableHashSet<string> EmptyAddressTypes =
+        ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
 
     // No public Nodes / MeshNodes property. Static nodes registered via
     // MeshBuilder.AddMeshNodes(...) flow through StaticMeshNodeListProvider
