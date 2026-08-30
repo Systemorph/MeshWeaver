@@ -98,8 +98,8 @@ public class UnservedVerdictEvictionTest(ITestOutputHelper output) : HubTestBase
             TargetUnserved = true,
         };
 
-    /// <summary>Marker the owner writes AFTER the transient verdict — its arrival on the client is
-    /// the proof that the server-side stream was not evicted.</summary>
+    /// <summary>Marker that the owner writes after the transient verdict — its arrival on the
+    /// client is the proof that the server-side stream was not evicted.</summary>
     private const string SurvivedTheVerdict = "survived-the-transient-verdict";
 
     private static Task<int> EvictedAsync(Workspace workspace) =>
