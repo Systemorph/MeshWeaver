@@ -174,6 +174,16 @@ public static class OrleansServerRegistryExtensions
         // at process exit (#613). Subscribed at stage First ⇒ stops LAST, so grains keep their
         // full chance to flush before the terminal drain. See IoPoolSiloTeardown.
         services.AddIoPoolSiloTeardown();
+        // 🚨 Let ACCEPTED routing work LAND before the silo stops (issue #2638). RoutingGrain's
+        // turn is O(1), so Orleans' grain deactivation never waits on a route; the leg runs on
+        // the routing pool but holds its permit only for the subscribe; and the per-node delivery
+        // plus every NACK were detached from even that. The silo stop therefore ran — grains
+        // deactivated, transport stopped, mesh drained, container disposed — over legs that were
+        // still executing, and their tails died resolving grain proxies from a disposed Autofac
+        // scope. RoutingQuiescence counts that work; its participant holds the silo stop at stage
+        // Active (BEFORE membership announces ShuttingDown and BEFORE any grain deactivates) until
+        // the count is zero, bounded, so each leg lands or is NACK'd over a live transport.
+        services.AddRoutingQuiescence();
         // The root mesh hub's cross-silo REPLY stream (core#694 layer 2) — see
         // RootMeshHubReplyStreamService for the full story.
         services.AddRootMeshHubReplyStream();

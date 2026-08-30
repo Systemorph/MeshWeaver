@@ -241,11 +241,12 @@ evidence is in this pipeline's own comments — read them before proposing anyth
 
 **What is actually true:**
 
-- **`MeshWeaver.Plugins/publish-packages.yml` publishes NOTHING.** It packs and reports, `dry-run` by
-  design: *"nothing consumes a package feed"*, and a push to `nuget.pkg.github.com` would 403 on the
-  org's Packages billing limit and redden main on every merge. So there is no second publisher, and
-  **no package-release event to hang a webhook on** — the question is well-posed and the premise
-  does not hold here.
+- **There is no node-package feed, and no lane that could publish to one.** Until 2026-08-30
+  `MeshWeaver.Plugins/publish-packages.yml` packed every node package against a NuGet *floor* (dry
+  run, publishing nothing); the maintainer retired it — in-mesh source runs inside the portal
+  image, so its reference set is the image plus the modules the publication was sealed against
+  (`node-repo-compile-check.yml`), and nothing a node repo builds reaches a package feed. So there
+  is no second publisher, and **no package-release event to hang a webhook on**.
 - **Consumers fetch BUNDLES from the registry portal** (`/api/plugins/bundles`) — *"assembled from
   the very bytes that portal runs"*. Distribution is bundles, not a feed.
 - **Coordination already exists, and it is not a shared pipeline.** Each node repo's
