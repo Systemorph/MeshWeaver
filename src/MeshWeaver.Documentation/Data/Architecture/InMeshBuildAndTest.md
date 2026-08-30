@@ -43,6 +43,11 @@ ok  Claims/Claim: compile=Ok render=ok tests=ok
 `compile` is a real Roslyn pass over the node's sources; `tests` is the `Tests` area executed on a
 probe instance the gate creates. Neither involves a package, and neither is a `dotnet test`.
 
+> **This page is the CI-invocation layer.** What a plugin build *is* — take the image, install
+> dependencies as artifacts, build, test — is [The Plugin Build Contract](/Doc/Architecture/PluginBuildContract),
+> and the cascade it runs as is [The Build Process](/Doc/Architecture/BuildProcess). This page is
+> about how CI reaches them: one tool, three lines, and no repo-local script.
+
 ## The gap is not NodeTypes — it is modules
 
 The 206 node sets are already in the target shape. The 44 compiled test projects are testing
@@ -125,19 +130,112 @@ currently uses.
 The maintainer's shape for a CI job, in four lines:
 
 ```yaml
-- uses: actions/checkout@v7                      # 0. checkout git
-- run: dotnet tool install -g MeshWeaver.Cli     # 1. install the CLI
-- run: memex build plugin <path>                 # 2. build + run it
+- uses: actions/checkout@v7                                   # 0. checkout git
+- run: dotnet tool install -g MeshWeaver.Cli                  # 1. install the CLI
+- run: memex build plugin <path> --image <image>              # 2. pull it, run in it, build + test
 ```
 
-**`memex build plugin <path>` is the whole contract.** A workflow says *which plugin this job is
-about*; the tool works out what actually changed, closes over everything that depends on it, builds
-that, and runs its tests. Nothing else in the job knows about modules, closures, bundles or the
-mesh — and a plugin repo's CI stops being a program about MeshWeaver and becomes three lines.
+**`memex build plugin <path> --image <image>` is the whole contract.** A workflow says *which plugin
+this job is about* and *which image to build it against*; the tool pulls that image, runs the build
+inside it, works out what actually changed, closes over everything that depends on it, builds that,
+runs its tests, and publishes. Nothing else in the job knows about modules, closures, bundles,
+registries or the mesh — and a plugin repo's CI stops being a program about MeshWeaver and becomes
+three lines.
 
 The verb shape matters as much as the behaviour: `build` is the command group and `plugin` names
-the subject, so the same tool has room for the other subjects CI needs (`memex build …` for other
-artefacts, `memex test …`, `memex publish …`) without every repo growing its own script for each.
+the subject, so the same tool has room for the other subjects CI needs without every repo growing
+its own script for each.
+
+### The image is an ARGUMENT, not an ambient
+
+`memex build plugin <path> --image <image>` — **the image to build against is passed in.**
+
+A plugin is built by taking the MeshWeaver image and installing its dependencies as built artifacts
+into it ([the four steps](/Doc/Architecture/PluginBuildContract)). Which image that is decides the
+whole result, so it belongs in the invocation where a reader can see it, not in an environment
+variable resolved somewhere upstream.
+
+🚨 **This is not a preference; it is the thing that failed on 2026-08-30.** The gate named
+`Compile every NodeType (vs core)` took its 120 reference assemblies from `MW_IMAGE_DIGEST` — an
+image — while advertising `MW_PLATFORM_REF: main`, a label that decided nothing. A contract merged
+into core `main` twenty minutes earlier was therefore invisible to it, two NodeTypes failed
+`CS0246`, and the natural conclusion from the job's name was *"the type is missing from core"* —
+which was false, and would have sent someone to the wrong repository. 76 of 78 NodeTypes compiled
+fine against the same set, which is exactly what "the framework in this image predates that merge"
+predicts.
+
+**And the CLI pulls the image and runs it.** That is the other half of making the image an argument:
+the job does not `docker login`, does not `docker pull`, does not `docker run` with a volume mount
+and a wall of flags. It names the image; the tool fetches it and executes the build inside it.
+
+That is what collapses a plugin repo's CI to three lines. Everything the current workflows spend
+their length on — logging in to the registry, resolving a digest, mounting `/repo`, wiring the bake
+output, passing `--seed`, retrying a login that failed on a TCP reset — is the tool's business, in
+one place, testable, rather than copied into every repo's YAML and drifting.
+
+It also puts the registry-transient handling somewhere it can be done once and done properly.
+Bounded retry around a registry operation currently exists in four workflows as four separate
+shell loops, each added after a different incident.
+
+With the image as an explicit argument:
+
+- **the skew is visible.** `--image meshweaver.azurecr.io/mw-plugin-test:<tag>` in the job is a fact
+  a reader can check against the change under test; `MW_IMAGE_DIGEST` in an env block is not.
+- **the label cannot lie.** There is no second name for the framework, so no gate can be called
+  *"vs core"* while consuming an image.
+- **pinning during an incident is an argument change**, not an edit to a workflow under pressure —
+  the same property `MW_PLUGINS_REF` was given deliberately in `main-cd.yml`.
+
+### What `build` means by default — both directions, then publish
+
+**By default the command closes over the dependency graph in *both* directions and ends by
+publishing:**
+
+1. **Everything the target depends on is built** — the upstream closure, so the target is built
+   against the actual current state of its dependencies rather than whatever a registry last
+   happened to serve.
+2. **Everything that depends on this repo's targets is built** — the downstream closure, **across
+   repos**. A change to core builds Plugins, Reinsurance, Education, SocialMedia, Crm and
+   Manufacturing, because they are what depends on it.
+3. **It ends by publishing a new package version.**
+
+🚨 **"Package" here is a module bundle in the plugin registry, not NuGet.** That is not in tension
+with *"no NuGet packages"* above: the platform is never consumed as a NuGet package, and what gets
+published at the end of a build is the plugin's own bundle, which is how installs already receive
+modules. The one NuGet artefact in the whole picture is the CLI itself
+(`dotnet tool install -g MeshWeaver.Cli`), which is the tool, not the product.
+
+### Why the downstream half is the important half
+
+It is tempting to read step 2 as an optimisation. It is the opposite: it is the only step that
+closes a hole this fleet has been paying for repeatedly, and it had a live example on the very day
+this page was written.
+
+Core merged an added overload — `ObserveCompletion` — which is **source-compatible everywhere the
+compiler looks**. Nothing was removed, so no binary-compat gate would fire. But `<see cref>` is the
+one place where *adding* a member breaks already-correct code, and three bare crefs in
+**MeshWeaver.Plugins** became `CS0419` under `-warnaserror`. Core's CI could not see them; Plugins'
+CI builds against the published core, not core's `main`. **Neither side could catch it**, and the
+break was found only when core CD — which builds the portal hosts *from* `plugins-repo` — went red
+and **delivery stopped for hours**.
+
+A build that closes downstream by default builds the dependents *as part of the change that breaks
+them*. That is [#2689](https://github.com/Systemorph/MeshWeaver/issues/2689)'s ask, delivered as a
+property of the build rather than as another gate someone has to remember to add.
+
+### The cost, stated
+
+A default that builds every dependent across six repos is expensive, and pretending otherwise would
+be dishonest. Two things make it tractable, and both already exist:
+
+- **the affected-set computation** — the closure is over what *changed*, not over everything; and
+- **the publication-derived baseline** — the diff is against what is actually published, so a
+  re-run or a raced run does not re-do the world.
+
+Which is why the `--self-test` that *proves the computation can say no* matters more here than
+anywhere else: with a bidirectional default, an affected-set computer that always answers
+"everything" turns every commit into a fleet-wide rebuild, and nothing about a green run would tell
+you.
 
 **Most of this is already written — it is just split three ways and one of the three is python.**
 
