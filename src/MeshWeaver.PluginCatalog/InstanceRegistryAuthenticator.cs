@@ -239,10 +239,27 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                                     instance,
                                     Content<PluginGrant>(grantRead.Node)
                                     ?? new PluginGrant { InstanceId = instance.InstanceId }));
-                            });
+                            })
+                            // The plan ladder rides on the caller: a plan-scoped grant entry is
+                            // decided against it at every surface, and reading it HERE — inside the
+                            // same System scope, cached with the same lifetime as the verdict — is
+                            // what keeps the endpoints from each resolving a ladder of their own.
+                            // A ladder read that fails yields Empty: plan-scoped entries then license
+                            // nothing (fail closed), plan-less entries are untouched, and the
+                            // verdict itself stays a verdict.
+                            .SelectMany(result => result.Instance is null
+                                ? Observable.Return(result)
+                                : Ladder().Select(ranks =>
+                                    InstanceAuthResult.Resolved(result.Instance with { Ranks = ranks })));
                     });
             }));
     }
+
+    /// <summary>The registry's plan ladder, or <see cref="PlanTierRanks.Empty"/> on a host that
+    /// registers no <see cref="PlanTierLadder"/>. Composed inside the resolution's System scope.</summary>
+    private IObservable<PlanTierRanks> Ladder() =>
+        hub.ServiceProvider.GetService<PlanTierLadder>()?.Read()
+        ?? Observable.Return(PlanTierRanks.Empty);
 
     /// <summary>The unavailable result for a read that reached no verdict, or null when it did.
     /// <see cref="NodeReadStatus.DeleteInProgress"/> counts as a verdict — the record is going away,
@@ -339,9 +356,17 @@ public sealed record AuthenticatedInstance(MeshWeaverInstance Instance, PluginGr
     /// </summary>
     public SyncAccessTokenClaims? TokenScope { get; init; }
 
+    /// <summary>
+    /// The registry's plan ladder at resolution time — what a plan-scoped grant entry is decided
+    /// against (<see cref="PlanTierRanks.Covers"/>). <see cref="PlanTierRanks.Empty"/> on a host
+    /// with no tier nodes or when the read failed: plan-scoped entries then license nothing.
+    /// </summary>
+    public PlanTierRanks Ranks { get; init; } = PlanTierRanks.Empty;
+
     /// <summary>Whether this caller may pull <paramref name="packageId"/> from registry source
-    /// <paramref name="sourceName"/> at <paramref name="now"/> — granted, still within the
-    /// licence's term, and within the presented token's scope if one was used.</summary>
+    /// <paramref name="sourceName"/> at <paramref name="now"/> WITHOUT knowing the package's tier —
+    /// only a plan-less grant entry can say yes (see <see cref="PluginGrant.Allows(string,string,DateTimeOffset)"/>),
+    /// and the presented token's scope must cover it if one was used.</summary>
     public bool Allows(string sourceName, string packageId, DateTimeOffset now) =>
         Grant.Allows(sourceName, packageId, now)
         && (TokenScope is null || TokenScope.Covers(sourceName, packageId));
@@ -350,4 +375,16 @@ public sealed record AuthenticatedInstance(MeshWeaverInstance Instance, PluginGr
     /// <paramref name="sourceName"/> right now — what a live request means.</summary>
     public bool Allows(string sourceName, string packageId) =>
         Allows(sourceName, packageId, DateTimeOffset.UtcNow);
+
+    /// <summary>Whether this caller may pull <paramref name="packageId"/> — declaring
+    /// <paramref name="packageTier"/> — from registry source <paramref name="sourceName"/> at
+    /// <paramref name="now"/>: granted for that tier under <see cref="Ranks"/>, within term, and
+    /// within the token's scope. The overload every registry surface decides with.</summary>
+    public bool Allows(string sourceName, string packageId, string? packageTier, DateTimeOffset now) =>
+        Grant.Allows(sourceName, packageId, packageTier, Ranks, now)
+        && (TokenScope is null || TokenScope.Covers(sourceName, packageId));
+
+    /// <summary><see cref="Allows(string,string,string?,DateTimeOffset)"/> right now.</summary>
+    public bool Allows(string sourceName, string packageId, string? packageTier) =>
+        Allows(sourceName, packageId, packageTier, DateTimeOffset.UtcNow);
 }

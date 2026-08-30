@@ -134,5 +134,140 @@ public class PluginGrantTest
         Assert.Equal(entry, PluginGrantEntry.TryParse(entry.ToString()));
     }
 
+    // ── Plans: an entry scoped to a subscription tier ────────────────────────────────────────
+    //
+    // The ladder the Store seeds under Admin/Tiers/* as of 2026-08-30 — rank on the node, dedicated
+    // flagged all-access ("no limit on packages", which its rank alone would not give it).
+    private static readonly PlanTierRanks Ladder = PlanTierRanks.From(
+    [
+        ("free", 0, false), ("personal", 10, false), ("pro", 20, false),
+        ("dedicated", 25, true), ("enterprise", 30, false),
+    ]);
+
+    private static PluginGrant PlanGrant(string tier) => new()
+    {
+        InstanceId = "customer",
+        Entries = [new PluginGrantEntry { Source = "Plugins", PackageId = PluginGrantEntry.AllPackages, Tier = tier }],
+    };
+
+    private static bool Covers(string plan, string? packageTier) =>
+        PlanGrant(plan).Allows("Plugins", "SomePackage", packageTier, Ladder);
+
+    [Theory]
+    [InlineData("personal", "free", true)]
+    [InlineData("personal", "personal", true)]
+    [InlineData("personal", "pro", false)]
+    [InlineData("personal", "enterprise", false)]
+    [InlineData("pro", "personal", true)]
+    [InlineData("pro", "pro", true)]
+    [InlineData("pro", "dedicated", false)]
+    [InlineData("enterprise", "pro", true)]
+    [InlineData("enterprise", "enterprise", true)]
+    public void PlanScopedEntry_CoversPackagesRankedAtOrBelowItsPlan(string plan, string packageTier, bool covered)
+        => Assert.Equal(covered, Covers(plan, packageTier));
+
+    [Fact]
+    public void AllAccessPlan_CoversEvenPackagesRankedAboveIt()
+        // Dedicated ranks 25 and enterprise 30, so by rank alone the dedicated instance would lose
+        // the enterprise-marked packages — "no limit on packages" is the all-access flag on its
+        // tier node, not a bigger number.
+        => Assert.True(Covers("dedicated", "enterprise"));
+
+    [Theory]
+    [InlineData("personal")]
+    [InlineData("pro")]
+    [InlineData("enterprise")]
+    public void PackageDeclaringNoPlan_IsBaseline_CoveredByEveryPlan(string plan)
+        // Store, Agents, Skills and Essentials declare no tier. A plan-scoped instance without them
+        // is not a smaller portal, it is a broken one — the one deliberate asymmetry with the
+        // Store's purchase rule, where "no tier" means "not sold under a plan".
+        => Assert.True(Covers(plan, null));
+
+    [Fact]
+    public void UnknownPlanOnTheEntry_LicensesNothing()
+    {
+        Assert.False(Covers("platinum", "free"));
+        Assert.False(Covers("platinum", null));
+    }
+
+    [Fact]
+    public void UnknownPackageTier_IsCoveredByNothing()
+        // A typo on the package side must never widen a licence either.
+        => Assert.False(Covers("enterprise", "gold"));
+
+    [Fact]
+    public void WithoutALadder_PlanScopedEntriesFailClosed_AndPlanLessOnesStand()
+    {
+        var scoped = PlanGrant("pro");
+        Assert.False(scoped.Allows("Plugins", "Store", "free", PlanTierRanks.Empty));
+        Assert.False(scoped.Allows("Plugins", "Store", null, PlanTierRanks.Empty));
+        // The customer-portal grant of today — no plan — is unchanged by the ladder's absence.
+        var open = new PluginGrant
+        {
+            InstanceId = "prod",
+            Entries = [new PluginGrantEntry { Source = "Plugins" }],
+        };
+        Assert.True(open.Allows("Plugins", "Store", "enterprise", PlanTierRanks.Empty));
+    }
+
+    [Fact]
+    public void TierBlindOverload_NeverSaysYesOnAPlanScopedEntry()
+    {
+        // A caller that does not know the package's tier cannot be answered by a plan-scoped
+        // entry — otherwise every plan is all-access at exactly the call sites that forgot to ask.
+        Assert.False(PlanGrant("enterprise").Allows("Plugins", "Store"));
+        Assert.True(MemexGrant.Allows("Plugins", "Store"));
+    }
+
+    [Fact]
+    public void WholeSourceFetch_NeedsAPlanLessWholeSourceEntry()
+    {
+        // A sealed publication carries every plan's bundles; a plan-scoped `Plugins/*` licenses
+        // that source's packages one by one and never the publication whole.
+        Assert.True(MemexGrant.AllowsWholeSource("Plugins"));
+        Assert.False(MemexGrant.AllowsWholeSource("Reinsurance"));   // a single-package entry
+        Assert.False(PlanGrant("dedicated").AllowsWholeSource("Plugins"));
+    }
+
+    [Fact]
+    public void PlanMatchIsCaseInsensitive_OnBothSides()
+    {
+        Assert.True(PlanGrant("PRO").Allows("Plugins", "X", "Personal", Ladder));
+        Assert.True(PlanGrant("pro").Allows("Plugins", "X", " PRO ", Ladder));
+    }
+
+    [Theory]
+    [InlineData("Plugins/*@pro", "Plugins", "*", "pro")]
+    [InlineData("Plugins@personal", "Plugins", "*", "personal")]
+    [InlineData("Education/AgenticEngineering@Pro", "Education", "AgenticEngineering", "pro")]
+    public void TryParse_ReadsThePlanSuffix(string text, string source, string package, string tier)
+    {
+        var entry = PluginGrantEntry.TryParse(text);
+        Assert.NotNull(entry);
+        Assert.Equal(source, entry!.Source);
+        Assert.Equal(package, entry.PackageId);
+        Assert.Equal(tier, entry.Tier);
+    }
+
+    [Theory]
+    [InlineData("Plugins/*@")]   // a plan separator with no plan
+    [InlineData("@pro")]         // a plan with no source
+    public void TryParse_MalformedPlanSuffix_IsNull(string text)
+        => Assert.Null(PluginGrantEntry.TryParse(text));
+
+    [Fact]
+    public void PlanScopedEntry_RendersAndRoundTrips()
+    {
+        var entry = new PluginGrantEntry { Source = "Plugins", Tier = "pro" };
+        Assert.Equal("Plugins/*@pro", entry.ToString());
+        Assert.Equal(entry, PluginGrantEntry.TryParse(entry.ToString()));
+        // A plan-less entry renders exactly as before — the notation is additive.
+        Assert.Equal("Plugins/*", new PluginGrantEntry { Source = "Plugins" }.ToString());
+    }
+
+    [Fact]
+    public void Ladder_OrdersItsIdsCheapestFirst()
+        => Assert.Equal(["free", "personal", "pro", "dedicated", "enterprise"], Ladder.Ids);
+
     private static bool MemexAllows(string source, string package) => MemexGrant.Allows(source, package);
 }

@@ -209,6 +209,21 @@ public record PackageManifest
     public string? Currency { get; init; }
 
     /// <summary>
+    /// The subscription PLAN this package belongs to (the root content's <c>tier</c> — <c>free</c>,
+    /// <c>personal</c>, <c>pro</c>, <c>dedicated</c>, <c>enterprise</c>), lower-cased; null when the
+    /// package declares none, which the registry reads as platform BASELINE (rank 0 — covered by
+    /// every plan).
+    ///
+    /// <para>🚨 Read here because the registry's ENTITLEMENT decision keys on it: a plan-scoped
+    /// grant entry (<c>Plugins/*@personal</c>) licenses the packages of a source by their tier,
+    /// and leaving the field unread would make every such entry license nothing — the same
+    /// dead-metadata class <c>preInstalled</c>, <c>contactEmail</c> and <c>module</c> each were.
+    /// Carried onto the install record by the ordinary stamp, so the bundle index can decide
+    /// without re-reading the repo.</para>
+    /// </summary>
+    public string? Tier { get; init; }
+
+    /// <summary>
     /// The sales contact (the root content's <c>contactEmail</c>). Set = the package is sold
     /// CONTACT-SALES rather than self-service: the Store's cover offers "Contact sales" instead of a
     /// buy button, and the content is gated exactly as a priced package's is.

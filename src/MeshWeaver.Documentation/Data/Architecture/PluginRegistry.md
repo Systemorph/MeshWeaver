@@ -185,6 +185,62 @@ its check on the action.
 > for three instances and not for a catalogue: a consumer needing ONE package had no smaller thing
 > to ask for than a standing credential to a whole repository.
 
+### Plans — an entry scoped to a subscription tier
+
+The Store sells **plans** (`free` · `personal` · `pro` · `dedicated` — your own instance — ·
+`enterprise` — self-hosted; [Subscriptions](/Doc/Architecture/PluginRegistry) in the Store's own
+docs), and every package names the plan it belongs to in its root's `content.tier`. A grant entry
+can now carry that plan too — `Plugins/*@pro` — and then licenses exactly **the packages of its
+source that the plan covers**, decided by `PlanTierRanks.Covers`:
+
+| entry | covers |
+|---|---|
+| `Plugins/*` (no plan) | every package of the source, whatever it declares — today's meaning, unchanged |
+| `Plugins/*@personal` | packages declaring `free` or `personal`, and every package declaring **no** tier |
+| `Plugins/*@pro` | … plus `pro` |
+| `Plugins/*@dedicated` | everything — the tier node is flagged `allAccess` ("no limit on packages"), which its rank alone (25 &lt; enterprise's 30) would not give it |
+| `Plugins/*@enterprise` | everything, by rank |
+
+**The ladder is the Store's data, not a table in the platform.** The registry reads its own
+`Admin/Tiers/{id}` nodes (`content.rank`, `content.allAccess`) once a minute (`PlanTierLadder`) and
+hands the snapshot to the authenticated caller, so every surface — `/api/plugins`, `/files`, the
+bundle index and download — decides the same way and there is no copy of the Store's `PlanTiers` to
+drift. Two rules are deliberate and fail closed:
+
+- a plan the ladder does not know licenses **nothing**, and a package tier it does not know is
+  covered by **nothing** — a typo never widens a licence. The admin tab refuses an unknown plan
+  before writing it; a registry with no tier nodes at all decides every plan-scoped entry as "no"
+  while plan-less entries are untouched;
+- a caller that does not know the package's tier (the tier-blind `Allows(source, package)`) is
+  never answered by a plan-scoped entry — otherwise every plan would be all-access at exactly the
+  call sites that forgot to ask.
+
+One asymmetry with the Store's *purchase* rule is deliberate: a package that declares **no** tier
+(Store, Agents, Skills, Essentials) is the platform **baseline** and is covered by every plan. For a
+person buying a package "no tier" means "not sold under a plan"; for an instance replicating the
+registry it means "ships with the platform", and a Pro instance without the Store is not a smaller
+portal, it is a broken one.
+
+**A registration key carries the plan.** Mint it for a plan (Instance grants ▸ Registration keys ▸
+Plan) and every install that registers with it is seeded `<source>/*@<plan>` for each configured
+source, on top of `DefaultGrants` — "a key for Pro customers" is minted once and never typed per
+instance. A key with no plan seeds the `DefaultGrants` alone, exactly as before. Fetching a source's
+**sealed publication whole** (`/api/plugins/bundles/prebuilt/…`, the node-repo CI gates) still needs
+a plan-less `<source>/*`: the publication carries every plan's bundles.
+
+**Open registration — the free tier by default.** A local install (`memex-local registry
+https://memex.meshweaver.cloud`, no key) registers with **no** bootstrap key at all. The registry
+accepts that only where its operator minted a registration key for the plan un-keyed callers enrol
+into — `free` on memex.meshweaver.cloud — and configured it as `PluginCatalog:OpenRegistration:Key`
+(the chart's `secrets.memex_portal.PluginCatalog__OpenRegistration__Key`). The registration then runs
+exactly as if the caller had presented that key: owned by its minting admin, seeded
+`<source>/*@free`, revocable by revoking the key. Everywhere else an un-keyed registration is refused
+with the same 401 an invalid key gets, and the caller never learns which. Raising an instance to a
+higher plan is a platform admin's edit of its grant on the registry (Instance grants ▸ Plan) —
+never something the instance can ask for. `InstanceOpenRegistrationTest` and `PluginBundlePlanTest`
+pin both halves: the closed default, and that an instance on the free plan cannot pull a package
+above it.
+
 ## Short-lived tokens — `POST /api/instances/token`
 
 An instance exchanges its durable `mwi_` key for a short-lived, scoped `mwa_` access token:
