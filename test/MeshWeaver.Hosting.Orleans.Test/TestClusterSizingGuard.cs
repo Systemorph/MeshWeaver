@@ -83,7 +83,7 @@ public class TestClusterSizingGuard(ITestOutputHelper output)
         var homes = new[]
         {
             Path.Combine(dir.FullName, "test", "MeshWeaver.Hosting.Orleans.Test"),
-            Path.Combine(dir.FullName, "src", "MeshWeaver.Hosting.Orleans.TestBase"),
+            Path.Combine(dir.FullName, "test", "MeshWeaver.Hosting.Orleans.TestBase"),
             // 🚨 MeshWeaver.AI.Orleans.TestBase used to sit here too; the AI rig left this repo
             // with the engine (#2276), so its cluster-sizing is guarded by the same test in
             // MeshWeaver.Plugins. A guard cannot police sources it cannot see — naming a directory
