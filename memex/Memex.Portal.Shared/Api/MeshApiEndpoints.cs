@@ -227,11 +227,17 @@ public static class MeshApiEndpoints
     /// <summary>
     /// <c>POST /api/mesh/render-area</c> — subscribes the node's layout area server-side (the
     /// same <c>GetRemoteStream</c> primitive the Blazor portal binds with), takes the first
-    /// fully-materialised Full <c>{areas,data}</c> frame, disposes the subscription (on every
-    /// path, including client abort — the observable chain tears down with the request's
-    /// <see cref="CancellationToken"/>), and ships the frame verbatim: hub serializer options,
+    /// fully-materialised Full <c>{areas,data}</c> frame, disposes the subscription on every
+    /// normal path, and ships the frame verbatim: hub serializer options,
     /// <c>$type</c> discriminators, JSON-encoded instance keys — byte-identical to the gRPC
     /// wire's Full <c>DataChangedEvent</c>, so an SSR client seeds its area source without
+    /// <para>🚨 On a CLIENT ABORT the wait stops but the subscription is NOT disposed: the
+    /// cancellation token passed to <c>ObserveCompletion</c> cancels the returned <c>Task</c>, and
+    /// that method deliberately keeps its error arm attached so a late fault is reported instead
+    /// of vanishing. The render therefore runs to completion server-side after an abort. Said
+    /// plainly because the earlier wording promised teardown the code does not perform; if a real
+    /// abort-cancels-the-render is wanted, it needs an explicit disposal path, not a doc edit.</para>
+    ///
     /// translation. A timeout returns a 504 JSON error instead of hanging; every other failure
     /// ships the <see cref="MeshOperations"/> <c>"Error: …"</c>/<c>"Not found: …"</c> sentinel
     /// exactly like the sibling verbs.

@@ -80,7 +80,6 @@
 # helper that might accidentally deadlock the suite, it IS the deadlock, constructed on a private
 # single-threaded SynchronizationContext and proven via a BOUNDED wait from a genuinely separate
 # thread. It exists to pin the mechanism this whole ratchet is about; see the file's own remarks.
-test/MeshWeaver.Content.Test/ThreadMessageToolTest.cs	1
 test/MeshWeaver.ContentCollections.Indexing.Graph.Test/ContentChunkAutocompleteProviderTest.cs	2
 test/MeshWeaver.ContentCollections.Indexing.Test/ChunkNavigationStoreTest.cs	2
 test/MeshWeaver.ContentCollections.Indexing.Test/ContentChunkSearchTest.cs	6
@@ -90,10 +89,7 @@ test/MeshWeaver.Documentation.Test/BlockingBridgeSelfDeadlockMechanismTest.cs	1
 test/MeshWeaver.Graph.Test/NodeTypeAdoptionRegistryTest.cs	3
 test/MeshWeaver.Graph.Test/NodeTypeBakeStatusTest.cs	2
 test/MeshWeaver.Graph.Test/OverlayReEvaluationReadTest.cs	3
-test/MeshWeaver.Hosting.Orleans.Test/OrleansClusterDisposal.cs	1
 test/MeshWeaver.Hosting.Orleans.Test/OrleansEventSubscriptionTimerTest.cs	1
-test/MeshWeaver.Hosting.Orleans.Test/OrleansScheduledPostTest.cs	2
-test/MeshWeaver.Hosting.PostgreSql.Test/PostgreSqlTransientRetryTest.cs	4
 test/MeshWeaver.Hosting.Test/AlcLeaseRegistryTest.cs	3
 test/MeshWeaver.Messaging.Hub.Test/SystemScopeDoesNotEscapeTest.cs	3
 test/MeshWeaver.PluginCatalog.Test/FeatureFlagReaderTest.cs	7

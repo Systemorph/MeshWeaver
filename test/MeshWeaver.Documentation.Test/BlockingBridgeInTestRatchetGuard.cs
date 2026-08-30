@@ -82,12 +82,21 @@ public class BlockingBridgeInTestRatchetGuard(ITestOutputHelper output)
     /// the shape; this stops the list as a WHOLE from growing — including by the trick of adding a
     /// new file's line. Lower it whenever you delete or lower an entry.
     /// </summary>
-    private const int TotalBudget = 46;
+    private const int TotalBudget = 38;
 
     /// <summary>
-    /// <c>test/</c> only. <c>src/</c> is governed by the harder rule AGENTS.md already states for
-    /// product code (nothing async, ever) and by the reviews that enforce it; this guard exists
-    /// because tests were treated as exempt from it, and the consequence there is WORSE, not milder.
+    /// <c>test/</c> only — this guard exists because tests were treated as exempt from the
+    /// no-blocking rule, and the consequence there is WORSE, not milder: a test that self-deadlocks
+    /// takes its whole shard with it and reports <c>exit=124</c> with no failing test named.
+    ///
+    /// <para>🚨 CORRECTED 2026-08-30. This remark used to say <c>src/</c> was covered "by the
+    /// harder rule AGENTS.md already states for product code … and by the reviews that enforce it".
+    /// <b>Reviews are not a gate</b>, and the production trees in fact carried 9 unguarded blocking
+    /// sites across 5 files. They are now scanned — by
+    /// <see cref="ObservableToTaskBridgeGuard.NoNewBlockingBridgeInProductionCode"/>, against
+    /// <c>test/ProductionBlockingBridgeSites.allow</c>, using the same two markers. The two guards
+    /// are split by ROOT rather than by marker so each keeps one budget over one tree; do not widen
+    /// this array to production roots or the same sites would be counted against two budgets.</para>
     /// </summary>
     private static readonly string[] ScannedRoots = ["test"];
 

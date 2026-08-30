@@ -1,0 +1,44 @@
+# Blocking bridges in PRODUCTION roots (src/, tools/, samples/, clients/).
+#
+# Seeded 2026-08-30 by ObservableToTaskBridgeGuard.NoNewBlockingBridgeInProductionCode.
+# Format: <repo-relative path><TAB><count>.  '#' starts a comment.
+#
+# 🚨 THIS INVENTORY MAY ONLY SHRINK. Adding a line is not a fix — it is the fix being
+# skipped. Fix the site (stay reactive and Subscribe, or go through IIoPool at a genuine
+# IO edge), delete the line, and lower ProductionBlockingTotalBudget in the same change.
+#
+# WHY IT IS SEEDED RATHER THAN EMPTY. Every other rule in ObservableToTaskBridgeGuard holds
+# production at ZERO with no list at all, because production genuinely contains no
+# unsanctioned observable-to-Task bridge. The BLOCKING shapes do not start from zero: these
+# nine sites already existed when the guard was extended, and the sibling guard
+# (BlockingBridgeInTestRatchetGuard) had never scanned production roots — it scans test/ only,
+# on the stated grounds that src/ is "governed by ... the reviews that enforce it". Reviews
+# are not a gate. Holding these at zero on day one would have made the guard red on merge,
+# and a rule that reds on arrival gets suppressed rather than obeyed.
+#
+# The markers are `.Wait()` and `.GetAwaiter().GetResult()`. `.Wait(timeout)` is deliberately
+# NOT matched: IoPool's `_gate.Wait(DrainTimeout)` is the SemaphoreSlim AGENTS.md sanctions
+# inside IoPool, and HubDisposalJoin's `joined.Wait(budget)` is a documented, bounded
+# Task.Wait(TimeSpan). The empty-paren spelling is the UNBOUNDED park, which is the defect.
+
+# Two Python-process reads bridged to blocking waits in an in-mesh sample layout area.
+# In-mesh source compiles at RUNTIME in the portal, so no compiler here ever sees this file —
+# which is exactly why it needs a scanner rather than a review.
+samples/Graph/Data/PythonDemo/PrimeReport/Source/PrimeReportLayoutAreas.cs	2
+
+# Rx's blocking IObservable.Wait() over an @@-include resolution whose chain completes on
+# subscribe (a dictionary lookup). Safe as written, but the shape is one refactor away from a
+# real source and therefore from a real park.
+src/MeshWeaver.Compiler/NodeSetCompiler.cs	1
+
+# Rx's blocking IObservable.Wait() on the Orleans cluster disposal join. Bounded by an
+# upstream .Timeout(timeout), whose timer runs on the default scheduler and so always unblocks
+# the parked thread — a named failure rather than a wedge.
+src/MeshWeaver.Hosting.Orleans.TestBase/OrleansClusterDisposal.cs	1
+
+# Host lifecycle (StartAsync/StopAsync) and a queue drain, blocked from the plugin tester's
+# synchronous run boundary.
+tools/MeshWeaver.PluginTester/PluginGateRunner.cs	3
+
+# One Rx .Wait() over package discovery and one .GetAwaiter().GetResult() in the bake.
+tools/MeshWeaver.PluginTester/TreeBake.cs	2
