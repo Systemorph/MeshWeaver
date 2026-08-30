@@ -1,3 +1,5 @@
+using MeshWeaver.Mesh;
+
 namespace MeshWeaver.Fixture;
 
 /// <summary>
@@ -25,8 +27,33 @@ namespace MeshWeaver.Fixture;
 /// </summary>
 public static class TestTimeouts
 {
-    /// <summary>Local baseline for one convergence wait. Every other value is derived from it.</summary>
-    private static readonly TimeSpan LocalConvergence = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// 🚨 The framework's own outer bound on a caller-visible write — the instant
+    /// <c>UpdateRemote</c> gives up and reports <c>OwnerUnreachable</c>. A test wait must DOMINATE
+    /// it, never equal it.
+    ///
+    /// <para>The old baseline was a literal <c>30 s</c>, which is exactly
+    /// <c>LateResponseWatchBound</c> and one second below this. A test awaiting a mesh write
+    /// therefore gave up one second BEFORE the framework produced its diagnosis, every single time
+    /// — so the failure always read "the observable emitted nothing at all" and never
+    /// "OwnerUnreachable: the owner produced no terminal for this patch". The bound was placed at
+    /// precisely the value that destroys the most information (#2819).</para>
+    /// </summary>
+    private static TimeSpan FrameworkWriteBound => LatePatchResponseRegistry.WriteVerdictBound;
+
+    /// <summary>
+    /// Local baseline for one convergence wait. Every other value is derived from it — and it is
+    /// itself derived from <see cref="FrameworkWriteBound"/> rather than written as a literal, so
+    /// the ordering holds by construction instead of by whoever writes the next test remembering
+    /// it.
+    ///
+    /// <para>The slack is ADDITIVE, not a ratio: what has to be covered is the propagation of one
+    /// terminal — the framework produces <c>OwnerUnreachable</c> at the write bound and it has to
+    /// reach the assertion — and that cost does not scale with the bound. Five seconds is ample
+    /// for it and keeps the local wait near the familiar half-minute; a multiplier would inflate
+    /// every wedged test's failure time to buy the same few seconds.</para>
+    /// </summary>
+    private static TimeSpan LocalConvergence => FrameworkWriteBound + TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// How much slower CI is assumed to be. Overridable with <c>MW_TEST_TIMEOUT_FACTOR</c> so the
