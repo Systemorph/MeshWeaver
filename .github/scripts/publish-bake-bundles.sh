@@ -147,9 +147,20 @@ for zip in "${BUNDLES[@]}"; do basename "$zip"; done | sort > "$SENTINEL_LOCAL"
 MODULES_DIR_NAME="modules"
 MODULES_INDEX="_index"
 MODULES=("$BAKE_DIR/$MODULES_DIR_NAME"/*.module.nupkg)
+# 🚨 A workflow that COMPOSED modules must have STAGED them. EXT_MODULES_DIR is exported by the
+# reusable bake's assemble step (before and after #2707 alike); an empty staging dir beside it
+# means the CALLING WORKFLOW predates module sealing while this script does not — a version skew
+# (the workflow pinned by `uses:`, the script fetched at platform-ref). Plugins run 33284306805
+# (2026-08-30) sealed exactly that: an EMPTY set that the new contract reads as "composed nothing",
+# so every consumer was told the seal carries no AI. RED, naming the pin to bump — never a seal
+# that claims completeness for bytes it did not carry.
+if [ -n "${EXT_MODULES_DIR:-}" ] && [ "${#MODULES[@]}" -eq 0 ]; then
+  echo "::error::this bake composed external modules ($(ls "$EXT_MODULES_DIR" 2>/dev/null | tr '\n' ' ')) but staged none under $BAKE_DIR/$MODULES_DIR_NAME/ — the calling workflow predates module sealing (MeshWeaver#2707) while this script does not. Bump the caller's node-repo-publish-bake.yml pin to a core commit at or after 4584ca3c5. Refusing to seal an empty module set that would claim completeness."
+  exit 1
+fi
 MODULES_INDEX_LOCAL="$SENTINEL_LOCAL_DIR/$MODULES_INDEX"
 : > "$MODULES_INDEX_LOCAL"
-for m in "${MODULES[@]}"; do basename "$m"; done | sort > "$MODULES_INDEX_LOCAL"
+for m in ${MODULES[@]+"${MODULES[@]}"}; do basename "$m"; done | sort > "$MODULES_INDEX_LOCAL"
 
 # The CONTENT identity marker: which source commit this publication was baked from. It is NOT
 # part of the reader's contract (SeedPublishedRoot seeds only what the sentinel lists; extra
@@ -235,7 +246,7 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   # The module set: every bundle, then its index — both strictly before the sentinel.
   ensure_directory "$account" "$share" "$dest/$MODULES_DIR_NAME"
   local m
-  for m in "${MODULES[@]}"; do
+  for m in ${MODULES[@]+"${MODULES[@]}"}; do
     az storage file upload --account-name "$account" --share-name "$share" \
       --path "$dest/$MODULES_DIR_NAME/$(basename "$m")" --source "$m" \
       --auth-mode login --backup-intent --only-show-errors > /dev/null
