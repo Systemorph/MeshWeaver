@@ -37,6 +37,20 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
             return 2;
         }
 
+        // Argument validation happens BEFORE any docker work, so a misconfigured job fails in
+        // seconds naming the input — not minutes later inside a container. (The first version
+        // checked --upstream-seed after stage 1, and the 'proof' of its refusal path turned out
+        // to have died at the container entrypoint before ever reaching the check.)
+        if ((options.RegistryModules is { Length: > 0 } || options.UpstreamSeed is { Length: > 0 })
+            && (options.RegistryUrl is not { Length: > 0 } || options.RegistryKey is not { Length: > 0 }))
+        {
+            await error.WriteLineAsync(
+                "error: --registry-modules / --upstream-seed need --registry-url and a key "
+                + "(MW_REGISTRY_KEY or --registry-key). A dependency install or seed that silently "
+                + "skips is a gate that tests nothing, so this refuses rather than proceeding.");
+            return 6;
+        }
+
         // Pin by DIGEST once, and use it for both stages. The workflow this replaces already did
         // this (`${IMAGE%%:*}@${DIGEST}`) for a reason: a tag can move between the compile and the
         // gate, and then the bytes tested are not the bytes baked — which is the one claim the
@@ -68,14 +82,6 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         var extDir = options.ExternalModulesDir is { Length: > 0 } e ? Path.GetFullPath(e) : null;
         if (options is { RegistryModules.Length: > 0 })
         {
-            if (options.RegistryUrl is not { Length: > 0 } || options.RegistryKey is not { Length: > 0 })
-            {
-                await error.WriteLineAsync(
-                    "error: --registry-modules needs --registry-url and a key (MW_REGISTRY_KEY or "
-                    + "--registry-key). A dependency install that silently skips is a gate that "
-                    + "tests nothing, so this refuses rather than proceeding without them.");
-                return 6;
-            }
             extDir ??= Path.Combine(Path.GetTempPath(), $"memex-ext-{Environment.ProcessId}");
             var fetched = await FetchRegistryModules(
                 options.RegistryUrl!, options.RegistryKey!, options.RegistryModules!, extDir, ct);
@@ -113,6 +119,21 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                 $"error: compile ran but wrote no bake identity ({BakeIdentityFile} missing or empty) "
                 + "— the bake stage regressed. Refusing to test bytes that were never produced.");
             return 5;
+        }
+
+        // ── upstream seed: the PUBLICATION the gate's fresh mesh installs first ─────────────────
+        // Round 3's lesson: module DLLs are necessary and NOT sufficient. The gate boots a fresh
+        // mesh, and a package whose `requires` chain reaches upstream PACKAGES needs those
+        // packages' bundles in the seed, or its own installs register nothing (Manufacturing:
+        // 162 files installed, 0 NodeTypes — the working test-repos gate consumes 44 bundles,
+        // this command's seed held 1). Fetched INTO the bake dir, whose framework-mvid.txt is by
+        // construction the identity the publication must be sealed for.
+        if (options.UpstreamSeed is { Length: > 0 } upstreams)
+        {
+            var frameworkIdentity = (await File.ReadAllTextAsync(identity, ct)).Trim();
+            var seeded = await FetchUpstreamSeed(
+                options.RegistryUrl!, options.RegistryKey!, upstreams, frameworkIdentity, bake, ct);
+            if (!seeded) return 8;
         }
 
         // ── stage 2: CONSUME — stand a mesh up on the bytes stage 1 produced ───────────────────
@@ -239,6 +260,86 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
     private static IEnumerable<string> SourceShaArgs(BuildPluginOptions o) =>
         o.SourceSha is { Length: > 0 } sha ? ["--source-sha", sha] : [];
 
+    /// <summary>
+    /// Fetches each upstream source's SEALED publication for <paramref name="frameworkIdentity"/>
+    /// into <paramref name="seedDir"/> — the client half of the registry's
+    /// <c>prebuilt/{identity}/{source}</c> route, byte-for-byte the node-repo gate's shell:
+    /// index (<c>{"bundles":[…]}</c>) → each file → refuse a 404 (no sealed publication), a
+    /// 401/403 (the key needs a whole-source grant '<c>src/*</c>'), and an EMPTY seed — sealed
+    /// but empty is refused, never treated as "nothing to install".
+    /// </summary>
+    private async Task<bool> FetchUpstreamSeed(
+        string registryUrl, string key, string upstreams, string frameworkIdentity,
+        string seedDir, CancellationToken ct)
+    {
+        using var http = new HttpClient { BaseAddress = new Uri(registryUrl.TrimEnd('/') + "/") };
+        http.DefaultRequestHeaders.Authorization = new("Bearer", key);
+        var fetched = 0;
+        foreach (var src in upstreams.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var basePath = $"api/plugins/bundles/prebuilt/{frameworkIdentity}/{src}";
+            using var resp = await http.GetAsync(basePath, ct);
+            if ((int)resp.StatusCode == 404)
+            {
+                await error.WriteLineAsync(
+                    $"error: upstream '{src}' has no SEALED publication on {registryUrl} for identity "
+                    + $"{frameworkIdentity}. Not compiling it instead.");
+                return false;
+            }
+            if ((int)resp.StatusCode is 401 or 403)
+            {
+                await error.WriteLineAsync(
+                    $"error: the registry refused the key for '{src}' ({(int)resp.StatusCode}) — the "
+                    + $"instance needs a whole-source grant '{src}/*'.");
+                return false;
+            }
+            if (!resp.IsSuccessStatusCode)
+            {
+                await error.WriteLineAsync($"error: registry answered {(int)resp.StatusCode} for {basePath} — refusing.");
+                return false;
+            }
+            System.Text.Json.JsonDocument doc;
+            try { doc = System.Text.Json.JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct)); }
+            catch
+            {
+                await error.WriteLineAsync($"error: {basePath} answered 200 but not a publication index.");
+                return false;
+            }
+            using (doc)
+            {
+                if (!doc.RootElement.TryGetProperty("bundles", out var bundles)
+                    || bundles.ValueKind != System.Text.Json.JsonValueKind.Array)
+                {
+                    await error.WriteLineAsync($"error: {basePath} answered 200 but not a publication index.");
+                    return false;
+                }
+                foreach (var nameEl in bundles.EnumerateArray())
+                {
+                    var name = nameEl.GetString();
+                    if (name is not { Length: > 0 }) continue;
+                    // Path-safety: the index names files, never paths — a traversal here would let
+                    // a registry write outside the seed.
+                    if (name.Contains('/') || name.Contains('\\') || name.Contains(".."))
+                    {
+                        await error.WriteLineAsync($"error: publication index for '{src}' names an unsafe path '{name}' — refusing.");
+                        return false;
+                    }
+                    await using var body = await http.GetStreamAsync($"{basePath}/{name}", ct);
+                    await using var file = File.Create(Path.Combine(seedDir, name));
+                    await body.CopyToAsync(file, ct);
+                    fetched++;
+                }
+            }
+            await output.WriteLineAsync($"upstream '{src}': fetched from {registryUrl}");
+        }
+        if (fetched == 0)
+        {
+            await error.WriteLineAsync("error: sealed but empty — refusing an empty seed.");
+            return false;
+        }
+        return true;
+    }
+
     private Task<int> RunInImage(
         string image, string repo,
         string? extDir,
@@ -274,6 +375,9 @@ public sealed record BuildPluginOptions(
     public string? RegistryModules { get; init; }
     /// <summary>The mwi_ instance key; prefer sourcing from $MW_REGISTRY_KEY.</summary>
     public string? RegistryKey { get; init; }
+    /// <summary>Space-separated upstream SOURCES whose sealed publication seeds the gate's mesh
+    /// (e.g. "plugins") — the packages a `requires` chain reaches, not merely their DLLs.</summary>
+    public string? UpstreamSeed { get; init; }
 
     public IReadOnlyList<string> ExtraArgs => Extra ?? [];
 }
