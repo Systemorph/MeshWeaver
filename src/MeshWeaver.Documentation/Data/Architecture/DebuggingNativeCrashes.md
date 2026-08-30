@@ -652,6 +652,31 @@ container, so a diagnostic emitted from inside a `catch` or an Rx `onError` can 
 fault into an unhandled one. Route such emissions through a guarded helper whose single empty catch
 swallows only the *logging* failure.
 
+## 🚨 The managed twin — #890 — produces NO dump, and no amount of asking will change that
+
+`#890` is the same "one 8-byte word reads as zero" shape surfacing in **managed** code: Roslyn's
+`Emit` throws `NullReferenceException` from `Cci.MetadataWriter`, reading a `ContainingType` that
+the guard immediately above it had just read as non-null. Its canary's verdict has told triage to
+*"capture a core dump and re-run with tiering disabled"* since 2026-08-28, and **not one has ever
+arrived** — because the advice is unfollowable by construction:
+
+`DOTNET_DbgEnableMiniDump` fires on a **signal**. The #890 process never crashes; it throws a
+managed exception, logs it, and keeps running until CI's 8-minute cap kills it — `exit=124`, which
+is `timeout --signal=TERM`, which produces **no dump**. Every occurrence in the 9-event
+2026-08-22→08-29 sweep ends `exit=124` or `TESTFAIL`. **The dump route belongs to this page's family
+(#613), not to #890.**
+
+What #890 *can* contribute that a dump cannot is a measurement #613 has no way to take, because a
+crashed process has no "after": **the fault is total and permanent.** On run `33322993649` shard 1,
+after the first throw at 16:42:42.375, **7 of 7** compiles that reached the metadata writer failed
+identically over 6 m 15 s and **none** succeeded — while every compile that needed only diagnostics
+kept returning correct `CS####` codes. A one-off zeroed word cannot produce a 100 % failure rate over
+freshly allocated symbols; a **tier-1 / dynamic-PGO miscompilation** of one method can, and also
+explains the fixed frame, the load dependence and the onset ~80 s into a compile-heavy assembly.
+So the cheap next measurement for BOTH issues is the half of the advice that *is* followable:
+re-run with `DOTNET_TieredCompilation=0` (or `DOTNET_TieredPGO=0`, the sharper probe). See
+[NodeTypeCompilation → When the PROCESS cannot emit](/Doc/Architecture/NodeTypeCompilation).
+
 ## Related
 
 - [DebuggingMessageFlow](../DebuggingMessageFlow) — for hangs and lost messages (a

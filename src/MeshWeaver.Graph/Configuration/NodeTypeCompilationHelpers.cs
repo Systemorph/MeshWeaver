@@ -2187,9 +2187,36 @@ internal static class NodeTypeCompilationHelpers
     /// the only automatic un-park is a SOURCE change, which a recycle never produces — it stayed
     /// there until a human pressed Compile. Duplicating the type test at both sites is how they
     /// drifted apart in the first place, so there is deliberately exactly one.</para>
+    ///
+    /// <para>🚨 <b>The third member is an emit the CANARY proved the PROCESS could not do
+    /// (#890).</b> When Roslyn's <c>Emit</c> THROWS, <see cref="EmitPipeline"/> immediately
+    /// re-emits a trivial, freshly parsed, known-good control compilation — first against the same
+    /// references, then against an image-backed CoreLib that shares nothing. A
+    /// <c>REFERENCES</c> or <c>BELOW-ROSLYN</c> verdict means <b>that control also failed</b>: the
+    /// process can no longer emit ANY assembly, so this compile learned nothing whatsoever about
+    /// the code it was handed. Recording it as <see cref="CompilationStatus.Error"/> states a
+    /// verdict that was never formed — and it is durable state: <see cref="ApplyCompileFailure"/>
+    /// also stamps <see cref="NodeTypeDefinition.FailedBuildInputs"/>, so
+    /// <see cref="HasStaleFailureVerdict"/> then reads "this failure was formed under exactly the
+    /// live inputs" and the automatic re-drive correctly declines — for a fault the inputs had
+    /// nothing to do with, and which a fresh process would not reproduce. Measured on run
+    /// 33322993649 shard 1: after the first such throw, <b>7 of 7</b> later compiles that reached
+    /// Roslyn's metadata writer failed identically over 6 m 15 s and none succeeded, while every
+    /// compile that needed only DIAGNOSTICS still returned correct <c>CS####</c> codes — the
+    /// process was emit-dead and five tests reported it under five unrelated names.</para>
+    ///
+    /// <para>🚨 It is keyed on the verdict being READ, never on a canary being PRESENT — every
+    /// emit-phase throw carries one, and <c>OK</c> / <c>INCONCLUSIVE</c> / <c>DIVERGENT</c> all
+    /// mean the process was NOT shown to be at fault. Widening this to "any infrastructure fault"
+    /// is the blind spot <c>SourceSnapshotEstablishmentTest.EveryOtherCompileFailure_StillStampsError</c>
+    /// exists to refuse, and it stays refused: see <see cref="EmitPipeline.IsProcessEmitFailure"/>.
+    /// The bake gate filing THIS case as unevaluated rather than as a code regression is the
+    /// correct reading, not a hole — a bake whose process cannot emit has evaluated nothing.</para>
     /// </summary>
     internal static bool IsAvailabilityNonVerdict(Exception? error) =>
-        error is SourceDiscoveryUnavailableException or AddressRecyclingException;
+        error is SourceDiscoveryUnavailableException or AddressRecyclingException
+        || (error is not null
+            && EmitPipeline.IsProcessEmitFailure(error.Data[EmitPipeline.EmitCanaryDataKey]));
 
     /// <summary>
     /// THE terminal stamp of a FAILED compile — the exact field set <see cref="RunCompile"/>'s
@@ -2564,11 +2591,34 @@ internal static class NodeTypeCompilationHelpers
                             parkRegistry.OnCompileSucceeded(hubPath);
                         else if (IsAvailabilityNonVerdict(outcome.Error))
                         {
-                            logger?.LogInformation(
-                                "Compile for {HubPath} reached NO VERDICT ({Type}) — an availability fact, "
-                                + "not a compile failure: it does not count towards the park budget and the "
-                                + "type is left at Unavailable for the automatic re-drive to retry. {Error}",
-                                hubPath, outcome.Error!.GetType().Name, outcome.Error.Message);
+                            // 🚨 ATTRIBUTION for the emit-dead case (#890). One poisoned process
+                            // reports as up to ten unrelated test names — 23 % of all distinct
+                            // failing test names in the 08-22→08-29 sweep — and each occurrence has
+                            // cost a fresh, always-identical misdiagnosis. The canary already KNOWS
+                            // the process is the broken thing at the first throw; nothing said so in
+                            // a form the next reader could act on. This line is that statement, and
+                            // it is deliberately louder than its sibling: an Information line about
+                            // one node does not describe a process that can no longer compile
+                            // anything, and every compile after it in this process will fail the
+                            // same way for the same reason.
+                            if (EmitPipeline.IsProcessEmitFailure(
+                                    outcome.Error!.Data[EmitPipeline.EmitCanaryDataKey]))
+                                logger?.LogError(
+                                    "PROCESS CANNOT EMIT (#890) — the compile of {HubPath} aborted inside "
+                                    + "Roslyn's emit, and the canary's control compilation (trivial, freshly "
+                                    + "parsed, known-good) could not emit either. This says NOTHING about that "
+                                    + "type's code: it is left at Unavailable, no verdict is recorded and the "
+                                    + "park budget is untouched. 🚨 EVERY LATER COMPILE IN THIS PROCESS WILL "
+                                    + "FAIL THE SAME WAY — attribute the failures that follow to this line, not "
+                                    + "to the change under test, and do not re-diagnose them one by one. "
+                                    + "Verdict: {Verdict}",
+                                    hubPath, outcome.Error.Data[EmitPipeline.EmitCanaryDataKey]);
+                            else
+                                logger?.LogInformation(
+                                    "Compile for {HubPath} reached NO VERDICT ({Type}) — an availability fact, "
+                                    + "not a compile failure: it does not count towards the park budget and the "
+                                    + "type is left at Unavailable for the automatic re-drive to retry. {Error}",
+                                    hubPath, outcome.Error!.GetType().Name, outcome.Error.Message);
                         }
                         else
                         {
