@@ -166,8 +166,33 @@ public sealed class BakeSeedConsumer(
         get { lock (gate) return requested; }
     }
 
-    /// <summary>Assemblies adopted from the bake across the whole run.</summary>
+    /// <summary>
+    /// Adoption EVENTS across the whole run — the sum of the per-call counts the seeder returned.
+    ///
+    /// <para>🚨 This is NOT the number of assemblies adopted, and it must never be reported as one.
+    /// A path covered under two packages is seeded twice and counted twice, which is how a gate
+    /// reported the impossible <c>adopted 92 of 90</c> (#2697). Use <see cref="AdoptedPaths"/> for
+    /// any verdict or log line; this stays because "how many times did the seeder act" is a
+    /// different, occasionally useful fact.</para>
+    /// </summary>
     public int Adopted => Volatile.Read(ref adopted);
+
+    /// <summary>
+    /// The number of DISTINCT baked assemblies this run adopted, counted over the same set the
+    /// DECLINED list is the complement of — so <c>AdoptedPaths + declined == expected</c> holds by
+    /// construction rather than by luck.
+    /// </summary>
+    public int AdoptedPaths => AdoptedAmong(seed.DeclaredTypePaths, Requested, Covered);
+
+    /// <summary>
+    /// The adopted set: everything the bake declared AND the install requested AND the seeder
+    /// backed. Pure, so the accounting can be pinned without standing up a mesh.
+    /// </summary>
+    public static int AdoptedAmong(
+        ImmutableSortedSet<string> declared,
+        ImmutableSortedSet<string> requested,
+        ImmutableSortedSet<string> covered)
+        => declared.Intersect(requested).Intersect(covered).Count;
 
     /// <summary>Every NodeType path the seeder BACKED from this bake — adopted now or already
     /// current. The witness behind <see cref="Shortfall"/>'s named verdict.</summary>
@@ -214,7 +239,7 @@ public sealed class BakeSeedConsumer(
     /// the same shape as a skipped CI job wearing a passing tick.</para>
     /// </summary>
     public string? Shortfall() =>
-        DescribeShortfall(seed.DeclaredTypePaths, Requested, Covered, Adopted, seed.Directory);
+        DescribeShortfall(seed.DeclaredTypePaths, Requested, Covered, seed.Directory);
 
     /// <summary>
     /// <see cref="Shortfall"/>'s verdict as a PURE function of the four facts it rests on, so the
@@ -224,13 +249,16 @@ public sealed class BakeSeedConsumer(
     /// <param name="declared">Every path the bake carries bytes for.</param>
     /// <param name="requested">Every path the install asked the consumer about.</param>
     /// <param name="covered">Every path the seeder actually backed.</param>
-    /// <param name="adopted">The seeder's own count, reported as-is.</param>
     /// <param name="directory">The bake directory, for the no-overlap message.</param>
+    /// <remarks>🚨 There is deliberately no <c>adopted</c> parameter. It used to take the seeder's
+    /// running EVENT count and report it as-is, so a path covered under two packages counted twice
+    /// and the verdict could read <c>adopted 92 of 90</c> — an impossible sentence in the one line
+    /// meant to be trusted (#2697). The adopted number is now DERIVED from the same sets the
+    /// DECLINED list comes from, so the arithmetic cannot disagree with the naming.</remarks>
     public static string? DescribeShortfall(
         ImmutableSortedSet<string> declared,
         ImmutableSortedSet<string> requested,
         ImmutableSortedSet<string> covered,
-        int adopted,
         string directory)
     {
         var expected = declared.Intersect(requested);
@@ -253,7 +281,8 @@ public sealed class BakeSeedConsumer(
         // WARNING — the pointer led to lines the gate never writes, which is why a 1-of-87
         // shortfall was undiagnosable from a CI log (MeshWeaver.Crm main, red from 2026-08-28
         // 21:54 for ~12 h with every per-type verdict green). A verdict carries its own evidence.
-        return $"the gate adopted {adopted} of {expected.Count} baked assembly(ies) for the types "
+        return $"the gate adopted {expected.Intersect(covered).Count} of {expected.Count} baked "
+            + "assembly(ies) for the types "
             + $"it installed — {missing.Count} were DECLINED and compiled locally, so the gate did "
             + "not judge the bytes the bake shipped for them. DECLINED: "
             + $"{string.Join(", ", missing.Take(20))}"
