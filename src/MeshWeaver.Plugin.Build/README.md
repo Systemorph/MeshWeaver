@@ -1,97 +1,30 @@
 # MeshWeaver.Plugin.Build
 
-Builds a plugin's **in-mesh C#** the way the portal compiles it at runtime — in CI, before it ships.
+The build-side tool behind the module lane:
 
-```bash
-dotnet tool install -g MeshWeaver.Plugin.Build
-meshweaver-plugin-build ./ThreeBody --framework-version 3.0.0-rc2 --pack ./nupkgs
+```
+meshweaver-plugin-build module-pack <moduleOutputDir> [options]   # a module's publish output → a registry bundle
+meshweaver-plugin-build module-fetch <package> [options]          # a registry bundle → a local directory
 ```
 
-The tool is versioned **in lockstep with the framework** on purpose: it encodes how a given
-MeshWeaver version compiles (using set, reference set, closure semantics). A separately-versioned
-tool would drift from the runtime it exists to mirror.
+Run either verb with `--help` for its options. `module-pack` writes the bundle
+(`MeshWeaver.Plugin.<Package>.<Version>.module.nupkg` — a zip in NuGet layout with the module's
+assemblies under `meshweaver/modules/` and a manifest naming the entry assembly, its closure, its
+`minMeshVersion` floor and the framework identity it was built against) that
+`node-repo-module-pack.yml` uploads and, on a trunk push, POSTs to the registry.
 
-## Packaging
+## What is deliberately NOT here
 
-`--pack` writes `MeshWeaver.Plugin.<Name>.<Version>.nupkg` containing the plugin's node content,
-one prebuilt assembly per unit, and a manifest binding node paths to assemblies. The nuspec is a
-projection of the mesh manifest that authors already write — `"requires": ["Store@^1.0.0"]` becomes
-`<dependency id="MeshWeaver.Plugin.Store" version="[1.0.0,2.0.0)" />`.
+Until 2026-08-30 the bare verb packed a **node package** (a Store/Plugin with in-mesh `Source/*.cs`)
+by emitting a `.csproj` that referenced the `MeshWeaver.*` NuGet packages at a "floor" — the newest
+version every referenced package was published at — running `dotnet build` on it and writing a
+`.nupkg`. That is gone, for two reasons the maintainer stated:
 
-Assemblies go under `meshweaver/assemblies/`, **not** `lib/net10.0/`. Under `lib/` NuGet would
-surface every unit as a compile-time reference of any consumer, colliding the duplicate type names
-above and unifying CLR identity the runtime deliberately keeps separate. They are payload for the
-assembly store, not a reference set.
-
-## Why
-
-Source stored in mesh nodes (`Source/*.cs` under a NodeType) compiles **at runtime, in the portal**
-— never in `dotnet build`, never in a test. Across the four plugin repos that is hundreds of files
-in a couple of hundred compilation units, and the portal recompiles every one of them whenever the
-framework's content changes. The consequences are routine: a framework
-symbol gets deleted, every check is green, and the breakage appears as `CompileError` overlays in
-production against code the compiler was never shown.
-
-This tool closes that gap. It resolves each unit's closure from the node's own declared `sources`,
-supplies the ambient environment the portal supplies, and compiles.
-
-## What a "unit" is
-
-**A `Source/` directory owned by a NodeType — not a plugin, and not every `Source/` directory.**
-
-UWDeepfield has eleven units: its root plus one per NodeType. They compile *separately* at runtime,
-so two may legitimately declare the same type name (`TaskAssignmentService` exists in both
-`UwPortfolio/Source` and `UWDeepfieldHome/Source`). Merging a plugin's units into one assembly
-yields ~200 spurious `CS0111`s.
-
-Most `Source/` directories are not units at all — in the four plugin repos it is roughly one in
-three. The rest are
-**shared-source libraries** — `Claims/SampleData/Source` has no node at all and is pulled into its
-consumers via `shared=@Claims/SampleData/Source`. Building one standalone reports `CS0246` for every
-type it legitimately borrows from the consumer: a false alarm on healthy content, which is worse
-than no check. A unit's owner declares `NodeTypeDefinition` or `PluginContent`; anything else
-(a Markdown page describing the sample data, a course exercise authored as `index.md`) is skipped.
-
-## The generated skeleton
-
-Each unit compiles its sources **plus** a generated skeleton: the assembly attribute, the
-`MeshNodeProviderAttribute` subclass, and the `ConfigureHub` method wrapping the NodeType's
-`configuration` lambda. The tool calls the framework's own `DynamicMeshNodeAttributeGenerator`
-rather than reproducing it, so CI and runtime emit identical source.
-
-Two reasons it is not optional:
-
-- **Without it the assembly is inert** — it carries the user's types and registers nothing, so it
-  cannot stand in for a runtime compile however cleanly it built.
-- **The lambda is code no compiler has ever seen.** `content.configuration` is C# inside a JSON
-  string: invisible to `dotnet build` (node trees are `<None>`) and to any `*.cs` grep. On
-  2026-08-09 the framework deleted `AddTracking()` while `SocialMedia/Post`, `Profile` and
-  `PostsHub` each still called it from that field; CI was green and all three production portals
-  hit `REFUSING READINESS` on the next framework bump.
-
-## The three things a plain `.csproj` gets wrong
-
-1. **Includes have three syntaxes.** `shared=@Store/Coupon/Source` (path),
-   `shared=namespace:UWDeepfield/Source scope:subtree` (query), and an *aliased*
-   `client=namespace:UWDeepfield/ReinsuranceClient/Source scope:subtree`. Each unmatched form is a
-   silent under-resolution — the build then reports a thoroughly convincing `CS0246`/`CS0103` on a
-   symbol that does exist.
-2. **`Test/` is part of the same assembly.** The live `Store/Plugin` node's `compiledSources` lists
-   `Store/Plugin/Test/*` beside its Source. Omit it and production code that references a test type
-   (an area rendering its own results, as `IndustryNewsFeed` does) fails `CS0103` in CI while
-   compiling perfectly in the portal.
-3. **The ambient environment is not implicit.** In-mesh code compiles against every assembly the
-   portal has loaded, plus the generated skeleton's using preamble. Omit `MeshWeaver.Domain` and
-   `[MeshNode(…)]` binds to the `MeshNode` *record*, giving
-   `CS0616 'MeshNode' is not an attribute class`. See `CompilationEnvironment`.
-
-## Exit codes
-
-| Code | Meaning |
-|---|---|
-| 0 | every unit built (or the plugin is content-only — six of twenty carry no C#) |
-| 1 | at least one unit failed; the first five errors and the unit's declared `sources` are printed |
-| 2 | bad arguments |
-
-Failure is all-or-nothing on purpose: a partially built plugin is worse than an unbuilt one,
-because a consumer resolving a mixed set gets an ABI mismatch that semver says is fine.
+- **In-mesh source runs inside the portal image.** The only honest reference set is that image's
+  `/app` assemblies plus the modules its publication was sealed against — which is exactly what
+  `node-repo-compile-check.yml` type-checks against and what the gates run. A NuGet floor is a
+  different, older reference set (it stopped at rc7 the day `MeshWeaver.AI` left the platform repo),
+  and compiling against it recreated the very skew #2707 removed.
+- **Nothing a node repo builds goes to a package feed.** Consumers fetch bundles assembled from a
+  sealed publication (`/api/plugins/bundles`), never packages from NuGet — so a `.nupkg` per node
+  package had no consumer, and a NuGet publish token had no place in CI.
