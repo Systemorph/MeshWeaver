@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
+using System.Text.Json;
 using Xunit;
 
 namespace MeshWeaver.Messaging.Hub.Test;
@@ -44,6 +45,44 @@ public class LocalizationTest
         missing.Should().BeEmpty(
             "every key in strings.en.json needs a translation in strings.{0}.json; missing: {1}",
             locale, string.Join(", ", missing));
+    }
+
+    /// <summary>
+    /// 🚨 No catalog may declare a key TWICE — and this must read the RAW resource, because every
+    /// other assertion in this file runs on the LOADED catalog, where a duplicate is already gone.
+    ///
+    /// <para><see cref="LocalizationCatalog"/> loads with <c>builder[property.Name] = …</c>, a
+    /// dictionary assignment, so a repeated key silently overwrites and the collapsed catalog looks
+    /// perfect. Completeness, orphan and plural-pair checks all pass over the survivor. That is
+    /// exactly how <c>chat.modelStreamFaulted</c> and <c>chat.modelStreamStalled</c> came to be
+    /// declared twice in BOTH strings.en.json and strings.de.json — 1048 raw pairs collapsing to
+    /// 1046 — with nothing red for two commits.</para>
+    ///
+    /// <para>It was harmless only by luck: the two copies happened to carry equal text, one written
+    /// with literal characters and one <c>\u</c>-escaped. Had they differed, the winner would have
+    /// been decided by parser order, and editing the copy a reader happened to find would have
+    /// changed nothing at all — the "two homes drift" failure, inside a single file.</para>
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(AllLocales))]
+    public void NoCatalogDeclaresAKeyTwice(string locale)
+    {
+        var resourceName = $"MeshWeaver.Messaging.Localization.strings.{locale}.json";
+        using var stream = typeof(LocalizationCatalog).Assembly.GetManifestResourceStream(resourceName);
+        stream.Should().NotBeNull($"{resourceName} must be embedded");
+
+        using var document = JsonDocument.Parse(stream!);
+        var duplicates = document.RootElement.EnumerateObject()
+            .GroupBy(p => p.Name, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .Select(g => $"{g.Key} (x{g.Count()})")
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+
+        duplicates.Should().BeEmpty(
+            "strings.{0}.json declares {1} key(s) more than once; a duplicate is resolved by parser "
+            + "order and editing one copy leaves the other standing: {2}",
+            locale, duplicates.Length, string.Join(", ", duplicates));
     }
 
     /// <summary>
@@ -305,4 +344,8 @@ public class LocalizationTest
         => Locales.Supported
             .Where(l => l != Locales.Default)
             .Select(l => new object[] { l });
+
+    /// <summary>Every shipped catalog, English included — the duplicate check applies to all.</summary>
+    public static IEnumerable<object[]> AllLocales()
+        => Locales.Supported.Select(l => new object[] { l });
 }
