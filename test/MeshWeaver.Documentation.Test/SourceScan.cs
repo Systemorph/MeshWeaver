@@ -52,13 +52,53 @@ internal static class SourceScan
     /// only <c>.cs</c> would report a tree as clean while the same defect sat in a file no compiler
     /// ever looks at. Two <c>.ToTask(</c> sites were found in exactly that position.</para>
     /// </summary>
-    public static IEnumerable<string> SourceFiles(string root, IEnumerable<string> scannedRoots) =>
-        scannedRoots
+    /// <remarks>
+    /// 🚨 <b>An EMPTY result is treated as a BROKEN SCAN, not as a clean tree (#2844).</b>
+    ///
+    /// <para>The <c>Where(Directory.Exists)</c> below silently drops a root that is not there. That
+    /// is deliberate — a caller may name an optional root — but it means that pointing this scanner
+    /// at the wrong tree drops EVERY root and yields an empty sequence. For the ~30 zero-tolerance
+    /// guards built on it, "no offenders found" and "nothing was scanned" are then the same result,
+    /// so all of them report green while enforcing nothing.</para>
+    ///
+    /// <para>That is not hypothetical: relocating <c>MeshWeaver.Documentation.Test</c> into another
+    /// repository — a one-line csproj move considered on 2026-08-30 — would have disarmed the lot,
+    /// silently and permanently. Only 4 of 34 guards asserted that their scan found anything.</para>
+    ///
+    /// <para>🚨 A planted-tree self-test does NOT cover this. Running the real scanner over a temp
+    /// directory proves the SCANNER works; it cannot prove the scanner found the PRODUCTION tree.
+    /// The two fail independently, and only the second produces a wall of green over an unenforced
+    /// rule. Hence the check here, at the one place every guard passes through, rather than 30
+    /// individually-tuned floors — a rule copied 30 times is how 30 came to lack it.</para>
+    /// </remarks>
+    public static IEnumerable<string> SourceFiles(string root, IEnumerable<string> scannedRoots)
+    {
+        var roots = scannedRoots as string[] ?? scannedRoots.ToArray();
+        var files = roots
             .Select(r => Path.Combine(root, r))
             .Where(Directory.Exists)
             .SelectMany(dir => Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
             .Where(f => Path.GetExtension(f) is ".cs" or ".razor" or ".csx")
-            .Where(f => !IsExcluded(root, f));
+            .Where(f => !IsExcluded(root, f))
+            .ToArray();
+
+        if (files.Length == 0)
+        {
+            var missing = roots.Where(r => !Directory.Exists(Path.Combine(root, r))).ToArray();
+            throw new InvalidOperationException(
+                $"SourceScan found NO source files under '{root}' for root(s) "
+                + $"[{string.Join(", ", roots)}]"
+                + (missing.Length == 0
+                    ? " — every root exists but contains no .cs/.razor/.csx. "
+                    : $" — these do not exist: [{string.Join(", ", missing)}]. ")
+                + "🚨 This is a BROKEN SCAN, not a clean tree. A guard that reports green here has "
+                + "checked nothing: the repo root resolved somewhere unexpected (a relocated test "
+                + "project, a shadow-copied binary, a renamed root). Fix the scan — never soften "
+                + "the guard that surfaced it (#2844).");
+        }
+
+        return files;
+    }
 
     /// <summary>
     /// Blanks comment and string-literal characters, preserving offsets and newlines, so the scan
