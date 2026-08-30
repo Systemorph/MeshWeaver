@@ -79,6 +79,43 @@ public class HomeTabsTest
     }
 
     [Fact]
+    public void Content_AtTheRootLevel_ListsSpacesAndNothingElse()
+    {
+        // 🚨 THE regression guard for the deny-list this replaced. On memex.meshweaver.cloud the
+        // home listed `Posts` under a "Posts Hubs" heading (a SocialMedia/PostsHub partition root)
+        // and `Event` under "Event Hubs": the root leg excluded Store/Plugin, Store/Catalog and
+        // User, so every OTHER root type leaked in and minted its own type group. A deny-list is
+        // only as complete as the last person who remembered to extend it, so the root leg is an
+        // ALLOW-list now — a new root NodeType has to opt in, not remember to opt out.
+        var content = UserActivityLayoutAreas.BuildContentSection(NodePath, null, null, null, null);
+
+        var all = content.ScopeTabs!.Single(t => t.Label == "All");
+        foreach (var sort in all.SortOptions!)
+        {
+            var rootLeg = sort.Query.Split('\n')
+                .Single(leg => leg.StartsWith("namespace: ", StringComparison.Ordinal));
+            rootLeg.Should().Contain("nodeType:Space",
+                "the root level of the home list is the workspaces you can reach");
+            rootLeg.Should().NotContain("-nodeType:",
+                "an allow-list subsumes every exclusion; a leftover deny term is dead weight that reads as coverage");
+        }
+    }
+
+    [Fact]
+    public void Content_OwnPartitionLeg_IsNotTypeFiltered()
+    {
+        // The Spaces filter is the ROOT leg's. Your own home partition holds no Spaces at all, so
+        // applying it there would empty the list of everything you ever authored. What keeps app
+        // chrome ("{Package} — my workspace") out of it is `is:content` honouring the node's own
+        // ExcludeFromContext — a property of the node, not a term in this query.
+        var content = UserActivityLayoutAreas.BuildContentSection(NodePath, null, null, null, null);
+        var mine = content.ScopeTabs!.Single(t => t.Label == "Mine");
+
+        mine.Query.Should().Contain($"namespace:{NodePath}").And.Contain("is:content");
+        mine.Query.Should().NotContain("nodeType:Space");
+    }
+
+    [Fact]
     public void Content_FansOutByNodeType_BiggestGroupFirst()
     {
         // "All and then fan out in different types, sorted by frequency … get the top level
