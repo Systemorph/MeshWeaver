@@ -334,6 +334,29 @@ internal static class NodeTypeCompilationHelpers
                         return;
                     }
 
+                    // 🚨 #2818 — A FORCE MEANS "BUILD THE LIVE SOURCE", NOT "SERVE ME WHATEVER A
+                    // BUNDLE STILL RESOLVES". InstallReleaseRequestWatcher honours
+                    // RequestedReleaseForce (it bypasses its "already satisfied" short-circuit) and
+                    // flips the type Pending — but the flip lands HERE, and until now this branch
+                    // asked the bundle sources again regardless. On any mesh whose bundle still
+                    // resolved, a force therefore re-adopted the very bytes the operator was trying
+                    // to replace and settled "without a Roslyn pass"; it worked only where
+                    // SeedForTypes MISSED, i.e. exactly where nobody needed it. That is how the
+                    // stale prebuilt in #2813 could not be forced off a node whose live source was
+                    // already fixed. The flag survives the Pending flip (the dispatch commit keeps
+                    // it) and is consumed by the terminal stamp of the compile it dispatches —
+                    // ApplyCompileSuccess / ApplyCompileFailure / ApplyGateSettle — so a stale force
+                    // can never suppress adoption for a later, unforced trigger.
+                    if (pendingNode!.Content is NodeTypeDefinition { RequestedReleaseForce: true })
+                    {
+                        logger?.LogInformation(
+                            "Compile watcher: {HubPath} was flipped Pending by a FORCED release — "
+                            + "skipping on-demand prebuilt adoption and compiling the live source.",
+                            hubPath);
+                        DispatchOrPark();
+                        return;
+                    }
+
                     var attempt = new SingleAssignmentDisposable();
                     onDemandAdoptionSubs.Add(attempt);
                     attempt.Disposable = prebuiltConsumer.SeedForTypes([hubPath])
@@ -396,9 +419,19 @@ internal static class NodeTypeCompilationHelpers
                         // module MVID map on every attempt, for nothing: adoption stamps assembly
                         // coordinates on the NODE, and changes no part of the environment these
                         // guards describe.
+                        // 🚨 …and the node must have LEFT Pending. A real adoption stamps
+                        // CompilationStatus=Ok together with the coordinates
+                        // (PrebuiltAssemblySeeder.Seed), so an Ok node with a usable build is
+                        // what "landed" looks like. HasUsableBuild alone is not enough on a type
+                        // that already HAD a build: its old coordinates satisfy the predicate on
+                        // the very Pending node this watcher is trying to settle, so a consumer
+                        // that reported an adoption it never wrote back was believed — and the
+                        // type sat at Pending for ever (#2818's regression, third phase: a dirty
+                        // type with the previous build's coordinates, re-triggered unforced).
                         return ownStream
                             .Where(n => n?.ContentAs<NodeTypeDefinition>(
                                             hub.JsonSerializerOptions, logger) is { } adoptedDef
+                                        && adoptedDef.CompilationStatus == CompilationStatus.Ok
                                         && HasUsableBuild(n, adoptedDef, guards))
                             .Take(1)
                             .Select(_ => true)
@@ -2064,6 +2097,10 @@ internal static class NodeTypeCompilationHelpers
             FailedBuildInputs = formedUnderLiveInputs
                 ? BuildInputsToken(modulesHash, parkedDef.CurrentSourceVersions)
                 : parkedDef.FailedBuildInputs,
+            // A forced release that ends in a park is spent too (#2818): under RequirePrebuilt the
+            // compile it asked for is refused by design and the park names that; a bundle that
+            // arrives later must be adoptable again, not refused by the stale force.
+            RequestedReleaseForce = false,
         };
 
     /// <summary>
@@ -2135,6 +2172,10 @@ internal static class NodeTypeCompilationHelpers
             // Clear the consumed release-requester so a later System-only recompile doesn't
             // mis-attribute its release to a stale prior user.
             RequestedReleaseBy = null,
+            // The force that dispatched this compile (if any) is spent: the compile watcher read
+            // it to skip on-demand adoption (#2818), and leaving it set would make the NEXT,
+            // unforced trigger skip adoption too.
+            RequestedReleaseForce = false,
             // 🚨 The standing FAILURE verdict is gone, so the inputs it was formed from must go
             // with it (#1793). Leaving the token behind would make a LATER failure look like it
             // had already had its automatic attempt under these inputs, and the type would sit
@@ -2263,6 +2304,8 @@ internal static class NodeTypeCompilationHelpers
             // Clear the consumed release-requester on failure too — the failed request is
             // done; a fresh request must re-stamp it.
             RequestedReleaseBy = null,
+            // Spent, like the requester — see ApplyCompileSuccess (#2818).
+            RequestedReleaseForce = false,
             // The adopted build this request belonged to is gone (CompiledSources is cleared
             // above), so the request goes with it — see ApplyCompileSuccess (#1834).
             RequestedSourceStampAt = null

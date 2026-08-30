@@ -5,6 +5,8 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Fixture;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -97,6 +99,135 @@ public class NodeTypeOnDemandAdoptionTest(ITestOutputHelper output) : MonolithMe
         parkRegistry.GetCompileAttemptCount(NodeTypePath).Should().Be(1,
             "the reported adoption did not produce a usable build, so the type must compile — "
             + "reaching a terminal state is the proof it was not left stranded at Pending");
+    }
+
+    private const string ForcedPartition = "AdoptOnDemandForceTest";
+    private const string ForcedTypeId = "ForcedType";
+    private const string ForcedTypePath = $"{ForcedPartition}/{ForcedTypeId}";
+
+    private const string ForcedCodeV1 = """
+        public static class ForcedTypeMarker
+        {
+            public const string Version = "V1";
+        }
+        """;
+
+    private const string ForcedCodeV2 = """
+        public static class ForcedTypeMarker
+        {
+            public const string Version = "V2";
+        }
+        """;
+
+    /// <summary>
+    /// 🚨 #2818 — A FORCE MUST NOT BE ANSWERED BY THE BUNDLE SOURCES.
+    ///
+    /// <para>The release watcher honoured <c>RequestedReleaseForce</c> (it bypassed its
+    /// "already satisfied" short-circuit) and flipped the type <c>Pending</c> — and the compile
+    /// watcher then asked the bundle sources again regardless, re-adopted whatever still resolved,
+    /// and settled "without a Roslyn pass". So a force worked exactly when <c>SeedForTypes</c>
+    /// MISSED, and was inert whenever a bundle still resolved — which is when an operator needs it
+    /// (#2813: a stale prebuilt adopted over freshly synced source could not be forced off the
+    /// node). A test that forces a type with NO resolvable bundle therefore passes against the
+    /// unfixed code; the discriminating assertion is that the forced <c>Pending</c> never
+    /// <b>consults</b> the consumer at all, on a consumer that answers "adopted".</para>
+    ///
+    /// <para>Three phases on one compiling type: the first build consults the sources once (the
+    /// #1782 gap-4 contract, unchanged); the forced release compiles WITHOUT consulting them and
+    /// leaves the force spent; an ordinary source edit afterwards consults them again — the proof
+    /// the force was consumed by its own compile rather than left standing on the node.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AForcedRelease_NeverConsultsTheBundleSources_AndCompilesTheLiveSource()
+    {
+        // A bundle that "still resolves": the consumer answers adopted (it writes nothing back, so
+        // the node never gains a usable build from it and the compile proceeds either way — what
+        // the fix changes is whether the question is asked).
+        consumer.AdoptedToReport = 1;
+        var parkRegistry = Mesh.ServiceProvider.GetRequiredService<NodeTypeCompileParkRegistry>();
+
+        // 1. Create the type + one source; the first-build kickoff compiles it.
+        await NodeFactory.CreateNode(new MeshNode(ForcedTypeId, ForcedPartition)
+        {
+            Name = "Forced Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Pin for the forced-release path (#2818).",
+                Configuration = "config => config.AddDefaultLayoutAreas()"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+        await NodeFactory.CreateNode(new MeshNode("code", $"{ForcedTypePath}/Source")
+        {
+            Name = "Code",
+            NodeType = "Code",
+            Content = new CodeConfiguration { Code = ForcedCodeV1, Language = "csharp" }
+        }).Should().Within(30.Seconds()).Emit();
+
+        var firstBuild = await SettledOk(after: null);
+        Output.WriteLine($"=== first build Ok at {firstBuild.LastCompileSucceededAt:O}; asked=[{string.Join(", ", consumer.Asked)}] ===");
+        consumer.Asked.Should().Equal([ForcedTypePath],
+            "the first build is an unforced compile miss and consults the bundle sources once (#1782 gap 4)");
+        parkRegistry.GetCompileAttemptCount(ForcedTypePath).Should().Be(1);
+
+        // 2. FORCE. The type flips Pending with RequestedReleaseForce=true; the compile watcher must
+        //    go straight to Roslyn.
+        Mesh.RequestNodeTypeRelease(ForcedTypePath, force: true,
+            onError: msg => Output.WriteLine($"forced request refused: {msg}"));
+
+        var forcedBuild = await SettledOk(after: firstBuild.LastCompileSucceededAt);
+        Output.WriteLine($"=== forced build Ok at {forcedBuild.LastCompileSucceededAt:O}; asked=[{string.Join(", ", consumer.Asked)}] ===");
+        consumer.Asked.Should().Equal([ForcedTypePath],
+            "a FORCED release must never consult the bundle sources — on a mesh whose bundle still "
+            + "resolves that consultation re-adopts the very bytes the operator is trying to replace");
+        parkRegistry.GetCompileAttemptCount(ForcedTypePath).Should().Be(2,
+            "the forced release must run a real Roslyn pass — the settle above is not enough on its "
+            + "own, because an adoption also settles the type");
+        forcedBuild.RequestedReleaseForce.Should().BeFalse(
+            "the force is spent by the compile it dispatched; left standing it would make every later, "
+            + "unforced trigger skip adoption too");
+
+        // 3. An ORDINARY trigger afterwards consults the bundle sources again. A source edit marks
+        //    the type dirty (InstallSourcesWatcher: CurrentSourceVersions vs CompiledSources); the
+        //    rebuild itself is asked for by an UNFORCED release request, exactly as
+        //    CodeEditRecompileTest does — a dirty type is not satisfied by its current build, so
+        //    the request dispatches a Pending that carries no force.
+        await Mesh.GetWorkspace().GetMeshNodeStream($"{ForcedTypePath}/Source/code")
+            .Update(n => n with { Content = new CodeConfiguration { Code = ForcedCodeV2, Language = "csharp" } })
+            .Take(1).Await(TestContext.Current.CancellationToken);
+        await Mesh.GetWorkspace().GetMeshNodeStream(ForcedTypePath)
+            .Should().Within(30.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d && d.IsDirty);
+        Output.WriteLine("=== source edited, type dirty; requesting an UNFORCED release ===");
+        Mesh.RequestNodeTypeRelease(ForcedTypePath,
+            onError: msg => Output.WriteLine($"unforced request refused: {msg}"));
+
+        var editedBuild = await SettledOk(after: forcedBuild.LastCompileSucceededAt);
+        Output.WriteLine($"=== edited build Ok at {editedBuild.LastCompileSucceededAt:O}; asked=[{string.Join(", ", consumer.Asked)}] ===");
+        consumer.Asked.Should().Equal([ForcedTypePath, ForcedTypePath],
+            "once the force is spent, an unforced trigger reaches on-demand adoption again — "
+            + "a sticky force would have skipped it here as well");
+        parkRegistry.GetCompileAttemptCount(ForcedTypePath).Should().Be(3);
+    }
+
+    /// <summary>Waits for the forced-path type to settle Ok with a success stamp strictly after
+    /// <paramref name="after"/> (or any stamp when null), and returns that definition.</summary>
+    private async Task<NodeTypeDefinition> SettledOk(DateTimeOffset? after)
+    {
+        await Mesh.GetWorkspace().GetMeshNodeStream(ForcedTypePath)
+            .Should().Within(90.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && d.LastCompileSucceededAt is { } at
+                && (after is null || at > after.Value)
+                && !d.IsDirty);
+        return await Mesh.GetWorkspace().GetMeshNodeStream(ForcedTypePath)
+            .Where(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && d.LastCompileSucceededAt is { } at
+                && (after is null || at > after.Value))
+            .Select(n => (NodeTypeDefinition)n!.Content!)
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>Creates a NodeType whose Configuration is not valid C# and waits for the compile
