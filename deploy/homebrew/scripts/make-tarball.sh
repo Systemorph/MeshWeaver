@@ -29,7 +29,11 @@ git -C "$repo" archive --format=tar --prefix="memex-local-${version}/" "$ref" \
 
 # A tarball that does not carry the CLI is a green step that installs nothing — assert the one
 # file everything else depends on is inside, never "tar exited 0".
-if ! tar -tzf "$out" | grep -qx "memex-local-${version}/deploy/homebrew/bin/memex-local"; then
+# 🚨 List to a variable, then grep — never `tar -tzf … | grep -q`: grep -q exits on its first match
+# and closes the pipe, tar dies with "stdout: write error", and under pipefail the check reports
+# the CLI as MISSING from a tarball that carries it (main's first tap publish, 2026-08-30).
+entries="$(tar -tzf "$out")"
+if ! grep -qxF "memex-local-${version}/deploy/homebrew/bin/memex-local" <<<"$entries"; then
   echo "tarball $out does not contain deploy/homebrew/bin/memex-local" >&2
   exit 1
 fi
