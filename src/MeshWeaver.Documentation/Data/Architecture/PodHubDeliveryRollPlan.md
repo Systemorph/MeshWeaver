@@ -175,9 +175,13 @@ directed NACK rather than only on `PodHubNotHere`). Nothing new spins: the retry
 unreachable, which is the same inert-classifier shape as #2451.
 
 > 🚨 **This is also why the "durable stream provider" decision does NOT close #1742.** A durable
-> provider improves the *fallback* — residual A below, plus hubs owned by an Orleans client process.
-> It cannot touch the primary reply path, because the directed call never goes near the stream
-> provider. Size that decision on #2320 / #2322 (both stream-leg tickets), not on this issue.
+> provider improves the *fallback* — the RAM-resident queue grain, item 1 of
+> [Orleans Stream Pub-Sub Durability → What this does NOT fix](/Doc/Architecture/OrleansStreamPubSubDurability),
+> plus hubs owned by an Orleans client process. It cannot touch the primary reply path, because
+> the directed call never goes near the stream provider. Size that decision on #2320 / #2322
+> (both stream-leg tickets), not on this issue — and that decision is now made:
+> [Durable Streams Are Mesh Nodes](/Doc/Architecture/DurableStreamsViaMeshNodes) retires the
+> fallback instead of hardening it.
 
 ## Related
 
