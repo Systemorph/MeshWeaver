@@ -108,6 +108,23 @@ on:
   push:
     branches: [ "main" ]
   pull_request:      # ← NO `branches:` filter. See the block above (#1401) before adding one.
+  # 🚨 THE MERGE QUEUE CANNOT WORK WITHOUT THIS TRIGGER, and its absence does not look like a
+  # missing trigger — it looks like a PR that queues and then sits there. The queue builds a
+  # temporary `gh-readonly-queue/main/…` ref and waits for the REQUIRED CONTEXT (`Consolidate test
+  # results`) to report on it; a workflow that never fires on `merge_group` reports nothing, so the
+  # entry waits out its timeout and is ejected, with no failing check to point at.
+  #
+  # Why a queue at all (#2412): with `strict: false` every PR is tested against the main it
+  # branched from, so a burst of merges lands a COMBINATION no run ever compiled. Measured twice —
+  # `CS0246: MeshOperations` on 2026-08-26, and on 2026-08-30 a new guard (#2782) plus an
+  # independently-landed gate primitive (#2792) that were each green alone and red together, which
+  # held main red for five consecutive runs and reddened a documentation-only PR. A queue builds
+  # each entry on top of the entries ahead of it, so the combination is compiled BEFORE it lands.
+  #
+  # This repo is PUBLIC, so the queue is available on the org's plan (private repos need
+  # Enterprise Cloud — MeshWeaver.Plugins carries the same trigger dormant for that reason).
+  # Enable it in the `main pr protection` ruleset ONLY after this trigger is on main.
+  merge_group:
   workflow_dispatch:
 
 # A force-push to a PR branch obsoletes the in-flight run — cancel it instead of
@@ -254,7 +271,10 @@ jobs:
     # 🚨 Runs on PRs only, and deliberately does NOT depend on precheck: this is a DIFF gate, so
     # a tree that is already green elsewhere still has to answer "is this change binary-breaking
     # for a consumer compiled earlier?" — a question no repo-local suite can answer.
-    if: github.event_name == 'pull_request'
+    # A merge_group entry HAS a base — main, by construction (the queue ref is main plus the
+    # entries ahead of this one) — so both diff gates keep holding inside the queue rather than
+    # going quiet exactly where the merge actually happens.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
     - uses: actions/checkout@v7
       with:
@@ -265,7 +285,7 @@ jobs:
     - name: "Refuse a binary-breaking primary-constructor change"
       run: |
         set -euo pipefail
-        git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        git fetch --no-tags --depth=200 origin "${{ github.event_name == 'merge_group' && 'main' || github.base_ref }}"
         # 🚨 The MERGE BASE, not the base branch tip — same reasoning as the type-move gate below.
         # This step disagreed with its own script until #2398: check-record-signatures.py's
         # docstring says it compares "the merge base against the working tree", while the step
@@ -279,7 +299,7 @@ jobs:
         # reverting it. A red on somebody else's commit, on a gate whose whole value is that people
         # believe it. Passing the merge-base SHA fixes both halves consistently (`sha...HEAD`
         # degenerates to `sha`, since it is an ancestor of HEAD).
-        base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+        base=$(git merge-base "origin/${{ github.event_name == 'merge_group' && 'main' || github.base_ref }}" HEAD)
         echo "Comparing against merge base $base"
         python3 scripts/check-record-signatures.py --base "$base"
     # The OTHER half of the same class (#2370): a public TYPE moving assemblies, which no repo-local
@@ -302,12 +322,12 @@ jobs:
       run: |
         set -euo pipefail
         # Already fetched above for the record gate; repeated explicitly so the steps can be reordered.
-        git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
+        git fetch --no-tags --depth=200 origin "${{ github.event_name == 'merge_group' && 'main' || github.base_ref }}"
         # 🚨 The MERGE BASE, not the base branch tip. This is a diff question, and a public type that
         # moves on main while this PR is open reads, against the tip, as THIS PR moving it back — a
         # red on somebody else's change. Four such moves landed on main in one day (#2398), so this
         # is the difference between a gate people believe and one they learn to allow-list past.
-        base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+        base=$(git merge-base "origin/${{ github.event_name == 'merge_group' && 'main' || github.base_ref }}" HEAD)
         echo "Comparing against merge base $base"
         python3 scripts/check-type-forwards.py --base "$base"
 
