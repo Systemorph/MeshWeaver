@@ -229,6 +229,11 @@ public sealed class RegistryUpdateReconciler(
             });
     }
 
+    /// <summary>The most one package's module adopt may take before the reconcile moves on —
+    /// generous for a large bundle download, small against a boot; the point is only that it is
+    /// FINITE (see the Timeout note below, Plugins#959).</summary>
+    internal static readonly TimeSpan PerPackageAdoptBudget = TimeSpan.FromMinutes(3);
+
     /// <summary>
     /// The module half of the boot reconcile (#1664 Slice C): for each of the registry's packages
     /// that declares a compiled module AND has an install record here, run the one module-update
@@ -248,11 +253,6 @@ public sealed class RegistryUpdateReconciler(
     /// withhold the rest, and <see cref="PluginBundleClient.AdoptModule"/> already absorbs its own
     /// failures into a logged zero.</para>
     /// </summary>
-    /// <summary>The most one package's module adopt may take before the reconcile moves on —
-    /// generous for a large bundle download, small against a boot; the point is only that it is
-    /// FINITE (see the Timeout note below, Plugins#959).</summary>
-    internal static readonly TimeSpan PerPackageAdoptBudget = TimeSpan.FromMinutes(3);
-
     private IObservable<Unit> ReconcileModules(
         PluginBundleClient bundles,
         string registryName,
