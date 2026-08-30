@@ -15,6 +15,7 @@ truth.
 
 ```bash
 brew tap systemorph/memex          # https://github.com/Systemorph/homebrew-memex
+brew trust systemorph/memex        # Homebrew refuses a third-party tap's formulae until the tap is trusted
 brew install memex-local
 ```
 
