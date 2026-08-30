@@ -60,6 +60,7 @@ public sealed class SyncLicenseService(IMessageHub hub, ILogger<SyncLicenseServi
         {
             Source = request.Source,
             PackageId = request.PackageId,
+            Tier = PlanTierRanks.Canonical(request.Tier) is { Length: > 0 } plan ? plan : null,
             ExpiresAt = request.ExpiresAt,
             IssuedUnderLicense = request.IssuedUnderLicense,
             IssuedVia = request.IssuedVia,
@@ -209,6 +210,10 @@ public sealed record SyncLicenseRequest
 
     /// <summary>End of the term. Null = perpetual (revocation remains available).</summary>
     public DateTimeOffset? ExpiresAt { get; init; }
+
+    /// <summary>The subscription plan the entry is scoped to (<see cref="PluginGrantEntry.Tier"/>),
+    /// or null/blank for every tier.</summary>
+    public string? Tier { get; init; }
 
     /// <summary>SPDX id of the licence the right is issued under. Null stays null — never
     /// defaulted, since recording terms nobody granted is worse than recording none.</summary>
