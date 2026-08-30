@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading;
@@ -148,52 +149,6 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
         DefaultPolicy = UpdatePolicyKind.Continuous,
     };
 
-    /// <summary>
-    /// Waits for the gate to hold <paramref name="candidateTag"/>, in TWO stages so a failure names
-    /// which half broke.
-    ///
-    /// <para>🚨 #2777. A single wait on <c>IsHeld</c> conflates two outcomes that need opposite
-    /// fixes: <b>the poller never ran a check</b> (it is wedged, or its trigger never fired) and
-    /// <b>a check ran and did not hold</b> (the gate is wrong — a real regression). Both arrived as
-    /// the same red, and the observed failure on <c>ec90061e4</c> — a docs-only merge that cannot
-    /// reach this code — could not be attributed to either. Widening the 30 s would only make a
-    /// real regression slower to surface.</para>
-    ///
-    /// <para>Stage 1 waits for <c>LastCheckedAt</c>, which EVERY check stamps beside its verdict
-    /// (#2553) — that is the positive signal that the poller is alive and has evaluated once. Stage
-    /// 2 then waits for the hold, and reports the verdict the check actually recorded, so "it held
-    /// late" and "it decided not to hold" are different messages.</para>
-    /// </summary>
-    private async Task<UpdatePolicyContent> WaitForHeld(string candidateTag, CancellationToken ct)
-    {
-        var policy = Mesh.GetWorkspace()
-            .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-            .Select(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions));
-
-        var checkedOnce = await policy
-            .Where(content => content.LastCheckedAt is not null)
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
-            .Await(ct);
-
-        try
-        {
-            return await policy
-                .Where(content => content.IsHeld(candidateTag))
-                .FirstAsync()
-                .Timeout(TimeSpan.FromSeconds(30))
-                .Await(ct);
-        }
-        catch (TimeoutException ex)
-        {
-            throw new TimeoutException(
-                $"the poller DID run a check (LastCheckedAt={checkedOnce.LastCheckedAt:O}, "
-                + $"trigger={checkedOnce.LastCheckTrigger}, verdict=\"{checkedOnce.LastCheckVerdict}\") "
-                + $"but never held {candidateTag}. This is the gate deciding NOT to hold — a real "
-                + "regression — not a poll that had not fired yet (#2777).", ex);
-        }
-    }
-
     [Fact(Timeout = 60000)]
     public async Task AHeldReleaseIsNotRolled_AndTheHoldIsWrittenWhereTheUpdatesTabReadsIt()
     {
@@ -210,7 +165,20 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
         {
             // POSITIVE signal for a refusal: the hold lands on the policy node. Waiting for "no
             // patch" alone would pass against a poller that had simply died.
-            var held = await WaitForHeld(CandidateTag, ct);
+            // 🚨 Wait for the service to have EVALUATED, never for a held state to appear inside a
+            // bound (#2777). This service is event-driven, so "the hold is not there yet" and "the
+            // first check has not run yet" are indistinguishable from outside — and on a loaded
+            // shard the second is what actually happened, reported as if it were a wrong verdict.
+            // ChecksReported is the condition itself; the state is then asserted, not raced.
+            await service.Evaluations.FirstAsync().Timeout(TimeSpan.FromSeconds(45)).Await(ct);
+
+            var held = await Mesh.GetWorkspace()
+                .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                .Select(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions))
+                .Where(content => content.IsHeld(CandidateTag))
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Await(ct);
 
             held.HeldReason.Should().Contain("Store",
                 "the refusal must name the package that blocks it — an unnamed hold is unactionable");
@@ -304,7 +272,20 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
         await service.StartAsync(CancellationToken.None);
         try
         {
-            var held = await WaitForHeld(CandidateTag, ct);
+            // 🚨 Wait for the service to have EVALUATED, never for a held state to appear inside a
+            // bound (#2777). This service is event-driven, so "the hold is not there yet" and "the
+            // first check has not run yet" are indistinguishable from outside — and on a loaded
+            // shard the second is what actually happened, reported as if it were a wrong verdict.
+            // ChecksReported is the condition itself; the state is then asserted, not raced.
+            await service.Evaluations.FirstAsync().Timeout(TimeSpan.FromSeconds(45)).Await(ct);
+
+            var held = await Mesh.GetWorkspace()
+                .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                .Select(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions))
+                .Where(content => content.IsHeld(CandidateTag))
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Await(ct);
 
             held.HeldIndeterminate.Should().BeTrue(
                 "an unwired gate is the ABSENCE of a verdict — an availability failure to fix, "
@@ -392,7 +373,13 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
         await service.StartAsync(CancellationToken.None);
         try
         {
-            var held = await WaitForHeld(CandidateTag, ct);
+            var held = await Mesh.GetWorkspace()
+                .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                .Select(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions))
+                .Where(content => content.IsHeld(CandidateTag))
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Await(ct);
 
             held.HeldIndeterminate.Should().BeTrue(
                 "clearing the PACING floor says nothing about whether the release is AVAILABLE — "
@@ -451,6 +438,14 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
         IConfiguration? configuration = null)
         : SelfUpdateHostedService(hub, acr, updater, options, logger)
     {
+        /// <summary>
+        /// Surfaces the base class's per-check completion so the tests can await it. The base
+        /// member is <c>protected internal</c> and this assembly is not in its
+        /// <c>InternalsVisibleTo</c> list, so a derived-class forward is the local way to reach it
+        /// — cheaper than widening the production assembly's friend list for one test file.
+        /// </summary>
+        public IObservable<Unit> Evaluations => ChecksReported;
+
         protected override ReleaseAvailabilityService? ResolveAvailabilityGate() => gate;
 
         /// <summary>Present a deployment that consumes no CI bakes when the test asks for one —

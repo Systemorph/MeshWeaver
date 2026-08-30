@@ -7,12 +7,15 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
+using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Features;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -42,6 +45,11 @@ public record PluginRegistryCredential
 
     /// <summary>When the registration happened.</summary>
     public DateTimeOffset RegisteredAt { get; init; }
+
+    /// <summary>The plan the registry put this instance on (#2804), as echoed by the registration
+    /// response — what this installation is entitled to pull, shown in Settings. Null when the
+    /// registry predates plans; the registry is the authority either way.</summary>
+    public string? Plan { get; init; }
 }
 
 /// <summary>Where auto-registration credentials live and how a registry URL maps to a node id.</summary>
@@ -67,22 +75,112 @@ public static class PluginRegistryCredentials
 }
 
 /// <summary>
-/// Resolves the token a consumer presents to a registry: an explicitly configured token always
+/// Resolves the credential a consumer presents to a registry: an explicitly configured token always
 /// wins; otherwise the stored <see cref="PluginRegistryCredential"/> from a first-startup
-/// auto-registration, decrypted; otherwise empty (unauthenticated — only an open dev/e2e registry
-/// answers). Reads run as System: the credential is deployment infrastructure in the Admin
-/// partition, not something the browsing user could (or should) read.
+/// auto-registration, decrypted — and, since #2804, EXCHANGED for a short-lived JWT
+/// (<see cref="SyncAccessToken"/>) at the registry's token route, so the durable <c>mwi_</c> key
+/// leaves this process once per token lifetime instead of on every request; otherwise empty
+/// (unauthenticated — only an open dev/e2e registry answers). Reads run as System: the credential
+/// is deployment infrastructure in the Admin partition, not something the browsing user could (or
+/// should) read.
+///
+/// <para>The exchange degrades, it never blocks: a registry that predates the token route, or one
+/// that is momentarily unreachable, gets the durable key presented directly (the legacy window the
+/// registry still honours), with one warning per attempt so the fallback is visible in the log.
+/// Tokens are cached per registry until <see cref="RefreshMargin"/> before their expiry — an
+/// instance field on this mesh-scoped singleton, never static state.</para>
 /// </summary>
 public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryTokenResolver> logger)
 {
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
 
-    /// <summary>The effective token for <paramref name="registry"/>. Cold; emits once.</summary>
+    /// <summary>How long before a cached token's expiry it stops being reused — wide enough that a
+    /// request in flight when the margin is reached still arrives with a live token.</summary>
+    public static readonly TimeSpan RefreshMargin = TimeSpan.FromSeconds(60);
+
+    // Shared fallback when no IHttpClientFactory is registered — HttpClient is designed to be
+    // long-lived and shared; a per-call `new HttpClient()` leaks sockets. Immutable shared
+    // resource, not a cache, so it does not fall under the no-static-state rule.
+    private static readonly HttpClient SharedHttp = new();
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Token, DateTimeOffset ExpiresAt)> tokens =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The effective credential for <paramref name="registry"/> — a JWT when the registry
+    /// issues one, else the durable key. Cold; emits once.</summary>
     public IObservable<string> ResolveToken(PluginRegistryReference registry)
     {
         if (!string.IsNullOrWhiteSpace(registry.Token))
             return Observable.Return(registry.Token.Trim());
 
+        return StoredCredential(registry)
+            .SelectMany(raw => raw.Length == 0 ? Observable.Return("") : Exchange(registry.Url, raw));
+    }
+
+    /// <summary>
+    /// The durable <c>mwi_</c> key exchanged for a token at <c>{registry}/api/instances/token</c>,
+    /// cached until <see cref="RefreshMargin"/> before it expires. Anything other than a token in
+    /// the answer — a 404 from an older registry, a 5xx, a network fault — yields the key itself.
+    /// </summary>
+    private IObservable<string> Exchange(string registryUrl, string rawKey)
+    {
+        if (!rawKey.StartsWith(InstanceKeys.KeyPrefix, StringComparison.Ordinal))
+            return Observable.Return(rawKey);           // not an instance key: nothing to exchange
+
+        var url = (registryUrl ?? "").Trim().TrimEnd('/');
+        if (url.Length == 0)
+            return Observable.Return(rawKey);
+
+        if (tokens.TryGetValue(url, out var hit) && hit.ExpiresAt - DateTimeOffset.UtcNow > RefreshMargin)
+            return Observable.Return(hit.Token);
+
+        var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
+        var http = hub.ServiceProvider.GetService<IHttpClientFactory>()
+            ?.CreateClient(InstanceRegistrationClient.BundleHttpClientName) ?? SharedHttp;
+
+        return pool.Invoke<ExchangeOutcome>(async ct =>
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, url + SyncTokenPayloads.Route);
+                request.Headers.TryAddWithoutValidation("Authorization", $"{SyncAccessToken.Scheme} {rawKey}");
+                request.Content = new StringContent(
+                    JsonSerializer.Serialize(new SyncTokenPayloads.Request(), SyncTokenPayloads.Json),
+                    System.Text.Encoding.UTF8, "application/json");
+                using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+                var status = (int)response.StatusCode;
+                if (!response.IsSuccessStatusCode)
+                    return new ExchangeOutcome(null, status, 0);
+                var body = JsonSerializer.Deserialize<SyncTokenPayloads.Response>(
+                    await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false), SyncTokenPayloads.Json);
+                return new ExchangeOutcome(body?.AccessToken, status, body?.ExpiresIn ?? 0);
+            })
+            .Select(result =>
+            {
+                if (string.IsNullOrWhiteSpace(result.Token) || result.ExpiresIn <= 0)
+                {
+                    logger.LogWarning(
+                        "Token exchange at {Url} answered {Status} without a token — presenting the "
+                        + "instance key directly (legacy)", url, result.Status);
+                    return rawKey;
+                }
+                tokens[url] = (result.Token, DateTimeOffset.UtcNow.AddSeconds(result.ExpiresIn));
+                return result.Token;
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "Token exchange at {Url} failed — presenting the instance key directly (legacy)", url);
+                return Observable.Return(rawKey);
+            });
+    }
+
+    /// <summary>What the token route answered: the token and its lifetime, or the status that
+    /// carried none.</summary>
+    private sealed record ExchangeOutcome(string? Token, int Status, int ExpiresIn);
+
+    /// <summary>The stored, decrypted registration credential for <paramref name="registry"/>, or
+    /// empty. Reads run as System (the credential lives in the Admin partition).</summary>
+    private IObservable<string> StoredCredential(PluginRegistryReference registry)
+    {
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         return Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
@@ -354,8 +452,14 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="registryToken">An explicitly configured registry token, if any.</param>
     /// <param name="instanceId">The configured instance id, if any.</param>
     /// <param name="masterKeyPresent">Whether the platform key protector can actually encrypt.</param>
+    /// <param name="consentGiven">Whether a platform admin of this installation has accepted the
+    /// privacy statement and the platform terms (<see cref="InstanceConsent"/>). Gates the OPEN
+    /// lane only: an instance provisioned with a registration key was set up by an operator who
+    /// accepted on the fleet's side, and asking an unattended pod would leave it unregistered
+    /// forever.</param>
     internal static (RegistrationPreflight Action, string? Reason) DecideRegistration(
-        string? bootstrapKey, string? registryToken, string? instanceId, bool masterKeyPresent)
+        string? bootstrapKey, string? registryToken, string? instanceId, bool masterKeyPresent,
+        bool consentGiven)
     {
         // OPEN registration: an instance id and no key. The registry decides whether it accepts
         // un-keyed callers and which plan they enrol into (the free tier on the cloud registry);
@@ -389,6 +493,16 @@ public sealed class InstanceAutoRegistrationService(
                     + "anything is consumed: the bootstrap key stays valid and the instance id stays "
                     + "free, so configuring the master key and restarting completes the registration. "
                     + "(Registering first and failing to store would burn both — #2585.)");
+        // The instance starts, and ASKS. An open registration is a deployment presenting itself to
+        // a registry on someone's behalf; until a platform admin here has read and accepted the
+        // privacy statement and the platform terms, nothing is registered, no token is obtained
+        // and no catalogue is pulled. The caller waits for the consent record and then registers —
+        // no restart, no timer.
+        if (open && !consentGiven)
+            return (RegistrationPreflight.AwaitConsent,
+                "PluginCatalog:InstanceId is set (open registration) but no platform admin has accepted "
+                + "the privacy statement and platform terms yet — waiting. Open Settings ▸ Instance "
+                + "registration, review both, and register; the registration then runs at once.");
         return (RegistrationPreflight.Register, null);
     }
 
@@ -403,6 +517,10 @@ public sealed class InstanceAutoRegistrationService(
 
         /// <summary>Present the bootstrap key.</summary>
         Register = 2,
+
+        /// <summary>Open registration, and the deployment's consent has not been given yet — wait
+        /// for the <see cref="InstanceConsent"/> record, then register.</summary>
+        AwaitConsent = 3,
     }
 
     /// <summary>
@@ -418,18 +536,80 @@ public sealed class InstanceAutoRegistrationService(
         // (IProviderKeyProtector's own doc names this as the sanctioned order).
         var masterKeyPresent =
             hub.ServiceProvider.GetService<IMasterKeyProvider>()?.GetMasterKey() is not null;
-        var (action, reason) = DecideRegistration(
-            bootstrapKey, registry.Token, options.InstanceId, masterKeyPresent);
-        switch (action)
+
+        // Consent is read only where it can gate: the OPEN lane with an instance id. A keyed or
+        // unconfigured deployment never touches the consent record.
+        var open = bootstrapKey.Length == 0 && !string.IsNullOrWhiteSpace(options.InstanceId);
+        var consent = open ? ConsentGiven(wait: false) : Observable.Return(true);
+
+        return consent.SelectMany(consentGiven =>
         {
-            case RegistrationPreflight.Skip:
-                if (reason is not null)
+            var (action, reason) = DecideRegistration(
+                bootstrapKey, registry.Token, options.InstanceId, masterKeyPresent, consentGiven);
+            switch (action)
+            {
+                case RegistrationPreflight.Skip:
+                    if (reason is not null)
+                        logger.LogInformation("{Reason}", reason);
+                    return Observable.Return(Unit.Default);
+                case RegistrationPreflight.Abort:
+                    logger.LogError("{Reason}", reason);
+                    return Observable.Empty<Unit>();       // misconfigured → do not go on to install
+                case RegistrationPreflight.AwaitConsent:
                     logger.LogInformation("{Reason}", reason);
-                return Observable.Return(Unit.Default);
-            case RegistrationPreflight.Abort:
-                logger.LogError("{Reason}", reason);
-                return Observable.Empty<Unit>();       // misconfigured → do not go on to install
-        }
+                    // The instance has asked; now it waits for the answer — the consent record a
+                    // platform admin writes from Settings — and registers the moment it lands.
+                    // Ordering on the actual precondition: no timer, no restart, no poll.
+                    return ConsentGiven(wait: true)
+                        .Where(given => given)
+                        .Take(1)
+                        .Do(_ => logger.LogInformation(
+                            "Consent recorded — registering this installation as '{InstanceId}' at {Url}.",
+                            options.InstanceId!.Trim(), registry.Url))
+                        .SelectMany(_ => Register(options, registry, bootstrapKey));
+            }
+            return Register(options, registry, bootstrapKey);
+        });
+    }
+
+    /// <summary>
+    /// Whether the deployment's <see cref="InstanceConsent"/> is on record and complete. Existence
+    /// through a query (empty-on-absent, storm-safe — a point read of a maybe-absent node opens the
+    /// breaker on the path, #2229), the content off the live node stream. With
+    /// <paramref name="wait"/> the query is LEFT OPEN until a record appears, which is how the
+    /// registration that was waiting for consent wakes up without a restart.
+    /// </summary>
+    private IObservable<bool> ConsentGiven(bool wait)
+    {
+        var workspace = hub.GetWorkspace();
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var path = MeshWeaverInstanceNodeType.ConsentPath;
+        var rows = accessService.RunAsSystem(() => workspace.GetQuery(
+            $"consent|{path}", $"path:{path} nodeType:{MeshWeaverInstanceNodeType.ConsentNodeType}"));
+        var present = wait
+            ? rows.Where(r => r.Any()).Take(1)
+            : rows.Take(1).Timeout(TimeSpan.FromSeconds(10));
+        return present
+            .SelectMany(r => r.Any()
+                ? accessService.RunAsSystem(() => workspace.GetMeshNodeStream(path)
+                        .Where(node => node is not null)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(10)))
+                    .Select(node => node!.ContentAs<InstanceConsent>(hub.JsonSerializerOptions)?.IsComplete ?? false)
+                : Observable.Return(false))
+            .Catch((Exception ex) =>
+            {
+                // A read that reached no verdict is not consent. Say so, and stay unregistered.
+                logger.LogWarning(ex, "Could not read the instance consent record at {Path} — treating as not given", path);
+                return Observable.Return(false);
+            });
+    }
+
+    /// <summary>The registration proper — present the key (or none, openly), store the issued
+    /// credential. Split out of <see cref="EnsureRegistered"/> so the consent-deferred path and the
+    /// immediate path run the same code.</summary>
+    private IObservable<Unit> Register(PluginCatalogOptions options, PluginRegistryReference registry, string bootstrapKey)
+    {
         var instanceId = options.InstanceId!.Trim();
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
@@ -475,6 +655,7 @@ public sealed class InstanceAutoRegistrationService(
                                 // never issues a null key — it either refuses or returns ciphertext.
                                 ProtectedKey = protector.Protect(result.InstanceKey)!,
                                 RegisteredAt = DateTimeOffset.UtcNow,
+                                Plan = result.Plan,
                             },
                         };
                         return Observable.Defer(() =>

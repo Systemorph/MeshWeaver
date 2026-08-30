@@ -52,6 +52,20 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
+    /// Forgets the cached verdict for the instance whose key hashes to <paramref name="keyHash"/>.
+    /// Called by the writes that change what a verdict says — a plan promotion, a disable — so the
+    /// change is visible on the NEXT request served by this process rather than after
+    /// <see cref="CacheDuration"/>; other replicas see it within the window. Not a test hook: a
+    /// promotion an admin just made and a fetch that still refuses is the exact confusion #2804
+    /// exists to remove.
+    /// </summary>
+    public void Invalidate(string keyHash)
+    {
+        if (!string.IsNullOrWhiteSpace(keyHash))
+            cache.TryRemove(keyHash, out _);
+    }
+
+    /// <summary>
     /// The node read, injectable so the CACHE and CLASSIFICATION rules can be driven without a
     /// mesh. Production is <see cref="IMessageHub"/>'s interrogable one-shot read; a test supplies
     /// an unavailable/absent/present sequence directly.
@@ -378,10 +392,11 @@ public sealed record AuthenticatedInstance(MeshWeaverInstance Instance, PluginGr
 
     /// <summary>Whether this caller may pull <paramref name="packageId"/> — declaring
     /// <paramref name="packageTier"/> — from registry source <paramref name="sourceName"/> at
-    /// <paramref name="now"/>: granted for that tier under <see cref="Ranks"/>, within term, and
-    /// within the token's scope. The overload every registry surface decides with.</summary>
+    /// <paramref name="now"/>: granted by an entry within term, covered by the INSTANCE's plan
+    /// (<see cref="MeshWeaverInstance.Plan"/>, baseline when absent) under <see cref="Ranks"/>,
+    /// and within the token's scope. The overload every registry surface decides with (#2804).</summary>
     public bool Allows(string sourceName, string packageId, string? packageTier, DateTimeOffset now) =>
-        Grant.Allows(sourceName, packageId, packageTier, Ranks, now)
+        Grant.Allows(sourceName, packageId, packageTier, Ranks, Instance.Plan, now)
         && (TokenScope is null || TokenScope.Covers(sourceName, packageId));
 
     /// <summary><see cref="Allows(string,string,string?,DateTimeOffset)"/> right now.</summary>

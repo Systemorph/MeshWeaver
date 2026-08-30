@@ -153,6 +153,45 @@ public static class EmitPipeline
     internal const string EmitCanaryDataKey = "MeshWeaver.EmitCanary";
 
     /// <summary>
+    /// Did the canary PROVE that this PROCESS can no longer emit — as opposed to this
+    /// compilation's own inputs being at fault?
+    ///
+    /// <para>Both <c>REFERENCES</c> and <c>BELOW-ROSLYN</c> are reached only after the control
+    /// compilation — trivial, freshly parsed, known-good source — ALSO failed to emit. Whatever
+    /// broke, it is not the code the caller handed in, so a compile that aborts this way has
+    /// formed NO verdict about that code. <c>NodeTypeCompilationHelpers.IsAvailabilityNonVerdict</c>
+    /// reads this and stamps <c>CompilationStatus.Unavailable</c> instead of <c>Error</c>.</para>
+    ///
+    /// <para>🚨 The three withholding verdicts are deliberately false, for the same reason each of
+    /// them exists:</para>
+    /// <list type="bullet">
+    ///   <item><c>OK</c> — the control emitted fine against the SAME references, so the fault IS a
+    ///     property of this compilation's inputs. That is a genuine <c>Error</c>.</item>
+    ///   <item><c>INCONCLUSIVE</c> — leg 2 never ran (no on-disk CoreLib to build the control
+    ///     from), so nothing was proven either way. Reading "I could not run" as "the process is
+    ///     dead" is the exact defect that branch was carved out to avoid.</item>
+    ///   <item><c>DIVERGENT</c> — both legs failed but in DIFFERENT frames, which the verdict
+    ///     already refuses to call one process-wide fault.</item>
+    /// </list>
+    ///
+    /// <para>🚨 And it is <b>not</b> "the exception carries a canary at all". Every emit-phase
+    /// throw carries one; only two of the five verdicts say the process is the broken thing.
+    /// Keying on presence would widen the non-verdict to every infrastructure fault — the blind
+    /// spot <c>SourceSnapshotEstablishmentTest.EveryOtherCompileFailure_StillStampsError</c>
+    /// exists to refuse — so the verdict has to be READ, not merely found.</para>
+    ///
+    /// <para>Pure and total: any other string, and <c>null</c>, answer false. The parameter is
+    /// <see cref="object"/> because it is read straight out of
+    /// <see cref="System.Collections.IDictionary"/> <c>Exception.Data</c>, where a value of the
+    /// wrong type is a real possibility and must degrade to "not proven".</para>
+    /// </summary>
+    /// <param name="canaryVerdict">The value stamped under <see cref="EmitCanaryDataKey"/>.</param>
+    internal static bool IsProcessEmitFailure(object? canaryVerdict) =>
+        canaryVerdict is string verdict
+        && (verdict.StartsWith("canary=BELOW-ROSLYN", StringComparison.Ordinal)
+            || verdict.StartsWith("canary=REFERENCES", StringComparison.Ordinal));
+
+    /// <summary>
     /// A minimal, self-contained compilation used ONLY by <see cref="ProbeSharedEmitState"/>.
     /// Three levels of nested generics on purpose: that is what makes Roslyn's metadata writer
     /// walk a type's containing chain (<c>GetConsolidatedTypeParameters</c> recursing through

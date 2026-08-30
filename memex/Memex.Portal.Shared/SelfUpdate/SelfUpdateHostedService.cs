@@ -5,6 +5,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
@@ -159,12 +160,33 @@ public class SelfUpdateHostedService : IHostedService
                 .SelectMany(verdict => ReportCheck(check.trigger, verdict)))
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
-                _ => { },
+                _ => _checksReported.OnNext(Unit.Default),
                 ex => _logger?.LogError(ex, "[SelfUpdate] update watch terminated unexpectedly."));
 
         _subscription = new CompositeDisposable(checks, policy.Connect());
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// One emission per CHECK that has been evaluated AND reported (#2777). An instance field —
+    /// its lifetime is this service's — never static.
+    ///
+    /// <para>🚨 It exists because the alternative is a test bounding a POLL. This service is
+    /// event-driven but its first check is still work that has to happen, so a test that waits
+    /// "up to 30 s for the held state to appear" is really waiting for the first check to run:
+    /// on a loaded shard it may simply not have, and the test then reports the absence of a
+    /// verdict as a wrong verdict. That is the same false-RED shape as #2793, and the answer is
+    /// the same — publish the condition, do not infer it from a bound. Production never
+    /// subscribes; nothing here changes what a check does or when it runs.</para>
+    /// </summary>
+    private readonly Subject<Unit> _checksReported = new();
+
+    /// <summary>
+    /// Test seam (<c>InternalsVisibleTo</c>): fires once per check whose verdict has been written.
+    /// Await the FIRST emission to know the service has evaluated at least once, then assert on the
+    /// state it produced — never race a timer against it.
+    /// </summary>
+    protected internal IObservable<Unit> ChecksReported => _checksReported;
 
     /// <summary>
     /// The safety net (#2494): a bounded liveness floor on the CHECK, never on the roll.
@@ -246,6 +268,9 @@ public class SelfUpdateHostedService : IHostedService
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _subscription?.Dispose();
+        // Complete the seam so a subscriber awaiting a check that will now never come is
+        // released rather than left hanging on a stopped service.
+        _checksReported.OnCompleted();
         return Task.CompletedTask;
     }
 

@@ -185,33 +185,49 @@ its check on the action.
 > for three instances and not for a catalogue: a consumer needing ONE package had no smaller thing
 > to ask for than a standing credential to a whole repository.
 
-### Plans — an entry scoped to a subscription tier
+### Plans — the licence on the instance
 
 The Store sells **plans** (`free` · `personal` · `pro` · `dedicated` — your own instance — ·
 `enterprise` — self-hosted; the ladder and the purchase rule are the Store's own, `Store/Subscriptions`
 in the MeshWeaver.Plugins repository), and every package names the plan it belongs to in its root's
-`content.tier`. A grant entry
-can now carry that plan too — `Plugins/*@pro` — and then licenses exactly **the packages of its
-source that the plan covers**, decided by `PlanTierRanks.Covers`:
+`content.tier`. **The instance carries its plan on its own record** (`MeshWeaverInstance.Plan`,
+#2804): a new registration starts on `free` (a registration key minted for a plan puts it on that
+plan), and a global admin raises it in one field (Instance grants ▸ Plan). Every registry decision
+— `/api/plugins`, `/files`, the bundle index and download — is then:
 
-| entry | covers |
+> granted for the source/package by some entry within its term **and** the package's tier is
+> covered by the instance's plan (`PlanTierRanks.CoversInstance`), narrowed by the entry's own cap
+> when it names one (`Narrower`).
+
+| instance plan | may pull |
 |---|---|
-| `Plugins/*` (no plan) | every package of the source, whatever it declares — today's meaning, unchanged |
-| `Plugins/*@personal` | packages declaring `free` or `personal`, and every package declaring **no** tier |
-| `Plugins/*@pro` | … plus `pro` |
-| `Plugins/*@dedicated` | everything — the tier node is flagged `allAccess` ("no limit on packages"), which its rank alone (25 &lt; enterprise's 30) would not give it |
-| `Plugins/*@enterprise` | everything, by rank |
+| *(none on the record)* | the baseline: packages declaring `free` or **no** tier — a record that predates the field is a free instance, not an unlimited one |
+| `free` | the same |
+| `personal` | … plus `personal` |
+| `pro` | … plus `pro` |
+| `dedicated` | everything — the tier node is flagged `allAccess` ("no limit on packages"), which its rank alone (25 &lt; enterprise's 30) would not give it |
+| `enterprise` | everything, by rank |
+
+A grant entry says **which** sources and packages an instance may see — `Plugins/*`,
+`Reinsurance/UWDeepfield` — never at what level. An entry may still carry a plan
+(`Plugins/*@free`) and then acts as a **cap** for that source: a free-capped entry on a pro instance
+licenses free packages from that source; an enterprise-suffixed entry on a free instance licenses
+free. A cap can only lower, never raise — which is precisely what the previous rule got wrong:
+*"a plan-less entry covers every tier"* let every instance registered before plans existed pull
+`pro` and `enterprise` bundles, and a `@pro` suffix licensed pro on any instance that carried it.
 
 **The ladder is the Store's data, not a table in the platform.** The registry reads its own
 `Admin/Tiers/{id}` nodes (`content.rank`, `content.allAccess`) once a minute (`PlanTierLadder`) and
-hands the snapshot to the authenticated caller, so every surface — `/api/plugins`, `/files`, the
-bundle index and download — decides the same way and there is no copy of the Store's `PlanTiers` to
-drift. Two rules are deliberate and fail closed:
+hands the snapshot to the authenticated caller, so every surface decides the same way and there is
+no copy of the Store's `PlanTiers` to drift. The rules at the edges are deliberate and never widen:
 
-- a plan the ladder does not know licenses **nothing**, and a package tier it does not know is
-  covered by **nothing** — a typo never widens a licence. The admin tab refuses an unknown plan
-  before writing it; a registry with no tier nodes at all decides every plan-scoped entry as "no"
-  while plan-less entries are untouched;
+- a plan the ladder does not know — a typo, or a plan this registry never seeded — reads as the
+  **baseline**: free and untiered packages, nothing above. "Nothing at all" would not be safer, it
+  would be a portal without its Store; the fail-closed property that matters is that an unknown id
+  cannot license MORE. A registry with no tier nodes at all (a local self-registry, the e2e stub)
+  therefore serves its free and untiered packages to every instance and refuses every paid tier —
+  `free` ranks at the baseline by definition, ladder or not;
+- a package tier the ladder does not know is covered by **nothing**;
 - a caller that does not know the package's tier (the tier-blind `Allows(source, package)`) is
   never answered by a plan-scoped entry — otherwise every plan would be all-access at exactly the
   call sites that forgot to ask.
@@ -222,36 +238,42 @@ person buying a package "no tier" means "not sold under a plan"; for an instance
 registry it means "ships with the platform", and a Pro instance without the Store is not a smaller
 portal, it is a broken one.
 
+**Promotion takes effect on the next request.** `InstancePlanService.SetPlan` writes the field and
+tells the process's `InstanceRegistryAuthenticator` to forget its cached verdict for that instance;
+other replicas follow within the cache minute. `PluginBundlePlanTest` pins both halves — a legacy
+plan-less grant is capped at free, and a promoted instance pulls its pro package on the very next
+request.
+
 **A registration key carries the plan.** Mint it for a plan (Instance grants ▸ Registration keys ▸
-Plan) and every install that registers with it is seeded `<source>/*@<plan>` for each configured
-source, on top of `DefaultGrants` — "a key for Pro customers" is minted once and never typed per
-instance. A key with no plan seeds the `DefaultGrants` alone, exactly as before. Fetching a source's
-**sealed publication whole** (`/api/plugins/bundles/prebuilt/…`, the node-repo CI gates) still needs
-a plan-less `<source>/*`: the publication carries every plan's bundles.
+Plan) and every install that registers with it lands ON that plan and is seeded one plan-less
+`<source>/*` entry per configured source, on top of `DefaultGrants` — "a key for Pro customers" is
+minted once and never typed per instance. A key with no plan seeds the `DefaultGrants` alone and
+the instance starts on `free`. Fetching a source's **sealed publication whole**
+(`/api/plugins/bundles/prebuilt/…`, the node-repo CI gates) still needs a plan-less `<source>/*`:
+the publication carries every plan's bundles.
 
 **Open registration — the free tier by default.** A local install (`memex-local registry
 https://memex.meshweaver.cloud`, no key) registers with **no** bootstrap key at all. The registry
 accepts that only where its operator minted a registration key for the plan un-keyed callers enrol
 into — `free` on memex.meshweaver.cloud — and configured it as `PluginCatalog:OpenRegistration:Key`
 (the chart's `secrets.memex_portal.PluginCatalog__OpenRegistration__Key`). The registration then runs
-exactly as if the caller had presented that key: owned by its minting admin, seeded
-`<source>/*@free`, revocable by revoking the key. Everywhere else an un-keyed registration is refused
-with the same 401 an invalid key gets, and the caller never learns which. Raising an instance to a
-higher plan is a platform admin's edit of its grant on the registry (Instance grants ▸ Plan) —
-never something the instance can ask for. `InstanceOpenRegistrationTest` and `PluginBundlePlanTest`
-pin both halves: the closed default, and that an instance on the free plan cannot pull a package
-above it.
+exactly as if the caller had presented that key: owned by its minting admin, on the `free` plan,
+seeded `<source>/*`, revocable by revoking the key. Everywhere else an un-keyed registration is
+refused with the same 401 an invalid key gets, and the caller never learns which. Raising an
+instance to a higher plan is a platform admin's edit of the instance's plan on the registry — never
+something the instance can ask for. `InstanceOpenRegistrationTest` pins the closed default and the
+plan the registration lands on.
 
 ## Short-lived tokens — `POST /api/instances/token`
 
-An instance exchanges its durable `mwi_` key for a short-lived, scoped `mwa_` access token:
+An instance exchanges its durable `mwi_` key for a short-lived, scoped JWT access token:
 
 ```
 POST /api/instances/token
 Authorization: Bearer mwi_…
 { "scope": ["Plugins/Publish"], "lifetimeSeconds": 900 }
 
-→ { "accessToken": "mwa_…", "tokenType": "Bearer", "expiresIn": 900,
+→ { "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6…", "tokenType": "Bearer", "expiresIn": 900,
     "scope": ["Plugins/Publish"] }
 ```
 
@@ -268,7 +290,7 @@ Three properties, and each is what makes the token safe to hand out:
   scope is an additional filter, never an alternative source of permission.
 - **A token cannot mint its successor.** Only the durable key may exchange; otherwise a
   minutes-long credential becomes perpetual by renewal. The check is on the credential's SHAPE
-  (`mwi_` vs `mwa_`, disjoint by construction), not on a claim the presenter could edit.
+  (`mwi_` vs JWT, disjoint by construction), not on a claim the presenter could edit.
 
 The token is **signed, not stored** — minting writes no node, so there is no per-issue write
 amplification and no expiry sweep to maintain. That is only safe *because* authority is re-checked
@@ -437,4 +459,5 @@ import pipeline both paths share.
 
 - @../RepositoryTopology — why credential encapsulation is a *general* rule: the plugins repo is private, so access to any of its content is mediated by this registry rather than by GitHub credentials handed to each consumer.
 - @../Plugins — the node-native plugin model this registry serves.
+- @../InstanceIdentityAndSetup — the 2026-08-30 design that moves the plan from grant strings onto the instance's own partition node, replaces the `mwi_` bearer with a JWT on every fetch, and adds the first-run setup app.
 - @../StaticRepoImport — the import pipeline both the registry and direct GitSync share.
