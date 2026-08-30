@@ -1,10 +1,17 @@
 using System.Reactive.Linq;
 
-namespace MeshWeaver.Fixture;
+namespace MeshWeaver.Messaging;
 
 /// <summary>
-/// The ONE way a test waits for an observable — and the reason <c>.ToTask()</c> does not appear in
-/// this repository (maintainer, 2026-08-30: <i>"no ToTask ever"</i>).
+/// The ONE way anything in this codebase waits for an observable — and the reason <c>.ToTask()</c>
+/// does not appear in it (maintainer, 2026-08-30: <i>"no ToTask ever"</i>, <i>"strictly"</i>).
+///
+/// <para>🚨 It lives in a PRODUCT assembly, not the test fixture, because the rule is not a test
+/// convention. The bridges that actually deadlock a hub are the ones in product code — an SDK
+/// boundary we must implement (a Microsoft.Agent.Framework <c>…Async</c> override, an
+/// <c>IHostedService</c>, ASP.NET middleware) whose signature is not ours to change. Those had no
+/// sanctioned bridge to move to while this helper was test-only, which is why
+/// MeshWeaver.Plugins still carries 80 of them in <c>src/</c> while core carries none.</para>
 ///
 /// <para>🚨 Rx's own <c>ToTask()</c> completes its <c>TaskCompletionSource</c> WITHOUT
 /// <c>RunContinuationsAsynchronously</c>, so the awaiting test resumes INLINE on whichever thread

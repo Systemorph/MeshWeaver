@@ -62,6 +62,22 @@
          covers Should()/asserts + the Seconds()/Milliseconds()/… time helpers, so
          test files need no per-file assertion import. -->
     <Using Include="MeshWeaver.Reactive.Assertions" />
+    <!-- ObservableAwait.Await — the ONE sanctioned observable→Task bridge — moved from
+         MeshWeaver.Fixture (a TEST assembly) into MeshWeaver.Messaging.Hub, because the bridges
+         that actually deadlock a hub are in PRODUCT code: an SDK boundary we must implement
+         (a Microsoft.Agent.Framework ...Async override, IHostedService, ASP.NET middleware) cannot
+         reference the test fixture, so those had nowhere to go and stayed on Rx's .ToTask().
+         Imported globally here so the ~330 existing call sites need no churn, and so exactly ONE
+         implementation exists — a forward in the old namespace made every .Await(ct) ambiguous
+         (CS0121) in the files that import both. -->
+    <!-- Excluded: the three test projects with no messaging dependency at all (they assert JSON,
+         image packing and browser E2E). A global using cannot resolve a namespace the project does
+         not reference, so naming them is honest; adding a ProjectReference just to satisfy a using
+         would be the wrong direction. -->
+    <Using Include="MeshWeaver.Messaging"
+           Condition="'$(MSBuildProjectName)' != 'MeshWeaver.Json.Test'
+                  and '$(MSBuildProjectName)' != 'MeshWeaver.PluginImage.Test'
+                  and '$(MSBuildProjectName)' != 'MeshWeaver.Portal.E2E.Test'" />
   </ItemGroup>
 
   <ItemGroup>
