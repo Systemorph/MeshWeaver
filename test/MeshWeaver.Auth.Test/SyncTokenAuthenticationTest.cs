@@ -20,7 +20,7 @@ namespace MeshWeaver.Auth.Test;
 
 /// <summary>
 /// Pins the short-lived access token END TO END against a real mesh: an instance exchanges its
-/// durable <c>mwi_</c> key for a scoped <c>mwa_</c> token, and the registry authenticator resolves
+/// durable <c>mwi_</c> key for a scoped JWT, and the registry authenticator resolves
 /// it, narrows by its scope, and still consults the live sync licence.
 ///
 /// <para>The unit tests in <c>SyncAccessTokenTest</c> prove the token's cryptography. What can only
@@ -291,7 +291,7 @@ public class SyncTokenAuthenticationTest(ITestOutputHelper output) : MonolithMes
         (await keys.Existing().Should().Emit()).Should().BeNull("nothing has minted yet");
 
         var caller = await Authenticator()
-            .Authenticate("Bearer mwa_not-a-real-token.nope")
+            .Authenticate("Bearer eyJhbGciOiJIUzI1NiJ9.e30.not-a-real-signature")
             .Should().Emit();
 
         caller.Should().BeNull();

@@ -13,6 +13,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Features;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -67,22 +68,112 @@ public static class PluginRegistryCredentials
 }
 
 /// <summary>
-/// Resolves the token a consumer presents to a registry: an explicitly configured token always
+/// Resolves the credential a consumer presents to a registry: an explicitly configured token always
 /// wins; otherwise the stored <see cref="PluginRegistryCredential"/> from a first-startup
-/// auto-registration, decrypted; otherwise empty (unauthenticated — only an open dev/e2e registry
-/// answers). Reads run as System: the credential is deployment infrastructure in the Admin
-/// partition, not something the browsing user could (or should) read.
+/// auto-registration, decrypted — and, since #2804, EXCHANGED for a short-lived JWT
+/// (<see cref="SyncAccessToken"/>) at the registry's token route, so the durable <c>mwi_</c> key
+/// leaves this process once per token lifetime instead of on every request; otherwise empty
+/// (unauthenticated — only an open dev/e2e registry answers). Reads run as System: the credential
+/// is deployment infrastructure in the Admin partition, not something the browsing user could (or
+/// should) read.
+///
+/// <para>The exchange degrades, it never blocks: a registry that predates the token route, or one
+/// that is momentarily unreachable, gets the durable key presented directly (the legacy window the
+/// registry still honours), with one warning per attempt so the fallback is visible in the log.
+/// Tokens are cached per registry until <see cref="RefreshMargin"/> before their expiry — an
+/// instance field on this mesh-scoped singleton, never static state.</para>
 /// </summary>
 public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryTokenResolver> logger)
 {
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
 
-    /// <summary>The effective token for <paramref name="registry"/>. Cold; emits once.</summary>
+    /// <summary>How long before a cached token's expiry it stops being reused — wide enough that a
+    /// request in flight when the margin is reached still arrives with a live token.</summary>
+    public static readonly TimeSpan RefreshMargin = TimeSpan.FromSeconds(60);
+
+    // Shared fallback when no IHttpClientFactory is registered — HttpClient is designed to be
+    // long-lived and shared; a per-call `new HttpClient()` leaks sockets. Immutable shared
+    // resource, not a cache, so it does not fall under the no-static-state rule.
+    private static readonly HttpClient SharedHttp = new();
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Token, DateTimeOffset ExpiresAt)> tokens =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The effective credential for <paramref name="registry"/> — a JWT when the registry
+    /// issues one, else the durable key. Cold; emits once.</summary>
     public IObservable<string> ResolveToken(PluginRegistryReference registry)
     {
         if (!string.IsNullOrWhiteSpace(registry.Token))
             return Observable.Return(registry.Token.Trim());
 
+        return StoredCredential(registry)
+            .SelectMany(raw => raw.Length == 0 ? Observable.Return("") : Exchange(registry.Url, raw));
+    }
+
+    /// <summary>
+    /// The durable <c>mwi_</c> key exchanged for a token at <c>{registry}/api/instances/token</c>,
+    /// cached until <see cref="RefreshMargin"/> before it expires. Anything other than a token in
+    /// the answer — a 404 from an older registry, a 5xx, a network fault — yields the key itself.
+    /// </summary>
+    private IObservable<string> Exchange(string registryUrl, string rawKey)
+    {
+        if (!rawKey.StartsWith(InstanceKeys.KeyPrefix, StringComparison.Ordinal))
+            return Observable.Return(rawKey);           // not an instance key: nothing to exchange
+
+        var url = (registryUrl ?? "").Trim().TrimEnd('/');
+        if (url.Length == 0)
+            return Observable.Return(rawKey);
+
+        if (tokens.TryGetValue(url, out var hit) && hit.ExpiresAt - DateTimeOffset.UtcNow > RefreshMargin)
+            return Observable.Return(hit.Token);
+
+        var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
+        var http = hub.ServiceProvider.GetService<IHttpClientFactory>()
+            ?.CreateClient(InstanceRegistrationClient.BundleHttpClientName) ?? SharedHttp;
+
+        return pool.Invoke<ExchangeOutcome>(async ct =>
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, url + SyncTokenPayloads.Route);
+                request.Headers.TryAddWithoutValidation("Authorization", $"{SyncAccessToken.Scheme} {rawKey}");
+                request.Content = new StringContent(
+                    JsonSerializer.Serialize(new SyncTokenPayloads.Request(), SyncTokenPayloads.Json),
+                    System.Text.Encoding.UTF8, "application/json");
+                using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+                var status = (int)response.StatusCode;
+                if (!response.IsSuccessStatusCode)
+                    return new ExchangeOutcome(null, status, 0);
+                var body = JsonSerializer.Deserialize<SyncTokenPayloads.Response>(
+                    await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false), SyncTokenPayloads.Json);
+                return new ExchangeOutcome(body?.AccessToken, status, body?.ExpiresIn ?? 0);
+            })
+            .Select(result =>
+            {
+                if (string.IsNullOrWhiteSpace(result.Token) || result.ExpiresIn <= 0)
+                {
+                    logger.LogWarning(
+                        "Token exchange at {Url} answered {Status} without a token — presenting the "
+                        + "instance key directly (legacy)", url, result.Status);
+                    return rawKey;
+                }
+                tokens[url] = (result.Token, DateTimeOffset.UtcNow.AddSeconds(result.ExpiresIn));
+                return result.Token;
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "Token exchange at {Url} failed — presenting the instance key directly (legacy)", url);
+                return Observable.Return(rawKey);
+            });
+    }
+
+    /// <summary>What the token route answered: the token and its lifetime, or the status that
+    /// carried none.</summary>
+    private sealed record ExchangeOutcome(string? Token, int Status, int ExpiresIn);
+
+    /// <summary>The stored, decrypted registration credential for <paramref name="registry"/>, or
+    /// empty. Reads run as System (the credential lives in the Admin partition).</summary>
+    private IObservable<string> StoredCredential(PluginRegistryReference registry)
+    {
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         return Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
