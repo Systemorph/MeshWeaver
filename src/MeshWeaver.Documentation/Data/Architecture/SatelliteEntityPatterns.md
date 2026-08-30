@@ -327,11 +327,13 @@ Subscribe to the node's stream **before** triggering the operation, then reactiv
 //    GetMeshNodeStream(path) is the shared per-path handle; do NOT hand-roll
 //    GetRemoteStream<MeshNode>(address) + FirstOrDefault(n => n.Path == …),
 //    which pulls the whole collection and re-opens its own subscription.
+//    The assertion subscribes SYNCHRONOUSLY on the calling thread, so arming it here
+//    really does attach the observer before step 1 sends the request. It also owns the
+//    wait: no FirstAsync + ToTask bridge, which is forbidden repo-wide (2026-08-30).
 var markersAppeared = workspace.GetMeshNodeStream(docPath)
     .Select(node => (node?.Content as MarkdownContent)?.Content ?? "")
-    .Where(content => content.Contains($"<!--insert:{markerId}"))
-    .FirstAsync()
-    .ToTask(ct);
+    .Should().Within(30.Seconds())
+    .Match(content => content.Contains($"<!--insert:{markerId}"));
 
 // 1) Send the request. In TESTS the sanctioned bridge is the test base's helper;
 //    production code subscribes to hub.Observe(...) instead of awaiting.

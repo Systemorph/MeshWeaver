@@ -100,8 +100,10 @@ Log.LogInformation("Phase 1: pulling source data…");
 await Mesh.GetWorkspace()
     .GetMeshNodeStream("rbuergi/source-feed")
     .Where(n => (n?.Content as FeedContent)?.Status == FeedStatus.Ready)
-    .Take(1)
-    .ToTask(Ct);                               // ← cancellable
+    .FirstAsync()                              // ← not .Take(1): empty must FAULT
+    .ObserveCompletion(                        // ← never Rx's ToTask: forbidden repo-wide
+        ex => Log.LogWarning(ex, "source-feed watch faulted AFTER the wait settled"),
+        Ct);                                   // ← cancellable
 Log.LogInformation("Phase 2: crunching numbers…");
 await MyOwnWork(Ct);                           // ← your own async step, cancellable
 Log.LogInformation("Phase 3: rendering report…");

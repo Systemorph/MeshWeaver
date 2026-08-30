@@ -1,0 +1,71 @@
+# GuidanceBridgeSites.allow — the guidance ratchet for the forbidden Rx→Task bridge.
+#
+# Maintainer ruling, 2026-08-30: "totask is forbidden", "strictly", "no totask ever". The older
+# carve-out — "tests are the only sanctioned place" — is RETRACTED. `.ToTask(` is a defect in
+# `test/**` exactly as in `src/`.
+#
+# WHY GUIDANCE GETS ITS OWN RATCHET. A scanner can hold source to that rule. It cannot see a
+# MARKDOWN file, and a markdown file that PRESCRIBES the shape generates new violations faster
+# than a sweep removes them: every agent and every reviewer reads it as the house pattern. The
+# examples with the shortest path to production are the ones nothing compiles — a `.csx` script
+# body pasted into a mesh node, which compiles at RUNTIME in the portal, where no `dotnet build`
+# and no test ever sees it. And `.github/copilot-instructions.md` drives the automatic Copilot
+# review on every PR in this repo: until 2026-08-30 it told that reviewer the bridge was "the
+# accepted bridge" in `test/**`, so review actively DEFENDED the banned shape.
+#
+# WHAT IS COUNTED: `.ToTask(` inside a fenced code block whose info string is `csharp`, `cs` or
+# `c#`. Nothing else. Prose naming `.ToTask()` is overwhelmingly a WARNING — "never do this",
+# "this is the deadlock pattern", the war stories that explain why the rule exists — and a ratchet
+# that counted those would push people to delete the institutional memory to go green. Unlabelled
+# and ```text / ```output / ```bash fences are NOT counted either: this repo puts captured stack
+# traces, measurements and red-flag lists in those.
+#
+# WHAT THE SEEDED LINES ARE. After the 2026-08-30 guidance sweep, every remaining occurrence is an
+# ❌ ANTI-PATTERN block — the shape shown so it can be recognised and deleted:
+#
+#   * AsynchronousCalls.md   — "❌ Direct .ToTask() bridge then await", the two "← still deadlocks"
+#                              variants, the disposal-wait ❌, and the request/response ❌.
+#   * BlazorDataBinding.md   — "Anti-Patterns to Delete on Sight" → "❌ WRONG — Task bridge in
+#                              lifecycle".
+#   * InitializationGates.md — "❌ DEADLOCK — await captures the grain scheduler".
+#   * ActorModel.md          — "❌ The deleted shape", naming the hand-rolled equivalent.
+#   * /async, /sigsegv       — "❌ parks the grain turn, then races a timer".
+#
+# Those must NOT be deleted to satisfy this file: a rule stated without the shape it forbids is
+# unrecognisable in review. That is why this is a seeded ratchet and not zero tolerance.
+#
+# TO FIX A SITE (i.e. one that TEACHES rather than warns), in priority order:
+#   1. The signature is ours          → return IObservable<T>, compose, .Subscribe(onNext, onError).
+#   2. A Task-returning override whose RESULT is unused (IHostedService.StartAsync, a grain
+#      lifecycle hook, a middleware hop) → subscribe and return Task.CompletedTask.
+#   3. A foreign signature that needs the value (ASP.NET endpoint, ILifecycleObserver.OnStop, an
+#      SDK interface, an `async Task` test method, a `.csx` body) →
+#          await src.FirstAsync().ObserveCompletion(ex => log.LogWarning(ex, "…"), ct)
+#      (MeshWeaver.Messaging.ReactiveCompletion). It completes with
+#      RunContinuationsAsynchronously and keeps its error arm attached; `reportLateFault` must
+#      never be an empty lambda. In a TEST, prefer the assertion surface, which owns the wait:
+#      `await obs.Should().Match(...)`.
+#
+# 🚨 `await source.FirstAsync()` is NOT the fix. Rx's own awaiter is an AsyncSubject<T> that
+# completes its continuation from inside OnCompleted, on the signalling thread — measured
+# identical to the bridge (INLINE=True for both; only ObserveCompletion measures INLINE=False).
+# It is the plausible "simplification" that fixes nothing.
+#
+# 🚨 `.ToTask()` returns the LAST value and THROWS on an empty sequence; ObserveCompletion returns
+# the FIRST and settles with `default`. So keep an existing `.FirstAsync()` / `.LastAsync()`, and
+# where the next line dereferences the result use `.FirstAsync()` (NOT `.Take(1)`) so an empty
+# source still faults instead of silently handing back null.
+#
+# THE RATCHET MAY ONLY SHRINK. A new file, a raised count, or a raised TOTAL fails. A stale line
+# (its site was converted) is REPORTED, never failed — two PRs shrinking concurrently would
+# otherwise red main on whichever merged second. Delete the stale line and lower TotalBudget in
+# GuidanceBridgeRatchetGuard by the same amount, in the same change.
+#
+# Format: <repo-relative path>\t<count>
+
+.claude/skills/async/SKILL.md	1
+.claude/skills/sigsegv/SKILL.md	1
+src/MeshWeaver.Documentation/Data/Architecture/ActorModel.md	1
+src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md	7
+src/MeshWeaver.Documentation/Data/Architecture/BlazorDataBinding.md	1
+src/MeshWeaver.Documentation/Data/Architecture/InitializationGates.md	1
