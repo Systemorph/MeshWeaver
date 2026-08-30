@@ -1,0 +1,134 @@
+{
+  "$schema-note": [
+    "The register of RULE BLOCKS that more than one repo in the fleet carries verbatim.",
+    "",
+    "Every repo's CLAUDE.md is a one-line `@AGENTS.md` include, so AGENTS.md is not reference",
+    "material an author consults when they remember to — it is the instruction file loaded into",
+    "every agent's context, in that repo, on every session. Two repos carrying different text for",
+    "the same rule therefore means agents BEHAVE differently per repo, silently.",
+    "",
+    "Before this file existed the fleet upheld that by prose ('everything there applies here",
+    "unchanged') and by hand-carrying edits. MeshWeaver.Plugins#705 measured what that produced.",
+    "The gate that reads this file is .github/scripts/check-shared-rules.py.",
+    "",
+    "ADDING A BLOCK: wrap the region in every listed repo with the markers, add the entry here,",
+    "and land it as ONE change set. The gate fails RED for a repo that is listed and has no",
+    "markers, so a half-landed adoption cannot be mistaken for a pass."
+  ],
+
+  "marker-syntax": {
+    "block": "<!-- shared-rule:begin <id> -->  …  <!-- shared-rule:end <id> -->",
+    "slot": "<!--slot:<name>--> … <!--/slot-->",
+    "note": [
+      "Both are HTML comments, so both are invisible in every rendered view and may sit on their",
+      "own line or inline. Block markers usually take their own line; an END marker placed",
+      "mid-sentence is the right move when a sentence's tail is role-specific — see this",
+      "register's conserve-work-products entry, where the block deliberately stops after the date",
+      "stamp and the clause after it stays outside.",
+      "",
+      "Slot markers mark the spans that are legitimately per-repo — the checker replaces each with",
+      "the token <<name>> before comparing, so the slot's CONTENT is free while its NAME and",
+      "POSITION are asserted like every other byte. An EMPTY slot is legal and meaningful: it",
+      "records that this repo says nothing where another says something.",
+      "",
+      "Comparison is byte-for-byte after exactly ONE normalisation: markdown soft-wrap is",
+      "collapsed (runs of whitespace, newlines included, become a single space). That is not a",
+      "loophole, it is the removal of one: core hard-wraps its AGENTS.md prose at ~200 columns",
+      "and the satellites at ~95, so a raw byte compare would encode each repo's wrap width as",
+      "part of the rule and be red on day one for a difference no reader can see. Everything a",
+      "reader CAN see — wording, punctuation, emphasis, links, emoji — is compared exactly."
+    ]
+  },
+
+  "repos": [
+    "Systemorph/MeshWeaver",
+    "Systemorph/MeshWeaver.Plugins",
+    "Systemorph/MeshWeaver.Education",
+    "Systemorph/MeshWeaver.Reinsurance",
+    "Systemorph/MeshWeaver.SocialMedia",
+    "Systemorph/MeshWeaver.Manufacturing",
+    "Systemorph/Memex"
+  ],
+
+  "hubs-note": [
+    "There are TWO hubs, and which one is authoritative depends on the KIND of rule. This is not",
+    "a proposal — it is what the seven files already say about themselves (measured 2026-08-30):",
+    "",
+    "  • AUTHORING rules -> Systemorph/MeshWeaver.Plugins. Manufacturing, SocialMedia and",
+    "    Reinsurance each open with 'The authoritative authoring rules live in MeshWeaver.Plugins'",
+    "    AGENTS.md … Everything there applies here unchanged'; Education names the same file for",
+    "    'the authoring rules for plugins … this file carries the content-authoring subset'.",
+    "",
+    "  • PLATFORM / PROCESS rules -> Systemorph/MeshWeaver (core). The conserve-work-products",
+    "    block says so in its own text, in all six satellites: 'the platform rule lives in",
+    "    MeshWeaver's AGENTS.md'. Core also owns the shared reusable CI (node-repo-*.yml) and the",
+    "    deployment topology.",
+    "",
+    "So MeshWeaver.Plugins is a HUB for authoring and a SPOKE for platform, which is why 'is the",
+    "Plugins repo the hub for everything?' (#705 question 1) has no single answer: the hub is a",
+    "property of the BLOCK, not of the repo. Hence `hub` below is per-block.",
+    "",
+    "`hub` takes a repo, or the literal \"peers\". \"peers\" means the listed repos must agree with",
+    "each other while no canonical home has been decided yet — it freezes an existing agreement",
+    "against further drift WITHOUT pre-empting where the rule should eventually live. It is the",
+    "honest encoding for #705's problem B (sections replicated across satellites with no canonical",
+    "home): those need a maintainer decision, and until it is made, 'they must not diverge further'",
+    "is a claim the gate can hold and the maintainer has not had to make."
+  ],
+
+  "blocks": [
+    {
+      "id": "conserve-work-products",
+      "hub": "Systemorph/MeshWeaver",
+      "required-in": [
+        "Systemorph/MeshWeaver",
+        "Systemorph/MeshWeaver.Plugins",
+        "Systemorph/MeshWeaver.Education",
+        "Systemorph/MeshWeaver.Reinsurance",
+        "Systemorph/MeshWeaver.SocialMedia",
+        "Systemorph/MeshWeaver.Manufacturing",
+        "Systemorph/Memex"
+      ],
+      "slots": ["doc-home", "reach"],
+      "why": [
+        "The maintainer directive of 2026-08-30, hand-carried into all seven repos as core#2732,",
+        "Plugins#954, Education#236, Reinsurance#122, SocialMedia#111, Manufacturing#34 and",
+        "Memex#149. Seven PRs, no mechanism: nothing would have caught a repo being missed, and",
+        "nothing would catch one drifting afterwards. It is this register's first entry because",
+        "it is the worked example of the gap.",
+        "",
+        "Slots, measured across the seven copies rather than assumed:",
+        "  • doc-home — where THIS repo's durable form lives (core's Documentation tree, a node",
+        "    repo's module folder, Education's course Space, Memex's docs/). The declared delta.",
+        "  • reach — core alone adds 'and to the portal; the doc tree ships with the platform',",
+        "    which is true of core and of no satellite. EMPTY in the other six, which is a legal",
+        "    slot value and is asserted as such.",
+        "",
+        "The block deliberately ENDS at 'Maintainer directive, 2026-08-30' — the date stamp is the",
+        "cheapest way to spot a stale copy, so it is inside the compared region — and the clause",
+        "after it is outside, because it states the reader's ROLE (core: 'this rule holds in every",
+        "repo of the fleet'; satellites: 'the platform rule lives in MeshWeaver's AGENTS.md') and",
+        "is correctly different at each end of the same pointer."
+      ]
+    },
+    {
+      "id": "worktree-per-change-set",
+      "hub": "peers",
+      "required-in": [
+        "Systemorph/MeshWeaver.Reinsurance",
+        "Systemorph/MeshWeaver.SocialMedia",
+        "Systemorph/MeshWeaver.Manufacturing"
+      ],
+      "slots": [],
+      "why": [
+        "Byte-identical in these three node repos on 2026-08-30, and present in NEITHER hub in this",
+        "form (core and Plugins both carry a longer, differently-worded worktree rule). That is",
+        "exactly #705's problem B: spoke-to-spoke copy-paste with no canonical home.",
+        "",
+        "`hub: peers` freezes the agreement that exists today without inventing a home for it. If",
+        "the maintainer later promotes this text into a hub, change `hub` to that repo and the same",
+        "gate starts enforcing the direction of inheritance instead of mere sameness."
+      ]
+    }
+  ]
+}

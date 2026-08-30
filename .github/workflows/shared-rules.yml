@@ -1,0 +1,126 @@
+name: Shared rule blocks
+
+# The scheduled half of the AGENTS.md drift gate. The per-pull-request half lives in
+# dotnet-test.yml as the `shared-rules` job and hangs off the repo's required check; this one
+# exists because that half has a blind spot it cannot close on its own.
+#
+# 🕳️ THE BLIND SPOT. Drift does not need a pull request to appear. A rule block is edited in one
+# repo and every other copy of it is wrong from that moment — but the gate only runs when someone
+# opens a pull request HERE. In a week where the fleet is busy and core is quiet, the fleet can be
+# inconsistent for days with every check green, because no check ran. That is the same defect the
+# gate exists to fix, one level up: an absent signal reading as a passing one.
+#
+# So the sweep also runs on a clock. Nothing about it is conditional on what changed, because
+# "what changed" is exactly the question it cannot be allowed to ask — the drift it is looking
+# for is, by construction, in a repo whose commits this workflow never sees.
+#
+# 🛡️ NO SKIP-TRAPDOOR, same as the pull-request half: the credential is asserted and fails RED
+# naming what to provision, the token is proven to READ every repo before any verdict is trusted,
+# the checker's self-test runs first, and there is no `continue-on-error:` and no input-shaped
+# `if:` anywhere. A red run here is the honest report that the fleet's instruction files disagree;
+# a green one is not obtainable without having actually read all seven.
+#
+# MeshWeaver.Plugins#705 · register: .github/shared-rules.json · rationale:
+# src/MeshWeaver.Documentation/Data/Architecture/SharedRuleBlocks.md
+
+on:
+  schedule:
+    # 05:45 UTC daily — before the working day, so a drift merged yesterday is named before
+    # anyone starts a session under the wrong rule.
+    - cron: "45 5 * * *"
+  workflow_dispatch:
+  # Also on a push to main that touches the gate's own moving parts, so a change to the register
+  # or the checker is measured against the live fleet immediately rather than at the next cron.
+  push:
+    branches: [main]
+    paths:
+      - ".github/shared-rules.json"
+      - ".github/scripts/check-shared-rules.py"
+      - ".github/workflows/shared-rules.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    name: "Every shared rule block is identical across the fleet"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 1 }
+
+      # No `if:` in this job. It asserts and fails; it does not decide whether to run.
+      - name: Assert the cross-repo read credential, or fail naming what to provision
+        env:
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -n "$MESHWEAVER_APP_ID" ] || missing+=("secrets.MESHWEAVER_APP_ID            app id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet")
+          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY   that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::The shared-rule sweep cannot read the fleet — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "Credential inputs are present (validity is proven below, not assumed)."
+
+      - name: Mint an installation token for the fleet
+        id: fleet-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          repositories: >-
+            MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex
+          permission-contents: read
+
+      # PRESENT is not VALID — chart-drift learned that on 2026-08-17, when a provisioned but dead
+      # credential passed an emptiness check and every run after died at checkout while the gate
+      # reported its inputs were fine.
+      - name: The token can actually READ every repo in the register
+        env:
+          FLEET_TOKEN: ${{ steps.fleet-token.outputs.token }}
+        run: |
+          set -uo pipefail
+          # 🚨 Read the register into a variable FIRST and assert it. `for repo in $(...)` would
+          # iterate ZERO times if that command failed — the loop would simply end, `bad` would
+          # still be 0, and the step would report every repo readable having contacted none of
+          # them. That is this gate's own defect turned on itself, so the list is proven
+          # non-empty before anything is looped over and counted after.
+          repos=$(python3 -c "import json;print(' '.join(json.load(open('.github/shared-rules.json'))['repos']))") \
+            || { echo "::error::Could not read the repo register from .github/shared-rules.json."; exit 1; }
+          [ -n "$repos" ] || { echo "::error::.github/shared-rules.json lists no repos — nothing to compare."; exit 1; }
+          bad=0
+          seen=0
+          for repo in $repos; do
+            seen=$((seen+1))
+            code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $FLEET_TOKEN" \
+              -H "Accept: application/vnd.github.raw" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$repo/contents/AGENTS.md") || code=000
+            case "$code" in
+              200) echo "  ok   $repo" ;;
+              401) echo "::error::$repo -> 401: the App token is invalid or expired."; bad=1 ;;
+              403) echo "::error::$repo -> 403: the token is valid but lacks contents:read here, or is rate-limited."; bad=1 ;;
+              404) echo "::error::$repo -> 404: no AGENTS.md, or the App is not installed on this repo (GitHub reports an invisible private repo as 404, not 403)."; bad=1 ;;
+              000) echo "::error::$repo -> could not reach api.github.com."; bad=1 ;;
+              *)   echo "::error::$repo -> HTTP $code."; bad=1 ;;
+            esac
+          done
+          [ "$bad" = "0" ] || { echo "::error::The sweep cannot read the whole fleet, so it cannot report on it. Refusing to pass on partial evidence."; exit 1; }
+          [ "$seen" -ge 2 ] || { echo "::error::The probe examined only $seen repo(s) — the register did not expand. Refusing to report success."; exit 1; }
+
+      - name: "Prove the gate is non-vacuous (self-test)"
+        run: python3 .github/scripts/check-shared-rules.py --self-test
+
+      # No `--local` here: the scheduled sweep reads every repo's default branch, core included,
+      # because what it is measuring is the state of the FLEET rather than of any one proposal.
+      - name: "Compare every block across every repo that carries it"
+        env:
+          GITHUB_TOKEN: ${{ steps.fleet-token.outputs.token }}
+        run: python3 .github/scripts/check-shared-rules.py
