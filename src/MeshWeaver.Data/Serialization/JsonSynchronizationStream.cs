@@ -45,6 +45,40 @@ public static class JsonSynchronizationStream
     private const int MaxRecycleReArms = 3;
 
     /// <summary>
+    /// 🚨 THE ONE PLACE a C# subscriber mints a <see cref="SubscribeRequest"/>. Every post — the
+    /// INITIAL subscribe, the recycle / <c>StreamEndedEvent</c> re-subscribe, and the frame-loss
+    /// resync in <c>SynchronizationStream.RequestFreshSnapshot</c> — goes through here.
+    ///
+    /// <para><b>Why a factory rather than three literals.</b> <see cref="SubscribeRequest"/> carries
+    /// NEGOTIATED wire capabilities, and a capability is a property of the APPLIER this assembly
+    /// ships — not of the moment one particular post is written. Declared at each call site, the
+    /// initial subscribe said <c>AcceptsStringSplice = true</c> and the two RE-subscribes silently
+    /// did not: the owner builds a fresh server-side stream for a re-subscribe it cannot match to a
+    /// live one (the subscriber was evicted on a <c>TargetUnserved</c> verdict, the owner recycled,
+    /// the sync hub was torn down), reads the capability off THAT request, and from then on fans out
+    /// whole-string <c>replace</c> frames to a mirror that understands splices — reinstating the
+    /// per-subscriber quadratic #1284/#1414 removed, permanently and silently, on exactly the paths
+    /// that fire during a resync storm. Nothing fails; the bytes just go back up.</para>
+    ///
+    /// <para>Withdrawing a capability is invisible by construction — a <c>replace</c> is a shape every
+    /// subscriber understands — so no test of the frames could ever notice. The fix is that there is
+    /// no second place to forget: add a capability here and every subscribe declares it.</para>
+    /// </summary>
+    /// <param name="streamId">The subscriber-side stream id the owner keys its fan-out by.</param>
+    /// <param name="reference">The workspace slice being subscribed to.</param>
+    /// <param name="identity">Identity for the owner's access check, or <c>null</c> to leave unset.</param>
+    internal static SubscribeRequest MintSubscribeRequest(
+        string streamId, WorkspaceReference reference, string? identity) =>
+        new(streamId, reference)
+        {
+            Identity = identity,
+            // Declared by the assembly that also OWNS the applier (ApplyPatchWithCorrectUnescaping),
+            // so the claim can never be wrong: whatever version of this code posts the subscribe is
+            // the version that folds the frames.
+            AcceptsStringSplice = true,
+        };
+
+    /// <summary>
     /// How far up the hub tree the recycle re-arm looks for the local instance of a rejecting
     /// owner (see <c>LocalInstanceOf</c>). Real trees are two or three deep — mesh → cache/client
     /// → sync — so this is only a guard against a malformed parent chain.
@@ -422,15 +456,7 @@ public static class JsonSynchronizationStream
         // ends inside one Subscribe, and keeps exactly the property the paragraph above needs: the
         // post below is still issued inside the scope.
         var postSubscribeRequest = () => hub.Observe(
-                new SubscribeRequest(reduced.StreamId, reference)
-                {
-                    Identity = identityForSubscribe,
-                    // Declared by the assembly that also OWNS the applier
-                    // (ApplyPatchWithCorrectUnescaping below), so the claim can never be
-                    // wrong: whatever version of this code posts the subscribe is the version
-                    // that folds the frames.
-                    AcceptsStringSplice = true,
-                },
+                MintSubscribeRequest(reduced.StreamId, reference, identityForSubscribe),
                 o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
             .Take(1);
         var observeSubscription = (isRealUser
@@ -590,7 +616,7 @@ public static class JsonSynchronizationStream
                     // Use register-before-post overload to avoid the race where the owner
                     // responds before the subject is registered in responseSubjects.
                     hub.Observe(
-                            new SubscribeRequest(reduced.StreamId, reference) { Identity = SystemUserId },
+                            MintSubscribeRequest(reduced.StreamId, reference, SystemUserId),
                             o => impersonateAsHub
                                 ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
                                 : o.WithTarget(owner))

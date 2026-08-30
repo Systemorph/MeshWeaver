@@ -196,6 +196,49 @@ patch arrived with no base, a patch failed to apply, a write was rejected) calls
 with a fresh Full. Gated by `_resyncInFlight` so a burst of confusing patches
 triggers exactly one resubscribe, not a storm.
 
+### The frame chain, and how to read `Frame loss detected`
+
+The transport under the fan-out is **at-most-once** — a frame published before a
+subscriber's stream subscription attached, or dropped under pressure, simply never
+arrives and nothing re-sends it. Before this was detectable, that loss was *silent*:
+later patches kept applying cleanly (they touch other entities), so the mirror tracked
+the owner forever at a constant deficit with no error anywhere.
+
+So every frame the owner emits carries **`BasedOnVersion`** — the version of the frame
+*this same forwarding subscription* sent immediately before it (`-1` for the first).
+A mirror compares an incoming Patch's `BasedOnVersion` against the version it last
+applied; a mismatch proves the gap, and the only sound reaction is a fresh
+authoritative snapshot: `RequestFreshSnapshot()` (above). Frames the owner *skips*
+(value-equal, no updates, an echo-suppressed patch) never enter the chain, so a
+legitimate version gap cannot false-trigger a resync.
+(`JsonSynchronizationStream.ToDataChanged` → `SynchronizationStream.UpdateStream`;
+test `StreamFrameLossResyncTest`.)
+
+🚨 **`[SYNC_STREAM] Frame loss detected …` is a RESYNC counter, not a data-loss
+counter.** Every line is a gap that was *detected and answered*; the mirror converges
+on the Full that follows. A raw count therefore means nothing on its own — the two
+numbers that do are **per-stream count** and **whether a Full ever follows**. Thousands
+spread over hundreds of streams is the recovery working; a stream that logs the line
+repeatedly and never converges is the defect (that one is #2654 — a layout area stuck
+on its `NamedAreaControl` placeholder).
+
+🚨 **The driver is almost always upstream of this file.** Anything that repeatedly ends
+and re-establishes a subscriber's server-side stream costs one gap per cycle, so read
+these lines from the *same window* before blaming the sync protocol:
+
+| line in the same window | what it means for the count |
+|---|---|
+| `Orleans '…' stream subscription could not be attached … cross-process routing … DISABLED` | the hub is reachable in-process only; the router will call it unserved (#2633 / #2692, fixed by #2645) |
+| `[ROUTE] Stream-routed delivery to '…' has no live subscriber` + `ClientSubscriptionEviction` | the owner evicted that subscriber's server-side streams on the router's `TargetUnserved` verdict (#2620). Correct when the subscriber is dead — one gap per cycle when it is not |
+| `Stream {StreamId}: owner {Owner} … — resubscribing for fresh snapshot` | an owner recycle / `StreamEndedEvent`; the re-assert re-bases the chain |
+
+That correlation is the recorded disposition of the memex-cloud storm on **#2641**
+(847 lines / 30 min): the frame-loss count was the *symptom* of an attach latch and the
+eviction cycle it caused, not a defect of the chain. See also
+[Durable Streams Are Mesh Nodes](/Doc/Architecture/DurableStreamsViaMeshNodes) — the
+version chain **is** the durable stream, which is why no durable stream provider is
+bought to stop these lines.
+
 ---
 
 ## 7. Minimal bytes on the wire
