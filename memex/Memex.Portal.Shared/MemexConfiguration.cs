@@ -204,9 +204,18 @@ public static class MemexConfiguration
             // Generations GC — delete only what NO activation entry references and nothing holds
             // open (skip-on-locked). Landing never deletes anything on a shared volume; this is
             // the one reclaim point. See ModuleLandingService.CollectGarbage.
-            var collected = ModuleLandingService.CollectGarbage(moduleRoot);
-            if (collected > 0)
-                Console.WriteLine($"[ModuleActivation] modules GC removed {collected} unreferenced generation(s)");
+            //
+            // 🚨 Registered, NEVER run here (#2684). It used to be a synchronous call at this exact
+            // spot — before the host listened — and on an Azure Files (CIFS) /data the
+            // rename-then-recursive-delete of orphaned generations is one SMB round-trip per file:
+            // minutes of uninterruptible IO (PID 1 in `Dsl` at wchan=wait_for_response), no
+            // listener on :8080, so the 300 s startup probe killed a pod the kernel could not even
+            // deliver the kill to, and the roll looped (memex-cloud, ci.6559). Housekeeping must
+            // not gate readiness: the hosted service runs the SAME pass, with the SAME semantics,
+            // after ApplicationStarted, through the file-system IIoPool. It stays ahead of the
+            // awaiting-setup early return below on purpose — an instance parked in setup still
+            // reclaims its garbage, exactly as the synchronous call did.
+            builder.ConfigureServices(services => services.AddModuleGenerationsGc(moduleRoot));
             var persistedActivation = ModuleActivationSidecar.Read(moduleRoot,
                 msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
             var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(

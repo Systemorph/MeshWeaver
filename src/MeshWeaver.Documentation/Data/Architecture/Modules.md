@@ -219,12 +219,12 @@ deployment is ever running an old bundle against a new platform. Inventing a shi
 is the one thing that must not happen: it mints a SECOND type identity and reintroduces the `as`/`is`
 trap-door that reads as a silent null.
 
-### 🚨 An ACTIVATED entry with no bytes — the boot-GC race (#2303)
+### 🚨 An ACTIVATED entry with no bytes — the GC race (#2303)
 
 The "Missing DLL" skip above is the SYMPTOM; #2303 traced one concrete way an entry ends up
-pointing at nothing: a race between `ModuleLandingService.CollectGarbage` (run at every pod's boot,
-before its own module set is computed) and a landing happening on a DIFFERENT replica at the same
-moment.
+pointing at nothing: a race between `ModuleLandingService.CollectGarbage` (run once per pod start,
+after `ApplicationStarted` — see the readiness section below) and a landing happening on a
+DIFFERENT replica at the same moment.
 
 A landing is two writes on the shared `/data` volume, deliberately ordered bytes-then-entry: it
 `Directory.Move`s the new generation into place, THEN writes the sidecar entry that names it
@@ -285,6 +285,30 @@ that had landed long ago, on both prods at once:
    temp path and loads from there; the shared tree stays a transport that GC may reclaim freely.
    The pin is protection, not a gate: a boot that cannot copy warns loudly and falls back to the
    shared path.
+
+### 🚨 GC is OFF the readiness path (#2684)
+
+Where the pass runs is as load-bearing as what it deletes. It used to run synchronously in the
+portal's boot path — before the host listened — and on an Azure Files (CIFS) `/data` the
+rename-then-recursive-delete of orphaned generations is one SMB round-trip per file: minutes of
+uninterruptible IO for a handful of directories. Rollout time thereby became a function of how much
+garbage the previous generation left on a network volume, which is unbounded and invisible until
+the probe kills the pod: memex-cloud's roll to ci.6559 sat as PID 1 in `Dsl` at
+`wchan=wait_for_response`, never bound :8080, blew the 300 s startup probe — whose kill cannot land
+on a process parked in uninterruptible IO — and looped, wedging the whole `helm upgrade`. Raising
+the probe budget would only move the cliff.
+
+Reclaiming orphans is housekeeping: valid at any time, needed by nothing the portal serves. So the
+pass now runs from `ModuleGenerationsGcHostedService`, registered by the same boot path that used
+to call it: `StartAsync` only registers an `ApplicationStarted` callback (it can never delay the
+listener), the callback schedules `CollectGarbage` on the file-system `IIoPool`, and the pass
+observes the pool's cancellation between directories so a mesh teardown never waits out a slow
+unlink. Nothing about the pass gates `/health` or `/alive`, and nothing about its SEMANTICS
+changed: same rules, same grace window, same atomic `.trash-*` rename — and the reference set is
+re-read from the per-module sidecar files at run time, so a post-start pass sees a set at least as
+fresh as the boot-time pass did. The running process is immune to its own reclaim because it loads
+store-landed generations from the process-local pin (above), never the shared tree — the same
+property that already protected it from a SIBLING pod's pass.
 
 Why a sidecar file and not a mesh node: the list is consumed before any storage provider, hub, or
 connection string exists, and it must move with the DLLs it describes — the landing service writes
