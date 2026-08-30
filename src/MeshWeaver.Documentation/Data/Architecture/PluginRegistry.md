@@ -437,4 +437,5 @@ import pipeline both paths share.
 
 - @../RepositoryTopology — why credential encapsulation is a *general* rule: the plugins repo is private, so access to any of its content is mediated by this registry rather than by GitHub credentials handed to each consumer.
 - @../Plugins — the node-native plugin model this registry serves.
+- @../InstanceIdentityAndSetup — the 2026-08-30 design that moves the plan from grant strings onto the instance's own partition node, replaces the `mwi_` bearer with a JWT on every fetch, and adds the first-run setup app.
 - @../StaticRepoImport — the import pipeline both the registry and direct GitSync share.
