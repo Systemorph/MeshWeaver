@@ -2026,15 +2026,26 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                     // Only now may this touch shared state: the hand-off is
                                                     // released with nothing to publish, because nothing landed.
                                                     onLocalState?.Invoke(null);
+                                                    // 🚨 The TRAIL is the diagnostic. "No terminal" names a
+                                                    // symptom; the request-fate ledger names the EDGE — never
+                                                    // received by the owner, DEFERRED behind an init gate that
+                                                    // never opened, HANDLER_EXIT with no reply, or a reply
+                                                    // RESPONSE_POSTED to a hub nobody awaited on. Seven distinct
+                                                    // tests failed with this one sentence on 2026-08-30
+                                                    // (MeshWeaver.Plugins#941) and not one failure block could
+                                                    // say which; the trail survives the requester's own 2 s
+                                                    // timeout precisely so it can be read here.
+                                                    var trail = _workspace.Hub.DescribeRequestFate(requestId);
                                                     diagLogger?.LogWarning(
-                                                        "[UpdateRemote] VERDICT_TIMEOUT hub={Hub} target={Path} bound={BoundSeconds}s — the owner produced no terminal for this patch inside the late-response window, which dominates every owner-side terminal path; the write is NOT confirmed",
-                                                        _workspace.Hub.Address, _path, verdictBoundSeconds);
+                                                        "[UpdateRemote] VERDICT_TIMEOUT hub={Hub} target={Path} bound={BoundSeconds}s — the owner produced no terminal for this patch inside the late-response window, which dominates every owner-side terminal path; the write is NOT confirmed. Request trail: {Trail}",
+                                                        _workspace.Hub.Address, _path, verdictBoundSeconds, trail);
                                                     RaiseError(new MeshNodeStreamException(new MeshNodeError(
                                                         MeshNodeErrorCode.OwnerUnreachable, _path!,
                                                         $"The owner of '{_path}' returned no verdict for this update within "
                                                         + $"{verdictBoundSeconds:0}s. "
                                                         + "The patch was posted and may still apply, but it is NOT confirmed — "
-                                                        + "re-read the node and re-apply if the change is required.")));
+                                                        + "re-read the node and re-apply if the change is required. "
+                                                        + $"Request trail: {trail}")));
                                                 }));
                                         }
                                         else

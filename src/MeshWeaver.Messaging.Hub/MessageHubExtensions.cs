@@ -18,6 +18,34 @@ namespace MeshWeaver.Messaging;
 public static class MessageHubExtensions
 {
     /// <summary>
+    /// Renders the request-fate trail the hub tree recorded for <paramref name="messageId"/> — every
+    /// stage a request passed through (AWAITING → ROUTED → DEFERRED / HANDLER_EXIT / RESPONSE_POSTED …)
+    /// with the hub and the elapsed time of each, and a one-line verdict on where it stopped.
+    ///
+    /// <para>For the DIAGNOSTIC that answers "the owner produced no terminal": it names whether the
+    /// request was ever received by the owner, parked behind an init gate, handled without a reply,
+    /// or answered to a hub nobody was awaiting on. Trails survive the requester's own timeout for a
+    /// bounded while, so a late verdict watcher can still read the owner's side of the story.
+    /// Never throws; a hub without a ledger answers a sentence saying so.</para>
+    /// </summary>
+    /// <param name="hub">Any hub of the tree that posted the request.</param>
+    /// <param name="messageId">The request delivery's id.</param>
+    /// <returns>One greppable line: the stages joined by <c>→</c>, then <c>⇒</c> and the verdict.</returns>
+    public static string DescribeRequestFate(this IMessageHub hub, string messageId)
+    {
+        try
+        {
+            return hub is MessageHub concrete
+                ? concrete.RequestFates.Describe(messageId)
+                : "<no request-fate ledger: the hub is not a MessageHub>";
+        }
+        catch (Exception e)
+        {
+            return $"<request-fate trail unavailable: {e.GetType().Name}: {e.Message}>";
+        }
+    }
+
+    /// <summary>
     /// Builds a new <see cref="IMessageHub"/> for <paramref name="address"/> from
     /// the given service provider, applying the optional configuration transform.
     /// The address's type is registered with the hub automatically.

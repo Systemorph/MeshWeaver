@@ -234,6 +234,12 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         if (scope is null)
             return;
 
+        // 🚨 Resolved NOW, from the OWNER's provider, never inside the disposal callback: by the
+        // time the child signals, resolving anything is the "never resolve DI once disposal has
+        // begun" mistake this whole file warns about. Null on a bare messaging-only mesh → the
+        // historical inline close.
+        var sequencer = ResolveScopeDisposalSequencer();
+
         hub.DisposalCompleted
             .Take(1)
             // 🚨 A FAULTED disposal must free the scope TOO — a teardown that failed is when the
@@ -244,11 +250,60 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             // answer that can never arrive has to be settled from the known-terminal state rather
             // than parked (the same rule DisposeHubsReactive's legs follow).
             .DefaultIfEmpty(Unit.Default)
-            .Subscribe(_ => CloseScope(address, scope));
+            .Subscribe(_ => CloseScopeInSequence(sequencer, address, scope));
         // Not held: `Take(1)` releases the subscription on the terminal notification, and until
         // then the child hub's own completion subject roots it. Holding it in a field would mean
         // disposing it when THIS collection is disposed — which happens strictly BEFORE the
         // children finish, i.e. it would cancel the very closes it exists to perform.
+    }
+
+    /// <summary>
+    /// Hands the close to the mesh's <see cref="IHubScopeDisposalSequencer"/> when one is registered
+    /// — which closes NOW on a live mesh and AFTER the teardown drains (pooled I/O joined, async
+    /// cleanup quiesced) when the mesh is tearing down — and closes inline otherwise.
+    ///
+    /// <para>🚨 Why the ORDER matters: <c>DisposalCompleted</c> covers the action block and the
+    /// message round-trips, not the offloaded work. Closing the scope on that signal alone, during a
+    /// whole-mesh teardown, put every pooled leaf and synced-query pipeline this hub had issued in
+    /// the position of resolving services from a disposed <c>LifetimeScope</c> — the
+    /// <c>ObjectDisposedException</c> straggler class that every CI teardown capture is full of,
+    /// and whose one escape onto a scheduler thread is the anonymous "Catastrophic failure" that
+    /// reds an otherwise green shard (MeshWeaver.Plugins#870). Queues and pools drain LAST; the
+    /// scopes their leaves resolve from must not go first.</para>
+    /// </summary>
+    private void CloseScopeInSequence(IHubScopeDisposalSequencer? sequencer, Address address, IDisposable scope)
+    {
+        if (sequencer is null)
+        {
+            CloseScope(address, scope);
+            return;
+        }
+        try
+        {
+            sequencer.CloseWhenDrained(address, () => CloseScope(address, scope));
+        }
+        catch (Exception e)
+        {
+            // The sequencer is an ordering optimisation over a close that MUST happen; a faulting
+            // sequencer must never turn into a leaked scope.
+            logger.LogWarning(e,
+                "[DISPOSE-CONTAINER] {Address}: the scope-disposal sequencer faulted — closing the "
+                + "lifetime scope inline instead", address);
+            CloseScope(address, scope);
+        }
+    }
+
+    private IHubScopeDisposalSequencer? ResolveScopeDisposalSequencer()
+    {
+        try
+        {
+            return serviceProvider.GetService<IHubScopeDisposalSequencer>();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The owner's own scope is already going down — there is nothing to sequence against.
+            return null;
+        }
     }
 
     /// <summary>
