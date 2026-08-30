@@ -69,6 +69,34 @@ public sealed class LatePatchResponseRegistry
     /// </summary>
     public static readonly TimeSpan LateResponseWatchBound = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// 🚨 Slack added to <see cref="LateResponseWatchBound"/> before a caller's write is failed for
+    /// SILENCE. The registry stops honouring a verdict at exactly the watch bound; firing the
+    /// caller's bound at the same instant would race a verdict that is still admissible. One second
+    /// is enough to order the two, and it is not a retry, a backoff, or a knob to widen when
+    /// something times out — a write still unanswered here has outlived every owner-side terminal
+    /// path, so the answer is a fault, not a longer wait.
+    /// </summary>
+    public static readonly TimeSpan VerdictBoundGrace = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// 🚨 The outer bound on a caller-visible mesh WRITE: the instant <c>UpdateRemote</c> gives up
+    /// and reports <c>OwnerUnreachable</c>. Public because a bound nobody can see gets re-authored
+    /// as a literal somewhere else, and then the two numbers collide.
+    ///
+    /// <para>They did collide. The convention for a test wait was a hand-written <c>30 s</c> — the
+    /// same number as <see cref="LateResponseWatchBound"/>, and one second BELOW this. So a test
+    /// awaiting a write always lost the race to the framework's own diagnosis by design: the
+    /// assertion reported "the observable emitted nothing at all" one second before the write would
+    /// have said <c>OwnerUnreachable — the owner produced no terminal for this patch</c>. The
+    /// failure that carried the explanation was never the one anybody read (#2819).</para>
+    ///
+    /// <para>🚨 Anything waiting on a write must bound itself STRICTLY ABOVE this, so the
+    /// framework's terminal wins and names the cause. <c>TestTimeouts.Convergence</c> derives from
+    /// it rather than restating it.</para>
+    /// </summary>
+    public static TimeSpan WriteVerdictBound => LateResponseWatchBound + VerdictBoundGrace;
+
     private sealed record Entry(
         string Path,
         DateTimeOffset ExpiresAt,

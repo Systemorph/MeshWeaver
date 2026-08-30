@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 
 using MeshWeaver.Fixture;
+using MeshWeaver.Mesh;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -34,6 +35,41 @@ public class TestTimeoutsTest
             $"the [Fact(Timeout)] value ({TestTimeouts.TestMilliseconds} ms) must exceed the "
             + $"convergence wait ({TestTimeouts.Convergence.TotalMilliseconds} ms), or an inner "
             + "wait can never lose first and the failure cannot say what it was waiting for.");
+    }
+
+    /// <summary>
+    /// 🚨 THE SECOND INVARIANT, and the one that was violated for as long as the bound was a
+    /// literal: a test wait must DOMINATE the framework's own outer write bound.
+    ///
+    /// <para><c>UpdateRemote</c> fails a silent write at
+    /// <c>LateResponseWatchBound + VerdictBoundGrace</c> = 31 s, and the grace exists precisely so
+    /// the framework's terminal arrives AFTER the registry stops honouring a verdict. The test
+    /// convention was a hand-written 30 s — the same number as <c>LateResponseWatchBound</c>, one
+    /// second below the terminal. So a test awaiting a write gave up before the framework could
+    /// answer, every time, and the failure read "the observable emitted nothing at all" instead of
+    /// naming <c>OwnerUnreachable</c>. The bound sat at exactly the value that destroys the most
+    /// information (#2819).</para>
+    ///
+    /// <para>Checked at every factor, including the local 1.0: a rule that holds only on CI leaves
+    /// the laptop — where the diagnosis is actually read — reporting nothing.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(null)]      // local
+    [InlineData("1")]
+    [InlineData("3")]
+    [InlineData("10")]
+    public void AConvergenceWaitDominatesTheFrameworkWriteBound(string? factor)
+    {
+        using var _ = new EnvironmentVariable("GITHUB_ACTIONS", factor is null ? null : "true");
+        using var __ = new EnvironmentVariable("MW_TEST_TIMEOUT_FACTOR", factor);
+
+        Assert.True(
+            TestTimeouts.Convergence > LatePatchResponseRegistry.WriteVerdictBound,
+            $"a convergence wait ({TestTimeouts.Convergence.TotalSeconds:0.##}s) must exceed the "
+            + $"framework's write verdict bound "
+            + $"({LatePatchResponseRegistry.WriteVerdictBound.TotalSeconds:0.##}s), or a test "
+            + "awaiting a mesh write gives up before UpdateRemote can report OwnerUnreachable and "
+            + "the failure can never say why.");
     }
 
     /// <summary>The ordering of the three convergence scales holds wherever it runs.</summary>
