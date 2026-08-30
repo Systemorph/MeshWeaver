@@ -33,16 +33,38 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// </summary>
 public class InlineResumptionMechanismTest
 {
-    /// <summary>Signals from a known thread and reports where the awaiter resumed.</summary>
-    private static async Task<(int Signalling, int Resumed)> Measure(Func<IObservable<int>, Task> wait)
+    /// <summary>
+    /// Signals from a known thread and reports whether the awaiter resumed INLINE — that is,
+    /// whether the wait had already completed by the time the signalling call returned.
+    ///
+    /// <para>🚨 <b>This used to compare managed thread IDs, and that probe is unsound.</b>
+    /// <c>Environment.CurrentManagedThreadId</c> differing proves nothing: a correctly QUEUED
+    /// continuation runs on a pool thread, and the pool is free to hand it the very thread that
+    /// just finished signalling. So <c>NotEqual(signalling, resumed)</c> fails intermittently on a
+    /// loaded shard while the behaviour under test is perfectly correct — observed 2026-08-30 on a
+    /// documentation-only PR. The same unsound shape is recorded two files away, in
+    /// <c>ActivityLiveProgressTest</c>: <i>"createdThread != commandThread — the runtime makes no
+    /// such [guarantee]"</i>.</para>
+    ///
+    /// <para>Inline resumption has a DIRECT observable: the continuation runs on the signaller's
+    /// stack, so the wait is already complete when <c>OnCompleted</c> returns. Queued resumption
+    /// cannot be. That is the property, measured rather than proxied — and the two positive
+    /// controls below (Rx's bridge, and awaiting the observable directly) prove the measurement
+    /// discriminates, because they must report TRUE.</para>
+    /// </summary>
+    private static async Task<(bool ResumedInline, int Signalling, int Resumed)> Measure(
+        Func<IObservable<int>, Task> wait)
     {
         var subject = new Subject<int>();
         var resumed = 0;
+        var insideSignal = 0;
+        var observedInsideSignal = false;
 
         var waiter = Task.Run(async () =>
         {
             await wait(subject);
             resumed = Environment.CurrentManagedThreadId;
+            observedInsideSignal = Volatile.Read(ref insideSignal) == 1;
         });
 
         // Let the waiter subscribe before we signal. A bare Subject drops a notification that
@@ -50,10 +72,26 @@ public class InlineResumptionMechanismTest
         await Task.Delay(300, TestContext.Current.CancellationToken);
 
         var signalling = Environment.CurrentManagedThreadId;
+        Volatile.Write(ref insideSignal, 1);
         subject.OnNext(1);
         subject.OnCompleted();
+        Volatile.Write(ref insideSignal, 0);
+
         await waiter;
-        return (signalling, resumed);
+
+        // 🚨 SAME THREAD **AND** STILL INSIDE THE SIGNALLING CALL. Neither half is sufficient and
+        // both earlier attempts at this proved it:
+        //   * thread ids differing proves nothing — the pool may hand a QUEUED continuation the
+        //     very thread that just finished signalling (the intermittent this replaces);
+        //   * "the waiter had completed when OnCompleted returned" proves nothing either — the
+        //     pool can run a queued continuation inside that window, and measurably does: it
+        //     reported inline on every one of five runs against ObserveCompletion.
+        // Together they are rigorous, because a thread cannot be in two places at once: if the
+        // continuation ran on the signalling thread WHILE the signaller was still inside OnNext/
+        // OnCompleted, it can only have been on the signaller's own stack. A queued continuation
+        // that later lands on that recycled thread necessarily finds the flag already cleared,
+        // because the thread was occupied until the signaller left the call.
+        return (resumed == signalling && observedInsideSignal, signalling, resumed);
     }
 
     /// <summary>
@@ -63,9 +101,14 @@ public class InlineResumptionMechanismTest
     [Fact]
     public async Task TheRxToTaskBridge_ResumesItsAwaiterOnTheSignallingThread()
     {
-        var (signalling, resumed) = await Measure(async source => await source.FirstAsync().ToTask());
+        var (resumedInline, signalling, resumed) = await Measure(
+            async source => await source.FirstAsync().ToTask());
 
-        Assert.Equal(signalling, resumed);
+        Assert.True(resumedInline,
+            "Rx's bridge completes its TaskCompletionSource from inside the pipeline without "
+            + "RunContinuationsAsynchronously, so the awaiter runs on the signaller's stack and the "
+            + $"wait is already finished when OnCompleted returns (signalled on {signalling}, "
+            + $"resumed on {resumed})");
     }
 
     /// <summary>
@@ -76,9 +119,13 @@ public class InlineResumptionMechanismTest
     [Fact]
     public async Task AwaitingTheObservableDirectly_AlsoResumesOnTheSignallingThread()
     {
-        var (signalling, resumed) = await Measure(async source => await source.FirstAsync());
+        var (resumedInline, signalling, resumed) = await Measure(
+            async source => await source.FirstAsync());
 
-        Assert.Equal(signalling, resumed);
+        Assert.True(resumedInline,
+            "Rx's awaiter is an AsyncSubject that completes its continuation from inside "
+            + "OnCompleted — awaiting the observable directly has the SAME inline-resume property "
+            + $"as the bridge it appears to replace (signalled on {signalling}, resumed on {resumed})");
     }
 
     /// <summary>
@@ -88,10 +135,14 @@ public class InlineResumptionMechanismTest
     public async Task ObserveCompletion_DoesNotResumeOnTheSignallingThread()
     {
         var lateFaults = 0;
-        var (signalling, resumed) = await Measure(
+        var (resumedInline, signalling, resumed) = await Measure(
             async source => await source.FirstAsync().ObserveCompletion(_ => Interlocked.Increment(ref lateFaults)));
 
-        Assert.NotEqual(signalling, resumed);
+        Assert.False(resumedInline,
+            "RunContinuationsAsynchronously must QUEUE the continuation, so the wait cannot already "
+            + "be complete when OnCompleted returns. 🚨 This deliberately does NOT assert that the "
+            + "thread ids differ: a queued continuation may legitimately run on the pool thread that "
+            + $"just signalled (signalled on {signalling}, resumed on {resumed})");
         Assert.Equal(0, lateFaults);
     }
 }
