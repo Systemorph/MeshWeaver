@@ -154,37 +154,60 @@ public static class CascadeBuild
             : 1;
     }
 
-    /// <summary>Runs the build and returns the report; the exit code is <see cref="Report.ExitCode"/>.</summary>
-    public static Report Run(Options options)
+    /// <summary>
+    /// Every progress line starts with the UTC time and the managed thread — packages build in
+    /// parallel, so a reader must be able to tell whose line this is (maintainer, 2026-08-30:
+    /// "output the time and which package … and for multithreaded also some thread id").
+    /// </summary>
+    private static string Stamp() =>
+        $"{DateTime.UtcNow:HH:mm:ss.fff} [T{Environment.CurrentManagedThreadId:D3}]";
+
+    /// <summary>Runs the build and emits the report once; the exit code is <see cref="Report.ExitCode"/>.</summary>
+    public static IObservable<Report> Run(Options options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        return Observable.Defer(() => RunCore(options))
+            .Catch((Exception ex) => Observable.Return(
+                new Report(PrebuiltAssemblySeeder.LiveFrameworkMvid, [], [], TimeSpan.Zero, [],
+                    $"{ex.GetType().Name}: {ex.Message}")));
+    }
+
+    private static IObservable<Report> RunCore(Options options)
+    {
         var wall = Stopwatch.StartNew();
         var frameworkIdentity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
         if (PrebuiltAssemblySeeder.LiveFrameworkIdentityWarning is { } warning)
             options.Output.WriteLine($"build: ⚠ framework identity degraded — {warning}");
 
         RepoSnapshot snapshot;
-        IReadOnlyList<PackageManifest> packages;
         try
         {
             snapshot = LocalNodeRepo.LoadSync(options.RepoRoot);
-            packages = LocalNodeRepo.DiscoverPackages(snapshot).Wait();
         }
         catch (Exception ex)
         {
-            return Fatal(frameworkIdentity, wall, $"{ex.GetType().Name}: {ex.Message}");
+            return Observable.Return(Fatal(frameworkIdentity, wall, $"{ex.GetType().Name}: {ex.Message}"));
         }
+        return LocalNodeRepo.DiscoverPackages(snapshot)
+            .Take(1)
+            .SelectMany(packages => Build(options, wall, frameworkIdentity, snapshot, packages));
+    }
+
+    private static IObservable<Report> Build(
+        Options options, Stopwatch wall, string frameworkIdentity, RepoSnapshot snapshot,
+        IReadOnlyList<PackageManifest> packages)
+    {
         if (packages.Count == 0)
-            return Fatal(frameworkIdentity, wall,
+            return Observable.Return(Fatal(frameworkIdentity, wall,
                 $"No node-repo packages (top-level folders with an index.json root) found under "
-                + $"'{Path.GetFullPath(options.RepoRoot)}'.");
+                + $"'{Path.GetFullPath(options.RepoRoot)}'."));
 
         var byId = packages.ToDictionary(p => p.Id, StringComparer.Ordinal);
         var selection = Select(options.Packages, byId, out var unknown);
         if (unknown.Length > 0)
-            return Fatal(frameworkIdentity, wall,
+            return Observable.Return(Fatal(frameworkIdentity, wall,
                 $"unknown package(s): {string.Join(", ", unknown)} — known: "
-                + string.Join(", ", packages.Select(p => p.Id)));
+                + string.Join(", ", packages.Select(p => p.Id))));
 
         var skipped = new List<string>();
         var treeNodes = TreeNodeLoader.Load(
@@ -210,7 +233,7 @@ public static class CascadeBuild
         }
         catch (InvalidOperationException ex)
         {
-            return Fatal(frameworkIdentity, wall, ex.Message);
+            return Observable.Return(Fatal(frameworkIdentity, wall, ex.Message));
         }
         var idOf = CompiledDependencies.CreateIdResolver(
             FrameworkBuildIdentity.ProcessSurfacePairs,
@@ -231,7 +254,7 @@ public static class CascadeBuild
                 : [];
 
         options.Output.WriteLine(
-            $"build: {selection.Length} of {packages.Count} package(s) selected "
+            $"{Stamp()} build: {selection.Length} of {packages.Count} package(s) selected "
             + $"({(options.Packages.Count == 0 || options.Packages.Contains(AllSelector) ? "all — full rebuild" : string.Join(", ", options.Packages))}), "
             + $"{treeNodes.Length} node(s), max-parallel={options.MaxParallel}, tests={(options.RunTests ? "on" : "off")}, "
             + $"framework={frameworkIdentity}");
@@ -239,10 +262,7 @@ public static class CascadeBuild
         var entriesByPackage = new Dictionary<string, List<BundleWriter.AssemblyEntry>>(StringComparer.Ordinal);
         var entriesLock = new object();
 
-        ImmutableArray<Cascade.NodeResult<PackageBuild>> results;
-        try
-        {
-            results = Cascade.Run<PackageBuild>(
+        return Cascade.Run<PackageBuild>(
                 selection,
                 DependenciesOf,
                 (id, deps) =>
@@ -253,13 +273,16 @@ public static class CascadeBuild
                         entriesByPackage, entriesLock);
                     return (build, build.IsGreen);
                 },
-                options.MaxParallel).Wait();
-        }
-        catch (InvalidOperationException ex)
-        {
-            return Fatal(frameworkIdentity, wall, ex.Message);
-        }
+                options.MaxParallel)
+            .Select(results => Finish(options, wall, frameworkIdentity, snapshot, packages, results, entriesByPackage, workDirectory, DependenciesOf));
+    }
 
+    private static Report Finish(
+        Options options, Stopwatch wall, string frameworkIdentity, RepoSnapshot snapshot,
+        IReadOnlyList<PackageManifest> packages, ImmutableArray<Cascade.NodeResult<PackageBuild>> results,
+        Dictionary<string, List<BundleWriter.AssemblyEntry>> entriesByPackage, string workDirectory,
+        Func<string, IReadOnlyList<string>> DependenciesOf)
+    {
         var bundles = ImmutableArray<string>.Empty;
         if (options.OutputDirectory is { } outDir)
         {
@@ -354,7 +377,7 @@ public static class CascadeBuild
             : baseReferences.Concat(dependencyAssemblies.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))).ToArray();
 
         options.Output.WriteLine(
-            $"[{id}] start — {types.Length} type(s), depends on "
+            $"{Stamp()} [{id}] start — {types.Length} type(s), depends on "
             + (deps.Count == 0 ? "nothing" : string.Join(", ", deps.Select(d => d.Id)))
             + (external.Length == 0 ? "" : $" (+ external: {string.Join(", ", external)})"));
 
@@ -382,10 +405,7 @@ public static class CascadeBuild
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,
                     Path.Combine(packageDir, CodeConventions.SanitizeNodeName(candidate.Node.Path)),
-                    resolveNuGet: (refs, ct) => nugetResolver
-                        .ResolveAsync(refs, targetFramework: null, ct)
-                        .GetAwaiter().GetResult()
-                        .AssemblyPaths,
+                    resolveNuGet: TreeBake.BlockingNuGetResolution(nugetResolver),
                     logger: options.Logger);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -394,7 +414,7 @@ public static class CascadeBuild
                 built.Add(new TypeBuild(
                     candidate.Node.Path, id, $"{ex.GetType().Name}: {ex.Message}", typeClock.Elapsed,
                     resolution.Sources.Length, null, null, []));
-                options.Output.WriteLine($"[{id}]   RED {candidate.Node.Path} ({typeClock.Elapsed.TotalMilliseconds:F0} ms)");
+                options.Output.WriteLine($"{Stamp()} [{id}]   RED {candidate.Node.Path} ({typeClock.Elapsed.TotalMilliseconds:F0} ms)");
                 options.Output.WriteLine(ex.Message);
                 continue;
             }
@@ -434,7 +454,7 @@ public static class CascadeBuild
                 compiled.NodePath, id, null, typeClock.Elapsed, compiled.Inputs.MatchedSourcePaths.Length,
                 compiled.DllPath, tests, binds));
             options.Output.WriteLine(
-                $"[{id}]   ok  {compiled.NodePath} ({typeClock.Elapsed.TotalMilliseconds:F0} ms, "
+                $"{Stamp()} [{id}]   ok  {compiled.NodePath} ({typeClock.Elapsed.TotalMilliseconds:F0} ms, "
                 + $"{compiled.Inputs.MatchedSourcePaths.Length} source(s))"
                 + (tests is null ? "" : $" tests: {tests.Passed} passed, {tests.Failed} failed, {tests.NeedsMesh} needs-mesh")
                 + (binds.IsEmpty ? "" : $" binds-dependency-assembly: {string.Join(", ", binds)}"));
@@ -445,7 +465,7 @@ public static class CascadeBuild
             id, built.ToImmutable(), emitted.ToImmutable(),
             compileClock.Elapsed - testClock.Elapsed, testClock.Elapsed, external);
         options.Output.WriteLine(
-            $"[{id}] {(result.IsGreen ? "GREEN" : "RED")} — compile {result.Compile.TotalSeconds:F1}s, "
+            $"{Stamp()} [{id}] {(result.IsGreen ? "GREEN" : "RED")} — compile {result.Compile.TotalSeconds:F1}s, "
             + $"tests {result.Tests.TotalSeconds:F1}s ({result.TestsPassed} passed, {result.TestsFailed} failed, "
             + $"{result.TestsNeedMesh} needs-mesh)");
         return result;

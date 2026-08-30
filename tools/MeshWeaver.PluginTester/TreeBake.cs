@@ -235,6 +235,19 @@ public static class TreeBake
     /// module's types, reported the resulting misses as CONTENT errors, and named nothing about a
     /// reference. Loud here, once, beats five red NodeTypes and a fleet that will not roll.</para>
     /// </summary>
+    /// <summary>
+    /// The compiler's NuGet hook is synchronous by contract (<see cref="NodeSetCompiler.Compile"/>
+    /// takes a plain delegate), and the resolver is genuinely async, so this is the ONE place the
+    /// bake lane blocks on it. Shared with the build verb so the production blocking-bridge
+    /// inventory keeps counting exactly one site, here.
+    /// </summary>
+    internal static Func<IReadOnlyList<NuGetPackageReference>, CancellationToken, IReadOnlyList<string>>
+        BlockingNuGetResolution(INuGetAssemblyResolver resolver) =>
+        (refs, ct) => resolver
+            .ResolveAsync(refs, targetFramework: null, ct)
+            .GetAwaiter().GetResult()
+            .AssemblyPaths;
+
     internal static IReadOnlyList<InstalledModuleAssembly> LoadExternalModules(Options options)
     {
         var paths = options.ModuleAssemblyPaths;
@@ -340,10 +353,7 @@ public static class TreeBake
                     // The ONE Task bridge in the bake, at a console build step — never on a hub
                     // scheduler. NuGet restore is genuine network IO with no reactive surface;
                     // the runtime bridges it through the IoPool for the same reason.
-                    resolveNuGet: (refs, ct) => nugetResolver
-                        .ResolveAsync(refs, targetFramework: null, ct)
-                        .GetAwaiter().GetResult()
-                        .AssemblyPaths,
+                    resolveNuGet: BlockingNuGetResolution(nugetResolver),
                     logger: options.Logger);
 
                 // 🚨 The RAW resolved set, not the post-filter compile set — the mesh-driven bake

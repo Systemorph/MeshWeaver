@@ -64,7 +64,7 @@ try
     if (args.Length > 0 && args[0] == "compile")
         return RunCompile(args[1..]);
     if (args.Length > 0 && args[0] == CascadeBuild.Verb)
-        return RunBuild(args[1..]);
+        return await RunBuild(args[1..]);
     if (args.Length > 0 && args[0] == "framework-identity")
         return RunFrameworkIdentity(args[1..]);
     return await RunGate(args);
@@ -75,7 +75,7 @@ catch (Exception ex)
     return 70; // EX_SOFTWARE: distinct from 0 (green), 1 (gate red) and 2 (bad usage).
 }
 
-static int RunBuild(string[] args)
+static async Task<int> RunBuild(string[] args)
 {
     // build <repo-root> [<package>… | all] [--module <dll>]… [--out <dir>] [--report <file>]
     //       [--max-parallel <n>] [--case-timeout <s>] [--no-tests] [--source-sha <sha>]
@@ -144,7 +144,7 @@ static int RunBuild(string[] args)
         Console.Error.WriteLine(BuildUsage());
         return 2;
     }
-    var report = CascadeBuild.Run(new CascadeBuild.Options
+    var report = await CascadeBuild.Run(new CascadeBuild.Options
     {
         RepoRoot = root,
         Packages = packages,
@@ -155,7 +155,7 @@ static int RunBuild(string[] args)
         CaseTimeout = caseTimeout,
         RunTests = runTests,
         SourceSha = sourceSha,
-    });
+    }).Await(CancellationToken.None);
     return report.ExitCode;
 }
 

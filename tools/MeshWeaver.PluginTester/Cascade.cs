@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -26,8 +27,13 @@ namespace MeshWeaver.PluginTester;
 /// starts the work, every later subscriber receives the same single result, and nobody ever
 /// re-runs a package because two packages both required it.</para>
 ///
+/// <para><b>Bounded parallelism without a blocking wait.</b> Work is handed to one queue and
+/// executed through <c>Merge(maxParallel)</c>: Rx subscribes at most that many work items at a
+/// time and takes the next when one completes. No semaphore, no thread parked on a wait — a
+/// blocking bridge is exactly what the production inventory refuses.</para>
+///
 /// <para><b>Timings are part of the result.</b> Each outcome carries when the node became
-/// READY (its last dependency completed), when it STARTED (a slot was available) and when it
+/// READY (its last dependency completed), when it STARTED (a slot was granted) and when it
 /// FINISHED, so a report can show queue time separately from work time and compute the critical
 /// path — the maintainer wants the numbers, not a green wall.</para>
 ///
@@ -83,7 +89,7 @@ public static class Cascade
     /// Runs the cascade over <paramref name="ids"/>, where <paramref name="dependenciesOf"/> names
     /// each id's direct dependencies (ids outside the set are ignored — they are external, and
     /// whoever built the set decided how they are satisfied) and <paramref name="run"/> does one
-    /// node's work, returning true for green. Returns every node's result once all have settled.
+    /// node's work, returning true for green. Emits every node's result once all have settled.
     /// </summary>
     /// <param name="ids">The node ids in the cascade.</param>
     /// <param name="dependenciesOf">Direct dependencies per id.</param>
@@ -109,14 +115,23 @@ public static class Cascade
         return Observable.Defer(() =>
         {
             var idSet = ids.ToImmutableHashSet(StringComparer.Ordinal);
+            if (idSet.IsEmpty)
+                return Observable.Return(ImmutableArray<NodeResult<T>>.Empty);
             if (FindCycle(idSet, dependenciesOf) is { } cycle)
                 return Observable.Throw<ImmutableArray<NodeResult<T>>>(new InvalidOperationException(
                     $"the dependency graph has a cycle: {cycle} — a cascade over it would never "
                     + "start, because every node in the cycle waits for another one in it"));
 
             var clock = Stopwatch.StartNew();
-            var slots = new SemaphoreSlim(maxParallel, maxParallel);
             var pool = scheduler ?? TaskPoolScheduler.Default;
+
+            // The concurrency gate. Every node hands its work here when it becomes ready;
+            // Merge(maxParallel) subscribes at most that many at a time and takes the next as one
+            // completes. The gate is subscribed BEFORE any node, so nothing is handed to a queue
+            // nobody is listening to.
+            var queue = new Subject<IObservable<Unit>>();
+            var gate = queue.Merge(maxParallel).Subscribe(_ => { }, _ => { });
+
             var nodes = new Dictionary<string, IObservable<NodeResult<T>>>(StringComparer.Ordinal);
 
             // Build the streams lazily and memoise them: a node's stream is created once and the
@@ -145,28 +160,35 @@ public static class Cascade
                                 ready, ready, ready));
                         }
                         var ordered = depResults.ToArray();
-                        return Observable.Start(() =>
-                        {
-                            slots.Wait();
-                            var started = clock.Elapsed;
-                            try
+                        // The result travels back through its own subject; the work item handed
+                        // to the gate is deferred so it starts when the gate subscribes it —
+                        // that moment is 'Started', and Started - Ready is the slot wait.
+                        var result = new AsyncSubject<NodeResult<T>>();
+                        var work = Observable.Defer(() => Observable.Start(() =>
                             {
-                                var (result, green) = run(id, ordered);
-                                return new NodeResult<T>(
-                                    id, green ? NodeOutcome.Green : NodeOutcome.Red, result, null, null,
-                                    ready, started, clock.Elapsed);
-                            }
-                            catch (Exception ex)
+                                var started = clock.Elapsed;
+                                try
+                                {
+                                    var (payload, green) = run(id, ordered);
+                                    return new NodeResult<T>(
+                                        id, green ? NodeOutcome.Green : NodeOutcome.Red, payload, null, null,
+                                        ready, started, clock.Elapsed);
+                                }
+                                catch (Exception ex)
+                                {
+                                    return new NodeResult<T>(
+                                        id, NodeOutcome.Faulted, default, null,
+                                        $"{ex.GetType().Name}: {ex.Message}", ready, started, clock.Elapsed);
+                                }
+                            }, pool))
+                            .Do(r =>
                             {
-                                return new NodeResult<T>(
-                                    id, NodeOutcome.Faulted, default, null,
-                                    $"{ex.GetType().Name}: {ex.Message}", ready, started, clock.Elapsed);
-                            }
-                            finally
-                            {
-                                slots.Release();
-                            }
-                        }, pool);
+                                result.OnNext(r);
+                                result.OnCompleted();
+                            })
+                            .Select(_ => Unit.Default);
+                        queue.OnNext(work);
+                        return result;
                     })
                     .PublishLast()
                     .AutoConnect();
@@ -175,12 +197,14 @@ public static class Cascade
             }
 
             var all = idSet.OrderBy(i => i, StringComparer.Ordinal).Select(NodeOf).ToArray();
-            return all.Length == 0
-                ? Observable.Return(ImmutableArray<NodeResult<T>>.Empty)
-                : all.CombineLatest()
-                    .Take(1)
-                    .Select(results => results.OrderBy(r => r.Id, StringComparer.Ordinal).ToImmutableArray())
-                    .Finally(slots.Dispose);
+            return all.CombineLatest()
+                .Take(1)
+                .Select(results => results.OrderBy(r => r.Id, StringComparer.Ordinal).ToImmutableArray())
+                .Finally(() =>
+                {
+                    queue.OnCompleted();
+                    gate.Dispose();
+                });
         });
     }
 

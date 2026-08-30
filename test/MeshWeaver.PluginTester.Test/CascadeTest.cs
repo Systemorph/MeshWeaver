@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Messaging;
 using MeshWeaver.PluginTester;
 using Xunit;
 
@@ -27,17 +28,17 @@ public class CascadeTest
         Diamond.TryGetValue(id, out var d) ? d : [];
 
     [Fact]
-    public void ANodeStartsOnlyAfterEveryDependencyIsGreen_AndDependentsSeeTheirResults()
+    public async Task ANodeStartsOnlyAfterEveryDependencyIsGreen_AndDependentsSeeTheirResults()
     {
         var seen = new ConcurrentDictionary<string, string[]>(StringComparer.Ordinal);
-        var results = Cascade.Run<string>(
+        var results = await Cascade.Run<string>(
             Diamond.Keys.ToArray(), DepsOf,
             (id, deps) =>
             {
                 seen[id] = deps.Select(d => d.Id).OrderBy(x => x, StringComparer.Ordinal).ToArray();
                 return ($"built {id}", true);
             },
-            maxParallel: 4).Wait();
+            maxParallel: 4).Await(TestContext.Current.CancellationToken);
 
         Assert.Equal(4, results.Length);
         Assert.All(results, r => Assert.True(r.IsGreen, $"{r.Id}: every node's work returned green, so nothing is red or blocked"));
@@ -52,17 +53,17 @@ public class CascadeTest
     }
 
     [Fact]
-    public void OnRedWeBreak_TheFailureIsReportedOnceAndEveryDependentIsBlockedByName()
+    public async Task OnRedWeBreak_TheFailureIsReportedOnceAndEveryDependentIsBlockedByName()
     {
         var ran = new ConcurrentBag<string>();
-        var results = Cascade.Run<string>(
+        var results = await Cascade.Run<string>(
             Diamond.Keys.ToArray(), DepsOf,
             (id, _) =>
             {
                 ran.Add(id);
                 return (id, id != "AI"); // AI fails
             },
-            maxParallel: 4).Wait();
+            maxParallel: 4).Await(TestContext.Current.CancellationToken);
 
         var byId = results.ToDictionary(r => r.Id, StringComparer.Ordinal);
         Assert.Equal(Cascade.NodeOutcome.Green, byId["Store"].Outcome);
@@ -75,12 +76,12 @@ public class CascadeTest
     }
 
     [Fact]
-    public void AFaultingWorkFunctionIsReportedAsFaulted_NotAsACrashOfTheWholeBuild()
+    public async Task AFaultingWorkFunctionIsReportedAsFaulted_NotAsACrashOfTheWholeBuild()
     {
-        var results = Cascade.Run<string>(
+        var results = await Cascade.Run<string>(
             Diamond.Keys.ToArray(), DepsOf,
             (id, _) => id == "Store" ? throw new InvalidOperationException("disk on fire") : (id, true),
-            maxParallel: 2).Wait();
+            maxParallel: 2).Await(TestContext.Current.CancellationToken);
 
         var byId = results.ToDictionary(r => r.Id, StringComparer.Ordinal);
         Assert.Equal(Cascade.NodeOutcome.Faulted, byId["Store"].Outcome);
@@ -89,28 +90,28 @@ public class CascadeTest
     }
 
     [Fact]
-    public void EveryNodeRunsExactlyOnce_HoweverManyDependentsShareIt()
+    public async Task EveryNodeRunsExactlyOnce_HoweverManyDependentsShareIt()
     {
         var runs = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         var wide = new Dictionary<string, string[]>(StringComparer.Ordinal) { ["Base"] = [] };
         for (var i = 0; i < 20; i++)
             wide[$"Leaf{i:D2}"] = ["Base"];
 
-        Cascade.Run<int>(
+        await Cascade.Run<int>(
             wide.Keys.ToArray(), id => wide[id],
             (id, _) =>
             {
                 runs.AddOrUpdate(id, 1, (_, n) => n + 1);
                 return (0, true);
             },
-            maxParallel: 8).Wait();
+            maxParallel: 8).Await(TestContext.Current.CancellationToken);
 
         Assert.Equal(21, runs.Count);
         Assert.All(runs.Values, n => Assert.Equal(1, n)); // twenty dependents, ONE execution of Base
     }
 
     [Fact]
-    public void IndependentNodesRunInParallel_BoundedByTheSlotCount()
+    public async Task IndependentNodesRunInParallel_BoundedByTheSlotCount()
     {
         const int nodes = 6;
         const int slots = 3;
@@ -118,7 +119,7 @@ public class CascadeTest
         var peak = 0;
         var flat = Enumerable.Range(0, nodes).Select(i => $"N{i}").ToArray();
 
-        var results = Cascade.Run<int>(
+        var results = await Cascade.Run<int>(
             flat, _ => [],
             (_, _) =>
             {
@@ -132,7 +133,7 @@ public class CascadeTest
                 Interlocked.Decrement(ref inFlight);
                 return (0, true);
             },
-            maxParallel: slots).Wait();
+            maxParallel: slots).Await(TestContext.Current.CancellationToken);
 
         Assert.Equal(nodes, results.Length); Assert.All(results, r => Assert.True(r.IsGreen));
         Assert.True(peak > 1, "nodes with no edge between them run at the same time");
@@ -141,7 +142,7 @@ public class CascadeTest
     }
 
     [Fact]
-    public void ACycleIsRefusedUpFront_NamingIt()
+    public async Task ACycleIsRefusedUpFront_NamingIt()
     {
         var cyclic = new Dictionary<string, string[]>(StringComparer.Ordinal)
         {
@@ -149,40 +150,41 @@ public class CascadeTest
             ["B"] = ["C"],
             ["C"] = ["A"],
         };
-        Action act = () => _ = Cascade.Run<int>(cyclic.Keys.ToArray(), id => cyclic[id], (_, _) => (0, true), 2).Wait();
-        var ex = Assert.Throws<InvalidOperationException>(act);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Cascade.Run<int>(cyclic.Keys.ToArray(), id => cyclic[id], (_, _) => (0, true), 2)
+                .Await(TestContext.Current.CancellationToken));
         Assert.Contains("cycle", ex.Message); Assert.Contains("A", ex.Message); Assert.Contains("C", ex.Message);
     }
 
     [Fact]
-    public void DependenciesOutsideTheSelectionAreExternal_AndDoNotBlock()
+    public async Task DependenciesOutsideTheSelectionAreExternal_AndDoNotBlock()
     {
         // 'AI' requires 'Store', but only 'AI' is in the cascade: Store is somebody else's
         // (the image, --module, another repo). AI must start on its own.
-        var results = Cascade.Run<int>(
-            ["AI"], DepsOf, (_, _) => (1, true), 2).Wait();
+        var results = await Cascade.Run<int>(
+            ["AI"], DepsOf, (_, _) => (1, true), 2).Await(TestContext.Current.CancellationToken);
         Assert.True(Assert.Single(results).IsGreen);
     }
 
     [Fact]
-    public void CriticalPathIsTheChainThatEndsLast_LeafFirst()
+    public async Task CriticalPathIsTheChainThatEndsLast_LeafFirst()
     {
-        var results = Cascade.Run<int>(
+        var results = await Cascade.Run<int>(
             Diamond.Keys.ToArray(), DepsOf,
             (id, _) =>
             {
                 Thread.Sleep(id == "AI" ? 120 : 20);
                 return (0, true);
             },
-            maxParallel: 4).Wait();
+            maxParallel: 4).Await(TestContext.Current.CancellationToken);
 
         var path = Cascade.CriticalPath(results, DepsOf);
         Assert.Equal(["Store", "AI", "Edu"], path); // Edu finishes last; waited for AI (slow), which waited for Store
     }
 
     [Fact]
-    public void AnEmptySelectionIsAnEmptyReport()
+    public async Task AnEmptySelectionIsAnEmptyReport()
     {
-        Assert.Empty(Cascade.Run<int>([], _ => [], (_, _) => (0, true), 1).Wait());
+        Assert.Empty(await Cascade.Run<int>([], _ => [], (_, _) => (0, true), 1).Await(TestContext.Current.CancellationToken));
     }
 }
