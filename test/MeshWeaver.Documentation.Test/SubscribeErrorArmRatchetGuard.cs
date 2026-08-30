@@ -29,10 +29,25 @@ namespace MeshWeaver.Documentation.Test;
 /// realistic, too large to fix in one change. 🚨 Raising <see cref="Baseline"/> is not a fix; the
 /// number is in the diff so that re-seeding is visible to a reviewer.</para>
 ///
-/// <para><b>The conversion</b> is one argument, not a redesign — and choose it deliberately:
-/// <c>.Subscribe(x =&gt; Handle(x), ex =&gt; logger.LogWarning(ex, "… {Path}", path))</c> at a
-/// graceful boundary, or a propagating arm where the caller must learn. An empty <c>ex =&gt; { }</c>
-/// trades this guard for the swallow-and-continue AGENTS.md forbids, so it is not the answer.</para>
+/// <para><b>🚨 The conversion depends on the subscription's LIFETIME, and getting this backwards
+/// builds a wedge.</b> <c>onError</c> is TERMINAL in Rx: the subscription is finished the moment it
+/// fires.</para>
+/// <list type="bullet">
+/// <item><b>One-shot</b> (a write, a request/response, anything that completes after its work):
+/// add the arm — <c>.Subscribe(_ =&gt; { }, ex =&gt; logger.LogWarning(ex, "… {Path}", path))</c>,
+/// or a propagating arm where the caller must learn. Termination is correct here; the work is
+/// over either way.</item>
+/// <item><b>Long-lived</b> (a timer tick, a broadcast, an idle sweep, anything expected to keep
+/// firing): handle the fault <b>inside</b> <c>onNext</c>, or <c>.Catch</c> upstream so the
+/// sequence continues. An <c>onError</c> arm here converts "an unhandled exception once" into
+/// "this subscription silently stopped working forever" — which is worse, and is the frame-loss
+/// class this repo has been bitten by. <c>MeshNodeStreamCache.cs:1987</c> is the shape to copy:
+/// the <c>try</c> lives in the <c>onNext</c>, so a fault costs one tick and not the subscription.
+/// Such a site satisfies this guard by ALSO carrying an arm for the sequence's own fault, but the
+/// per-item handling is the part that keeps it alive.</item>
+/// </list>
+/// <para>An empty <c>ex =&gt; { }</c> is not the answer to either: it trades this guard for the
+/// swallow-and-continue AGENTS.md forbids.</para>
 /// </summary>
 public class SubscribeErrorArmRatchetGuard
 {
@@ -69,9 +84,13 @@ public class SubscribeErrorArmRatchetGuard
             + "nowhere for it to go, so it becomes an unhandled exception that takes the xunit "
             + "runner to Environment.Exit(2). That is the 'Passed! - Failed: 0' shard that reds "
             + "anyway, with a message and no stack (#2666).\n\n"
-            + "Add the arm: .Subscribe(x => Handle(x), ex => logger.LogWarning(ex, \"… {Path}\", "
-            + "path)) — but NOT an empty ex => { }, which only trades this for the "
-            + "swallow-and-continue AGENTS.md forbids.\n\n"
+            + "🚨 The fix depends on LIFETIME, because onError is TERMINAL. A ONE-SHOT (a write, "
+            + "a request/response) takes the arm: .Subscribe(_ => { }, ex => logger.LogWarning(ex, "
+            + "\"… {Path}\", path)). A LONG-LIVED subscription (a timer, a broadcast, an idle "
+            + "sweep) must handle the fault INSIDE onNext, or .Catch upstream — an onError arm "
+            + "there turns 'threw once' into 'stopped working forever'. Copy "
+            + "MeshNodeStreamCache.cs:1987, whose try lives in the onNext. Never an empty "
+            + "ex => { }: that trades this guard for the swallow-and-continue AGENTS.md forbids.\n\n"
             + "🚨 Do NOT raise the Baseline.\n"
             + "Heaviest files:\n"
             + string.Join("\n", perFile.Take(10).Select(x => $"  {x.Path} ({x.Count})")));
