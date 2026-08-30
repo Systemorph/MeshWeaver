@@ -5,17 +5,14 @@
      validate it"  ·  "all plugins should only re-build what changed"  ·  "there is always a
      notion of 'full rebuild' when the platform updates"  ·  "unify all MeshWeaver.* repos"
 
-TWO LANES ask this question, with the same rule and the same fallbacks, so they share one script:
+ONE LANE asks this question (a second, `--for packages` for the retired NuGet-floor pack lane
+`plugin-publish.yml`, was removed on 2026-08-30 — in-mesh source is type-checked against the
+platform IMAGE by node-repo-compile-check.yml, and nothing a node repo builds goes to a feed):
 
   --for modules   `node-repo-module-pack.yml` fans out ONE JOB per mixed package. That fan-out was
                   the caller's literal list, every entry on every event: MeshWeaver.Plugins ran 29
                   module builds on every push of every PR, whether the diff touched one module's
                   C# or a course's markdown.
-  --for packages  `plugin-publish.yml` packs EVERY node package in one job — 53 in
-                  MeshWeaver.Plugins, `Store` alone being 17 compilation units. It is the COMPILE
-                  GATE over ~12k lines of in-mesh NodeType C# against the newest RELEASED
-                  framework (a different compiler input from `compile-check.py --image`), and it
-                  publishes nothing on a PR because that lane is `dry-run` by design.
 
 🚨 THE BIAS IS THE DESIGN, and it is copied from bake-scope.sh deliberately. Narrowing a build is
 the shape that produces a SILENT under-build, and the evidence of the miss is the absence of
@@ -43,11 +40,6 @@ gate exists.
     serves this version" is NOT evidence the published bundle matches HEAD. (That is the same
     blind spot Plugins #878 records on the delivery side.) Until this lane stamps a source commit
     into what it publishes, a push packs everything.
-  * packages — `plugin-publish.yml`'s header spells out why there is no changed-plugin detection
-    on the publish path: the derived PATCH is the change detector, and a hand-written diff would
-    be a second detector free to disagree, whose failure mode is a plugin that silently never
-    ships. That argument is about PUBLISHING. On a `pull_request` nothing is published at all, so
-    it does not apply — and the unnarrowed `push` keeps the trunk exhaustive.
 
 So the whole win sits on `pull_request` / `merge_group`, which is exactly where the cost is: a PR
 pushes many times, a trunk commit lands once.
@@ -67,7 +59,6 @@ pushes many times, a trunk commit lands once.
 
 USAGE
     node-repo-scope.py --for modules  --modules @matrix.json --event pull_request --base-ref main
-    node-repo-scope.py --for packages --event schedule
     node-repo-scope.py --self-test
 
 OUTPUT — JSON on stdout, the human report on stderr, plus $GITHUB_OUTPUT / $GITHUB_STEP_SUMMARY.
@@ -121,17 +112,6 @@ FULL_REASONS = {
                     "must be rebuilt and republished against the new framework identity "
                     "(MeshWeaver#2088), so the git diff is irrelevant.",
         "workflow_dispatch": "a manual dispatch has no diff to narrow by — packing every module.",
-    },
-    "packages": {
-        "push": "the publish path's change detector is the DERIVED VERSION, not a diff "
-                "(plugin-publish.yml's header): a second detector free to disagree would let a "
-                "plugin silently never ship. Packing every plugin.",
-        "repository_dispatch": "the published framework moved — this gate's value is being "
-                               "EXHAUSTIVE against that floor, because a package that did not "
-                               "change can still stop compiling. Packing every plugin.",
-        "schedule": "the released-framework floor moves without this repo changing, and a package "
-                    "that did not change can still stop compiling against it. Packing every plugin.",
-        "workflow_dispatch": "a manual dispatch has no diff to narrow by — packing every plugin.",
     },
 }
 
@@ -260,16 +240,15 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
            override: list[str] | None, say, publishing: bool = False,
            always: frozenset[str] = frozenset()) -> dict:
     all_packages = sorted(node_packages(root))
-    universe = ([e["module"] for e in entries] if lane == "modules" else all_packages)
+    universe = [e["module"] for e in entries]
 
     def full(reason: str) -> dict:
         return {"lane": lane, "scope": "full", "reason": reason,
-                "modules": [{**e, "test": True} for e in entries] if lane == "modules" else [],
-                "packages": all_packages if lane == "packages" else [],
+                "modules": [{**e, "test": True} for e in entries],
                 "count": len(universe), "selected": sorted(universe), "skipped": [], "why": {}}
 
     def refuse(reason: str) -> dict:
-        return {"lane": lane, "scope": "refuse", "reason": reason, "modules": [], "packages": [],
+        return {"lane": lane, "scope": "refuse", "reason": reason, "modules": [],
                 "count": 0, "selected": [], "skipped": [], "why": {}}
 
     # 🚨 THE ANSWER "BUILD EVERYTHING, AND EVERYTHING IS NOTHING" IS NOT AN ANSWER. `full` with a
@@ -344,15 +323,6 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
             return full(f"{SELECTOR} could not narrow the node-package closure (it refused, "
                         "answered ALL, or could not be parsed) — running the full set.")
         affected = answer
-
-    if lane == "packages":
-        chosen = sorted(affected & set(all_packages))
-        return {"lane": lane, "scope": "narrowed",
-                "reason": f"{len(chosen)} of {len(all_packages)} plugin(s) are reachable from this "
-                          f"diff ({len(files)} file(s)).",
-                "modules": [], "packages": chosen, "count": len(chosen), "selected": chosen,
-                "skipped": sorted(set(all_packages) - set(chosen)),
-                "why": {p: "in the affected closure" for p in chosen}}
 
     # ── the modules lane also needs the COMPILED half ──
     # An entry built from outside this checkout (a platform-hosted transition entry) can never be
@@ -439,7 +409,7 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
     return {"lane": lane, "scope": "narrowed",
             "reason": f"{len(selected)} of {len(entries)} module bundle(s) are reachable from this "
                       f"diff ({len(files)} file(s)).",
-            "modules": selected, "packages": [], "count": len(selected),
+            "modules": selected, "count": len(selected),
             "selected": sorted(chosen), "skipped": sorted(set(universe) - chosen), "why": why}
 
 
@@ -557,7 +527,7 @@ def self_test() -> int:
         _fixture(root)
 
         print("FULL-run fallbacks — the bias that makes narrowing safe (both lanes):")
-        for lane, n in (("modules", 2), ("packages", 3)):
+        for lane, n in (("modules", 2),):
             for event, label in (
                     ("push", "a push has no sound publication baseline / is the publish path"),
                     ("repository_dispatch", "a framework release rebuilds everything"),
@@ -598,10 +568,6 @@ def self_test() -> int:
         got = _run(root, "modules", "pull_request", ["Beta/Board.json"])
         check("[modules] a node package's DEPENDENT is selected too",
               got["selected"] == ["Acme.Alpha", "Acme.Beta"], f"{got['selected']}")
-        got = _run(root, "packages", "pull_request", ["Beta/Board.json"])
-        check("[packages] the pack lane narrows to the same closure",
-              got["packages"] == ["Alpha", "Beta"] and got["skipped"] == ["Gamma"],
-              f"{got['packages']} skipped={got['skipped']}")
 
         print("the floor — bundles the caller's gates compose on EVERY run:")
         got = _run(root, "modules", "pull_request", ["docs/guide.md"], extra=["--always", "Acme.Alpha"])
@@ -642,7 +608,7 @@ def self_test() -> int:
                   got["scope"] == "narrowed" and got["selected"] == expect, f"{got['selected']}")
 
         print("the legitimate EMPTY answer — explicit, never a missing input:")
-        for lane in ("modules", "packages"):
+        for lane in ("modules",):
             got = _run(root, lane, "pull_request", ["docs/guide.md"])
             check(f"[{lane}] a diff reaching nothing selects ZERO, and says so",
                   got["scope"] == "narrowed" and got["count"] == 0 and got["skipped"],
@@ -693,16 +659,16 @@ def self_test() -> int:
         check("an EMPTY matrix input is refused (exit 2), never answered as full/0",
               proc.returncode == 2 and "nothing to select from" in proc.stderr,
               f"exit={proc.returncode}")
-        proc = _raw(root, "packages", "pull_request", ["Alpha/index.json"],
+        proc = _raw(root, "modules", "pull_request", ["Alpha/index.json"],
                     extra=["--root", str(root / "no-such-dir")])
         check("a --root that is not the checkout is refused, never answered as full/0",
               proc.returncode != 0 and '"count": 0' not in proc.stdout,
               f"exit={proc.returncode} stdout={proc.stdout[:120]}")
 
         print("a PUBLISHING run never narrows, whatever the event:")
-        got = _run(root, "packages", "pull_request", ["Alpha/index.json"], extra=["--publishing"])
+        got = _run(root, "modules", "pull_request", ["Alpha/index.json"], extra=["--publishing"])
         check("--publishing forces FULL even on a pull_request",
-              got["scope"] == "full" and got["count"] == 3 and "PUBLISHES" in got["reason"],
+              got["scope"] == "full" and got["count"] == 2 and "PUBLISHES" in got["reason"],
               f"scope={got['scope']} count={got['count']}")
 
         print("a stale matrix entry must fail on THIS PR, not on the next push to main:")
@@ -783,7 +749,7 @@ def self_test() -> int:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    p.add_argument("--for", dest="lane", choices=("modules", "packages"))
+    p.add_argument("--for", dest="lane", choices=("modules",))
     p.add_argument("--modules", help="the module matrix as JSON, or @file (--for modules)")
     p.add_argument("--root", default=".", help="the caller repo checkout")
     p.add_argument("--event", default="", help="the triggering GitHub event name")
@@ -802,8 +768,8 @@ def main() -> int:
     args = p.parse_args()
     if args.self_test:
         return self_test()
-    if not args.lane:
-        p.error("--for {modules,packages} is required")
+    if args.lane is None:
+        p.error("--for modules is required (only --self-test runs without a lane)")
 
     entries: list[dict] = []
     if args.lane == "modules":
@@ -848,7 +814,6 @@ def main() -> int:
             fh.write(f"scope={answer['scope']}\n")
             fh.write(f"count={answer['count']}\n")
             fh.write("modules=" + json.dumps(answer["modules"]) + "\n")
-            fh.write("packages=" + " ".join(answer["packages"]) + "\n")
             fh.write("selected=" + " ".join(answer["selected"]) + "\n")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         total = answer["count"] + len(answer["skipped"])
