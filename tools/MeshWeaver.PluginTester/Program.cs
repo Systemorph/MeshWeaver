@@ -6,6 +6,7 @@ using MeshWeaver.PluginCatalog;
 using MeshWeaver.PluginTester;
 
 using MeshWeaver.Compiler;
+using MeshWeaver.Messaging;
 // mw-plugin-test <repo-root> [--compile-timeout <seconds>] [--render-timeout <seconds>]
 //                            [--allow <file>] [--report <file>] [--seed <dir>]
 //                            [--bake-output <dir>] [--source-sha <sha>] [--module <dll>]...
@@ -479,7 +480,11 @@ static async Task<int> RunGate(string[] args)
         Console.WriteLine($"external module: {module}");
     if (allowApplied)
         Console.WriteLine($"known-debt allowlist: {allowlist.Entries.Count} entr(ies)");
-    var report = await PluginGateRunner.Run(options).FirstAsync().ToTask();
+    // 🚨 ObserveCompletion, never Rx's own observable-to-Task bridge — see the ruling of
+    // 2026-08-30 ("no ToTask ever") and ReactiveCompletion's remarks.
+    var report = (await PluginGateRunner.Run(options).FirstAsync()
+        .ObserveCompletion(ex => Console.Error.WriteLine(
+            $"plugin gate faulted AFTER the report was produced — reported, not orphaned: {ex}")))!;
     if (reportPath is not null)
     {
         // Written for EVERY completed run — red, green, or fatal — and before any allowlist verdict:

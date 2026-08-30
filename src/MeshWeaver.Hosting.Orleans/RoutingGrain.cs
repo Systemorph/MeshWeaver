@@ -102,6 +102,14 @@ internal class RoutingGrain(
     private readonly DeadTargetRefusalLog nackLog = new(DeadTargetRefusalLog.DefaultWindow);
 
     /// <summary>
+    /// The same window again for <see cref="AnswerPodHubNotHere"/>'s refusal, keyed by the
+    /// unreachable ADDRESS. Deliberately its OWN instance rather than a share of
+    /// <see cref="refusalLog"/>: that one is cleared the moment a live stream subscriber is found,
+    /// and a pod-hub refusal has nothing to do with stream subscribers.
+    /// </summary>
+    private readonly DeadTargetRefusalLog podHubRefusalLog = new(DeadTargetRefusalLog.DefaultWindow);
+
+    /// <summary>
     /// Probes whether this process's DI container still resolves — the positive half of
     /// <see cref="IsScopeTeardown"/> (issue #2638). On a live container this is a cheap lookup of an
     /// already-materialised singleton with no side effects; once the host has disposed its root
@@ -377,21 +385,27 @@ internal class RoutingGrain(
     /// requester spends its full budget on silence, and nothing anywhere logs a thing. A directed
     /// call has an OUTCOME, which is the entire point.</para>
     ///
-    /// <para><b>The fallback is deliberate and is not scaffolding.</b>
-    /// <see cref="PodHubNotHereException"/> means "no silo serves this address through the grain
-    /// transport", and there are two very different reasons for that:</para>
+    /// <para>🚨 <b>The stream fallback is taken by DECLARATION, never because the grain answered
+    /// "not here"</b> — <c>Doc/Architecture/DurableStreamsViaMeshNodes</c>, release N+2 of the roll
+    /// plan. <see cref="PodHubNotHereException"/> means "no silo serves this address through the
+    /// grain transport", and that has two very different causes which the exception cannot tell
+    /// apart:</para>
     /// <list type="bullet">
-    ///   <item>the owner is still on the PREVIOUS RELEASE and never claimed the address — true for
-    ///     the whole overlap window of every rolling deploy, which is precisely the window in which
-    ///     the last change in this area stranded 39 addresses by not having a fallback (#1770);</item>
     ///   <item>the owner is an Orleans CLIENT process, which cannot host a grain at all. For those
-    ///     hubs the stream is not a legacy path, it is the only path — so this branch is
-    ///     PERMANENT.</item>
+    ///     hubs the stream is not a legacy path, it is the only path — and that is now
+    ///     <see cref="MeshConfiguration.ClientHostedAddressTypes">declared</see> by the host that
+    ///     knows it (the Orleans test rig declares the built-in stream-routed types; production
+    ///     declares nothing);</item>
+    ///   <item>the owner is a SILO whose claim has not landed yet — the overlap window of a rolling
+    ///     deploy, and the window in which not having a fallback stranded 39 addresses (#1770).</item>
     /// </list>
-    /// <para>Either way the fallback is safe rather than a return to silence, because the stream leg
-    /// now checks for a subscriber before it publishes and NACKs when there is none. Full plan,
-    /// including the one log line that says when the overlap window has closed:
-    /// <c>Doc/Architecture/PodHubDeliveryRollPlan</c>.</para>
+    /// <para>Publishing on the second reading is what kept #2320 / #2322 / #2406 reachable: a
+    /// publish into a stream with no live subscriber SUCCEEDS and discards (the subscriber probe
+    /// narrows this but fails open by design), and a publish into a stream whose queue grain is
+    /// wedged or whose producer never registered stalls for 30–60 s. So that reading now gets a
+    /// fast TRANSIENT NACK instead — see <see cref="AnswerPodHubNotHere"/> — and the overlap window
+    /// is covered by the sender's own recovery plus the owner's now-indefinite claim
+    /// (<c>OrleansRoutingService.AttachPodHub</c>), not by a publish that succeeds and discards.</para>
     ///
     /// <para>🚨 <b>Issue #2299: a TRANSIENT rejection used to be treated exactly like a terminal
     /// one.</b> Prod evidence names two distinct transports-level rejections for the same underlying
@@ -435,6 +449,12 @@ internal class RoutingGrain(
         void PostFailureToSender(string failureMessage, ErrorType errorType) =>
             PostFailure(delivery, address, streamProvider, grainFactory, failureMessage, errorType);
 
+        // The three-argument form, so the ROUTER's authoritative "no silo serves this hub" stamp
+        // travels with the verdict — see AnswerPodHubNotHere.
+        void PostVerdictToSender(string failureMessage, ErrorType errorType, bool targetUnserved) =>
+            PostFailure(delivery, address, streamProvider, grainFactory, failureMessage, errorType,
+                targetUnserved: targetUnserved);
+
         return DeliverToGrainObservable(
                 () => grainFactory.GetGrain<IPodHubGrain>(addressPath).Deliver(delivery),
                 addressPath, delivery.Id, logger)
@@ -444,7 +464,9 @@ internal class RoutingGrain(
                 return Unit.Default;
             })
             .Catch<Unit, Exception>(ex => IsPodHubNotHere(ex)
-                ? FallBackToStream()
+                ? AnswerPodHubNotHere(
+                    delivery, addressPath, address.Type, meshConfig,
+                    FallBackToStream, PostVerdictToSender, logger, podHubRefusalLog)
                 // A REAL failure of the call, transient retries exhausted (or a non-transient
                 // fault) — the owning silo threw, went away mid-call, or the placement could not
                 // be made. This is the whole gain over a publish: it is OBSERVABLE, so it becomes
@@ -464,15 +486,16 @@ internal class RoutingGrain(
         IObservable<Unit> FallBackToStream()
         {
             RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_NOT_HERE addr={addressPath} id={delivery.Id}");
-            // 🚨 THE LINE THAT DECIDES WHEN THE OVERLAP WINDOW HAS CLOSED. Information, once per
-            // delivery that takes the fallback: during a roll it is the plan working; after a roll
-            // has fully completed, for a SILO-hosted address, it is a hub that never claimed itself
-            // and wants investigating. Never read its absence as proof — read a full rolling deploy
-            // with none of these as the signal that the grain transport carries everything it can.
+            // 🚨 Reached ONLY for an address type DECLARED client-hosted. Kept at Information at
+            // its original level and cost: production declares no such type, so in the fleet this
+            // line cannot be emitted at all — and if one is ever declared, this is the line that
+            // says a stream publish (which succeeds and discards when nobody is subscribed) is
+            // still carrying traffic. It no longer measures a roll window; that job moved to the
+            // owner-side "Pod-hub claim … did not land" Warning.
             logger.LogInformation(
-                "[ROUTE] Pod-hub grain for {Address} is not attached — falling back to the stream publish. "
-                + "Expected while a previous-release pod still owns that hub, and permanently for a hub "
-                + "owned by an Orleans client process (a client cannot host a grain).",
+                "[ROUTE] Pod-hub grain for {Address} is not attached — falling back to the stream publish, "
+                + "because this address type is DECLARED client-hosted and an Orleans client cannot host "
+                + "a grain. No other condition reaches this line.",
                 addressPath);
             return BuildStreamRoute(delivery, address, addressPath, streamProvider, grainFactory);
         }
@@ -495,6 +518,94 @@ internal class RoutingGrain(
             PostFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", errorType);
             return Observable.Return(Unit.Default);
         }
+    }
+
+    /// <summary>
+    /// What a <see cref="PodHubNotHereException"/> means for THIS address type — the whole of
+    /// release N+2 in <c>Doc/Architecture/DurableStreamsViaMeshNodes</c>, in one decision.
+    ///
+    /// <list type="number">
+    ///   <item><b>Declared client-hosted</b> (<see cref="MeshConfiguration.ClientHostedAddressTypes"/>)
+    ///     → <paramref name="fallBackToStream"/>. The owner is a process that cannot host a grain,
+    ///     so the stream is not a fallback, it is the only transport there is. Nothing in production
+    ///     declares one; the Orleans test rig declares the built-in stream-routed types, because it
+    ///     hosts a hub of each on its cluster client.</item>
+    ///   <item><b>Anything else</b> → a TRANSIENT NACK, right here, in one hop. No silo currently
+    ///     serves that hub; the sender is told so inside the directed call's own budget instead of
+    ///     the stream's, and its own recovery runs.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b><see cref="ErrorType.ShuttingDown"/>, never the terminal
+    /// <see cref="ErrorType.Failed"/> and never <see cref="ErrorType.NotFound"/>.</b> The consumers
+    /// with recovery machinery of their own — <c>SynchronizationStream</c>'s resubscribe latch,
+    /// <c>MeshNodeStreamCache.IsTransientOwnerFailure</c> — RIDE OUT <c>ShuttingDown</c> and TEAR
+    /// DOWN on a terminal verdict, and "no silo serves this hub right now" is a lifecycle
+    /// transition by construction: it is the rolling deploy's overlap window, and the owner's claim
+    /// (<c>OrleansRoutingService.AttachPodHub</c>) keeps retrying until it lands. That pairing is
+    /// what makes this safe WITHOUT the stream publish: the answer is a NACK the caller retries,
+    /// not a publish that succeeds and discards.</para>
+    ///
+    /// <para>🚨 <b>Stamped <see cref="DeliveryFailure.TargetUnserved"/> — the same authoritative
+    /// shape <see cref="RefuseNoSubscriber"/> produces</b>, because it is the same statement made by
+    /// the same authority: the ROUTER asked the cluster (here Orleans' grain directory, there the
+    /// stream subscription registry) and was told nobody serves that address. 🚨 That stamp is the
+    /// OWNER-side eviction gate (<c>DataExtensions.HandleTargetUnservedFailure</c>, #2426/#2546),
+    /// which is why it had to be re-gated on the stamp ALONE in the same change: it used to also
+    /// require <see cref="ErrorType.NotFound"/>, so leaving that in place would have made this
+    /// verdict inert and re-opened the fan-out-to-a-corpse leak for every dead circuit. The two
+    /// halves are complementary: the SUBSCRIBER rides the transient verdict out and re-asks, while
+    /// the OWNER drops the server-side stream it can no longer push to.</para>
+    ///
+    /// <para>Windowed like <see cref="RefuseNoSubscriber"/>: the first refusal of an address in the
+    /// window earns the full <c>Warning</c> line, repeats log at <c>Debug</c> and are counted into
+    /// the next full one. Warning rather than Error because the verdict is transient by
+    /// construction; every delivery is still refused and still NACKed, window or no window.</para>
+    /// </summary>
+    /// <param name="delivery">The delivery the pod-hub grain refused.</param>
+    /// <param name="addressPath">The destination address, as a path.</param>
+    /// <param name="addressType">The destination's address TYPE — the key the declaration is on.</param>
+    /// <param name="meshConfig">The mesh configuration carrying the declarations.</param>
+    /// <param name="fallBackToStream">The stream leg, invoked ONLY for a declared client-hosted type.</param>
+    /// <param name="postFailureToSender">Message, error type, and the <c>TargetUnserved</c> stamp.</param>
+    /// <param name="logger">Logger for the refusal line.</param>
+    /// <param name="refusalLog">Window for the full line; null logs every refusal in full.</param>
+    internal static IObservable<Unit> AnswerPodHubNotHere(
+        IMessageDelivery delivery,
+        string addressPath,
+        string addressType,
+        MeshConfiguration meshConfig,
+        Func<IObservable<Unit>> fallBackToStream,
+        Action<string, ErrorType, bool> postFailureToSender,
+        ILogger logger,
+        DeadTargetRefusalLog? refusalLog = null)
+    {
+        if (meshConfig.ClientHostedAddressTypes.Contains(addressType))
+            return fallBackToStream();
+
+        var reason =
+            $"Directed delivery to pod hub '{addressPath}' was refused: no silo in this cluster is "
+            + "currently serving that hub. Transient — the owner claims its address for as long as it "
+            + "is registered, so a retry is the correct response.";
+        var suppressedSincePriorReport = 0;
+        if (refusalLog is null || refusalLog.ShouldReport(addressPath, out suppressedSincePriorReport))
+            logger.LogWarning(
+                "[ROUTE] {Reason} Message {MessageType} ({DeliveryId}) from {Sender} was NOT posted to the "
+                + "Orleans stream — a publish to a subscriber-less stream succeeds and discards, and a "
+                + "publish into a wedged queue grain stalls for the sender's whole budget (#2320/#2322/"
+                + "#2406). Surfacing a transient DeliveryFailure to the sender instead. {Suppressed} "
+                + "earlier refusal(s) of this address since the last such line were logged at Debug.",
+                reason, delivery.Message?.GetType().Name ?? "(null)", delivery.Id, delivery.Sender,
+                suppressedSincePriorReport);
+        else
+            logger.LogDebug(
+                "[ROUTE] {Reason} Message {MessageType} ({DeliveryId}) from {Sender} was NOT posted; "
+                + "refusal windowed (see the Warning line for this address). Surfacing a transient "
+                + "DeliveryFailure to the sender.",
+                reason, delivery.Message?.GetType().Name ?? "(null)", delivery.Id, delivery.Sender);
+        RoutingGrainTrace.Write(
+            $"RoutingGrain.RouteMessage POD_HUB_NOT_HERE_REFUSED addr={addressPath} id={delivery.Id} sender={delivery.Sender}");
+        postFailureToSender(reason, ErrorType.ShuttingDown, true);
+        return Observable.Return(Unit.Default);
     }
 
     /// <summary>
@@ -815,10 +926,13 @@ internal class RoutingGrain(
             new DeliveryFailure(echoedDelivery, failureMessage)
             {
                 ErrorType = errorType,
-                // Stamped ONLY by the no-live-subscriber refusal (see PostRefusalToSender): the
-                // authoritative routing verdict that lets the owner-side client-subscription
-                // eviction distinguish "that subscriber's process is gone" from an
-                // application-level NotFound a live hub answered.
+                // Stamped ONLY by the router's two AUTHORITATIVE "nobody serves that address"
+                // verdicts — the no-live-subscriber refusal (RefuseNoSubscriber, via
+                // PostRefusalToSender) and the pod-hub refusal (AnswerPodHubNotHere) — which is
+                // what lets the owner-side client-subscription eviction distinguish "that
+                // subscriber's process is gone" from an application-level NotFound a live hub
+                // answered. The stamp is the eviction gate; the ErrorType beside it says whether
+                // the SENDER should keep its own recovery armed, and the two are independent.
                 TargetUnserved = targetUnserved,
             },
             new PostOptions(address)

@@ -5,7 +5,7 @@ using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
+using System.Reactive.Threading.Tasks;  // Task<T>.ToObservable() — the SAFE direction; nothing here bridges the other way.
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
@@ -117,6 +117,27 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     private bool IsHostStopping => hostStopping.IsCancellationRequested;
 
     /// <summary>
+    /// Can THIS process host an Orleans grain? A silo can; a cluster CLIENT cannot, and neither
+    /// can a host with no Orleans at all.
+    ///
+    /// <para><b>Derived from Orleans' own composition, not from a flag of ours.</b>
+    /// <see cref="ILocalSiloDetails"/> is registered by <c>DefaultSiloServices</c> and by nothing
+    /// else — a client's container has none — so its presence IS the question, answered by the
+    /// framework that decides it.</para>
+    ///
+    /// <para>🚨 <b>What it governs, and what it must never govern.</b> It selects the pod-hub
+    /// claim's TERMINAL and the level of the line that reports one — see
+    /// <see cref="AttachPodHub"/>. It does NOT gate whether the claim is attempted: a routing
+    /// service built on a bare container (several fixtures do exactly that) must still make the
+    /// call, or the gate that stops a SHUTTING-DOWN silo from claiming would be indistinguishable
+    /// from a gate that stopped claiming altogether.</para>
+    ///
+    /// <para>Settable as a test seam, exactly like <see cref="AttachBackoff"/>: instance state,
+    /// never static, so a unit test can pin the silo policy without standing up a silo.</para>
+    /// </summary>
+    internal bool CanHostGrains { get; set; }
+
+    /// <summary>
     /// 🚨 <b>THE ONLY DOOR to an Orleans grain from this class</b> — and therefore the one place
     /// where "this host has begun stopping" turns into "do not ask Orleans for an activation".
     /// Every <c>GetGrain</c> in this file goes through here; <c>grainFactory</c> is never touched
@@ -194,6 +215,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // stays uncancelled and every routing decision below behaves exactly as before.
         hostStopping = serviceProvider.GetService<IHostApplicationLifetime>()?.ApplicationStopping
                        ?? CancellationToken.None;
+        // Orleans registers ILocalSiloDetails in DefaultSiloServices only, so resolving it here is
+        // the framework's own answer to "is this process a silo" — see CanHostGrains. Optional for
+        // the same reason as the two above: a bare mesh in a unit test is neither silo nor client.
+        CanHostGrains = serviceProvider.GetService<ILocalSiloDetails>() is not null;
     }
 
     /// <summary>
@@ -814,8 +839,17 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
         if (asyncDisposeQueue is not null)
             // The ONE place a Task appears, and only because the queue's contract is Task-shaped —
-            // the sanctioned boundary conversion, with the body above staying reactive.
-            asyncDisposeQueue.Enqueue(_ => teardown.DefaultIfEmpty(Unit.Default).LastAsync().ToTask());
+            // the body above stays reactive. 🚨 The wait is ObserveCompletion, never Rx's own
+            // observable-to-Task bridge (maintainer, 2026-08-30: "no ToTask ever"): the queue
+            // awaits this, and Rx's bridge would resume the DRAIN inline on the thread that
+            // finished the unsubscribe, running the rest of the teardown queue there.
+            asyncDisposeQueue.Enqueue(_ => teardown
+                .DefaultIfEmpty(Unit.Default)
+                .LastAsync()
+                .ObserveCompletion(
+                    ex => logger.LogDebug(ex,
+                        "Orleans stream teardown for {Address} faulted AFTER the wait settled — "
+                        + "reported, not orphaned", address)));
         else
             // No queue registered (a bare mesh in a unit test): there is no async teardown to join,
             // so the previous detached behaviour is correct rather than a regression.
@@ -825,23 +859,72 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     }
 
     /// <summary>
-    /// How many times an <see cref="IPodHubGrain.Attach"/> that landed on the WRONG silo is retried.
-    /// This is not a poll and not a health retry: <c>false</c> means one specific, transient thing —
-    /// the previous owner's activation has not gone yet, which happens exactly while an address
-    /// MOVES between pods. Bounded, because "the owner is not a silo at all" (an Orleans client
-    /// process, which cannot host a grain) must terminate rather than spin: that hub keeps the
-    /// stream, permanently and correctly.
+    /// The pod-hub claim's INITIAL budget — the point at which a claim that has not landed stops
+    /// being "the address is still moving between pods" and becomes reportable.
+    ///
+    /// <para>🚨 <b>It is not a give-up.</b> On a process that <see cref="CanHostGrains">can host
+    /// grains</see> the claim keeps retrying with the same capped
+    /// <see cref="PodHubClaimBackoff">backoff</see> past this point; exhausting the budget only
+    /// buys the one <c>Warning</c> line that names the address. See <see cref="AttachPodHub"/> for
+    /// the terminals, and <c>Doc/Architecture/DurableStreamsViaMeshNodes</c> for why a bounded
+    /// claim was #1742's open residual.</para>
     /// </summary>
-    private const int PodHubAttachRetries = 5;
+    internal const int PodHubAttachRetries = 5;
+
+    /// <summary>
+    /// Backoff between pod-hub claim attempts: 100 ms doubling to a 2 s ceiling. The attempt index
+    /// is CLAMPED at <see cref="PodHubAttachRetries"/> by the caller, so a claim that keeps
+    /// retrying settles at the ceiling instead of growing without bound.
+    /// </summary>
+    /// <param name="attempt">Zero-based index of the attempt that just failed.</param>
+    /// <returns>How long to wait before the next attempt.</returns>
+    internal static TimeSpan PodHubClaimBackoff(int attempt) =>
+        TimeSpan.FromMilliseconds(Math.Min(100 * Math.Pow(2, attempt), 2_000));
+
+    /// <summary>
+    /// Test seam (<c>InternalsVisibleTo</c>): the backoff the pod-hub claim retry uses. Instance
+    /// state, never static — the POLICY (indefinite on a silo, bounded where a grain can never be
+    /// hosted) is what a test pins, without a wall clock. Production keeps
+    /// <see cref="PodHubClaimBackoff"/>.
+    /// </summary>
+    internal Func<int, TimeSpan> ClaimBackoff { get; set; } = PodHubClaimBackoff;
 
     /// <summary>
     /// Claims <paramref name="address"/> for THIS process, so the rest of the cluster can deliver to
     /// it with a directed grain call instead of a stream publish (#1742).
     ///
     /// <para>Synchronous to the caller and best-effort by construction: <c>RegisterStream</c>'s local
-    /// route is already live, and a claim that never lands simply leaves this hub on the stream —
-    /// the transport it has always used. So a failure here degrades, it never blocks; the returned
-    /// disposable releases the claim.</para>
+    /// route is already live, and a claim that has not landed yet simply leaves this hub on the
+    /// stream — the transport it has always used. So a failure here degrades, it never blocks; the
+    /// returned disposable releases the claim.</para>
+    ///
+    /// <para>🚨 <b>The claim's lifetime is DERIVED, never a counter</b> — the #2426 rule, applied
+    /// here because a bounded claim was #1742's stated open residual: six attempts over ≈3 s and
+    /// then a <c>Debug</c> give-up, after which a SILO-hosted hub kept the stream transport for the
+    /// whole life of the process, invisibly. On a process that <see cref="CanHostGrains">can host
+    /// grains</see> the claim now retries with its capped backoff until one of exactly two
+    /// terminals, both of which are real events rather than budgets:</para>
+    /// <list type="number">
+    ///   <item>the hub's registration is disposed — the returned disposable, which is also what
+    ///     <see cref="Dispose"/> reaches through <see cref="inFlight"/>;</item>
+    ///   <item><see cref="IHostApplicationLifetime.ApplicationStopping"/> fires — expressed by
+    ///     <see cref="GrainWhileRunning{TGrain}"/> inside the <c>Defer</c>, so every re-subscribe
+    ///     re-asks and a claim still bouncing when shutdown begins stops asking rather than placing
+    ///     an activation on the silo that is leaving.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>The third terminal is IMPOSSIBILITY, and it is derived too.</b> A process that
+    /// cannot host a grain can never win this claim — <c>PodHubGrain.Attach</c> is
+    /// <c>[PreferLocalPlacement]</c>, so from a client it lands on some silo which has no local
+    /// route and answers <c>false</c>, for ever. There the initial budget IS the end, exactly as
+    /// before, and the give-up stays at <c>Debug</c> because it is the expected permanent outcome.
+    /// Retrying it indefinitely would not be a derived lifetime, it would be a poll that cannot
+    /// converge — and a measurable one: each attempt makes the SILO log
+    /// <c>[POD-HUB] Attach … landed on a silo that has no local route</c> at
+    /// <c>Information</c>, i.e. one line per hub per backoff interval, which is the log-storm shape
+    /// #2426/#2546 exist to remove.</para>
+    ///
+    /// <para>See <c>Doc/Architecture/DurableStreamsViaMeshNodes</c>.</para>
     /// </summary>
     private IDisposable AttachPodHub(Address address)
     {
@@ -855,6 +938,8 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             return Disposable.Empty;
 
         var addressPath = address.ToString();
+        var attempt = 0;
+        var reported = false;
         var attach = new SingleAssignmentDisposable();
         inFlight.Add(attach);
         attach.Disposable = Observable
@@ -882,25 +967,67 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             .SelectMany(claimed => claimed
                 ? Observable.Return(true)
                 : Observable.Throw<bool>(new PodHubNotHereException(addressPath)))
-            .RetryWhen(errors => errors
-                .Select((ex, i) => (Exception: ex, Attempt: i))
-                .SelectMany(t => t.Attempt >= PodHubAttachRetries
-                    ? Observable.Throw<long>(t.Exception)
-                    : Observable.Timer(
-                        TimeSpan.FromMilliseconds(Math.Min(100 * Math.Pow(2, t.Attempt), 2_000)),
-                        Scheduler.Default)))
+            // The claim's own state, per registration: how many attempts have failed (CLAMPED at
+            // the initial budget, so an indefinite claim settles at the backoff ceiling and the
+            // counter can never overflow) and whether the budget-exhausted line has been reported.
+            // Locals in this closure, never fields and never static — one claim, one lifetime. The
+            // error sequence RetryWhen hands us is serialised (one error, then its signal, then
+            // the next), so plain reads and writes are correct here.
+            .RetryWhen(errors => errors.SelectMany(ex =>
+            {
+                if (attempt >= PodHubAttachRetries)
+                {
+                    // 🚨 THE TERMINAL, and the only one that is a decision rather than an event: a
+                    // process that cannot host a grain can never win this claim, so the budget IS
+                    // the end there. Everywhere else the budget only buys the line below.
+                    if (!CanHostGrains)
+                        return Observable.Throw<long>(ex);
+                    if (!reported)
+                    {
+                        reported = true;
+                        OrleansRouteTrace.Write(
+                            $"OrleansRoutingService.AttachPodHub BUDGET_EXHAUSTED addr={addressPath} ex={ex.Message}");
+                        // 🚨 Warning, ONCE, naming the hub — the signal #1742 was missing. A silo
+                        // that cannot claim its own hub is abnormal: until the claim lands that hub
+                        // is reachable only over the stream, which is the transport this design
+                        // retires. The claim keeps trying, so this line is "still trying", not
+                        // "gave up" — and its resolution is logged below.
+                        logger.LogWarning(ex,
+                            "Pod-hub claim for {Address} did not land within its initial budget of "
+                            + "{Attempts} attempts. This process CAN host grains, so a hub that cannot "
+                            + "claim its own address is abnormal — until the claim lands, the cluster "
+                            + "can only reach it over the Orleans stream. The claim keeps retrying with "
+                            + "a capped backoff until this hub's registration is disposed or the host "
+                            + "stops; there is no give-up.",
+                            addressPath, PodHubAttachRetries);
+                    }
+                }
+
+                var wait = ClaimBackoff(attempt);
+                attempt = Math.Min(attempt + 1, PodHubAttachRetries);
+                return Observable.Timer(wait, Scheduler.Default);
+            }))
             .Subscribe(
                 _ =>
                 {
                     OrleansRouteTrace.Write($"OrleansRoutingService.AttachPodHub OK addr={addressPath}");
-                    logger.LogDebug("Pod-hub claim for {Address} landed on this process", addressPath);
+                    if (reported)
+                        // The close of the Warning above — without it a Loki reader cannot tell an
+                        // address that recovered from one that is still stranded.
+                        logger.LogInformation(
+                            "Pod-hub claim for {Address} landed after its initial budget was exhausted — "
+                            + "the cluster reaches this hub by directed grain call again.",
+                            addressPath);
+                    else
+                        logger.LogDebug("Pod-hub claim for {Address} landed on this process", addressPath);
                 },
                 ex =>
                 {
-                    // Debug, not Warning: on an Orleans CLIENT this is the expected, permanent
-                    // outcome for every hub, and a per-hub warning there would be pure noise. The
-                    // signal that matters lives on the ROUTER side — the fallback line — because
-                    // that is where "a silo-hosted hub was not reachable by call" is observable.
+                    // Reached only on the impossibility terminal above (or if the retry signal
+                    // itself faults). Debug, not Warning: on an Orleans CLIENT this is the expected,
+                    // permanent outcome for every hub, and a per-hub warning there would be pure
+                    // noise — which is exactly why the level is derived from what this process can
+                    // host rather than from how many attempts were spent.
                     OrleansRouteTrace.Write($"OrleansRoutingService.AttachPodHub GAVE_UP addr={addressPath} ex={ex.Message}");
                     logger.LogDebug(ex,
                         "Pod-hub claim for {Address} did not land in this process — it keeps the Orleans "
@@ -1051,9 +1178,19 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // The readiness signal is an AsyncSubject the Orleans lifecycle completes at Active —
             // the source observable IS the gate (no polling, no timer). Late subscribers get the
             // completed signal replayed, so hubs registered after startup pass straight through.
+            // 🚨 ObserveCompletion, never Rx's own observable-to-Task bridge (maintainer,
+            // 2026-08-30: "no ToTask ever"). Ready is completed by the Orleans lifecycle at
+            // ServiceLifecycleStage.Active — on the SILO'S OWN lifecycle thread. Rx's bridge
+            // resumes its awaiter inline on the signalling thread, so everything below (a
+            // cluster call that resolves a PubSubRendezvousGrain through the grain directory)
+            // would run on the lifecycle thread that is still bringing the silo up.
             await serviceProvider.GetRequiredService<OrleansStreamingReadiness>().Ready
                 .Timeout(StreamingReadinessTimeout)
-                .ToTask(ct)
+                .ObserveCompletion(
+                    ex => logger.LogDebug(ex,
+                        "Orleans streaming readiness faulted AFTER the wait settled for {Address} — "
+                        + "reported, not orphaned", address),
+                    ct)
                 .ConfigureAwait(false);
 
             // 🚨 THE ATTACH IS RETRIED, THE GATE IS NOT — issue #2633.
@@ -1092,11 +1229,18 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 },
                 backoff: AttachBackoff)
                 // The enclosing method is async by construction — RegisterStream stores the Task so
-                // teardown can await the handle it produced and unsubscribe it. ToTask(ct) is the one
-                // bridge, and it is where cancellation lands: a teardown that cancels mid-budget
-                // surfaces as OperationCanceledException into the catch below, exactly as the
-                // pre-#2633 single attempt did.
-                .ToTask(ct).ConfigureAwait(false);
+                // teardown can await the handle it produced and unsubscribe it. 🚨 The wait is
+                // ObserveCompletion, never Rx's own observable-to-Task bridge (maintainer,
+                // 2026-08-30: "no ToTask ever"); it is where cancellation lands: a teardown that
+                // cancels mid-budget surfaces as OperationCanceledException into the catch below,
+                // exactly as the pre-#2633 single attempt did. The retry composition above CAN
+                // emit and then fault, which is precisely the shape a settled Task drops — so the
+                // error arm stays attached here.
+                .ObserveCompletion(
+                    ex => logger.LogWarning(ex,
+                        "Orleans stream attach for {Address} faulted AFTER the wait settled — "
+                        + "reported, not orphaned", address),
+                    ct).ConfigureAwait(false);
 
             OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync OK addr={address}");
             logger.LogDebug("Orleans '{Provider}' stream subscription attached for {Address}",

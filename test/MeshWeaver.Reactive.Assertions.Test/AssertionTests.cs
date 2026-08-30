@@ -375,4 +375,43 @@ public class AssertionTests
         hot.OnNext(1);
         await Assert.ThrowsAnyAsync<AssertionException>(async () => await wait);
     }
+
+    /// <summary>
+    /// 🚨 REGRESSION PIN. <c>Complete()</c> was latently broken and had neither a test nor a call
+    /// site, so nothing noticed: it waited on <c>IgnoreElements()</c>, which on a healthy
+    /// completion produces an EMPTY sequence — and Rx's observable-to-Task bridge reports an empty
+    /// sequence by THROWING <c>InvalidOperationException("Sequence contains no elements")</c>.
+    /// The method's own <c>catch (Exception ex)</c> then turned the SUCCESS case into
+    /// <i>"Expected the observable to complete …, but it errored: Sequence contains no elements"</i>,
+    /// so the assertion could never pass.
+    ///
+    /// <para>Removing that bridge (maintainer, 2026-08-30: "no ToTask ever") fixed it as a side
+    /// effect: <c>ReactiveWait.First</c> settles on the COMPLETION itself, so an empty completion
+    /// is data rather than an exception. These two cases pin both directions.</para>
+    /// </summary>
+    [Fact]
+    public async Task Observable_Complete_PassesOnCompletionAndFailsOnSilence()
+    {
+        await Observable.Empty<int>().Should().Complete();
+        await Observable.Return(1).Should().Complete();
+
+        await Assert.ThrowsAnyAsync<AssertionException>(
+            () => Observable.Never<int>().Should().Within(TimeSpan.FromMilliseconds(50)).Complete());
+    }
+
+    /// <summary>
+    /// The companion pin for <c>NotEmit</c>: an empty completion must still read as "nothing was
+    /// emitted". <c>ReactiveWait.First</c> settles an empty source with <c>default</c> rather than
+    /// faulting, so the assertion keeps an explicit <c>FirstAsync()</c> to restore the throw —
+    /// without it a stream that emitted NOTHING would be reported as having emitted <c>0</c>.
+    /// </summary>
+    [Fact]
+    public async Task Observable_NotEmit_HoldsForAnEmptyCompletion()
+    {
+        await Observable.Empty<int>().Should().NotEmit(TimeSpan.FromMilliseconds(50));
+        await Observable.Never<int>().Should().NotEmit(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<AssertionException>(
+            () => Observable.Return(0).Should().NotEmit(TimeSpan.FromMilliseconds(50)));
+    }
 }

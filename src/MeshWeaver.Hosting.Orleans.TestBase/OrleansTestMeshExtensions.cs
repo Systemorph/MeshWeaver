@@ -29,6 +29,25 @@ public static class OrleansTestMeshExtensions
     {
         var assemblyLocation = typeof(OrleansTestMeshExtensions).Assembly.Location;
         var configured = builder
+            // 🚨 THE RIG HOSTS ITS HUBS ON AN ORLEANS CLIENT, and this is where it says so. An
+            // Orleans client cannot host a grain, so IPodHubGrain.Attach can never land for a hub
+            // that lives there and the memory stream is not a fallback for it — it is the only
+            // transport there is. The rig puts a hub of EVERY built-in stream-routed type on its
+            // cluster client:
+            //   client — OrleansTestBase.GetClient / SharedOrleansFixture.GetClient
+            //   mesh   — the client host's own root hub, via RootMeshHubReplyStreamService
+            //   portal — OrleansDocumentationTest / OrleansGraphDataTest / OrleansInteractiveMarkdownTest
+            //   cache  — the client host's MeshNodeStreamCache hub
+            // so all four are declared. PRODUCTION declares NONE: no production process hosts mesh
+            // hubs as an Orleans client, and there a PodHubNotHere therefore means "the owner is a
+            // silo whose claim has not landed", which now gets a transient NACK instead of a stream
+            // publish that succeeds and discards (#2320/#2322/#2406). These declarations go away
+            // when the rig hosts its hubs on a silo — at which point AddMemoryStreams goes with
+            // them. See Doc/Architecture/DurableStreamsViaMeshNodes.
+            .AddClientHostedAddressType("client")
+            .AddClientHostedAddressType("mesh")
+            .AddClientHostedAddressType("portal")
+            .AddClientHostedAddressType("cache")
             .InstallAssemblies(assemblyLocation)
             .AddMeshNodes(MeshNode.FromPath($"{AddressExtensions.AppType}/HubFactory") with
             {
