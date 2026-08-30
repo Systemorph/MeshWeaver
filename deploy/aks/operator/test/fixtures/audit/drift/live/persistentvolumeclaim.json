@@ -1,0 +1,7 @@
+{
+  "kind": "List",
+  "items": [
+    { "apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": { "name": "memex-data", "namespace": "memex" }, "spec": {} },
+    { "apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": { "name": "memex-content", "namespace": "memex" }, "spec": {} }
+  ]
+}

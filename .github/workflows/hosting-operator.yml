@@ -58,8 +58,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 16 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 16 (14 commands + run.sh + _common.sh)."
+          if [ "$tracked" -lt 18 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 18 (15 commands + run.sh + _common.sh + _audit.jq)."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -93,6 +93,7 @@ jobs:
           # here so this repo can gate them without a cross-repo checkout. Keep in step with
           # MeshWeaver.Plugins/Hosting/InstanceAction/Source/InstanceActionPlan.cs.
           cat > "$plan_src" <<'EOF'
+          hosting-audit
           hosting-backup
           hosting-deploy
           hosting-dns
@@ -119,7 +120,23 @@ jobs:
             echo "::error::A missing one fails INSIDE a running lifecycle Job — for a teardown, after the quiesce."
             exit 1
           fi
-          echo "all 14 commands present and executable"
+          echo "all 15 commands present and executable"
+          # hosting-audit is two files: the command and the jq program beside it. A command that
+          # ships without its detection dies at "the detection program … is missing" inside a Job.
+          [ -f deploy/aks/operator/bin/_audit.jq ] || { echo "::error::bin/_audit.jq is missing — hosting-audit cannot compute anything without it"; exit 1; }
+          # Parse-check the program. jq exits 3 on a PROGRAM error and 5 on a runtime error();
+          # empty inputs legitimately reach the error() refusal, so only exit 3 is a failure here —
+          # the behaviour tests below exercise the real detection against fixtures.
+          set +e
+          jq -n -f deploy/aks/operator/bin/_audit.jq --slurpfile manifest /dev/null --slurpfile live /dev/null \
+            --arg namespace n --arg release r --arg deployment d --arg container c --argjson revision 1 \
+            --arg chart "" --arg auditedAt now --arg skipped "" >/dev/null 2>"$RUNNER_TEMP/audit-jq.err"
+          jq_rc=$?
+          set -e
+          if [ "$jq_rc" -eq 3 ]; then
+            echo "::error::_audit.jq does not parse:"; cat "$RUNNER_TEMP/audit-jq.err"; exit 1
+          fi
+          echo "_audit.jq parses (exit ${jq_rc} on empty inputs is its own refusal, as designed)"
 
       - name: Behaviour tests
         run: deploy/aks/operator/test/run-tests.sh
@@ -164,7 +181,8 @@ jobs:
             test -x /opt/hosting/bin/run.sh          || { echo "run.sh missing"; exit 1; }
             test -f /opt/hosting/chart/Chart.yaml    || { echo "chart missing — build context must be deploy/"; exit 1; }
             command -v hosting-deploy >/dev/null     || { echo "hosting-* not on PATH"; exit 1; }
-            command -v helm kubectl az pg_dump >/dev/null || { echo "a required tool is missing"; exit 1; }
+            command -v helm kubectl az pg_dump jq >/dev/null || { echo "a required tool is missing"; exit 1; }
+            test -f /opt/hosting/bin/_audit.jq       || { echo "_audit.jq missing — hosting-audit has no detection"; exit 1; }
             echo "image carries: $(ls /opt/hosting/bin/hosting-* | wc -l) commands + chart $(grep ^version /opt/hosting/chart/Chart.yaml)"
           '
 

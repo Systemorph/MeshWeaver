@@ -1,0 +1,6 @@
+{
+  "kind": "List",
+  "items": [
+    { "apiVersion": "batch/v1", "kind": "CronJob", "metadata": { "name": "assembly-cache-prune", "namespace": "memex", "creationTimestamp": "2026-08-22T10:00:00Z" }, "spec": { "schedule": "0 3 * * *" } }
+  ]
+}

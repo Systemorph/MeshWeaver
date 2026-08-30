@@ -1,0 +1,7 @@
+{
+  "kind": "List",
+  "items": [
+    { "apiVersion": "batch/v1", "kind": "Job", "metadata": { "name": "assembly-cache-prune-29123456", "namespace": "memex", "ownerReferences": [ { "kind": "CronJob", "name": "assembly-cache-prune" } ] }, "spec": {} },
+    { "apiVersion": "batch/v1", "kind": "Job", "metadata": { "name": "memex-migration", "namespace": "memex" }, "spec": {} }
+  ]
+}

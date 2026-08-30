@@ -1,0 +1,19 @@
+{
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": { "name": "memex-portal-config", "namespace": "memex" },
+      "data": {
+        "Portal__Name": "memex",
+        "Email__Enabled": "true",
+        "Hosting__ModuleReportSecret": "rendered-shared-secret",
+        "Features__Ai__Providers__OpenRouter": "live-edited-value-that-must-never-print",
+        "Portal__ReactAppUrl": "https://app.example"
+      }
+    },
+    { "apiVersion": "v1", "kind": "ConfigMap", "metadata": { "name": "kube-root-ca.crt", "namespace": "memex" }, "data": { "ca.crt": "..." } },
+    { "apiVersion": "v1", "kind": "ConfigMap", "metadata": { "name": "hand-made-config", "namespace": "memex" }, "data": { "a": "b" } }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "kind": "List",
+  "items": [
+    { "apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": { "name": "memex-ingress", "namespace": "memex" }, "spec": {} },
+    { "apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": { "name": "brand-site", "namespace": "memex" }, "spec": {} }
+  ]
+}

@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# hosting-audit --namespace <ns> --release <name> [--deployment memex-portal-deployment] [--container memex-portal]
+#
+# What lives ONLY on the cluster — configuration no repository renders?
+#
+# 🚨 WHY THIS EXISTS. On 2026-08-30 the memex portal crashed at boot because its Email section
+# existed TWICE: the chart's ConfigMap defaults, and a cluster-only secret somebody had patched
+# onto the Deployment as env with `kubectl set env`. .NET picks the winner at random per pod start.
+# The audit run by hand afterwards found 25 env patches, 10 live-edited ConfigMap keys, sidecar
+# containers and a volume on memex; 31 env patches and replicas/nodeSelector on memex-cloud; a
+# CronJob, Deployments, Ingresses and PVCs the chart has never heard of in both namespaces; and a
+# plain-text registry token in the pod spec (Systemorph/Memex#148). None of it was visible from any
+# repository, because `helm upgrade` PRESERVES a live-edited ConfigMap key and never touches an
+# object it does not own — drift of this class does not show up as a failed deploy, it shows up as
+# an outage months later. The rule this enforces: NOTHING LIVES ONLY ON THE CLUSTER — every value is
+# a typed field on the Hosting/Deployment record, rendered by the chart; secrets are Key Vault names.
+#
+# THE TRUTH is the helm manifest: `helm get manifest` + `helm get hooks`, turned into objects by
+# `kubectl apply --dry-run=client -o json`. Everything live that is not in it, and every field of
+# the portal Deployment / the chart's ConfigMaps that differs from it, is a finding.
+#
+# WHAT IS DETECTED (names only — a VALUE is never printed, because the point of the exercise is
+# that some of them are secrets):
+#   * live objects in the namespace not in the manifest — owned objects (ReplicaSets, CronJob-spawned
+#     Jobs), helm release secrets, ServiceAccount tokens, CSI-synced secrets, kube-root-ca.crt and
+#     the `default` ServiceAccount excluded, since none of those is configuration anyone put there;
+#   * the portal Deployment's live-only env names (and manifest-only ones — a value the chart
+#     renders that the pod lacks is the same edit from the other side), envFrom, volumes, mounts,
+#     containers, pod annotations, and the pod-spec fields a `kubectl patch` reaches: replicas,
+#     nodeSelector, tolerations, affinity, serviceAccountName, terminationGracePeriodSeconds, the
+#     portal container's resources, lifecycle and startup-probe budget;
+#   * the chart's ConfigMaps: keys that exist only live, only in the manifest, or whose VALUE differs;
+#   * Secrets the live pod reads (envFrom, secretKeyRef, secret volumes) that are neither
+#     chart-managed nor CSI-synced;
+#   * entries whose NAME looks like a secret (token|secret|key|password) carried as a PLAIN value —
+#     inline env on the pod, or a key in a chart ConfigMap.
+#
+# THE OUTPUT is the human summary plus the machine lines the mesh's Hosting plugin parses:
+#   ::hosting:: audit_verdict=clean|drift   ::hosting:: audit_findings=N   ::hosting:: audit=<base64 JSON>
+# The JSON is the LiveOnlyConfigReport the Hosting/InstanceAction `Audit` verb records on the
+# instance's Hosting/ConfigAudit node. The mesh re-derives the verdict from the lists — the lists
+# are the evidence, the word is a convenience.
+#
+# 🚨 READ-ONLY, and it exits 0 on drift. Drift is a FINDING the report carries, not a failure of
+# the run; the run fails only when it cannot measure — no release, no manifest, no live Deployment,
+# or a kind it is not allowed to list. An audit that cannot read a kind must not report that kind as
+# clean, so a Forbidden is fatal and names the ClusterRole to widen. A dry run audits for real:
+# nothing here mutates, so there is nothing to rehearse.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-audit"
+
+AUDIT_JQ="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_audit.jq"
+
+namespace="" release="" deployment="memex-portal-deployment" container="memex-portal"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace)  namespace="${2:-}";  shift 2 ;;
+    --release)    release="${2:-}";    shift 2 ;;
+    --deployment) deployment="${2:-}"; shift 2 ;;
+    --container)  container="${2:-}";  shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::need_flag release "$release"
+hosting::safe_name namespace "$namespace"
+hosting::safe_name release "$release"
+hosting::safe_name deployment "$deployment"
+hosting::safe_name container "$container"
+
+command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed in this image — the audit's detection is a jq program, and without it nothing can be compared"
+[ -f "$AUDIT_JQ" ] || hosting::die "the detection program ${AUDIT_JQ} is missing beside this script — the image was built without it"
+
+hosting::dry && hosting::log "dry run requested — the audit is read-only, so it runs for real"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# ── 1. the release: which revision is being audited ─────────────────────────────────────────────
+# `helm status -o json` is the whole release object — including `config`, the user-supplied values,
+# which carry the Key Vault half. Only two fields leave this variable, and neither is a value.
+status="$(hosting::read helm status "$release" -n "$namespace" -o json 2>"$work/err")" \
+  || hosting::die "no helm release '${release}' in namespace '${namespace}' ($(tr -d '\n' < "$work/err")). An audit compares the cluster against a release's manifest; with no release there is nothing to compare against, and reporting the namespace as 'unmanaged' would be a confident wrong answer."
+revision="$(printf '%s' "$status" | jq -r '.version // empty')"
+chart="$(printf '%s' "$status" | jq -r '.chart.metadata.version // empty')"
+[ -n "$revision" ] || hosting::die "helm status answered for '${release}' but named no revision — refusing to audit against a release the output cannot identify"
+hosting::log "release   ${release} in ${namespace} — revision ${revision}${chart:+, chart ${chart}}"
+
+# ── 2. the manifest — the truth ─────────────────────────────────────────────────────────────────
+# Hooks are included: the migration Job is a helm hook, and `helm get manifest` alone would list it
+# as an object the chart has never heard of.
+hosting::read helm get manifest "$release" -n "$namespace" > "$work/manifest.yaml" 2>"$work/err" \
+  || hosting::die "could not read the manifest of release '${release}' ($(tr -d '\n' < "$work/err"))"
+hosting::read helm get hooks "$release" -n "$namespace" > "$work/hooks.yaml" 2>"$work/err" \
+  || hosting::die "could not read the hooks of release '${release}' ($(tr -d '\n' < "$work/err"))"
+if ! cat "$work/manifest.yaml" "$work/hooks.yaml" \
+     | kubectl apply --dry-run=client -o json -f - 2>"$work/err" \
+     | jq -s '[.[] | if .kind == "List" then (.items // [])[] else . end]' > "$work/manifest.json"; then
+  hosting::die "could not turn the manifest into objects ($(tr -d '\n' < "$work/err")). kubectl needs the cluster's discovery to resolve every kind the chart renders — a CRD the chart uses that the cluster does not serve fails here, and that is a finding about the chart, not noise."
+fi
+managed="$(jq 'length' "$work/manifest.json")"
+[ "$managed" -gt 0 ] \
+  || hosting::die "the manifest of '${release}' rendered no objects — an audit against an empty manifest would report every live object as unmanaged, which is not a measurement"
+hosting::log "manifest  ${managed} chart-managed object(s)"
+
+# ── 3. the live namespace ───────────────────────────────────────────────────────────────────────
+# One `kubectl get <kind>` per kind. A kind this cluster does not serve is SKIPPED and recorded in
+# the report (nothing of that kind can exist); anything else — Forbidden above all — is fatal,
+# because a kind the audit could not read is a kind it must not report as clean.
+KINDS="deployment statefulset daemonset cronjob job configmap secret secretproviderclass ingress service serviceaccount role rolebinding poddisruptionbudget scaledobject horizontalpodautoscaler persistentvolumeclaim networkpolicy"
+skipped=""
+: > "$work/live.jsonl"
+for kind in $KINDS; do
+  if hosting::read kubectl get "$kind" -n "$namespace" -o json > "$work/live-${kind}.json" 2>"$work/err"; then
+    jq -c '.items // []' "$work/live-${kind}.json" >> "$work/live.jsonl" \
+      || hosting::die "kubectl's listing of ${kind} in ${namespace} is not JSON"
+  else
+    err="$(tr -d '\n' < "$work/err")"
+    case "$err" in
+      *"doesn't have a resource type"*|*"the server could not find the requested resource"*|*"no matches for kind"*)
+        skipped="${skipped} ${kind}"
+        hosting::log "kind      ${kind} is not served by this cluster — skipped" ;;
+      *)
+        hosting::die "could not list ${kind} in ${namespace}: ${err}. An audit that cannot read a kind must not report it as clean — grant the hosting-operator ClusterRole get/list on it (deploy/aks/manifests/hosting-operator/operator-rbac.yaml) and re-run." ;;
+    esac
+  fi
+done
+jq -s 'add // []' "$work/live.jsonl" > "$work/live.json" \
+  || hosting::die "could not combine the live listings"
+skipped="${skipped# }"
+
+# ── 4. the detection ────────────────────────────────────────────────────────────────────────────
+if ! jq -n \
+      --slurpfile manifest "$work/manifest.json" \
+      --slurpfile live "$work/live.json" \
+      --arg namespace "$namespace" --arg release "$release" \
+      --arg deployment "$deployment" --arg container "$container" \
+      --argjson revision "$revision" --arg chart "$chart" \
+      --arg auditedAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+      --arg skipped "$skipped" \
+      -f "$AUDIT_JQ" > "$work/report.json" 2>"$work/err"; then
+  hosting::die "the audit could not be computed: $(sed -e 's/^jq: error (at <unknown>): //' "$work/err" | tr -d '\n')"
+fi
+
+# ── 5. the report — names, never values ─────────────────────────────────────────────────────────
+verdict="$(jq -r '.verdict' "$work/report.json")"
+count="$(jq -r '.findingCount' "$work/report.json")"
+
+say_list() {  # say_list <label> <jq expression yielding an array of strings>
+  local label="$1" expr="$2" n items
+  n="$(jq -r "${expr} | length" "$work/report.json")"
+  [ "$n" -gt 0 ] || return 0
+  items="$(jq -r "${expr} | join(\" \")" "$work/report.json")"
+  hosting::log "${label} (${n}): ${items}"
+}
+echo
+echo "Live-only configuration in ${namespace} (release ${release}, revision ${revision}):"
+say_list "env live-only         " '.envLiveOnly'
+say_list "env manifest-only     " '.envManifestOnly'
+say_list "envFrom live-only     " '.envFromLiveOnly'
+say_list "volumes live-only     " '.volumesLiveOnly'
+say_list "mounts live-only      " '.mountsLiveOnly'
+say_list "containers live-only  " '.containersLiveOnly'
+say_list "pod annotations live-only" '.podAnnotationsLiveOnly'
+jq -r '.podSpecDiffs[] | "  pod spec differs        \(.field): live=\(.live) manifest=\(.manifest)"' "$work/report.json"
+jq -r '.configMaps[] | select(.missingLive or ((.liveOnlyKeys|length) + (.manifestOnlyKeys|length) + (.differingKeys|length)) > 0)
+  | "  ConfigMap \(.name): " + (if .missingLive then "MISSING live" else "live-only keys [\(.liveOnlyKeys|join(" "))] manifest-only keys [\(.manifestOnlyKeys|join(" "))] value-differs [\(.differingKeys|join(" "))]" end)' "$work/report.json"
+jq -r '.unmanagedObjects[] | "  unmanaged \(.kind) (\(.names|length)): \(.names|join(" "))"' "$work/report.json"
+say_list "🚨 unmanaged secrets the pod reads" '.unmanagedSecrets'
+say_list "🚨 secret-shaped entries carried as PLAIN values" '.plainSecretEntries'
+say_list "kinds skipped (not served)" '.skippedKinds'
+echo
+if [ "$verdict" = "clean" ]; then
+  echo "  VERDICT: clean — the cluster runs what revision ${revision} renders, and nothing else."
+else
+  echo "  VERDICT: drift — ${count} finding(s) against revision ${revision}. Each one is configuration that lives only on the cluster; its home is a field on the Hosting/Deployment record (Systemorph/Memex#148 names them)."
+fi
+
+hosting::say audit_revision "$revision"
+hosting::say audit_findings "$count"
+hosting::say audit_verdict "$verdict"
+# The whole report, base64 so a name containing '=' or a space cannot break the key=value line.
+hosting::say audit "$(jq -c . "$work/report.json" | base64 | tr -d '\n')"

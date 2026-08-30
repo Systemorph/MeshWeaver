@@ -1,0 +1,14 @@
+{
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "memex-migration",
+        "namespace": "memex"
+      },
+      "spec": {}
+    }
+  ]
+}
