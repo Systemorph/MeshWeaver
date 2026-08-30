@@ -61,7 +61,10 @@ public static class InstanceRegistrationEndpoints
                     body.BootstrapKey, body.InstanceId, body.DisplayName, body.Description, body.HomeUrl))
             .Select(registration => (IResult)Results.Json(
                 new InstanceRegistrationPayloads.Response(
-                    registration.Instance.InstanceId, registration.RawKey),
+                    registration.Instance.InstanceId, registration.RawKey)
+                {
+                    Plan = registration.Instance.Plan ?? PlanTierRanks.BaselinePlan,
+                },
                 InstanceRegistrationPayloads.Json))
             .Catch((InvalidBootstrapKeyException ex) =>
             {

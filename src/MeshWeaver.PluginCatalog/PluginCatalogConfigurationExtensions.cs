@@ -84,6 +84,9 @@ public static class PluginCatalogConfigurationExtensions
                 // The plan on the instance record — promoted by a global admin, read by every
                 // registry decision (#2804).
                 .AddSingleton<InstancePlanService>()
+                // The consent that gates an open registration, and the live views the Hosting
+                // app renders it from (#2804 program, slice 3).
+                .AddSingleton<InstanceConsentService>()
                 // Registration bootstrap keys (mwr_) — minted on the admin surface, validated by
                 // the /api/instances/register endpoint. Mesh-scoped like everything above.
                 .AddSingleton<RegistrationKeyService>()

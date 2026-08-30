@@ -30,7 +30,14 @@ public static class InstanceRegistrationPayloads
 
     /// <summary>The success response: the registered id, and the instance key — the ONLY time it is
     /// available in the clear. The caller must persist it now or lose it.</summary>
-    public record Response(string InstanceId, string InstanceKey);
+    public record Response(string InstanceId, string InstanceKey)
+    {
+        /// <summary>The plan the instance was registered ON (#2804) — the licence every fetch is
+        /// decided against, echoed so the installation can say what it is entitled to without a
+        /// second call. Null from a registry that predates plans. An init property, not a
+        /// constructor parameter, so the wire shape stays binary-compatible.</summary>
+        public string? Plan { get; init; }
+    }
 }
 
 /// <summary>
