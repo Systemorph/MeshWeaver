@@ -114,3 +114,7 @@ The tab exists **only on portal.example.com**, doubly gated:
 Log links need `Instances:GrafanaBaseUrl` (Helm: `instancesAdmin.grafanaBaseUrl`) — the Grafana
 Explore (Loki) deep link is built per namespace. Empty until the in-cluster Grafana
 (`monitoring` ns, `loki-grafana` service) is exposed on a host.
+
+## Related
+
+- @../InstanceIdentityAndSetup — where this is going (design, 2026-08-30): an instance as its own partition on the registry, its plan on its own node, JWT authentication, the first-run setup app, and environment changes only through the instance's `Hosting/Deployment` record.
