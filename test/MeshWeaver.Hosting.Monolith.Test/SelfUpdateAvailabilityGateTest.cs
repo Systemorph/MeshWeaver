@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading;
@@ -164,6 +165,13 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
         {
             // POSITIVE signal for a refusal: the hold lands on the policy node. Waiting for "no
             // patch" alone would pass against a poller that had simply died.
+            // 🚨 Wait for the service to have EVALUATED, never for a held state to appear inside a
+            // bound (#2777). This service is event-driven, so "the hold is not there yet" and "the
+            // first check has not run yet" are indistinguishable from outside — and on a loaded
+            // shard the second is what actually happened, reported as if it were a wrong verdict.
+            // ChecksReported is the condition itself; the state is then asserted, not raced.
+            await service.Evaluations.FirstAsync().Timeout(TimeSpan.FromSeconds(45)).Await(ct);
+
             var held = await Mesh.GetWorkspace()
                 .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
                 .Select(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions))
@@ -264,6 +272,13 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
         await service.StartAsync(CancellationToken.None);
         try
         {
+            // 🚨 Wait for the service to have EVALUATED, never for a held state to appear inside a
+            // bound (#2777). This service is event-driven, so "the hold is not there yet" and "the
+            // first check has not run yet" are indistinguishable from outside — and on a loaded
+            // shard the second is what actually happened, reported as if it were a wrong verdict.
+            // ChecksReported is the condition itself; the state is then asserted, not raced.
+            await service.Evaluations.FirstAsync().Timeout(TimeSpan.FromSeconds(45)).Await(ct);
+
             var held = await Mesh.GetWorkspace()
                 .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
                 .Select(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions))
@@ -423,6 +438,14 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
         IConfiguration? configuration = null)
         : SelfUpdateHostedService(hub, acr, updater, options, logger)
     {
+        /// <summary>
+        /// Surfaces the base class's per-check completion so the tests can await it. The base
+        /// member is <c>protected internal</c> and this assembly is not in its
+        /// <c>InternalsVisibleTo</c> list, so a derived-class forward is the local way to reach it
+        /// — cheaper than widening the production assembly's friend list for one test file.
+        /// </summary>
+        public IObservable<Unit> Evaluations => ChecksReported;
+
         protected override ReleaseAvailabilityService? ResolveAvailabilityGate() => gate;
 
         /// <summary>Present a deployment that consumes no CI bakes when the test asks for one —
