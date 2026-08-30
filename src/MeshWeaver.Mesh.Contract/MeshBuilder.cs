@@ -479,6 +479,7 @@ public record MeshBuilder
         var accessConfig = NodeTypeAccessConfig;
         var routingRules = QueryRoutingRules;
         var streamRoutedTypes = StreamRoutedAddressTypes;
+        var clientHostedTypes = ClientHostedAddressTypes;
 
         ConfigureServices(services => services
             .AddSingleton(_ =>
@@ -498,7 +499,8 @@ public record MeshBuilder
                     autocompleteExcludedNodeTypes: excludedTypes.Count > 0 ? excludedTypes : null,
                     queryRoutingRules: routingRules,
                     streamRoutedAddressTypes: streamRoutedTypes,
-                    nodeTypeGates: accessConfig.BuildGates());
+                    nodeTypeGates: accessConfig.BuildGates(),
+                    clientHostedAddressTypes: clientHostedTypes);
             })
             // Static nodes registered via AddMeshNodes(...) flow as an
             // IStaticNodeProvider. Application code reads them via
@@ -721,4 +723,27 @@ public record MeshBuilder
 
     internal HashSet<string> StreamRoutedAddressTypes { get; } =
         new(global::MeshWeaver.Mesh.MeshConfiguration.DefaultStreamRoutedAddressTypes, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Declares that hubs at this address-type prefix are hosted in an Orleans CLIENT process,
+    /// which cannot host a grain. For those — and ONLY those — the Orleans memory stream stays the
+    /// transport when the pod-hub grain answers "not here": there is no directed call that could
+    /// ever reach them. See <see cref="MeshConfiguration.ClientHostedAddressTypes"/> for why this
+    /// is a declaration rather than an inference from the grain's answer, and
+    /// <c>Doc/Architecture/DurableStreamsViaMeshNodes</c> for the design.
+    ///
+    /// <para>🚨 <b>Nothing in production declares one.</b> This exists for the Orleans test rig,
+    /// which hosts hubs on a cluster client. Declaring a type here opts it
+    /// OUT of the transient NACK and back into a stream publish that succeeds-and-discards when
+    /// nobody is subscribed — do not add one to make a routing symptom go away.</para>
+    /// </summary>
+    /// <param name="addressType">The address-type prefix (e.g. <c>client</c>).</param>
+    /// <returns>The builder for method chaining.</returns>
+    public MeshBuilder AddClientHostedAddressType(string addressType)
+    {
+        ClientHostedAddressTypes.Add(addressType);
+        return this;
+    }
+
+    internal HashSet<string> ClientHostedAddressTypes { get; } = new(StringComparer.Ordinal);
 }
