@@ -164,8 +164,18 @@ manufactured by every deploy. Two residual silent-loss windows remain:
 1. **The queue grain is still in RAM.** `MemoryStreamQueueGrain` holds enqueued-but-not-yet-pulled
    messages, and it dies with its silo. This is a narrow race at the moment of departure, not a
    permanent black hole — but it is silent.
-2. **A genuinely absent subscriber.** A hub whose subscription attach failed, or which is torn down
-   between publish and pull, still absorbs the message without a `DeliveryFailure`.
+2. **A genuinely absent subscriber.** A hub which is torn down between publish and pull still
+   absorbs the message without a `DeliveryFailure`.
+
+   > 🚨 **The "attach failed" half of this residual is narrower since #2633.** It used to be much
+   > wider than it reads: `OrleansRoutingService.SubscribeWhenStreamingReadyAsync` made a SINGLE
+   > attach attempt, and the subscribe's own grain-directory lookup is refused whenever cluster
+   > membership is mid-handoff — i.e. on every rolling deploy. One such rejection latched that hub
+   > into *"cross-process routing DISABLED"* permanently, so "a hub whose subscription attach
+   > failed" was not a race at all but a standing condition, until the hub re-registered. The attach
+   > is now retried on a bounded, loud budget against the same `IsTransientFailure` the delivery leg
+   > uses, so what remains here is the genuine race plus a genuinely permanent attach failure — both
+   > of which still say so at `Critical`.
 
 > 🚨 **Both of those residuals now live on a FALLBACK path, and that changes who should pay for
 > them.** Since the transport swap ([Pod-Hub Delivery](/Doc/Architecture/PodHubDeliveryRollPlan))
