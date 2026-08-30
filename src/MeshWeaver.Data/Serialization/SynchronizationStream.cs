@@ -1603,7 +1603,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             // "awaiting first data" for the full 45s detector with no error anywhere. A Patch
             // whose BasedOnVersion is NOT the version we last applied proves the gap; the only
             // sound reaction is a fresh authoritative snapshot from the owner (event-driven,
-            // storm-gated by _resyncInFlight — no timer, no retry loop). Applies to
+            // storm-gated by resyncInFlight — no timer, no retry loop). Applies to
             // DataChangedEvent (owner→mirror) only: a PatchDataChangeRequest's chain is stamped
             // by the SENDING mirror and is not comparable to this stream's applied version.
             // Fulls need no gap check — a Full re-establishes the complete state, and a LOST
