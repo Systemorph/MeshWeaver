@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for test/run-tests.sh — answers hosting-audit's two read-only call shapes
+# from a fixture directory ($HOSTING_AUDIT_FIXTURE). Not a mock of kubectl: the real pipeline turns
+# helm's YAML into objects with `kubectl apply --dry-run=client -o json`; here the fixture manifest
+# is already JSON objects and the "apply" passes stdin through, so what is tested is the detection
+# and the contract lines, not YAML parsing.
+#
+#   kubectl apply --dry-run=client -o json -f -   → stdin, unchanged
+#   kubectl get <kind> -n <ns> -o json            → $FIXTURE/live/<kind>.json, else an empty list
+#       $FIXTURE/live/<kind>.forbidden  present   → "Error from server (Forbidden)" on stderr, exit 1
+#       $FIXTURE/live/<kind>.notype     present   → "doesn't have a resource type" on stderr, exit 1
+set -uo pipefail
+fixture="${HOSTING_AUDIT_FIXTURE:?the kubectl stub needs HOSTING_AUDIT_FIXTURE}"
+case "${1:-}" in
+  apply) cat ;;
+  get)
+    kind="${2:-}"
+    if [ -f "$fixture/live/${kind}.forbidden" ]; then
+      echo "Error from server (Forbidden): ${kind} is forbidden: User \"system:serviceaccount:memex-ops:hosting-operator\" cannot list resource \"${kind}\"" >&2
+      exit 1
+    fi
+    if [ -f "$fixture/live/${kind}.notype" ]; then
+      echo "error: the server doesn't have a resource type \"${kind}\"" >&2
+      exit 1
+    fi
+    if [ -f "$fixture/live/${kind}.json" ]; then cat "$fixture/live/${kind}.json"; else echo '{"items":[]}'; fi ;;
+  *) echo "kubectl stub: unexpected invocation: $*" >&2; exit 1 ;;
+esac

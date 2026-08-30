@@ -1,0 +1,28 @@
+{
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "memex-portal-config",
+        "namespace": "memex"
+      },
+      "data": {
+        "Portal__Name": "memex",
+        "Email__Enabled": "false"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "kube-root-ca.crt",
+        "namespace": "memex"
+      },
+      "data": {
+        "ca.crt": "..."
+      }
+    }
+  ]
+}

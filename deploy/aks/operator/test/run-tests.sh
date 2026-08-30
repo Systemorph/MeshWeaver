@@ -185,6 +185,85 @@ case "$out" in *"DRY-RUN would run"*) ok "a dry run narrates what it would do" ;
   *) bad "a dry run narrates" "said: ${out}" ;; esac
 
 echo
+echo "── hosting-audit: what lives only on the cluster ─────────────────"
+# The stubs are NOT mocks of helm/kubectl — they answer the audit's read-only calls from fixture
+# files so the DETECTION can be asserted without a cluster. What a fixture cannot prove (that a
+# real `helm get manifest | kubectl apply --dry-run=client` round-trips YAML) is proven by the
+# first real audit, same as every other command here.
+STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs" && pwd)"
+FIXTURES="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/audit" && pwd)"
+
+refuses "audit needs --namespace"           "missing required flag --namespace" hosting-audit --release r
+refuses "audit needs --release"             "missing required flag --release"   hosting-audit --namespace n
+refuses "audit rejects unknown flags"       "unknown argument"                  hosting-audit --namespace n --release r --nope 1
+refuses_hard "audit namespace with a metacharacter" "is not a plain name" \
+  hosting-audit --namespace 'n; kubectl delete ns --all' --release r
+refuses "audit refuses when the release does not exist" "no helm release" \
+  env PATH="$STUBS:$PATH" HOSTING_AUDIT_FIXTURE="$FIXTURES/missing" hosting-audit --namespace memex --release memex
+# 🚨 A kind the audit may not LIST is a kind it must not report as clean — Forbidden is fatal and
+# names the ClusterRole to widen, it never degrades to "nothing of that kind".
+refuses "audit refuses a kind it may not read" "ClusterRole" \
+  env PATH="$STUBS:$PATH" HOSTING_AUDIT_FIXTURE="$FIXTURES/forbidden" hosting-audit --namespace memex --release memex
+
+# The drifting namespace: every category detected, by NAME, and no VALUE ever printed.
+out="$(env PATH="$STUBS:$PATH" HOSTING_AUDIT_FIXTURE="$FIXTURES/drift" \
+  hosting-audit --namespace memex --release memex 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok "a drifting audit still exits 0 (drift is a finding, not a failed run)" \
+  || bad "a drifting audit exits 0" "exited ${rc}: ${out}"
+case "$out" in *"::hosting:: audit_verdict=drift"*) ok "drift is the verdict" ;;
+  *) bad "drift is the verdict" "said: ${out}" ;; esac
+report="$(printf '%s\n' "$out" | sed -n 's/^::hosting:: audit=//p' | tail -1 | base64 -d 2>/dev/null)"
+if [ -z "$report" ]; then
+  bad "the report rides an ::hosting:: audit= line" "no decodable audit= line in: ${out}"
+else
+  ok "the report rides an ::hosting:: audit= line"
+  check_report() {  # check_report <what> <jq predicate over the report>
+    if printf '%s' "$report" | jq -e "$2" >/dev/null 2>&1; then ok "$1"; else
+      bad "$1" "predicate '$2' false for: $(printf '%s' "$report" | jq -c . 2>/dev/null)"; fi
+  }
+  check_report "env patches are found by name"       '.envLiveOnly | index("PluginCatalog__RegistryToken") and index("EMAIL__CLIENTSECRET")'
+  check_report "a manifest-only env is the same edit" '.envManifestOnly == ["RENDERED_ONLY"]'
+  check_report "envFrom / volumes / mounts patches"   '(.envFromLiveOnly == ["memex-extra-secret"]) and (.volumesLiveOnly == ["memex-content"]) and (.mountsLiveOnly == ["/mnt/content"])'
+  check_report "sidecar containers are found"         '.containersLiveOnly == ["node-gate","python-gate"]'
+  check_report "pod-spec patches are found"           '[.podSpecDiffs[].field] | index(".spec.replicas") and index(".spec.template.spec.nodeSelector")'
+  check_report "a lifecycle patch is reported with its strings REDACTED" '(.podSpecDiffs | map(select(.field | endswith(".lifecycle")))) as $l | ($l | length) == 1 and ($l[0].live | contains("…")) and (($l[0].live | contains("lifecycle-cmd")) | not)'
+  check_report "live-edited ConfigMap keys are found" '.configMaps[0] | (.liveOnlyKeys | index("Portal__ReactAppUrl")) and (.differingKeys == ["Email__Enabled"])'
+  check_report "unmanaged objects group by kind"      '.unmanagedObjects | map(select(.kind == "CronJob")) | .[0].names == ["assembly-cache-prune"]'
+  check_report "owned/helm/SA-token/CSI objects are excluded" '[.unmanagedObjects[].names[]] | (index("assembly-cache-prune-29123456") or index("sh.helm.release.v1.memex.v42") or index("memex-kv-secrets") or index("memex-portal-sa-token") or index("default")) | not'
+  check_report "the hook Job is chart-managed"        '[.unmanagedObjects[].names[]] | index("memex-migration") | not'
+  check_report "unmanaged secrets the pod reads"      '.unmanagedSecrets == ["memex-email-secret","memex-extra-secret"]'
+  check_report "plain secret-shaped entries, all containers" '.plainSecretEntries | index("env:memex-portal:PluginCatalog__RegistryToken") and index("env:node-gate:GATE_API_KEY") and index("configmap:memex-portal-config/Hosting__ModuleReportSecret")'
+  check_report "the audited revision is recorded"     '.helmRevision == 42 and .managedObjectCount == 6'
+fi
+# 🚨 The most important assertion of the section: names only. The fixture's secret VALUES must
+# never appear anywhere in the output — the report lands on a node a page renders.
+case "$out" in
+  *"must-never-print"*) bad "the audit never prints a value" "a fixture secret VALUE leaked: ${out}" ;;
+  *) ok "the audit never prints a value" ;;
+esac
+
+# The clean namespace: verdict clean, zero findings, and a kind the cluster does not serve is
+# recorded as skipped — never silently absent, never a finding.
+out="$(env PATH="$STUBS:$PATH" HOSTING_AUDIT_FIXTURE="$FIXTURES/clean" \
+  hosting-audit --namespace memex --release memex 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok "a clean audit exits 0" || bad "a clean audit exits 0" "exited ${rc}: ${out}"
+case "$out" in *"::hosting:: audit_verdict=clean"*) ok "clean is the verdict when live matches the manifest" ;;
+  *) bad "clean is the verdict" "said: ${out}" ;; esac
+case "$out" in *"::hosting:: audit_findings=0"*) ok "…with zero findings" ;;
+  *) bad "…with zero findings" "said: ${out}" ;; esac
+report="$(printf '%s\n' "$out" | sed -n 's/^::hosting:: audit=//p' | tail -1 | base64 -d 2>/dev/null)"
+if printf '%s' "$report" | jq -e '.skippedKinds == ["scaledobject"]' >/dev/null 2>&1; then
+  ok "an unserved kind is recorded as skipped, not silently absent"
+else
+  bad "an unserved kind is recorded as skipped" "report: $(printf '%s' "$report" | jq -c .skippedKinds 2>/dev/null)"
+fi
+
+# Read-only: a dry run audits for real — same report, same verdict.
+emits "a dry run still audits (read-only)" "::hosting:: audit_verdict=clean" \
+  env HOSTING_DRY_RUN=true PATH="$STUBS:$PATH" HOSTING_AUDIT_FIXTURE="$FIXTURES/clean" \
+  hosting-audit --namespace memex --release memex
+
+echo
 echo "─────────────────────────────────────────────────────────────────"
 echo "${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1

@@ -25,7 +25,9 @@ ARG TARGETARCH=amd64
 # refuses with "server version mismatch". Azure Linux 3 ships 16.x and the fleet's flexible servers
 # are major 16 (memexaks-pg, verified 2026-08-22) — bump both together when the fleet moves.
 # tar: needed to unpack helm, and not in the base. shadow-utils: useradd, for the non-root user.
-RUN tdnf install -y --refresh postgresql tar shadow-utils ca-certificates \
+# jq: hosting-audit's detection is a jq program (bin/_audit.jq) — without it the audit cannot
+# compare a single field, and it refuses rather than reporting a namespace it never read as clean.
+RUN tdnf install -y --refresh postgresql tar shadow-utils ca-certificates jq \
  && tdnf clean all \
  && curl -fsSLo /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
