@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -155,6 +156,64 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <summary>Number of operations currently executing through this pool.</summary>
     public int CurrentInFlight => Volatile.Read(ref _inFlight);
 
+    // 🚨 WHICH leaf, not just how many. The residual a dirty teardown reports has been an
+    // anonymous "AgentStore=1" — enough to know a pool did not drain, never enough to fix it.
+    // #2480 added the POOL NAME for exactly this reason and stopped one level short: measured
+    // 2026-08-30 on MeshWeaver.AI.Test under load, 3 of 20 runs ended in a dirty teardown naming
+    // AgentStore, Query and FileSystem on different runs — three pools, no leaf, nothing to act on.
+    //
+    // The delegate is kept BY REFERENCE while the leaf is in flight (no stack capture, no string
+    // built on the hot path) and formatted only when a residual is reported, so a pool that drains
+    // cleanly pays one dictionary insert and one removal per leaf and nothing else.
+    private readonly ConcurrentDictionary<long, object> _inFlightLeaves = new();
+    private long _leafSeq;
+
+    /// <summary>
+    /// Records an in-flight leaf so a residual can NAME it; returns its ticket. Takes the work
+    /// ITSELF — a delegate on the three functional entry points, the source observable on
+    /// <see cref="SubscribeThroughPool{T}"/>, which has no delegate to name.
+    /// </summary>
+    private long EnterLeaf(object io)
+    {
+        var id = Interlocked.Increment(ref _leafSeq);
+        _inFlightLeaves[id] = io;
+        return id;
+    }
+
+    /// <summary>Retires a leaf's ticket. Safe to call for an id that was never added.</summary>
+    private void LeaveLeaf(long id) => _inFlightLeaves.TryRemove(id, out _);
+
+    /// <summary>
+    /// The call sites of the leaves still in flight, most useful form first: a lambda's
+    /// compiler-generated method name carries its ENCLOSING method, so
+    /// <c>MeshQuery+&lt;&gt;c__DisplayClass22_0.&lt;MergeProviderObservables&gt;b__1</c> points at the
+    /// exact operation that did not unwind. Empty when the pool drained clean.
+    /// </summary>
+    internal IReadOnlyList<string> PendingLeafSites =>
+        _inFlightLeaves.Values
+            .Select(d =>
+            {
+                try
+                {
+                    // A delegate names its enclosing method through the compiler-generated
+                    // lambda; anything else (the subscribe path's observable) can only offer
+                    // its type, which still says WHICH chain is stuck.
+                    if (d is Delegate del)
+                    {
+                        var m = del.Method;
+                        return $"{m.DeclaringType?.FullName ?? "?"}.{m.Name}";
+                    }
+                    return d.GetType().FullName ?? d.GetType().Name;
+                }
+                catch
+                {
+                    // A diagnostic must never be the reason a teardown fails.
+                    return "(unavailable)";
+                }
+            })
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
     /// <summary>
     /// Runs an async I/O leaf off the calling scheduler under the pool's concurrency gate.
     /// </summary>
@@ -190,12 +249,14 @@ public sealed class IoPool : IIoPool, IDisposable
                 // the inner await, so the gate caps in-flight ops, not threads.
                 await _gate.WaitAsync(ct).ConfigureAwait(false);
                 Interlocked.Increment(ref _inFlight);
+                var leaf = EnterLeaf(io);
                 try
                 {
                     return await io(ct).ConfigureAwait(false);
                 }
                 finally
                 {
+                    LeaveLeaf(leaf);
                     // 🚨 RELEASE THE PERMIT FIRST. TryFinishDisposal disposes _gate the moment the
                     // last leaf's decrement takes _inFlight to zero — so with the decrement first,
                     // THIS leaf disposed the gate and then called Release() on it, throwing
@@ -251,6 +312,7 @@ public sealed class IoPool : IIoPool, IDisposable
                 var ct = linked.Token;
                 await _gate.WaitAsync(ct).ConfigureAwait(false);
                 Interlocked.Increment(ref _inFlight);
+                var leaf = EnterLeaf(source);
                 try
                 {
                     await foreach (var item in source(ct).WithCancellation(ct).ConfigureAwait(false))
@@ -259,6 +321,7 @@ public sealed class IoPool : IIoPool, IDisposable
                 }
                 finally
                 {
+                    LeaveLeaf(leaf);
                     ReleaseGate();
                 }
             }
@@ -312,6 +375,7 @@ public sealed class IoPool : IIoPool, IDisposable
                         // so CurrentInFlight reflects actually-running blocking work,
                         // capped at the scheduler's MaximumConcurrencyLevel.
                         Interlocked.Increment(ref _inFlight);
+                        var blockingLeaf = EnterLeaf(work);
                         if (Interlocked.Increment(ref _blockingInFlight) == 1)
                             _blockingIdle.Reset();
                         try
@@ -320,6 +384,7 @@ public sealed class IoPool : IIoPool, IDisposable
                         }
                         finally
                         {
+                            LeaveLeaf(blockingLeaf);
                             // 🚨 ORDER MATTERS: the signal is set LAST. Drain() wakes on _blockingIdle, so
                             // anything it releases must already observe fully-updated counters — setting
                             // the signal before decrementing _inFlight let Drain return while
@@ -422,6 +487,7 @@ public sealed class IoPool : IIoPool, IDisposable
                             var ct = linked.Token;
                             await _gate.WaitAsync(ct).ConfigureAwait(false);
                             Interlocked.Increment(ref _inFlight);
+                            var subLeaf = EnterLeaf(source);
                             try
                             {
                                 // Draining before we even subscribed → do not open providers / create hubs.
@@ -430,6 +496,7 @@ public sealed class IoPool : IIoPool, IDisposable
                             }
                             finally
                             {
+                                LeaveLeaf(subLeaf);
                                 ReleaseGate();
                             }
                         }
