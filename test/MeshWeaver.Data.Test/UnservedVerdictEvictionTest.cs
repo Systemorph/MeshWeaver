@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data.TestDomain;
@@ -100,7 +99,7 @@ public class UnservedVerdictEvictionTest(ITestOutputHelper output) : HubTestBase
             .Where(n => n >= 1)
             .FirstAsync()
             .Timeout(20.Seconds())
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     /// <summary>
     /// 🚨 THE PIN. The transient verdict the retired stream leg's replacement produces must still
