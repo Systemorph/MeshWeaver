@@ -101,6 +101,28 @@ Before writing a test, review the invariants every test must respect:
 
 ---
 
+## In-mesh tests and the build process (node repos)
+
+A NodeType in a node repo ships its tests as `<Type>/Test/*.cs` — **static classes whose public
+static parameterless methods throw on failure** — and a `Tests` layout area that lists them. Since
+2026-08-30 those run through the container the platform build produced, not through xUnit:
+
+```
+mw-plugin-test build <repo-root> [<package>... | all]
+```
+
+**Build means compile and run tests**, per package, as a dependency cascade: a package observes
+the result streams of the packages it requires and starts itself when the last one is green; on
+red the dependents are blocked by name, on green they continue; independent packages build in
+parallel; every package reports its timings. Sources come from the checkout on disk and compile
+against the image's `/app` plus the assemblies the dependency packages just emitted — no mesh
+import, no `$(MeshWeaverRoot)` source checkout, no `MeshWeaver.Fixture`. Cases that need a host
+are counted as `needs-mesh` and run by the gate, seeded from the build's output. See
+`tools/MeshWeaver.PluginTester/README.md` (`build`).
+
+`MeshWeaver.Fixture` and the two TestBase assemblies are this repo's OWN test support: they live
+under `test/` and are never packed or published.
+
 ## The Canonical Test Base
 
 Every monolith test inherits `MonolithMeshTestBase`. The shape is always the same:
@@ -515,7 +537,7 @@ Use `FullyQualifiedName~` — it is the only `--filter` property this repo uses 
 ## Test Project Layout
 
 - Framework code lives in `src/`, tests in `test/`, with one `*.Test` project per production project where it makes sense.
-- Shared fixtures live in `src/MeshWeaver.Hosting.Monolith.TestBase` and the Orleans test base.
+- Shared fixtures live in `test/MeshWeaver.Hosting.Monolith.TestBase` and the Orleans test base.
 - NodeType tests live in the NodeType's `Test/` namespace (`Namespace/Type/Test/TypeTest.cs`).
 
 ---
@@ -528,4 +550,4 @@ Use `FullyQualifiedName~` — it is the only `--filter` property this repo uses 
 - [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — why hub-reachable code is `IObservable<T>`, never `Task<T>`
 - [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — why `ReadNode` is the right read after a write
 - [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow) — reading the framework's own trace when a test hangs
-- `src/MeshWeaver.Hosting.Monolith.TestBase/MonolithMeshTestBase.cs` — the base every monolith test inherits
+- `test/MeshWeaver.Hosting.Monolith.TestBase/MonolithMeshTestBase.cs` — the base every monolith test inherits

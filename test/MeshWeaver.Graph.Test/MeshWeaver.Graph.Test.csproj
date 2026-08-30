@@ -18,9 +18,9 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Build\MeshWeaver.Plugin.Build.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Packaging\MeshWeaver.Plugin.Packaging.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
     <!-- The red-log watcher's burst aggregation. CompileFailureReportOrderTest reproduces #1840
          end to end — the console burst the portal writes, through the SAME aggregation the watcher

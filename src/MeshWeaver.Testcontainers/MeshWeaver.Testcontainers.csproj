@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- The memex test container: a real memex from the platform build as a test SUBSTRATE, the way
+         Testcontainers.PostgreSql gives a test a real Postgres (maintainer, 2026-08-30: "let's create
+         clean test container package for memex … similar to pg"). Test support, never a NuGet package:
+         consumers get it through the test container image or a source reference. -->
+    <IsPackable>false</IsPackable>
+    <Description>A Testcontainers module that starts the memex portal image as a disposable test substrate.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Testcontainers" />
+  </ItemGroup>
+</Project>

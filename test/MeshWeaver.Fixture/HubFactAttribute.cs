@@ -31,7 +31,12 @@ public sealed class HubFactAttribute : FactAttribute
     /// Initializes a new instance and sets the test timeout to 30000 milliseconds — above the
     /// measured CI fixture cost, in line with the runner-wide <c>methodTimeout</c>.
     /// </summary>
-    public HubFactAttribute()
+    /// <param name="sourceFilePath">Supplied by the compiler; xunit v3 records it on the test case.</param>
+    /// <param name="sourceLineNumber">Supplied by the compiler; xunit v3 records it on the test case.</param>
+    public HubFactAttribute(
+        [System.Runtime.CompilerServices.CallerFilePath] string? sourceFilePath = null,
+        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = -1)
+        : base(sourceFilePath, sourceLineNumber)
     {
         Timeout = 30000;
     }
