@@ -84,6 +84,15 @@ on:
         required: false
         type: string
         default: ''
+      platform-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref whose .github/scripts this gate runs (compose-sealed-modules.sh).
+          Default main; pin it to the same sha as the `uses:` line for a reproducible run.
+          (`github.job_workflow_sha` is EMPTY inside a reusable called from another repo — measured
+          2026-08-30 — so the script's ref is an input, never inferred.)
+        required: false
+        type: string
+        default: main
       upstream-seed:
         description: >-
           The upstream source(s) whose SEALED publication for this image's framework identity
@@ -218,7 +227,7 @@ jobs:
           REGISTRY_KEY: ${{ secrets.registry-key }}
           SEAL_UPSTREAMS: ${{ inputs.upstream-seed }}
           IDENTITY: ${{ steps.image.outputs.identity }}
-          JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -228,11 +237,14 @@ jobs:
               # 🚨 The publication is the unit of consistency (MeshWeaver#2698): module bytes come
               # from the SEALED upstream publication for this identity, never the registry's
               # package endpoint. No fallback — a missing seal or module set is RED in the script.
-              # The compose script at THIS workflow's own commit (github.job_workflow_sha) — never a floating
-              # ref, so a node repo pinned to a reusable sha gets the script that sha was written with.
+              # The compose script at inputs.platform-ref (default main; pin it beside the `uses:` sha for a
+              # reproducible run). NOT github.job_workflow_sha: it is empty inside a reusable called from
+              # another repository, so a fetch keyed on it silently read main while claiming a pin.
               SCRIPT="${RUNNER_TEMP:-/tmp}/compose-sealed-modules.sh"
-              gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-sealed-modules.sh?ref=${JOB_WORKFLOW_SHA}" --jq .content | base64 -d > "$SCRIPT" \
-                || { echo "::error::could not fetch compose-sealed-modules.sh at ${JOB_WORKFLOW_SHA} from Systemorph/MeshWeaver"; exit 1; }
+              [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the compose script has no ref to be fetched at"; exit 1; }
+              gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-sealed-modules.sh?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$SCRIPT" \
+                || { echo "::error::could not fetch compose-sealed-modules.sh at ${PLATFORM_REF} from Systemorph/MeshWeaver"; exit 1; }
+              head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-sealed-modules.sh at ${PLATFORM_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
               chmod +x "$SCRIPT"
               [ -n "${REGISTRY_URL:-}" ] || { echo "::error::upstream-seed is set but registry-url is empty — the compile check reads sealed module sets from the registry."; exit 1; }
               "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" \
