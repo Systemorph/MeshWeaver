@@ -18,18 +18,21 @@ namespace MeshWeaver.PluginCatalog;
 /// <param name="MinMeshVersion">That module's declared platform floor, or null.</param>
 /// <param name="TargetPartition">The partition the package installs into, when it declares one —
 /// what a serving instance checks to know whether it holds this package's content at all.</param>
-/// <param name="Tier">The plan the package declares (<see cref="PackageManifest.Tier"/>), or null
-/// for a baseline package — the registry's answer to "which tier is this", which a plan-scoped
-/// grant is decided against and which overrides a cached install record's stamp.</param>
 public sealed record PackageOrigin(
     string PackageId,
     string Source,
     string? ReleasedVersion,
     string? Module,
     string? MinMeshVersion,
-    string? TargetPartition = null,
-    string? Tier = null)
+    string? TargetPartition = null)
 {
+    /// <summary>The plan the package declares (<see cref="PackageManifest.Tier"/>), or null for a
+    /// baseline package — the registry's answer to "which tier is this", which a plan-scoped grant
+    /// is decided against and which overrides a cached install record's stamp. An init property,
+    /// not a primary-constructor parameter: modules bind this record's constructor by signature,
+    /// and widening it would break every one compiled before the plan existed (#2298's gate).</summary>
+    public string? Tier { get; init; }
+
     /// <summary>The partition this package's content lives in — its declared
     /// <see cref="TargetPartition"/>, else its id (what a node-native repo's folder name is).</summary>
     public string Partition =>
@@ -253,7 +256,7 @@ public sealed class PackageOriginAnchor
                 package.Id,
                 new PackageOrigin(
                     package.Id, listing.Source.Name, package.ReleasedVersion, package.Module,
-                    package.MinMeshVersion, package.TargetPartition, package.Tier));
+                    package.MinMeshVersion, package.TargetPartition) { Tier = package.Tier });
 
         if (failures.Length == 0)
         {
