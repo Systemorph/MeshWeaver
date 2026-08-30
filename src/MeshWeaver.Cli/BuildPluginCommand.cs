@@ -76,19 +76,51 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                 UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
                 UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
 
+        // ── the upstream seed comes FIRST, because it is also where the modules come from ───────
+        // Round 4's lesson: sourcing module DLLs from the package index takes the LATEST version,
+        // while the sealed publication's types were built against the SEALED module mvids — 10
+        // upstream types were DECLINED ('MeshWeaver.AI built against mvid:699963b6…, live is
+        // 813bec7e…') because the composed module and the publication disagreed. The reusable gate
+        // never has this skew: with an upstream seed, compose-sealed-modules takes the modules FROM
+        // the publication, identity-matched. Same here — the identity is asked of the IMAGE
+        // (--print-framework-identity, the gate's own pre-bake step), the seed is fetched before
+        // stage 1, and the requested modules are extracted from the seed's own bundles. Only a
+        // build with NO upstream seed falls back to the package index's latest.
+        var seedDir = bake; // the gate consumes one dir: own bake + upstream bundles
+        if (options.UpstreamSeed is { Length: > 0 } upstreams)
+        {
+            var line = await Capture("docker",
+                ["run", "--rm", "--init", "--entrypoint", "/app/mw-plugin-test", pinned,
+                 "--print-framework-identity"], ct);
+            var idIdx = line.IndexOf("identity=", StringComparison.Ordinal);
+            var frameworkIdentity = idIdx >= 0
+                ? line[(idIdx + "identity=".Length)..].Split(' ', '\n', '\r')[0].Trim()
+                : "";
+            if (frameworkIdentity.Length == 0)
+            {
+                await error.WriteLineAsync(
+                    $"error: could not resolve a framework identity from the image (got: '{line.Trim()}') "
+                    + "— cannot address an upstream publication.");
+                return 8;
+            }
+            await output.WriteLineAsync($"framework identity: {frameworkIdentity} (from the image)");
+            var seeded = await FetchUpstreamSeed(
+                options.RegistryUrl!, options.RegistryKey!, upstreams, frameworkIdentity, seedDir, ct);
+            if (!seeded) return 8;
+        }
+
         // ── dependencies: INSTALL, never build (PluginBuildContract step 2) ─────────────────────
-        // Proven necessary on the verb's first production run: without the external modules the
-        // gate installed 162 files and registered ZERO NodeTypes — every '$type' (AgentConfiguration
-        // first) degraded to an untyped JsonElement, and the gate correctly refused to judge bytes
-        // it never installed. A package with a Skill/Agent subtree needs MeshWeaver.AI REGISTERED,
-        // not merely resolvable.
+        // Module DLLs register the types a Skill/Agent subtree needs; without them the gate
+        // installs files and registers ZERO NodeTypes (round 1's lesson).
         var moduleArgs = new List<string>();
         var extDir = options.ExternalModulesDir is { Length: > 0 } e ? Path.GetFullPath(e) : null;
         if (options is { RegistryModules.Length: > 0 })
         {
             extDir ??= Path.Combine(Path.GetTempPath(), $"memex-ext-{Environment.ProcessId}");
-            var fetched = await FetchRegistryModules(
-                options.RegistryUrl!, options.RegistryKey!, options.RegistryModules!, extDir, ct);
+            var fetched = options.UpstreamSeed is { Length: > 0 }
+                ? ComposeModulesFromSeed(seedDir, options.RegistryModules!, extDir)
+                : await FetchRegistryModules(
+                    options.RegistryUrl!, options.RegistryKey!, options.RegistryModules!, extDir, ct);
             if (fetched is null) return 7;
             moduleArgs.AddRange(fetched);
         }
@@ -125,20 +157,6 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
             return 5;
         }
 
-        // ── upstream seed: the PUBLICATION the gate's fresh mesh installs first ─────────────────
-        // Round 3's lesson: module DLLs are necessary and NOT sufficient. The gate boots a fresh
-        // mesh, and a package whose `requires` chain reaches upstream PACKAGES needs those
-        // packages' bundles in the seed, or its own installs register nothing (Manufacturing:
-        // 162 files installed, 0 NodeTypes — the working test-repos gate consumes 44 bundles,
-        // this command's seed held 1). Fetched INTO the bake dir, whose framework-mvid.txt is by
-        // construction the identity the publication must be sealed for.
-        if (options.UpstreamSeed is { Length: > 0 } upstreams)
-        {
-            var frameworkIdentity = (await File.ReadAllTextAsync(identity, ct)).Trim();
-            var seeded = await FetchUpstreamSeed(
-                options.RegistryUrl!, options.RegistryKey!, upstreams, frameworkIdentity, bake, ct);
-            if (!seeded) return 8;
-        }
 
         // ── stage 2: CONSUME — stand a mesh up on the bytes stage 1 produced ───────────────────
         return await RunInImage(pinned, repo, options, extDir,
@@ -308,6 +326,68 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
             $"error: could not pull '{image}' in {PullAttempts} attempts. Three consecutive failures "
             + "is no longer a transient — check the registry and the credentials rather than retrying.");
         return null;
+    }
+
+    /// <summary>
+    /// Composes the requested module packages from the SEED's own bundles — identity-matched by
+    /// construction, so the composed module mvids are exactly the ones the publication's types
+    /// were built against. Matching is by bundle manifest (<c>plugin</c> / <c>module.assemblyName</c>)
+    /// with a filename fallback; a requested package absent from the seed is a refusal, never a
+    /// silent skip.
+    /// </summary>
+    private List<string>? ComposeModulesFromSeed(string seedDir, string modules, string extDir)
+    {
+        Directory.CreateDirectory(extDir);
+        var args = new List<string>();
+        var wanted = modules.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToDictionary(m => m, _ => false, StringComparer.OrdinalIgnoreCase);
+        foreach (var bundle in Directory.EnumerateFiles(seedDir, "*.zip"))
+        {
+            string? plugin = null, name = null;
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(bundle))
+            {
+                var entry = zip.GetEntry("meshweaver/manifest.json");
+                if (entry is not null)
+                {
+                    using var rd = new StreamReader(entry.Open());
+                    using var doc = System.Text.Json.JsonDocument.Parse(rd.ReadToEnd());
+                    if (doc.RootElement.TryGetProperty("plugin", out var pl)) plugin = pl.GetString();
+                    if (doc.RootElement.TryGetProperty("module", out var m)
+                        && m.TryGetProperty("assemblyName", out var an)) name = an.GetString();
+                }
+            }
+            plugin ??= Path.GetFileNameWithoutExtension(bundle).Split('.')[0];
+            var key = wanted.Keys.FirstOrDefault(w => string.Equals(w, plugin, StringComparison.OrdinalIgnoreCase));
+            if (key is null || wanted[key]) continue;
+            var unpack = Path.Combine(extDir, $"unpack-{plugin}");
+            if (Directory.Exists(unpack)) Directory.Delete(unpack, true);
+            System.IO.Compression.ZipFile.ExtractToDirectory(bundle, unpack);
+            var modulesDir = Path.Combine(unpack, "meshweaver", "modules");
+            if (name is not { Length: > 0 })
+            {
+                var dlls = Directory.Exists(modulesDir) ? Directory.GetFiles(modulesDir, "*.dll") : [];
+                if (dlls.Length != 1) { Directory.Delete(unpack, true); continue; }
+                name = Path.GetFileNameWithoutExtension(dlls[0]);
+            }
+            if (!File.Exists(Path.Combine(modulesDir, $"{name}.dll"))) { Directory.Delete(unpack, true); continue; }
+            var target = Path.Combine(extDir, name);
+            if (Directory.Exists(target)) Directory.Delete(target, true);
+            Directory.Move(modulesDir, target);
+            Directory.Delete(unpack, true);
+            args.Add("--module"); args.Add($"/ext/{name}/{name}.dll");
+            wanted[key] = true;
+            output.WriteLine($"external module composed from the SEED: {name} ({key})");
+        }
+        var missing = wanted.Where(kv => !kv.Value).Select(kv => kv.Key).ToList();
+        if (missing.Count > 0)
+        {
+            error.WriteLine(
+                $"error: requested module package(s) not found in the upstream seed: {string.Join(", ", missing)} "
+                + "— a module composed from anywhere else would carry the wrong mvid and every "
+                + "publication type built against it would be DECLINED.");
+            return null;
+        }
+        return args;
     }
 
     /// <summary>
