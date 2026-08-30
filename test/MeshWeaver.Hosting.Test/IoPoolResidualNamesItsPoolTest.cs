@@ -1,3 +1,6 @@
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
 
@@ -52,22 +55,33 @@ public class IoPoolResidualNamesItsPoolTest
             new IoPoolOptions { DrainTimeout = TimeSpan.FromMilliseconds(250) });
         var pool = registry.Get(IoPoolNames.Query);
 
-        using var entered = new ManualResetEventSlim(false);
-        using var release = new ManualResetEventSlim(false);
+        // 🚨 SIGNALS ARE OBSERVABLES, not ManualResetEventSlim. /async names a hand-woven gate as
+        // the same defect class as await on a turn-based scheduler, and the ONE sanctioned blocking
+        // primitive in this repo is the SemaphoreSlim sealed inside IoPool itself.
+        var entered = new AsyncSubject<Unit>();
+        var release = new AsyncSubject<Unit>();
 
         pool.InvokeBlocking(_ =>
         {
-            entered.Set();
-            // Deliberately ignores the token and outlives IoPool's drain budget — that IS the
-            // condition a residual reports.
-            release.Wait(TimeSpan.FromMinutes(2));
+            entered.OnNext(Unit.Default);
+            entered.OnCompleted();
+            // 🚨 The ONLY block in this test, and it is the SUBJECT: a leaf that ignores its
+            // cancellation token and outlives the drain budget IS the residual condition being
+            // pinned. Bounded so a failing run cannot wedge the shard — the drain returns long
+            // before this, and the finally below releases it either way.
+            release.Timeout(TimeSpan.FromSeconds(30))
+                .Catch(Observable.Return(Unit.Default))
+                .Wait();
             return 0;
         }).Subscribe(_ => { }, _ => { });
 
-        entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)
-            .Should().BeTrue("the leaf must actually be running before the drain starts");
+        // Reactive wait for the precondition: the leaf must be running before the drain starts.
+        entered.Timeout(TimeSpan.FromSeconds(10))
+            .Catch<Unit, Exception>(_ => Observable.Throw<Unit>(
+                new InvalidOperationException("the leaf never started — the drain would measure nothing")))
+            .Wait();
 
-        // 🚨 release.Set() is UNCONDITIONAL. It was previously the statement after this await, so
+        // 🚨 The release is UNCONDITIONAL. It was previously the statement after this await, so
         // when the await threw (its token IS the method-timeout token) the blocked leaf was never
         // freed: it held a pool thread for its full two minutes and `using` disposed over live
         // work — the residual escaping from the test written to prove residuals are reported.
@@ -79,7 +93,8 @@ public class IoPoolResidualNamesItsPoolTest
         }
         finally
         {
-            release.Set();
+            release.OnNext(Unit.Default);
+            release.OnCompleted();
         }
 
         total.Should().BeGreaterThan(0,
