@@ -646,8 +646,9 @@ What changes under the hood, and why:
 | `Modules__Required__0..4` | blanked (nothing can land them) | the image baseline stands — a store-delivered required module reads `ExpectedLater`, never a rollout blocker, and `verify --repair` performs the one activation restart |
 | image | built from source (Option B) | ACR `main` (`--build` still works — `up`/`update` only change their default) |
 
-The registry file is `0600` because a bootstrap key registers instances under the minting admin's
-identity; `registry status` never prints it. **What this install may pull is decided on the
+The registry file is always `0600`: it may carry a bootstrap key, and a bootstrap key is a secret
+— it registers instances under the minting admin's identity — so the mode does not vary by whether
+one was given; `registry status` never prints it. **What this install may pull is decided on the
 registry**, per instance, in `Admin/_PluginGrant/{instanceId}` — registering is identity, not
 entitlement ([PluginRegistry.md](/Doc/Architecture/PluginRegistry)). A first boot that installs
 nothing has one of two causes, and `memex-local verify` names both: the registration was refused
