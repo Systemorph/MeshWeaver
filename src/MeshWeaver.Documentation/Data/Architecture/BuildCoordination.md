@@ -270,12 +270,15 @@ dependency. The subscription itself is a remote-path watch and uses the
 `SubscribeWithReEstablish` fault taxonomy: transient faults re-establish; a poisoned or
 deleted root is terminal and loud, never a silent 1 Hz retry loop.
 
-🚨 **That feed is not running.** `PostgreSqlChangeListener` is registered but never started in
-either partitioned-PG overload — `AddPartitionedPostgreSqlPersistence` has the `AddHostedService`
-call commented out, and the Aspire overload the portal actually uses never had one. Within a
-cluster the GO still reaches every silo, because `GetMeshNodeStream` resolves to the ONE per-node
-hub that owns `Admin/Build` there; **across clusters nothing propagates it**, so a follower in the
-bake silo's peer cluster observes only what its own hub read at activation.
+🚨 **That feed delivers only to a session that is already listening — it never replays.** (It *is*
+running: "registered but never started in either partitioned-PG overload" was #1440, the middle leg
+of the #1814 outage, fixed by #1816 and pinned by `ChangeListenerWiringTests` in the adapter's repo.)
+A `NOTIFY` fired while a follower's `LISTEN` session was down, or before its mirror activated, is
+gone; within a cluster the GO still reaches every silo, because `GetMeshNodeStream` resolves to the
+ONE per-node hub that owns `Admin/Build` there, but **across clusters a follower that came up after
+the write observes only what its own hub read at activation.** The design page
+[Durable Streams Are Mesh Nodes](/Doc/Architecture/DurableStreamsViaMeshNodes) records the loss
+semantics.
 
 **Nothing in the protocol may therefore depend on being notified.** The arbiter never did — it
 READS the durable row on every pass (above). The follower used to, and that is #1440.
