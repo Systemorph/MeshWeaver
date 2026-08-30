@@ -749,7 +749,7 @@ def self_test() -> int:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    p.add_argument("--for", dest="lane", choices=("modules",), required=True)
+    p.add_argument("--for", dest="lane", choices=("modules",))
     p.add_argument("--modules", help="the module matrix as JSON, or @file (--for modules)")
     p.add_argument("--root", default=".", help="the caller repo checkout")
     p.add_argument("--event", default="", help="the triggering GitHub event name")
@@ -768,6 +768,8 @@ def main() -> int:
     args = p.parse_args()
     if args.self_test:
         return self_test()
+    if args.lane is None:
+        p.error("--for modules is required (only --self-test runs without a lane)")
 
     entries: list[dict] = []
     if args.lane == "modules":
