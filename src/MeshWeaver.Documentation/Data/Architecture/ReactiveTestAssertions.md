@@ -1,15 +1,17 @@
 ---
 Name: Reactive Test Assertions
 Category: Architecture
-Description: The MeshWeaver.Reactive.Assertions surface — assert on observables directly, awaiting the terminal assertion instead of hand-rolling an Rx→Task bridge. Covers the full API, why the assertion subscribes on the thread pool, error assertions via Materialize, and the equivalency/JSON helpers.
+Description: The MeshWeaver.Reactive.Assertions surface — assert on observables directly, awaiting the terminal assertion instead of hand-rolling an Rx→Task bridge (`.ToTask()` is forbidden everywhere, tests included). Covers the full API, why the assertion subscribes off xUnit's sync context and settles through its own ReactiveWait, error assertions via Materialize, and the equivalency/JSON helpers.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
 ---
 
 # Reactive Test Assertions
 
-MeshWeaver is reactive end-to-end: services, handlers, layout areas, and activities return `IObservable<T>` and never `await` (see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)). Its tests follow the same principle — **you assert on the stream directly, and the Rx→Task bridge lives inside the assertion instead of in your test body**.
+MeshWeaver is reactive end-to-end: services, handlers, layout areas, and activities return `IObservable<T>` and never `await` (see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)). Its tests follow the same principle — **you assert on the stream directly, and the assertion OWNS the wait instead of your test body**.
 
-All test assertions flow through `MeshWeaver.Reactive.Assertions`, an in-house library (it *replaced* FluentAssertions — that package is no longer referenced) wired in via a global `using` and project reference in `test/Directory.Build.props`. The names and chaining patterns (`.And` / `.Which`, trailing `because` args) are familiar. What is different is that the **observable assertions own the wait**: each terminal method returns a `Task` that the test body `await`s, so a test method is `async Task` and contains no hand-rolled `.FirstAsync().ToTask()`, `.Result`, `.Wait()` or `Task.Delay`.
+All test assertions flow through `MeshWeaver.Reactive.Assertions`, an in-house library (it *replaced* FluentAssertions — that package is no longer referenced) wired in via a global `using` and project reference in `test/Directory.Build.props`. The names and chaining patterns (`.And` / `.Which`, trailing `because` args) are familiar. What is different is that the **observable assertions own the wait**: each terminal method returns a `Task` that the test body `await`s, so a test method is `async Task` and contains no `.FirstAsync().ToTask()` — none at all, anywhere — no `.Result`, no `.Wait()` and no `Task.Delay`.
+
+> **🚨 `.ToTask()` is forbidden repo-wide, `test/**` included** (maintainer ruling, 2026-08-30: *"totask is forbidden"*, *"no totask ever"* — the earlier "tests are the one sanctioned place" carve-out is RETRACTED). Rx's bridge completes its `TaskCompletionSource` **without** `TaskCreationOptions.RunContinuationsAsynchronously`, so it resumes the awaiter *inline on the signalling thread, still inside Rx's trampoline*. In a test that thread then carries the rest of the test, its mesh teardown, and — under xUnit — the runner starting the next test class, so the green proves the wrong thing. **`await source.FirstAsync()` is not a lighter alternative**: Rx's own awaiter is an `AsyncSubject<T>` that completes its continuation from inside `OnCompleted`, and measures the same (`INLINE=True` for both spellings; only the queued completion below measures `INLINE=False`). Where an assertion genuinely cannot express the wait, the bridge is `MeshWeaver.Messaging.ReactiveCompletion.ObserveCompletion(reportLateFault, ct)`.
 
 > **🚨 The terminal assertions are `Task`-returning, not blocking.** `Emit()` / `Match()` return `Task<T>`; `Be()` / `Complete()` / `NotEmit()` return `Task<ObservableAssertions<T>>`. **Every one must be `await`ed.** An un-awaited `obs.Should().Emit();` statement compiles without a warning, subscribes, and then lets the test race on — the classic green-but-lying test. `ObservableAssertions.cs` says so in its own doc comment: the wait is *"never a thread-blocking `ManualResetEventSlim` + `Wait`"*.
 
@@ -36,7 +38,7 @@ For the surrounding test-writing rules, see [Writing Tests](/Doc/Architecture/Wr
   <line x1="160" y1="91" x2="208" y2="91" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-grn)"/>
   <rect x="210" y="72" width="160" height="38" rx="8" fill="#5c6bc0"/>
   <text x="290" y="87" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="bold">await .Should().Match(…)</text>
-  <text x="290" y="101" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">SubscribeOn(TaskPool) + ToTask</text>
+  <text x="290" y="101" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#fff">off sync-context + queued resume</text>
   <line x1="370" y1="91" x2="418" y2="91" stroke="#43a047" stroke-width="1.5" marker-end="url(#arr-grn)"/>
   <rect x="420" y="72" width="150" height="38" rx="8" fill="#26a69a"/>
   <text x="495" y="87" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff" font-weight="bold">Hub delivers emission</text>
@@ -70,7 +72,7 @@ For the surrounding test-writing rules, see [Writing Tests](/Doc/Architecture/Wr
   <text x="390" y="302" text-anchor="middle" font-family="sans-serif" font-size="10" fill="currentColor" fill-opacity=".5" font-style="italic">maxParallelThreads: 1 — everything serialises behind the held thread</text>
 </svg>
 
-*The assertion `SubscribeOn`s the source onto `TaskPoolScheduler` and bridges with `.ToTask()`, so every mesh round-trip runs on the thread pool and only the awaited result hops back to the test. Blocking that thread yourself (`.Result` / `.Wait()`) funnels those continuations back onto xUnit's single-threaded `MaxConcurrencySyncContext` — measured at 8 s versus 3 ms on `AddressResolutionTest` (2026-06-15). Do not remove the `SubscribeOn`.*
+*The assertion subscribes **synchronously on the calling thread with the ambient `SynchronizationContext` suppressed** (`SubscribeHereOffSyncContext`), so the observer is attached in time to see a hot subject's emission while the mesh's continuations still capture `null` and land on the pool. It then waits through the package's own `ReactiveWait.First` — a `TaskCompletionSource` created with `TaskCreationOptions.RunContinuationsAsynchronously` — **not** `.ToTask()`, so the test's resume is queued instead of running on whichever mesh thread signalled. Blocking that thread yourself (`.Result` / `.Wait()`) funnels those continuations back onto xUnit's single-threaded `MaxConcurrencySyncContext` — measured at 8 s versus 3 ms on `AddressResolutionTest` (2026-06-15). Do not reintroduce `SubscribeOn`, and do not drop the suppression.*
 
 ---
 
@@ -106,9 +108,11 @@ public async Task ObserveQuery_EmitsInitialResults()            // ← async Tas
 
 (That is `ObservableQueryTests.ObserveQuery_EmitsInitialResults` in `test/MeshWeaver.Query.Test` — the role model for this shape.)
 
-`.Emit()` and `.Match()` **return** the matched value, so `var x = await obs.Should().Match(...)` replaces a hand-rolled `var x = await obs.FirstAsync().ToTask()` one-for-one.
+`.Emit()` and `.Match()` **return** the matched value, so `var x = await obs.Should().Match(...)` replaces a hand-rolled `var x = await obs.FirstAsync().ToTask()` one-for-one — and that hand-rolled shape is now a defect wherever it appears, not merely a verbose alternative.
 
-> **The wait is the sanctioned test-edge Rx→Task bridge.** The source is `SubscribeOn`'d onto `TaskPoolScheduler`, filtered, `Take(1)`'d, bounded with `Timeout` (throwing a private sentinel so the assertion's own timeout stays distinguishable from a `TimeoutException` raised by the *source*), and bridged via `.ToTask()`. Nothing blocks a thread. A timed-out assertion reports what the stream actually emitted — "emitted nothing at all" versus "last of N emissions was …" — because those two failures have opposite fixes.
+> 🚨 **There is no sanctioned Rx→Task bridge — not even at the test edge** (2026-08-30). Nothing in the assertion path calls `.ToTask()`.
+>
+> **The assertion owns the wait.** The source is subscribed, filtered, `Take(1)`'d, collected with `ToList()` (so an empty completion arrives as data rather than as an exception indistinguishable from a source fault), bounded with `Timeout` (throwing a private sentinel so the assertion's own timeout stays distinguishable from a `TimeoutException` raised by the *source*), and settled through `ReactiveWait` — a `TaskCompletionSource` created with `RunContinuationsAsynchronously`, which is the line that keeps the test's continuation off the signalling thread. **The subscription is disposed when the wait settles**, so a settled assertion stops consuming a stream its siblings still need. Nothing blocks a thread. A timed-out assertion reports what the stream actually emitted — "emitted nothing at all" versus "last of N emissions was …" — because those two failures have opposite fixes.
 
 ---
 
@@ -258,7 +262,7 @@ This exercises the real control plane: the owning hub's watcher reacts to `Reque
 
 The library lives in `src/MeshWeaver.Reactive.Assertions` (`System.Reactive` only) — the observable surface in `ObservableAssertions.cs`, the value surface in `ObjectAssertions.cs` / `CollectionAssertions.cs` / `MoreAssertions.cs`, and the equivalency + JSON helpers in `Equivalency.cs` / `JsonAssertions.cs`.
 
-If a genuinely missing assertion is blocking a test, **add it to the library with a unit test in `test/MeshWeaver.Reactive.Assertions.Test` that exercises both the pass and the fail path** — do not work around it with a hand-rolled `.FirstAsync().ToTask()` in the test body.
+If a genuinely missing assertion is blocking a test, **add it to the library with a unit test in `test/MeshWeaver.Reactive.Assertions.Test` that exercises both the pass and the fail path** — do not work around it with a hand-rolled `.FirstAsync().ToTask()` in the test body. That workaround is not merely discouraged; it is the forbidden shape, and the library's `ReactiveWait.First` exists precisely so no call site ever needs it.
 
 ---
 

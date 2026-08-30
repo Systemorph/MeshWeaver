@@ -4,48 +4,47 @@
 # memex-local — stand up the prod-like memex stack on Colima k3s (Mac), 1:1 with
 # Doc/Architecture/LocalColimaMac. The formula declares the brew toolchain and
 # installs the orchestration CLI; it vendors a snapshot of the deploy/helm chart
-# so a standalone install works (refreshed by `brew reinstall`). Run-from-checkout
-# mode uses the live deploy/helm (or MEMEX_REPO/MEMEX_CHART_DIR) directly — that
-# checkout stays the single source of truth. NOTE: a brew install's wrapper sets
-# MEMEX_CHART_DIR to the vendored snapshot, so on a brew install an *exported*
-# MEMEX_CHART_DIR/MEMEX_REPO does NOT override it — use run-from-checkout for that.
+# so a standalone install works. Run-from-checkout mode uses the live deploy/helm
+# (or MEMEX_REPO/MEMEX_CHART_DIR) directly — that checkout stays the single source
+# of truth. NOTE: a brew install's wrapper sets MEMEX_CHART_DIR to the vendored
+# snapshot, so on a brew install an *exported* MEMEX_CHART_DIR/MEMEX_REPO does NOT
+# override it — use run-from-checkout for that.
 #
-# Install (brew) — requires a local tap: current Homebrew only discovers formulae
-# at a tap's root/Formula, and this formula lives at the nested
-# deploy/homebrew/Formula/, so `brew install ./…/memex-local.rb` and a two-arg tap
-# of the monorepo are both rejected. Until a real tap repo
-# (Systemorph/homebrew-memex) is published, create a local tap from the checkout:
-#   brew tap-new systemorph/memex
-#   cp deploy/homebrew/Formula/memex-local.rb "$(brew --repo systemorph/memex)/Formula/"
-#   brew install --HEAD systemorph/memex/memex-local
+# THIS FILE IS THE TEMPLATE. The published tap (Systemorph/homebrew-memex) carries the
+# same formula RENDERED by deploy/homebrew/scripts/render-formula.sh with a stable
+# `url`/`sha256` pointing at the tarball the platform's Homebrew workflow attaches to a
+# release of that tap (version 0.2.<main commit count>, so every merge to main is an
+# upgrade). Install from there:
 #
-# Or skip brew entirely — the CLI runs straight from the checkout (its designed
-# run-from-checkout mode resolves the chart + share assets from the repo):
-#   ln -s "$PWD/deploy/homebrew/bin/memex-local" ~/.local/bin/memex-local   # (~/.local/bin on PATH)
-#   # …or just call ./deploy/homebrew/bin/memex-local directly.
+#   brew tap systemorph/memex
+#   brew install memex-local
+#   memex-local registry https://memex.meshweaver.cloud   # consume the cloud registry (free tier; --key mwr_… for a plan)
+#   memex-local up
 #
-# Then:
-#   memex-local up        # full stack
-#   memex-local status
-#   memex-local logs
+# From a checkout (developing memex-local itself), a local tap over THIS file works too:
+#   brew tap-new systemorph/memex-dev
+#   cp deploy/homebrew/Formula/memex-local.rb "$(brew --repo systemorph/memex-dev)/Formula/"
+#   brew install --HEAD systemorph/memex-dev/memex-local
 #
 class MemexLocal < Formula
   desc "Local prod-like memex portal on Colima k3s (Helm + ingress + Ollama)"
   homepage "https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Documentation/Data/Architecture/LocalColimaMac.md"
-  version "0.1.0"
+  version "0.2.0"
   license "Apache-2.0"
 
-  # HEAD-only: this is an internal operator tool that tracks the repo. For a
-  # tagged release, add a stable `url`/`sha256` pointing at a release tarball.
+  # The published tap's render inserts `url`/`sha256` here; the template stays HEAD-capable so a
+  # checkout can install the tip of main.
   head "https://github.com/Systemorph/MeshWeaver.git", branch: "main"
 
-  # Runtime toolchain — exactly the tools LocalColimaMac.md §1 installs.
+  # Runtime toolchain — exactly the tools LocalColimaMac.md §1 installs, plus the Azure CLI the
+  # registry-mode image pull needs (`az acr login`; the CI-built image lives in a private ACR).
   # NOTE: the .NET SDK is intentionally NOT a formula dependency. `depends_on cask:`
   # is rejected by current Homebrew ("Unsupported special dependency: :cask"), it's
   # needed only for the local-build image path (Option B, §3) — the ACR-pull path
-  # (Option A) needs no SDK — and LocalColimaMac.md §1 treats the standalone .NET
-  # installer as equally valid. The requirement is surfaced in `caveats` and enforced
-  # at runtime by `preflight()` / `doctor` (which check for `dotnet` on the build path).
+  # (Option A, the registry-mode default) needs no SDK — and LocalColimaMac.md §1
+  # treats the standalone .NET installer as equally valid. The requirement is
+  # surfaced in `caveats` and enforced at runtime by `preflight()` / `doctor`.
+  depends_on "azure-cli"       # az acr login (registry mode pulls the CI-built image)
   depends_on "colima"          # k3s VM
   depends_on "helm"            # chart install/upgrade
   depends_on "kubernetes-cli"  # kubectl
@@ -73,21 +72,27 @@ class MemexLocal < Formula
     <<~EOS
       memex-local automates Doc/Architecture/LocalColimaMac (Colima k3s on Mac).
 
-      First run (brings up colima → image → ingress → mkcert → helm → ollama →
-      launchd port-forward):
+      Recommended: consume the cloud plugin registry (LocalColimaMac §17) — no key
+      needed, an un-keyed registration lands on the FREE tier:
 
+        memex-local registry https://memex.meshweaver.cloud
         memex-local up
 
+      That pulls the CI-built multi-arch image from ACR (`az login` first — no .NET
+      SDK, no source checkout), registers this install at the registry on first
+      boot, installs the packages it is granted and lands their compiled modules —
+      the only way a local install gets Radzen/Analysis/EntityViews/GoogleMaps/Speech.
+      A higher plan is a platform admin's edit of this instance's grant on the
+      registry, or a registration key minted for that plan (--key mwr_…).
+
+      Alternative (serving plugins from a source checkout, §16): set MEMEX_REPO to a
+      MeshWeaver checkout with MeshWeaver.Plugins beside it, install the .NET SDK
+      (10.0: https://dotnet.microsoft.com/download or `brew install --cask
+      dotnet-sdk`) and run `memex-local up` — it builds a native arm64 image.
+
       Notes:
-        * The default image path builds a native arm64 portal image locally
-          (Option B, §3) and needs the MeshWeaver source AND the .NET SDK (10.0):
-          install it from https://dotnet.microsoft.com/download or
-          `brew install --cask dotnet-sdk`, then set MEMEX_REPO to your checkout.
-          Or use `memex-local up --from-acr` to pull from ACR (Option A) — that
-          path needs no SDK (run `az acr login -n meshweaver` first).
-        * Fill in your Microsoft Entra app values in ~/.memex-local/values.local.yaml
-          (generated on first run), or uncomment Authentication__EnableDevLogin
-          for a no-Azure login.
+        * ~/.memex-local/values.local.yaml is generated on first run; set
+          Authentication__DevAdminUsers to your username (DevLogin is the default).
         * Verbose logging is applied as a deployment-config override (kubectl set
           env) — no committed appsettings are changed.
 
@@ -98,5 +103,7 @@ class MemexLocal < Formula
   test do
     assert_match "memex-local", shell_output("#{bin}/memex-local version")
     assert_match "USAGE", shell_output("#{bin}/memex-local help")
+    # Registry mode is a state machine over one file; `status` must answer without a cluster.
+    assert_match "SELF-REGISTRY", shell_output("#{bin}/memex-local registry status")
   end
 end

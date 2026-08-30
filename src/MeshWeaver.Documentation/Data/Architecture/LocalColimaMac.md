@@ -40,7 +40,7 @@ brew install socket_vmnet
 
 You also need the **.NET SDK** (10.0) to build the portal image — install from [dotnet.microsoft.com](https://dotnet.microsoft.com/download) or `brew install --cask dotnet-sdk`.
 
-> **Prefer one command?** `deploy/homebrew/` ships a `memex-local` CLI that automates **every step on this page**, idempotently. Since Option B needs a checkout anyway, run it straight from there — `./deploy/homebrew/bin/memex-local up` (or symlink it onto your PATH) — then `up` / `down` / `status` / `logs` / `update`. A brew install works too (via a local tap, until a tap repo is published). See `deploy/homebrew/README.md`. The rest of this page is the manual reference the CLI follows 1:1.
+> **Prefer one command?** `brew tap systemorph/memex && brew install memex-local` — the `memex-local` CLI automates **every step on this page**, idempotently: `up` / `down` / `status` / `logs` / `update`. The tap is published by this repository's CI on every merge to `main` (`brew upgrade memex-local` follows main). Point it at the cloud plugin registry first (**§17**, `memex-local registry https://memex.meshweaver.cloud` — no key needed, that is the free tier) and it needs neither a source checkout nor the .NET SDK. See `deploy/homebrew/README.md`. The rest of this page is the manual reference the CLI follows 1:1.
 
 The work splits across three areas, which the rest of this page walks through in order:
 
@@ -598,6 +598,66 @@ Expected on a healthy run — the instance registers, is granted `Plugins/*` by
 
 > 🚨 The grant/install split is the security property, not a formality: an instance is routinely
 > entitled to paid course content, and "install everything I'm entitled to" would auto-install it.
+
+> 🚨 **What a self-registry install can NEVER have: a module binary.** A checkout holds source, not
+> assemblies, and a registry serves a module only from its own `modules/<name>/` — so every
+> module-declaring package installs its content and silently skips its DLL (MeshWeaver#2417; the
+> self-sealing "up to date" gates were fixed in #2659, the lane itself stays closed by construction).
+> No Radzen charts, Analysis, EntityViews, GoogleMaps or Speech, and `values.local.self-registry.yaml`
+> blanks those five `Modules__Required` entries so readiness does not stall on them. The way to a
+> complete local portal is not a local build lane; it is the next section.
+
+---
+
+## 17. Registry mode — consume memex.meshweaver.cloud (`memex-local registry`)
+
+The other way round from §16: this install is a **consumer** of a remote plugin registry, exactly
+like every cloud instance is a consumer of memex.meshweaver.cloud. It runs the **CI-built
+multi-arch image** from ACR (the native arm64 member — no source checkout, no .NET SDK, `az login`
+once), registers itself at the registry on first boot, installs the packages it is granted and
+**lands their compiled modules** from the registry's bundles into `/data`. Module bundles are
+platform-floor-gated IL, so the amd64-built bundles the registry serves land on an arm64 install
+unchanged. (Prebuilt NodeType *bakes* are identity-gated and amd64-only; a local install compiles
+those on first access, which is the `PreWarm__DynamicTypes: "false"` behaviour it already has.)
+
+```bash
+memex-local registry https://memex.meshweaver.cloud --id my-mac    # no key: an OPEN registration → the free tier
+memex-local up            # a fresh install …
+memex-local update        # … or an existing self-registry one: pulls the ACR image, re-renders the chart
+memex-local registry status
+```
+
+**No key is the default.** An un-keyed registration is an *open* one: memex.meshweaver.cloud
+accepts it and enrols the install into its default plan, the **free tier** — every package the
+free plan covers, plus the platform baseline. Raising it is a platform admin's edit of the
+instance's grant on the registry (Instance grants ▸ Plan); an install never asks for a plan
+itself. A registration key (`--key mwr_…`, minted by a platform admin under Settings ▸
+Administration ▸ Instance grants ▸ Registration keys, *for a plan*) is the way an install lands
+on a higher plan from its first boot — and the only way in on a registry that accepts no open
+registrations ([PluginRegistry.md](/Doc/Architecture/PluginRegistry) → *Plans*).
+
+What changes under the hood, and why:
+
+| | Self-registry (§16) | Registry mode (§17) |
+|---|---|---|
+| values layers | `values.local.defaults.yaml` + `values.local.self-registry.yaml` + overlay | `values.local.defaults.yaml` + `~/.memex-local/registry.yaml` + overlay |
+| `pluginCatalog` | `sources` + `localRepoMounts` off the checkout, `defaultGrants` | `registryUrl`, `instanceId`, `homeUrl`; the chart's `installByDefault: ["Plugins/*"]` |
+| bootstrap key | minted on the local portal (`instance up`) | none by default (open registration → the registry's default plan); with `--key`, **presented once** (`PluginCatalog__BootstrapKey`). Either way the issued `mwi_` key is stored encrypted in this install's database and survives every `update` |
+| `Modules__Required__0..4` | blanked (nothing can land them) | the image baseline stands — a store-delivered required module reads `ExpectedLater`, never a rollout blocker, and `verify --repair` performs the one activation restart |
+| image | built from source (Option B) | ACR `main` (`--build` still works — `up`/`update` only change their default) |
+
+The registry file is always `0600`: it may carry a bootstrap key, and a bootstrap key is a secret
+— it registers instances under the minting admin's identity — so the mode does not vary by whether
+one was given; `registry status` never prints it. **What this install may pull is decided on the
+registry**, per instance, in `Admin/_PluginGrant/{instanceId}` — registering is identity, not
+entitlement ([PluginRegistry.md](/Doc/Architecture/PluginRegistry)). A first boot that installs
+nothing has one of two causes, and `memex-local verify` names both: the registration was refused
+(401 — with a key: revoked or expired, mint a new one and re-run `registry`; without one: that
+registry accepts no open registrations, ask its platform admin for a key), or the registry
+advertises `0 package(s)` to this instance (no grant yet — a platform admin adds one for it).
+
+`memex-local registry off` deletes the file and the next `update` serves a checkout again; the
+instance stays registered on the registry until an admin revokes it there.
 
 ---
 

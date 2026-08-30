@@ -61,10 +61,29 @@ internal static class KernelScriptReferences
     // pooled leaf happens to trigger the FIRST-ever build. A caller's own cancellation must never
     // abort this — it is shared by every mesh in the process — so GetReferencesAsync races the
     // CALLER's token against this shared Task with Task.WaitAsync, never against the work itself.
-    private static readonly Lazy<Task<ImmutableArray<PortableExecutableReference>>> SharedSnapshot =
-        new(() => Task.Run(CreateSharedSnapshot), LazyThreadSafetyMode.ExecutionAndPublication);
+    //
+    // 🚨 IT IS A WARM-UP, NOT THE ANSWER (#2616). It used to be the answer: a
+    // Lazy<Task<ImmutableArray<...>>> whose value GetReferencesAsync returned directly. That
+    // FROZE `AppDomain.CurrentDomain.GetAssemblies()` as of the process's FIRST kernel session —
+    // and assemblies load LAZILY, so which ones existed at that instant was a load-order lottery.
+    // Whatever had not loaded yet was missing from every script compilation for the life of the
+    // process: completions silently short a symbol, and a script referencing it fails to compile.
+    // Under parallel shard load the lottery is decided by whichever unrelated test ran first,
+    // which is why it presented as a flake reproducing on completely unrelated diffs
+    // (ScriptCompletions_FilterByTypedPrefix_NotJustTheAlphabet losing "Mesh").
+    // So this Task now only WARMS the memo — the expensive first materialization still happens
+    // once, off the caller's pooled leaf — and GetReferencesAsync composes the set fresh from the
+    // CURRENT assembly list on every call. Later calls are dictionary hits, so the cost of being
+    // correct is an array copy and ~350 lookups, against a Roslyn compilation.
+    private static readonly Lazy<Task> SharedWarmup =
+        new(() => Task.Run(() => MaterializeCurrentAssemblies()), LazyThreadSafetyMode.ExecutionAndPublication);
 
-    private static ImmutableArray<PortableExecutableReference> CreateSharedSnapshot()
+    /// <summary>
+    /// Every non-collectible, production-referenceable assembly loaded RIGHT NOW, as shared
+    /// references. Called on each <see cref="GetReferencesAsync"/> so a late-loading assembly is
+    /// never invisible; the per-file memo makes every call after the first a dictionary hit.
+    /// </summary>
+    private static ImmutableArray<PortableExecutableReference> MaterializeCurrentAssemblies()
         => AppDomain.CurrentDomain.GetAssemblies()
             .Where(IsProductionReferenceable)
             // 🚨 Collectible-ALC assemblies (DynamicNode_* NodeType builds, other kernel
@@ -187,12 +206,22 @@ internal static class KernelScriptReferences
     /// promptly on cancellation and releases its gate permit, while the shared build keeps
     /// running to completion in the background for whichever mesh/request needs it next — safe,
     /// because it never touches a collectible NodeType ALC or any one mesh's disposed DI scope
-    /// (<see cref="CreateSharedSnapshot"/> explicitly excludes collectible-ALC assemblies).</para>
+    /// (<see cref="MaterializeCurrentAssemblies"/> explicitly excludes collectible-ALC assemblies).</para>
     /// </summary>
     public static async Task<ImmutableArray<MetadataReference>> GetReferencesAsync(
         IEnumerable<Assembly> sessionAssemblies, CancellationToken ct)
     {
-        var snapshot = await SharedSnapshot.Value.WaitAsync(ct).ConfigureAwait(false);
+        // Wait for the shared warm-up — which is where the BULK materialization (~350 assemblies,
+        // uncancellable CPU/disk) happens, off this caller's pooled leaf — then build the set from
+        // what is loaded NOW. See SharedWarmup for why this must not be a frozen list.
+        //
+        // 🚨 NOT "no synchronous work on the caller path". MaterializeCurrentAssemblies() resolves
+        // through the per-file memo, so an assembly that loaded AFTER the warm-up is materialized
+        // HERE, synchronously, by whichever caller sees it first — one CreateFromFile for that one
+        // file, then memoized for everyone. That is the price of not freezing the list, and it is
+        // bounded by how many assemblies have loaded since the warm-up, not by the ~350 total.
+        await SharedWarmup.Value.WaitAsync(ct).ConfigureAwait(false);
+        var snapshot = MaterializeCurrentAssemblies();
         var result = ImmutableArray.CreateBuilder<MetadataReference>(snapshot.Length + 4);
         var seen = new HashSet<PortableExecutableReference>();
         foreach (var reference in snapshot)

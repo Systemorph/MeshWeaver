@@ -151,10 +151,17 @@ For a binary format with no transformer, two reliable patterns:
 A note on collection resolution inside scripts: the kernel's `IContentService` does not know node-scoped collections by their plain name. Fetch the node's collection config first and register it under a qualified name — the same handshake `upload` performs:
 
 ```csharp
+// 🚨 ObserveCompletion, never Rx's ToTask bridge (forbidden repo-wide, 2026-08-30) and never a
+//    bare `await Mesh.Observe(...)`: both resume the rest of this script INLINE on the mesh
+//    thread that delivered the response. FirstAsync (not Take(1)): the next line dereferences
+//    delivery.Message, so an empty completion must FAULT rather than settle with null.
 var delivery = await Mesh.Observe(
         new GetDataRequest(new ContentCollectionReference(new[] { "content" })),
         o => o.WithTarget((Address)"MySpace"))
-    .Take(1).ToTask();
+    .FirstAsync()
+    .ObserveCompletion(
+        ex => Log.LogWarning(ex, "collection config read faulted AFTER the wait settled"),
+        Ct);
 var cfg = JsonSerializer.Deserialize<ContentCollectionConfig[]>(
         ((GetDataResponse)delivery.Message).Data is JsonElement je ? je : default,
         Mesh.JsonSerializerOptions)

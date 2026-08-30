@@ -9,6 +9,9 @@
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
+    <!-- KernelScriptReferencesFreshnessTest: the reference set is internal, and the freshness
+         invariant (#2616) is only testable from inside. -->
+    <InternalsVisibleTo Include="MeshWeaver.Kernel.Test" />
   </ItemGroup>
 
   <ItemGroup>

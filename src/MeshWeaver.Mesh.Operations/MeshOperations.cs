@@ -3616,40 +3616,68 @@ public class MeshOperations
             // bypasses the un-park seam, so a parked (terminally failed) type swallows
             // the trigger in the compile watcher's parked short-circuit and wedges at
             // Pending (2026-07-16 memex Reinsurance/Layer + BusinessRules/Scope).
-            hub.GetWorkspace().GetMeshNodeStream(resolvedPath).Update(curr =>
+            //
+            // 🚨 THE STAMP MUST LAND BEFORE THE DISPOSE — sequence it, never race it.
+            // This used to be a fire-and-forget .Subscribe() followed immediately by the
+            // DisposeRequest below, which left the two ordered only by the fact that both
+            // were issued inside the caller's hub turn. That is an invariant nothing
+            // enforced: when the dispose won, the reactivated hub re-ran its source query
+            // against a half-invalidated state, matched ZERO Code nodes and recompiled the
+            // PRE-FIX source — the type then settled at Error with the old diagnostics and
+            // stayed parked, which is precisely the "matches zero Code nodes" failure the
+            // permission gate's Take(1) comment above describes. Chaining the dispose onto
+            // the write's completion makes the ordering explicit and turn-independent.
+            // (Found via NodeTypeCompileParkTest.ParkedNodeType_RecycleRetry_AfterFix_
+            // SettlesOkAndUnparks, which failed ~20-40% once #2748 stopped resuming test
+            // continuations inline on the signalling thread and so stopped accidentally
+            // holding this ordering.)
+            var stamped = hub.GetWorkspace().GetMeshNodeStream(resolvedPath).Update(curr =>
                     IsNodeTypeNode(curr)
                         ? WithReleaseRequest(curr, DateTimeOffset.UtcNow)
                         : curr)
-                .Subscribe(
-                    _ => { },
-                    ex => logger.LogWarning(ex,
-                        "Recycle: failed to stamp release request for {Path}", resolvedPath));
-
-            var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-            if (changeFeed != null)
-            {
-                var segments = resolvedPath.Split('/');
-                var id = segments.Length > 0 ? segments[^1] : resolvedPath;
-                var ns = segments.Length > 1 ? string.Join("/", segments[..^1]) : "";
-                changeFeed.Publish(new MeshChangeEvent(
-                    Namespace: ns,
-                    Id: id,
-                    Path: resolvedPath,
-                    Kind: MeshChangeKind.Updated,
-                    NodeType: MeshNode.NodeTypePath,
-                    Version: 0,
-                    Timestamp: DateTimeOffset.UtcNow));
-            }
-
-            hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(resolvedPath)));
-            return Observable.Return(JsonSerializer.Serialize(
-                new
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Select(_ => true)
+                .Catch((Exception ex) =>
                 {
-                    status = "Recycled",
-                    path = resolvedPath,
-                    message = "DisposeRequest posted + cache invalidation broadcast via MeshChangeFeed. Wait ~100ms before the next access."
-                },
-                hub.JsonSerializerOptions));
+                    // A failed stamp must not swallow the recycle: the hub bounce is still
+                    // worth doing (it is the caller's actual ask), and the compile trigger
+                    // is recoverable by a second Recycle/Compile. Surface it in the log
+                    // rather than silently degrading to the old racy behaviour.
+                    logger.LogWarning(ex,
+                        "Recycle: failed to stamp release request for {Path} — disposing the hub anyway",
+                        resolvedPath);
+                    return Observable.Return(false);
+                });
+
+            return stamped.Select(_ =>
+            {
+                var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+                if (changeFeed != null)
+                {
+                    var segments = resolvedPath.Split('/');
+                    var id = segments.Length > 0 ? segments[^1] : resolvedPath;
+                    var ns = segments.Length > 1 ? string.Join("/", segments[..^1]) : "";
+                    changeFeed.Publish(new MeshChangeEvent(
+                        Namespace: ns,
+                        Id: id,
+                        Path: resolvedPath,
+                        Kind: MeshChangeKind.Updated,
+                        NodeType: MeshNode.NodeTypePath,
+                        Version: 0,
+                        Timestamp: DateTimeOffset.UtcNow));
+                }
+
+                hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(resolvedPath)));
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Recycled",
+                        path = resolvedPath,
+                        message = "DisposeRequest posted + cache invalidation broadcast via MeshChangeFeed. Wait ~100ms before the next access."
+                    },
+                    hub.JsonSerializerOptions);
+            });
         }
         catch (Exception ex)
         {

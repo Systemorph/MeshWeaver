@@ -125,10 +125,10 @@ This is a **hard contract**, not a style preference:
 
 - New service methods: `IObservable<T>` only.
 - Refactoring an existing `async Task<T>` that is hub-reachable: change the signature; update every caller.
-- Don't paper over it with default-interface Task shims. Don't keep the Task overload "for tests" — tests call `.FirstAsync().ToTask(ct)` at *their* edge. The production interface stays Task-free.
+- Don't paper over it with default-interface Task shims, and don't keep a Task overload "for tests": 🚨 **`.ToTask()` is forbidden in tests too** (maintainer, 2026-08-30). A test awaits the observable directly with a `.Timeout(...)`. The production interface stays Task-free.
 - Don't introduce `Observable.FromAsync(ct => SomeAsyncMethod(...))` to "make it observable" while the inner method still awaits a hub round-trip — that's the same deadlock with one extra layer of indirection.
 
-The Task boundary belongs at the test edge (`.FirstAsync().ToTask(ct)`) or in framework lifecycle hooks (`OnActivateAsync` etc.), and only when **no further mesh work** runs after the await.
+🚨 **There is no sanctioned `.ToTask()` boundary — not even at the test edge** (maintainer, 2026-08-30: *"no ToTask ever"*). The mechanism below is the reason: a Task completed inside an Rx pipeline resumes its awaiter INLINE on the signalling thread, still inside the trampoline, and everything the continuation does inherits that flag — which is why this was never a test-only concern. Await the observable directly (`await …FirstAsync().Timeout(…)`); in framework lifecycle hooks (`OnActivateAsync` etc.) subscribe and return `Task.CompletedTask`. The one place a bridge may work is inside an ACTIVITY, where nothing mesh-side runs after the await — and even there, prefer the reactive shape.
 
 **The same rule applies to every hub round-trip primitive:**
 
@@ -833,7 +833,7 @@ var response = await hub.Observe<MyResponse>(request).FirstAsync().ToTask();
 (The framework no longer offers a Task-returning request/response method at all — the only way
 to write this bug today is to bridge the observable back to a Task yourself, as above.)
 
-In tests, `await MonolithMeshTestBase.AwaitResponseAsync(request, ...)` is the sanctioned bridge — it uses `hub.Observe(...).FirstAsync().ToTask(ct)` with the test's cancellation token.
+In tests, `await MonolithMeshTestBase.AwaitResponseAsync(request, ...)` is the sanctioned helper — and 🚨 it must NOT bridge through `.ToTask()`: it awaits `hub.Observe(...).FirstAsync()` directly under the test's timeout.
 
 ---
 

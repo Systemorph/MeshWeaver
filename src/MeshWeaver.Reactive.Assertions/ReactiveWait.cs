@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reactive.Disposables;
 
 namespace MeshWeaver.Reactive.Assertions;
 
@@ -59,7 +60,17 @@ internal static class ReactiveWait
 
         var completion = new TaskCompletionSource<T?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        source.Subscribe(
+        // 🚨 DISPOSE THE SUBSCRIPTION WHEN THE WAIT SETTLES. Rx's own bridge did; dropping the
+        // IDisposable leaves a live subscriber on the asserted stream for the rest of the process.
+        // Assertions in a class share subjects, so every settled assertion keeps consuming and a
+        // later one starves — NodeTypeCompileParkTest.RecycleRetry, ~40% of main runs after #2748,
+        // reported as "Last of N emission(s), none matched" at the full timeout.
+        //
+        // The late-fault trace below therefore only covers faults arriving BEFORE disposal, which
+        // is the honest trade: a fault from a stream nobody is asserting on any more is noise, and
+        // keeping the subscription alive to catch it is what broke the suite.
+        var subscription = new SingleAssignmentDisposable();
+        subscription.Disposable = source.Subscribe(
             value => completion.TrySetResult(value),
             error =>
             {
@@ -73,6 +84,12 @@ internal static class ReactiveWait
             },
             () => completion.TrySetResult(default));
 
+        _ = completion.Task.ContinueWith(
+            (_, state) => ((IDisposable)state!).Dispose(),
+            subscription,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
         return completion.Task;
     }
 }

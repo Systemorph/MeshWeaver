@@ -92,8 +92,20 @@ public class IoPoolResidualNamesItsPoolTest
             "the residual must carry the leaking pool's NAME: Query=1 and Compile=1 are different "
             + "bugs with different owners");
         byPool[0].Residual.Should().BeGreaterThan(0);
-        byPool[0].ToString().Should().Be($"{IoPoolNames.Query}={byPool[0].Residual}",
-            "this is the wire format the teardown traces embed, so it is part of the contract");
+        // The wire format the teardown traces embed, so it is part of the contract: the pool's
+        // name and count first — and, since #2770, the leaf that is still running, in brackets.
+        // A bare `Query=1` sent the reader into every Query-pool caller in the process; the site
+        // is the difference between "some query leaked" and the method that owns it.
+        var wire = byPool[0].ToString();
+        wire.Should().StartWith($"{IoPoolNames.Query}={byPool[0].Residual} [",
+            "the residual leads with the pool's name and count, exactly as before #2770");
+        wire.Should().Contain(nameof(IoPoolResidualNamesItsPoolTest),
+            "the bracketed site names the leaf's enclosing method, and the leaf that leaked is "
+            + "the lambda THIS test handed to the pool — a residual naming any other site would "
+            + "be pointing the reader at somebody else's code");
+        byPool[0].Sites.Should().ContainSingle(
+            "one leaf leaked, so one site; a duplicate here would mean the same delegate was "
+            + "counted twice");
     }
 
     /// <summary>

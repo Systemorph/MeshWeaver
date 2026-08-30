@@ -47,7 +47,6 @@ memex/Memex.Portal.Shared/Authentication/UserOnboardingService.cs	3
 memex/Memex.Portal.Shared/Email/InvitationEmailSender.cs	2
 memex/Memex.Portal.Shared/Email/OutboundEmailSender.cs	1
 memex/Memex.Portal.Shared/Settings/InboxSettingsTab.cs	1
-src/MeshWeaver.AI/ChatClientCredentialResolver.cs	2
 src/MeshWeaver.GitSync/GitHubSyncService.cs	2
 src/MeshWeaver.GitSync/GitHubWebhookProcessor.cs	4
 src/MeshWeaver.Graph/Configuration/CellSurfaceAssemblyProvider.cs	2

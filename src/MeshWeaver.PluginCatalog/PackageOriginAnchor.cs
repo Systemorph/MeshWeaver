@@ -26,6 +26,13 @@ public sealed record PackageOrigin(
     string? MinMeshVersion,
     string? TargetPartition = null)
 {
+    /// <summary>The plan the package declares (<see cref="PackageManifest.Tier"/>), or null for a
+    /// baseline package — the registry's answer to "which tier is this", which a plan-scoped grant
+    /// is decided against and which overrides a cached install record's stamp. An init property,
+    /// not a primary-constructor parameter: modules bind this record's constructor by signature,
+    /// and widening it would break every one compiled before the plan existed (#2298's gate).</summary>
+    public string? Tier { get; init; }
+
     /// <summary>The partition this package's content lives in — its declared
     /// <see cref="TargetPartition"/>, else its id (what a node-native repo's folder name is).</summary>
     public string Partition =>
@@ -76,6 +83,12 @@ public sealed record PackageOriginSnapshot(
     /// <summary>The source the registry binds <paramref name="packageId"/> to, or null.</summary>
     public string? SourceOf(string packageId) =>
         Origins.TryGetValue(packageId, out var origin) ? origin.Source : null;
+
+    /// <summary>The plan the registry's catalog declares for <paramref name="packageId"/>, or null
+    /// — for a baseline package as much as for one the anchor does not carry; the caller falls
+    /// back to its cached observation in the second case.</summary>
+    public string? TierOf(string packageId) =>
+        Origins.TryGetValue(packageId, out var origin) ? origin.Tier : null;
 
     /// <summary>One line, for a log or a health payload.</summary>
     public string Describe() => State switch
@@ -243,7 +256,7 @@ public sealed class PackageOriginAnchor
                 package.Id,
                 new PackageOrigin(
                     package.Id, listing.Source.Name, package.ReleasedVersion, package.Module,
-                    package.MinMeshVersion, package.TargetPartition));
+                    package.MinMeshVersion, package.TargetPartition) { Tier = package.Tier });
 
         if (failures.Length == 0)
         {

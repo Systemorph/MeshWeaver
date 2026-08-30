@@ -7,7 +7,9 @@ Icon: Beaker
 
 # Writing Tests in MeshWeaver
 
-MeshWeaver is reactive end-to-end — and its tests are too. A well-written test method is **`async Task`**, contains **no hand-rolled `.FirstAsync().ToTask()` / `.Result` / `.Wait()` / `Task.Delay`**, and asserts on `IObservable<T>` directly through the `MeshWeaver.Reactive.Assertions` surface. Each terminal assertion (`Emit` / `Match` / `Be` / `Complete` / `NotEmit`) **returns a `Task` you `await`** — the Rx→Task bridge lives *inside* the assertion, never in the test body.
+MeshWeaver is reactive end-to-end — and its tests are too. A well-written test method is **`async Task`**, contains **no `.FirstAsync().ToTask()` / `.Result` / `.Wait()` / `Task.Delay`** — none at all, anywhere — and asserts on `IObservable<T>` directly through the `MeshWeaver.Reactive.Assertions` surface. Each terminal assertion (`Emit` / `Match` / `Be` / `Complete` / `NotEmit`) **returns a `Task` you `await`** — the wait lives *inside* the assertion, never in the test body, and it is **not** Rx's `.ToTask()` bridge: the assertion settles its own `TaskCompletionSource` with `RunContinuationsAsynchronously`, so the test never resumes on the mesh thread that signalled.
+
+> **🚨 `.ToTask()` is forbidden here too** (maintainer ruling, 2026-08-30: *"no totask ever"*; the old "tests are the one sanctioned place" carve-out is RETRACTED). Rx's bridge resumes the awaiter inline on the signalling thread, which in a test is the thread that then runs the rest of the test, its mesh teardown, and — under xUnit — the runner starting the next class. `await source.FirstAsync()` is the same defect in fewer characters: Rx's awaiter is an `AsyncSubject<T>` that completes its continuation from inside `OnCompleted`. Assert through `.Should()`; where an `async Task` signature genuinely must take a value out of a stream, use `MeshWeaver.Messaging.ReactiveCompletion.ObserveCompletion(reportLateFault, ct)`.
 
 > **🚨 `await` the assertion — it is not a blocking call.** `Emit()` and `Match()` return `Task<T>`; `Be()` / `Complete()` / `NotEmit()` return `Task<ObservableAssertions<T>>`. Dropping the `await` on a statement such as `NodeFactory.CreateNode(node).Should().Emit();` compiles with **no warning** and the test races on ahead without ever waiting for the write — the single easiest way to write a green-but-lying test here. (This reverses an earlier design in which the assertions blocked and test bodies were `void`; see `ObservableAssertions.cs`, which is explicit that it is *"never a thread-blocking `ManualResetEventSlim` + `Wait`"*.)
 
@@ -80,7 +82,7 @@ Before writing a test, review the invariants every test must respect:
 ## The Golden Rules
 
 > **Rule 1 — Test bodies are `async Task` and reactive.**
-> Assert on the observable: `await obs.Should().Within(10.Seconds()).Match(x => predicate)`. The assertion subscribes (on the thread pool), waits up to the timeout, and returns the matched emission. No hand-rolled `.FirstAsync().ToTask()`, no `.Result` / `.Wait()`, no `Task.Delay` anywhere in the body.
+> Assert on the observable: `await obs.Should().Within(10.Seconds()).Match(x => predicate)`. The assertion subscribes (off xUnit's sync context, so the mesh's continuations land on the pool), waits up to the timeout, and returns the matched emission. No `.FirstAsync().ToTask()` — the bridge is forbidden outright, not just "hand-rolled" — no `.Result` / `.Wait()`, no bare `await someObservable`, no `Task.Delay` anywhere in the body.
 
 > **Rule 2 — Every terminal assertion must be `await`ed.**
 > `.Emit()` / `.Match()` / `.Be()` / `.Complete()` / `.NotEmit()` return a `Task`. An un-awaited one is a fire-and-forget that the compiler will not flag in most positions, so the test proceeds before the write lands. `.Within(t)` and `.Should(t)` are the only synchronous links in the chain — they just configure the deadline. (See [Reactive Test Assertions §2](/Doc/Architecture/ReactiveTestAssertions) for the mechanics, including why the assertion subscribes on `TaskPoolScheduler` rather than xUnit's single-threaded sync context.)
@@ -182,7 +184,7 @@ From `MeshWeaver.Reactive.Assertions` (globally imported in every test project).
 | `await obs.Should().NotEmit(within: 200.Milliseconds())` | Nothing arrives — the **one** place a fixed wait is correct |
 | `obs.Should().Within(t)....` / `obs.Should(t)....` | Override the default 10 s timeout for this chain (synchronous — still `await` the terminal call) |
 
-`.Emit()` and `.Match()` **return** the matched value, replacing the hand-rolled `var x = await obs.FirstAsync().ToTask()` pattern one-for-one: `var x = await obs.Should().Within(t).Match(...)`.
+`.Emit()` and `.Match()` **return** the matched value, replacing the forbidden `var x = await obs.FirstAsync().ToTask()` pattern one-for-one: `var x = await obs.Should().Within(t).Match(...)`.
 
 **Fold the wait into the predicate.** Don't grab the first emission and hope it's the right one — describe the state you are waiting for:
 

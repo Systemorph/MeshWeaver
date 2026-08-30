@@ -126,7 +126,16 @@ Controls.Stack
 ```csharp
 Controls.Stack
     .WithView(async (host, ctx, ct) => {
-        var settings = await ioPool.Invoke(ct2 => LoadSettingsAsync(ct2)).ToTask(ct);
+        // 🚨 ViewDefinition's Task<UiControl?> is a signature we do not own, so an
+        //    await is legitimate here — the BRIDGE is not free choice. ObserveCompletion,
+        //    never Rx's ToTask bridge (forbidden repo-wide, 2026-08-30) and never a bare
+        //    `await someObservable`: both resume this render INLINE on the pool thread
+        //    that signalled, still inside Rx's trampoline.
+        var settings = await ioPool.Invoke(ct2 => LoadSettingsAsync(ct2))
+            .FirstAsync()
+            .ObserveCompletion(
+                ex => logger.LogWarning(ex, "settings load faulted after the wait settled"),
+                ct);
         return Controls.Label($"Hello, {settings.Name}");
     })
 ```

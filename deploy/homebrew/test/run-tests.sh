@@ -294,10 +294,115 @@ case "$body" in
        "it returns as soon as launchd accepts the job, and every caller verifies immediately after: ${body}" ;;
 esac
 
+echo "── registry mode is a state machine over ONE file ────────────────"
+
+# `memex-local registry` decides where a local install gets its plugins from — its own checkout
+# (which can never land a module binary, MeshWeaver#2417) or a remote registry — by writing or
+# removing ~/.memex-local/registry.yaml. Driven through the whole cycle against a scratch home; a
+# secret that is printed back, a wrong-shaped key that is accepted, or a file readable by everyone
+# are each a defect this suite exists to catch.
+RHOME="$STUBS/home"
+reg() { OUT="$(env MEMEX_LOCAL_HOME="$RHOME" "$CLI" registry "$@" 2>&1)"; RC=$?; }
+
+reg status
+if [ "$RC" -eq 0 ] && case "$OUT" in *SELF-REGISTRY*) true ;; *) false ;; esac; then
+  ok "a fresh install reports self-registry mode"
+else bad "a fresh install reports self-registry mode" "exited ${RC}: ${OUT}"; fi
+
+# No key is the DEFAULT: an open registration the registry enrols into its default plan (the free
+# tier). The file must then carry NO secrets block at all — an empty PluginCatalog__BootstrapKey
+# would still render into the chart's secret and read as "a key was given".
+reg https://memex.example.test --id open-box
+rfile="$RHOME/registry.yaml"
+if [ "$RC" -eq 0 ] && case "$OUT" in *"OPEN registration"*) true ;; *) false ;; esac; then
+  ok "a registry URL without a key is an OPEN (free-tier) registration"
+else bad "a registry URL without a key is an OPEN (free-tier) registration" "exited ${RC}: ${OUT}"; fi
+if [ -f "$rfile" ] && ! grep -q "PluginCatalog__BootstrapKey\|^secrets:" "$rfile"; then
+  ok "an open registration writes no secrets block"
+else bad "an open registration writes no secrets block" "$(cat "$rfile" 2>/dev/null)"; fi
+reg status
+case "$OUT" in *"OPEN"*"free tier"*) ok "status names the open registration and the free tier" ;;
+  *) bad "status names the open registration and the free tier" "$OUT" ;; esac
+reg off >/dev/null 2>&1 || true
+
+reg https://memex.example.test --key mwi_this-is-an-instance-key
+if [ "$RC" -ne 0 ] && case "$OUT" in *"REGISTRATION key"*) true ;; *) false ;; esac; then
+  ok "an instance key (mwi_) is refused by name, not by a 401 on first boot"
+else bad "an instance key (mwi_) is refused by name" "exited ${RC}: ${OUT}"; fi
+
+reg not-a-url --key mwr_x
+if [ "$RC" -ne 0 ] && case "$OUT" in *"expected a URL"*) true ;; *) false ;; esac; then
+  ok "a non-URL first argument refuses"
+else bad "a non-URL first argument refuses" "exited ${RC}: ${OUT}"; fi
+
+reg https://memex.example.test --key mwr_x --id "Not Valid"
+if [ "$RC" -ne 0 ] && case "$OUT" in *"--id must be"*) true ;; *) false ;; esac; then
+  ok "an instance id outside the registry's alphabet refuses"
+else bad "an instance id outside the registry's alphabet refuses" "exited ${RC}: ${OUT}"; fi
+
+reg https://memex.example.test/ --key mwr_abcdefghijklmnop --id my-box
+if [ "$RC" -eq 0 ] && [ -f "$rfile" ]; then ok "registry <url> --key --id writes the registry file"
+else bad "registry <url> --key --id writes the registry file" "exited ${RC}: ${OUT}"; fi
+if grep -q 'registryUrl: "https://memex.example.test"$' "$rfile" 2>/dev/null; then
+  ok "the URL is stored without its trailing slash"
+else bad "the URL is stored without its trailing slash" "$(cat "$rfile" 2>/dev/null)"; fi
+if grep -q 'instanceId: "my-box"$' "$rfile" 2>/dev/null \
+   && grep -q 'PluginCatalog__BootstrapKey: "mwr_abcdefghijklmnop"$' "$rfile" 2>/dev/null \
+   && grep -q '^pluginCatalog:$' "$rfile" 2>/dev/null && grep -q '^secrets:$' "$rfile" 2>/dev/null; then
+  ok "the file carries pluginCatalog.{registryUrl,instanceId} and the bootstrap-key secret"
+else bad "the file carries pluginCatalog.{registryUrl,instanceId} and the bootstrap-key secret" "$(cat "$rfile" 2>/dev/null)"; fi
+case "$(ls -l "$rfile" 2>/dev/null | cut -c1-10)" in
+  -rw-------) ok "the registry file is 0600 (it holds a secret)" ;;
+  *) bad "the registry file is 0600 (it holds a secret)" "$(ls -l "$rfile" 2>/dev/null)" ;;
+esac
+
+reg status
+if [ "$RC" -eq 0 ] && case "$OUT" in *"REGISTRY MODE"*"my-box"*) true ;; *) false ;; esac; then
+  ok "status reports registry mode and the instance id"
+else bad "status reports registry mode and the instance id" "exited ${RC}: ${OUT}"; fi
+case "$OUT" in
+  *mwr_abcdefghijklmnop*) bad "status never prints the bootstrap key" "$OUT" ;;
+  *) ok "status never prints the bootstrap key" ;;
+esac
+
+# In registry mode a missing view pack must send the developer to the REGISTRY (grants, the key),
+# not to a plugins checkout this install no longer mounts.
+reports "in registry mode a missing pack names the registry, not a checkout" "memex.example.test" \
+  MEMEX_LOCAL_HOME="$RHOME" FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=200 \
+  FAKE_MODULES="module=MeshWeaver.Blazor.Views missing"
+
+reg off
+if [ "$RC" -eq 0 ] && [ ! -f "$rfile" ]; then ok "registry off removes the file"
+else bad "registry off removes the file" "exited ${RC}: ${OUT}"; fi
+reg status
+case "$OUT" in *SELF-REGISTRY*) ok "after registry off the install is back in self-registry mode" ;;
+  *) bad "after registry off the install is back in self-registry mode" "$OUT" ;; esac
+
+reg --bogus
+if [ "$RC" -ne 0 ]; then ok "an unknown registry argument refuses"
+else bad "an unknown registry argument refuses" "exited 0: $OUT"; fi
+
+# Static: the two halves of the mode switch. helm_deploy must layer the registry file in one mode
+# and the self-registry blanking layer in the other; up/update must default to the CI-built image
+# in registry mode — a source build there would run a portal the registry never baked against.
+body="$(awk -v f='^helm_deploy\\(\\)' '$0 ~ f { on=1 } on { print } on && /^}$/ { exit }' "$CLI")"
+case "$body" in
+  *'-f "$REGISTRY_FILE"'*"values.local.self-registry.yaml"*)
+    ok "helm_deploy layers the registry file OR the self-registry defaults, by mode" ;;
+  *) bad "helm_deploy layers the registry file OR the self-registry defaults, by mode" "$body" ;;
+esac
+for c in cmd_up cmd_update; do
+  body="$(awk -v f="^${c}\\\\(\\\\)" '$0 ~ f { on=1 } on { print } on && /^}$/ { exit }' "$CLI")"
+  case "$body" in
+    *'registry_mode && image_source="acr"'*) ok "${c} defaults to the ACR image in registry mode" ;;
+    *) bad "${c} defaults to the ACR image in registry mode" "no registry-mode default in ${c}()" ;;
+  esac
+done
+
 echo "── the CLI still knows every command it documents ────────────────"
 
 help_out="$("$CLI" help 2>&1)"
-for cmd in up down status logs update verify port-forward observability doctor; do
+for cmd in up down status logs update registry verify port-forward observability doctor; do
   case "$help_out" in
     *"$cmd"*) ;;
     *) bad "help documents '$cmd'" "not in the usage text"; continue ;;

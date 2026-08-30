@@ -1,0 +1,37 @@
+# =============================================================================
+# memex-local — SELF-REGISTRY mode layer (tracked; passed ONLY when this install
+# serves plugins from a source checkout, LocalColimaMac §16)
+# =============================================================================
+# helm_deploy layers this file right after values.local.defaults.yaml and only
+# when no registry file exists (`memex-local registry status` says which). In
+# REGISTRY MODE (§17) it is deliberately NOT passed: the modules below then land
+# from the remote registry's bundles, so the image baseline's Modules:Required
+# stands and readiness reports them honestly.
+# =============================================================================
+
+config:
+  memex_portal:
+    # ---- The view packs are MODULES now, and a CHECKOUT cannot land them -------
+    # MeshWeaver #1974/#2018/#2081/#2085 turned Radzen, Analysis, EntityViews,
+    # GoogleMaps and Speech into modules, so the image no longer ships the five
+    # DLLs its own Modules:Required list still names. The required_modules health
+    # check then reports Unhealthy, /health answers 503, the startup probe never
+    # passes, and `memex-local update` ends in "timed out waiting for the
+    # condition" with the portal never serving.
+    #
+    # 🚨 In this mode memex-local IS the registry, serving the developer's Plugins
+    # checkout — source files, no built assemblies — so no module BINARY can ever
+    # land (MeshWeaver#2417), "install the packages" is not available here, and
+    # blanking the requirement is the sanctioned other half of what the health
+    # check itself suggests.
+    #
+    # Cost, stated plainly: no Radzen charts, Analysis, EntityViews, GoogleMaps or
+    # Speech on a self-registry install. The way out is not a local build lane
+    # but the other mode: `memex-local registry https://memex.meshweaver.cloud
+    # --key mwr_…` makes this install a consumer of the registry that HAS the
+    # bundles, and this file stops being applied.
+    Modules__Required__0: ""
+    Modules__Required__1: ""
+    Modules__Required__2: ""
+    Modules__Required__3: ""
+    Modules__Required__4: ""

@@ -170,8 +170,11 @@ public static class PluginRegistryEndpoints
 
     // Legacy anonymous mode has no instance to scope to and sees everything — that mode is gated
     // by PluginCatalog:RequireInstanceKey and warns on every request.
+    // The package's declared PLAN rides into the decision: a plan-scoped grant entry
+    // (Plugins/*@personal) licenses exactly the packages its plan covers, decided against the
+    // ladder the authenticator resolved on the caller (PlanTierRanks.Covers).
     private static bool IsGranted(AuthenticatedInstance? caller, ConfiguredPackageSource source, PackageManifest package)
-        => caller is null || caller.Allows(source.Name, package.Id);
+        => caller is null || caller.Allows(source.Name, package.Id, package.Tier);
 
     private static Task<IResult> List(
         IMessageHub hub, IConfiguration config, AuthenticatedInstance? caller, CancellationToken ct)

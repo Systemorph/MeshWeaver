@@ -197,6 +197,12 @@ public class NodeTypeCompileParkTest(ITestOutputHelper output) : MonolithMeshTes
             return curr with { Content = def with { Configuration = ValidConfiguration } };
         }).Should().Within(30.Seconds()).Emit();
 
+        // 🚨 REGRESSION GUARD (do NOT add a "wait for the node to carry the fix" here).
+        // Recycle must itself land its release-request stamp BEFORE it disposes the hub. It
+        // used to fire-and-forget that write and post the DisposeRequest immediately, leaving
+        // the two ordered only by both being issued inside the caller's turn — so when the
+        // dispose won, the reactivated hub recompiled the PRE-FIX source, matched zero Code
+        // nodes and re-settled at Error while staying parked. Waiting here would re-hide that.
         var recycleJson = await new MeshOperations(Mesh).Recycle(typePath)
             .FirstAsync().Timeout(60.Seconds()).Await(ct);
         Output.WriteLine($"Recycle tool returned: {recycleJson}");

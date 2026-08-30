@@ -39,9 +39,13 @@ gave you no synchronous overload. Flag it and name the boundary it should have c
   sanctioned boundary between the turn-based schedulers and real async IO, and it is the one place
   a `SemaphoreSlim` is allowed to live. New `await`s added *there* are in scope for ordinary
   correctness review, but not for this rule.
-- **Test projects** (`test/**`). `await …FirstAsync().ToTask()` is the accepted bridge.
+- **Test projects** (`test/**`). 🚨 `.ToTask()` is FORBIDDEN here too (2026-08-30): Rx completes its
+  `TaskCompletionSource` without `RunContinuationsAsynchronously`, so the awaiter resumes INLINE on the
+  signalling thread inside Rx's trampoline and every later `await` inherits that scheduler. Tests await
+  through `ObservableAwait.Await(ct)` (MeshWeaver.Messaging, in MeshWeaver.Messaging.Hub — product and test code alike) or `ReactiveCompletion.ObserveCompletion`.
 - **A one-line SDK/MCP surface adapter** whose body is reactive, e.g.
-  `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ToTask();`
+  `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ObserveCompletion(Report, ct);` — an external
+  signature may demand a `Task`; it is still never produced with `.ToTask()`.
 - **Framework APIs whose signature is not ours** — `IHostedService.StartAsync`,
   `Grain.OnActivateAsync`/`OnDeactivateAsync`, ASP.NET middleware. Flag anything *inside* them that
   could have been reactive, but not the override itself.
