@@ -160,7 +160,17 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
             // Answered as UNAVAILABLE, not a denial, for the reason UnestablishedCheck documents: no
             // verdict was reached, so the honest report is an availability failure. Fail-CLOSED — the
             // operation does not proceed. A chain that produced a value never reaches this line.
-            .DefaultIfEmpty(UnestablishedCheck(context, userId, pathToCheck, cause: null));
+            //
+            // 🚨 Built LAZILY, via nullable + DefaultIfEmpty() + a Select — never
+            // `DefaultIfEmpty(UnestablishedCheck(…))`, whose argument is an ordinary C# expression
+            // and is therefore evaluated on EVERY validation: UnestablishedCheck LOGS A WARNING, so
+            // that shape would emit "the permission check could NOT be established" for every
+            // healthy create / update / delete in the mesh — a log flood asserting the opposite of
+            // what happened.
+            .Select(result => (NodeValidationResult?)result)
+            .DefaultIfEmpty()
+            .Select(result => result
+                ?? UnestablishedCheck(context, userId, pathToCheck, cause: null));
     }
 
     /// <summary>

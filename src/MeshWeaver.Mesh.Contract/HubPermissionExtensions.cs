@@ -150,7 +150,15 @@ public static class HubPermissionExtensions
             // reached, exactly as #974 established. Placed AFTER the Catch so it covers the whole
             // chain, and it can only fire on completion, so a healthy fold (which emits, then is
             // Take(1)'d by the caller) never sees it. Pinned by PermissionFoldSilentTerminalTest.
-            .DefaultIfEmpty(PermissionCheckOutcome.Undetermined(
+            //
+            // 🚨 Built LAZILY, via nullable + DefaultIfEmpty() + a Select — never
+            // `DefaultIfEmpty(Undetermined($"…"))`, whose argument is an ordinary C# expression and
+            // is therefore evaluated on EVERY call: that shape formats the interpolated string and
+            // allocates the outcome for every [RequiresPermission] delivery in the mesh, to hand it
+            // to a branch that virtually never fires.
+            .Select(outcome => (PermissionCheckOutcome?)outcome)
+            .DefaultIfEmpty()
+            .Select(outcome => outcome ?? PermissionCheckOutcome.Undetermined(
                 $"permission fold on '{nodePath}' terminated without producing a verdict "
                 + "(a source of the permission fold completed without emitting)"));
     }
