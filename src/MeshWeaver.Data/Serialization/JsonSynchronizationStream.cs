@@ -1624,7 +1624,7 @@ public static class JsonSynchronizationStream
     /// <para>On a mismatch the correct reaction is neither to splice blind nor to drop the frame,
     /// but to stop trusting the local snapshot: <see cref="StaleStreamStateException"/> is what
     /// <c>SynchronizationStream.UpdateStream</c> already answers with a fresh authoritative Full from
-    /// the owner (storm-gated by <c>_resyncInFlight</c> — one resubscribe per gap, no timer, no
+    /// the owner (storm-gated by <c>resyncInFlight</c> — one re-ask outstanding at a time, no timer, no
     /// retry loop). In normal operation it cannot fire: the frame chain resyncs on a LOST frame
     /// before any patch is applied, so producer and subscriber are in lockstep by construction. It
     /// exists so that when they are not, the divergence is repaired rather than written into the
