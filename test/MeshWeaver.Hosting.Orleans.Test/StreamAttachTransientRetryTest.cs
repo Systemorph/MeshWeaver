@@ -125,28 +125,29 @@ public class StreamAttachTransientRetryTest
             AttachBackoff = _ => TimeSpan.Zero
         };
 
-        using var registration = routing.RegisterStream(
-            AddressExtensions.CreateMeshAddress($"attach-retry-{Guid.NewGuid():N}"),
-            (d, _) => Observable.Return(d));
+        var address = AddressExtensions.CreateMeshAddress($"attach-retry-{Guid.NewGuid():N}");
+        using var registration = routing.RegisterStream(address, (d, _) => Observable.Return(d));
+
+        // The completion task exists the moment RegisterStream returns; capture it BEFORE opening
+        // the gate so there is no window in which the attach could finish unobserved.
+        var settled = routing.AttachSettled(address)
+                      ?? throw new InvalidOperationException(
+                          "RegisterStream did not record an attach completion for the address — the "
+                          + "seam this test waits on is gone, and a poll would silently take its place.");
 
         // Open the gate exactly the way Orleans does: the lifecycle observer's OnStart at Active.
         await ((ILifecycleObserver)readiness).OnStart(CancellationToken.None);
 
-        // Poll until the attempt count STOPS moving — the attach runs detached, so there is no
-        // completion signal to await from here. Two consecutive equal readings after the first
-        // attempt has landed is the settled state; bounded so a regression fails rather than hangs.
-        var last = -1;
-        for (var i = 0; i < 200; i++)
-        {
-            await Task.Delay(25);
-            var now = provider.GetStreamCalls;
-            if (now > 0 && now == last)
-                return now;
-            last = now;
-        }
+        // 🚨 Wait for the attach to TERMINATE, never for the attempt counter to stop moving (#2793).
+        // The retry hops through the thread-pool scheduler between attempts, so on a loaded shard a
+        // settle-by-silence poll reads the count during a hop and declares it final — and the value
+        // it reads is 1, which is exactly the regression signature this file exists to detect. The
+        // condition under test is "the attach gave up", and this task IS that condition. The bound
+        // is a backstop against a hang, not the measurement: with AttachBackoff collapsed to zero
+        // the real elapsed time is milliseconds.
+        await settled.WaitAsync(TimeSpan.FromSeconds(30));
 
-        throw new TimeoutException(
-            $"the attach never settled — last observed attempt count {provider.GetStreamCalls}");
+        return provider.GetStreamCalls;
     }
 
     /// <summary>

@@ -5,6 +5,7 @@ using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;  // Task<T>.ToObservable() — the SAFE direction; nothing here bridges the other way.
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -65,6 +66,15 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     // completed the dispatch keeps its original fully-synchronous shape. Instance field:
     // lifetime is the mesh's, entries removed with their RegisterStream disposal.
     private readonly ConcurrentDictionary<Address, Task> subscriptionReady = new();
+
+    /// <summary>
+    /// Per-address completion of the POD-HUB CLAIM (<see cref="AttachPodHub"/>) — an instance field
+    /// owned by this routing service, never static. The subject completes when the claim TERMINATES:
+    /// it landed, or it hit the one terminal that is impossibility rather than a budget (a process
+    /// that cannot host a grain). A claim that is still retrying never completes it, which is the
+    /// honest answer for a lifetime that has no give-up. See <see cref="PodHubClaimSettled"/>.
+    /// </summary>
+    private readonly ConcurrentDictionary<Address, AsyncSubject<Unit>> podHubClaimSettled = new();
     private readonly CompositeDisposable inFlight = new();
     // Mesh-scoped IO pool for the genuinely-async stream UnsubscribeAsync. The hub's
     // RegisterForDisposal(IDisposable) is synchronous; the async unsubscribe is bridged
@@ -890,6 +900,26 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     internal Func<int, TimeSpan> ClaimBackoff { get; set; } = PodHubClaimBackoff;
 
     /// <summary>
+    /// Test seam (<c>InternalsVisibleTo</c>): completes once the pod-hub claim for
+    /// <paramref name="address"/> has <b>terminated</b> — it landed, or it hit the impossibility
+    /// terminal (a process that cannot host a grain can never win the claim). A claim that is still
+    /// retrying never completes this, because it has not stopped: there is no give-up on that path,
+    /// and saying otherwise would be the very silence #1742 removed.
+    ///
+    /// <para>🚨 The sibling of <c>AttachSettled</c> (#2800), and it exists for the same reason
+    /// (#2793): the alternative is a settle-by-silence poll, which measures a PAUSE. The claim's
+    /// retry hops through the thread-pool scheduler between attempts, so on a loaded CI shard that
+    /// hop exceeds the poll interval and "two equal readings" reads the count mid-hop — returning 1
+    /// where the test expects 6, which is exactly the regression signature this file exists to
+    /// detect. A false RED spelling the regression's own signature is worse than no test. The
+    /// condition is "the claim stopped attempting", and this IS that condition, positively.</para>
+    /// </summary>
+    /// <param name="address">The address whose claim to await.</param>
+    /// <returns>The completion, or <c>null</c> if no claim is registered for the address.</returns>
+    internal IObservable<Unit>? PodHubClaimSettled(Address address) =>
+        podHubClaimSettled.TryGetValue(address, out var settled) ? settled : null;
+
+    /// <summary>
     /// Claims <paramref name="address"/> for THIS process, so the rest of the cluster can deliver to
     /// it with a directed grain call instead of a stream publish (#1742).
     ///
@@ -941,6 +971,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         var attempt = 0;
         var reported = false;
         var attach = new SingleAssignmentDisposable();
+        // Armed BEFORE the claim is subscribed, so there is no window in which the claim could
+        // terminate unobserved. AsyncSubject: it completes once and replays that completion to
+        // whoever asks afterwards, so an observer arriving late still sees the terminal.
+        var settled = podHubClaimSettled[address] = new AsyncSubject<Unit>();
         inFlight.Add(attach);
         attach.Disposable = Observable
             .Defer(() =>
@@ -1020,6 +1054,8 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                             addressPath);
                     else
                         logger.LogDebug("Pod-hub claim for {Address} landed on this process", addressPath);
+                    settled.OnNext(Unit.Default);
+                    settled.OnCompleted();
                 },
                 ex =>
                 {
@@ -1033,11 +1069,14 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         "Pod-hub claim for {Address} did not land in this process — it keeps the Orleans "
                         + "stream transport. Expected on an Orleans client, which cannot host a grain.",
                         addressPath);
+                    settled.OnNext(Unit.Default);
+                    settled.OnCompleted();
                 });
 
         return Disposable.Create(() =>
         {
             inFlight.Remove(attach);
+            podHubClaimSettled.TryRemove(address, out _);
             attach.Dispose();
             // Fire-and-forget: teardown is best-effort, and an activation that outlives its owner is
             // recovered anyway — Deliver on a silo with no local route steps aside (see PodHubGrain).
@@ -1111,6 +1150,25 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// production keeps <see cref="SubscribeAttachBackoff"/>.
     /// </summary>
     internal Func<int, TimeSpan> AttachBackoff { get; set; } = SubscribeAttachBackoff;
+
+    /// <summary>
+    /// Test seam (<c>InternalsVisibleTo</c>): the task that completes once the stream attach for
+    /// <paramref name="address"/> has <b>terminated</b> — attached, given up after exhausting the
+    /// budget, or been cancelled. It is the same task <see cref="RegisterStream"/> stores as the
+    /// outbound gate, so it never faults and always completes.
+    ///
+    /// <para>🚨 This exists because the alternative is a settle-by-silence poll, and that measures
+    /// the wrong thing. A test that watched the attempt counter and called it "settled" after two
+    /// equal readings 25 ms apart was reading a <i>pause</i>: the retry hops through the thread-pool
+    /// scheduler between attempts, and on a loaded CI shard that hop exceeds 25 ms, so the poll
+    /// returned 1 — which is precisely the value the regression under test produces (#2633). A
+    /// false RED that spells the regression's own signature is worse than no test (#2793). The
+    /// condition is "the attach stopped attempting", and this is that condition, positively.</para>
+    /// </summary>
+    /// <param name="address">The address whose attach to await.</param>
+    /// <returns>The completion task, or <c>null</c> if nothing is registered for the address.</returns>
+    internal Task? AttachSettled(Address address) =>
+        subscriptionReady.TryGetValue(address, out var settled) ? settled : null;
 
     /// <summary>
     /// The attach, re-attempted while it fails TRANSIENTLY and the budget holds (issue #2633).
