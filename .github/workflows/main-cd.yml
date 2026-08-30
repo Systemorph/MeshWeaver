@@ -904,6 +904,14 @@ jobs:
           # which is what a bounded retry is for. Mirrors the idiom already used by
           # node-repo-{compile-check,gate,publish-bake}.yml for their registry logins.
           set -euo pipefail
+          # 🚨 The retry discriminates by FAILURE CLASS, mirroring the node-repo login idiom: the
+          # one class known to be deterministic — a COMPILER diagnostic — fails immediately, and
+          # everything else is retried (including failures this does not recognise; an
+          # unclassified publish failure is far more often transport than permanent). Measured on
+          # run 33332830755: a CS0419 in plugins-repo failed identically on all 3 attempts,
+          # 20:10 → 20:24 — fourteen minutes to fail one deterministic compile three times. A
+          # build that already produced diagnostics cannot be retried into success.
+          LOG="${RUNNER_TEMP:-/tmp}/portal-ai-publish.log"
           for attempt in 1 2 3; do
             echo "::group::portal-ai publish attempt $attempt of 3"
             if dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
@@ -914,21 +922,30 @@ jobs:
                  -p:ContainerRegistry=${{ env.ACR }} \
                  -p:ContainerRepository=memex-portal-ai \
                  -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }} \
-                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest; then
+                 -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest \
+                 2>&1 | tee "$LOG"; then
               echo "::endgroup::"
               echo "portal-ai published on attempt $attempt"
               exit 0
             fi
             echo "::endgroup::"
+            # Compiler diagnostics are deterministic: the same source fails the same way, so a
+            # retry only triples the cost and delays the red. (This reads the CAPTURED attempt
+            # output, not the workflow log, so it cannot match its own comments — the script-echo
+            # trap that has misled two CD triages already.)
+            if grep -qE 'error (CS|MSB)[0-9]{4}' "$LOG"; then
+              echo "::error::portal-ai publish failed with COMPILER diagnostics (see attempt $attempt above) — deterministic, not retried. Fix the build; the retry exists for the transport, not the compiler."
+              exit 1
+            fi
             if [ "$attempt" -lt 3 ]; then
               # Re-login before retrying: an ACR token can expire during a long multi-arch push,
               # and a re-auth costs seconds against a leg that takes minutes.
-              echo "attempt $attempt failed — re-authenticating and retrying in 30s"
+              echo "attempt $attempt failed without compiler diagnostics — re-authenticating and retrying in 30s"
               az acr login --name meshweaver || true
               sleep 30
             fi
           done
-          echo "::error::portal-ai publish failed on all 3 attempts — read the LAST attempt's output above. A CONTAINER1001 blob-upload failure there means the registry connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
+          echo "::error::portal-ai publish failed on all 3 attempts with no compiler diagnostics — read the LAST attempt's output above. A registry blob-upload failure there (the CONTAINER-10xx family) means the connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
           exit 1
 
   migration-image:
