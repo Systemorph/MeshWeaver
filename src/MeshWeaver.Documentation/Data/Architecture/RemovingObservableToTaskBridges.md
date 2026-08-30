@@ -279,6 +279,50 @@ dependency is invisible for exactly as long as the bridge stays. So:
   evidence about *that test*, and the first move is to find the ordering it was relying on — not to
   put the bridge back.
 
+## 🕳️ Known gaps — where the next person will trip
+
+Three things this rule does **not** cover, recorded here rather than left to be rediscovered. None is
+a reason to distrust the guard; each is a reason not to read its green as more than it means.
+
+### 1. A `using` alias still evades the construction detectors
+
+The detectors match `new [qualifiers.]TaskCompletionSource…` and the target-typed
+`TaskCompletionSource<T> x = new(…)`. They do **not** see an aliased type:
+
+```csharp
+using Tcs = System.Threading.Tasks.TaskCompletionSource<int>;
+…
+var completion = new Tcs();   // invisible to the scanner
+```
+
+The consequence is the bad one, the same as the qualified-spelling hole found in review: the
+safe-form classifier asks *"do **all** constructions carry `RunContinuationsAsynchronously`?"*, so a
+construction it cannot see makes the answer vacuously **yes**, and the unsafe-form zero rule passes
+having checked nothing. Closing it properly means resolving `using` aliases per file — real work, not
+another alternation in a regex. **If you are reviewing a file that aliases a completion source, the
+guard is not helping you; read it yourself.**
+
+### 2. `MeshServiceExtensions.ToTask` never settles on an empty source
+
+`SingleObserver<T>.OnCompleted` is an empty body. A source that **completes without emitting** leaves
+the returned task pending **forever** — not a fault, not a `default`, just a wait that never ends.
+This is deliberately unchanged: fixing it is a behaviour change (the wait would start yielding
+`default`, or throwing as `ObservableAwait` does) and belongs with the port that retires the shim,
+not with the inline-resumption fix that shares its line. Note the contrast — `ObservableAwait` and
+`ReactiveCompletion` both settle on completion, so **the shim is the odd one out**, and a caller that
+migrates to either will see an empty source behave differently.
+
+### 3. The shim's real callers are invisible to every compiler here
+
+`CreateNodeAsync`/`UpdateNodeAsync`/`DeleteNodeAsync` have **zero** callers in this repo outside
+tests. The ones that matter are **58 call sites across 22 in-mesh `Source/*.cs` files in
+MeshWeaver.Reinsurance**, which compile at RUNTIME in the portal. So the
+`RunContinuationsAsynchronously` fix — a strict improvement, no signature change — was **never
+exercised against a single real caller by any build or test in this repository**. Green CI proves
+nothing about them, and neither does this page. The exit is to port those sites to
+`CreateNode(...).Subscribe(...)` and then move the shim to `MeshWeaver.Fixture`
+(MeshWeaver.Reinsurance #102).
+
 ## Related
 
 - [Asynchronous Calls](../AsynchronousCalls) — the rule, and the wider no-`async` contract.
