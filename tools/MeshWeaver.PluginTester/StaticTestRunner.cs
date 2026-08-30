@@ -153,7 +153,6 @@ public static class StaticTestRunner
         // The case runs on its own thread so a hang can be reported by name rather than hanging
         // the whole build; the thread is background so it cannot keep the process alive.
         Exception? failure = null;
-        var done = new ManualResetEventSlim(false);
         var thread = new Thread(() =>
         {
             try
@@ -168,17 +167,19 @@ public static class StaticTestRunner
             {
                 failure = ex;
             }
-            finally
-            {
-                done.Set();
-            }
         })
         {
             IsBackground = true,
             Name = $"test:{name}",
         };
         thread.Start();
-        if (!done.Wait(timeout))
+        // 🚨 Thread.Join(timeout), not a ManualResetEventSlim. It is the built-in primitive for
+        // exactly this — "did that thread finish within the budget" — and it is STRICTER: the event
+        // fired from a `finally` signalled before the thread had actually terminated, whereas Join
+        // returns only on real termination, which is also what gives `failure` its happens-before.
+        // A hand-woven gate here was flagged by HandWovenGateRatchetGuard; the fix is to delete the
+        // gate rather than exempt it, because the standard library already has this one.
+        if (!thread.Join(timeout))
         {
             return new Case(name, Outcome.Failed, clock.Elapsed,
                 $"did not return within {timeout.TotalSeconds:F0}s — a hung case; the thread is "
