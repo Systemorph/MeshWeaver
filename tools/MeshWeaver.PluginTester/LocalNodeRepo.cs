@@ -58,7 +58,25 @@ public static class LocalNodeRepo
         foreach (var file in Directory.EnumerateFiles(directory))
         {
             var relative = Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
-            var bytes = File.ReadAllBytes(file);
+            byte[] bytes;
+            try
+            {
+                bytes = File.ReadAllBytes(file);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A file that CANNOT be read is skipped loudly, never a fatal for the whole
+                // sweep. A local checkout legitimately holds debris no clean CI checkout has —
+                // the first real `build` run on a dev machine died, with nothing printed, on
+                // e2e/.auth/profile/RunningChromeVersion, a dead symlink left by a Playwright
+                // profile (gitignored, so invisible to every CI run). Such a file would have
+                // crashed BOTH bake paths before, so skipping it cannot fork the swept content
+                // set between them ("which files are content" stays shared). Console.Error, not
+                // a callback: both callers are CLI entry points, and a silent skip would be the
+                // same defect this tool just taught us about.
+                Console.Error.WriteLine($"sweep: skipped unreadable '{relative}': {ex.Message}");
+                continue;
+            }
             files.Add(TryDecodeUtf8(bytes, out var text)
                 ? new RepoFile(relative, text)
                 : new RepoFile(relative, string.Empty, bytes));
