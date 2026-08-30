@@ -143,7 +143,24 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
             // See UnestablishedCheck for why this chain otherwise has no terminal at all (#1446).
             .Timeout(_establishmentBudget)
             .Catch((Exception ex) =>
-                Observable.Return(UnestablishedCheck(context, userId, pathToCheck, ex)));
+                Observable.Return(UnestablishedCheck(context, userId, pathToCheck, ex)))
+            // 🚨 THE THIRD TERMINAL — and it is an ALLOW without this line (issue #2742). The chain
+            // above ends on a value or a fault, but the fold behind it can also COMPLETE WITHOUT
+            // EVER EMITTING: CombineLatest completes the moment any source completes having produced
+            // no value, so one silent leg empties the whole fold. `Take(1)` then completes empty,
+            // `Timeout` forwards that completion unchanged (it bounds silence BEFORE a terminal, not
+            // an empty one), the `Catch` above never sees an error — and this validator emits NO
+            // NodeValidationResult at all. RunCreationValidatorsObs's Concat simply skips a validator
+            // that yields nothing, so "no verdict" became "nothing objected" and the write proceeded.
+            // Measured on this tree before the fix: a user holding NO grant created a node under an
+            // evaluator returning Observable.Empty<Permission>() — State = Active, CreatedBy = that
+            // user. Same defect and same shape as the message gate's (HubPermissionExtensions
+            // .CheckPermissionOutcome); both had two terminals represented where the fold has three.
+            //
+            // Answered as UNAVAILABLE, not a denial, for the reason UnestablishedCheck documents: no
+            // verdict was reached, so the honest report is an availability failure. Fail-CLOSED — the
+            // operation does not proceed. A chain that produced a value never reaches this line.
+            .DefaultIfEmpty(UnestablishedCheck(context, userId, pathToCheck, cause: null));
     }
 
     /// <summary>
@@ -183,15 +200,19 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
     /// does not proceed; it just stops claiming to know why.</para>
     /// </summary>
     private NodeValidationResult UnestablishedCheck(
-        NodeValidationContext context, string? userId, string pathToCheck, Exception cause)
+        NodeValidationContext context, string? userId, string pathToCheck, Exception? cause)
     {
-        // Both roads lead here, and they are NOT the same defect: a stall means nothing answered,
-        // a fault means something answered badly. Saying "did not answer within 30s" about a
+        // THREE roads lead here, and they are NOT the same defect: a stall means nothing answered
+        // in time, a fault means something answered badly, and a null cause means the chain
+        // TERMINATED WITHOUT AN ANSWER (#2742 — a silent leg emptied the fold; there is no exception
+        // to name because nothing ever threw). Saying "did not answer within 30s" about a
         // NullReferenceException would point the reader at a starving peer silo that was never
         // involved — the same mis-naming this fix exists to stop doing to the CALLER.
-        var why = cause is TimeoutException
-            ? $"did not answer within {_establishmentBudget.TotalSeconds:0}s"
-            : $"failed ({cause.GetType().Name}: {cause.Message})";
+        var why = cause is null
+            ? "completed without producing a verdict (a source of the permission fold emitted nothing)"
+            : cause is TimeoutException
+                ? $"did not answer within {_establishmentBudget.TotalSeconds:0}s"
+                : $"failed ({cause.GetType().Name}: {cause.Message})";
 
         _logger.LogWarning(cause,
             "RLS: the {Operation} permission check on {Path} could NOT be established — the "

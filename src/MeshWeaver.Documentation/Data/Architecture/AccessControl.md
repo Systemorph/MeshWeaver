@@ -510,8 +510,25 @@ refusal anywhere downstream — the pipeline's `.Take(1).Select(…).DefaultIfEm
 `[RequiresPermission(Read)]` `GetDataRequest` was delivered and answered normally with no failure at
 all — a full authorization bypass, reachable through the public `WithPermissionEvaluator` seam.
 `CheckPermissionOutcome` now materialises that terminal as `Undetermined`, so it fails **closed** and
-reports `Unavailable` rather than vanishing. Pinned by `PermissionFoldSilentTerminalTest`; the seeding
-rule above is pinned by `PermissionFoldLegSeedGuardTest`.
+reports `Unavailable` rather than vanishing.
+
+**Both consumers had the same hole, so both were closed.** `RlsNodeValidator` — the *node-operation*
+gate — ends its chain in `TakeDecisionOutsideGate().Timeout(budget).Catch(…)`, which covers a value and
+a fault. `Take(1)` on an empty fold completes empty; `Timeout` forwards that completion unchanged (it
+bounds silence *before* a terminal, not an empty one); the `Catch` never fires; and the validator emits
+**no** `NodeValidationResult`. `RunCreationValidatorsObs`'s `Concat` skips a validator that yields
+nothing, so "no verdict" read as "nothing objected" — measured: a caller holding **no grant at all**
+created a node under a silent evaluator and got back `State = Active, CreatedBy = <that user>`. It now
+ends in `.DefaultIfEmpty(UnestablishedCheck(…, cause: null))`, whose message names the silent case
+apart from the stalled and the faulted one, because the three have different causes.
+
+> **The rule, stated once:** wherever a permission answer is consumed, **"no outcome" is not consent.**
+> A chain that can end without emitting must materialise that ending as a refusal — never leave it
+> empty for a downstream `DefaultIfEmpty` / `Concat` / `Where` to read as "nothing objected".
+
+Pinned by `PermissionFoldSilentTerminalTest` (message gate) and `RlsSilentFoldWriteTest` (node
+operations), each with an over-reach control proving a healthy fold on the same mesh still answers; the
+seeding rule above is pinned by `PermissionFoldLegSeedGuardTest`.
 
 ### 🚨 The budget is DERIVED, never configured beside the bound it sits inside (#1198)
 

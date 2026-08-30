@@ -22,6 +22,11 @@ tells the caller it is temporarily unavailable and worth retrying. It is deliber
 "access denied": no decision was made about your rights, so saying otherwise would send you off to ask
 for permissions you may already have.
 
+The same gap existed on the other side, where creating, changing or deleting content is checked: a check
+that finished without deciding let the write happen. In a measurement of the old behaviour, someone
+holding no permission at all created a node and it was saved. That path now refuses the write with the
+same "no answer was reached" report.
+
 Nothing changes for a check that does reach an answer. A grant still grants and a denial still reads as
 a denial, in exactly the words it used before.
 
