@@ -1687,7 +1687,15 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 .GetService(typeof(AccessService)) as AccessService;
             using (accessService?.ImpersonateAsSystem())
             {
-                Host.Post(new SubscribeRequest(StreamId, wsRef) { Subscriber = Configuration.Subscriber! },
+                // 🚨 Minted, never constructed inline: a re-subscribe declares the SAME negotiated
+                // wire capabilities as the initial subscribe. When the owner cannot match this
+                // request to a live server-side stream (the subscriber was evicted on a
+                // TargetUnserved verdict, the owner recycled) it builds a fresh one and reads the
+                // capabilities off THIS request — so a capability omitted here is withdrawn for the
+                // rest of the mirror's life, silently. See MintSubscribeRequest.
+                Host.Post(
+                    JsonSynchronizationStream.MintSubscribeRequest(StreamId, wsRef, identity: null)
+                        with { Subscriber = Configuration.Subscriber! },
                     o => o.WithTarget(StreamIdentity.Owner));
             }
         }
