@@ -9,8 +9,9 @@
 # wedge is diagnosable — i.e. it manufactures the repro the fix must be proven against.
 #
 # Run it from the Actions tab (workflow_dispatch). Defaults target CodeEditRecompile;
-# re-dispatch with project=test/MeshWeaver.Hosting.Orleans.Test filter=FullyQualifiedName~PartitionRootActivationTest
-# (etc.) for the others.
+# The defaults pointed at CodeEditRecompileTest in test/MeshWeaver.Hosting.Monolith.Test until that
+# suite moved to MeshWeaver.Plugins (#2276); they now name a suite that still lives here.
+# Re-dispatch with any other project=/filter= pair for the others.
 name: Flake repro (manual)
 
 on:
@@ -19,11 +20,11 @@ on:
       project:
         description: "Test project to loop"
         type: string
-        default: "test/MeshWeaver.Hosting.Monolith.Test"
+        default: "test/MeshWeaver.Hosting.Orleans.Test"
       filter:
         description: "dotnet test --filter expression (the suspect test)"
         type: string
-        default: "FullyQualifiedName~CodeEditRecompileTest.PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease"
+        default: "FullyQualifiedName~PartitionRootActivationTest"
       iterations:
         description: "Max loop iterations (stop-on-first-failure mode stops early; rate mode always runs all of them)"
         type: string
@@ -60,8 +61,8 @@ jobs:
     timeout-minutes: 60
     # Effective params: workflow_dispatch inputs when present, else push-trigger defaults.
     env:
-      REPRO_PROJECT: ${{ inputs.project || 'test/MeshWeaver.Hosting.Monolith.Test' }}
-      REPRO_FILTER: ${{ inputs.filter || 'FullyQualifiedName~CodeEditRecompileTest.PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease' }}
+      REPRO_PROJECT: ${{ inputs.project || 'test/MeshWeaver.Hosting.Orleans.Test' }}
+      REPRO_FILTER: ${{ inputs.filter || 'FullyQualifiedName~PartitionRootActivationTest' }}
       REPRO_ITERS: ${{ inputs.iterations || '80' }}
       REPRO_MODE: ${{ inputs.mode || 'hunt' }}
       DOTNET_ENVIRONMENT: Development

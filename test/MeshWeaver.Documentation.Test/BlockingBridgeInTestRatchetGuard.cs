@@ -82,7 +82,7 @@ public class BlockingBridgeInTestRatchetGuard(ITestOutputHelper output)
     /// the shape; this stops the list as a WHOLE from growing — including by the trick of adding a
     /// new file's line. Lower it whenever you delete or lower an entry.
     /// </summary>
-    private const int TotalBudget = 36;
+    private const int TotalBudget = 26;
 
     /// <summary>
     /// <c>test/</c> only — this guard exists because tests were treated as exempt from the
