@@ -85,6 +85,8 @@ A hub in the test process is a *hosted hub*, not a grain on the silo. Routing re
 
 `MeshConfiguration.DefaultStreamRoutedAddressTypes` is `{ "portal", "client", "cache", "mesh" }`, declared at static-init time so no configurator ordering can make a built-in type "go missing". Modules add their own with `MeshBuilder.AddStreamRoutedAddressType(...)` — Graph registers `import`, the gRPC hosting registers its Python and Node types.
 
+> **🚨 Stream-ROUTED is not the same as CLIENT-HOSTED, and since [Durable Streams Are Mesh Nodes](/Doc/Architecture/DurableStreamsViaMeshNodes) the difference decides what a delivery gets.** A stream-routed address is first attempted as a *directed* `IPodHubGrain.Deliver` call to the pod that claimed it; the memory stream is reached only when the grain answers "not here", **and only for an address type separately declared `MeshBuilder.AddClientHostedAddressType(...)`** — i.e. one whose hubs live in an Orleans CLIENT process, which cannot host a grain. Production declares none; the Orleans test rig declares all four built-in types in `OrleansTestMeshExtensions.ConfigurePortalMesh`, because it genuinely hosts a hub of each on its cluster client. For anything else "not here" is answered with a transient `ShuttingDown` + `TargetUnserved` NACK instead of a publish. **If you add a test hub on the CLUSTER CLIENT at a new address type, declare it in both places** — stream-routed *and* client-hosted — or its cross-silo deliveries will be NACK'd rather than carried.
+
 The registration step looks like this:
 
 ```csharp
