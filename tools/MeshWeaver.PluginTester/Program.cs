@@ -175,12 +175,27 @@ static async Task<int> RunBuildProject(string[] args)
     var extraRefs = new List<string>();
     var generatorPaths = new List<string>();
     var accept = new List<string>();
+    var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     var allowWarnings = false;
     var maxParallel = Math.Max(1, Environment.ProcessorCount);
     for (var i = 0; i < args.Length; i++)
     {
+        // MSBuild's -p:Name=Value, in both its spellings. It is how the caller supplies the
+        // identity inputs this builder cannot compute — SourceRevisionId above all, which the SDK
+        // reads from git and this builder has no git to read.
+        if (args[i].StartsWith("-p:", StringComparison.Ordinal)
+            || args[i].StartsWith("/p:", StringComparison.Ordinal))
+        {
+            if (!TryAddProperty(properties, args[i][3..]))
+                return 2;
+            continue;
+        }
         switch (args[i])
         {
+            case "--property" when i + 1 < args.Length:
+                if (!TryAddProperty(properties, args[++i]))
+                    return 2;
+                break;
             case "--output" or "-o" when i + 1 < args.Length:
                 outDir = args[++i];
                 break;
@@ -244,21 +259,41 @@ static async Task<int> RunBuildProject(string[] args)
         ExtraReferenceDirectories = extraRefs,
         GeneratorPaths = generatorPaths,
         Accept = accept,
+        Properties = properties,
         AllowWarnings = allowWarnings,
         MaxParallel = maxParallel,
     }).Await(CancellationToken.None);
     return projectReport.ExitCode;
 }
 
+// A global property, as `Name=Value`. An unparseable one is a refusal rather than a silent
+// omission: a property that does not arrive changes the assembly this builder emits.
+static bool TryAddProperty(Dictionary<string, string> properties, string assignment)
+{
+    var split = assignment.IndexOf('=', StringComparison.Ordinal);
+    if (split <= 0)
+    {
+        Console.Error.WriteLine(
+            $"mw-plugin-test build-project: '{assignment}' is not a property assignment — write Name=Value.");
+        return false;
+    }
+    properties[assignment[..split]] = assignment[(split + 1)..];
+    return true;
+}
+
 static string BuildProjectUsage() =>
     "usage: mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] "
-    + "[--extra-refs <dir>]... [--accept <construct>]... [--allow-warnings] [--max-parallel <n>]\n"
+    + "[--extra-refs <dir>]... [--accept <construct>]... [-p:Name=Value]... [--allow-warnings] "
+    + "[--max-parallel <n>]\n"
     + "  Compiles a .NET project with NO dotnet SDK and NO NuGet restore: the .csproj is evaluated "
     + "without MSBuild, every reference is resolved from this container's /app (and its .deps.json), "
     + "ProjectReferences inside the source root are built first in dependency order, and Roslyn runs "
     + "with the SDK's diagnostic standard (nullable analysis, DocumentationMode.Diagnose). Warnings "
     + "fail the build unless --allow-warnings. A construct the evaluator cannot reproduce fails the "
-    + "run by name; --accept <construct> acknowledges one.";
+    + "run by name; --accept <construct> acknowledges one. The emitted assembly carries the "
+    + "identity GenerateAssemblyInfo would have given it (AssemblyVersion/FileVersion/"
+    + "InformationalVersion and the rest); -p:Name=Value supplies the properties it is derived "
+    + "from, SourceRevisionId included — this builder runs no git.";
 
 static string BuildUsage() =>
     "usage: mw-plugin-test build <repo-root> [<package>... | all] [--module <dll>]... [--out <dir>] "

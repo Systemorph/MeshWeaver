@@ -43,6 +43,59 @@ public static class ProjectFile
     /// with no matching <c>PackageVersion</c>.</param>
     public sealed record PackageRef(string Id, string? Version);
 
+    /// <summary>
+    /// One assembly-level attribute the SDK's <c>GenerateAssemblyInfo</c> would have written into
+    /// <c>obj/&lt;Configuration&gt;/&lt;tfm&gt;/&lt;Project&gt;.AssemblyInfo.cs</c>. Every attribute
+    /// that target emits takes string arguments only, which is why they are modelled as strings.
+    /// </summary>
+    /// <param name="TypeName">The attribute's fully-qualified type name.</param>
+    /// <param name="Arguments">Positional constructor arguments, in order.</param>
+    public sealed record AssemblyAttributeSpec(string TypeName, ImmutableArray<string> Arguments);
+
+    /// <summary>
+    /// 🔴 <b>THE ASSEMBLY'S IDENTITY — the part of an SDK build that fails at RUNTIME BINDING, not
+    /// at compile time, when it is wrong.</b>
+    ///
+    /// <para>The SDK does not compile <c>&lt;AssemblyVersion&gt;</c> into anything by magic: the
+    /// <c>GenerateAssemblyInfo</c> target writes it as an <c>[assembly: AssemblyVersion("…")]</c>
+    /// attribute into a generated source file, and csc reads that file like any other. A builder
+    /// that runs NO MSBuild targets therefore emits Roslyn's default identity — <c>0.0.0.0</c> —
+    /// and nothing anywhere goes red: the compile is green, the DLL is well-formed, and the failure
+    /// surfaces later, in a different process, as
+    /// <c>FileNotFoundException: Could not load file or assembly '…, Version=3.0.0.0'</c>.</para>
+    ///
+    /// <para>That is not hypothetical. MeshWeaver.Plugins pins <c>&lt;AssemblyVersion&gt;3.0.0.0
+    /// &lt;/AssemblyVersion&gt;</c> in its <c>src/Directory.Build.props</c> precisely because
+    /// Systemorph/MeshWeaver#143 shipped 1.0.0.0 assemblies into a 3.0.0.0 process and
+    /// CrashLoopBackOff'd a migration. Building one of those projects through this builder without
+    /// this record produced <c>AssemblyVersion=0.0.0.0</c> — the same defect, one version number
+    /// further from the truth.</para>
+    /// </summary>
+    /// <param name="Generate">False when the project sets <c>GenerateAssemblyInfo=false</c> and
+    /// supplies its own attributes; synthesizing them anyway is CS0579.</param>
+    /// <param name="Version">The NuGet-shaped <c>$(Version)</c>, after the
+    /// <c>VersionPrefix</c>/<c>VersionSuffix</c> defaults.</param>
+    /// <param name="AssemblyVersion">The BINDING identity: the explicit
+    /// <c>$(AssemblyVersion)</c>, else the numeric core of <see cref="Version"/> padded to four
+    /// fields.</param>
+    /// <param name="FileVersion">The explicit <c>$(FileVersion)</c>, else
+    /// <see cref="AssemblyVersion"/> — never <see cref="Version"/>.</param>
+    /// <param name="InformationalVersion">The explicit <c>$(InformationalVersion)</c>, else
+    /// <see cref="Version"/>, with <c>$(SourceRevisionId)</c> appended under SemVer 2.0 rules when
+    /// one is known.</param>
+    /// <param name="SourceRevisionApplied">Whether a <c>$(SourceRevisionId)</c> was available to
+    /// append. False means the emitted <see cref="InformationalVersion"/> is the SDK's MINUS its
+    /// <c>+&lt;sha&gt;</c> suffix — see the remark on <see cref="Model.AssemblyInfo"/>.</param>
+    /// <param name="Attributes">Every attribute to synthesize, in the SDK's own order.</param>
+    public sealed record AssemblyInfo(
+        bool Generate,
+        string Version,
+        string AssemblyVersion,
+        string FileVersion,
+        string InformationalVersion,
+        bool SourceRevisionApplied,
+        ImmutableArray<AssemblyAttributeSpec> Attributes);
+
     /// <summary>The evaluated project.</summary>
     /// <param name="ProjectPath">Absolute path of the <c>.csproj</c>.</param>
     /// <param name="Sdk">The <c>Sdk</c> attribute, verbatim.</param>
@@ -65,6 +118,8 @@ public static class ProjectFile
     /// <param name="GlobalUsings">Namespaces the SDK would have emitted as <c>global using</c>.</param>
     /// <param name="Properties">Every evaluated property, for diagnosis.</param>
     /// <param name="UnexecutedTargets">Names of <c>Target</c> elements this evaluator did not run.</param>
+    /// <param name="AssemblyInfo">🔴 The assembly's identity — what <c>GenerateAssemblyInfo</c>
+    /// would have written. Omitting it emits <c>0.0.0.0</c>, which no compile can catch.</param>
     public sealed record Model(
         string ProjectPath,
         string Sdk,
@@ -86,7 +141,8 @@ public static class ProjectFile
         ImmutableArray<PackageRef> PackageReferences,
         ImmutableArray<string> GlobalUsings,
         ImmutableDictionary<string, string> Properties,
-        ImmutableArray<string> UnexecutedTargets)
+        ImmutableArray<string> UnexecutedTargets,
+        AssemblyInfo AssemblyInfo)
     {
         /// <summary>The project's own directory.</summary>
         public string Directory => Path.GetDirectoryName(ProjectPath)!;
@@ -191,8 +247,21 @@ public static class ProjectFile
         private readonly List<(string Id, string? Version)> _packageReferences = [];
         private readonly List<string> _usings = [];
         private readonly List<string> _unexecutedTargets = [];
+        // The three item types GenerateAssemblyInfo turns into assembly attributes. They used to be
+        // in this evaluator's "metadata that changes nothing" list, which was true of the COMPILE
+        // and false of the ASSEMBLY: an InternalsVisibleTo dropped here makes the friend assembly
+        // fail to compile in a later run, and an AssemblyMetadata dropped here makes the About page
+        // fall back — both without a word.
+        private readonly List<(string Name, string? Key)> _internalsVisibleTo = [];
+        private readonly List<(string Key, string Value)> _assemblyMetadata = [];
+        private readonly List<AssemblyAttributeSpec> _assemblyAttributes = [];
         private readonly Dictionary<string, string> _packageVersions = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _imported = new(StringComparer.OrdinalIgnoreCase);
+        // 🚨 A GLOBAL PROPERTY IS IMMUTABLE, exactly as under MSBuild: a <PropertyGroup> cannot
+        // overwrite one, which is what makes `-p:Name=Value` an override rather than a suggestion.
+        // Before this set existed, the project body silently won and the flag meant nothing for
+        // precisely the properties a caller passes it for — AssemblyVersion above all.
+        private readonly HashSet<string> _globalNames = new(StringComparer.OrdinalIgnoreCase);
         private bool _defaultCompileItemsDisabled;
 
         private string ProjectDirectory => Path.GetDirectoryName(projectPath)!;
@@ -201,7 +270,10 @@ public static class ProjectFile
         {
             SeedWellKnown();
             foreach (var (name, value) in globals)
+            {
                 _properties[name] = value;
+                _globalNames.Add(name);
+            }
 
             // MSBuild's implicit outer imports: the NEAREST Directory.Build.props before the
             // project body, the NEAREST Directory.Build.targets after it. Directory.Packages.props
@@ -280,6 +352,7 @@ public static class ProjectFile
                         if (!ConditionHolds(element, file)) continue;
                         foreach (var property in element.Elements())
                         {
+                            if (_globalNames.Contains(property.Name.LocalName)) continue;
                             if (!ConditionHolds(property, file)) continue;
                             _properties[property.Name.LocalName] = Expand(property.Value, file);
                         }
@@ -435,13 +508,50 @@ public static class ProjectFile
                             + "two definitions of the same type in one compilation.");
                     break;
 
+                case "InternalsVisibleTo":
+                    if (remove.Length > 0)
+                    {
+                        foreach (var friend in Split(remove))
+                            _internalsVisibleTo.RemoveAll(
+                                i => string.Equals(i.Name, friend, StringComparison.OrdinalIgnoreCase));
+                        break;
+                    }
+                    if (include.Length == 0) break;
+                    // The SDK reads `Key`, falling back to `PublicKey`; both spell the same thing.
+                    var friendKey = Metadata(item, "Key", file) is { Length: > 0 } k
+                        ? k : Metadata(item, "PublicKey", file);
+                    foreach (var friend in Split(include))
+                        _internalsVisibleTo.Add((friend, friendKey.Length > 0 ? friendKey : null));
+                    break;
+
+                case "AssemblyMetadata":
+                    if (remove.Length > 0)
+                    {
+                        foreach (var key in Split(remove))
+                            _assemblyMetadata.RemoveAll(
+                                m => string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase));
+                        break;
+                    }
+                    if (include.Length == 0) break;
+                    _assemblyMetadata.Add((include, Metadata(item, "Value", file)));
+                    break;
+
+                case "AssemblyAttribute":
+                    if (remove.Length > 0)
+                    {
+                        foreach (var typeName in Split(remove))
+                            _assemblyAttributes.RemoveAll(
+                                a => string.Equals(a.TypeName, typeName, StringComparison.Ordinal));
+                        break;
+                    }
+                    if (include.Length == 0) break;
+                    _assemblyAttributes.Add(new AssemblyAttributeSpec(include, ReadParameters(item, file)));
+                    break;
+
                 case "None":
                 case "Content":
                 case "AdditionalFiles":
-                case "InternalsVisibleTo":
-                case "AssemblyAttribute":
                 case "FrameworkReference":
-                case "AssemblyMetadata":
                 case "SupportedPlatform":
                 case "TrimmerRootAssembly":
                 case "RuntimeHostConfigurationOption":
@@ -455,6 +565,42 @@ public static class ProjectFile
                         $"{file}: item type <{type}> is not understood by this builder. Nothing is "
                         + "ignored in silence.");
             }
+        }
+
+        /// <summary>
+        /// One piece of item metadata, in either of MSBuild's two spellings — the XML attribute
+        /// (<c>&lt;AssemblyMetadata Include="k" Value="v" /&gt;</c>) and the child element
+        /// (<c>&lt;Value&gt;v&lt;/Value&gt;</c>). Both appear in these repos, so reading only one
+        /// would drop the other silently.
+        /// </summary>
+        private string Metadata(XElement item, string name, string file)
+        {
+            if ((string?)item.Attribute(name) is { } attribute)
+                return Expand(attribute, file);
+            var child = item.Elements().FirstOrDefault(
+                e => string.Equals(e.Name.LocalName, name, StringComparison.OrdinalIgnoreCase));
+            return child is null || !ConditionHolds(child, file) ? string.Empty : Expand(child.Value, file);
+        }
+
+        /// <summary>
+        /// The positional constructor arguments of an <c>&lt;AssemblyAttribute&gt;</c> item:
+        /// <c>_Parameter1</c>, <c>_Parameter2</c>, … read in NUMERIC order and stopping at the
+        /// first gap, which is how <c>WriteCodeFragment</c> reads them.
+        /// </summary>
+        private ImmutableArray<string> ReadParameters(XElement item, string file)
+        {
+            var arguments = ImmutableArray.CreateBuilder<string>();
+            for (var index = 1; ; index++)
+            {
+                var name = $"_Parameter{index.ToString(CultureInfo.InvariantCulture)}";
+                var hasAttribute = item.Attribute(name) is not null;
+                var hasChild = item.Elements().Any(
+                    e => string.Equals(e.Name.LocalName, name, StringComparison.OrdinalIgnoreCase));
+                if (!hasAttribute && !hasChild)
+                    break;
+                arguments.Add(Metadata(item, name, file));
+            }
+            return arguments.ToImmutable();
         }
 
         private void ReadPackageVersions(string path)
@@ -516,10 +662,169 @@ public static class ProjectFile
                     .Select(p => new PackageRef(p.Id, p.Version ?? _packageVersions.GetValueOrDefault(p.Id)))],
                 globalUsings,
                 _properties.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
-                [.. _unexecutedTargets]);
+                [.. _unexecutedTargets],
+                BuildAssemblyInfo(assemblyName));
         }
 
         private string Prop(string name) => _properties.GetValueOrDefault(name, string.Empty);
+
+        // ── the assembly identity ──────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Reproduces the SDK's <c>GetAssemblyVersion</c> + <c>GetAssemblyAttributes</c> pair —
+        /// <c>Microsoft.NET.DefaultAssemblyInfo.targets</c> and
+        /// <c>Microsoft.NET.GenerateAssemblyInfo.targets</c> — as evaluation rather than execution.
+        /// Every rule below was MEASURED against the real SDK (10.0.400) rather than recalled:
+        /// <c>Version=1.2.3-beta.4</c> → <c>AssemblyVersion=1.2.3.0</c>, <c>Version=1</c> →
+        /// <c>1.0.0.0</c>, <c>Version=01.2.3</c> → <c>1.2.3.0</c>, an explicit
+        /// <c>AssemblyVersion</c> wins and <c>FileVersion</c> follows IT rather than
+        /// <c>Version</c>.
+        /// </summary>
+        private AssemblyInfo BuildAssemblyInfo(string assemblyName)
+        {
+            var generate = Prop("GenerateAssemblyInfo");
+            if (generate.Length > 0 && !IsTrue(generate) && !IsFalse(generate))
+                throw new UnsupportedConstructException(
+                    $"{projectPath}: GenerateAssemblyInfo='{generate}' is neither true nor false. The "
+                    + "assembly's binding identity depends on it, and a guessed identity fails at "
+                    + "runtime binding rather than here.");
+
+            // Microsoft.NET.DefaultAssemblyInfo.targets: the VersionPrefix/VersionSuffix defaults
+            // apply ONLY when $(Version) is empty.
+            var version = Prop("Version");
+            if (version.Length == 0)
+            {
+                var prefix = Prop("VersionPrefix") is { Length: > 0 } p ? p : "1.0.0";
+                var suffix = Prop("VersionSuffix");
+                version = suffix.Length > 0 ? $"{prefix}-{suffix}" : prefix;
+            }
+
+            // 🚨 The ONE derivation that matters. An explicit AssemblyVersion is an override the SDK
+            // leaves alone; otherwise the GetAssemblyVersion task parses $(Version) as a NuGet
+            // version and renders its NUMERIC core, normalised to four fields.
+            var assemblyVersion = Prop("AssemblyVersion") is { Length: > 0 } av
+                ? av
+                : DeriveAssemblyVersion(version, projectPath);
+            var fileVersion = Prop("FileVersion") is { Length: > 0 } fv ? fv : assemblyVersion;
+            var informational = Prop("InformationalVersion") is { Length: > 0 } iv ? iv : version;
+
+            // AddSourceRevisionToInformationalVersion, verbatim including its SemVer 2.0 rule: a
+            // string that already carries build metadata gets '.sha', everything else '+sha'. This
+            // builder runs no git, so the id is only ever present when a caller supplied it — see
+            // AssemblyInfo.SourceRevisionApplied for what its absence means.
+            var revision = Prop("SourceRevisionId");
+            if (revision.Length > 0)
+                informational = informational.Contains('+', StringComparison.Ordinal)
+                    ? $"{informational}.{revision}"
+                    : $"{informational}+{revision}";
+
+            var generates = generate.Length == 0 || IsTrue(generate);
+            return new AssemblyInfo(
+                generates, version, assemblyVersion, fileVersion, informational,
+                revision.Length > 0,
+                generates
+                    ? ComposeAttributes(assemblyName, assemblyVersion, fileVersion, informational)
+                    : []);
+        }
+
+        /// <summary>
+        /// The attribute list, in the order <c>GetAssemblyAttributes</c> declares it, honouring each
+        /// <c>Generate…Attribute</c> switch and each "only when the property is non-empty" condition.
+        /// </summary>
+        private ImmutableArray<AssemblyAttributeSpec> ComposeAttributes(
+            string assemblyName, string assemblyVersion, string fileVersion, string informational)
+        {
+            // Microsoft.NET.DefaultAssemblyInfo.targets' own fallback chain.
+            var authors = Prop("Authors") is { Length: > 0 } a ? a : assemblyName;
+            var company = Prop("Company") is { Length: > 0 } c ? c : authors;
+            var title = Prop("AssemblyTitle") is { Length: > 0 } t ? t : assemblyName;
+            var product = Prop("Product") is { Length: > 0 } pr ? pr : assemblyName;
+
+            var attributes = ImmutableArray.CreateBuilder<AssemblyAttributeSpec>();
+
+            void Add(string switchName, string typeName, params string[] arguments)
+            {
+                if (IsFalse(Prop(switchName))) return;
+                attributes.Add(new AssemblyAttributeSpec(typeName, [.. arguments]));
+            }
+
+            void AddIfSet(string switchName, string typeName, string value)
+            {
+                if (value.Length == 0) return;
+                Add(switchName, typeName, value);
+            }
+
+            AddIfSet("GenerateAssemblyCompanyAttribute", "System.Reflection.AssemblyCompanyAttribute", company);
+            AddIfSet("GenerateAssemblyConfigurationAttribute",
+                "System.Reflection.AssemblyConfigurationAttribute", Prop("Configuration"));
+            AddIfSet("GenerateAssemblyCopyrightAttribute",
+                "System.Reflection.AssemblyCopyrightAttribute", Prop("Copyright"));
+            AddIfSet("GenerateAssemblyDescriptionAttribute",
+                "System.Reflection.AssemblyDescriptionAttribute", Prop("Description"));
+            AddIfSet("GenerateAssemblyFileVersionAttribute",
+                "System.Reflection.AssemblyFileVersionAttribute", fileVersion);
+            AddIfSet("GenerateAssemblyInformationalVersionAttribute",
+                "System.Reflection.AssemblyInformationalVersionAttribute", informational);
+            AddIfSet("GenerateAssemblyProductAttribute", "System.Reflection.AssemblyProductAttribute", product);
+            AddIfSet("GenerateAssemblyTrademarkAttribute",
+                "System.Reflection.AssemblyTrademarkAttribute", Prop("Trademark"));
+            AddIfSet("GenerateAssemblyTitleAttribute", "System.Reflection.AssemblyTitleAttribute", title);
+            AddIfSet("GenerateAssemblyVersionAttribute",
+                "System.Reflection.AssemblyVersionAttribute", assemblyVersion);
+
+            // RepositoryUrl: the SDK also accepts PublishRepositoryUrl=true, which makes it read
+            // $(PrivateRepositoryUrl) — a value SourceLink derives from the git remote. There is no
+            // git here, so that path is a NAMED refusal rather than a plausible-looking omission.
+            if (!IsFalse(Prop("GenerateRepositoryUrlAttribute")))
+            {
+                var repositoryUrl = Prop("RepositoryUrl");
+                if (repositoryUrl.Length > 0)
+                    attributes.Add(new AssemblyAttributeSpec(
+                        "System.Reflection.AssemblyMetadataAttribute", ["RepositoryUrl", repositoryUrl]));
+                else if (IsTrue(Prop("PublishRepositoryUrl")))
+                    throw new UnsupportedConstructException(
+                        $"{projectPath}: PublishRepositoryUrl=true with no $(RepositoryUrl). The SDK "
+                        + "would stamp AssemblyMetadata(\"RepositoryUrl\") from $(PrivateRepositoryUrl), "
+                        + "which SourceLink derives from the git remote — and this builder runs no git. "
+                        + "Set RepositoryUrl explicitly (in the project or with --property "
+                        + "RepositoryUrl=…), or turn the attribute off with "
+                        + "GenerateRepositoryUrlAttribute=false.");
+            }
+
+            AddIfSet("GenerateNeutralResourcesLanguageAttribute",
+                "System.Resources.NeutralResourcesLanguageAttribute", Prop("NeutralLanguage"));
+
+            if (!IsFalse(Prop("GenerateInternalsVisibleToAttributes")))
+            {
+                var publicKey = Prop("PublicKey");
+                foreach (var (name, key) in _internalsVisibleTo)
+                {
+                    var effective = key ?? (publicKey.Length > 0 ? publicKey : null);
+                    attributes.Add(new AssemblyAttributeSpec(
+                        "System.Runtime.CompilerServices.InternalsVisibleToAttribute",
+                        [effective is null ? name : $"{name}, PublicKey={effective}"]));
+                }
+            }
+
+            if (!IsFalse(Prop("GenerateAssemblyMetadataAttributes")))
+                foreach (var (key, value) in _assemblyMetadata)
+                    attributes.Add(new AssemblyAttributeSpec(
+                        "System.Reflection.AssemblyMetadataAttribute", [key, value]));
+
+            if (IsTrue(Prop("EnablePreviewFeatures")) && !IsFalse(Prop("GenerateRequiresPreviewFeaturesAttribute")))
+                attributes.Add(new AssemblyAttributeSpec(
+                    "System.Runtime.Versioning.RequiresPreviewFeaturesAttribute", []));
+
+            if (IsTrue(Prop("DisableRuntimeMarshalling"))
+                && !IsFalse(Prop("GenerateDisableRuntimeMarshallingAttribute")))
+                attributes.Add(new AssemblyAttributeSpec(
+                    "System.Runtime.CompilerServices.DisableRuntimeMarshallingAttribute", []));
+
+            // Anything the project declared itself, last — the same position WriteCodeFragment gives
+            // items contributed outside GetAssemblyAttributes' own ItemGroup.
+            attributes.AddRange(_assemblyAttributes);
+            return attributes.ToImmutable();
+        }
 
         private ImmutableArray<string> ResolveCompileItems()
         {
@@ -918,6 +1223,47 @@ public static class ProjectFile
                     throw new FormatException($"unexpected '{text[_position..]}'");
             }
         }
+    }
+
+    /// <summary>
+    /// The SDK's <c>GetAssemblyVersion</c> task, reproduced: parse <paramref name="version"/> as a
+    /// NuGet version and render its NUMERIC core normalised to four fields.
+    ///
+    /// <para>Measured against SDK 10.0.400 rather than recalled — <c>1.2.3-beta.4</c> → <c>1.2.3.0</c>
+    /// (the pre-release label is dropped), <c>1.2.3+meta</c> → <c>1.2.3.0</c> (so is build metadata),
+    /// <c>1</c> → <c>1.0.0.0</c> and <c>4.5</c> → <c>4.5.0.0</c> (short forms are padded),
+    /// <c>01.2.3</c> → <c>1.2.3.0</c> (leading zeros normalise), and <c>1.2.3.4.5</c> is rejected.</para>
+    /// </summary>
+    /// <param name="version">The <c>$(Version)</c> to derive from.</param>
+    /// <param name="projectPath">Named in the failure message.</param>
+    /// <returns>A four-field version string.</returns>
+    /// <exception cref="UnsupportedConstructException"><paramref name="version"/> is not a version.</exception>
+    internal static string DeriveAssemblyVersion(string version, string projectPath)
+    {
+        var core = version;
+        if (core.IndexOf('+', StringComparison.Ordinal) is var plus and >= 0)
+            core = core[..plus];
+        if (core.IndexOf('-', StringComparison.Ordinal) is var dash and >= 0)
+            core = core[..dash];
+
+        var parts = core.Split('.');
+        var fields = new int[4];
+        var valid = parts.Length is >= 1 and <= 4;
+        for (var i = 0; valid && i < parts.Length; i++)
+            valid = int.TryParse(parts[i], NumberStyles.None, CultureInfo.InvariantCulture, out fields[i]);
+        if (!valid)
+            // 🚨 Loud, and it names the property. The alternative — falling back to something
+            // plausible — is precisely the defect this whole record exists to prevent: a wrong
+            // binding identity cannot be caught by any compile, any test of this build, or any
+            // reviewer; it surfaces in another process as a missing-file error.
+            throw new UnsupportedConstructException(
+                $"{projectPath}: Version='{version}' is not a version the SDK's GetAssemblyVersion task "
+                + "would accept (up to four non-negative integer fields, optionally followed by "
+                + "'-prerelease' and '+metadata'), so the AssemblyVersion cannot be derived from it. "
+                + "Set AssemblyVersion explicitly, or fix Version — a guessed binding identity fails "
+                + "at runtime in another process, not here.");
+
+        return string.Join('.', fields.Select(f => f.ToString(CultureInfo.InvariantCulture)));
     }
 
     /// <summary>
