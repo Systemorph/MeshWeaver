@@ -1,5 +1,7 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -49,12 +51,13 @@ public class LayoutRenderTeardownDrainTest(ITestOutputHelper output) : MonolithM
     private const string BlockingArea = nameof(BlockingArea);
     private static readonly Address HostAddress = new("layout-render-drain-host");
 
-    // Signalled by the render body once it is executing on the pool thread (holding a Layout-pool
-    // permit); the test proceeds only after the render is genuinely in-flight — no sleeps, no polling.
-    private readonly ManualResetEventSlim renderInFlight = new(false);
-    // Held by the render body until the test releases it, keeping the render subscribe in-flight for
-    // the duration of the assertions.
-    private readonly ManualResetEventSlim releaseRender = new(false);
+    // 🚨 No hand-woven gate. Completed by the render body once it is executing on the pool thread
+    // (holding a Layout-pool permit); the test awaits it reactively, so it proceeds only after the
+    // render is genuinely in-flight — no sleeps, no polling, and nothing to dispose.
+    private readonly AsyncSubject<Unit> renderInFlight = new();
+    // The other direction: the render body is DELIBERATELY parked (that occupancy is what the drain
+    // must join), so the release is a volatile flag it polls under a bounded SpinUntil.
+    private int releaseRender;
 
     /// <summary>
     /// A view generator that mirrors the production render body shape (a synchronous render that
@@ -65,9 +68,10 @@ public class LayoutRenderTeardownDrainTest(ITestOutputHelper output) : MonolithM
     /// </summary>
     private IObservable<UiControl?> BlockingView(LayoutAreaHost host, RenderingContext ctx)
     {
-        renderInFlight.Set();
+        renderInFlight.OnNext(Unit.Default);
+        renderInFlight.OnCompleted();
         // Bounded so a wiring regression can never hang the suite; the test releases well within this.
-        releaseRender.Wait(TimeSpan.FromSeconds(30));
+        SpinWait.SpinUntil(() => Volatile.Read(ref releaseRender) == 1, TimeSpan.FromSeconds(30));
         // Same service-resolution shape as the real menu renderer whose GetService threw the disposed
         // -scope ODE at teardown. With the drain joining this render first, the scope is still alive.
         _ = host.Hub.ServiceProvider.GetService<ILoggerFactory>();
@@ -94,8 +98,8 @@ public class LayoutRenderTeardownDrainTest(ITestOutputHelper output) : MonolithM
         using var areaSubscription = areaStream.GetControlStream(BlockingArea).Subscribe(_ => { });
 
         // Wait until the render body is genuinely executing on the pool (deterministic — no sleep).
-        renderInFlight.Wait(TimeSpan.FromSeconds(30))
-            .Should().BeTrue("the layout render must actually start executing");
+        await renderInFlight.Should().Within(30.Seconds())
+            .Emit("the layout render must actually start executing");
 
         // (1) TRACKED: the in-flight render holds a Layout-pool permit. Pre-fix it ran on a bare
         //     TaskPoolScheduler thread the pool never saw → CurrentInFlight == 0.
@@ -114,7 +118,7 @@ public class LayoutRenderTeardownDrainTest(ITestOutputHelper output) : MonolithM
             "executing is the teardown use-after-dispose/unload window this fix closes");
 
         // Release the render; DrainAll can now acquire the freed permit and return.
-        releaseRender.Set();
+        Volatile.Write(ref releaseRender, 1);
         await drainReturned.WaitAsync(TimeSpan.FromSeconds(30));
         layoutPool.CurrentInFlight.Should().Be(0, "the render released its permit once it completed");
     }
@@ -123,9 +127,7 @@ public class LayoutRenderTeardownDrainTest(ITestOutputHelper output) : MonolithM
     {
         // Guarantee the render is never left blocked if an assertion aborts early (the [Fact] timeout
         // would otherwise wait on the 30s render bound before teardown).
-        releaseRender.Set();
+        Volatile.Write(ref releaseRender, 1);
         await base.DisposeAsync();
-        renderInFlight.Dispose();
-        releaseRender.Dispose();
     }
 }

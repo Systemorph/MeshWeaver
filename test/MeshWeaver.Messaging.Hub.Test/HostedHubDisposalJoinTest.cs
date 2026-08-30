@@ -1,5 +1,7 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -51,47 +53,58 @@ public class HostedHubDisposalJoinTest(ITestOutputHelper output) : HubTestBase(o
     {
         var client = GetClient();
 
-        using var constructionEntered = new ManualResetEventSlim(false);
-        using var releaseConstruction = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate: construction → test is an AsyncSubject the producer completes;
+        // the release travels INTO the thread parked inside Build, so it is a volatile flag polled
+        // under a bounded SpinUntil and written in the `finally` below.
+        var constructionEntered = new AsyncSubject<Unit>();
+        var releaseConstruction = 0;
 
-        // Same gate/latch shape as InflightHubCreationDrainTest: the WithInitialization hook runs
+        // Same latch shape as InflightHubCreationDrainTest: the WithInitialization hook runs
         // synchronously inside Build, so this thread parks INSIDE construction — where the routed
-        // straggler emissions of the #613 class sit when teardown begins. The gate, not a timer,
+        // straggler emissions of the #613 class sit when teardown begins. The flag, not a timer,
         // is what holds the window open, so nothing here samples a race.
         var creation = Task.Run(() => client.GetHostedHub(
             new Address("slow-inflight", "1"),
             c => c.WithInitialization(_ =>
             {
-                constructionEntered.Set();
-                releaseConstruction.Wait(TimeSpan.FromSeconds(30));
+                constructionEntered.OnNext(Unit.Default);
+                constructionEntered.OnCompleted();
+                SpinWait.SpinUntil(() => Volatile.Read(ref releaseConstruction) == 1, TimeSpan.FromSeconds(30));
             }),
             HostedHubCreation.Always));
 
-        constructionEntered.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue(
-            "the hosted-hub construction must have started before disposal begins");
+        try
+        {
+            await constructionEntered.Should().Within(10.Seconds()).Emit(
+                "the hosted-hub construction must have started before disposal begins");
 
-        var disposalCompleted = client.DisposalCompleted.Take(1).Await();
-        client.Dispose();
+            var disposalCompleted = client.DisposalCompleted.Take(1).Await();
+            client.Dispose();
 
-        // Sanctioned negative wait: the finding IS that nothing happened. There is no positive
-        // signal to filter for — "the owner did not declare itself done" has no emission.
-        var winner = await Task.WhenAny(disposalCompleted, Task.Delay(PastTheOldCap));
+            // Sanctioned negative wait: the finding IS that nothing happened. There is no positive
+            // signal to filter for — "the owner did not declare itself done" has no emission.
+            var winner = await Task.WhenAny(disposalCompleted, Task.Delay(PastTheOldCap));
 
-        winner.Should().NotBe(disposalCompleted,
-            "the owner declared its hosted hubs disposed while a construction it started was "
-            + "still running — so it went on to tear down the container underneath that Build. "
-            + "A join must not out-run the answers it is joining: the child's completion is "
-            + "already guaranteed terminal by MessageHub's own disposal watchdog, and a second, "
-            + "SHORTER budget layered above it can only ever pre-empt that guarantee");
+            winner.Should().NotBe(disposalCompleted,
+                "the owner declared its hosted hubs disposed while a construction it started was "
+                + "still running — so it went on to tear down the container underneath that Build. "
+                + "A join must not out-run the answers it is joining: the child's completion is "
+                + "already guaranteed terminal by MessageHub's own disposal watchdog, and a second, "
+                + "SHORTER budget layered above it can only ever pre-empt that guarantee");
 
-        releaseConstruction.Set();
+            Volatile.Write(ref releaseConstruction, 1);
 
-        await disposalCompleted.WaitAsync(TimeSpan.FromSeconds(15));
+            await disposalCompleted.WaitAsync(TimeSpan.FromSeconds(15));
 
-        var lateHub = await creation.WaitAsync(TimeSpan.FromSeconds(10));
-        lateHub.Should().NotBeNull(
-            "the creation was started before disposal, so the contract is to finish it, not refuse it");
-        await lateHub!.DisposalCompleted.Take(1).Await().WaitAsync(TimeSpan.FromSeconds(10));
+            var lateHub = await creation.WaitAsync(TimeSpan.FromSeconds(10));
+            lateHub.Should().NotBeNull(
+                "the creation was started before disposal, so the contract is to finish it, not refuse it");
+            await lateHub!.DisposalCompleted.Take(1).Await().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            Volatile.Write(ref releaseConstruction, 1);
+        }
     }
 
     /// <summary>
