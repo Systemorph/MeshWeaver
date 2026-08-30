@@ -1,0 +1,266 @@
+name: Homebrew (memex-local)
+
+# memex-local is delivered through Homebrew — the tap Systemorph/homebrew-memex — and until this
+# workflow existed nothing ever INSTALLED the formula: the Linux gate in hosting-operator.yml
+# parses the CLI, shellchecks it and runs its behaviour tests against stub tools, which is exactly
+# the layer where most of its defects lived, but `brew install` itself, the vendored chart layout,
+# the wrapper's MEMEX_LOCAL_SHARE/MEMEX_CHART_DIR plumbing and macOS's bash 3.2 were all asserted by
+# whoever next ran `memex-local up` on their laptop. That is how the published formula drifted
+# 11 000 commits behind main without a red tick anywhere.
+#
+# 🚨 WHAT THIS GATE CAN AND CANNOT PROVE. A hosted macOS runner has Homebrew and bash 3.2 and can
+# install, test and audit the formula from THIS tree; it has no nested virtualisation, so Colima
+# never starts here and `memex-local up` is out of reach. Whether the chart deploys is settled by
+# the chart's own gates and by the first `memex-local up` on a real Mac; this proves the delivery
+# — that what `brew install memex-local` puts on a machine is what the repository holds.
+#
+# Two jobs, one contract:
+#   • install    — every PR touching the CLI, its assets or the chart it vendors: tarball the tree,
+#                  render the formula against it (a file:// URL), tap, install, `brew test`,
+#                  `brew audit`, exercise the CLI and run the behaviour suite under /bin/bash 3.2.
+#   • publish    — main only: the same tarball attached to a release of the tap repository and the
+#                  formula committed there with its sha256, so `brew upgrade memex-local` sees
+#                  every merge to main as a newer version (0.2.<commit count>).
+#
+# 🛡️ NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"): `publish` needs a
+# `preflight` that asserts the App credential exists and fails RED naming what to provision; it
+# never asks "is the secret set" in an `if:`. The path filter below is deliberate and is NOT a
+# trapdoor: this check is not required by the ruleset, and a PR that touches neither the CLI nor
+# the chart has nothing for a macOS runner to measure.
+
+on:
+  pull_request:
+    paths:
+      - deploy/homebrew/**
+      - deploy/helm/**
+      - .github/workflows/homebrew.yml
+  push:
+    branches: [main]
+    paths:
+      - deploy/homebrew/**
+      - deploy/helm/**
+      - .github/workflows/homebrew.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TAP_REPO: Systemorph/homebrew-memex
+
+jobs:
+  install:
+    name: brew install + test (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the version is the commit COUNT of the tree under test
+
+      - name: Assert the tools this gate needs
+        run: |
+          set -euo pipefail
+          missing=()
+          command -v brew >/dev/null 2>&1 || missing+=("brew — the runner image lost Homebrew")
+          [ -x /bin/bash ] || missing+=("/bin/bash — macOS's own bash 3.2, the interpreter every developer's launchd agent runs")
+          command -v ruby >/dev/null 2>&1 || missing+=("ruby — formula syntax check")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the Homebrew gate cannot run — provide:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          brew --version; /bin/bash --version | head -1
+
+      - name: Version = 0.2.<commit count>
+        id: ver
+        run: |
+          set -euo pipefail
+          echo "version=0.2.$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+
+      # The SAME tarball + render the publish job ships, pointed at this tree. Installing from the
+      # checkout's HEAD spec would clone github.com/…/main — i.e. test the wrong commit.
+      - name: Tarball + render the formula against this tree
+        id: render
+        run: |
+          set -euo pipefail
+          tar="$RUNNER_TEMP/memex-local-${{ steps.ver.outputs.version }}.tar.gz"
+          deploy/homebrew/scripts/make-tarball.sh "${{ steps.ver.outputs.version }}" "$tar"
+          sha="$(shasum -a 256 "$tar" | awk '{print $1}')"
+          mkdir -p "$RUNNER_TEMP/formula"
+          deploy/homebrew/scripts/render-formula.sh "${{ steps.ver.outputs.version }}" "file://$tar" "$sha" \
+            > "$RUNNER_TEMP/formula/memex-local.rb"
+          ruby -c "$RUNNER_TEMP/formula/memex-local.rb"
+          # The render must have TAKEN: a template edit that renamed a line renders unchanged and
+          # would publish the old version forever (render-formula.sh refuses, this proves it did).
+          # Homebrew scans the version from the tarball name, so the rendered formula carries the
+          # url + sha256 and NO `version` line (brew audit --strict refuses the redundancy).
+          grep -q "url \"file://$tar\"" "$RUNNER_TEMP/formula/memex-local.rb"
+          grep -q "sha256 \"$sha\"" "$RUNNER_TEMP/formula/memex-local.rb"
+          if grep -q '^  version "' "$RUNNER_TEMP/formula/memex-local.rb"; then
+            echo "::error::the rendered formula still carries a version line"; exit 1
+          fi
+          echo "tarball=$tar" >> "$GITHUB_OUTPUT"
+
+      - name: Tap + install
+        run: |
+          set -euo pipefail
+          git config --global user.email "ci@meshweaver.cloud"
+          git config --global user.name "MeshWeaver CI"
+          brew tap-new --no-git memex-ci/local
+          cp "$RUNNER_TEMP/formula/memex-local.rb" "$(brew --repo memex-ci/local)/Formula/"
+          brew install --formula memex-ci/local/memex-local
+          # Positive signal: the wrapper is on PATH and runs THIS version, not a cached bottle.
+          memex-local version | tee /dev/stderr | grep -q "memex-local 0.2"
+
+      - name: brew test + audit
+        run: |
+          set -euo pipefail
+          brew test memex-ci/local/memex-local
+          # Offline audit: style + the formula's own claims. `--online` would fetch the homepage and
+          # is a network dependency this gate has no business having.
+          brew audit --strict memex-ci/local/memex-local
+
+      # The CLI must answer every read-only command from a bare install: no cluster, no checkout, no
+      # ~/.memex-local. `doctor` warns (colima is not running) but must not die; `registry` is a
+      # state machine over one file and is driven through a full cycle.
+      - name: Exercise the installed CLI (no cluster)
+        env:
+          MEMEX_LOCAL_HOME: ${{ runner.temp }}/memex-home
+        run: |
+          set -euo pipefail
+          memex-local help | grep -q "USAGE"
+          memex-local doctor | tee "$RUNNER_TEMP/doctor.txt"
+          grep -q "chart:" "$RUNNER_TEMP/doctor.txt"      # the vendored chart resolved
+          grep -q "SELF-REGISTRY" "$RUNNER_TEMP/doctor.txt"
+          memex-local registry https://memex.example.test --key mwr_ci-gate-key --id ci-gate
+          memex-local registry status | tee "$RUNNER_TEMP/registry.txt"
+          grep -q "REGISTRY MODE" "$RUNNER_TEMP/registry.txt"
+          grep -q "ci-gate" "$RUNNER_TEMP/registry.txt"
+          if grep -q "mwr_ci-gate-key" "$RUNNER_TEMP/registry.txt"; then
+            echo "::error::registry status printed the bootstrap key in full"; exit 1
+          fi
+          [ "$(stat -f '%Lp' "$MEMEX_LOCAL_HOME/registry.yaml")" = "600" ]
+          memex-local registry off
+          memex-local registry status | grep -q "SELF-REGISTRY"
+          # An instance key must be refused by NAME, not by a 401 on first boot.
+          if memex-local registry https://memex.example.test --key mwi_not-a-registration-key 2>"$RUNNER_TEMP/err.txt"; then
+            echo "::error::an instance key was accepted as a registration key"; exit 1
+          fi
+          grep -q "REGISTRATION key" "$RUNNER_TEMP/err.txt"
+
+      # The Linux gate runs this suite under bash 5. Every developer's machine runs the CLI under
+      # macOS bash 3.2 — the interpreter whose `set -u` + empty-array abort the suite pins
+      # statically because Linux cannot reach it. Here it is reached.
+      - name: Behaviour tests under macOS bash 3.2
+        run: /bin/bash deploy/homebrew/test/run-tests.sh
+
+      - name: Uninstall cleanly
+        run: |
+          set -euo pipefail
+          brew uninstall memex-local
+          if command -v memex-local >/dev/null 2>&1; then
+            echo "::error::memex-local is still on PATH after uninstall"; exit 1
+          fi
+
+  preflight:
+    name: Publish inputs are provisioned
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every publish input exists
+        env:
+          APP_ID: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          APP_KEY: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "$APP_ID" ]  || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID — the GitHub App (installed org-wide, Contents: Read + Write) that pushes to $TAP_REPO")
+          [ -n "$APP_KEY" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY — its private key")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the tap cannot be published — provision:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "publish inputs present"
+
+  publish:
+    name: Publish the tap (main)
+    if: github.event_name == 'push'
+    needs: [install, preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Mint the App token for the tap repository
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          repositories: homebrew-memex
+
+      - name: Version = 0.2.<commit count>
+        id: ver
+        run: echo "version=0.2.$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Tarball
+        id: tar
+        run: |
+          set -euo pipefail
+          tar="$RUNNER_TEMP/memex-local-${{ steps.ver.outputs.version }}.tar.gz"
+          deploy/homebrew/scripts/make-tarball.sh "${{ steps.ver.outputs.version }}" "$tar"
+          echo "path=$tar" >> "$GITHUB_OUTPUT"
+          echo "sha=$(sha256sum "$tar" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      # One release per version on the TAP repository, the tarball as its asset. Idempotent: a
+      # re-run of the same commit finds the release and reuses it — the tarball is reproducible
+      # (`gzip -n`), so the asset already there carries the same sha256 the formula pins.
+      - name: Release the tarball on the tap
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          TARBALL: ${{ steps.tar.outputs.path }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          if gh release view "$tag" --repo "$TAP_REPO" >/dev/null 2>&1; then
+            echo "release $tag exists on $TAP_REPO — reusing"
+          else
+            gh release create "$tag" "$TARBALL" --repo "$TAP_REPO" \
+              --title "memex-local $VERSION" \
+              --notes "memex-local $VERSION — built from Systemorph/MeshWeaver@${GITHUB_SHA}. Install: brew tap systemorph/memex && brew install memex-local"
+          fi
+          # The asset must be DOWNLOADABLE at the URL the formula will pin, not merely uploaded.
+          url="https://github.com/$TAP_REPO/releases/download/$tag/$(basename "$TARBALL")"
+          curl -fsSL -o "$RUNNER_TEMP/roundtrip.tar.gz" "$url"
+          [ "$(sha256sum "$RUNNER_TEMP/roundtrip.tar.gz" | awk '{print $1}')" = "${{ steps.tar.outputs.sha }}" ] \
+            || { echo "::error::the released asset's sha256 differs from the tarball just built"; exit 1; }
+          echo "url=$url" >> "$GITHUB_ENV"
+
+      - name: Commit the rendered formula to the tap
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          SHA256: ${{ steps.tar.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" "$RUNNER_TEMP/tap"
+          mkdir -p "$RUNNER_TEMP/tap/Formula"
+          deploy/homebrew/scripts/render-formula.sh "$VERSION" "$url" "$SHA256" \
+            > "$RUNNER_TEMP/tap/Formula/memex-local.rb"
+          cd "$RUNNER_TEMP/tap"
+          git config user.email "ci@meshweaver.cloud"
+          git config user.name "MeshWeaver CI"
+          if git diff --quiet -- Formula/memex-local.rb; then
+            echo "formula unchanged on $TAP_REPO"
+            exit 0
+          fi
+          git add Formula/memex-local.rb
+          git commit -m "memex-local $VERSION (Systemorph/MeshWeaver@${GITHUB_SHA::12})"
+          git push origin HEAD
+          echo "published memex-local $VERSION to $TAP_REPO"
