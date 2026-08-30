@@ -29,7 +29,7 @@ namespace Memex.Portal.Shared.Authentication;
 /// </summary>
 public sealed class MeshWeaverInstanceService(
     IMeshService nodeFactory, IMessageHub hub, ILogger<MeshWeaverInstanceService> logger,
-    IConfiguration? configuration = null)
+    IConfiguration? configuration = null) : IInstanceKeyRegistry
 {
     /// <summary>Config key listing the <c>Source/Package</c> entries every new registration is
     /// seeded with (<c>PluginCatalog:DefaultGrants:0</c>, …). Absent/empty → registration grants
@@ -392,6 +392,123 @@ public sealed class MeshWeaverInstanceService(
                         return rawKey;
                     });
             });
+    }
+
+    /// <summary>
+    /// Adopts a key that was minted ELSEWHERE — the Hosting operator's <c>hosting-kv-rotate</c>
+    /// job generates the raw <c>mwi_</c> key, puts it straight into Key Vault, and reports only its
+    /// SHA-256 through the <c>::hosting:: key_hash=</c> marker line. This is the registry-side half
+    /// of that rotation: the instance node takes the new hash, a fresh index entry points at it,
+    /// and the PREVIOUS index entry is deleted so the old key stops authenticating the moment this
+    /// completes (<see cref="ReissueKey"/> left that entry "to be cleaned up separately"; a rotation
+    /// driven by a lifecycle verb must not).
+    ///
+    /// <para>🚨 The raw key never reaches this process. That is the point of the split: the
+    /// registry stores hashes, the operator holds the vault write, and nothing in between logs,
+    /// displays or persists the secret. A caller that already has the raw key and wants a hash for
+    /// it uses <see cref="InstanceKeys.Hash"/> — never a log line.</para>
+    /// </summary>
+    /// <param name="instancePath">The <c>MeshWeaverInstance</c> node to re-key.</param>
+    /// <param name="keyHash">The lowercase SHA-256 hex of the new raw key (64 chars).</param>
+    public IObservable<Unit> AdoptKeyHash(string instancePath, string keyHash)
+    {
+        if (keyHash is not { Length: 64 } || !keyHash.All(Uri.IsHexDigit) || keyHash != keyHash.ToLowerInvariant())
+            return Observable.Throw<Unit>(new ArgumentException(
+                "keyHash must be the lowercase SHA-256 hex of the raw key (64 hex chars) — the registry "
+                + "stores hashes only, and this one arrived in the wrong shape", nameof(keyHash)));
+
+        var workspace = hub.GetWorkspace();
+        return workspace.GetMeshNodeStream(instancePath)
+            .Where(node => node is not null)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .SelectMany(node =>
+            {
+                var instance = node!.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions)
+                    ?? throw new InvalidOperationException($"Node {instancePath} is not a MeshWeaverInstance.");
+                if (string.Equals(instance.KeyHash, keyHash, StringComparison.Ordinal))
+                {
+                    logger.LogInformation("Instance {InstanceId} already carries key hash {Prefix}… — nothing to adopt",
+                        instance.InstanceId, InstanceKeys.HashPrefix(keyHash));
+                    return Observable.Return(Unit.Default);
+                }
+                var previousHash = instance.KeyHash;
+                return WriteIndex(keyHash, instancePath, instance.InstanceId)
+                    .SelectMany(_ => workspace.GetMeshNodeStream(instancePath)
+                        .Update(current => current with
+                        {
+                            Content = (current.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions)
+                                       ?? instance) with
+                            {
+                                KeyHash = keyHash,
+                                KeyIssuedAt = DateTimeOffset.UtcNow,
+                            },
+                        }))
+                    .SelectMany(_ => DeleteIndex(previousHash))
+                    .Select(_ =>
+                    {
+                        logger.LogInformation("Adopted rotated key for instance {InstanceId} (hash prefix {Prefix}); previous index entry removed",
+                            instance.InstanceId, InstanceKeys.HashPrefix(keyHash));
+                        return Unit.Default;
+                    });
+            });
+    }
+
+    /// <inheritdoc cref="IInstanceKeyRegistry.AdoptKeyHash"/>
+    /// <remarks>Resolves the instance NODE by id first — the operator knows the deployment's
+    /// instance id, never the owner's node path — then adopts on that path.</remarks>
+    IObservable<Unit> IInstanceKeyRegistry.AdoptKeyHash(string instanceId, string keyHash)
+    {
+        if (string.IsNullOrWhiteSpace(instanceId))
+            return Observable.Throw<Unit>(new ArgumentException("instanceId is required", nameof(instanceId)));
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var request = new MeshQueryRequest
+        {
+            Query = $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId}",
+        };
+        return Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => meshService.Query(request))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .SelectMany(results =>
+            {
+                // The index nodes share the NodeType and use the hash prefix as id, so an instance
+                // record is the hit whose id IS the instance id and whose namespace is not the index.
+                var node = results.FirstOrDefault(n =>
+                    string.Equals(n.Id, instanceId, StringComparison.Ordinal)
+                    && !string.Equals(n.Namespace, MeshWeaverInstanceNodeType.IndexNamespace, StringComparison.Ordinal));
+                return node?.Path is null
+                    ? Observable.Throw<Unit>(new InvalidOperationException(
+                        $"no MeshWeaverInstance is registered as '{instanceId}' — nothing to rotate"))
+                    : AdoptKeyHash(node.Path, keyHash);
+            });
+    }
+
+    /// <summary>Removes the index entry for a superseded hash. Absent is fine — a first-time
+    /// adoption or an already-cleaned entry both leave nothing to delete.</summary>
+    private IObservable<Unit> DeleteIndex(string? previousHash)
+    {
+        if (string.IsNullOrWhiteSpace(previousHash) || previousHash.Length < InstanceKeys.HashPrefixLength)
+            return Observable.Return(Unit.Default);
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var indexPath = $"{MeshWeaverInstanceNodeType.IndexNamespace}/{InstanceKeys.HashPrefix(previousHash)}";
+        return Observable.Defer(() =>
+        {
+            var disposable = accessService.SwitchAccessContext(
+                new AccessContext { ObjectId = WellKnownUsers.System, Name = "system-security" });
+            return nodeFactory.DeleteNode(indexPath)
+                .Select(_ => Unit.Default)
+                .Catch<Unit, Exception>(ex =>
+                {
+                    // Absent already: not a failure. Anything else IS one — a stale entry that
+                    // still authenticates is the hole this method exists to close.
+                    logger.LogDebug(ex, "No index entry to remove at {Path}", indexPath);
+                    return Observable.Return(Unit.Default);
+                })
+                .Finally(() => disposable.Dispose());
+        });
     }
 
     /// <summary>Enables or disables an instance. A disabled instance fails authentication while its
