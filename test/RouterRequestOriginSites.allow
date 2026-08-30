@@ -32,10 +32,8 @@ test/MeshWeaver.Data.Test/StreamRouteSelfParentTerminationTest.cs	2
 # The leak being pinned is literally `CreateNodeRequest@mesh/<self>` (#981): a self-targeted create
 # on the ROUTER whose reply the router's own HandleCallbacks drops for want of a registered subject.
 # Change either end and the test no longer reproduces the shape it exists to pin.
-test/MeshWeaver.Hosting.Monolith.Test/UpsertInnerCreateObservationTest.cs	2
 
 # The interleaving under test is an ORDERING on the router's action block: a stalling handler owns
 # it, the probe must land in that queue, and only then may Dispose()'s ShutdownRequest queue behind
 # it. From a client hub the enqueue becomes a routed hop, so Dispose() could beat the probe in and
 # the reject would come from a different branch — a flake, not a stricter test.
-test/MeshWeaver.Hosting.Monolith.Test/ShutdownRoutingRejectClassificationTest.cs	1
