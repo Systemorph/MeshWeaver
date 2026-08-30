@@ -42,14 +42,38 @@
 # drifted the same way (Monolith 200→345, Data 25→73, PluginTester 60→8).
 #
 # The floor for ANY sharding is the heaviest single SCHEDULABLE UNIT — a project,
-# or one part of a split one. Today that is Hosting.Monolith.Test's two halves at
-# ~331 s each. Adding shards below that buys nothing.
+# or one part of a split one. Today that is Hosting.Monolith.Test's three thirds
+# at ~221 s each. Adding shards below that buys nothing.
 #
-# SPLIT RULE: split a project only when its solo weight exceeds the ideal shard
-# load (sum ÷ SHARD_TOTAL, currently 2526 ÷ 6 ≈ 421 s), because only then is it
-# the binding floor. Monolith (662 s) qualifies; nothing else does. (AI.Test's
-# split was dropped for the same reason before the suite itself moved to
-# MeshWeaver.Plugins beside the engine, #2276.)
+# SPLIT RULE — TWO independent triggers. Either one is sufficient.
+#
+#  (1) BALANCE. Solo weight exceeds the ideal shard load (sum ÷ SHARD_TOTAL,
+#      currently 2526 ÷ 6 ≈ 421 s), because only then is the project the binding
+#      floor. Monolith (663 s) qualifies. (AI.Test's split was dropped under this
+#      rule before the suite itself moved to MeshWeaver.Plugins, #2276.)
+#
+#  (2) 🚨 HEADROOM AGAINST THE PER-PROJECT CAP (#2747). Solo weight exceeds ~60%
+#      of the `timeout 8m` = 480 s wall-clock cap each project runs under in
+#      dotnet-test.yml. This trigger is INDEPENDENT of balance and it is the one
+#      that bites in production: a project can sit comfortably under the ideal
+#      shard load and still be one slow runner away from exit=124.
+#
+#      PluginCatalog was exactly that. Measured across four consecutive runs it
+#      ran 315/320/315 s — 66-72% of the cap — and then 480 s exit=124 TIMEOUT on
+#      e12697ebd (run 33302269352, shard 0), with the SAME tree passing at 320 s
+#      on the very next run. No change was responsible. The five "test failures"
+#      that came with the kill were timing casualties of it, not defects, so every
+#      occurrence costs a full investigation before it can be dismissed — and this
+#      repo's rules (correctly) forbid simply re-running it.
+#
+#      Raising the cap is NOT the alternative: the cap is what turns a wedge into a
+#      bounded, attributable failure instead of a 20-minute shard. Splitting lowers
+#      the numerator instead — PluginCatalog's two parts run ~174 s each, ~36% of
+#      the cap — and it costs nothing, because the parts land on different runners.
+#
+# 🚨 The two triggers must BOTH be checked when re-measuring. A project that grows
+# past 288 s (60% of 480) needs splitting even while the LPT loop still reports
+# six balanced shards, which is precisely why the balance rule alone missed this.
 #
 # Unlisted projects get DEFAULT_WEIGHT — a deliberate over-estimate, since an
 # unlisted project is a NEW one whose cost nobody has measured yet.
@@ -86,8 +110,8 @@ fi
 
 # "<seconds> <project-name>", heaviest first.
 WEIGHTS=$(cat <<'EOF'
-663 MeshWeaver.Hosting.Monolith.Test 2
-348 MeshWeaver.PluginCatalog.Test
+663 MeshWeaver.Hosting.Monolith.Test 3
+348 MeshWeaver.PluginCatalog.Test 2
 269 MeshWeaver.Hosting.Orleans.Test
 91 MeshWeaver.Data.Test
 76 MeshWeaver.Messaging.Hub.Test

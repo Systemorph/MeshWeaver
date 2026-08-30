@@ -95,23 +95,22 @@ public class PodHubClaimLifetimeTest
     }
 
     /// <summary>
-    /// Bounded wait for the attempt count to STOP moving. There is no completion signal to await
-    /// for a claim that ends, so two consecutive equal readings after the first attempt landed is
-    /// the settled state — the same technique as <c>StreamAttachTransientRetryTest</c>.
+    /// 🚨 Waits for the claim to TERMINATE, never for the attempt counter to stop moving (#2793).
+    /// The retry hops through the thread-pool scheduler between attempts, so on a loaded CI shard
+    /// that hop exceeds a 25 ms poll and "two equal readings" reads the count MID-HOP — it returned
+    /// 1 on the merge-queue entry for #2800, which is precisely the value unfixed code produces, so
+    /// the false RED spelled the regression's own signature. <c>PodHubClaimSettled</c> is the
+    /// condition itself, positively; the bound is a backstop against a hang, not the measurement
+    /// (with the backoff collapsed to 1 ms the real elapsed time is milliseconds).
     /// </summary>
-    private static async Task<int> WaitUntilSettled(RefusingGrainFactory factory)
+    private static async Task<int> WaitUntilSettled(OrleansRoutingService routing, RefusingGrainFactory factory)
     {
-        var last = -1;
-        for (var i = 0; i < 400; i++)
-        {
-            await Task.Delay(25);
-            var now = factory.AttachCalls;
-            if (now > 0 && now == last)
-                return now;
-            last = now;
-        }
-        throw new TimeoutException(
-            $"the claim never settled — last observed attempt count {factory.AttachCalls}");
+        var settled = routing.PodHubClaimSettled(Hub)
+                      ?? throw new InvalidOperationException(
+                          "the routing service recorded no pod-hub claim for the address — the seam "
+                          + "this test waits on is gone, and a poll would silently take its place.");
+        await settled.Timeout(TimeSpan.FromSeconds(30)).LastOrDefaultAsync();
+        return factory.AttachCalls;
     }
 
     /// <summary>
@@ -166,7 +165,7 @@ public class PodHubClaimLifetimeTest
         using var routing = Router(factory, sp, logger, canHostGrains: false);
 
         using var registration = routing.RegisterStream(Hub, Ignore);
-        var attempts = await WaitUntilSettled(factory);
+        var attempts = await WaitUntilSettled(routing, factory);
 
         attempts.Should().Be(OrleansRoutingService.PodHubAttachRetries + 1,
             "an Orleans client cannot host a grain, so the claim is impossible rather than slow — "
