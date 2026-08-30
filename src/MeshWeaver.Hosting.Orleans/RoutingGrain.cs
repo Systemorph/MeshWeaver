@@ -66,6 +66,15 @@ internal class RoutingGrain(
     private readonly OrleansRoutingService? localRoutes =
         meshHub.ServiceProvider.GetService<IRoutingService>() as OrleansRoutingService;
 
+    // 🚨 Issue #2638. The mesh-scoped gauge the SILO STOP holds on: every leg this grain dispatches
+    // and every NACK it carries is tracked from dispatch to termination, and
+    // RoutingQuiescenceSiloParticipant will not let the silo deactivate a grain until the count is
+    // zero. Resolved from the mesh hub's provider like the failure registry, so grain and participant
+    // read the SAME instance across this grain's own activations (a StatelessWorker is recycled; its
+    // legs are not). Null on a host that did not register it — then nothing is held, as before.
+    private readonly RoutingQuiescence? quiescence =
+        meshHub.ServiceProvider.GetService<RoutingQuiescence>();
+
     /// <summary>
     /// Per-destination FIFO for the stream-routed branch. Instance field — its lifetime is this
     /// activation's, and it holds an entry only while a destination has work in flight.
@@ -242,10 +251,17 @@ internal class RoutingGrain(
         if (meshConfig.StreamRoutedAddressTypes.Contains(address.Type))
         {
             ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
+            // Claimed at ENQUEUE like the in-flight slot — a leg queued behind another leg is work
+            // this silo has accepted and must let land before it stops (#2638).
+            var slot = quiescence?.Track();
             orderedDispatcher.Enqueue(
                 addressPath,
                 BuildPodHubRoute(delivery, address, addressPath, streamProvider, grainFactory),
-                () => ReportDrained(Interlocked.Decrement(ref inFlightRoutes)));
+                () =>
+                {
+                    ReportDrained(Interlocked.Decrement(ref inFlightRoutes));
+                    slot?.Dispose();
+                });
         }
         else
             Dispatch(BuildGrainRoute(delivery, address, addressPath, streamProvider, grainFactory),
@@ -262,8 +278,13 @@ internal class RoutingGrain(
     private void Dispatch(IObservable<Unit> route, string addressPath, string deliveryId)
     {
         ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
+        var slot = quiescence?.Track();
         routingPool.SubscribeThroughPool(route)
-            .Finally(() => ReportDrained(Interlocked.Decrement(ref inFlightRoutes)))
+            .Finally(() =>
+            {
+                ReportDrained(Interlocked.Decrement(ref inFlightRoutes));
+                slot?.Dispose();
+            })
             .Subscribe(
                 _ => { },
                 ex => logger.LogError(ex,
@@ -692,7 +713,15 @@ internal class RoutingGrain(
             return pathResolver.ResolveRoute(addressPath)
                 .Take(1)
                 .Timeout(ResolveTimeout)
-                .Select(resolution =>
+                // 🚨 SelectMany, not Select — the delivery is PART OF THE LEG (issue #2638). It used
+                // to be subscribed inside a Select with its subscription discarded, so the leg
+                // "terminated" the instant path resolution emitted while the grain call, its ≤6
+                // retry timers and its NACK ran on detached, untracked, undrainable continuations —
+                // the tail that executed after the host had disposed its container in prod. Now the
+                // leg terminates when the delivery has LANDED or been NACK'd: the in-flight slot,
+                // the RoutingQuiescence gauge the silo stop holds on, and the pool drain all see the
+                // whole thing.
+                .SelectMany(resolution =>
                 {
                     var grainKey = resolution?.Prefix ?? addressPath;
                     RoutingGrainTrace.Write($"RoutingGrain.RouteMessage RESOLVE_EMIT id={delivery.Id} addr={addressPath} grainKey={grainKey} prefix={resolution?.Prefix ?? "(null)"} remainder={resolution?.Remainder ?? "(null)"}");
@@ -709,7 +738,7 @@ internal class RoutingGrain(
                         logger.LogWarning("[ROUTE] NotFound: {FailureMessage}", failureMessage);
                         RoutingGrainTrace.Write($"RoutingGrain.RouteMessage NOT_FOUND id={delivery.Id} addr={addressPath} sender={delivery.Sender}");
                         PostFailureToSender(failureMessage, ErrorType.NotFound);
-                        return Unit.Default;
+                        return Observable.Return(Unit.Default);
                     }
 
                     logger.LogDebug("[ROUTE] Delivering {MessageType} to grain {GrainKey}", delivery.Message?.GetType().Name ?? "(null)", grainKey);
@@ -722,7 +751,7 @@ internal class RoutingGrain(
                     // hubs aren't stream-registered — those return at the StreamRoutedAddressTypes check above),
                     // so the SubscribeRequest never got a response, the cache hub timed out after 60 s, and the
                     // node wedged on "Subscribing to {path}…" until a portal restart (prod 2026-06-24).
-                    DeliverToGrainWithRetry(
+                    return DeliverToGrainRoute(
                         () => grainFactory.GetGrain<IMessageHubGrain>(grainKey).DeliverMessage(delivery),
                         grainKey, addressPath, delivery.Id, PostFailureToSender, logger,
                         resolveActivationError: activationFailures is null
@@ -733,7 +762,6 @@ internal class RoutingGrain(
                         // terminal defect. Without the probe it NACK'd the sender as permanently
                         // Failed and tore down its recovery machinery.
                         scopeDisposed: IsServiceScopeDisposed);
-                    return Unit.Default;
                 })
                 .Catch<Unit, Exception>(ex =>
                 {
@@ -827,12 +855,9 @@ internal class RoutingGrain(
         if (localRoute is not null)
         {
             RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_LOCAL_ROUTE id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
-            localRoute.Invoke(failureDelivery, CancellationToken.None)
-                .Subscribe(
-                    _ => { },
-                    ex => logger.LogWarning(ex,
-                        "[ROUTE] Failed to deliver {ErrorType} failure to co-hosted sender {Sender} over its local route",
-                        errorType, delivery.Sender));
+            SubscribeNack(
+                localRoute.Invoke(failureDelivery, CancellationToken.None).Select(_ => Unit.Default),
+                "over its local route");
             return;
         }
 
@@ -936,11 +961,35 @@ internal class RoutingGrain(
 
         // The NACK is fire-and-forget by nature — there is no NACK for a NACK — so the one thing a
         // subscriber owes is that a fault reaching here is never swallowed.
-        void SubscribeNack(IObservable<Unit> nack) =>
-            nack.Subscribe(
-                _ => { },
-                ex => logger.LogWarning(ex,
-                    "[ROUTE] Failed to deliver {ErrorType} failure to sender {Sender}", errorType, delivery.Sender));
+        //
+        // 🚨 …and it is ROUTING WORK, tracked like a leg (issue #2638). A NACK used to be a bare
+        // detached Subscribe: nothing counted it, nothing drained it, and the prod incident IS a
+        // NACK executing after the host had disposed its container. Through the routing pool it is
+        // terminated by IoPoolSiloTeardown's drain like every leg, and through the RoutingQuiescence
+        // gauge the silo stop holds until it has been carried — over a transport that still exists.
+        void SubscribeNack(IObservable<Unit> nack, string transport = "")
+        {
+            var slot = quiescence?.Track();
+            routingPool.SubscribeThroughPool(nack)
+                .Finally(() => slot?.Dispose())
+                .Subscribe(
+                    _ => { },
+                    ex =>
+                    {
+                        // The pool has been drained: this process is past the point where anything
+                        // can carry a NACK, and the drain says so by refusing the subscribe. Expected
+                        // teardown, not a fault — the hold ran out or the stop was non-graceful, and
+                        // RoutingQuiescence already reported the residual at Error.
+                        if (ex is OperationCanceledException)
+                            logger.LogDebug(
+                                "[ROUTE] {ErrorType} failure to sender {Sender} not carried {Transport}: the routing pool is drained (silo stopping)",
+                                errorType, delivery.Sender, transport);
+                        else
+                            logger.LogWarning(ex,
+                                "[ROUTE] Failed to deliver {ErrorType} failure to sender {Sender} {Transport}",
+                                errorType, delivery.Sender, transport);
+                    });
+        }
 
         // The NACK leg for a GRAIN-hosted sender (a per-node hub): resolve the sender's path the
         // same way the forward leg would, and when it names a real node, deliver the NACK as the
@@ -1276,9 +1325,43 @@ internal class RoutingGrain(
         IScheduler? scheduler = null,
         Func<string, string?>? resolveActivationError = null,
         Func<bool>? scopeDisposed = null)
+        => DeliverToGrainRoute(
+                grainCall, grainKey, addressPath, deliveryId, postFailureToSender, logger,
+                maxRetries, backoff, scheduler, resolveActivationError, scopeDisposed)
+            .Subscribe(
+                _ => { },
+                ex => logger.LogError(ex,
+                    "[ROUTE] Grain {GrainKey} delivery leg faulted past its own NACK arm ({DeliveryId})",
+                    grainKey, deliveryId));
+
+    /// <summary>
+    /// The delivery as ONE COLD LEG — the grain call with its transient retry, the result arm
+    /// (a <c>Failed</c> result NACKs the sender with the verdict the owning hub recorded) and the
+    /// fault arm (classified, then NACK'd) — emitting exactly one <see cref="Unit"/> and completing
+    /// once the delivery has LANDED or been NACK'd. Never faults past its NACK arm by design; the
+    /// subscriber's error arm exists so that a NACK that itself throws is still reported.
+    ///
+    /// <para>🚨 <b>Issue #2638 — a leg, not a detached side effect.</b> <see cref="BuildGrainRoute"/>
+    /// composes this INTO the route observable, so the route's in-flight slot, the
+    /// <see cref="RoutingQuiescence"/> gauge the silo stop holds on, and the routing pool's drain
+    /// all cover the delivery, its ≤6 retry timers and its NACK. <see cref="DeliverToGrainWithRetry"/>
+    /// is the fire-and-forget subscription of the same leg, kept for the pure tests that drive it.</para>
+    /// </summary>
+    internal static IObservable<Unit> DeliverToGrainRoute(
+        Func<Task<IMessageDelivery>> grainCall,
+        string grainKey,
+        string addressPath,
+        string deliveryId,
+        Action<string, ErrorType> postFailureToSender,
+        ILogger logger,
+        int maxRetries = 6,
+        Func<int, TimeSpan>? backoff = null,
+        IScheduler? scheduler = null,
+        Func<string, string?>? resolveActivationError = null,
+        Func<bool>? scopeDisposed = null)
     {
         return DeliverToGrainObservable(grainCall, grainKey, deliveryId, logger, maxRetries, backoff, scheduler)
-            .Subscribe(
+            .Do(
                 result =>
                 {
                     RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_OK id={deliveryId} grainKey={grainKey} state={result.State}");
@@ -1338,7 +1421,9 @@ internal class RoutingGrain(
                             grainKey, failMsg, failureErrorType);
                         postFailureToSender(failMsg, failureErrorType);
                     }
-                },
+                })
+            .Select(_ => Unit.Default)
+            .Catch<Unit, Exception>(
                 ex =>
                 {
                     RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_FAULT id={deliveryId} grainKey={grainKey} ex={ex.Message}");
@@ -1358,6 +1443,7 @@ internal class RoutingGrain(
                         "[ROUTE] Grain {GrainKey} delivery failed after transient retries (or a non-transient fault) → NACK sender as {ErrorType}: {Detail}",
                         grainKey, errorType, detail);
                     postFailureToSender($"Delivery to '{addressPath}' failed: {detail}", errorType);
+                    return Observable.Return(Unit.Default);
                 });
     }
 
