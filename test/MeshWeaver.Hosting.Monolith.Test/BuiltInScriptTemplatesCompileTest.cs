@@ -47,7 +47,10 @@ public class BuiltInScriptTemplatesCompileTest(ITestOutputHelper output) : Monol
                 NodeType = "Markdown"
             }).Should().Emit();
 
-        var response = (await Mesh
+        // 🚨 From the CLIENT hub, never the router (RouterAsTestRequestOriginRatchetGuard): issuing
+        // this from the mesh hub itself puts it on both ends of the delivery, which shows up as
+        // ROUTER_TRAFFIC errors and makes the test drive a path no caller ever takes.
+        var response = (await RequestHub
             .Observe<NodeCopyDispatchResponse>(
                 new NodeCopyDispatchRequest(source, $"{TestPartition}/copies") { Force = true },
                 o => o.WithTarget(Mesh.Address))
