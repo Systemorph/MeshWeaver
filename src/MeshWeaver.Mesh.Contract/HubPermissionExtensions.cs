@@ -83,7 +83,12 @@ public static class HubPermissionExtensions
     /// <summary>
     /// Runs ONE permission check and CLASSIFIES its outcome (issue #974): a verdict becomes
     /// <see cref="PermissionCheckOutcome.Granted"/> / <see cref="PermissionCheckOutcome.Denied"/>,
-    /// a FAULTED fold becomes <see cref="PermissionCheckOutcome.Undetermined"/>.
+    /// while a fold that reaches NO verdict — because it FAULTED, or because it terminated without
+    /// ever emitting (issue #2742) — becomes <see cref="PermissionCheckOutcome.Undetermined"/>.
+    ///
+    /// <para>🚨 <b>This observable always produces exactly one outcome.</b> That is contract, not a
+    /// coincidence: every caller treats "no outcome" as "nothing refused the delivery", so an empty
+    /// check is indistinguishable from an all-granted one. See the <c>DefaultIfEmpty</c> below.</para>
     ///
     /// <para>🚨 <b>This is the one place the distinction can be made, so it is the only place it is
     /// made.</b> The fold is the only party that knows whether it reached an answer. Callers branch
@@ -124,7 +129,30 @@ public static class HubPermissionExtensions
             .Select(PermissionCheckOutcome.FromVerdict)
             .Catch<PermissionCheckOutcome, Exception>(ex => Observable.Return(
                 PermissionCheckOutcome.Undetermined(
-                    $"permission fold on '{nodePath}' faulted: {ex.GetType().Name}: {ex.Message}")));
+                    $"permission fold on '{nodePath}' faulted: {ex.GetType().Name}: {ex.Message}")))
+            // 🚨 SILENCE IS NOT CONSENT (issue #2742). A fold has THREE terminals, not two: it can
+            // emit, it can fault — and it can COMPLETE WITHOUT EVER EMITTING. The third one had no
+            // representation here, so it left this observable EMPTY, and an empty check is not a
+            // refusal anywhere downstream: AccessControlPipeline's decision chain ends in
+            // `.Take(1).Select(…).DefaultIfEmpty()`, whose null means "every check was granted" —
+            // so it invoked `next` and DELIVERED the message. Measured on this tree before the fix:
+            // an evaluator returning Observable.Empty<Permission>() let a [RequiresPermission(Read)]
+            // GetDataRequest through with no failure at all. That is a full authorization BYPASS
+            // arriving through the same door as the hang this issue is about — a leg of the
+            // CombineLatest fold that produces no value. CombineLatest completes the instant ANY
+            // source completes without having emitted, so one silent leg empties the whole fold;
+            // the WithPermissionEvaluator seam (a public embedder extension point, see
+            // MeshExtensions) reaches it directly.
+            //
+            // The tri-state already has the right word for "the fold produced no verdict", and it is
+            // the same one a FAULT gets: Undetermined ⇒ IsGranted=false ⇒ fail CLOSED, reported as
+            // ErrorType.Unavailable (retryable), never as "Access denied" — because no verdict was
+            // reached, exactly as #974 established. Placed AFTER the Catch so it covers the whole
+            // chain, and it can only fire on completion, so a healthy fold (which emits, then is
+            // Take(1)'d by the caller) never sees it. Pinned by PermissionFoldSilentTerminalTest.
+            .DefaultIfEmpty(PermissionCheckOutcome.Undetermined(
+                $"permission fold on '{nodePath}' terminated without producing a verdict "
+                + "(a source of the permission fold completed without emitting)"));
     }
 
     /// <summary>
