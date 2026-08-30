@@ -111,12 +111,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     private static readonly TimeSpan UpdateResponseWaitBound = TimeSpan.FromSeconds(2);
 
     // 🚨 Slack added to LateResponseWatchBound before the caller's write is failed for SILENCE.
-    // The registry stops honouring a verdict at exactly LateResponseWatchBound; firing the
-    // caller's bound at the same instant would race a verdict that is still admissible. One
-    // second is enough to order the two, and it is not a retry, a backoff, or a knob to widen
-    // when something times out — a write still unanswered here has outlived every owner-side
-    // terminal path, so the answer is a fault, not a longer wait.
-    private static readonly TimeSpan VerdictBoundGrace = TimeSpan.FromSeconds(1);
+    // Now sourced from LatePatchResponseRegistry rather than restated here: this grace is what puts
+    // the caller's outer write bound at 31s, and a test that waits on a write must sit strictly
+    // ABOVE that to let the framework's OwnerUnreachable win the race and name the cause. A private
+    // copy was invisible to the test tree, which independently authored the SAME 30s as
+    // LateResponseWatchBound and so could never observe the verdict (#2819).
+    private static readonly TimeSpan VerdictBoundGrace = LatePatchResponseRegistry.VerdictBoundGrace;
 
     // 🚨 Retry budget for the provably-safe NACK cases — the ones where the owner STATED the
     // patch never applied: OwnerDisposing, OwnerNotReady, and Conflict. Each re-enqueue re-runs
