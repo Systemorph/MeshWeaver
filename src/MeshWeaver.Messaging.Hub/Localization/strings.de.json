@@ -1012,6 +1012,7 @@
   "instanceRegistration.error.failed": "Die Zustimmung konnte nicht erfasst werden:",
   "instanceRegistration.withdraw": "Zustimmung zurückziehen",
   "instanceRegistration.withdrawn": "Zustimmung zurückgezogen — die Installation registriert sich nicht mehr; löschen Sie die gespeicherten Zugangsdaten, um die Authentifizierung zu beenden.",
+  "instanceRegistration.missingPrivacy": "Auf dieser Installation ist noch keine Datenschutzerklärung veröffentlicht — veröffentlichen Sie zuerst eine unter Einstellungen ▸ Datenschutz. Sie wird öffentlich unter /privacy bereitgestellt.",
   "menu.userProfile": "Benutzerprofil",
   "chat.chat": "Chat",
   "chat.recentThreads": "Letzte Threads",

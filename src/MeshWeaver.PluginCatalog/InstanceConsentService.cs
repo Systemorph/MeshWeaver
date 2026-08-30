@@ -43,14 +43,6 @@ public sealed class InstanceConsentService(IMessageHub hub, ILogger<InstanceCons
 
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
 
-    /// <summary>Shown when no privacy statement has been published on this installation yet.</summary>
-    public const string MissingPrivacyStatement = """
-        # Privacy Statement
-
-        No privacy statement has been published on this installation yet. A platform admin publishes
-        one under Settings ▸ Privacy; it is served publicly at `/privacy`.
-        """;
-
     /// <summary>The default platform terms a fresh installation shows. Generic on purpose: they
     /// describe what registering at a registry means for the deployment and leave commercial terms
     /// to the plan the registry puts the instance on.</summary>
@@ -99,7 +91,8 @@ public sealed class InstanceConsentService(IMessageHub hub, ILogger<InstanceCons
         return (registry, instanceId, !string.IsNullOrWhiteSpace(options.BootstrapKey));
     }
 
-    /// <summary>Both texts, as shown — the privacy statement (or <see cref="MissingPrivacyStatement"/>)
+    /// <summary>Both texts, as shown — the privacy statement (null when none has been PUBLISHED on
+    /// this installation: there is nothing to accept, and the app says so in the viewer's language)
     /// and the terms (created with <see cref="DefaultTerms"/> on first use). Emits once.</summary>
     public IObservable<ConsentTexts> Texts()
     {
@@ -107,7 +100,7 @@ public sealed class InstanceConsentService(IMessageHub hub, ILogger<InstanceCons
         var workspace = hub.GetWorkspace();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        IObservable<string> Read(string path, string fallback) => workspace
+        IObservable<string?> Read(string path, string? fallback) => workspace
             .GetQuery($"consent-text|{path}", $"path:{path} nodeType:Markdown")
             .Take(1)
             .Timeout(ReadTimeout)
@@ -140,9 +133,9 @@ public sealed class InstanceConsentService(IMessageHub hub, ILogger<InstanceCons
         // One sealed System scope around the reads (#1790): the subscriber is the admin's circuit.
         return access.RunAsSystem(() => EnsureTerms()
             .SelectMany(_ => Observable.CombineLatest(
-                Read(PrivacyPath, MissingPrivacyStatement),
+                Read(PrivacyPath, null),
                 Read(TermsPath, DefaultTerms),
-                (privacy, terms) => new ConsentTexts(privacy, terms))
+                (privacy, terms) => new ConsentTexts(privacy, terms ?? DefaultTerms))
                 .Take(1)));
     }
 
@@ -195,6 +188,10 @@ public sealed class InstanceConsentService(IMessageHub hub, ILogger<InstanceCons
     {
         if (string.IsNullOrWhiteSpace(instanceId))
             return Observable.Throw<MeshNode>(new ArgumentException("An instance id is required.", nameof(instanceId)));
+        if (!texts.CanBeAccepted)
+            return Observable.Throw<MeshNode>(new InvalidOperationException(
+                "No privacy statement has been published on this installation — there is nothing to accept. "
+                + "Publish one under Settings ▸ Privacy first."));
         var context = hub.ServiceProvider.GetService<AccessService>()?.Context;
         if (context is null || string.IsNullOrWhiteSpace(context.ObjectId))
             return Observable.Throw<MeshNode>(new InvalidOperationException(
@@ -204,7 +201,7 @@ public sealed class InstanceConsentService(IMessageHub hub, ILogger<InstanceCons
         {
             InstanceId = instanceId.Trim(),
             RegistryUrl = (registryUrl ?? "").TrimEnd('/'),
-            PrivacyStatementHash = Sha256(texts.Privacy),
+            PrivacyStatementHash = Sha256(texts.Privacy!),
             TermsHash = Sha256(texts.Terms),
             AcceptedAt = DateTimeOffset.UtcNow,
             AcceptedByUserId = context.ObjectId,
@@ -275,6 +272,14 @@ public sealed class InstanceConsentService(IMessageHub hub, ILogger<InstanceCons
 }
 
 /// <summary>The two texts a consent is given for, as shown.</summary>
-/// <param name="Privacy">The privacy statement markdown.</param>
+/// <param name="Privacy">The privacy statement markdown — null when none has been published on this
+/// installation, in which case there is nothing to accept yet.</param>
 /// <param name="Terms">The platform terms markdown.</param>
-public sealed record ConsentTexts(string Privacy, string Terms);
+public sealed record ConsentTexts(string? Privacy, string Terms)
+{
+    /// <summary>Whether a consent can be given on these texts: a published privacy statement and
+    /// non-empty terms. The seeded terms are an OPERATOR document, shipped in English like the
+    /// privacy statement's own default and edited under the node; the app's chrome is localized,
+    /// the documents are whatever the operator publishes.</summary>
+    public bool CanBeAccepted => !string.IsNullOrWhiteSpace(Privacy) && !string.IsNullOrWhiteSpace(Terms);
+}
