@@ -10,6 +10,21 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Watches a directory for file system changes and publishes notifications to <see cref="IObserver{T}"/> of <see cref="DataChangeNotification"/>.
 /// This enables reactive updates when files are modified externally (e.g., by another process or editor).
 /// </summary>
+/// <remarks>
+/// 🚨 NOT on the production path (verified 2026-08-30): nothing in <c>src/</c> registers or
+/// constructs this watcher — the only constructions are <c>FileSystemChangeWatcherTests</c>, and
+/// <c>StorageAdapterMeshQueryProvider</c> mentions it in a comment only. Live synced queries
+/// re-run on the adapters' own in-process change feed (<c>IStorageAdapter.Changes</c>), not on
+/// this class. Its adapter reads are as tracked as the <c>IStorageAdapter</c> it is given —
+/// with a <c>FileSystemStorageAdapter</c> (which now REQUIRES the mesh-scoped
+/// <c>IoPoolRegistry</c>) those leaves are drainable. What is NOT tracked is the watcher's own
+/// driving machinery: <see cref="FileSystemWatcher"/> event callbacks and the debounce
+/// <see cref="Timer"/> fire on bare ThreadPool threads outside any <c>IIoPool</c> ledger, so the
+/// work they initiate is invisible to the teardown drain until it reaches the adapter. If this
+/// class is ever wired into production, give it the registry (required constructor parameter,
+/// like the adapters) and route those callbacks through the <c>FileSystem</c> pool so teardown
+/// can cancel and join them.
+/// </remarks>
 public class FileSystemChangeWatcher : IDisposable
 {
     private readonly string _baseDirectory;
