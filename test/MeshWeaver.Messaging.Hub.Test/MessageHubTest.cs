@@ -3,8 +3,10 @@ using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
 
+using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 namespace MeshWeaver.Messaging.Hub.Test;
 
 public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
@@ -327,16 +329,24 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
     {
         const int watermark = 25;
         const int flood = 200;
-        using var blockHandlerEntered = new ManualResetEventSlim(false);
-        using var releaseBlock = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate. `blockHandlerEntered` travels handler → test, so it is an
+        // AsyncSubject the producer completes and the test awaits through the assertion helpers.
+        // The release travels the other way, INTO a turn thread this test deliberately parks (that
+        // park IS the subject), so it is a volatile flag the parked turn polls under a bounded
+        // SpinUntil: no handle to dispose, no `Wait()` bridge, and nothing that can outlive its
+        // bound if an assertion throws before the release.
+        var blockHandlerEntered = new AsyncSubject<Unit>();
+        var releaseBlock = 0;
 
         var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "1"), c => c
             .WithPostingIdentity(PostingIdentity.System)
             .WithAggregateWatermark(watermark)
             .WithHandler<BlockTurnRequest>((hub, d) =>
             {
-                blockHandlerEntered.Set();
-                releaseBlock.Wait(TimeSpan.FromSeconds(30)); // hold the single turn thread
+                blockHandlerEntered.OnNext(Unit.Default);
+                blockHandlerEntered.OnCompleted();
+                // hold the single turn thread
+                SpinWait.SpinUntil(() => Volatile.Read(ref releaseBlock) == 1, TimeSpan.FromSeconds(30));
                 return d.Processed();
             })
             .WithHandler<SayHelloRequest>((hub, request) =>
@@ -345,33 +355,42 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
                 return request.Processed();
             }));
 
-        // Observe the FIRST aggregate shed (fires synchronously on the flooding thread).
-        var firstShed = victim.StormBreaker!.AggregateSheds.Should().Within(10.Seconds()).Emit();
+        try
+        {
+            // Observe the FIRST aggregate shed (fires synchronously on the flooding thread).
+            var firstShed = victim.StormBreaker!.AggregateSheds.Should().Within(10.Seconds()).Emit();
 
-        // 1) Occupy the single action-block thread.
-        victim.Post(new BlockTurnRequest(), o => o.WithTarget(victim.Address));
-        blockHandlerEntered.Wait(TimeSpan.FromSeconds(10))
-            .Should().BeTrue("the block handler must occupy the turn thread before we flood");
+            // 1) Occupy the single action-block thread.
+            victim.Post(new BlockTurnRequest(), o => o.WithTarget(victim.Address));
+            await blockHandlerEntered.Should().Within(10.Seconds())
+                .Emit("the block handler must occupy the turn thread before we flood");
 
-        // 2) Flood sheddable traffic while the block is held → depth crosses the watermark.
-        for (var i = 0; i < flood; i++)
-            victim.Post(new MissingSubscribeEvent(i), o => o.WithTarget(victim.Address));
+            // 2) Flood sheddable traffic while the block is held → depth crosses the watermark.
+            for (var i = 0; i < flood; i++)
+                victim.Post(new MissingSubscribeEvent(i), o => o.WithTarget(victim.Address));
 
-        await firstShed; // RED without the aggregate breaker: this never emits
+            await firstShed; // RED without the aggregate breaker: this never emits
 
-        // 3) A user-facing probe posted DURING the overload must never be shed.
-        var probe = victim.Observe(new SayHelloRequest(), o => o.WithTarget(victim.Address))
-            .Should().Within(10.Seconds()).Emit();
+            // 3) A user-facing probe posted DURING the overload must never be shed.
+            var probe = victim.Observe(new SayHelloRequest(), o => o.WithTarget(victim.Address))
+                .Should().Within(10.Seconds()).Emit();
 
-        // 4) Release the block; the bounded queue drains and the probe is answered.
-        releaseBlock.Set();
-        (await probe).Should().BeAssignableTo<IMessageDelivery<HelloEvent>>(
-            "the action block stayed drainable — sheddable traffic was shed, user-facing work was not");
+            // 4) Release the block; the bounded queue drains and the probe is answered.
+            Volatile.Write(ref releaseBlock, 1);
+            (await probe).Should().BeAssignableTo<IMessageDelivery<HelloEvent>>(
+                "the action block stayed drainable — sheddable traffic was shed, user-facing work was not");
 
-        victim.StormBreaker.AggregateShedCount.Should().BeGreaterThan(0,
-            "the aggregate watermark shed the excess sheddable traffic");
-        victim.StormBreaker.TripCount.Should().Be(0,
-            "the per-key breaker must NOT be what saved the hub — this isolates the aggregate path");
+            victim.StormBreaker.AggregateShedCount.Should().BeGreaterThan(0,
+                "the aggregate watermark shed the excess sheddable traffic");
+            victim.StormBreaker.TripCount.Should().Be(0,
+                "the per-key breaker must NOT be what saved the hub — this isolates the aggregate path");
+        }
+        finally
+        {
+            // 🚨 In a `finally`: an assertion that throws above must not leave the turn thread
+            // parked into the next test.
+            Volatile.Write(ref releaseBlock, 1);
+        }
     }
 
     /// <summary>
@@ -391,48 +410,61 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task Dispose_WhenHandlerBlocksTheTurn_WatchdogTearsDownChildrenAndDisposables()
     {
-        using var blockHandlerEntered = new ManualResetEventSlim(false);
-        using var releaseBlock = new ManualResetEventSlim(false);
-        using var ownDisposed = new ManualResetEventSlim(false);
-        using var childDisposed = new ManualResetEventSlim(false);
+        // 🚨 No hand-woven gate — see ManyDistinctMissingSubscribes_DoNotWedge above for why the
+        // two directions get different shapes: producer → test is an AsyncSubject, test → parked
+        // turn is a volatile flag polled under a bounded SpinUntil.
+        var blockHandlerEntered = new AsyncSubject<Unit>();
+        var ownDisposed = new AsyncSubject<Unit>();
+        var childDisposed = new AsyncSubject<Unit>();
+        var releaseBlock = 0;
 
         var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "wedged-dispose"), c => c
             .WithPostingIdentity(PostingIdentity.System)
             .WithHandler<BlockTurnRequest>((_, d) =>
             {
-                blockHandlerEntered.Set();
-                releaseBlock.Wait(TimeSpan.FromSeconds(30)); // hold the single turn thread → starve ShutdownRequest
+                blockHandlerEntered.OnNext(Unit.Default);
+                blockHandlerEntered.OnCompleted();
+                // hold the single turn thread → starve ShutdownRequest
+                SpinWait.SpinUntil(() => Volatile.Read(ref releaseBlock) == 1, TimeSpan.FromSeconds(30));
                 return d.Processed();
             }));
 
         // Stands in for a sync-stream subscription that DisposeImpl tears down.
-        victim.RegisterForDisposal(Disposable.Create(ownDisposed.Set));
+        victim.RegisterForDisposal(Disposable.Create(() =>
+        {
+            ownDisposed.OnNext(Unit.Default);
+            ownDisposed.OnCompleted();
+        }));
         // Stands in for a hosted sync-stream hub whose keep-alive heartbeat is stopped by hostedHubs.Dispose().
         var child = victim.GetHostedHub(new Address("child", "1"),
             cc => cc.WithPostingIdentity(PostingIdentity.System), HostedHubCreation.Always)!;
-        child.RegisterForDisposal(Disposable.Create(childDisposed.Set));
+        child.RegisterForDisposal(Disposable.Create(() =>
+        {
+            childDisposed.OnNext(Unit.Default);
+            childDisposed.OnCompleted();
+        }));
 
         try
         {
             // 1) Wedge the victim's action block so its ShutdownRequest can never get a turn.
             victim.Post(new BlockTurnRequest(), o => o.WithTarget(victim.Address));
-            blockHandlerEntered.Wait(TimeSpan.FromSeconds(10))
-                .Should().BeTrue("the block handler must occupy the turn thread before we dispose");
+            await blockHandlerEntered.Should().Within(10.Seconds())
+                .Emit("the block handler must occupy the turn thread before we dispose");
 
             // 2) Dispose — the state machine is starved; only the 8s watchdog can complete it.
             victim.Dispose();
 
             // 3) The watchdog (8s) must force the real teardown, not just signal completion.
-            ownDisposed.Wait(TimeSpan.FromSeconds(20))
-                .Should().BeTrue("the watchdog must run DisposeImpl so the hub's own subscriptions don't leak when disposal wedges");
-            childDisposed.Wait(TimeSpan.FromSeconds(20))
-                .Should().BeTrue("the watchdog must dispose hosted hubs so their keep-alive heartbeats don't leak forever");
+            await ownDisposed.Should().Within(20.Seconds())
+                .Emit("the watchdog must run DisposeImpl so the hub's own subscriptions don't leak when disposal wedges");
+            await childDisposed.Should().Within(20.Seconds())
+                .Emit("the watchdog must dispose hosted hubs so their keep-alive heartbeats don't leak forever");
         }
         finally
         {
             // Always release the held turn — even if an assertion fails — so the blocking handler
             // can't pin a thread for 30s and bleed into other tests.
-            releaseBlock.Set();
+            Volatile.Write(ref releaseBlock, 1);
         }
         await Task.Yield();
     }

@@ -1,5 +1,7 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -50,10 +52,13 @@ public class ShutdownRoutingRejectClassificationTest(ITestOutputHelper output) :
     /// <summary>Message whose handler stalls the mesh's action block for the duration of the setup.</summary>
     private record StallMeshActionBlock;
 
-    // Instance gates (never static — they die with the test instance, like every other
+    // Instance state (never static — it dies with the test instance, like every other
     // fixture-owned state in this suite). Test-side gating only: nothing in src/ is timed.
-    private readonly ManualResetEventSlim stallEntered = new(false);
-    private readonly ManualResetEventSlim releaseStall = new(false);
+    // 🚨 No hand-woven gate: handler → test is an AsyncSubject the stalling handler completes;
+    // the release travels back INTO the deliberately stalled action block, so it is a volatile
+    // flag polled under a bounded SpinUntil and written in the test's `finally`.
+    private readonly AsyncSubject<Unit> stallEntered = new();
+    private int releaseStall;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
@@ -70,11 +75,12 @@ public class ShutdownRoutingRejectClassificationTest(ITestOutputHelper output) :
                 .WithTypes(typeof(StallMeshActionBlock))
                 .WithHandler<StallMeshActionBlock>((_, request) =>
                 {
-                    stallEntered.Set();
+                    stallEntered.OnNext(Unit.Default);
+                    stallEntered.OnCompleted();
                     // Deliberately ignores cancellation (Dispose() calls CancelExecution):
                     // the point is that the ShutdownRequest posted by Dispose() cannot be
                     // processed until the test has queued everything behind it.
-                    releaseStall.Wait(TimeSpan.FromSeconds(30));
+                    SpinWait.SpinUntil(() => Volatile.Read(ref releaseStall) == 1, TimeSpan.FromSeconds(30));
                     return request.Processed();
                 }));
 
@@ -109,7 +115,7 @@ public class ShutdownRoutingRejectClassificationTest(ITestOutputHelper output) :
         {
             // 1. Stall the mesh action block. Everything posted from here on queues behind it.
             Mesh.Post(new StallMeshActionBlock(), o => o.WithTarget(Mesh.Address));
-            stallEntered.Wait(TimeSpan.FromSeconds(20)).Should().BeTrue(
+            await stallEntered.Should().Within(20.Seconds()).Emit(
                 "the stalling handler must own the action block before the interleaving is queued");
 
             // 2. Queue the probe. Observe pre-registers the response callback before posting.
@@ -131,7 +137,7 @@ public class ShutdownRoutingRejectClassificationTest(ITestOutputHelper output) :
         }
         finally
         {
-            releaseStall.Set();
+            Volatile.Write(ref releaseStall, 1);
         }
 
         var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => probe);

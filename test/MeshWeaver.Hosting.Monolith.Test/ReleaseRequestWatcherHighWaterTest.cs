@@ -1,6 +1,8 @@
 using System;
 using System.IO;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -153,68 +155,80 @@ public class ReleaseRequestWatcherHighWaterTest(ITestOutputHelper output)
         //    on the owner's serialized write path), and the test blocks on it
         //    BEFORE enqueueing the triggers. Without it, on a busy runner the gate
         //    write could still be queued when the triggers are posted and only
-        //    execute after gate.Set() — nothing parked, the interleaving silently
+        //    execute after the gate opens — nothing parked, the interleaving silently
         //    degrades to ordinary timing, and the test could false-PASS a future
-        //    regression. Cross-thread ManualResetEventSlim handshake is the
-        //    project's established pattern for synchronous Subscribe-side signals
-        //    (see DeleteNodeBehaviorTest); both waits are bounded so a broken run
-        //    can never wedge the suite.
-        using var parked = new ManualResetEventSlim(false);
-        using var gate = new ManualResetEventSlim(false);
+        //    regression. 🚨 No hand-woven gate in either direction: `parked` travels
+        //    write-turn → test, so it is an AsyncSubject the turn completes and the
+        //    test awaits reactively; the gate travels back INTO the deliberately
+        //    parked turn, so it is a volatile flag polled under a bounded SpinUntil
+        //    and opened in the `finally` below. Both waits are bounded so a broken
+        //    run can never wedge the suite.
+        var parked = new AsyncSubject<Unit>();
+        var gate = 0;
         ownWs.GetMeshNodeStream().Update(curr =>
         {
             // Handshake: the serialized write queue is now provably parked.
-            parked.Set();
-            if (!gate.Wait(TimeSpan.FromSeconds(20)))
+            parked.OnNext(Unit.Default);
+            parked.OnCompleted();
+            if (!SpinWait.SpinUntil(() => Volatile.Read(ref gate) == 1, TimeSpan.FromSeconds(20)))
                 Output.WriteLine("!!! gate wait timed out — interleaving no longer forced");
             return curr; // no-op
         }).Subscribe(
             _ => { },
             ex => Output.WriteLine($"gate write failed: {ex}"));
 
-        parked.Wait(TimeSpan.FromSeconds(20)).Should().BeTrue(
-            "the gate write must be executing (owner write queue parked) before the "
-            + "triggers are enqueued — otherwise the lost-trigger interleaving is not forced");
+        try
+        {
+            await parked.Should().Within(20.Seconds()).Emit(
+                "the gate write must be executing (owner write queue parked) before the "
+                + "triggers are enqueued — otherwise the lost-trigger interleaving is not forced");
 
-        var t1 = DateTimeOffset.UtcNow;
-        var t2 = t1.AddMilliseconds(200);
-        ownWs.GetMeshNodeStream().Update(curr =>
-            curr.Content is not NodeTypeDefinition d
-                ? curr
-                : curr with
-                {
-                    Content = d with { RequestedReleaseAt = t1, RequestedReleaseForce = true }
-                })
-            .Subscribe(_ => { }, ex => Output.WriteLine($"P1 write failed: {ex}"));
-        ownWs.GetMeshNodeStream().Update(curr =>
-            curr.Content is not NodeTypeDefinition d
-                ? curr
-                : curr with
-                {
-                    Content = d with { RequestedReleaseAt = t2, RequestedReleaseForce = true }
-                })
-            .Subscribe(_ => { }, ex => Output.WriteLine($"P2 write failed: {ex}"));
+            var t1 = DateTimeOffset.UtcNow;
+            var t2 = t1.AddMilliseconds(200);
+            ownWs.GetMeshNodeStream().Update(curr =>
+                curr.Content is not NodeTypeDefinition d
+                    ? curr
+                    : curr with
+                    {
+                        Content = d with { RequestedReleaseAt = t1, RequestedReleaseForce = true }
+                    })
+                .Subscribe(_ => { }, ex => Output.WriteLine($"P1 write failed: {ex}"));
+            ownWs.GetMeshNodeStream().Update(curr =>
+                curr.Content is not NodeTypeDefinition d
+                    ? curr
+                    : curr with
+                    {
+                        Content = d with { RequestedReleaseAt = t2, RequestedReleaseForce = true }
+                    })
+                .Subscribe(_ => { }, ex => Output.WriteLine($"P2 write failed: {ex}"));
 
-        Output.WriteLine($"=== triggers enqueued: t1={t1:O} t2={t2:O} — opening gate ===");
-        gate.Set();
+            Output.WriteLine($"=== triggers enqueued: t1={t1:O} t2={t2:O} — opening gate ===");
+            Volatile.Write(ref gate, 1);
 
-        // 4. The CONTRACT: every trigger is eventually handled. The watcher's
-        //    Update for T2 bails (status is Pending from T1's dispatch), so T2
-        //    must re-fire on the post-settle emission and be stamped. With the
-        //    eager high-water advance, that re-fire is gated off and
-        //    LastReleaseRequestHandledAt stays at t1 forever — this wait times
-        //    out, pinning the lost trigger.
-        await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Should().Within(45.Seconds())
-            .Match(n => n?.Content is NodeTypeDefinition d
-                && d.LastReleaseRequestHandledAt is { } handled
-                && handled >= t2);
-        Output.WriteLine("=== t2 handled ===");
+            // 4. The CONTRACT: every trigger is eventually handled. The watcher's
+            //    Update for T2 bails (status is Pending from T1's dispatch), so T2
+            //    must re-fire on the post-settle emission and be stamped. With the
+            //    eager high-water advance, that re-fire is gated off and
+            //    LastReleaseRequestHandledAt stays at t1 forever — this wait times
+            //    out, pinning the lost trigger.
+            await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+                .Should().Within(45.Seconds())
+                .Match(n => n?.Content is NodeTypeDefinition d
+                    && d.LastReleaseRequestHandledAt is { } handled
+                    && handled >= t2);
+            Output.WriteLine("=== t2 handled ===");
 
-        // And the whole machine settles cleanly afterwards.
-        await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Should().Within(45.Seconds())
-            .Match(n => n?.Content is NodeTypeDefinition d
-                && d.CompilationStatus == CompilationStatus.Ok);
+            // And the whole machine settles cleanly afterwards.
+            await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+                .Should().Within(45.Seconds())
+                .Match(n => n?.Content is NodeTypeDefinition d
+                    && d.CompilationStatus == CompilationStatus.Ok);
+        }
+        finally
+        {
+            // 🚨 In a `finally`: an assertion that throws above must not leave the owner's write
+            // queue parked for the full 20 s bound, into the rest of the class.
+            Volatile.Write(ref gate, 1);
+        }
     }
 }
