@@ -34,7 +34,6 @@ src/MeshWeaver.Compiler/NodeSetCompiler.cs	1
 # Rx's blocking IObservable.Wait() on the Orleans cluster disposal join. Bounded by an
 # upstream .Timeout(timeout), whose timer runs on the default scheduler and so always unblocks
 # the parked thread — a named failure rather than a wedge.
-src/MeshWeaver.Hosting.Orleans.TestBase/OrleansClusterDisposal.cs	1
 
 # Host lifecycle (StartAsync/StopAsync) and a queue drain, blocked from the plugin tester's
 # synchronous run boundary.

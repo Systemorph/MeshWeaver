@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- The test-tree props default to Exe (xunit v3 entry point); this is a LIBRARY test-support
+         assembly, moved here from src/ on 2026-08-30 so it is never packed or published again. -->
+    <OutputType>Library</OutputType>
+    <MeshWeaverTestSupportLibrary>true</MeshWeaverTestSupportLibrary>
+    <!-- The root props (which src/ inherited and the test tree does not) tolerate CA2255: these
+         libraries carry the [ModuleInitializer] hooks that arm test-process-wide teardown capture
+         (TeardownStragglerCapturer, the exception suppressors) — application-side code by design,
+         loaded only into test hosts. -->
+    <NoWarn>$(NoWarn);CA2255</NoWarn>
+    <ProjectGuid>{6f6deed4-65c1-4e88-bbea-489f56cd62de}</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="HtmlAgilityPack" />
+    <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="Serilog.Settings.Configuration" />
+    <PackageReference Include="Serilog.Sinks.File" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+  </ItemGroup>
+</Project>

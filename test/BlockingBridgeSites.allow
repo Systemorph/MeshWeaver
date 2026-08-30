@@ -88,9 +88,11 @@ test/MeshWeaver.ContentCollections.Test/ObservableCollectionSurfaceTest.cs	2
 test/MeshWeaver.Documentation.Test/BlockingBridgeSelfDeadlockMechanismTest.cs	1
 test/MeshWeaver.Graph.Test/NodeTypeAdoptionRegistryTest.cs	3
 test/MeshWeaver.Graph.Test/NodeTypeBakeStatusTest.cs	2
-test/MeshWeaver.Graph.Test/OverlayReEvaluationReadTest.cs	3
 test/MeshWeaver.Hosting.Orleans.Test/OrleansEventSubscriptionTimerTest.cs	1
 test/MeshWeaver.Hosting.Test/AlcLeaseRegistryTest.cs	3
 test/MeshWeaver.Messaging.Hub.Test/SystemScopeDoesNotEscapeTest.cs	3
 test/MeshWeaver.PluginCatalog.Test/FeatureFlagReaderTest.cs	7
 test/MeshWeaver.PluginCatalog.Test/PackageParameterResolutionTest.cs	1
+# Moved here from ProductionBlockingBridgeSites.allow on 2026-08-30 with the Orleans TestBase (src/ → test/):
+# the same single site, now under the test tree this ratchet scans — not a new bridge.
+test/MeshWeaver.Hosting.Orleans.TestBase/OrleansClusterDisposal.cs	1

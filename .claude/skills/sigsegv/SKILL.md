@@ -88,7 +88,7 @@ the process happened to be. Where the evidence lives:
   `TEST_START` / `TEST_END` window markers and `[FAULT]` records with stacks, joinable by `pid=`.
   A `TEST_START` with no `TEST_END` names the test a killed host was stuck in.
   🚨 Records are rate-bounded — `grep FAULT-BUDGET` before reasoning from an *absence*.
-- **`test-logs/teardown-stragglers.log`** (`src/MeshWeaver.Fixture/TeardownStragglerCapturer.cs`) —
+- **`test-logs/teardown-stragglers.log`** (`test/MeshWeaver.Fixture/TeardownStragglerCapturer.cs`) —
   `FirstChanceException` dumps every straggler with a stack, **including the caught ones invisible
   everywhere else**. This is the diagnostic for "all tests pass, host exits non-zero". Run the
   native host the way CI does (`dotnet <Suite>.dll -trx …` from the bin dir); `dotnet test` is not
