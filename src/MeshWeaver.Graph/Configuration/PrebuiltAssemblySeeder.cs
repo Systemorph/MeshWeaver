@@ -133,7 +133,7 @@ public static class PrebuiltAssemblySeeder
     /// <para>🚨 The counterpart to <see cref="DeclineReason(string?)"/>, and the reason both are
     /// public: <c>DeclineReason</c> answers "must we NOT adopt", this answers "need we adopt at
     /// all". Without it every boot re-adopts every bundle entry it holds — and adoption is not
-    /// cheap bookkeeping: <see cref="Seed"/> opens the type's own mesh-node stream (which ACTIVATES
+    /// cheap bookkeeping: <see cref="Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> opens the type's own mesh-node stream (which ACTIVATES
     /// its per-node hub), re-uploads the assembly bytes to the shared store, and writes the node.
     /// Measured on memex-cloud 2026-08-17, that was 43 hub activations, 43 uploads and 43 writes —
     /// <b>13.5 s of a 101 s boot</b> — establishing that nothing had changed since the previous pod
@@ -159,7 +159,7 @@ public static class PrebuiltAssemblySeeder
     /// precisely what the bake would call <see cref="BakeState.Baked"/></b>.</para>
     ///
     /// <para>🚨 Note in particular what this does NOT compare: the NodeType MeshNode's CURRENT
-    /// version. <see cref="Seed"/> uploads and stamps the version it read BEFORE its own write, and
+    /// version. <see cref="Seed(MeshWeaver.Messaging.IMessageHub, string, byte[], byte[], string, Microsoft.Extensions.Logging.ILogger, System.Collections.Generic.IReadOnlyDictionary{string, string})"/> uploads and stamps the version it read BEFORE its own write, and
     /// that write bumps the node — so after any adoption <c>LastCompiledVersion</c> is permanently
     /// one behind <c>node.Version</c>, and a naive equality check is unsatisfiable. That mismatch
     /// is also why today's unconditional re-adoption uploads the SAME bytes under a NEW store key
@@ -253,6 +253,46 @@ public static class PrebuiltAssemblySeeder
         string? frameworkMvid,
         ILogger? logger = null,
         IReadOnlyDictionary<string, string>? dependencies = null)
+        => Seed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
+            sourceFingerprint: null);
+
+    /// <summary>
+    /// Seeds <paramref name="assemblyBytes"/> as the build for <paramref name="nodeTypePath"/>,
+    /// carrying the producer's source fingerprint so the OWNER can check the adoption (#2813).
+    ///
+    /// <para>Cold: the write runs on Subscribe. Emits <c>true</c> when the assembly was adopted and
+    /// <c>false</c> when it was declined — a decline is not an error, it is the caller's signal to
+    /// compile normally.</para>
+    /// </summary>
+    /// <param name="hub">The calling hub.</param>
+    /// <param name="nodeTypePath">Mesh path of the NodeType this assembly implements.</param>
+    /// <param name="assemblyBytes">The compiled assembly.</param>
+    /// <param name="pdbBytes">Symbols, when the assembly does not embed them.</param>
+    /// <param name="frameworkMvid">The framework build identity the bytes were compiled against,
+    /// as recorded by the producer. <c>null</c> declines the seed.</param>
+    /// <param name="logger">Diagnostics. Every decline is logged with its reason.</param>
+    /// <param name="dependencies">The producer's per-type dependency record, or <c>null</c> for a
+    /// legacy bundle.</param>
+    /// <param name="sourceFingerprint">🚨 <b>The producer's CONTENT fingerprint of the sources these
+    /// bytes were built from</b> (#2813) — <see cref="PartitionSourceFingerprint"/> shape. Stamped
+    /// onto the node, where the OWNER compares it against its own live source set before honouring
+    /// the adoption's <c>RequestedSourceStampAt</c>. <c>null</c> for a legacy bundle that records
+    /// none: the adoption still lands, but as <c>BuildProvenance.AdoptedUnverified</c> — never
+    /// silently as verified.
+    ///
+    /// <para>A separate OVERLOAD rather than an eighth optional parameter: the seven-parameter form
+    /// is public surface with shipped callers, and adding an optional parameter to it is a BINARY
+    /// break the compatibility gate is right to refuse. This parameter carries no default, so an
+    /// existing seven-argument call still binds unambiguously to the old form.</para></param>
+    public static IObservable<bool> Seed(
+        IMessageHub hub,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        string? frameworkMvid,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint)
     {
         // 🚨 THE GATE. FrameworkVersion is the resolved framework build identity — a content/
         // surface identity, not a version string — and the assembly-store key carries the first
@@ -371,6 +411,14 @@ public static class PrebuiltAssemblySeeder
                                     // instead has no ordering to lose: whichever of the two writes
                                     // lands second carries the owner's authoritative pair.
                                     RequestedSourceStampAt = DateTimeOffset.UtcNow,
+                                    // 🚨 #2813 — WHAT the producer says these bytes were built
+                                    // from. The owner checks it against its own live source set
+                                    // when it fulfils the request above; it cannot be checked
+                                    // here, for the same cross-hub reason the request exists.
+                                    // Null (a legacy bundle) is carried as null, never as a
+                                    // match: the owner then records AdoptedUnverified rather
+                                    // than AdoptedVerified.
+                                    AdoptedSourceFingerprint = sourceFingerprint,
                                     // The producer's dependency record (#1707 slice 2) — validated
                                     // above; stamped so ongoing validity checks judge the adopted
                                     // build like a locally-compiled one. Legacy bundles (null)
