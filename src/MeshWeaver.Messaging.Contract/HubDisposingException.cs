@@ -105,4 +105,28 @@ public sealed class HubDisposingException : ObjectDisposedException
     /// <returns><c>true</c> when the failure is a hub-disposal race.</returns>
     public static bool IsHubDisposal(Exception? exception)
         => ExceptionChain.Contains<HubDisposingException>(exception);
+
+    /// <summary>
+    /// True when <paramref name="exception"/> is (or wraps) the DI container's
+    /// "this scope is gone" — an <see cref="ObjectDisposedException"/> naming a disposed Autofac
+    /// <c>LifetimeScope</c>.
+    ///
+    /// <para>🚨 This is a TEARDOWN fact, not a fault of the work that hit it, and the distinction
+    /// is the whole point: a hub whose scope has been closed cannot serve anything, so a delivery
+    /// that faults this way must be answered as RETRYABLE (the address reactivates) rather than as
+    /// a result. It is the same evidence <c>TeardownStragglerCapturer</c> filters on and the same
+    /// the access pipeline keys on, kept HERE so every layer classifies it identically instead of
+    /// each re-deriving it — <c>HubDisposingException</c> covers only the case where the hub
+    /// announced its own disposal, and a scope closed underneath a live delivery never does.</para>
+    ///
+    /// <para>Matched on the message rather than a type: the exception is raised by Autofac and
+    /// wrapped by whatever invoked it (reflection hands it over as
+    /// <see cref="System.Reflection.TargetInvocationException"/>), so the chain — not the outer
+    /// type — is what carries the fact.</para>
+    /// </summary>
+    public static bool IsDisposedContainer(Exception? exception)
+        => ExceptionChain.Contains(exception, static e =>
+            e is ObjectDisposedException
+            && ((e.Message?.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase) ?? false)
+                || (e.Message?.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase) ?? false)));
 }
