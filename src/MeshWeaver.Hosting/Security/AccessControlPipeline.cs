@@ -49,7 +49,7 @@ public static class AccessControlPipeline
     /// two shapes <c>TeardownStragglerCapturer</c> filters).</para>
     /// </summary>
     /// <summary>
-    /// The refusal a delivery gets when it reached a hub that is GONE (see <see cref="IsHubGone"/>).
+    /// The refusal a delivery gets when it reached a hub that is GONE (see <see cref="IsHubGone(IMessageHub, Exception)"/>).
     ///
     /// <para>🚨 THE WORDING IS CONTRACT, exactly as <c>MessageService.NackThroughParent</c>'s is.
     /// The mesh classifies delivery failures by their MESSAGE TEXT as well as their ErrorType, and
@@ -62,10 +62,26 @@ public static class AccessControlPipeline
     /// is still refused, and the caller simply stops retrying again. Pinned by
     /// <c>RecycledHubRefusalTest</c>.</para>
     /// </summary>
+    /// <summary><see cref="RecyclingRefusal(Address, string, Exception)"/> for a reason string.</summary>
+    internal static string RecyclingRefusal(Address address, string messageTypeName, string? reason) =>
+        $"Hub {address} is shutting down (its access gate could not reach a verdict: {reason}) "
+        + $"— cannot evaluate access for {messageTypeName}; the address may reactivate "
+        + "(recycle / restart). Rejecting now.";
+
     internal static string RecyclingRefusal(Address address, string messageTypeName, Exception error) =>
         $"Hub {address} is shutting down (its lifetime scope is gone, {error.GetType().Name}) "
         + $"— cannot evaluate access for {messageTypeName}; the address may reactivate "
         + "(recycle / restart). Rejecting now.";
+
+    /// <summary>
+    /// <see cref="IsHubGone(IMessageHub, Exception)"/> for a path that has a REASON STRING rather
+    /// than an exception — the permission fold reports an undetermined outcome as text.
+    /// </summary>
+    internal static bool IsHubGone(IMessageHub hub, string? reason)
+        => hub.IsShuttingDown
+           || (reason is not null
+               && (reason.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase)
+                   || reason.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase)));
 
     internal static bool IsHubGone(IMessageHub hub, Exception error)
     {
@@ -425,11 +441,36 @@ public static class AccessControlPipeline
                             // Both refuse the delivery — the fail-closed behaviour is UNCHANGED
                             // and `next` is not invoked on either leg. What changes is that the
                             // second one stops impersonating the first.
+                            // 🚨 THREE outcomes, not two — because "we could not check" has two very
+                            // different causes and only one of them is about this mesh being busy.
+                            //
+                            //   Denied                      → Unauthorized  ("we checked; you may not")
+                            //   Undetermined, hub GONE      → ShuttingDown  ("this activation is going away")
+                            //   Undetermined, hub healthy   → Unavailable   ("we could not check")
+                            //
+                            // The middle one is issue #2673, measured. When the owner is recycled
+                            // mid-read the fold cannot reach a verdict, and answering that as
+                            // Unavailable — with wording no transient classifier matches
+                            // (MeshNodeStreamCache.IsTransientOwnerFailure and friends key on
+                            // "is shutting down" / "Rejecting now") — makes GetMeshNode take it as
+                            // TERMINAL and resolve NULL for a node that exists at an address that
+                            // reactivates. Measured shape:
+                            //   "Permission check unavailable for user 'Roland' on
+                            //    'TestData/reprobe-recovers' (Read) — no verdict was reached"
+                            //   → [TEST] recovered in 62 ms: (null)
+                            // Answering it in the recycling vocabulary instead makes the caller
+                            // re-probe, which is what lands it on the fresh activation.
+                            //
+                            // Fail-closed is UNCHANGED on every leg: `next` is never invoked here.
                             var (errorType, message) = refusal.Outcome.IsUndetermined
-                                ? (ErrorType.Unavailable,
-                                    $"Permission check unavailable for user '{effectiveUser}' on '{refusal.Path}' "
-                                    + $"({refusal.Permission}) — no verdict was reached, so this is NOT a statement "
-                                    + $"about this user's rights. Retry shortly. Cause: {refusal.Outcome.UndeterminedReason}")
+                                ? IsHubGone(hub, refusal.Outcome.UndeterminedReason)
+                                    ? (ErrorType.ShuttingDown,
+                                        RecyclingRefusal(hub.Address, delivery.Message.GetType().Name,
+                                            refusal.Outcome.UndeterminedReason))
+                                    : (ErrorType.Unavailable,
+                                        $"Permission check unavailable for user '{effectiveUser}' on '{refusal.Path}' "
+                                        + $"({refusal.Permission}) — no verdict was reached, so this is NOT a statement "
+                                        + $"about this user's rights. Retry shortly. Cause: {refusal.Outcome.UndeterminedReason}")
                                 : (ErrorType.Unauthorized,
                                     $"Access denied: user '{effectiveUser}' lacks {refusal.Permission} permission on '{refusal.Path}'");
 
