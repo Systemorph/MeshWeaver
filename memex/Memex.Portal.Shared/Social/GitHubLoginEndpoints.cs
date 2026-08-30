@@ -1,10 +1,10 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using MeshWeaver.GitSync;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Builder;
@@ -112,9 +112,11 @@ public static class GitHubLoginEndpoints
             if (string.IsNullOrEmpty(code)) return Fail("no authorization code returned by GitHub");
 
             var redirectUri = BuildRedirectUri(http);
-            // Reactive end-to-end; bridge to Task ONCE at the HTTP boundary (the sanctioned edge
-            // pattern, as in GitHubConnectEndpoints / OAuthConnectController). Exchange the code,
-            // then fetch login + primary verified email together.
+            // Reactive end-to-end; bridge to Task ONCE at the HTTP boundary via ObserveCompletion
+            // (the sanctioned edge pattern, as in GitHubConnectEndpoints / OAuthConnectController) —
+            // never Rx's .ToTask(), which resumes the awaiter inline on the signalling thread
+            // (forbidden since 2026-08-30). Exchange the code, then fetch login + primary verified
+            // email together.
             return await oauth.ExchangeCode(code!, redirectUri)
                 .SelectMany(token => oauth.GetLogin(token.AccessToken)
                     .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
@@ -162,7 +164,10 @@ public static class GitHubLoginEndpoints
                     return Observable.Return(Fail(ex.Message));
                 })
                 .FirstAsync()
-                .ToTask(http.RequestAborted);
+                .ObserveCompletion(
+                    ex => logger.LogWarning(ex,
+                        "GitHub sign-in faulted after the response had already been sent"),
+                    http.RequestAborted);
         });
 
         return endpoints;
