@@ -58,8 +58,8 @@ The real `AzureFoundry` key lives in Key Vault, mounted by the CSI add-on and sy
 
 1. Store the secret: `az keyvault secret set --vault-name <key-vault> --name AzureFoundry-ApiKey --value <key>`.
 2. Grant the add-on identity read access (once): `az role assignment create --assignee <csi-addon-identity-clientId> --role "Key Vault Secrets User" --scope <key-vault resourceId>` (or an access policy with secret get/list).
-3. Apply the environment's `SecretProviderClass` — template at [`deploy/aks/envs/example/secretproviderclass.yaml`](https://github.com/Systemorph/MeshWeaver/blob/main/deploy/aks/envs/example/secretproviderclass.yaml); the real one is per-environment and git-ignored.
-4. Patch the portal Deployment to mount it + read the synced secret:
+3. Declare it under `keyVaultSecrets:` in the environment's values (`vaultName`, `tenantId`, `identityClientId`, and `secrets: [{vaultSecret: AzureFoundry-ApiKey, key: AzureFoundry__ApiKey}]`) — the chart renders the `SecretProviderClass`, the CSI volume, its mount and the `envFrom`, so steps 3–4 of the legacy path below are no longer hand-applied. See [DeploymentAKS](/Doc/Architecture/DeploymentAKS) → "Key Vault secrets are DECLARED in values". *(Legacy, hand-made shape — template at [`deploy/aks/envs/example/secretproviderclass.yaml`](https://github.com/Systemorph/MeshWeaver/blob/main/deploy/aks/envs/example/secretproviderclass.yaml); the real one is per-environment and git-ignored.)*
+4. *(Legacy only)* Patch the portal Deployment to mount it + read the synced secret:
 
 ```yaml
 # strategic-merge patch on the portal container/pod

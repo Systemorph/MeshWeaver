@@ -38,6 +38,9 @@ kubectl -n "$NS" scale statefulset memex-postgres-statefulset --replicas=0 || tr
 
 kubectl -n "$NS" set image deployment/memex-portal-deployment memex-portal="$ACR/memex-portal-ai:$IMAGE_TAG"
 
+# ⚠️ LEGACY: the hand-made SecretProviderClass + the CSI volume/mount/envFrom patch. An
+# environment that declares its secrets under `keyVaultSecrets:` in values.exampledb.yaml gets all
+# four rendered by the chart above and skips both lines (deploy/helm/values.yaml → keyVaultSecrets).
 kubectl apply -f ./secretproviderclass.yaml
 kubectl -n "$NS" patch deployment memex-portal-deployment --type=json --patch-file ./portal-patch.json
 
