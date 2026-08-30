@@ -870,4 +870,48 @@ public class IoPoolTest
 
         releaseTeardown.Set();
     }
+
+    /// <summary>
+    /// 🚨 A RESIDUAL MUST NAME ITS LEAF. A dirty teardown reporting an anonymous
+    /// <c>AgentStore=1</c> tells you a pool did not drain and nothing about what to fix — measured
+    /// 2026-08-30, three such teardowns in 20 loaded runs of MeshWeaver.AI.Test named three
+    /// different pools and not one operation. #2480 added the pool NAME for this reason; this is
+    /// the level it stopped at.
+    /// </summary>
+    [Fact]
+    public void AResidualNamesTheLeafThatWouldNotUnwind()
+    {
+        var pool = new IoPool(2);
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+
+        // A leaf that ignores its token — exactly the defect the residual exists to report.
+        pool.InvokeBlocking(_ =>
+        {
+            entered.Set();
+            release.Wait(Timeout10);
+            return 0;
+        }).Subscribe(_ => { }, _ => { });
+
+        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+
+        var sites = pool.PendingLeafSites;
+        sites.Should().NotBeEmpty("a leaf is in flight, so the pool must be able to say WHICH");
+        string.Join(" | ", sites).Should().Contain(nameof(AResidualNamesTheLeafThatWouldNotUnwind),
+            "the lambda's compiler-generated name carries its ENCLOSING method — that is what turns "
+            + "'AgentStore=1' into a pointer at the operation to fix");
+
+        release.Set();
+        pool.Dispose();
+    }
+
+    /// <summary>A pool that drains cleanly reports no sites — the diagnostic is not noise.</summary>
+    [Fact]
+    public async Task ACleanPool_HasNoPendingSites()
+    {
+        var pool = new IoPool(2);
+        await pool.Invoke(_ => Task.FromResult(1)).FirstAsync().Await(TestContext.Current.CancellationToken);
+        pool.PendingLeafSites.Should().BeEmpty("every leaf unwound — there is nothing to name");
+        pool.Dispose();
+    }
 }
