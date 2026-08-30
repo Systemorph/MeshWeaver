@@ -70,8 +70,14 @@ pluginCatalog:
   # ["Plugins/*"] so a fresh install gets the platform plugin repo without an admin grant step.
   # Registration writes them into the instance's Admin/_PluginGrant node, so admins can still
   # revoke per instance. Empty = strict default: registering grants nothing. Never list
-  # private/paid sources here.
+  # private/paid sources here. An entry may name a PLAN — "Plugins/*@free" — and then grants the
+  # packages of that source the plan covers (Doc/Architecture/PluginRegistry → Plans).
   defaultGrants: []
+  # REGISTRY: OPEN registration — a registration WITHOUT a bootstrap key (a Homebrew install that
+  # names only its instance id). Mint a registration key for the plan such callers enrol into
+  # (normally `free`) and put it in secrets.memex_portal.PluginCatalog__OpenRegistration__Key; the
+  # registry then treats an un-keyed registration as presenting that key. Unset (the default) =
+  # open registrations are refused with 401, exactly like an invalid key.
   # CONSUMER: first-startup auto-registration. Set the logical App ID here and the mwr_ bootstrap
   # key as secrets.memex_portal.PluginCatalog__BootstrapKey — on first boot the install registers
   # itself at the registry and stores the issued instance key; no token copying. Empty = manual

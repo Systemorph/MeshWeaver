@@ -291,7 +291,10 @@ public static class PluginBundleEndpoints
         if (!IsBareName(identity) || !IsBareName(source))
             return Results.Json(new { error = "identity and source must be bare names" },
                 statusCode: StatusCodes.Status400BadRequest);
-        var allowed = caller.Grant.Allows(source, PluginGrantEntry.AllPackages);
+        // A PLAN-LESS whole-source entry, specifically: a sealed publication carries every plan's
+        // bundles, so a plan-scoped `<source>/*@pro` — which licenses that source's packages one by
+        // one, by tier — must never fetch the publication whole.
+        var allowed = caller.Grant.AllowsWholeSource(source);
         Ledger(http)?.Record(new EntitlementDecision(
             $"{PrebuiltSegment}/{source}",
             allowed ? EntitlementOutcome.Granted : EntitlementOutcome.Denied,
@@ -513,7 +516,11 @@ public static class PluginBundleEndpoints
                 anchor.SourceOf(package.PluginId),
                 package.Source,
                 anchor.IsComplete,
-                source => caller.Allows(source, package.PluginId));
+                // The package's PLAN, registry-first like its source: the anchor's catalog says
+                // which tier a package declares today, the install record's stamp is the cached
+                // observation for a package the anchor does not carry.
+                source => caller.Allows(
+                    source, package.PluginId, anchor.TierOf(package.PluginId) ?? package.Tier));
 
     /// <summary>
     /// 🚨 The ONE answer for a bundle this caller cannot have — used for "no such package", "no such
@@ -767,7 +774,8 @@ public static class PluginBundleEndpoints
                     MinMeshVersion: origin.MinMeshVersion,
                     // No CACHED binding: this entry exists only because the anchor advertises it,
                     // and Decide reads that binding straight off the snapshot.
-                    Source: null)))
+                    Source: null,
+                    Tier: origin.Tier)))
                 .ToArray();
         });
     }
@@ -1337,7 +1345,7 @@ public static class PluginBundleEndpoints
                 .Where(m => m is not null && !string.IsNullOrWhiteSpace(m.ReleasedVersion))
                 .Select(m => new BundleEntry(
                     PackagingManifest.IdPrefix + m!.Id, m.ReleasedVersion!, m.Id, m.Module,
-                    m.MinMeshVersion, m.Source))
+                    m.MinMeshVersion, m.Source, m.Tier))
                 .OrderBy(e => e.PluginId, StringComparer.OrdinalIgnoreCase)
                 .ToArray());
 
@@ -1358,7 +1366,10 @@ public static class PluginBundleEndpoints
     /// installed from a source that is not configured, and on an entry that exists only because the
     /// anchor advertises it — in every one of those cases the absence sends the question upstream
     /// rather than answering it.</param>
+    /// <param name="Tier">The plan the package declares (<see cref="PackageManifest.Tier"/>), or
+    /// null for a baseline package — the cached observation; <see cref="Decide"/> prefers the
+    /// anchor's, exactly as it does for <paramref name="Source"/>.</param>
     private sealed record BundleEntry(
         string PackageId, string Version, string PluginId, string? Module = null,
-        string? MinMeshVersion = null, string? Source = null);
+        string? MinMeshVersion = null, string? Source = null, string? Tier = null);
 }

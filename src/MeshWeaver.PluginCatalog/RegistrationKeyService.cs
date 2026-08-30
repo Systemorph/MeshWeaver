@@ -37,9 +37,12 @@ public sealed class RegistrationKeyService(
     /// the minter's partition; the routing index is written under System into the shared
     /// instance-credential index namespace.
     /// </summary>
+    /// <param name="tier">The subscription plan instances registered with this key enrol into
+    /// (<see cref="RegistrationKey.Tier"/>), or null/blank for none. Stored in its canonical
+    /// (lower-case) form.</param>
     public IObservable<RegistrationKeyMintResult> Mint(
         string userId, string userName, string userEmail,
-        string description = "", DateTimeOffset? expiresAt = null)
+        string description = "", DateTimeOffset? expiresAt = null, string? tier = null)
     {
         var rawKey = RegistrationKeys.Generate();
         var hash = InstanceKeys.Hash(rawKey);
@@ -49,6 +52,7 @@ public sealed class RegistrationKeyService(
         {
             KeyHash = hash,
             Description = description,
+            Tier = PlanTierRanks.Canonical(tier) is { Length: > 0 } plan ? plan : null,
             OwnerUserId = userId,
             OwnerUserName = userName,
             OwnerUserEmail = userEmail,
@@ -70,8 +74,8 @@ public sealed class RegistrationKeyService(
                 .Select(_ =>
                 {
                     logger.LogInformation(
-                        "Minted registration key {Id} for {UserId} (expires {ExpiresAt})",
-                        id, userId, expiresAt?.ToString("u") ?? "never");
+                        "Minted registration key {Id} for {UserId} (expires {ExpiresAt}, plan {Plan})",
+                        id, userId, expiresAt?.ToString("u") ?? "never", key.Tier ?? "none");
                     return new RegistrationKeyMintResult(rawKey, created, key);
                 }));
     }
