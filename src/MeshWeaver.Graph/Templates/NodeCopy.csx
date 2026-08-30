@@ -40,7 +40,9 @@ var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 var count = await NodeCopyHelper
     .CopyNodeTree(meshService, meshService, Mesh, sourcePath, targetNamespace, force)
     .FirstAsync()
-    .ToTask(Ct);
+    // ObserveCompletion, never .ToTask(): the bridge resumes this script inline on the
+    // signalling thread, inside Rx's trampoline (forbidden since 2026-08-30).
+    .ObserveCompletion(ex => Log.LogError(ex, "Copy faulted after the wait settled"), Ct);
 
 Log.LogInformation("Copy complete: {Count} node(s)", count);
 

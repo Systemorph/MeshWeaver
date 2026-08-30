@@ -56,7 +56,8 @@ var response = await Mesh
     .Observe<MirrorResult>(request, o => o.WithTarget(new Address("mesh")))
     .Take(1)
     .Timeout(TimeSpan.FromMinutes(10))
-    .ToTask(Ct);
+    // ObserveCompletion, never .ToTask() — see NodeCopy.csx.
+    .ObserveCompletion(ex => Log.LogError(ex, "Mirror faulted after the wait settled"), Ct);
 
 var result = response.Message;
 Log.LogInformation(
