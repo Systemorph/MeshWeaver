@@ -2116,8 +2116,15 @@ public static class DataExtensions
                     // that a disposed container reaches this arm: the hub announced its disposal
                     // (HubDisposingException), or its DI scope was closed underneath the read.
                     var cause = FindHubDisposal(ex) ?? InnermostCause(ex);
+                    // 🚨 "shutting down" IS CONTRACT — do not reword it out.
+                    // MeshNodeStreamCache.IsTransientOwnerFailure classifies on that marker, and a
+                    // consumer that does not see it TEARS DOWN instead of riding the recycle out.
+                    // Measured the hard way: an earlier draft of this very change said "is going
+                    // away" and the rate run came back 10/100 with every remaining failure being
+                    // that missing marker — a product regression, not merely a red assertion.
+                    // Both causes are named, but the marker stays.
                     NackSilentRead(hub, request,
-                        "the read faulted because the owning hub is going away — its hosted-hub "
+                        "the read faulted because the owning hub is shutting down — its hosted-hub "
                         + "creation is frozen or its service scope has been closed, so the data "
                         + $"stream for this reference could not be created ({cause.GetType().Name}: "
                         + $"{cause.Message}). Retry against the fresh activation.");
