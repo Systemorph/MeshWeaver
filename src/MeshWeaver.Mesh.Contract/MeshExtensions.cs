@@ -3919,9 +3919,27 @@ public static class MeshExtensions
                 return Observable.Empty<MeshNode?>();
             });
 
+        // 🚨 THREE terminal states, not two (MeshWeaver#2454). A two-arm Subscribe answers the
+        // caller on a value and on a fault — and says NOTHING when the source COMPLETES EMPTY. The
+        // handler has already returned `Processed()` by then, so the delivery trail records
+        // `HANDLER_ENTER … → HANDLER_EXIT state=Processed` with no reply ever posted, and the caller
+        // waits out its entire budget. That is #2454's signature verbatim, and it is a per-node hub
+        // that cannot quiesce: measured on shard 3 as `PendingCallbacks=1[CreateOrUpdateNodeRequest]`
+        // holding a mesh disposal open for 19 s.
+        //
+        // `DefaultIfEmpty()` would be the wrong repair here: it emits `null`, which this onNext arm
+        // reads as "the node does not exist" and turns into a CREATE. An empty read means the read
+        // produced no answer, which is not the same thing — inventing a create from it would be a
+        // silent write on missing information. So empty gets its own outcome, and it is a refusal.
+        //
+        // Same idiom as SelfUpdateHostedService's `.DefaultIfEmpty(SelfUpdateVerdict.NoOutcome())`
+        // and for the same stated reason: "the only thing that stops a third one being added is
+        // making 'produced nothing' itself an outcome that gets reported."
+        var answered = false;
         gatedExisting.Subscribe(
             existing =>
             {
+                answered = true;
                 if (existing is null)
                 {
                     DispatchInnerCreate();
@@ -3936,9 +3954,24 @@ public static class MeshExtensions
             },
             ex =>
             {
+                answered = true;
                 logger.LogWarning(ex,
                     "[CreateOrUpdate] persistence read failed for {Path}", node.Path);
                 PostFail($"Persistence read failed: {ex.Message}",
+                    NodeUpsertRejectionReason.Unknown);
+            },
+            () =>
+            {
+                if (answered)
+                    return;
+                logger.LogWarning(
+                    "[CreateOrUpdate] the existing-node read for {Path} completed WITHOUT a result — "
+                    + "neither a node nor a fault. Answering the caller with a refusal rather than "
+                    + "leaving it to wait out its budget (MeshWeaver#2454).", node.Path);
+                PostFail(
+                    "The existing-node read completed without producing a result or a fault, so the "
+                    + "upsert could not decide between create and update. Retry; if it recurs, the "
+                    + "storage adapter's Read is completing empty rather than emitting null.",
                     NodeUpsertRejectionReason.Unknown);
             });
 

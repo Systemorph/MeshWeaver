@@ -248,6 +248,22 @@ def run_decide_cases(root, case) -> None:
     case("an INCOMPLETE image set on the same event still builds",
          rc == 0 and "bake_only=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
 
+    # 🚨 The operator override (#2622). A complete image set for CORE's sha says nothing about
+    # whether the portal HOSTS — which live in MeshWeaver.Plugins — changed. Without this, a
+    # dispatch is a structural no-op for that case: reason=reconcile, COMPLETE=true, bake_only.
+    rc, log, outputs = run_step(body, {**reconcile, "FORCE_REBUILD": "true"}, None)
+    case("rebuild=true overrides a COMPLETE image set and publishes",
+         rc == 0 and "publish=true" in outputs and "bake_only=true" not in outputs,
+         f"rc={rc} out={outputs!r} log={log}")
+    case("...and it says it was an explicit rebuild, not an ordinary publish",
+         "rebuild" in log, f"log={log}")
+
+    # The default must be unchanged: absent or false, the bake-only branch still wins. Without
+    # this, "the override works" would also pass if the override were always on.
+    rc, log, outputs = run_step(body, {**reconcile, "FORCE_REBUILD": "false"}, None)
+    case("rebuild=false leaves the bake-only branch exactly as it was",
+         rc == 0 and "bake_only=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+
 
 def main() -> int:
     root = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve()
