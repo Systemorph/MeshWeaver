@@ -1111,8 +1111,17 @@ jobs:
             139) marker="[CI] $label exit=$rc SIGNAL SIGSEGV (host died on a signal, not an assertion)"
               crash="SIGNAL SIGSEGV: the host died on a signal, not an assertion — see #613 (use-after-unload of a collectible ALC). A mini dump is in collected-logs/." ;;
             *)
-              if [ "$rc" = "$trxfails" ]; then
-                marker="[CI] $name exit=$rc TESTFAIL ($trxfails failing test(s) recorded in trx — xunit v3 exits with the failure count; the host completed normally)"
+              # 🚨 xUnit v3 exits 1 for ANY number of failures — NOT with the failure count. The
+              # earlier rule `rc == trxfails` held only for the one-failure case by coincidence:
+              # on main 81f8869d5 (2026-08-30) Hosting.Monolith.Test printed its normal summary
+              # `Total: 331, Failed: 2` and exited 1, and this branch called it a host crash
+              # ("MASKED … host crashed after streaming results") and wrote a synthetic
+              # HOST_CRASHED over two ordinary flakes. A host that recorded failures and exited
+              # below the signal range (128+) completed normally: that is TESTFAIL. A crash is a
+              # signal exit (handled above), no trx at all, or a non-zero exit with NOTHING
+              # recorded as failed — never a healthy summary with rc<128.
+              if [ -f "$trxfile" ] && [ "${trxfails:-0}" -gt 0 ] && [ "$rc" -lt 128 ]; then
+                marker="[CI] $name exit=$rc TESTFAIL ($trxfails failing test(s) recorded in trx; xUnit v3 exits 1 for any failure; the host completed normally)"
               elif [ ! -f "$trxfile" ]; then
                 marker="[CI] $label exit=$rc MASKED (no trx written — the host died before recording any result)"
                 crash="MASKED: exit=$rc with no trx — the host died before recording any result."
