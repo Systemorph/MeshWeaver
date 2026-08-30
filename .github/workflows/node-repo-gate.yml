@@ -674,11 +674,22 @@ jobs:
           # file back through outputs, so it is uploaded as an artifact below. `pipefail` keeps the
           # TESTER's exit code — tee's success never masks a red gate.
           GATE_LOG="${RUNNER_TEMP:-/tmp}/gate.log"
+          # 🚨 Exported BEFORE the tester runs: under `set -e` a red gate would exit this script before
+          # a later export, and the always() upload would then skip on an empty GATE_LOG — the log
+          # missing exactly when a caller's ratchet needs the `GATE FAILED` line. The tester's exit
+          # code is carried past `tee` explicitly and re-raised after, so a red gate is still red.
+          echo "GATE_LOG=$GATE_LOG" >> "$GITHUB_ENV"
+          echo "artifact=gate-log-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          set +e
           docker run --rm --init "${EXT_V[@]}" -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/seed:ro" "${DUMP_ARGS[@]}" \
             --entrypoint /app/mw-plugin-test "$IMAGE" /repo \
             "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} --seed /seed | tee "$GATE_LOG"
-          echo "GATE_LOG=$GATE_LOG" >> "$GITHUB_ENV"
-          echo "artifact=gate-log-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::the gate exited $rc — the verdict is above and in the gate-log-${GITHUB_SHA} artifact"
+            exit "$rc"
+          fi
           echo "OWN_BAKE=$OWN_BAKE" >> "$GITHUB_ENV"
           echo "bake identity: $(cat "$OWN_BAKE/framework-mvid.txt") — $(ls "$OWN_BAKE"/*.zip | wc -l | tr -d ' ') bundle(s), gated on their own bytes"
       # 🚨 The dump is written by the CONTAINER, which runs as root, so the file lands owned by
