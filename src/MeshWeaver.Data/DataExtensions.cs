@@ -2080,7 +2080,7 @@ public static class DataExtensions
             // single answer.
             .Catch<GetDataResponse, Exception>(ex => HubDisposingException.IsHubDisposal(ex)
                 ? Observable.Throw<GetDataResponse>(ex)
-                : Observable.Return(new GetDataResponse(null, 0) { Error = ex.Message }))
+                : Observable.Return(new GetDataResponse(null, 0) { Error = DescribeReadFault(ex) }))
             .Subscribe(
                 response =>
                 {
@@ -2139,6 +2139,30 @@ public static class DataExtensions
                     + "shutting down and never produced a value. Retry against the fresh activation.");
         }));
         return request.Processed();
+    }
+
+    /// <summary>
+    /// The error text a NON-disposal read fault is answered with — the ROOT cause, not the wrapper.
+    ///
+    /// <para>🚨 The reflective Reduce hands this path a <see cref="System.Reflection.TargetInvocationException"/>
+    /// whose own message is the useless <c>"Exception has been thrown by the target of an
+    /// invocation."</c> — and answering THAT is how a read failure reaches a caller, a log and a CI
+    /// failure block naming nothing at all. The error arm three lines below already unwraps for
+    /// exactly this reason ("Name the ROOT cause, not the wrapper"); this arm did not, so every
+    /// non-disposal fault was reported anonymously. `SilentReadNackTest`'s bulk-only failure has
+    /// been arriving with precisely that string, which is why the exception behind it is still
+    /// unidentified (#2727).</para>
+    /// </summary>
+    internal static string DescribeReadFault(Exception exception)
+    {
+        var root = exception;
+        // Bounded, cycle-tolerant walk to the innermost cause — the same discipline
+        // ExceptionChain.Contains applies, kept local because we want the NODE, not a predicate.
+        for (var i = 0; i < 32 && root.InnerException is { } inner && !ReferenceEquals(inner, root); i++)
+            root = inner;
+        return ReferenceEquals(root, exception)
+            ? $"{exception.GetType().Name}: {exception.Message}"
+            : $"{exception.GetType().Name}: {exception.Message} (cause: {root.GetType().Name}: {root.Message})";
     }
 
     /// <summary>
