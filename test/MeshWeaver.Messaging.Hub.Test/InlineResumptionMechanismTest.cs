@@ -33,7 +33,20 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// </summary>
 public class InlineResumptionMechanismTest
 {
-    /// <summary>Signals from a known thread and reports where the awaiter resumed.</summary>
+    /// <summary>
+    /// Signals from a known thread and reports where the awaiter resumed.
+    ///
+    /// <para>🚨 The signalling thread is a DEDICATED thread, never a pool worker. The measurement is
+    /// "did the awaiter resume on the signalling thread", and that is only a proxy for "inline" if
+    /// the pool can never legitimately put the continuation on that same thread. After an
+    /// <c>await Task.Delay</c> this method itself runs on a pool worker; a
+    /// <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/> completion queues the
+    /// continuation to the pool, and the moment <c>OnCompleted</c> returns and this method yields
+    /// at <c>await waiter</c>, that same worker is free to pick the continuation up — same managed
+    /// thread id, NOT inline. Measured on CI (2026-08-30, #2781, shard 5): thread 84 both sides,
+    /// on a diff of three documentation lines. A thread the pool does not own closes that hole:
+    /// inline resumption runs on it by definition, pooled resumption never can.</para>
+    /// </summary>
     private static async Task<(int Signalling, int Resumed)> Measure(Func<IObservable<int>, Task> wait)
     {
         var subject = new Subject<int>();
@@ -49,11 +62,21 @@ public class InlineResumptionMechanismTest
         // arrives with no observer attached, so the wait would never complete.
         await Task.Delay(300, TestContext.Current.CancellationToken);
 
-        var signalling = Environment.CurrentManagedThreadId;
-        subject.OnNext(1);
-        subject.OnCompleted();
+        var signalling = 0;
+        var producer = new Thread(() =>
+        {
+            Volatile.Write(ref signalling, Environment.CurrentManagedThreadId);
+            subject.OnNext(1);
+            subject.OnCompleted();
+        }) { IsBackground = true, Name = "InlineResumptionMechanismTest.producer" };
+        producer.Start();
+        // No Join: in the inline cases the waiter completes INSIDE OnCompleted, and a task
+        // continuation runs synchronously on the completing thread — so this very method resumes
+        // on the producer, and a Join here would be a thread joining itself. `signalling` is
+        // published before the signal that completes `waiter` (the completion's interlocked state
+        // change already orders it); the volatile pair makes that hand-off explicit.
         await waiter;
-        return (signalling, resumed);
+        return (Volatile.Read(ref signalling), resumed);
     }
 
     /// <summary>
