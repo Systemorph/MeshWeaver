@@ -63,6 +63,8 @@ try
 {
     if (args.Length > 0 && args[0] == "compile")
         return RunCompile(args[1..]);
+    if (args.Length > 0 && args[0] == CascadeBuild.Verb)
+        return RunBuild(args[1..]);
     if (args.Length > 0 && args[0] == "framework-identity")
         return RunFrameworkIdentity(args[1..]);
     return await RunGate(args);
@@ -72,6 +74,97 @@ catch (Exception ex)
     Console.Error.WriteLine($"mw-plugin-test: FATAL — {ex}");
     return 70; // EX_SOFTWARE: distinct from 0 (green), 1 (gate red) and 2 (bad usage).
 }
+
+static int RunBuild(string[] args)
+{
+    // build <repo-root> [<package>… | all] [--module <dll>]… [--out <dir>] [--report <file>]
+    //       [--max-parallel <n>] [--case-timeout <s>] [--no-tests] [--source-sha <sha>]
+    // The new build process (2026-08-30): compile + run tests per package, as a dependency
+    // cascade, from the checkout on disk, against this image's /app — no mesh import anywhere.
+    string? root = null;
+    var packages = new List<string>();
+    var modules = new List<string>();
+    string? outDir = null;
+    string? reportPath = null;
+    string? sourceSha = null;
+    var maxParallel = Math.Max(1, Environment.ProcessorCount);
+    var caseTimeout = TimeSpan.FromSeconds(60);
+    var runTests = true;
+    for (var i = 0; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--module" when i + 1 < args.Length:
+                modules.Add(args[++i]);
+                break;
+            case "--out" when i + 1 < args.Length:
+                outDir = args[++i];
+                break;
+            case "--report" when i + 1 < args.Length:
+                reportPath = args[++i];
+                break;
+            case "--source-sha" when i + 1 < args.Length:
+                sourceSha = args[++i];
+                break;
+            case "--max-parallel" when i + 1 < args.Length:
+                if (!int.TryParse(args[++i], NumberStyles.Integer, CultureInfo.InvariantCulture, out maxParallel) || maxParallel < 1)
+                {
+                    Console.Error.WriteLine("mw-plugin-test build: --max-parallel takes a positive integer");
+                    return 2;
+                }
+                break;
+            case "--case-timeout" when i + 1 < args.Length:
+                if (!double.TryParse(args[++i], NumberStyles.Float, CultureInfo.InvariantCulture, out var s) || s <= 0)
+                {
+                    Console.Error.WriteLine("mw-plugin-test build: --case-timeout takes seconds > 0");
+                    return 2;
+                }
+                caseTimeout = TimeSpan.FromSeconds(s);
+                break;
+            case "--no-tests":
+                runTests = false;
+                break;
+            case "-h" or "--help":
+                Console.WriteLine(BuildUsage());
+                return 0;
+            case var flag when flag.StartsWith("--", StringComparison.Ordinal):
+                Console.Error.WriteLine($"mw-plugin-test build: unknown option {flag}");
+                Console.Error.WriteLine(BuildUsage());
+                return 2;
+            default:
+                if (root is null)
+                    root = args[i];
+                else
+                    packages.Add(args[i]);
+                break;
+        }
+    }
+    if (root is null)
+    {
+        Console.Error.WriteLine(BuildUsage());
+        return 2;
+    }
+    var report = CascadeBuild.Run(new CascadeBuild.Options
+    {
+        RepoRoot = root,
+        Packages = packages,
+        ModuleAssemblyPaths = modules,
+        OutputDirectory = outDir,
+        ReportPath = reportPath,
+        MaxParallel = maxParallel,
+        CaseTimeout = caseTimeout,
+        RunTests = runTests,
+        SourceSha = sourceSha,
+    });
+    return report.ExitCode;
+}
+
+static string BuildUsage() =>
+    "usage: mw-plugin-test build <repo-root> [<package>... | all] [--module <dll>]... [--out <dir>] "
+    + "[--report <file>] [--max-parallel <n>] [--case-timeout <s>] [--no-tests] [--source-sha <sha>]\n"
+    + "  Compiles AND tests each selected package (plus its in-repo requirements) as a dependency "
+    + "cascade: a package starts when its dependencies are green, is blocked when one is red. "
+    + "'all' (default) rebuilds everything. Sources are read from disk; nothing is imported into a mesh.";
 
 static int RunCompile(string[] args)
 {
@@ -447,7 +540,7 @@ static async Task<int> RunGate(string[] args)
             }
             case "--help" or "-h":
                 Console.WriteLine(
-                    "usage: mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
+                    "usage: mw-plugin-test build <repo-root> [<package>... | all] ...   (see build --help)\n       mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
                     + "[--allow <file>] [--report <file>] [--seed <dir>] [--bake-output <dir>] "
                     + "[--source-sha <sha>] [--module <dll>]... [--print-framework-identity]");
                 return 0;

@@ -235,7 +235,7 @@ public static class TreeBake
     /// module's types, reported the resulting misses as CONTENT errors, and named nothing about a
     /// reference. Loud here, once, beats five red NodeTypes and a fleet that will not roll.</para>
     /// </summary>
-    private static IReadOnlyList<InstalledModuleAssembly> LoadExternalModules(Options options)
+    internal static IReadOnlyList<InstalledModuleAssembly> LoadExternalModules(Options options)
     {
         var paths = options.ModuleAssemblyPaths;
         if (paths.Count == 0)
@@ -274,7 +274,7 @@ public static class TreeBake
     /// <summary>Installed module simple name → implementation MVID ("N"). Deliberately the same
     /// projection the mesh makes (<c>NodeTypeCompilationHelpers.ModuleMvidsOf</c>): producer and
     /// consumer have to compute one id for one build, or every bundle is declined.</summary>
-    private static IReadOnlyDictionary<string, string> ModuleMvidsOf(
+    internal static IReadOnlyDictionary<string, string> ModuleMvidsOf(
         IReadOnlyList<InstalledModuleAssembly> modules)
     {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -408,7 +408,7 @@ public static class TreeBake
         return new Report(frameworkIdentity, results.ToImmutable(), bundles);
     }
 
-    private static ImmutableArray<string> WriteBundles(
+    internal static ImmutableArray<string> WriteBundles(
         Options options,
         IReadOnlyList<PackageManifest> packages,
         RepoSnapshot snapshot,
