@@ -77,6 +77,10 @@ public static class PluginCatalogConfigurationExtensions
                 // Mints (once, per registry) and rotates the key that signs short-lived sync access
                 // tokens. Mesh-scoped so its cache dies with the mesh, like the authenticator.
                 .AddSingleton<SyncTokenSigningKeyService>()
+                // The plan ladder (Admin/Tiers/*) a plan-scoped grant entry is decided against —
+                // read once per minute, on the caller, by the authenticator above. Mesh-scoped so
+                // the cache dies with the mesh.
+                .AddSingleton<PlanTierLadder>()
                 // Registration bootstrap keys (mwr_) — minted on the admin surface, validated by
                 // the /api/instances/register endpoint. Mesh-scoped like everything above.
                 .AddSingleton<RegistrationKeyService>()

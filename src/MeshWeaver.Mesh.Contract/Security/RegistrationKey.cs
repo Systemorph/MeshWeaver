@@ -29,6 +29,20 @@ public record RegistrationKey
     /// <summary>What this key is for, in the minting admin's words (e.g. "AKS env scaffold").</summary>
     public string Description { get; init; } = "";
 
+    /// <summary>
+    /// The subscription PLAN every instance registered with this key enrols into (<c>personal</c>,
+    /// <c>pro</c>, <c>dedicated</c>, <c>enterprise</c> — an id of the registry's
+    /// <c>Admin/Tiers/*</c> nodes), or null for no plan.
+    ///
+    /// <para>Registration with a plan-bearing key seeds the new instance's grant with one
+    /// plan-scoped whole-source entry per configured source (<c>Plugins/*@pro</c>, …), on top of
+    /// the operator's <c>PluginCatalog:DefaultGrants</c> — so "a key for Pro customers" is minted
+    /// once and every install that presents it may pull exactly what the Pro plan covers
+    /// (<see cref="PlanTierRanks.Covers"/>), nothing an admin has to type per instance. Null keeps
+    /// today's behaviour: the DefaultGrants seed and nothing else.</para>
+    /// </summary>
+    public string? Tier { get; init; }
+
     /// <summary>ObjectId of the platform admin who minted the key. Instances registered with it
     /// are created under THIS identity.</summary>
     public string OwnerUserId { get; init; } = "";

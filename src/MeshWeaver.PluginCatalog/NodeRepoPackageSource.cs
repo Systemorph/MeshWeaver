@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.GitSync;
+using MeshWeaver.Mesh.Security;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.PluginCatalog;
@@ -147,6 +148,8 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         Icon = peeked.Icon,
                         Price = peeked.Price,
                         Currency = peeked.Currency,
+                        // The plan the package belongs to — what a plan-scoped grant licenses it by.
+                        Tier = peeked.Tier,
                         // Contact-sales: commercial without a price (PackageEntitlement.IsCommercial).
                         ContactEmail = peeked.ContactEmail,
                         Poster = peeked.Poster,
@@ -196,7 +199,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
         string? Category, string? Icon, decimal? Price, string? Currency, string? Poster,
         bool PreInstalled, ImmutableList<string> Requires, ImmutableList<string> PublicSegments,
         string? License, string? ContactEmail, string? Module, string? MinMeshVersion,
-        ImmutableList<PackageParameter> Parameters);
+        ImmutableList<PackageParameter> Parameters, string? Tier);
 
     // Reads the node's type/name/description — plus the storefront card fields (category/icon on
     // the node, price/currency/poster inside the content) — straight from the JSON: no MeshNode
@@ -219,8 +222,16 @@ public sealed class NodeRepoPackageSource : IPackageSource
             string? module = null;
             string? minMeshVersion = null;
             var parameters = ImmutableList<PackageParameter>.Empty;
+            string? tier = null;
             if (r.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object)
             {
+                // The package's PLAN ("tier": free / personal / pro / dedicated / enterprise) — what a
+                // plan-scoped grant entry licenses it by. Same dead-metadata rationale as every field
+                // below: the registry's entitlement decision keys on the manifest, so a tier the
+                // listing drops is a plan that licenses nothing.
+                if (content.TryGetProperty("tier", out var t) && t.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(t.GetString()))
+                    tier = PlanTierRanks.Canonical(t.GetString());
                 if (content.TryGetProperty("price", out var p) && p.ValueKind == JsonValueKind.Number
                     && p.TryGetDecimal(out var parsed))
                     price = parsed;
@@ -295,7 +306,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
                 r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
                 price, currency, poster, preInstalled, requires, publicSegments, license,
-                contactEmail, module, minMeshVersion, parameters);
+                contactEmail, module, minMeshVersion, parameters, tier);
         }
         catch (JsonException ex)
         {

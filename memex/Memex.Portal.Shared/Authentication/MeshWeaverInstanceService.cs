@@ -36,6 +36,16 @@ public sealed class MeshWeaverInstanceService(
     /// nothing, the strict default.</summary>
     public const string DefaultGrantsConfigKey = "PluginCatalog:DefaultGrants";
 
+    /// <summary>
+    /// Config key holding the registration key an OPEN registration — a
+    /// <c>POST /api/instances/register</c> with NO bootstrap key — is treated as presenting.
+    /// Normally a key the operator minted for the <c>free</c> plan, so a local install that names
+    /// only its instance id lands on the free tier by itself; raising it is an admin's edit of its
+    /// grant on the registry. Absent = open registrations are refused (401), the strict default.
+    /// Revoking the key closes the lane without touching the instances it registered.
+    /// </summary>
+    public const string OpenRegistrationKeyConfigKey = "PluginCatalog:OpenRegistration:Key";
+
     /// <summary>Namespace holding a user's registered instances, inside their own partition.</summary>
     public const string InstanceNamespace = "MeshWeaverInstance";
 
@@ -61,9 +71,13 @@ public sealed class MeshWeaverInstanceService(
     /// is what makes the claim visible; <see cref="IsIdAvailable"/> is checked first so a
     /// collision is a clean error rather than a half-written registration.</para>
     /// </summary>
+    /// <param name="tier">The subscription plan the instance enrols into (a registration key's
+    /// <see cref="RegistrationKey.Tier"/>), or null. Seeds one plan-scoped whole-source entry per
+    /// configured source on top of the <see cref="DefaultGrantsConfigKey"/> seed.</param>
     public IObservable<InstanceRegistrationResult> Register(
         string userId, string userName, string userEmail,
-        string instanceId, string displayName, string description = "", string homeUrl = "")
+        string instanceId, string displayName, string description = "", string homeUrl = "",
+        string? tier = null)
     {
         if (!IsValidInstanceId(instanceId))
             return Observable.Throw<InstanceRegistrationResult>(new ArgumentException(
@@ -115,7 +129,7 @@ public sealed class MeshWeaverInstanceService(
                     .SelectMany(existing => Observable.Throw<MeshNode>(
                         existing is not null ? new InstanceIdTakenException(instanceId) : ex)))
                 .SelectMany(created => WriteIndex(hash, created.Path, instanceId)
-                    .SelectMany(_ => SeedDefaultGrants(instanceId))
+                    .SelectMany(_ => SeedDefaultGrants(instanceId, tier))
                     .Select(_ =>
                     {
                         logger.LogInformation(
@@ -160,18 +174,58 @@ public sealed class MeshWeaverInstanceService(
                         return Register(
                                 resolved.Key.OwnerUserId, resolved.Key.OwnerUserName,
                                 resolved.Key.OwnerUserEmail, instanceId,
-                                displayName, description, homeUrl)
+                                displayName, description, homeUrl,
+                                // The key's PLAN is what the instance enrols into — a key minted
+                                // "for Pro customers" seeds Plugins/*@pro on every install that
+                                // presents it; a key without a plan seeds the DefaultGrants alone.
+                                tier: resolved.Key.Tier)
                             .Finally(() => disposable.Dispose());
                     })
                     .SelectMany(registration => keys.StampUse(resolved.KeyPath)
                         .Select(_ =>
                         {
                             logger.LogInformation(
-                                "Instance '{InstanceId}' auto-registered via bootstrap key of {Owner}",
-                                registration.Instance.InstanceId, resolved.Key.OwnerUserId);
+                                "Instance '{InstanceId}' auto-registered via bootstrap key of {Owner} (plan {Plan})",
+                                registration.Instance.InstanceId, resolved.Key.OwnerUserId,
+                                resolved.Key.Tier ?? "none");
                             return registration;
                         }));
             });
+    }
+
+    /// <summary>
+    /// Registers an installation that presented NO bootstrap key — open registration. Runs the
+    /// ordinary <see cref="RegisterWithBootstrapKey"/> with the key the registry's operator
+    /// configured for un-keyed callers (<see cref="OpenRegistrationKeyConfigKey"/>), so the
+    /// instance is owned by that key's minting admin and enrols into that key's plan exactly as a
+    /// keyed registration would; the key's revocation and expiry apply unchanged.
+    /// Refuses — as <see cref="InvalidBootstrapKeyException"/>, the same 401 an invalid key gets —
+    /// when no open key is configured, or when the configured value is not a registration key.
+    /// </summary>
+    public IObservable<InstanceRegistrationResult> RegisterOpen(
+        string instanceId, string displayName = "", string description = "", string homeUrl = "")
+    {
+        var openKey = configuration?[OpenRegistrationKeyConfigKey]?.Trim() ?? "";
+        if (openKey.Length == 0)
+        {
+            logger.LogInformation(
+                "Open registration for '{InstanceId}' refused — no {Key} is configured on this registry",
+                instanceId, OpenRegistrationKeyConfigKey);
+            return Observable.Throw<InstanceRegistrationResult>(new InvalidBootstrapKeyException());
+        }
+        if (!RegistrationKeys.HasKeyShape(openKey))
+        {
+            // Misconfiguration, not a caller's fault — and it must not be fixed by accepting
+            // whatever string is there: the value decides whose instances these become.
+            logger.LogError(
+                "{Key} is set but is not a registration key (mwr_…) — open registration is "
+                + "misconfigured and refused", OpenRegistrationKeyConfigKey);
+            return Observable.Throw<InstanceRegistrationResult>(new InvalidBootstrapKeyException());
+        }
+        logger.LogInformation(
+            "Open registration for '{InstanceId}' — presenting the registry's open registration key",
+            instanceId);
+        return RegisterWithBootstrapKey(openKey, instanceId, displayName, description, homeUrl);
     }
 
     /// <summary>The default grant entries the operator configured, parsed and de-blanked.
@@ -186,8 +240,44 @@ public sealed class MeshWeaverInstanceService(
                 .ToList();
 
     /// <summary>
-    /// Seeds the operator-configured default grant entries into
-    /// <c>Admin/_PluginGrant/{instanceId}</c> as part of registration. No defaults configured →
+    /// The plan-scoped seed a registration with plan <paramref name="tier"/> adds: one
+    /// <c>&lt;source&gt;/*@&lt;plan&gt;</c> entry per configured source (<c>PluginCatalog:Sources:N:Name</c>).
+    /// Empty for no plan — and, loudly, for a plan on a registry that configures no sources: a
+    /// key "for Pro customers" that seeds nothing is a registration that installs nothing, and
+    /// that must be legible in the log rather than discovered on the first boot.
+    /// </summary>
+    private IReadOnlyList<PluginGrantEntry> PlanGrantEntries(string? tier)
+    {
+        var plan = PlanTierRanks.Canonical(tier);
+        if (plan.Length == 0)
+            return [];
+        var sources = configuration?.GetSection("PluginCatalog:Sources").GetChildren()
+            .Select(s => s["Name"])
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n!)
+            .ToList() ?? [];
+        if (sources.Count == 0)
+        {
+            logger.LogWarning(
+                "Registration with plan '{Plan}': this registry configures no PluginCatalog:Sources, "
+                + "so the plan seeds no grant entry — the instance will be able to pull nothing", plan);
+            return [];
+        }
+        var now = DateTimeOffset.UtcNow;
+        return sources.Select(source => new PluginGrantEntry
+        {
+            Source = source,
+            PackageId = PluginGrantEntry.AllPackages,
+            Tier = plan,
+            IssuedVia = $"registration key (plan {plan})",
+            IssuedAt = now,
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Seeds the operator-configured default grant entries — plus the plan-scoped entries a
+    /// registration with <paramref name="tier"/> earns (<see cref="PlanGrantEntries"/>) — into
+    /// <c>Admin/_PluginGrant/{instanceId}</c> as part of registration. No defaults and no plan →
     /// no write at all, preserving "registering is identity, not entitlement" exactly.
     ///
     /// <para>Runs as System on BOTH the read and the write: the grant lives in the Admin partition,
@@ -195,21 +285,23 @@ public sealed class MeshWeaverInstanceService(
     /// seed is registry policy, not a user action. Read-then-<c>CreateOrUpdateNode</c>, never
     /// <c>stream.Update</c>: the node does not exist yet for a fresh id, and Update aborts on a
     /// missing node (the first-grant failure observed live 2026-08-06). Existing entries — e.g. an
-    /// admin re-seeding after an orphan cleanup — are preserved; defaults merge in idempotently.</para>
+    /// admin re-seeding after an orphan cleanup — are preserved; defaults merge in idempotently, and
+    /// an existing entry for a pair is never NARROWED by a plan-scoped seed for the same pair.</para>
     /// </summary>
-    private IObservable<Unit> SeedDefaultGrants(string instanceId)
+    private IObservable<Unit> SeedDefaultGrants(string instanceId, string? tier = null)
     {
-        var defaults = DefaultGrantEntries();
+        var defaults = DefaultGrantEntries().Concat(PlanGrantEntries(tier)).ToList();
         if (defaults.Count == 0)
             return Observable.Return(Unit.Default);
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var path = MeshWeaverInstanceNodeType.GrantPath(instanceId);
 
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => hub.GetMeshNode(path, TimeSpan.FromSeconds(10)))
-            .Take(1)
+        // RunAsSystem for the read, never Observable.Using over ImpersonateAsSystem: the scope is
+        // AsyncLocal and Rx disposes a Using resource on whatever thread terminates the sequence,
+        // which leaked System into the caller's continuation (#1790). RunAsSystem enters at
+        // Subscribe and leaves on the way out of it; the write below opens its own scope.
+        return accessService.RunAsSystem(() => hub.GetMeshNode(path, TimeSpan.FromSeconds(10)).Take(1))
             .SelectMany(existing => Observable.Defer(() =>
             {
                 var grant = existing?.ContentAs<PluginGrant>(hub.JsonSerializerOptions)

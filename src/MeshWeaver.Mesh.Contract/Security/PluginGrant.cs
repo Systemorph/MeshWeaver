@@ -53,9 +53,16 @@ public record PluginGrant
 
     /// <summary>
     /// Whether this grant permits <paramref name="packageId"/> from registry source
-    /// <paramref name="sourceName"/> at <paramref name="now"/>. Both an exact package grant and a
-    /// whole-source grant (<see cref="PluginGrantEntry.AllPackages"/>) satisfy the match, and the
-    /// matching entry must still be within its term.
+    /// <paramref name="sourceName"/> at <paramref name="now"/>, decided WITHOUT knowing the
+    /// package's tier. Both an exact package grant and a whole-source grant
+    /// (<see cref="PluginGrantEntry.AllPackages"/>) satisfy the match, and the matching entry must
+    /// still be within its term.
+    ///
+    /// <para>🚨 Only PLAN-LESS entries can answer here. An entry scoped to a plan
+    /// (<see cref="PluginGrantEntry.Tier"/>) licenses packages BY THEIR TIER, and a caller that does
+    /// not know the package's tier cannot be told "yes" by it — that would turn every plan into an
+    /// all-access grant at exactly the call sites that forgot to ask. Registry surfaces pass the
+    /// tier and the ladder (<see cref="Allows(string,string,string?,PlanTierRanks,DateTimeOffset)"/>).</para>
     ///
     /// <para>🚨 <paramref name="now"/> is an ARGUMENT, never read from the ambient clock inside the
     /// predicate. This is the authorization decision of the registry surface: it has to be
@@ -64,7 +71,8 @@ public record PluginGrant
     /// call sites that legitimately mean "right now".</para>
     /// </summary>
     public bool Allows(string sourceName, string packageId, DateTimeOffset now) =>
-        !IsRevoked && Entries.Any(e => e.Matches(sourceName, packageId) && e.IsValidAt(now));
+        !IsRevoked && Entries.Any(e =>
+            !e.IsPlanScoped && e.Matches(sourceName, packageId) && e.IsValidAt(now));
 
     /// <summary>
     /// <see cref="Allows(string,string,DateTimeOffset)"/> evaluated at the current instant — what a
@@ -72,6 +80,40 @@ public record PluginGrant
     /// </summary>
     public bool Allows(string sourceName, string packageId) =>
         Allows(sourceName, packageId, DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// Whether this grant permits <paramref name="packageId"/> — declaring
+    /// <paramref name="packageTier"/> — from registry source <paramref name="sourceName"/> at
+    /// <paramref name="now"/>: some entry matches the pair, is within its term, and COVERS the
+    /// package's tier under <paramref name="ranks"/> (<see cref="PlanTierRanks.Covers"/>). A plan-less
+    /// entry covers every tier; a plan-scoped one covers what its plan ranks at or above it. This is
+    /// the overload every registry surface decides with.
+    /// </summary>
+    public bool Allows(
+        string sourceName, string packageId, string? packageTier, PlanTierRanks ranks, DateTimeOffset now) =>
+        !IsRevoked && Entries.Any(e =>
+            e.Matches(sourceName, packageId) && e.IsValidAt(now) && e.Covers(packageTier, ranks));
+
+    /// <summary><see cref="Allows(string,string,string?,PlanTierRanks,DateTimeOffset)"/> at the
+    /// current instant.</summary>
+    public bool Allows(string sourceName, string packageId, string? packageTier, PlanTierRanks ranks) =>
+        Allows(sourceName, packageId, packageTier, ranks, DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// Whether this grant carries a live, PLAN-LESS whole-source entry for
+    /// <paramref name="sourceName"/> — what fetching a source's sealed publication as a whole
+    /// requires. A plan-scoped <c>Source/*</c> covers the packages of its plan one by one and never
+    /// the source's whole publication, which carries every plan's bundles.
+    /// </summary>
+    public bool AllowsWholeSource(string sourceName, DateTimeOffset now) =>
+        !IsRevoked && Entries.Any(e =>
+            !e.IsPlanScoped
+            && e.PackageId == PluginGrantEntry.AllPackages
+            && string.Equals(e.Source, sourceName, StringComparison.OrdinalIgnoreCase)
+            && e.IsValidAt(now));
+
+    /// <summary><see cref="AllowsWholeSource(string,DateTimeOffset)"/> at the current instant.</summary>
+    public bool AllowsWholeSource(string sourceName) => AllowsWholeSource(sourceName, DateTimeOffset.UtcNow);
 }
 
 /// <summary>
@@ -93,6 +135,24 @@ public record PluginGrantEntry
     /// <summary>The package id, or <see cref="AllPackages"/> for the whole source. Package ids are
     /// matched with ordinal case sensitivity, exactly as the catalog compares them.</summary>
     public string PackageId { get; init; } = AllPackages;
+
+    /// <summary>
+    /// The subscription PLAN this entry is scoped to (<c>personal</c>, <c>pro</c>,
+    /// <c>dedicated</c>, <c>enterprise</c> — the ids of the registry's <c>Admin/Tiers/*</c> nodes),
+    /// or null for every tier.
+    ///
+    /// <para>A plan-scoped entry licenses the packages of its source BY TIER: a package declaring
+    /// a tier ranked at or below the plan's, a baseline package declaring none, and — on an
+    /// all-access plan — everything. That is what lets one <c>Plugins/*@personal</c> entry express
+    /// "the platform repo, as far as the Personal plan reaches" instead of an admin enumerating
+    /// packages, and it is decided by <see cref="PlanTierRanks.Covers"/> against the ladder the
+    /// registry reads from its tier nodes. Null keeps today's meaning exactly: the whole source,
+    /// whatever tier its packages declare.</para>
+    /// </summary>
+    public string? Tier { get; init; }
+
+    /// <summary>Whether this entry is scoped to a plan (<see cref="Tier"/> set).</summary>
+    public bool IsPlanScoped => !string.IsNullOrWhiteSpace(Tier);
 
     /// <summary>
     /// End of this entry's term. Null = perpetual (revocation remains available). A licence that
@@ -135,27 +195,43 @@ public record PluginGrantEntry
         string.Equals(Source, sourceName, StringComparison.OrdinalIgnoreCase)
         && (PackageId == AllPackages || string.Equals(PackageId, packageId, StringComparison.Ordinal));
 
+    /// <summary>Whether this entry's plan covers a package declaring <paramref name="packageTier"/>
+    /// under <paramref name="ranks"/> — always true for a plan-less entry. Coverage only; the pair
+    /// match is <see cref="Matches"/> and the term is <see cref="IsValidAt"/>.</summary>
+    public bool Covers(string? packageTier, PlanTierRanks ranks) => ranks.Covers(Tier, packageTier);
+
     /// <summary>Renders the entry the way it is written in docs and the admin UI —
-    /// <c>Plugins/*</c>, <c>Reinsurance/UWDeepfield</c>.</summary>
-    public override string ToString() => $"{Source}/{PackageId}";
+    /// <c>Plugins/*</c>, <c>Reinsurance/UWDeepfield</c>, <c>Plugins/*@pro</c> for a plan-scoped one.</summary>
+    public override string ToString() =>
+        IsPlanScoped ? $"{Source}/{PackageId}@{PlanTierRanks.Canonical(Tier)}" : $"{Source}/{PackageId}";
 
     /// <summary>
-    /// Parses the <c>Source/Package</c> notation used in config and docs — <c>Plugins/*</c>,
-    /// <c>Reinsurance/UWDeepfield</c>, or a bare <c>Plugins</c> meaning the whole source.
-    /// Returns <c>null</c> for a blank or malformed value (no source, or nothing after the
-    /// separator) instead of throwing: these are operator-typed config values, and one bad list
-    /// entry must not take the registration surface down with it.
+    /// Parses the <c>Source/Package[@plan]</c> notation used in config and docs — <c>Plugins/*</c>,
+    /// <c>Reinsurance/UWDeepfield</c>, a bare <c>Plugins</c> meaning the whole source, or
+    /// <c>Plugins/*@personal</c> for an entry scoped to a plan. Returns <c>null</c> for a blank or
+    /// malformed value (no source, nothing after the separator, an empty plan after <c>@</c>)
+    /// instead of throwing: these are operator-typed config values, and one bad list entry must
+    /// not take the registration surface down with it.
     /// </summary>
     public static PluginGrantEntry? TryParse(string? text)
     {
         var trimmed = text?.Trim();
         if (string.IsNullOrEmpty(trimmed))
             return null;
+        string? tier = null;
+        var at = trimmed.LastIndexOf('@');
+        if (at >= 0)
+        {
+            tier = PlanTierRanks.Canonical(trimmed[(at + 1)..]);
+            if (tier.Length == 0)
+                return null;
+            trimmed = trimmed[..at].Trim();
+        }
         var slash = trimmed.IndexOf('/');
         var source = (slash < 0 ? trimmed : trimmed[..slash]).Trim();
         var packageId = slash < 0 ? AllPackages : trimmed[(slash + 1)..].Trim();
         if (source.Length == 0 || packageId.Length == 0)
             return null;
-        return new PluginGrantEntry { Source = source, PackageId = packageId };
+        return new PluginGrantEntry { Source = source, PackageId = packageId, Tier = tier };
     }
 }
