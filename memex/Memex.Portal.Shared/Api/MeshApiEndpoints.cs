@@ -373,7 +373,7 @@ public static class MeshApiEndpoints
     }
 
     /// <summary>
-    /// The late-fault sink for this surface's <see cref="ReactiveCompletion.ObserveCompletion{T}"/>
+    /// The late-fault sink for this surface's <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, System.Threading.CancellationToken)"/>
     /// bridges. A fault that lands AFTER the response has already settled can no longer change the
     /// answer, but it is the only record that anything went wrong on the way out — discarding it is
     /// half of what <c>ObserveCompletion</c> exists to remove.

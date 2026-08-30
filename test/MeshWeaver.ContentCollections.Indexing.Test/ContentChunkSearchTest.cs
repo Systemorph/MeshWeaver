@@ -211,4 +211,68 @@ public class ContentChunkSearchTest
         json.Should().Contain("\"bbox\":");
         json.Should().Contain("\"x\":0.1");
     }
+
+    /// <summary>
+    /// 🚨 <b>#2741 — a sweep that cannot fail is not a sweep.</b>
+    ///
+    /// <para>AGENTS.md requires a live-mesh <c>search_chunks</c> sweep before deleting any public
+    /// framework surface, because the mesh holds callers the repo has already dropped and no
+    /// compiler can see them. On a deployment with no embedding provider that sweep answered
+    /// <c>{"count":0,"results":[]}</c> — byte-identical to "I searched and found no callers" — so an
+    /// agent following the prescribed procedure reads it as permission to delete. Measured on BOTH
+    /// reachable portals on 2026-08-30.</para>
+    ///
+    /// <para>The envelope now carries no <c>count</c> at all when nothing was searched, which is the
+    /// point: a consumer testing <c>count == 0</c> finds the field ABSENT rather than finding a zero
+    /// that means the opposite of what it looks like.</para>
+    /// </summary>
+    [Fact]
+    public async Task ToJson_WhenIndexingIsOff_CarriesNoCount_SoZeroCannotBeReadAsNoResults()
+    {
+        var off = "Content indexing is not active on this deployment.";
+        var result = await ContentChunkSearch
+            .Search(new InertChunkedContentVectorStore(off), new InertChunkEmbedder(off),
+                "namespace:ACME/content alpha", anchorPath: null, limit: 50)
+            .FirstAsync();
+
+        result.Searched.Should().BeFalse("nothing was embedded and no collection was read");
+
+        var json = ContentChunkSearch.ToJson(result);
+        json.Should().NotContain("\"count\":",
+            "a count of 0 for a search that never ran is the false pass this test exists to prevent");
+        json.Should().NotContain("\"results\":");
+        json.Should().Contain("\"searched\":false");
+        json.Should().Contain(ContentChunkSearch.NotSearchedError);
+        json.Should().Contain(off, "the envelope must still say WHAT to configure, not merely that it did not search");
+    }
+
+    /// <summary>
+    /// The same rule for the other way a search fails to run: no query text. "You gave me nothing to
+    /// search for" and "I searched and found nothing" are different answers and must not share an
+    /// envelope either.
+    /// </summary>
+    [Fact]
+    public async Task ToJson_WhenTheQueryCarriesNoText_CarriesNoCount()
+    {
+        var result = await Search("namespace:ACME/content");
+
+        result.Searched.Should().BeFalse();
+        ContentChunkSearch.ToJson(result).Should().NotContain("\"count\":");
+    }
+
+    /// <summary>
+    /// The control, and the half that keeps the guard honest: a search that DID run still reports its
+    /// count, including the genuine zero. Without this, "omit the count" could quietly become "omit
+    /// the count whenever it is zero", which would hide a real empty result.
+    /// </summary>
+    [Fact]
+    public async Task ToJson_WhenASearchRanAndMatchedNothing_StillReportsZero()
+    {
+        var result = await Search("namespace:EMPTY/collection alpha");
+
+        result.Searched.Should().BeTrue();
+        var json = ContentChunkSearch.ToJson(result);
+        json.Should().Contain("\"searched\":true");
+        json.Should().Contain("\"count\":0");
+    }
 }

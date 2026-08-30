@@ -47,7 +47,7 @@ internal static class UserRoleResolver
     /// <c>AuthenticationHandler.HandleAuthenticateAsync</c> boundary —
     /// callers expect a Task-returning helper, but everything below
     /// stays observable. It is
-    /// <see cref="ReactiveCompletion.ObserveCompletion{T}"/>, never Rx's
+    /// <see cref="ReactiveCompletion.ObserveCompletion{T}(System.IObservable{T}, System.Action{System.Exception}, System.Threading.CancellationToken)"/>, never Rx's
     /// <c>.ToTask()</c>, which would resume the caller inline on whichever hub
     /// thread published the roles (forbidden since 2026-08-30).</para>
     /// </summary>

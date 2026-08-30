@@ -119,6 +119,20 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.FailedBuildInputs"/>.</summary>
     public string? FailedBuildInputs { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.AdoptedSourceFingerprint"/>.</summary>
+    public string? AdoptedSourceFingerprint { get; init; }
+
+    /// <summary>See <see cref="NodeTypeDefinition.CurrentSourceFingerprint"/>.</summary>
+    public string? CurrentSourceFingerprint { get; init; }
+
+    /// <summary>
+    /// See <see cref="NodeTypeDefinition.BuildProvenance"/> — WHERE the build came from, and
+    /// whether an adopted one was ever checked against the source (#2813). The satellite carries
+    /// it for the same reason the node does: a reader that cannot tell an adopted build from a
+    /// compiled one cannot tell a stale one either.
+    /// </summary>
+    public Mesh.Services.BuildProvenance BuildProvenance { get; init; }
+
     /// <summary>The state projected from a NodeType definition — pure. Null in, null out.</summary>
     public static NodeTypeCompileState? FromDefinition(NodeTypeDefinition? definition) =>
         definition is null
@@ -146,6 +160,9 @@ public record NodeTypeCompileState
                 RequestedSourceStampAt = definition.RequestedSourceStampAt,
                 CompiledFrameworkVersion = definition.CompiledFrameworkVersion,
                 FailedBuildInputs = definition.FailedBuildInputs,
+                AdoptedSourceFingerprint = definition.AdoptedSourceFingerprint,
+                CurrentSourceFingerprint = definition.CurrentSourceFingerprint,
+                BuildProvenance = definition.BuildProvenance,
             };
 
     /// <summary>Whether NO compile machinery has recorded anything yet — a never-compiled,
@@ -160,7 +177,9 @@ public record NodeTypeCompileState
         && LatestAssemblyCollection is null && LatestAssemblyPath is null
         && CompiledSources is null && CurrentSourceVersions is null
         && RequestedSourceStampAt is null
-        && CompiledFrameworkVersion is null && FailedBuildInputs is null;
+        && CompiledFrameworkVersion is null && FailedBuildInputs is null
+        && AdoptedSourceFingerprint is null && CurrentSourceFingerprint is null
+        && BuildProvenance is Mesh.Services.BuildProvenance.Compiled;
 }
 
 /// <summary>

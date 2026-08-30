@@ -83,9 +83,56 @@ public static class ReactiveCompletion
         this IObservable<T> source,
         Action<Exception> reportLateFault,
         CancellationToken cancellationToken = default)
+        => ObserveCompletion(source, reportLateFault, cancelSource: false, cancellationToken);
+
+    /// <summary>
+    /// As <see cref="ObserveCompletion{T}(IObservable{T}, Action{Exception}, CancellationToken)"/>,
+    /// but <paramref name="cancelSource"/> decides whether cancelling the wait also DISPOSES the
+    /// subscription — and therefore whether it reaches the source at all.
+    ///
+    /// <para>🚨 <b>The default (<c>false</c>) is not an oversight, and must stay the default.</b>
+    /// Keeping the subscription attached is what lets a LATE fault reach
+    /// <paramref name="reportLateFault"/> instead of becoming an unobserved exception — the whole
+    /// reason this bridge exists rather than <c>.ToTask()</c>.</para>
+    ///
+    /// <para><b>Why the opt-in is needed (MeshWeaver#2772).</b> That default silently changed
+    /// cancellation semantics for every site converted from <c>.ToTask(ct)</c>, which DID dispose.
+    /// For work holding a bounded resource that difference is not academic:
+    /// <c>IoPool.InvokeObservable</c> builds its work under a token linked to Rx's
+    /// <c>subscriberCt</c>, which is cancelled <i>when the subscription is disposed</i>. So under
+    /// the non-disposing default a caller that has already given up keeps its pool permit for the
+    /// full duration of work nobody is waiting for — and it is invisible: nothing faults, nothing
+    /// logs, the slot is simply not available.</para>
+    ///
+    /// <para>Pass <c>true</c> when the wait owns a bounded or request-scoped resource — a pooled
+    /// permit, a request slot — and giving up must release it. Accept that a fault arriving after
+    /// cancellation is then <b>no longer guaranteed to be observed</b>, exactly as under
+    /// <c>.ToTask(ct)</c>: you are choosing the resource over the diagnostic, so choose it
+    /// deliberately. It is "not guaranteed" rather than "lost" on purpose — cancellation and the
+    /// fault race, so an <c>OnError</c> that reaches the observer before the disposal takes effect
+    /// still reaches <paramref name="reportLateFault"/>. Do not build on either outcome.</para>
+    /// </summary>
+    /// <typeparam name="T">The signal's payload type.</typeparam>
+    /// <param name="source">The completion signal; must terminate.</param>
+    /// <param name="reportLateFault">Receives a fault arriving after the task settled.</param>
+    /// <param name="cancelSource">When <c>true</c>, cancelling <paramref name="cancellationToken"/>
+    /// disposes the subscription, so cancellation propagates INTO the source.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <returns>The first value, or <c>default</c> if the source completed without one.</returns>
+    public static Task<T?> ObserveCompletion<T>(
+        this IObservable<T> source,
+        Action<Exception> reportLateFault,
+        bool cancelSource,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(reportLateFault);
+
+        // Assigned AFTER Subscribe returns, so it must tolerate cancellation landing first:
+        // SingleAssignmentDisposable disposes the value on assignment when it is already disposed,
+        // which closes the window where a token that fires during the subscribe would otherwise
+        // leave the source running with nobody waiting.
+        var subscription = cancelSource ? new System.Reactive.Disposables.SingleAssignmentDisposable() : null;
 
         // 🚨 RunContinuationsAsynchronously IS THE DEADLOCK FIX. Without it — which is exactly
         // what Rx's own ToTask() does — TrySetResult below resumes the awaiting caller INLINE on
@@ -98,9 +145,24 @@ public static class ReactiveCompletion
 
         if (cancellationToken.CanBeCanceled)
         {
-            var registration = cancellationToken.Register(
-                static state => ((TaskCompletionSource<T?>)state!).TrySetCanceled(),
-                completion);
+            // 🚨 Two shapes, because this is a hot utility and the default must not pay for the
+            // option. The non-disposing path keeps the original STATIC callback over the
+            // TaskCompletionSource itself — no closure, no boxed tuple. Only the opt-in allocates
+            // the extra state it actually needs (Copilot review on #2772).
+            var registration = subscription is null
+                ? cancellationToken.Register(
+                    static state => ((TaskCompletionSource<T?>)state!).TrySetCanceled(),
+                    completion)
+                : cancellationToken.Register(
+                    static state =>
+                    {
+                        var (tcs, sub) = ((TaskCompletionSource<T?>, IDisposable))state!;
+                        tcs.TrySetCanceled();
+                        // Disposing is what makes Rx cancel subscriberCt, which is what releases
+                        // an IoPool permit (#2772).
+                        sub.Dispose();
+                    },
+                    (completion, (IDisposable)subscription));
             // Release the registration once the wait is over, whichever way it ended. Not a wait
             // of its own: the continuation only disposes, and the task itself is observed by the
             // caller that awaits it.
@@ -116,7 +178,7 @@ public static class ReactiveCompletion
         // .ToTask() does and what loses a late fault; the subscription instead releases itself
         // when the SOURCE terminates, which is the only moment after which no fault can still
         // arrive. The observer is rooted by the source until then.
-        source.Subscribe(
+        var handle = source.Subscribe(
             value => completion.TrySetResult(value),
             error =>
             {
@@ -142,6 +204,12 @@ public static class ReactiveCompletion
                 }
             },
             () => completion.TrySetResult(default));
+
+        // Non-disposing default: the handle is dropped exactly as before, and the subscription
+        // releases itself when the SOURCE terminates — the only moment after which no fault can
+        // still arrive. Opt-in: hand it to the SAD so a cancel can reach it.
+        if (subscription is not null)
+            subscription.Disposable = handle;
 
         return completion.Task;
     }
