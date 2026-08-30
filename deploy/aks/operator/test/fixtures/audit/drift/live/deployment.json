@@ -1,0 +1,172 @@
+{
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "memex-portal-deployment",
+        "namespace": "memex",
+        "labels": {
+          "app.kubernetes.io/managed-by": "Helm"
+        }
+      },
+      "spec": {
+        "replicas": 2,
+        "template": {
+          "metadata": {
+            "annotations": {
+              "checksum/config": "abc",
+              "kubectl.kubernetes.io/restartedAt": "2026-08-30T06:00:00Z"
+            }
+          },
+          "spec": {
+            "serviceAccountName": "memex-portal-sa",
+            "terminationGracePeriodSeconds": 1800,
+            "nodeSelector": {
+              "workload": "silos"
+            },
+            "containers": [
+              {
+                "name": "memex-portal",
+                "image": "meshweaver.azurecr.io/memex-portal-ai:3.0.0-rc8.ci.5123",
+                "env": [
+                  {
+                    "name": "ASPNETCORE_ENVIRONMENT",
+                    "value": "Production"
+                  },
+                  {
+                    "name": "MEMEX_DATABASENAME",
+                    "value": "memex"
+                  },
+                  {
+                    "name": "EMAIL__CLIENTSECRET",
+                    "value": "s3cr3t-value-that-must-never-print"
+                  },
+                  {
+                    "name": "PluginCatalog__RegistryToken",
+                    "value": "tok-value-that-must-never-print"
+                  },
+                  {
+                    "name": "PluginCatalog__RegistryUrl",
+                    "value": "https://memex.meshweaver.cloud"
+                  },
+                  {
+                    "name": "EMAIL__TENANTID",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "memex-email-secret",
+                        "key": "tenant"
+                      }
+                    }
+                  }
+                ],
+                "envFrom": [
+                  {
+                    "configMapRef": {
+                      "name": "memex-portal-config"
+                    }
+                  },
+                  {
+                    "secretRef": {
+                      "name": "memex-kv-secrets"
+                    }
+                  },
+                  {
+                    "secretRef": {
+                      "name": "memex-extra-secret"
+                    }
+                  }
+                ],
+                "resources": {},
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "failureThreshold": 60,
+                  "timeoutSeconds": 1,
+                  "successThreshold": 1
+                },
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/data"
+                  },
+                  {
+                    "name": "memex-content",
+                    "mountPath": "/mnt/content"
+                  }
+                ],
+                "lifecycle": {
+                  "preStop": {
+                    "exec": {
+                      "command": [
+                        "sh",
+                        "-c",
+                        "lifecycle-cmd-that-must-never-print"
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "name": "node-gate",
+                "image": "node:22",
+                "env": [
+                  {
+                    "name": "GATE_API_KEY",
+                    "value": "gate-key-value-that-must-never-print"
+                  }
+                ]
+              },
+              {
+                "name": "python-gate",
+                "image": "python:3.12"
+              }
+            ],
+            "volumes": [
+              {
+                "name": "data",
+                "persistentVolumeClaim": {
+                  "claimName": "memex-data"
+                }
+              },
+              {
+                "name": "memex-content",
+                "persistentVolumeClaim": {
+                  "claimName": "memex-content"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "status": {
+        "readyReplicas": 2
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "portal-next-deployment",
+        "namespace": "memex"
+      },
+      "spec": {
+        "replicas": 1,
+        "template": {
+          "spec": {
+            "containers": [
+              {
+                "name": "next",
+                "image": "x"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

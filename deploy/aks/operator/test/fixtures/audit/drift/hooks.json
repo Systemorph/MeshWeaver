@@ -1,0 +1,1 @@
+{ "apiVersion": "batch/v1", "kind": "Job", "metadata": { "name": "memex-migration", "namespace": "memex", "annotations": { "helm.sh/hook": "pre-upgrade" } }, "spec": { "template": { "spec": { "containers": [ { "name": "migration", "image": "x" } ] } } } }

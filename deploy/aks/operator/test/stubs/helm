@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# A stand-in `helm` for test/run-tests.sh — answers hosting-audit's three read-only calls from a
+# fixture directory ($HOSTING_AUDIT_FIXTURE). It is NOT a mock of helm: it asserts nothing about
+# what helm does, it only lets the detection run against a known manifest without a cluster.
+#
+#   helm status  <rel> -n <ns> -o json   → $FIXTURE/status.json   (absent → "release: not found")
+#   helm get manifest <rel> -n <ns>      → $FIXTURE/manifest.json (already objects — see kubectl stub)
+#   helm get hooks    <rel> -n <ns>      → $FIXTURE/hooks.json, or nothing
+set -uo pipefail
+fixture="${HOSTING_AUDIT_FIXTURE:?the helm stub needs HOSTING_AUDIT_FIXTURE}"
+case "${1:-} ${2:-}" in
+  "status "*)
+    [ -f "$fixture/status.json" ] || { echo "Error: release: not found" >&2; exit 1; }
+    cat "$fixture/status.json" ;;
+  "get manifest")
+    [ -f "$fixture/manifest.json" ] || { echo "Error: release: not found" >&2; exit 1; }
+    cat "$fixture/manifest.json" ;;
+  "get hooks")
+    [ -f "$fixture/hooks.json" ] && cat "$fixture/hooks.json"
+    exit 0 ;;
+  *) echo "helm stub: unexpected invocation: $*" >&2; exit 1 ;;
+esac

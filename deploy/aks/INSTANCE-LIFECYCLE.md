@@ -121,6 +121,14 @@ rule is in the mesh's pure, unit-tested plan. What the scripts themselves guaran
   it goes into a one-shot Secret the mesh reads once and deletes.
 - **`hosting-verify-catalog` proves the plugin mounts took.** An instance with green pods and an
   empty Store is the failure worth catching, and it is invisible in a rollout status.
+- **`hosting-audit` names what lives ONLY on the cluster** — the `Audit` verb's one step. It diffs
+  the namespace against `helm get manifest` + `helm get hooks` (the truth) and reports, by name and
+  never by value, the portal Deployment's live-only env / envFrom / volumes / mounts / containers /
+  pod-spec patches, the chart ConfigMaps' live-edited keys, objects the chart does not own, secrets
+  the pod reads that nothing renders, and secret-shaped names carried as plain values. It emits the
+  report as `::hosting:: audit=<base64 JSON>` for the mesh to record, exits 0 on drift (drift is a
+  finding, not a failed run) and **refuses** when it cannot measure — no release, no live portal, or
+  a kind its ClusterRole may not list. The mesh side is the Hosting plugin's `Hosting/Audit` page.
 
 ## Two traps worth knowing
 

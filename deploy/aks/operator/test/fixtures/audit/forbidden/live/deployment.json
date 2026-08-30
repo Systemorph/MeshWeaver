@@ -1,0 +1,96 @@
+{
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "memex-portal-deployment",
+        "namespace": "memex"
+      },
+      "spec": {
+        "replicas": 1,
+        "template": {
+          "metadata": {
+            "annotations": {
+              "checksum/config": "abc"
+            }
+          },
+          "spec": {
+            "serviceAccountName": "memex-portal-sa",
+            "terminationGracePeriodSeconds": 1800,
+            "containers": [
+              {
+                "name": "memex-portal",
+                "image": "meshweaver.azurecr.io/memex-portal-ai:3.0.0-rc8.ci.5123",
+                "env": [
+                  {
+                    "name": "ASPNETCORE_ENVIRONMENT",
+                    "value": "Production"
+                  },
+                  {
+                    "name": "MEMEX_DATABASENAME",
+                    "value": "memex"
+                  },
+                  {
+                    "name": "RENDERED_ONLY",
+                    "value": "1"
+                  }
+                ],
+                "envFrom": [
+                  {
+                    "configMapRef": {
+                      "name": "memex-portal-config"
+                    }
+                  },
+                  {
+                    "secretRef": {
+                      "name": "memex-kv-secrets"
+                    }
+                  }
+                ],
+                "resources": {
+                  "limits": {
+                    "cpu": "4",
+                    "memory": "8Gi"
+                  },
+                  "requests": {
+                    "cpu": "1",
+                    "memory": "4Gi"
+                  }
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "failureThreshold": 60,
+                  "timeoutSeconds": 1,
+                  "successThreshold": 1
+                },
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/data"
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "name": "data",
+                "persistentVolumeClaim": {
+                  "claimName": "memex-data"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "status": {
+        "readyReplicas": 1
+      }
+    }
+  ]
+}

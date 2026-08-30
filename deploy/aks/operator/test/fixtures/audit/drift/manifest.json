@@ -1,0 +1,54 @@
+{
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": { "name": "memex-portal-deployment", "namespace": "memex" },
+      "spec": {
+        "replicas": 1,
+        "template": {
+          "metadata": { "annotations": { "checksum/config": "abc" } },
+          "spec": {
+            "serviceAccountName": "memex-portal-sa",
+            "terminationGracePeriodSeconds": 1800,
+            "containers": [
+              {
+                "name": "memex-portal",
+                "image": "meshweaver.azurecr.io/memex-portal-ai:3.0.0-rc8.ci.5000",
+                "env": [
+                  { "name": "ASPNETCORE_ENVIRONMENT", "value": "Production" },
+                  { "name": "MEMEX_DATABASENAME", "value": "memex" },
+                  { "name": "RENDERED_ONLY", "value": "1" }
+                ],
+                "envFrom": [
+                  { "configMapRef": { "name": "memex-portal-config" } },
+                  { "secretRef": { "name": "memex-kv-secrets" } }
+                ],
+                "resources": { "limits": { "cpu": 4, "memory": "8Gi" }, "requests": { "cpu": 1, "memory": "4Gi" } },
+                "startupProbe": { "httpGet": { "path": "/health", "port": 8080 }, "periodSeconds": 5, "failureThreshold": 60 },
+                "volumeMounts": [ { "name": "data", "mountPath": "/data" } ]
+              }
+            ],
+            "volumes": [ { "name": "data", "persistentVolumeClaim": { "claimName": "memex-data" } } ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": { "name": "memex-portal-config", "namespace": "memex" },
+      "data": { "Portal__Name": "memex", "Email__Enabled": "false", "Hosting__ModuleReportSecret": "rendered-shared-secret" }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Secret",
+      "metadata": { "name": "memex-chart-secret", "namespace": "memex" },
+      "type": "Opaque",
+      "data": { "x": "eA==" }
+    },
+    { "apiVersion": "v1", "kind": "Service", "metadata": { "name": "memex-portal-service", "namespace": "memex" }, "spec": { "ports": [ { "port": 80 } ] } },
+    { "apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": { "name": "memex-ingress", "namespace": "memex" }, "spec": {} }
+  ]
+}

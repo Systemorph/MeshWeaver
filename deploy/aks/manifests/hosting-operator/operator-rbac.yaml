@@ -39,6 +39,28 @@ rules:
   - apiGroups: ["secrets-store.csi.x-k8s.io"]
     resources: ["secretproviderclasses"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # READ-ONLY, for hosting-audit. The live-only-config audit lists every kind a namespace can carry
+  # and compares it against the helm manifest; a kind it is Forbidden to list is one it must NOT
+  # report as clean, so it refuses — which means every kind below has to be readable or the audit
+  # never completes. Nothing here is writable: an audit measures, it never reconciles.
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list"]
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects"]
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
