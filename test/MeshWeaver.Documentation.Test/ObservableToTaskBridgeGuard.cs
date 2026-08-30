@@ -200,6 +200,18 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
             + "merge into a path-rename conflict. When the move lands, this entry goes stale and "
             + "the register test above will say so."),
 
+        ("src/MeshWeaver.Fixture/ObservableAwait.cs",
+            "The test tree's ONE wait, introduced by #2750 when 1,538 `.ToTask(` call sites were "
+            + "swept. Same category as ReactiveWait: infrastructure whose entire PURPOSE is to hand "
+            + "a test a Task to await, so it cannot be bridge-free, and it ships from a production "
+            + "root because MeshWeaver.Fixture is where the test bases live. It is a FAITHFUL "
+            + "ToTask (last value, faults on an empty sequence) — deliberately, because settling on "
+            + "the first notification would have silently changed 462 call sites that do not reduce "
+            + "to a single element; only the continuation scheduling differs. Safe form. "
+            + "🚨 This entry is the guard's first live catch: ObservableAwait landed on main hours "
+            + "after these detectors were written, contains not one character of `.ToTask(`, and "
+            + "the spelling-only rule would have waved it through."),
+
         ("src/MeshWeaver.Mesh.Contract/Services/MeshServiceExtensions.cs",
             "The *Async CRUD shim, already governed by MeshServiceHasNoTaskShimGuard (one assembly, "
             + "three verbs, may shrink and never grow). It cannot simply be deleted: measured "
