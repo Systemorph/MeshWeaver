@@ -1,0 +1,192 @@
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
+using Xunit;
+
+namespace MeshWeaver.Documentation.Test;
+
+/// <summary>
+/// 🚨 <c>.Subscribe(x =&gt; …)</c> with no error arm is how a fault escapes the mesh and kills the
+/// process. Every subscription in production carries <c>.Subscribe(onNext, onError)</c>.
+///
+/// <para><b>Why the single-argument overload specifically.</b> Rx routes a throw inside
+/// <c>Select</c>/<c>SelectMany</c>/<c>Defer</c> to <c>onError</c> — but it <b>rethrows out of an
+/// <c>onNext</c> delegate</b>, onto whatever thread the scheduler happened to use. With no
+/// <c>onError</c> to receive it there is nowhere for that fault to go, so it becomes an unhandled
+/// exception on a pool thread. A resolve inside an operator chain does not do this; the bare
+/// <c>Subscribe(onNext)</c> does.</para>
+///
+/// <para><b>What it costs, measured (#2666).</b> One Release run of <c>MeshWeaver.AI.Test</c>
+/// recorded <b>476 first-chance disposed-scope stragglers across 19 seams</b>. xunit.v3 never hooks
+/// <c>TaskScheduler.UnobservedTaskException</c>, so an unobserved task exception is silent — but
+/// <c>AppDomain.UnhandledException</c> <i>is</i> hooked, and it takes the runner to
+/// <c>Environment.Exit(2)</c>. The signature that produces is the one this repo has chased
+/// repeatedly: <c>Passed! - Failed: 0</c> <b>and a non-zero exit</b> — a shard that reports
+/// everything green and reds anyway, carrying a message with no stack.</para>
+///
+/// <para><b>Why a ratchet.</b> 89 sites across 45 files at seeding. Small enough that conversion is
+/// realistic, too large to fix in one change. 🚨 Raising <see cref="Baseline"/> is not a fix; the
+/// number is in the diff so that re-seeding is visible to a reviewer.</para>
+///
+/// <para><b>The conversion</b> is one argument, not a redesign — and choose it deliberately:
+/// <c>.Subscribe(x =&gt; Handle(x), ex =&gt; logger.LogWarning(ex, "… {Path}", path))</c> at a
+/// graceful boundary, or a propagating arm where the caller must learn. An empty <c>ex =&gt; { }</c>
+/// trades this guard for the swallow-and-continue AGENTS.md forbids, so it is not the answer.</para>
+/// </summary>
+public class SubscribeErrorArmRatchetGuard
+{
+    /// <summary>Production only. A test may subscribe bare — its failure IS the report.</summary>
+    private static readonly string[] ScannedRoots = ["src", "memex"];
+
+    /// <summary>
+    /// 🚨 Seeded EXACTLY from the tree on 2026-08-30. MAY ONLY DECREASE.
+    ///
+    /// <para>Unlike the timeout-literal ratchet, this one carries <b>no transitional margin</b>.
+    /// There the rule post-dated the branches it would fail, so a margin protected authors from a
+    /// rule they could not have known about. Here the rule is not new — AGENTS.md has always
+    /// required the error arm — so a bare subscription arriving from a branch cut yesterday is a
+    /// TRUE positive, and the right outcome is that it is seen.</para>
+    /// </summary>
+    private const int Baseline = 95;
+
+    private static readonly Regex SubscribeCall = new(@"\.Subscribe\s*\(", RegexOptions.Compiled);
+
+    [Fact]
+    public void EverySubscriptionCarriesAnErrorArm_AndTheCountOnlyFalls()
+    {
+        var root = SourceScan.FindRepoRoot();
+        var perFile = SourceScan.SourceFiles(root, ScannedRoots)
+            .Select(f => (Path: SourceScan.Relative(root, f), Count: CountIn(f)))
+            .Where(x => x.Count > 0)
+            .OrderByDescending(x => x.Count)
+            .ToList();
+        var total = perFile.Sum(x => x.Count);
+
+        Assert.True(total <= Baseline,
+            $"🚨 Bare .Subscribe(onNext) rose to {total} (baseline {Baseline}). Rx RETHROWS a fault "
+            + "out of an onNext delegate onto the scheduler's thread — with no onError there is "
+            + "nowhere for it to go, so it becomes an unhandled exception that takes the xunit "
+            + "runner to Environment.Exit(2). That is the 'Passed! - Failed: 0' shard that reds "
+            + "anyway, with a message and no stack (#2666).\n\n"
+            + "Add the arm: .Subscribe(x => Handle(x), ex => logger.LogWarning(ex, \"… {Path}\", "
+            + "path)) — but NOT an empty ex => { }, which only trades this for the "
+            + "swallow-and-continue AGENTS.md forbids.\n\n"
+            + "🚨 Do NOT raise the Baseline.\n"
+            + "Heaviest files:\n"
+            + string.Join("\n", perFile.Take(10).Select(x => $"  {x.Path} ({x.Count})")));
+    }
+
+    /// <summary>
+    /// 🚨 A ratchet seeded well above the tree tolerates a large regression before it ever fires,
+    /// so the slack is itself checked. The one always-correct edit to <see cref="Baseline"/> is
+    /// downward, in whichever change does the converting.
+    /// </summary>
+    [Fact]
+    public void TheBaselineStaysCloseToTheTree()
+    {
+        var root = SourceScan.FindRepoRoot();
+        var total = SourceScan.SourceFiles(root, ScannedRoots).Sum(CountIn);
+
+        Assert.True(Baseline - total <= 15,
+            $"The tree holds {total} bare subscriptions but Baseline is {Baseline}: slack of "
+            + $"{Baseline - total} is how many NEW ones could land before this fires. Lower the "
+            + "baseline in the change that converted them.");
+    }
+
+    /// <summary>
+    /// 🚨 Proven by MUTATION over a planted tree, running the REAL scan. The arity parse is the
+    /// part that can silently stop working — a lambda contains commas, parentheses and braces, so a
+    /// naive "does it contain a comma" test misreads almost every real call site.
+    /// </summary>
+    [Fact]
+    public void TheScannerSeesWhatItClaimsTo()
+    {
+        var dir = Directory.CreateTempSubdirectory("subscribe-arm-selftest");
+        try
+        {
+            var s = Directory.CreateDirectory(Path.Combine(dir.FullName, "src")).FullName;
+            void W(string name, string body) => File.WriteAllText(Path.Combine(s, name), body);
+
+            W("Bare.cs", "class A { void M() { o.Subscribe(x => Handle(x)); } }");
+            W("BareBlock.cs", "class B { void M() { o.Subscribe(x => { Handle(x); }); } }");
+            W("BareMultiline.cs", "class C { void M() { o\n  .Subscribe(change =>\n  {\n    Handle(change);\n  }); } }");
+            W("Armed.cs", "class D { void M() { o.Subscribe(x => Handle(x), ex => Log(ex)); } }");
+            W("ArmedMultiline.cs", "class E { void M() { o\n  .Subscribe(\n    x => Handle(x),\n    ex => Log(ex)); } }");
+            W("Observer.cs", "class F { void M() { o.Subscribe(stream); } }");
+            W("NoArgs.cs", "class G { void M() { o.Subscribe(); } }");
+            W("CommaInsideLambda.cs",
+                "class H { void M() { o.Subscribe(r => hub.Post(r, x => x.ResponseFor(q))); } }");
+            W("NestedLambdaArgument.cs",
+                "class I { void M() { o.Subscribe(MakeObserver(x => x)); } }");
+            W("Prose.cs", "// never write .Subscribe(x => f(x)) without an error arm\nclass J { }");
+            Directory.CreateDirectory(Path.Combine(s, "obj"));
+            W(Path.Combine("obj", "Ignored.cs"), "class K { void M() { o.Subscribe(x => Handle(x)); } }");
+
+            var found = SourceScan.SourceFiles(dir.FullName, ["src"])
+                .Select(f => (Name: Path.GetFileName(f), Count: CountIn(f)))
+                .Where(x => x.Count > 0)
+                .ToDictionary(x => x.Name, x => x.Count);
+
+            Assert.True(found.ContainsKey("Bare.cs"), "a bare expression-lambda subscription must be found");
+            Assert.True(found.ContainsKey("BareBlock.cs"), "a bare block-lambda subscription must be found");
+            Assert.True(found.ContainsKey("BareMultiline.cs"),
+                "🚨 real call sites wrap — a scanner that only sees one line sees almost nothing");
+            Assert.True(found.ContainsKey("CommaInsideLambda.cs"),
+                "🚨 THE case a naive comma count gets wrong: the comma belongs to a nested call, so "
+                + "this is still a ONE-argument Subscribe and must be flagged");
+            Assert.False(found.ContainsKey("Armed.cs"), "an error arm is the fix, not a finding");
+            Assert.False(found.ContainsKey("ArmedMultiline.cs"), "…including when the arms wrap");
+            Assert.False(found.ContainsKey("Observer.cs"),
+                "Subscribe(IObserver) carries its own OnError — not a bare subscription");
+            Assert.False(found.ContainsKey("NoArgs.cs"), "Subscribe() has no onNext to rethrow from");
+            Assert.False(found.ContainsKey("NestedLambdaArgument.cs"),
+                "🚨 the lambda is an argument to the OBSERVER FACTORY, not the onNext — a top-level "
+                + "'=>' test is what separates these two, and getting it wrong cries wolf");
+            Assert.False(found.ContainsKey("Prose.cs"), "a comment describing the rule is not a violation");
+            Assert.False(found.ContainsKey("Ignored.cs"), "obj/ must not be scanned");
+        }
+        finally { dir.Delete(recursive: true); }
+    }
+
+    /// <summary>
+    /// Counts <c>.Subscribe(</c> calls whose argument list is exactly ONE argument that is itself a
+    /// lambda. Balances <c>()</c>, <c>[]</c> and <c>{}</c> so a comma or an arrow nested inside the
+    /// lambda body is not mistaken for a second argument or for the argument's own arrow.
+    /// </summary>
+    private static int CountIn(string file)
+    {
+        var text = SourceScan.MaskCommentsAndStrings(File.ReadAllText(file));
+        var count = 0;
+
+        foreach (Match m in SubscribeCall.Matches(text))
+        {
+            var depth = 0;
+            var topLevelCommas = 0;
+            var topLevelArrow = false;
+            var any = false;
+
+            for (var i = m.Index + m.Length; i < text.Length; i++)
+            {
+                var c = text[i];
+                if (c is '(' or '[' or '{') depth++;
+                else if (c is ')' or ']' or '}')
+                {
+                    if (depth == 0) break;   // the closing paren of Subscribe(
+                    depth--;
+                }
+                else if (depth == 0)
+                {
+                    if (c == ',') topLevelCommas++;
+                    else if (c == '=' && i + 1 < text.Length && text[i + 1] == '>') topLevelArrow = true;
+                }
+
+                if (!char.IsWhiteSpace(c)) any = true;
+            }
+
+            if (any && topLevelCommas == 0 && topLevelArrow) count++;
+        }
+
+        return count;
+    }
+}
