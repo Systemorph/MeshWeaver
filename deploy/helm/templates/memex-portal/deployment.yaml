@@ -31,6 +31,19 @@ spec:
         # node image-upgrade, but gracefully and one at a time (the PDB beside this file + the 120s
         # terminationGracePeriod above), never on every autoscaler bin-packing pass.
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+        # 🚨 A ConfigMap or Secret change is delivered as ENV at pod START, so without these two
+        # hashes `helm upgrade` reports "deployed", the rendered objects carry the new value, and
+        # no running process ever reads it — the "we set it and it vanished" shape helm-release.yml
+        # warns about, now measured: memex-cloud revision 21 (2026-08-30 16:13Z) rendered
+        # PluginCatalog__OpenRegistration__Key into memex-portal-secrets and both pods kept
+        # answering 401, because the image was unchanged and nothing told the Deployment to roll.
+        # Hashing the rendered config + secrets templates into the pod template turns a
+        # configuration change into the SAME rollout an image change gets — graceful, one pod at a
+        # time under the PDB and the drain budget below — and into nothing when nothing changed:
+        # both templates render deterministically from values (no rand/now/lookup), so a re-render
+        # with the same values yields the same hash.
+        checksum/config: {{ include (print $.Template.BasePath "/memex-portal/config.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/memex-portal/secrets.yaml") . | sha256sum }}
     spec:
       # The in-pod self-updater patches this deployment via the Kubernetes API using this SA's
       # projected token (RBAC in rbac.yaml). See Doc/Architecture/ReleaseStrategy.
