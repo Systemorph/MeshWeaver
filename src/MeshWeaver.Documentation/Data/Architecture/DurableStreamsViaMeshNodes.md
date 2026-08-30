@@ -227,15 +227,20 @@ checked against it:
 
 ## Stale claims this page corrects
 
-Three comments in core and one in the PostgreSql adapter state that `PostgreSqlChangeListener` is
-*"registered and never started in either partitioned-PG overload"* / *"the pg_notify LISTEN
-fallback is disabled for partitioned PG"*. That was #1440 as filed on 2026-08-13; it was the middle
-leg of the #1814 outage and was fixed by #1816 — the partitioned overload now registers the hosted
-service that opens the session, and `ChangeListenerWiringTests` fails the build if it ever stops.
-The *conclusions* those comments draw (read the durable witness, never wait to be told —
-`BuildProtocolDriver`, `BuildNodeType.ArbitrateDurably`, `ObserveBuildGo`) remain correct for a
-different reason: a NOTIFY is delivered to a *live* LISTEN session and is never replayed, so a
-mirror that activates after the write is still not told. The comments now say that.
+Code comments and doc pages in core (`BuildCoordinationExtensions`, `BuildNodeType`,
+`BuildProtocolDriver`, `RegistryUpdateReconciler`, [Build Coordination](/Doc/Architecture/BuildCoordination),
+[Plugin Update on Green Build](/Doc/Architecture/PluginUpdateOnGreenBuild)) stated that
+`PostgreSqlChangeListener` is *"registered and never started in either partitioned-PG overload"*;
+the PostgreSql adapter's `PostgreSqlPathRoutingAdapter` (in MeshWeaver.Plugins) still says *"the
+pg_notify LISTEN fallback is disabled for partitioned PG"*. That was #1440 as filed on 2026-08-13;
+it was the middle leg of the #1814 outage and was fixed by #1816 — the partitioned overload now
+registers the hosted service that opens the session, and `ChangeListenerWiringTests` fails the
+build if it ever stops. The *conclusions* those comments draw (read the durable witness, never wait
+to be told — `BuildProtocolDriver`, `BuildNodeType.ArbitrateDurably`, `ObserveBuildGo`,
+`RegistryUpdateReconciler`) remain correct for a different reason: a NOTIFY is delivered to a *live*
+LISTEN session on the *same* database and is never replayed, so a mirror that activates after the
+write — or a deployment on another database — is still not told. Every core occurrence is corrected
+with this page; the adapter's one is corrected in its own repo.
 
 ## Related
 
