@@ -3640,10 +3640,31 @@ public class MeshOperations
                 .Select(_ => true)
                 .Catch((Exception ex) =>
                 {
-                    // A failed stamp must not swallow the recycle: the hub bounce is still
-                    // worth doing (it is the caller's actual ask), and the compile trigger
-                    // is recoverable by a second Recycle/Compile. Surface it in the log
-                    // rather than silently degrading to the old racy behaviour.
+                    // 🚨 A DENIAL IS NOT A TRANSIENT FAULT. A caller who may not write this node
+                    // may not tear its hub down either: the stamp and the dispose are two halves
+                    // of ONE authorised operation, and proceeding after the write was refused
+                    // hands an unauthorised caller the destructive half for free. It happened on
+                    // memex 2026-08-30 17:11:21Z — an operator without Update on a GitSynced
+                    // module space called Recycle, the access pipeline correctly refused the
+                    // stamp, and this Catch disposed the hub anyway; the NodeType then had no
+                    // release request to act on and its watcher went silent. Refusing outright
+                    // leaves the caller exactly where they started, which is the right outcome
+                    // for someone who was not permitted to change anything.
+                    if (ex is UnauthorizedAccessException)
+                    {
+                        logger.LogWarning(ex,
+                            "Recycle REFUSED for {Path}: the release-request stamp was DENIED, so the "
+                            + "hub is NOT disposed — a caller who may not write this node may not "
+                            + "recycle it either. Nothing was changed.",
+                            resolvedPath);
+                        return Observable.Throw<bool>(ex);
+                    }
+
+                    // Anything else IS transient (a timeout, an owner mid-move): the hub bounce is
+                    // still worth doing — it is the caller's actual ask, and they were allowed to
+                    // ask — and the compile trigger is recoverable by a second Recycle/Compile.
+                    // Surface it in the log rather than silently degrading to the old racy
+                    // behaviour.
                     logger.LogWarning(ex,
                         "Recycle: failed to stamp release request for {Path} — disposing the hub anyway",
                         resolvedPath);
