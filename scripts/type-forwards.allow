@@ -25,3 +25,14 @@
 # $(MeshWeaverRoot) (core, MeshWeaver.Plugins, MeshWeaver.SocialMedia — the latter pinned
 # pre-split). A forwarder is impossible here: the base would have to reference the AI assembly,
 # which references the base (the documented reference-cycle case).
+
+# #2771 — ObservableAwait leaves MeshWeaver.Fixture for MeshWeaver.Messaging.Hub (namespace
+# MeshWeaver.Fixture → MeshWeaver.Messaging), so product code gets the deadlock-safe bridge. No
+# shipped package can hold the TypeRef: the type was added 2026-08-30 by #2750, one day AFTER the
+# last release (v3.0.0-rc8, 2026-08-29), and the shipped MeshWeaver.Fixture 3.0.0-rc8 nupkg was
+# pulled from nuget.org and inspected — it contains no ObservableAwait (control: HubTestBase,
+# TestBase, ConfigureMesh all present in the same DLL). Fixture is in no module bundle or bake
+# surface; its only consumers are TestBase assemblies and test projects that compile from source.
+# A forwarder is impossible without keeping `namespace MeshWeaver.Fixture` inside a product
+# assembly, which would tell product code to `using MeshWeaver.Fixture` — the wrong direction.
+MeshWeaver.Fixture:MeshWeaver.Fixture.ObservableAwait  #2771 — added by #2750 after v3.0.0-rc8; never shipped

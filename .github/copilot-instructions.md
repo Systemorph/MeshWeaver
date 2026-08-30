@@ -42,7 +42,7 @@ gave you no synchronous overload. Flag it and name the boundary it should have c
 - **Test projects** (`test/**`). 🚨 `.ToTask()` is FORBIDDEN here too (2026-08-30): Rx completes its
   `TaskCompletionSource` without `RunContinuationsAsynchronously`, so the awaiter resumes INLINE on the
   signalling thread inside Rx's trampoline and every later `await` inherits that scheduler. Tests await
-  through `ObservableAwait.Await(ct)` (MeshWeaver.Fixture) or `ReactiveCompletion.ObserveCompletion`.
+  through `ObservableAwait.Await(ct)` (MeshWeaver.Messaging, in MeshWeaver.Messaging.Hub — product and test code alike) or `ReactiveCompletion.ObserveCompletion`.
 - **A one-line SDK/MCP surface adapter** whose body is reactive, e.g.
   `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ObserveCompletion(Report, ct);` — an external
   signature may demand a `Task`; it is still never produced with `.ToTask()`.
