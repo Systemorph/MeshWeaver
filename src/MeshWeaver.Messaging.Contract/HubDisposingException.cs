@@ -51,6 +51,28 @@ public sealed class HubDisposingException : ObjectDisposedException
     }
 
     /// <summary>
+    /// The same typed refusal, wrapping the fault that REVEALED the teardown — the
+    /// <see cref="ObjectDisposedException"/> Autofac threw when a long-lived subscription (a
+    /// permission fold, #2679) resolved from the hub's already-disposed scope. The probe-gated
+    /// classifier (<c>ScopeTeardown</c>) recognises that fault as the hub going away and re-raises
+    /// it in this shape so every downstream consumer classifies it as the benign teardown it is;
+    /// carrying the original as <see cref="Exception.InnerException"/> keeps the stack that shows
+    /// WHICH resolution raced the disposal. <c>ObjectName</c> is empty on this overload — the
+    /// address lives on <see cref="HubAddress"/> and in the message, and nothing reads it.
+    /// </summary>
+    /// <param name="hubAddress">Address of the disposing hub.</param>
+    /// <param name="what">What could not be created / continued, e.g. the permission fold.</param>
+    /// <param name="innerException">The fault that revealed the teardown.</param>
+    public HubDisposingException(Address hubAddress, object what, Exception innerException)
+        : base(
+            $"Hub {hubAddress} is shutting down — cannot create {Describe(what)}. "
+            + "The address may reactivate (recycle / restart); retry to get the authoritative answer.",
+            innerException)
+    {
+        HubAddress = hubAddress;
+    }
+
+    /// <summary>
     /// Renders <paramref name="what"/> for the message, delimited with DOUBLE quotes — always,
     /// with no inspection of the value.
     ///

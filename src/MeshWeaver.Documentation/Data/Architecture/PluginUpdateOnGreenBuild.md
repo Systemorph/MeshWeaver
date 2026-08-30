@@ -55,9 +55,10 @@ unconditionally and each is inert on the deployment shape it does not serve.
 ### Why the consumer READS instead of waiting to be told
 
 There is nothing for a consumer to subscribe to. The registry is a **different deployment with a
-different database**, so it shares no durable row; and there is no cross-process change feed either
-(`PostgreSqlChangeListener` is registered and never started). A signal would therefore mean a new
-push protocol — a subscription registry, a shared secret, an inbox — kept in step with the feed that
+different database**, so it shares no durable row — and the cross-process change feed the platform
+does run (`PostgreSqlChangeListener`, live since #1816) is scoped to *this* deployment's database,
+so no `NOTIFY` from the registry can reach it either. A signal would therefore mean a new push
+protocol — a subscription registry, a shared secret, an inbox — kept in step with the feed that
 already exists.
 
 It does not need one. `GET /api/plugins` already returns every package's `ModuleVersion`, which is

@@ -97,6 +97,30 @@ public static class AreaErrorClassifier
     public static bool IsHubDisposalRace(Exception? ex) => HubDisposingException.IsHubDisposal(ex);
 
     /// <summary>
+    /// <see cref="IsHubDisposalRace(Exception?)"/> widened by the DI-scope half of the teardown
+    /// contract (#2679): also true when the fault carries a bare
+    /// <see cref="ObjectDisposedException"/> AND <paramref name="scopeDisposed"/> confirms the
+    /// rendering host's OWN scope is gone.
+    ///
+    /// <para>This is the shape the incident arrived in: the render chain resolved a service from
+    /// the host hub's Autofac scope after that scope had been disposed, so the fault was Autofac's
+    /// own <see cref="ObjectDisposedException"/> — not the typed <see cref="HubDisposingException"/>
+    /// the type-only overload matches — and the render reported a routine teardown at Error and then
+    /// faulted AGAIN trying to localise its placeholder on the same dead scope.</para>
+    ///
+    /// <para>🚨 The probe is the point, not the type test — the same argument
+    /// <c>MessageHub</c> makes for #2444 and <c>RoutingGrain</c> for #2638. An
+    /// <see cref="ObjectDisposedException"/> from an unrelated disposed dependency while the host's
+    /// scope is ALIVE is a genuine defect and keeps reporting as one; a null probe keeps exactly the
+    /// type-only answer.</para>
+    /// </summary>
+    /// <param name="ex">The exception to classify; may be null.</param>
+    /// <param name="scopeDisposed">Probe — does the rendering host's own DI scope still resolve?
+    /// See <see cref="ScopeTeardown.IsServiceScopeDisposed"/>.</param>
+    public static bool IsHubDisposalRace(Exception? ex, Func<bool>? scopeDisposed)
+        => IsHubDisposalRace(ex) || ScopeTeardown.IsScopeTeardown(ex, scopeDisposed);
+
+    /// <summary>
     /// Returns the NodeType path of a <see cref="ErrorType.CompilationInProgress"/> NACK
     /// (so the GUI can swap to that NodeType's Progress view at once), or <c>null</c>.
     /// This is NOT retried — it has dedicated, immediate handling.

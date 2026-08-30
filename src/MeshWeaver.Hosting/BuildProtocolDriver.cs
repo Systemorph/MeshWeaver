@@ -376,12 +376,14 @@ public static class BuildProtocolDriver
     /// <list type="number">
     /// <item><b>The GO becomes visible.</b> Not "is announced" — <em>visible</em>. The old code
     /// subscribed to <c>ObserveBuildGo</c> alone, which is a projection of THIS cluster's mirror of
-    /// <c>Admin/Build</c>. A builder in another process writes the same durable row, but no change
-    /// feed crosses the process boundary (<c>PostgreSqlChangeListener</c> is registered and never
-    /// started in either partitioned-PG overload), so a mirror that activated before that write is
-    /// never told and the wait was for an event that could not be delivered. So the GO is now also
-    /// READ off the durable witness — the same record, and for the same reason, the claim arbiter
-    /// decides on (<c>BuildNodeType.ArbitrateDurably</c>).</item>
+    /// <c>Admin/Build</c>. A builder in another process writes the same durable row; the
+    /// <c>PostgreSqlChangeListener</c> feed does cross the process boundary (the partitioned
+    /// overloads start it since #1816 — that "registered and never started" was #1440, the middle
+    /// leg of #1814), but a <c>NOTIFY</c> reaches only a LIVE <c>LISTEN</c> session and is never
+    /// replayed, so a mirror that activates after that write is still never told and a wait on
+    /// the announcement alone is a wait for an event that may already have passed. So the GO is
+    /// now also READ off the durable witness — the same record, and for the same reason, the claim
+    /// arbiter decides on (<c>BuildNodeType.ArbitrateDurably</c>).</item>
     /// <item><b>The arbiter hands US the claim.</b> Registering as a candidate is not free to
     /// abandon: the registration outlives the grant wait, and the arbiter grants it the moment the
     /// build falls free — whether the builder finished or died. The old follower had stopped
