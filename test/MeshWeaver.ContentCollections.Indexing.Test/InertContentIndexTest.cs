@@ -58,8 +58,19 @@ public class InertContentIndexTest
             Assert.Empty(result.Hits);
             Assert.Equal(Reason, result.Message);
             // The tool envelope the MCP/agent surface actually returns.
+            //
+            // 🚨 It carries NO `count` (MeshWeaver#2741). This assertion used to require
+            // `"count":0`, and that was the defect rather than the contract: `count: 0` is
+            // byte-identical to "I searched and found nothing", and `count` is the field a caller
+            // reads. AGENTS.md requires a live-mesh `search_chunks` sweep before deleting any public
+            // framework surface, so on a deployment with no embedding provider the prescribed safety
+            // step returned a PASS having verified nothing. Omitting the field is what makes the
+            // difference impossible to miss.
             var json = ContentChunkSearch.ToJson(result);
-            Assert.Contains("\"count\":0", json);
+            Assert.False(result.Searched);
+            Assert.DoesNotContain("\"count\":", json);
+            Assert.Contains("\"searched\":false", json);
+            Assert.Contains(ContentChunkSearch.NotSearchedError, json);
             Assert.Contains(Reason, json);
         }
     }
