@@ -297,9 +297,11 @@ static string? PromptForToken()
     { Description = "Space-separated packages to INSTALL as built artifacts before building (e.g. \"AI Essentials\") — PluginBuildContract step 2." };
     var regKeyOpt = new Option<string?>("--registry-key")
     { Description = "mwi_… instance key for the registry (default: $MW_REGISTRY_KEY; prefer the env var — argv is visible in process listings)." };
+    var upstreamOpt = new Option<string?>("--upstream-seed")
+    { Description = "Space-separated upstream SOURCES whose sealed publication seeds the gate's mesh (e.g. \"plugins\") — the packages a requires chain reaches, not merely their DLLs." };
 
     var plugin = new Command("plugin", "Build a plugin: install its dependencies, bake its packages, then test the BAKED bytes.")
-    { pathArg, imageOpt, bakeOpt, extOpt, shaOpt, allowOpt, regUrlOpt, regModulesOpt, regKeyOpt };
+    { pathArg, imageOpt, bakeOpt, extOpt, shaOpt, allowOpt, regUrlOpt, regModulesOpt, regKeyOpt, upstreamOpt };
 
     plugin.SetAction((result, ct) => new BuildPluginCommand(Console.Out, Console.Error).RunAsync(
         new BuildPluginOptions(
@@ -313,6 +315,7 @@ static string? PromptForToken()
             RegistryUrl = result.GetValue(regUrlOpt),
             RegistryModules = result.GetValue(regModulesOpt),
             RegistryKey = result.GetValue(regKeyOpt) ?? Environment.GetEnvironmentVariable("MW_REGISTRY_KEY"),
+            UpstreamSeed = result.GetValue(upstreamOpt),
         },
         ct));
 
