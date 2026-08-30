@@ -78,7 +78,18 @@ public sealed class IoPool : IIoPool, IDisposable
 
     // Teardown safety net for the drain join: cancellation makes in-flight leaves release in ms,
     // so this is effectively never hit — it only bounds a hang if a leaf ignores its token.
-    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(30);
+    //
+    // 🚨 THE DEFAULT IS THE CONTRACT; THE FIELD EXISTS SO A TEST NEED NOT SPEND IT.
+    // A residual can only be observed by letting this budget expire, and Drain() spends it in
+    // THREE places (the cancel join, each gate slot, then the blocking-idle join). A test that
+    // pins the residual diagnostic therefore costs 30-90 s of wall clock — and cannot pass at all
+    // under test/xunit.runner.json's `methodTimeout: 30000`, which is how
+    // IoPoolResidualNamesItsPoolTest came to be killed at exactly 30 s with no assertion message.
+    // The SUBJECT of that test is "the residual is reported and NAMES its pool", not the numeric
+    // value below, so the budget is injectable and the default is asserted separately.
+    internal static readonly TimeSpan DefaultDrainTimeout = TimeSpan.FromSeconds(30);
+
+    private readonly TimeSpan _drainTimeout;
 
     /// <summary>
     /// Creates a pool whose async gate and sync-blocking scheduler are both capped at
@@ -86,10 +97,25 @@ public sealed class IoPool : IIoPool, IDisposable
     /// </summary>
     /// <param name="maxConcurrency">Maximum number of operations allowed to run concurrently; must be at least 1.</param>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxConcurrency"/> is less than 1.</exception>
-    public IoPool(int maxConcurrency)
+    public IoPool(int maxConcurrency) : this(maxConcurrency, DefaultDrainTimeout) { }
+
+    /// <summary>
+    /// As <see cref="IoPool(int)"/>, with an explicit teardown drain budget.
+    /// </summary>
+    /// <param name="maxConcurrency">Maximum number of operations allowed to run concurrently; must be at least 1.</param>
+    /// <param name="drainTimeout">
+    /// How long <see cref="Drain"/> waits at each of its joins before reporting a residual.
+    /// 🚨 Production must use <see cref="DefaultDrainTimeout"/> — this overload exists so a test
+    /// that has to let the budget EXPIRE (the only way to observe a residual) can do so in
+    /// milliseconds instead of spending 30 s of shard time per join.
+    /// </param>
+    public IoPool(int maxConcurrency, TimeSpan drainTimeout)
     {
         if (maxConcurrency < 1)
             throw new ArgumentOutOfRangeException(nameof(maxConcurrency));
+        if (drainTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(drainTimeout));
+        _drainTimeout = drainTimeout;
         _maxConcurrency = maxConcurrency;
         _gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         _blockingFactory = new TaskFactory(
@@ -630,11 +656,11 @@ public sealed class IoPool : IIoPool, IDisposable
             // a thread start; a callback that never finishes costs one budget and is then REPORTED
             // in the residual — which is the whole difference between #2394's silent 8-minute
             // wall-clock kill and a named, failing teardown.
-            var cancelResidual = StartCancelOffCallerThread().Join(DrainTimeout) ? 0 : 1;
+            var cancelResidual = StartCancelOffCallerThread().Join(_drainTimeout) ? 0 : 1;
             var acquired = 0;
             for (var i = 0; i < _maxConcurrency; i++)
             {
-                if (_gate.Wait(DrainTimeout)) acquired++;
+                if (_gate.Wait(_drainTimeout)) acquired++;
                 else break; // safety net: a leaf ignored its token — don't hang teardown forever
             }
             if (acquired > 0)
@@ -653,7 +679,7 @@ public sealed class IoPool : IIoPool, IDisposable
             // Re-read the counter when the wait expires: a leaf that finished between the signal reset
             // and our wait would otherwise be reported as surviving.
             var blockingResidual = 0;
-            if (!_blockingIdle.Wait(DrainTimeout))
+            if (!_blockingIdle.Wait(_drainTimeout))
             {
                 // _blockingInFlight, never _inFlight: an async leaf that ignored its token is ALREADY
                 // reported through gateResidual, so adding it again would double-count it.
@@ -688,7 +714,7 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <para>The thread calling <see cref="Drain"/>/<see cref="Dispose"/> is the MESH TEARDOWN
     /// thread (<c>IoPoolRegistry.DrainAll()</c>, from <c>MeshTeardownExtensions</c> and
     /// <c>MonolithMeshTestBase.DisposeAsync</c>). Running arbitrary application teardown there was
-    /// unbounded by construction: <see cref="DrainTimeout"/> bounds only the gate join that comes
+    /// unbounded by construction: <see cref="DefaultDrainTimeout"/> bounds only the gate join that comes
     /// AFTER the cancel, no watchdog covers this phase (the hub's own watchdog ends at
     /// <c>DisposalCompleted</c>, which teardown has already observed by then), and nothing on the
     /// path logs. One teardown leg that blocks therefore parked mesh teardown SILENTLY and forever

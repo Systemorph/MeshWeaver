@@ -52,7 +52,7 @@ public class HandWovenGateRatchetGuard
     /// <summary>
     /// The sum of the seeded inventory. Lower it by exactly what you delete, in the same change.
     /// </summary>
-    private const int TotalBudget = 81;
+    private const int TotalBudget = 79;
 
     /// <summary>
     /// The primitives that park a thread. <c>Monitor.Wait</c> is included because it is the same
