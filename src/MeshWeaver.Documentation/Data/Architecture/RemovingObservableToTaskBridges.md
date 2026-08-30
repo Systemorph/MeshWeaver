@@ -51,6 +51,27 @@ the trampoline.
 
 Pick by **who owns the signature**, in this order.
 
+### 🚨 0. The trap first: awaiting the observable directly is NOT a fix
+
+The obvious way to remove a bridge is to await the observable itself — `await source.FirstAsync()`.
+It reads cleaner, it drops a namespace, and it looks like exactly what "stay reactive" means. **It
+fixes nothing.** Rx's own awaiter is built on `AsyncSubject<T>`, which completes its continuation
+from inside `OnCompleted` — on the signalling thread — so it has the *same* inline-resume property
+as the bridge it replaced.
+
+Measured on this repo's Rx version rather than reasoned about (a `Subject<T>` signalled from a known
+thread, recording where the awaiter resumes), and pinned by `InlineResumptionMechanismTest`:
+
+```text
+TOTASK        signalling=6 resumed=6 INLINE=True
+DIRECT-AWAIT  signalling=7 resumed=7 INLINE=True
+OBSERVECOMPL  signalling=4 resumed=6 INLINE=False
+```
+
+Only `TaskCreationOptions.RunContinuationsAsynchronously` breaks the chain. This is the one
+substitution that would pass review, satisfy any textual scan, and leave the defect exactly where it
+was — so it is listed before the real options rather than after them.
+
 ### 1. The signature is yours → stay reactive
 
 Return `IObservable<T>`, compose with `.Select` / `.SelectMany` / `.Where` / `.Timeout`, and end in
@@ -109,7 +130,7 @@ The raw `grep` total is much higher than the real one, and the difference is doc
 | core `memex/` | 41 | 33 |
 | core `tools/` | 3 | 3 |
 | core `test/` | 1 537 | 1 514 |
-| `MeshWeaver.Plugins` production | 80 | — |
+| `MeshWeaver.Plugins` production | 80 | 64 |
 | `MeshWeaver.Plugins` `*.Test` | 715 | — |
 
 **Never scan for this shape without masking.** A textual scan counts the war stories that make the
