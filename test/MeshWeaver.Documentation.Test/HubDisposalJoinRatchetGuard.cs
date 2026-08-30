@@ -287,8 +287,11 @@ public class HubDisposalJoinRatchetGuard(ITestOutputHelper output)
             // The shared test bases and the fixture library they are built on.
             "src" => parts[1].EndsWith(".TestBase", StringComparison.Ordinal)
                      || parts[1].Contains(".Fixture", StringComparison.Ordinal),
-            // Fixtures only — test BODIES are bounded by their base class's join (see the remarks).
-            "test" => parts[1].Contains(".Fixture", StringComparison.Ordinal)
+            // The shared test bases and the fixture library (under test/ since 2026-08-30, so they
+            // are never packed or published) plus fixtures — test BODIES are bounded by their base
+            // class's join (see the remarks).
+            "test" => parts[1].EndsWith(".TestBase", StringComparison.Ordinal)
+                      || parts[1].Contains(".Fixture", StringComparison.Ordinal)
                       || parts[^1].Contains("Fixture", StringComparison.Ordinal),
             _ => false,
         };

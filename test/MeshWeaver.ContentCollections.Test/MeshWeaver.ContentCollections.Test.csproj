@@ -4,7 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="DocumentFormat.OpenXml" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
   </ItemGroup>
   <ItemGroup>
