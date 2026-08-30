@@ -930,20 +930,40 @@ internal static class NodeTypeCompilationHelpers
     }
 
     /// <summary>
-    /// THE adopted-build source stamp (#1834), as a PURE function: <paramref name="def"/> with
-    /// <see cref="NodeTypeDefinition.CompiledSources"/> set to the owner's live
-    /// <paramref name="snapshot"/> and the request that asked for it consumed.
+    /// THE adopted-build source stamp (#1834), as a PURE function — and, since #2813, the place
+    /// the adoption is CHECKED rather than merely asserted.
     ///
-    /// <para>The post-condition is the whole point and is exact, not approximate: the two
-    /// dictionaries are the SAME content, so <see cref="NodeTypeDefinition.IsDirty"/> is false by
+    /// <para>The stamp sets <see cref="NodeTypeDefinition.CompiledSources"/> to the owner's live
+    /// <paramref name="snapshot"/> and consumes the request that asked for it, so the two
+    /// dictionaries are the SAME content and <see cref="NodeTypeDefinition.IsDirty"/> is false by
     /// construction — which is what <c>InstallReleaseRequestWatcher</c>'s "satisfied by the
     /// existing current build" branch requires, and what makes an adoption stick.</para>
     ///
-    /// <para>Pure so the invariant is unit-testable with no hub, no mesh and no timing, and shared
-    /// by all three writers that may fulfil the request (the sources watcher's publication, the
-    /// release-request dispatch, and the standalone
+    /// <para>🚨 <b>That post-condition is also how an adopted build lied.</b> It makes the
+    /// staleness detector read clean whether or not the bytes have anything to do with the live
+    /// source — the detector is not broken, it is answering a question this write already answered
+    /// for it. A GitSync <c>update</c> adopted a prebuilt built from older source than the commit
+    /// it had just pulled, reported <c>Succeeded</c>, and the stale code destroyed four client
+    /// documents' bodies, one unrecoverable (#2813). So the stamp is now conditional on the
+    /// producer's recorded source fingerprint:</para>
+    ///
+    /// <list type="table">
+    ///   <item><term>fingerprint present, MATCHES the live one</term><description>stamp;
+    ///     <see cref="BuildProvenance.AdoptedVerified"/></description></item>
+    ///   <item><term>fingerprint present, DISAGREES</term><description>🚨 refuse — no stamp, flip
+    ///     <see cref="CompilationStatus.Pending"/> to compile the live source;
+    ///     <see cref="BuildProvenance.AdoptionRefused"/></description></item>
+    ///   <item><term>absent (a legacy bundle, or the owner's own not computed yet)</term>
+    ///     <description>stamp — provenance is UNKNOWN, not proven stale;
+    ///     <see cref="BuildProvenance.AdoptedUnverified"/></description></item>
+    /// </list>
+    ///
+    /// <para>Pure so all three rows are unit-testable with no hub, no mesh and no timing, and
+    /// shared by all three writers that may fulfil the request (the sources watcher's publication,
+    /// the release-request dispatch, and the standalone
     /// <see cref="InstallAdoptedSourceStampWatcher"/>) — one stamp shape, so two of them can never
-    /// disagree about what "adopted and current" means.</para>
+    /// disagree about what "adopted and current" means, and turning assert into check here fixes
+    /// all three at once.</para>
     /// </summary>
     /// <param name="def">The owner's own definition.</param>
     /// <param name="snapshot">The owner's live source snapshot
@@ -951,14 +971,142 @@ internal static class NodeTypeCompilationHelpers
     /// into it in this same update).</param>
     internal static NodeTypeDefinition ApplyAdoptedSourceStamp(
         NodeTypeDefinition def,
-        IReadOnlyDictionary<string, long> snapshot)
-        => def with
+        IReadOnlyDictionary<string, long> snapshot,
+        bool canCompileLocally)
+    {
+        var stamped = def with
         {
             CompiledSources = snapshot as System.Collections.Immutable.ImmutableDictionary<string, long>
                               ?? System.Collections.Immutable.ImmutableDictionary
                                   .CreateRange(snapshot),
             RequestedSourceStampAt = null,
         };
+
+        // ── #2813 — the three-way. ─────────────────────────────────────────────────────────────
+        // The producer's fingerprint is a CONTENT hash of the sources the bytes were built from;
+        // CurrentSourceFingerprint is the same shape over the live set. Both are on the node, so
+        // this stays pure.
+        if (def.AdoptedSourceFingerprint is not { Length: > 0 } adopted)
+            // LEGACY bundle — no fingerprint, so provenance is UNKNOWN, not proven stale.
+            //
+            // 🚨 It KEEPS the stamp, deliberately. Withholding it would make every legacy-bundle
+            // type IsDirty on arrival, which stops InstallReleaseRequestWatcher's "satisfied by the
+            // existing current build" branch (it requires !IsDirty) from ever absorbing — so every
+            // install would recompile everything, the 43 activations / 13.5 s of boot the prebuilt
+            // lane exists to remove. On a Modules:RequirePrebuilt mesh it is worse than slow: a
+            // local compile is refused by design, so not stamping would PARK every legacy-bundle
+            // type. That is the outage refusing unproven bundles was rejected to avoid, arriving
+            // through a different door. The requirement here is VISIBILITY, not refusal: the stamp
+            // stays and the provenance says it was never earned.
+            return stamped with { BuildProvenance = BuildProvenance.AdoptedUnverified };
+
+        if (def.CurrentSourceFingerprint is not { Length: > 0 } live)
+            // The owner has an adopted fingerprint but has not computed its own yet (the sources
+            // watcher publishes both in one write, so this is the pre-publication window). Not a
+            // mismatch — nothing has been compared. Treat exactly as unknown rather than refusing
+            // on an absence, which is the INCONCLUSIVE lesson from the emit canary (#890): a probe
+            // must not answer its scariest branch on its own inability to run.
+            return stamped with { BuildProvenance = BuildProvenance.AdoptedUnverified };
+
+        if (string.Equals(adopted, live, StringComparison.Ordinal))
+            return stamped with { BuildProvenance = BuildProvenance.AdoptedVerified };
+
+        // 🚨 REFUSED — the only hard fail, and the one this whole mechanism exists for. The bundle
+        // states which sources it was built from and they are NOT the ones this mesh holds, so the
+        // bytes are last week's code over today's data (#2813: four client documents' bodies lost,
+        // one unrecoverable). Do NOT stamp CompiledSources — that write is what makes IsDirty false
+        // by construction and is precisely the lie — and drive a real local compile of the live
+        // source by flipping Pending. The request is still consumed so it cannot re-fire.
+        //
+        // The refusal is recorded on the node rather than only logged: a reader must be able to see
+        // that the assembly currently serving was rejected, not merely that a compile is pending.
+        var refused = def with
+        {
+            RequestedSourceStampAt = null,
+            CompilationStatus = CompilationStatus.Pending,
+            BuildProvenance = BuildProvenance.AdoptionRefused,
+        };
+
+        // 🚨 …AND WHETHER THE REJECTED BYTES KEEP SERVING IS CONDITIONAL ON THIS MESH BEING ABLE TO
+        // REPLACE THEM. Seed has already stamped the adopted build's assembly coordinates, so doing
+        // nothing here leaves proven-stale code executing. The two answers are wrong in opposite
+        // directions, and the fork is decidable right here rather than by assuming how a flag is set
+        // on some mesh we cannot see:
+        //
+        //   canCompileLocally  -> CLEAR the coordinates. #2813 is a data-loss issue and stale bytes
+        //     EXECUTING is what destroyed the documents; the Pending flip above has already
+        //     dispatched a fresh compile, so the type is unserviceable for seconds. "Marked and
+        //     still serving" is exactly the state that let an armed control-plane node fire pre-fix
+        //     code unattended.
+        //
+        //   !canCompileLocally -> KEEP them (Modules:RequirePrebuilt refuses a local compile by
+        //     design, so clearing would leave the type with NO assembly at all, INDEFINITELY - an
+        //     outage with no recovery path, self-inflicted by a guard). The caller logs Critical
+        //     naming the node, because on such a mesh nothing this process can do will fix it and a
+        //     human has to rebake.
+        //
+        // 🚨 Do NOT collapse this to "RequirePrebuilt is unset everywhere". It is measured absent on
+        // memex and memex-cloud, and #2194 item 3 records the same - that is TWO instances, and says
+        // nothing about pearl, atioz, local installs, or any external instance the registry serves.
+        // Configuration lives on AKS in places this repo has never heard of (Memex#148).
+        return canCompileLocally
+            ? refused with
+            {
+                // The exact pair HasUsableBuild reads, plus the served-build identity - leaving the
+                // MVID would name bytes nothing serves.
+                LatestAssemblyCollection = null,
+                LatestAssemblyPath = null,
+                LatestAssemblyMvid = null,
+            }
+            : refused;
+    }
+
+    /// <summary>
+    /// <see cref="ApplyAdoptedSourceStamp"/> plus the two things a pure function cannot do: resolve
+    /// whether THIS mesh may compile locally, and say so when an adoption is refused on a mesh that
+    /// cannot replace the rejected bytes.
+    ///
+    /// <para>🚨 The <c>Critical</c> level on the <c>RequirePrebuilt</c> branch is not severity
+    /// inflation. On such a mesh a refused adoption is terminal by construction — the local compile
+    /// that would replace the bytes is refused by design — so the type keeps serving code this
+    /// process has PROVEN is not built from the live source, and no amount of waiting or retrying
+    /// changes that. Only a human rebaking the package does. That is the same class of statement
+    /// <c>DbVersionGate</c> makes when a portal is ahead of its schema.</para>
+    /// </summary>
+    internal static NodeTypeDefinition ApplyAdoptedSourceStampAndReport(
+        NodeTypeDefinition def,
+        IReadOnlyDictionary<string, long> snapshot,
+        IMessageHub hub,
+        string hubPath,
+        ILogger? logger)
+    {
+        var canCompileLocally = !PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider);
+        var result = ApplyAdoptedSourceStamp(def, snapshot, canCompileLocally);
+
+        if (result.BuildProvenance is not BuildProvenance.AdoptionRefused)
+            return result;
+
+        if (canCompileLocally)
+            logger?.LogError(
+                "ADOPTION REFUSED for {HubPath} (#2813): the prebuilt bundle records source "
+                + "fingerprint {Adopted} but this mesh's live sources are {Live}. The bytes were "
+                + "NOT accepted — assembly coordinates cleared so the rejected build stops serving "
+                + "— and a fresh compile of the live source has been dispatched.",
+                hubPath, def.AdoptedSourceFingerprint, def.CurrentSourceFingerprint);
+        else
+            logger?.LogCritical(
+                "ADOPTION REFUSED for {HubPath} (#2813) AND THIS MESH CANNOT COMPILE ({Key}=true). "
+                + "The bundle records source fingerprint {Adopted} but the live sources are {Live}, "
+                + "so the assembly currently serving is NOT built from the source this mesh holds. "
+                + "Its coordinates are deliberately LEFT IN PLACE — clearing them would leave the "
+                + "type with no assembly at all, indefinitely, which is worse than marked-stale when "
+                + "there is no path to a fresh build. 🚨 NOTHING THIS PROCESS CAN DO WILL FIX IT: "
+                + "rebake and republish this package, then request a release.",
+                hubPath, PrebuiltAssemblySeeder.RequirePrebuiltConfigKey,
+                def.AdoptedSourceFingerprint, def.CurrentSourceFingerprint);
+
+        return result;
+    }
 
     /// <summary>
     /// Fulfils an adoption's <see cref="NodeTypeDefinition.RequestedSourceStampAt"/> on the OWNER —
@@ -1046,7 +1194,8 @@ internal static class NodeTypeCompilationHelpers
                     if (def.RequestedSourceStampAt is null) return curr;
                     if (def.CurrentSourceVersions is not { } liveSources) return curr;
                     stampHighWater.Advance(def.RequestedSourceStampAt.Value);
-                    return curr with { Content = ApplyAdoptedSourceStamp(def, liveSources) };
+                    return curr with { Content = ApplyAdoptedSourceStampAndReport(
+                        def, liveSources, hub, hubPath, logger) };
                 }).Subscribe(
                     _ => logger?.LogInformation(
                         "[AdoptedSourceStamp] {HubPath}: adopted build stamped with the owner's live "
@@ -1195,10 +1344,15 @@ internal static class NodeTypeCompilationHelpers
                 foreach (var n in sources)
                     if (!string.IsNullOrEmpty(n.Path))
                         snap = snap.SetItem(n.Path!, NodeTypeDefinition.SourceVersionOf(n));
-                return (IReadOnlyDictionary<string, long>)snap;
+                // #2813 — carry the live source NODES alongside the tick snapshot so the
+                // publication below can fingerprint their CONTENT when (and only when) there is an
+                // adopted fingerprint to compare it against. The nodes are already materialised
+                // here; the hash is what costs, and it is paid only where it is used.
+                return (Snapshot: (IReadOnlyDictionary<string, long>)snap, Nodes: sources);
             }),
-                snapshot =>
+                published =>
                 {
+                    var snapshot = published.Snapshot;
                     // 🅿️ Auto-retry a PARKED (terminally-failed) type when its SOURCE snapshot has
                     // CHANGED since the failure — the "retry only if the sources changed" path. The
                     // compile watcher's parked short-circuit swallows a bare Pending flip, so we
@@ -1261,8 +1415,26 @@ internal static class NodeTypeCompilationHelpers
                             return curr;
 
                         var updated = def with { CurrentSourceVersions = snapshot };
+
+                        // 🚨 #2813 — the live CONTENT fingerprint, computed HERE because this is
+                        // the one place that already holds the live source nodes, and written in
+                        // the SAME update as the tick snapshot so a reader can never see one
+                        // without the other.
+                        //
+                        // Computed ONLY when it can be used: a type carrying an adopted
+                        // fingerprint, or a stamp request about to be judged against one. A
+                        // locally-compiled type has nothing to compare against, and hashing every
+                        // source node's serialised content on every source emission — a path that
+                        // today only reads timestamps — would be a real cost for no answer.
+                        if (pendingStamp || def.AdoptedSourceFingerprint is { Length: > 0 })
+                            updated = updated with
+                            {
+                                CurrentSourceFingerprint = PartitionSourceFingerprint.Compute(
+                                    published.Nodes, versioned: false, hub.JsonSerializerOptions),
+                            };
+
                         if (pendingStamp)
-                            updated = ApplyAdoptedSourceStamp(updated, snapshot);
+                            updated = ApplyAdoptedSourceStampAndReport(updated, snapshot, hub, hubPath, logger);
 
                         return curr with { Content = updated };
                     }).Subscribe(
@@ -1463,7 +1635,7 @@ internal static class NodeTypeCompilationHelpers
                         // still requires a genuinely non-dirty definition.
                         if (def.RequestedSourceStampAt is not null
                             && def.CurrentSourceVersions is { } liveSources)
-                            def = ApplyAdoptedSourceStamp(def, liveSources);
+                            def = ApplyAdoptedSourceStampAndReport(def, liveSources, hub, hubPath, logger);
                         // 🚨 Gate on the CARRIED triggerAt, NOT def.RequestedReleaseAt
                         // (which may have flapped back to an older value). Already
                         // handled at or beyond this trigger? bail.

@@ -514,6 +514,89 @@ completely silent: nothing anywhere named a NodeType that is broken and will not
 > token that happened to match the importing deployment's live inputs would suppress precisely the
 > retry it exists to grant.
 
+### 🚨 An ADOPTED build must say whether it was ever checked against the source
+
+Adoption — taking a prebuilt assembly from a bundle instead of compiling — is what makes installs
+and restarts cheap. It is also, until #2813, the one path that could make a NodeType assert something
+nobody established.
+
+`PrebuiltAssemblySeeder.Seed` writes CROSS-HUB, so it cannot read the owner's live source snapshot
+(#1834); it asks instead, via `RequestedSourceStampAt`, and the owner answers by stamping
+`CompiledSources = CurrentSourceVersions`. **That stamp is what makes `IsDirty` false**, which is
+what `InstallReleaseRequestWatcher`'s "satisfied by the existing current build" branch requires and
+what makes an adoption stick.
+
+And it is also how an adopted build lied. The two signals an operator is taught to trust —
+`CompilationStatus.Ok` and `CompiledSources == CurrentSourceVersions` — both read clean **whether or
+not the bytes have anything to do with the live source**, because the adoption writes the second one
+itself. The staleness detector was never broken; it was answering a question the adoption had already
+answered for it. On 2026-08-30 a GitSync `update` pulled new source, adopted a prebuilt built from
+older source, reported `Succeeded`, and the stale code destroyed four client documents' bodies — one
+unrecoverable. Only forcing a compile moved the MVID.
+
+#### The check, and where it can be made
+
+The producer records a **content** fingerprint of the sources the bytes were built from
+(`PartitionSourceFingerprint`). It has to be content, not versions: `CurrentSourceVersions` is
+`{path → LastModified.UtcTicks}`, mesh-LOCAL modification times the producer cannot know and does not
+have (the bake writes zeros), so a fingerprint over ticks would never match and every adoption would
+be refused.
+
+The comparison happens on the **owner**, in `ApplyAdoptedSourceStamp` — one pure function shared by
+all three writers that can fulfil the request, so turning assert into check fixes all three at once:
+
+| bundle stamp | matches the live one | outcome |
+|---|---|---|
+| yes | yes | adopt; `BuildProvenance = AdoptedVerified` |
+| yes | **no** | 🚨 **refuse** — no stamp, flip `Pending` to compile the live source; `AdoptionRefused` |
+| no (legacy), or the owner's own not published yet | — | adopt, **keep the stamp**; `AdoptedUnverified` |
+
+> 🚨 **The legacy row keeps the stamp deliberately.** Withholding it makes every legacy-bundle type
+> `IsDirty` on arrival, the `!IsDirty` absorb branch stops firing, and every install recompiles
+> everything — the 43 activations / 13.5 s of boot the prebuilt lane exists to remove. On a
+> `Modules:RequirePrebuilt` mesh a local compile is refused by design, so not stamping would **park
+> every legacy-bundle type**: the outage that refusing unproven bundles was rejected to avoid,
+> arriving through a different door. A bundle with no fingerprint is of **unknown** provenance, not
+> **proven stale**, and those deserve different answers. The requirement is VISIBILITY, not refusal.
+
+`BuildProvenance` is operational (stripped on export, preserved from the live node on import) and is
+mirrored onto the compile-state satellite, so a control plane can read it through
+`GetMeshNodeStream(path)`.
+
+#### Whether the refused bytes keep serving is CONDITIONAL
+
+`Seed` has already stamped the adopted build's assembly coordinates by the time the owner judges it,
+so a refusal that changes nothing else leaves proven-stale code executing. Both answers are wrong in
+one direction, and the fork is decided at the point of refusal rather than by assuming how a flag is
+set on a mesh nobody can see:
+
+- **this mesh can compile** → **clear** the coordinates. The `Pending` flip has already dispatched a
+  fresh compile, so the type is unserviceable for seconds — and "marked and still serving" is exactly
+  the state that lets an armed control-plane node fire pre-fix code unattended.
+- **`Modules:RequirePrebuilt`** → **keep** them, and log `Critical` naming the type. The local compile
+  that would replace the bytes is refused by design, so clearing leaves the type with no assembly at
+  all, indefinitely — an outage with no recovery path, self-inflicted by a guard. Only a rebake fixes
+  it, and the log says so.
+
+> 🚨 Do not collapse this to "`RequirePrebuilt` is unset everywhere". It is measured absent on
+> **memex** and **memex-cloud** (#2194 item 3 records the same) — two instances, saying nothing about
+> `pearl`, `atioz`, local installs, or any external instance the registry serves.
+
+#### Two things this deliberately does NOT do
+
+- **Nothing writes a fingerprint into a bundle yet**, so today every adoption reads
+  `AdoptedUnverified`. That is the honest state and the whole visibility win; the refusal row is armed
+  and starts discriminating the day the bake records one, with no further change here.
+- **Refusing to LOAD is the second line of defence.** The damage needs two ingredients — stale bytes
+  *and something armed to run them*. A type that renders read-only pages from unverified bytes is a
+  degraded system; a type that WRITES from them is the incident. The execute-time interlock is
+  tracked separately, and `BuildProvenance` is what makes it stateable.
+
+> 🚨 **Do not use `LatestReleasePath` vs the NodeType as a staleness signal.** It lags routinely —
+> a healthy type can serve perfectly with its release pointer several versions behind, and a check of
+> that shape fires constantly on healthy meshes. The fingerprint comparison above is the signal
+> precisely because it does not have this problem.
+
 ### Framework-version freezing
 
 A compiled NodeType DLL references the MeshWeaver framework assemblies present
