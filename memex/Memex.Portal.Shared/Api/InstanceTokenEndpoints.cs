@@ -78,9 +78,13 @@ public static class InstanceTokenEndpoints
         // 🚨 Authenticate BEFORE touching the signing key. Resolve() mints this registry's key if it
         // has none, and minting is a node write — so doing it first would let an unauthenticated
         // caller provoke one. The order is the access control.
-        return authenticator.Authenticate(header)
-            .SelectMany(caller =>
+        return authenticator.AuthenticateOutcome(header)
+            .SelectMany(outcome =>
             {
+                if (outcome.IsUnavailable)
+                    return Observable.Return(InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger));
+
+                var caller = outcome.Instance;
                 if (caller is null)
                     return Observable.Return(Results.Json(
                         new { error = "A registered instance key is required (Authorization: Bearer mwi_…)." },

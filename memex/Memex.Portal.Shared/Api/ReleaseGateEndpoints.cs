@@ -53,15 +53,22 @@ public static class ReleaseGateEndpoints
         var authenticator = http.RequestServices
             .GetRequiredService<InstanceRegistryAuthenticator>();
 
-        return authenticator.Authenticate(http.Request.Headers.Authorization)
-            .SelectMany(caller => caller is null
-                ? Observable.Return(Results.Json(
-                    new { error = "A registered instance key is required (Authorization: Bearer mwi_… or Basic)." },
-                    statusCode: StatusCodes.Status401Unauthorized))
-                : Answer(http, version))
+        var logger = http.RequestServices.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(ReleaseGateEndpoints));
+
+        return authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
+            .SelectMany(outcome => outcome.IsUnavailable
+                ? Observable.Return(InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger))
+                : outcome.Instance is null
+                    ? Observable.Return(Results.Json(
+                        new { error = "A registered instance key is required (Authorization: Bearer mwi_… or Basic)." },
+                        statusCode: StatusCodes.Status401Unauthorized))
+                    : Answer(http, version))
             .FirstAsync()
             .ToTask(ct);
     }
+
+
 
     private static IObservable<IResult> Answer(HttpContext http, string? version)
     {
