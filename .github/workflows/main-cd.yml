@@ -100,6 +100,18 @@ on:
   schedule:
     - cron: "23 * * * *"
   workflow_dispatch:
+    inputs:
+      rebuild:
+        description: >-
+          Force a full image build for main's HEAD even when its image set is already complete.
+          The operator's "the HOSTS changed, rebuild" button (MeshWeaver#2622): the portal hosts
+          live in MeshWeaver.Plugins, but CD is keyed on CORE's HEAD sha — so a plugins merge that
+          edits a file shipping IN the image (appsettings, csproj) is invisible to delivery until an
+          unrelated core commit happens to rebuild. Without this, a dispatch is a structural no-op
+          for that case: it takes reason=reconcile, finds the core-sha image set COMPLETE, and
+          decides bake_only.
+        type: boolean
+        default: false
 
 # id-token: write is required for OIDC federated login to Azure (no stored client secret).
 permissions:
@@ -568,6 +580,7 @@ jobs:
           MAX_ATTEMPTS: "3"
           BATCH_WINDOW: ${{ vars.CD_BATCH_WINDOW_MINUTES }}
           FRESH_AGE_MIN: ${{ steps.freshness.outputs.age_min }}
+          FORCE_REBUILD: ${{ inputs.rebuild }}
         run: |
           set -euo pipefail
           decision() { echo "publish=$1" >> "$GITHUB_OUTPUT"; echo "### $2" >> "$GITHUB_STEP_SUMMARY"; echo "$2"; }
@@ -629,9 +642,25 @@ jobs:
           # sealed directory whose content × framework identity already match — so this re-publishes
           # only when the bundles for the running identity are genuinely absent. Policy: always bake
           # on CI, never bake on a silo.
-          if [ "$COMPLETE" = "true" ]; then
+          # 🚨 The operator's override (MeshWeaver#2622). A complete image set for CORE's sha does
+          # NOT mean the image is current: the portal hosts live in MeshWeaver.Plugins, and a merge
+          # there that edits a file shipping IN the image is invisible to this check, because the
+          # image set is keyed on core's HEAD alone. That is not hypothetical — Plugins#814 fixed
+          # fresh-install engine activation by editing src/Memex.Portal.Distributed/appsettings.json
+          # at 14:54Z, and the newest image predated it with no producer that would ever rebuild.
+          #
+          # This is the ESCAPE HATCH, not the fix. The durable shape is to make the identity honest
+          # — record the plugins sha the image was baked from and have check-image-set.sh compare it
+          # against plugins@main — so the RECONCILER notices on its own. Until that exists, an
+          # operator who knows the hosts changed has no way to say so, and a dispatch is a
+          # structural no-op for exactly this case.
+          if [ "$COMPLETE" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
             echo "bake_only=true" >> "$GITHUB_OUTPUT"
             decision false "✅ main \`$SHORT\` already has a complete image set — no image build; re-asserting the content bake (publication is idempotent)"
+            exit 0
+          fi
+          if [ "$COMPLETE" = "true" ]; then
+            decision true "🔁 main \`$SHORT\` already has a complete image set, but \`rebuild\` was requested — building the full set anyway. Use this when the portal HOSTS changed in MeshWeaver.Plugins, which core's image-set key cannot see (#2622)."
             exit 0
           fi
 
