@@ -1,3 +1,4 @@
+using System.Reactive.Threading.Tasks;
 using System;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -70,7 +71,7 @@ public class RecycledHubRefusalTest : HubTestBase
     /// here would convert genuine faults into silent retries.
     /// </summary>
     [Fact]
-    public void OnlyAGoneHub_Qualifies_NotEveryObjectDisposedException()
+    public async Task OnlyAGoneHub_Qualifies_NotEveryObjectDisposedException()
     {
         var live = GetHost();
 
@@ -88,12 +89,10 @@ public class RecycledHubRefusalTest : HubTestBase
                 + "reached no verdict, and not retried as a recycle");
 
         live.Dispose();
-        await_disposal(live);
+        await live.DisposalCompleted.FirstOrDefaultAsync().ToTask();
         AccessControlPipeline.IsHubGone(live, new InvalidOperationException("boom"))
             .Should().BeTrue("a hub that is shutting down qualifies whatever the failure was — its "
                 + "services are going away underneath every check");
 
-        static void await_disposal(IMessageHub hub) =>
-            hub.DisposalCompleted.FirstOrDefaultAsync().Wait();
     }
 }
