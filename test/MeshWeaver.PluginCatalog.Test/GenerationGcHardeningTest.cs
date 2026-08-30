@@ -106,6 +106,50 @@ public class GenerationGcHardeningTest : IDisposable
         Assert.Empty(Directory.EnumerateDirectories(Modules, ".trash-*"));
     }
 
+    /// <summary>
+    /// #2684: the pass observes cancellation BETWEEN directories — the unit of atomic removal — so
+    /// a teardown drain never waits out a sweep crawling a slow CIFS volume. A cancelled pass
+    /// stops before its next rename and leaves only states a later pass already plans for: an
+    /// intact orphan, or nothing (the in-flight removal completes, it is never torn mid-rename).
+    /// </summary>
+    [Fact]
+    public void CollectGarbage_StopsBetweenDirectories_WhenCancelled()
+    {
+        Write("MeshWeaver.A@dead0001", "MeshWeaver.A.dll", "DEAD");
+        Write("MeshWeaver.B@dead0002", "MeshWeaver.B.dll", "DEAD");
+        Backdate(Path.Combine(Modules, "MeshWeaver.A@dead0001"));
+        Backdate(Path.Combine(Modules, "MeshWeaver.B@dead0002"));
+
+        // Already cancelled: the pass removes NOTHING — it never reaches a rename.
+        var none = ModuleLandingService.CollectGarbage(
+            root, cancellationToken: new CancellationToken(canceled: true));
+        Assert.Equal(0, none);
+        Assert.True(Directory.Exists(Path.Combine(Modules, "MeshWeaver.A@dead0001")));
+        Assert.True(Directory.Exists(Path.Combine(Modules, "MeshWeaver.B@dead0002")));
+
+        // Cancelled MID-pass (from inside the first removal's delete): the in-flight removal
+        // completes atomically, and the loop stops before touching the second directory.
+        using var cts = new CancellationTokenSource();
+        var removed = ModuleLandingService.CollectGarbage(
+            root, logger: null, minAge: null, nowUtc: null,
+            deleteDirectory: dir =>
+            {
+                cts.Cancel();
+                Directory.Delete(dir, recursive: true);
+            },
+            cancellationToken: cts.Token);
+
+        Assert.Equal(1, removed);
+        var survivors = Directory.EnumerateDirectories(Modules)
+            .Where(d => Path.GetFileName(d).Contains('@'))
+            .ToArray();
+        Assert.Single(survivors);
+        Assert.Empty(Directory.EnumerateDirectories(Modules, ".trash-*"));
+
+        // Deferred is not dropped: an uncancelled later pass reclaims the survivor.
+        Assert.Equal(1, ModuleLandingService.CollectGarbage(root));
+    }
+
     [Fact]
     public void PinnedLoadPath_SurvivesTheSharedGenerationBeingReclaimed()
     {
