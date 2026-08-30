@@ -120,6 +120,60 @@ The test of whether a step has really moved is whether **its progress and its ve
 on a node while it happens** — which is exactly what `BuildState` already offers and nothing
 currently uses.
 
+## The CI process, concretely
+
+The maintainer's shape for a CI job, in four lines:
+
+```yaml
+- uses: actions/checkout@v7                      # 0. checkout git
+- run: dotnet tool install -g MeshWeaver.Cli     # 1. install the CLI
+- run: memex build plugin <path>                 # 2. build + run it
+```
+
+**`memex build plugin <path>` is the whole contract.** A workflow says *which plugin this job is
+about*; the tool works out what actually changed, closes over everything that depends on it, builds
+that, and runs its tests. Nothing else in the job knows about modules, closures, bundles or the
+mesh — and a plugin repo's CI stops being a program about MeshWeaver and becomes three lines.
+
+The verb shape matters as much as the behaviour: `build` is the command group and `plugin` names
+the subject, so the same tool has room for the other subjects CI needs (`memex build …` for other
+artefacts, `memex test …`, `memex publish …`) without every repo growing its own script for each.
+
+**Most of this is already written — it is just split three ways and one of the three is python.**
+
+| piece | where it lives today | state |
+|---|---|---|
+| the tool CI would install | `src/MeshWeaver.Cli` — `PackAsTool`, `ToolCommandName=memex`, `PackageId=MeshWeaver.Cli`, `AssemblyName=memex` | **exists**, already documented as `dotnet tool install -g MeshWeaver.Cli` |
+| module pack/fetch + dependency closure | `src/MeshWeaver.Plugin.Build` — `ToolCommandName=meshweaver-plugin-build`, with `DepsClosure.cs`, `ModulePackCommand.cs`, `ModuleFetchCommand.cs` | **exists**, a second tool |
+| "what changed and everything that depends on it" | `MeshWeaver.Plugins/scripts/affected-modules.py` + `project-closure.py` | **python**, outside the mesh |
+
+`affected-modules.py` already computes exactly the thing step 2 needs, and its own docstring states
+the contract better than a summary would: *map every changed file to its owning module, close over
+all transitive DEPENDENTS (a change to X invalidates everything that compiles against X), then add
+the transitive DEPENDENCIES of that closure* — because the gate boots a fresh mesh and a gated
+module whose dependencies are absent fails with `NodeType 'X' is not registered` and `shared=@…`
+sources that resolve to nothing.
+
+It also already has **two consumers with one answer** (the gate narrows its mount; the bake narrows
+what it republishes), and it takes its baseline from the **publication** — the `source-commit.txt`
+beside the sealed bundles — rather than from `github.event.before`, so a run that lost a race, was
+re-run, or followed a skipped run still diffs against what is actually published.
+
+**So the work is not "invent the affected-set logic". It is:**
+
+1. **One tool, not two.** `memex` is the thing CI installs; `meshweaver-plugin-build`'s pack/fetch
+   and `DepsClosure` belong behind it as verbs rather than as a second `dotnet tool install`.
+2. **Move the closure out of python and into that tool**, keeping the two-consumers-one-answer
+   property and the publication-derived baseline — both are load-bearing and neither is obvious.
+3. **Give it the verb**: `memex build plugin <path>`, taking the plugin's path as its argument and
+   deciding the rest. A repo's job is then literally the three lines above.
+
+🚨 **`affected-modules.py` has a `--self-test` that proves it can say NO.** Whatever replaces it must
+keep that, and it must be run in CI rather than existing: an affected-set computer that always
+answers "everything" is indistinguishable from a correct one on a green day, and an affected-set
+computer that answers "nothing" is a gate that tests nothing. That property is the single most
+important thing to carry across, and it is the easiest to lose in a port.
+
 ## What blocks "any plugin" today
 
 1. **44 module test projects** with no in-mesh equivalent. Each needs its module's source expressible
