@@ -30,15 +30,26 @@ public class IoPoolResidualNamesItsPoolTest
     /// 🚨 The regression this file exists for. A leaf that ignores its cancellation token must be
     /// reported AS BELONGING TO ITS POOL, not merely counted.
     ///
-    /// <para>Deliberately slow (~30 s): a residual is by definition a leaf that outlives
-    /// <c>IoPool.Drain</c>'s budget, so the only way to observe one is to let the budget expire.
-    /// That is the cost of pinning the diagnostic rather than trusting it — and the budget is a
-    /// contract, so shortening it for the test would be testing something else.</para>
+    /// <para>🚨 <b>Fast on purpose.</b> A residual is by definition a leaf that outlives
+    /// <c>IoPool.Drain</c>'s budget, so the only way to observe one is to let the budget EXPIRE —
+    /// and <c>Drain</c> spends it three times over (the cancel join, each gate slot, the
+    /// blocking-idle join). At the production 30 s that is 30-90 s of shard time per run, and it
+    /// cannot pass at all under <c>test/xunit.runner.json</c>'s <c>methodTimeout: 30000</c>: the
+    /// first version of this test was killed at exactly 30 s with no assertion message, and its
+    /// <c>release.Set()</c> — sitting after an <c>await</c> of the method-timeout token — never
+    /// ran, so the leaf kept a pool thread blocked into the next test.</para>
+    ///
+    /// <para>The subject here is <b>that the residual is reported and NAMES its pool</b>, not the
+    /// numeric budget, so the pool is built with a millisecond budget and the 30 s default is
+    /// pinned separately by <see cref="TheDefaultDrainBudget_IsTheProductionContract"/>.</para>
     /// </summary>
     [Fact(Timeout = 180_000)]
-    public async Task DrainAll_reportsTheResidual_againstTheNameOfThePoolThatLeaked()
+    public void DrainAll_reportsTheResidual_againstTheNameOfThePoolThatLeaked()
     {
-        using var registry = new IoPoolRegistry();
+        // A millisecond budget: the SAME code path through the SAME DrainAll, three orders of
+        // magnitude less waiting. The subject is the residual naming its pool, not the 30 s value.
+        using var registry = new IoPoolRegistry(
+            new IoPoolOptions { DrainTimeout = TimeSpan.FromMilliseconds(250) });
         var pool = registry.Get(IoPoolNames.Query);
 
         using var entered = new ManualResetEventSlim(false);
@@ -56,13 +67,20 @@ public class IoPoolResidualNamesItsPoolTest
         entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)
             .Should().BeTrue("the leaf must actually be running before the drain starts");
 
+        // 🚨 release.Set() is UNCONDITIONAL. It was previously the statement after this await, so
+        // when the await threw (its token IS the method-timeout token) the blocked leaf was never
+        // freed: it held a pool thread for its full two minutes and `using` disposed over live
+        // work — the residual escaping from the test written to prove residuals are reported.
         var total = 0;
         IReadOnlyList<IoPoolRegistry.PoolResidual> byPool = [];
-        var drain = Task.Run(() => total = registry.DrainAll(out byPool),
-            TestContext.Current.CancellationToken);
-
-        await drain.WaitAsync(TimeSpan.FromSeconds(120), TestContext.Current.CancellationToken);
-        release.Set();
+        try
+        {
+            total = registry.DrainAll(out byPool);
+        }
+        finally
+        {
+            release.Set();
+        }
 
         total.Should().BeGreaterThan(0,
             "the leaf ignored its token and outlived the budget — that is a residual");
@@ -77,6 +95,17 @@ public class IoPoolResidualNamesItsPoolTest
         byPool[0].ToString().Should().Be($"{IoPoolNames.Query}={byPool[0].Residual}",
             "this is the wire format the teardown traces embed, so it is part of the contract");
     }
+
+    /// <summary>
+    /// The budget above is a TEST value; this pins the production one, so making it injectable
+    /// cannot quietly change the teardown contract (#2578/#2616 both turn on 30 s being the
+    /// window in which a leaf must unwind).
+    /// </summary>
+    [Fact]
+    public void TheDefaultDrainBudget_IsTheProductionContract()
+        => new IoPoolOptions().DrainTimeout.Should().Be(TimeSpan.FromSeconds(30),
+            "30 s is the teardown contract — a test may shorten its OWN pool's budget, but the "
+            + "default must not drift");
 
     /// <summary>
     /// The other direction: a clean drain must report NOTHING, so a reader can trust the absence

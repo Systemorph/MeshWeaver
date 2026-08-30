@@ -1,3 +1,4 @@
+using System;
 namespace MeshWeaver.Mesh.Threading;
 
 /// <summary>
@@ -132,6 +133,18 @@ public static class IoPoolNames
 /// </summary>
 public sealed record IoPoolOptions
 {
+    /// <summary>
+    /// How long <see cref="IoPool.Drain"/> waits at EACH of its joins before giving up and
+    /// reporting a residual.
+    ///
+    /// <para>🚨 Leave this at the default in production — 30 s is the teardown contract. It is
+    /// settable so a TEST that must let the budget EXPIRE (the only way to observe a residual)
+    /// can do so in milliseconds. <c>Drain</c> spends the budget three times over, so at the
+    /// production value such a test costs 30-90 s of shard time and cannot pass at all under
+    /// <c>test/xunit.runner.json</c>'s <c>methodTimeout: 30000</c>.</para>
+    /// </summary>
+    public TimeSpan DrainTimeout { get; init; } = IoPool.DefaultDrainTimeout;
+
     /// <summary>
     /// Concurrent file-system ops. These are async leaves (the thread is released
     /// during the await), so a generous cap avoids bottlenecking the many concurrent

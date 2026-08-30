@@ -64,7 +64,7 @@ public sealed class IoPoolRegistry : IDisposable
         if (Volatile.Read(ref _disposing) != 0)
             return _refused.Value;
 
-        var pool = _pools.GetOrAdd(name, n => new IoPool(_options.MaxConcurrencyFor(n)));
+        var pool = _pools.GetOrAdd(name, n => new IoPool(_options.MaxConcurrencyFor(n), _options.DrainTimeout));
 
         // Re-check: disposal may have begun between the check above and the add, in which case our
         // pool went in after the snapshot was taken. Pull it back out and refuse — losing a pool
