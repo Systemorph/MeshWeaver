@@ -275,10 +275,12 @@ spec:
             # ⚠️ This budget is what bounds a NodeType BAKE (PreWarm__GateReadiness). A cold compile
             # is ~2.4 s per NodeType and the sweep is strictly sequential (measured 2026-08-10), so
             # the largest mesh we run (~240 types) needs ~10 min of bake on top of a plain cold boot.
-            # periodSeconds × failureThreshold is the ceiling: the default 5 × 60 = 5 minutes is
-            # right for a plain boot and too small for a cold bake — turning the gate on without
-            # raising this kills the pod mid-bake, every time. Paired setting and full derivation:
-            # values.yaml (probes.startup) — 10 × 180 = 30 min.
+            # periodSeconds × failureThreshold is the ceiling. What this chart SHIPS, and what
+            # every environment in the fleet runs today, is the ungated default — right for a plain
+            # boot and far too small for a cold bake, so turning the gate on without raising it in
+            # the SAME change kills the pod mid-bake, every time, for ever. The paired setting and
+            # the full derivation live in values.yaml (probes.startup); PreWarmGateReadinessGuard
+            # enforces the coupling, so this comment can no longer drift away from what ships.
             httpGet: { path: /health, port: 8080 }
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
@@ -451,9 +453,9 @@ spec:
   # ⏱️ How long a rollout may be "not progressing" before k8s marks it ProgressDeadlineExceeded.
   #
   # 🚨 The k8s DEFAULT IS 600s, and against this deployment that default is simply WRONG: the
-  # startupProbe budget above is periodSeconds × failureThreshold, which managed envs set to
-  # 10 × 180 = 30 MINUTES to cover a cold NodeType bake. A legitimately-baking pod is therefore
-  # declared failed after 10 minutes — and `kubectl rollout status` reports a perfectly healthy
+  # startupProbe budget above is periodSeconds × failureThreshold, which an environment running a
+  # gated cold NodeType bake must raise to tens of minutes. A legitimately-baking pod would then be
+  # declared failed after 10 minutes — and `kubectl rollout status` would report a perfectly healthy
   # long bake as a failed rollout, which is exactly the signal an operator would act on by
   # rolling back the good image.
   #
