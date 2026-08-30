@@ -4,11 +4,11 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Threading.Tasks;
 using MeshWeaver.PluginTester;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginTester.Test;
 
@@ -329,7 +329,7 @@ public class PluginGateRunnerTest(ITestOutputHelper output)
         {
             var report = await PluginGateRunner.Run(options)
                 .FirstAsync()
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             report.WriteSummary(log);
             return (report, log.ToString());
         }

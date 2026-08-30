@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -55,7 +54,7 @@ public class OrleansUnresolvableNodeNoWedgeTest(ITestOutputHelper output) : Orle
                     NodeType = "Markdown",
                 }),
                 o => o.WithTarget(new Address("TestUser")))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         Output.WriteLine($"[test] parent created: {parentPath}");
 
@@ -71,7 +70,7 @@ public class OrleansUnresolvableNodeNoWedgeTest(ITestOutputHelper output) : Orle
         Func<Task> read = () => reader.Observe(
                 new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(missingChildPath)))
-            .FirstAsync().ToTask()
+            .FirstAsync().Await()
             .WaitAsync(10.Seconds());
 
         var thrown = await read.Should().ThrowAsync<Exception>(
@@ -92,7 +91,7 @@ public class OrleansUnresolvableNodeNoWedgeTest(ITestOutputHelper output) : Orle
         var parentResp = await reader.Observe(
                 new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(parentPath)))
-            .FirstAsync().ToTask()
+            .FirstAsync().Await()
             .WaitAsync(10.Seconds());
         parentResp.Message?.Data.Should().NotBeNull(
             "after a failed-fast child read, the parent hub must still answer promptly — no wedge");
@@ -119,7 +118,7 @@ public class OrleansUnresolvableNodeNoWedgeTest(ITestOutputHelper output) : Orle
         Func<Task> subscribe = () => reader.Observe(
                 new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address(phantom)))
-            .FirstAsync().ToTask()
+            .FirstAsync().Await()
             .WaitAsync(15.Seconds());
 
         try
@@ -162,7 +161,7 @@ public class OrleansUnresolvableNodeNoWedgeTest(ITestOutputHelper output) : Orle
             var createResp = await creator.Observe(
                     new CreateNodeRequest(new MeshNode(badId, "TestUser") { Name = "Bad", NodeType = illegalType }),
                     o => o.WithTarget(new Address("TestUser")))
-                .FirstAsync().ToTask().WaitAsync(15.Seconds());
+                .FirstAsync().Await().WaitAsync(15.Seconds());
             Output.WriteLine($"[create] success={createResp.Message.Success} error={createResp.Message.Error ?? "(none)"}");
         }
         catch (TimeoutException)
@@ -181,7 +180,7 @@ public class OrleansUnresolvableNodeNoWedgeTest(ITestOutputHelper output) : Orle
             await reader.Observe(
                     new GetDataRequest(new MeshNodeReference()),
                     o => o.WithTarget(new Address($"TestUser/{badId}")))
-                .FirstAsync().ToTask().WaitAsync(15.Seconds());
+                .FirstAsync().Await().WaitAsync(15.Seconds());
         }
         catch (TimeoutException)
         {
@@ -193,7 +192,7 @@ public class OrleansUnresolvableNodeNoWedgeTest(ITestOutputHelper output) : Orle
         var probe = await GetClient($"probe-{Guid.NewGuid():N}", "TestUser").Observe(
                 new CreateNodeRequest(new MeshNode($"probe-{Guid.NewGuid():N}", "TestUser") { Name = "Probe", NodeType = "Markdown" }),
                 o => o.WithTarget(new Address("TestUser")))
-            .FirstAsync().ToTask().WaitAsync(15.Seconds());
+            .FirstAsync().Await().WaitAsync(15.Seconds());
         probe.Message.Success.Should().BeTrue("the partition hub must stay responsive after an illegal-node-type op — no wedge");
     }
 }

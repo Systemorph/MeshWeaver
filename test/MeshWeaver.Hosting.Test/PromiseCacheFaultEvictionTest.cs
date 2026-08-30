@@ -2,11 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -89,11 +89,11 @@ public class PromiseCacheFaultEvictionTest
 
         // 1. The first caller hits the fault — and SEES it. Eviction must never swallow.
         var observed = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Get().Timeout(Timeout10).FirstAsync().ToTask(ct));
+            () => Get().Timeout(Timeout10).FirstAsync().Await(ct));
         Assert.Same(upstream.Fault, observed);
 
         // 2. The next caller gets a genuinely NEW attempt, not the latched terminal.
-        Assert.Equal("provisioned", await Get().Timeout(Timeout10).FirstAsync().ToTask(ct));
+        Assert.Equal("provisioned", await Get().Timeout(Timeout10).FirstAsync().Await(ct));
 
         // 3. 🚨 The assertion that distinguishes eviction from luck: the leaf ran twice. A replayed
         //    terminal would leave this at 1 — which is exactly what the bare dictionary did.
@@ -110,7 +110,7 @@ public class PromiseCacheFaultEvictionTest
         IObservable<string> Get() => cache.GetOrAdd("schema", _ => upstream.RunEagerly());
 
         for (var i = 0; i < 5; i++)
-            Assert.Equal("provisioned", await Get().Timeout(Timeout10).FirstAsync().ToTask(ct));
+            Assert.Equal("provisioned", await Get().Timeout(Timeout10).FirstAsync().Await(ct));
 
         // The whole point of a promise-cache: the work happened once, not five times.
         Assert.Equal(1, upstream.Attempts);
@@ -127,14 +127,14 @@ public class PromiseCacheFaultEvictionTest
 
         for (var i = 0; i < 3; i++)
             await Assert.ThrowsAsync<InvalidOperationException>(
-                () => Get().Timeout(Timeout10).FirstAsync().ToTask(ct));
+                () => Get().Timeout(Timeout10).FirstAsync().Await(ct));
 
         // 🚨 Exactly one attempt per ASK — the cache is not a retry loop, a timer or a poller. If
         // it re-attempted on its own this count would outrun the number of calls, which is the
         // resubscribe-storm shape that took production down on 2026-06-08.
         Assert.Equal(3, upstream.Attempts);
 
-        Assert.Equal("provisioned", await Get().Timeout(Timeout10).FirstAsync().ToTask(ct));
+        Assert.Equal("provisioned", await Get().Timeout(Timeout10).FirstAsync().Await(ct));
         Assert.Equal(4, upstream.Attempts);
     }
 
@@ -152,8 +152,8 @@ public class PromiseCacheFaultEvictionTest
             "deck", _ => upstream.Build().Replay(1).AutoConnect(1));
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Get().Timeout(Timeout10).FirstAsync().ToTask(ct));
-        Assert.Equal("slides", await Get().Timeout(Timeout10).FirstAsync().ToTask(ct));
+            () => Get().Timeout(Timeout10).FirstAsync().Await(ct));
+        Assert.Equal("slides", await Get().Timeout(Timeout10).FirstAsync().Await(ct));
         Assert.Equal(2, upstream.Attempts);
     }
 
@@ -282,9 +282,9 @@ public class PromiseCacheFaultEvictionTest
         IObservable<string> Connect() => slot.GetOrCreate(upstream.RunEagerly);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Connect().Timeout(Timeout10).FirstAsync().ToTask(ct));
+            () => Connect().Timeout(Timeout10).FirstAsync().Await(ct));
 
-        Assert.Equal("connected", await Connect().Timeout(Timeout10).FirstAsync().ToTask(ct));
+        Assert.Equal("connected", await Connect().Timeout(Timeout10).FirstAsync().Await(ct));
 
         // A fresh handshake, not a replayed dead one.
         Assert.Equal(2, upstream.Attempts);
@@ -292,7 +292,7 @@ public class PromiseCacheFaultEvictionTest
         // And once connected the slot hands the SAME promise to teardown — TryGet must never open
         // a new connection just to close one.
         Assert.True(slot.TryGet(out var held));
-        Assert.Equal("connected", await held!.Timeout(Timeout10).FirstAsync().ToTask(ct));
+        Assert.Equal("connected", await held!.Timeout(Timeout10).FirstAsync().Await(ct));
         Assert.Equal(2, upstream.Attempts);
 
         // TryTake is the teardown claim: atomic, exactly one winner.

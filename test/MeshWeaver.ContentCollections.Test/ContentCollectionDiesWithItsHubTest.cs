@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -43,7 +42,7 @@ public class ContentCollectionDiesWithItsHubTest(ITestOutputHelper output) : Hub
             .Where(c => c is not null)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         collection!.IsDisposed.Should().BeFalse(
             "precondition: the collection (and its watcher) is live while the hub is");

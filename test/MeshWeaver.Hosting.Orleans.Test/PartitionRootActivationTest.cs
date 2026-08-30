@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -11,6 +10,7 @@ using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -93,7 +93,7 @@ public class PartitionRootActivationTest(ITestOutputHelper output)
                 .Observe(new PingRequest(), o => o.WithTarget(new Address(partitionRoot)))
                 .FirstAsync()
                 .Timeout(FastBudget)
-                .ToTask();
+                .Await();
         }
         catch (TimeoutException)
         {

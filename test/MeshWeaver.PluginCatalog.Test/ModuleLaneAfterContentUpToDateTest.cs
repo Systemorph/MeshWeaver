@@ -5,7 +5,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Graph.Configuration;
@@ -13,6 +12,7 @@ using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -130,7 +130,7 @@ public class ModuleLaneAfterContentUpToDateTest(ITestOutputHelper output) : Mono
     {
         // ── The install that stamps the record. Any source shape does; what matters is that the
         //    record ends up carrying this moduleVersion.
-        await PackageInstaller.Install(Mesh, Pkg(), Files, "commit-1").FirstAsync().ToTask();
+        await PackageInstaller.Install(Mesh, Pkg(), Files, "commit-1").FirstAsync().Await();
 
         // ── Now install again, from a REGISTRY source that can serve bundles, at the SAME content
         //    version. Pre-fix this returns (0,0) without a single module question being asked.
@@ -143,7 +143,7 @@ public class ModuleLaneAfterContentUpToDateTest(ITestOutputHelper output) : Mono
         var result = await CatalogLayoutAreas
             .InstallOrUpdate(Mesh, registry, "commit-1", Pkg(), logger: null)
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         result.Written.Should().Be(0, "the CONTENT is up to date — nothing should be re-fetched");
         source.Fetches.Should().BeEmpty("the content short-circuit must survive this change intact");

@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -8,6 +7,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -59,9 +59,9 @@ public class SystemOwnedRetractionLastAdminTest(ITestOutputHelper output) : GitH
         await Connect();
         await CreateSpace(space);
         foreach (var grant in extraGrants)
-            await NodeFactory.CreateNode(grant).Timeout(30.Seconds()).ToTask();
+            await NodeFactory.CreateNode(grant).Timeout(30.Seconds()).Await();
         await Sync.SaveConfig(space, RepoUrl, "main", null, true, true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
     }
 
     [Fact(Timeout = 120000)]
@@ -79,7 +79,7 @@ public class SystemOwnedRetractionLastAdminTest(ITestOutputHelper output) : GitH
 
         // The grant is NOT removed — the invariant outranks the sweep; the space keeps its admin.
         var kept = await ReadNode($"{LastAdminSpace}/_Access/{UserId}_Access")
-            .Timeout(10.Seconds()).ToTask();
+            .Timeout(10.Seconds()).Await();
         Assert.NotNull(kept);
 
         // An expected condition, never a fault: nothing from the handler at Error or above.
@@ -98,7 +98,7 @@ public class SystemOwnedRetractionLastAdminTest(ITestOutputHelper output) : GitH
         await WaitForAbsent($"{CoAdminSpace}/_Access/{CoAdmin}_Access");
 
         var kept = await ReadNode($"{CoAdminSpace}/_Access/{UserId}_Access")
-            .Timeout(10.Seconds()).ToTask();
+            .Timeout(10.Seconds()).Await();
         Assert.NotNull(kept);
 
         Assert.Contains(capture.Entries, e =>
@@ -120,7 +120,7 @@ public class SystemOwnedRetractionLastAdminTest(ITestOutputHelper output) : GitH
         await WaitForAbsent($"{SystemAdminSpace}/_Access/{UserId}_Access");
 
         var systemGrant = await ReadNode($"{SystemAdminSpace}/_Access/{WellKnownUsers.System}_Access")
-            .Timeout(10.Seconds()).ToTask();
+            .Timeout(10.Seconds()).Await();
         Assert.NotNull(systemGrant);
 
         Assert.DoesNotContain(capture.Entries, e =>
@@ -136,7 +136,7 @@ public class SystemOwnedRetractionLastAdminTest(ITestOutputHelper output) : GitH
             .Where(n => n is null)
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
     /// <summary>Polls the captured handler log until a record matches — the log capture is not an
     /// observable source, so the sanctioned interval re-query stands in for a stream wait.</summary>
@@ -145,7 +145,7 @@ public class SystemOwnedRetractionLastAdminTest(ITestOutputHelper output) : GitH
             .Where(_ => capture.Entries.Any(predicate))
             .FirstAsync()
             .Timeout(30.Seconds())
-            .ToTask();
+            .Await();
 
     /// <summary>Captures every record the <see cref="SystemOwnedAccessRetractionHandler"/> logs
     /// (instance-scoped — one per test, dies with the mesh).</summary>

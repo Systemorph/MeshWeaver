@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Documentation;
@@ -14,6 +13,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Content.Test;
 
@@ -96,7 +96,7 @@ public class SyncedPartitionReadOnlyTest(ITestOutputHelper output) : MonolithMes
         Exception? error = null;
         using (accessService.ImpersonateAsSystem())
         {
-            try { created = await NodeFactory.CreateNode(node).FirstAsync().ToTask(); }
+            try { created = await NodeFactory.CreateNode(node).FirstAsync().Await(); }
             catch (Exception ex) { error = ex; }
         }
         error.Should().BeNull(
@@ -122,7 +122,7 @@ public class SyncedPartitionReadOnlyTest(ITestOutputHelper output) : MonolithMes
 
         MeshNode? created = null;
         Exception? error = null;
-        try { created = await create.FirstAsync().ToTask(); }   // subscribe now
+        try { created = await create.FirstAsync().Await(); }   // subscribe now
         catch (Exception ex) { error = ex; }
         error.Should().BeNull(
             $"System must be captured at the write's creation, not re-read at subscribe; got {error?.GetType().FullName}: '{error?.Message}'");

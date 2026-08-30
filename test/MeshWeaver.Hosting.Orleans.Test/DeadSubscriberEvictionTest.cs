@@ -3,7 +3,6 @@
 using System;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -87,7 +86,7 @@ public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansShare
             .Where(n => n >= 1)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(45))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         evicted.Should().BeGreaterThanOrEqualTo(1,
             "the router's TargetUnserved NACK must reach the owner (a per-node grain hub — over the "
@@ -116,7 +115,7 @@ public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansShare
         // Data arrived ⇒ the owner built and is serving a stream for this subscriber.
         var first = await stream.Materialize().FirstAsync()
             .Timeout(TimeSpan.FromSeconds(45))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
         first.Kind.Should().Be(NotificationKind.OnNext,
             $"a reachable subscriber must be served; got {first.Exception?.Message}");
 
@@ -142,7 +141,7 @@ public class DeadSubscriberEvictionTest(ITestOutputHelper output) : OrleansShare
             .Where(h => h is not null)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(45))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
         return hub!.GetWorkspace().Should().BeOfType<Workspace>(
                 "the eviction registry lives on the concrete Workspace")
             .Subject;

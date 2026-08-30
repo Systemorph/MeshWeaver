@@ -5,10 +5,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -45,7 +45,7 @@ public class ModuleActivationContentionTest : IDisposable
     }
 
     private Task Land(ModuleLandingService service, string name) =>
-        service.LandModule(name, [(name + ".dll", [1, 2, 3])]).FirstAsync().ToTask();
+        service.LandModule(name, [(name + ".dll", [1, 2, 3])]).FirstAsync().Await();
 
     /// <summary>Every file under the deployment root, by relative path and content hash.</summary>
     private Dictionary<string, string> Snapshot() =>

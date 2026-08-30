@@ -2,13 +2,13 @@ using System;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -80,11 +80,11 @@ public class NodeRedirectResolutionTest(ITestOutputHelper output) : MonolithMesh
 
     private Task<AddressResolution?> ResolveNav(string path) =>
         Resolver.ResolveNavigationPath(path).FirstAsync().Timeout(TimeSpan.FromSeconds(20))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     private Task<AddressResolution?> ResolveLiteral(string path) =>
         Resolver.ResolvePath(path).FirstAsync().Timeout(TimeSpan.FromSeconds(20))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     /// <summary>The full path a resolution stands for — prefix with the unmatched remainder re-attached.</summary>
     private static string Full(AddressResolution r) =>

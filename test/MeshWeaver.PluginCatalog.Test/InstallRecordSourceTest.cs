@@ -2,13 +2,13 @@
 
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -51,13 +51,13 @@ public class InstallRecordSourceTest(ITestOutputHelper output) : MonolithMeshTes
     private Task<InstallResult> Install(PackageManifest manifest) =>
         PackageInstaller.Install(
                 Mesh, manifest, [new PackageFile($"{PackageId}/Doc.md", $"# {PackageId}")], "HEAD")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).ToTask();
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await();
 
     /// <summary>Authoritative single-node read straight off storage — never the lagging index.</summary>
     private Task<MeshNode?> ReadRecord() =>
         Mesh.ServiceProvider.GetRequiredService<Mesh.Services.IStorageAdapter>()
             .Read($"{PackageInstaller.InstalledPartition}/{PackageId}", Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TimeSpan.FromSeconds(30)).ToTask();
+            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await();
 
     [Fact(Timeout = 300_000)]
     public async Task ASourcelessReinstall_KeepsTheRecordedSource()

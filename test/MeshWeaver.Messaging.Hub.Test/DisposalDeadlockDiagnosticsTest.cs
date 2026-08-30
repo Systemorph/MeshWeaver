@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -71,7 +70,7 @@ public class DisposalDeadlockDiagnosticsTest : HubTestBase
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
         victim.Dispose();
-        await victim.DisposalCompleted.FirstOrDefaultAsync().ToTask().WaitAsync(30.Seconds());
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(30.Seconds());
 
         var deadlock = _capture.Entries.FirstOrDefault(e => e.Contains("DISPOSAL DEADLOCK DETECTED"));
         deadlock.Should().NotBeNull(

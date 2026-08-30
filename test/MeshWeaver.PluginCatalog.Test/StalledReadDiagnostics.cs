@@ -3,13 +3,13 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginCatalog.Test;
 
@@ -65,7 +65,7 @@ internal static class StalledReadDiagnostics
         {
             return await mesh.GetWorkspace().GetMeshNodeStream(path)
                 .Where(n => n is not null).Select(n => n!)
-                .FirstAsync().Timeout(timeout).ToTask();
+                .FirstAsync().Timeout(timeout).Await();
         }
         catch (TimeoutException ex)
         {
@@ -101,7 +101,7 @@ internal static class StalledReadDiagnostics
                 .Timeout(budget)
                 .Catch((Exception ex) => Observable.Return($"probe failed: {ex.GetType().Name}: {ex.Message}"))
                 .FirstAsync()
-                .ToTask();
+                .Await();
         }
         catch (Exception ex)
         {

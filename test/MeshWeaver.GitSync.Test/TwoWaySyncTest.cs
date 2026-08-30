@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.GitSync.Test;
 
@@ -29,9 +29,9 @@ public class TwoWaySyncTest(ITestOutputHelper output) : GitHubSyncTestBase(outpu
         await Sync.SaveConfig(a, repo, "main", subdirectory: null,
                 createBranchIfMissing: true, createRepoIfMissing: true,
                 direction: SyncDirection.Bidirectional, sourceId: null, twoWay: true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
-        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();      // repo: Welcome only
+        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();      // repo: Welcome only
         // The sync baseline (LastSyncedAt) MUST be recorded before the local edit so the edit counts
         // as "newer on the server" — otherwise there is no baseline to compare against.
         await WaitForConfig(a, c => c.LastSyncedAt != null && c.LastSyncCommitSha == c1.CommitSha);
@@ -41,18 +41,18 @@ public class TwoWaySyncTest(ITestOutputHelper output) : GitHubSyncTestBase(outpu
 
         // Two-way update to the branch HEAD: the server-added node is KEPT — not pruned as a
         // repo-absent extra ("newer on the server wins; commit to carry it back").
-        await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).Await();
         Assert.NotNull(await WaitForNode($"{a}/ServerOnly"));
         Assert.NotNull(await WaitForNode($"{a}/Welcome"));
 
         // A SECOND two-way update MUST still keep it: preserving a node must not advance the sync
         // baseline (LastSyncedAt) past it, or the next update would stop seeing it as newer-on-server
         // and overwrite it — losing the edit one cycle later. Regression guard for that baseline bug.
-        await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).Await();
         Assert.NotNull(await WaitForNode($"{a}/ServerOnly"));
 
         // FORCE update: ignore two-way — the repo state wins and the server addition is discarded.
-        await Sync.ReimportAtCommit(a, "main", UserId, force: true).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(a, "main", UserId, force: true).Timeout(90.Seconds()).Await();
         Assert.True(await IsAbsent($"{a}/ServerOnly"));
         Assert.NotNull(await WaitForNode($"{a}/Welcome"));
     }
@@ -77,9 +77,9 @@ public class TwoWaySyncTest(ITestOutputHelper output) : GitHubSyncTestBase(outpu
         await Sync.SaveConfig(a, repo, "main", subdirectory: null,
                 createBranchIfMissing: true, createRepoIfMissing: true,
                 direction: SyncDirection.Bidirectional, sourceId: null, twoWay: true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
-        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
         var baseline = await WaitForConfig(a, c => c.LastSyncedAt != null && c.LastSyncCommitSha == c1.CommitSha);
 
         // A user adds a node on the SERVER after that baseline — not in the repo at any commit.
@@ -87,7 +87,7 @@ public class TwoWaySyncTest(ITestOutputHelper output) : GitHubSyncTestBase(outpu
 
         // Someone commits to the repo; the update imports it and KEEPS the server addition.
         await PushRepoFile(repo, "Docs.md", "# Docs\n\nfrom the repo.");
-        var update1 = await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).ToTask();
+        var update1 = await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).Await();
         Assert.NotNull(await WaitForNode($"{a}/Docs"));
         Assert.NotNull(await WaitForNode($"{a}/ServerOnly"));
 
@@ -97,12 +97,12 @@ public class TwoWaySyncTest(ITestOutputHelper output) : GitHubSyncTestBase(outpu
         // Preserved=0 here is what silently disarmed the protection and deleted the node one update
         // later; the assertions below would then fail.
         Assert.True(update1.Preserved > 0, $"kept-not-pruned must count as preserved (was {update1.Preserved})");
-        var afterUpdate1 = await Sync.ReadConfig(a).Timeout(30.Seconds()).ToTask();
+        var afterUpdate1 = await Sync.ReadConfig(a).Timeout(30.Seconds()).Await();
         Assert.Equal(baseline.LastSyncedAt, afterUpdate1!.LastSyncedAt);
 
         // A SECOND repo commit must not delete it either — the baseline may not have moved past it.
         await PushRepoFile(repo, "Docs2.md", "# Docs2\n\nfrom the repo.");
-        await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).Await();
         Assert.NotNull(await WaitForNode($"{a}/Docs2"));
         Assert.NotNull(await WaitForNode($"{a}/ServerOnly"));
     }
@@ -127,14 +127,14 @@ public class TwoWaySyncTest(ITestOutputHelper output) : GitHubSyncTestBase(outpu
         await Sync.SaveConfig(a, repo, "main", subdirectory: null,
                 createBranchIfMissing: true, createRepoIfMissing: true,
                 direction: SyncDirection.Bidirectional, sourceId: null, twoWay: true)
-            .Timeout(30.Seconds()).ToTask();
+            .Timeout(30.Seconds()).Await();
 
-        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).ToTask();
+        var c1 = await Sync.SyncToGitHub(a, UserId).Timeout(60.Seconds()).Await();
         var exported = await WaitForConfig(a, c => c.LastSyncedAt != null && c.LastSyncCommitSha == c1.CommitSha);
 
         // Baseline import: establishes the Succeeded fingerprint marker (so the LATER update
         // short-circuits) and advances the horizon — nothing is server-newer yet, so it reconciled.
-        await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).ToTask();
+        await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).Await();
         var reconciled = await WaitForConfig(a, c => c.LastSyncedAt > exported.LastSyncedAt);
 
         // A user adds a node on the SERVER after the horizon — not in the repo at any commit.
@@ -145,7 +145,7 @@ public class TwoWaySyncTest(ITestOutputHelper output) : GitHubSyncTestBase(outpu
 
         // The no-op update short-circuits on the unchanged fingerprint. It must record the commit
         // as seen WITHOUT moving the conflict horizon past the pending server addition.
-        var noOpResult = await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).ToTask();
+        var noOpResult = await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).Await();
         Assert.Equal("Skipped", noOpResult.Outcome);
         var afterNoOp = await WaitForConfig(a, c => c.LastSyncCommitSha == noOp.CommitSha);
         Assert.Equal(reconciled.LastSyncedAt, afterNoOp.LastSyncedAt);
@@ -153,7 +153,7 @@ public class TwoWaySyncTest(ITestOutputHelper output) : GitHubSyncTestBase(outpu
         // The consequence the horizon exists for: the next REAL push runs the prune for real, and
         // the server addition must survive it (pre-#677 the advanced horizon let it be pruned here).
         await PushRepoFile(repo, "Docs.md", "# Docs\n\nfrom the repo.");
-        var update = await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).ToTask();
+        var update = await Sync.ReimportAtCommit(a, "main", UserId).Timeout(90.Seconds()).Await();
         Assert.NotNull(await WaitForNode($"{a}/Docs"));
         Assert.NotNull(await WaitForNode($"{a}/ServerOnly"));
         Assert.True(update.Preserved > 0,
@@ -176,5 +176,5 @@ public class TwoWaySyncTest(ITestOutputHelper output) : GitHubSyncTestBase(outpu
             AuthorName = "octocat",
             AuthorEmail = "octocat@users.noreply.github.com",
             AccessToken = "ghp_test_token",
-        }).Timeout(30.Seconds()).ToTask();
+        }).Timeout(30.Seconds()).Await();
 }

@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Concurrency;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -8,6 +7,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -74,7 +74,7 @@ public class RoutingGrainPodHubDeliveryRetryTest
                 logger: NullLogger.Instance,
                 backoff: NoBackoff,
                 scheduler: Scheduler.Immediate)
-            .ToTask();
+            .Await();
 
         // Pre-fix, BuildPodHubRoute called the grain exactly ONCE — any rejection other than
         // PodHubNotHereException went straight to TerminalCallFailure, so `calls` would be 1 and
@@ -103,7 +103,7 @@ public class RoutingGrainPodHubDeliveryRetryTest
                     maxRetries: 3,
                     backoff: NoBackoff,
                     scheduler: Scheduler.Immediate)
-                .ToTask());
+                .Await());
 
         Assert.Equal(4, calls); // initial attempt + maxRetries (3)
     }
@@ -132,7 +132,7 @@ public class RoutingGrainPodHubDeliveryRetryTest
                     logger: NullLogger.Instance,
                     backoff: NoBackoff,
                     scheduler: Scheduler.Immediate)
-                .ToTask());
+                .Await());
 
         Assert.Equal(1, calls);
         Assert.True(RoutingGrain.IsPodHubNotHere(thrown));

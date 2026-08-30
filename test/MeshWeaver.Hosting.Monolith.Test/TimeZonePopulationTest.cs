@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -100,7 +100,7 @@ public class TimeZonePopulationIntegrationTest(ITestOutputHelper output) : Monol
 
         // (a) Empty profile + a detected zone → the zone is written once.
         await TimeZonePreference.PopulateOnce(Mesh, id, "America/New_York", options)
-            .DefaultIfEmpty().ToTask(TestContext.Current.CancellationToken);
+            .DefaultIfEmpty().Await(TestContext.Current.CancellationToken);
 
         await ReadNode(id).Should().Within(20.Seconds())
             .Match(n => n!.ContentAs<User>(options)!.TimeZoneId == "America/New_York");
@@ -108,7 +108,7 @@ public class TimeZonePopulationIntegrationTest(ITestOutputHelper output) : Monol
         // (b) A LATER detect (e.g. the user is on a VPN reporting a different zone) must NOT
         //     overwrite the stored value — write-once is the key correctness property.
         await TimeZonePreference.PopulateOnce(Mesh, id, "Europe/Zurich", options)
-            .DefaultIfEmpty().ToTask(TestContext.Current.CancellationToken);
+            .DefaultIfEmpty().Await(TestContext.Current.CancellationToken);
 
         (await ReadZone(id)).Should().Be("America/New_York",
             "a non-empty TimeZoneId must never be clobbered by a subsequent browser detect");
@@ -132,7 +132,7 @@ public class TimeZonePopulationIntegrationTest(ITestOutputHelper output) : Monol
 
         // …and a subsequent auto-detect still respects the (now user-chosen) value.
         await TimeZonePreference.PopulateOnce(Mesh, id, "America/Los_Angeles", options)
-            .DefaultIfEmpty().ToTask(TestContext.Current.CancellationToken);
+            .DefaultIfEmpty().Await(TestContext.Current.CancellationToken);
         (await ReadZone(id)).Should().Be("Europe/Zurich",
             "the manual override must survive later browser detects too");
 

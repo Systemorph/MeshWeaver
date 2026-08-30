@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Validation;
 using MeshWeaver.Graph;
@@ -15,6 +14,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -58,7 +58,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
         Func<Task> act = () => stream
             .FirstAsync()
             .Timeout(5.Seconds())
-            .ToTask();
+            .Await();
 
         var ex = (await act.Should().ThrowAsync<Exception>()).Which;
         ex.Should().NotBeOfType<TimeoutException>(
@@ -121,7 +121,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
         };
 
         // "some-user" is not in the portal namespace — VUserAccessRule denies
-        Func<Task> act = () => nodeFactory.CreateNode(vUserNode).FirstAsync().ToTask();
+        Func<Task> act = () => nodeFactory.CreateNode(vUserNode).FirstAsync().Await();
         await act.Should().ThrowAsync<Exception>();
     }
 

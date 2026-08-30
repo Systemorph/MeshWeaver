@@ -1,6 +1,5 @@
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -81,7 +81,7 @@ public class NotificationDispatchIdentityLatchTest(ITestOutputHelper output) : M
                     targetNodePath: "LatchSpace",
                     createdBy: Actor.ObjectId)
                 .Timeout(60.Seconds())
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
 
             identityRightAfterSubscribe = Access.Context?.ObjectId;
 

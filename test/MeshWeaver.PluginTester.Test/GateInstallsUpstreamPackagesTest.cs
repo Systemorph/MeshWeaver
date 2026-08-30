@@ -3,12 +3,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Plugin.Packaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginTester.Test;
 
@@ -114,7 +114,7 @@ public class GateInstallsUpstreamPackagesTest(ITestOutputHelper output)
                 SourceSha = "cafebabe",
                 CompileTimeout = TimeSpan.FromMinutes(4),
                 RenderTimeout = TimeSpan.FromMinutes(2),
-            }).FirstAsync().ToTask();
+            }).FirstAsync().Await();
             output.WriteLine(log.ToString());
             report.WriteSummary(new StringWriterAdapter(output));
 

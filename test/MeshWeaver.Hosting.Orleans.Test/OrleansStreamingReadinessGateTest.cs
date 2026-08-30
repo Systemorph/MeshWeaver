@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -12,6 +11,7 @@ using Orleans;
 using Orleans.Runtime;
 using Orleans.Streams;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -82,7 +82,7 @@ public class OrleansStreamingReadinessGateTest
             .Where(c => c > 0)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask();
+            .Await();
         calls.Should().Be(1, "after readiness the subscription attaches exactly once — no retry loop");
     }
 }

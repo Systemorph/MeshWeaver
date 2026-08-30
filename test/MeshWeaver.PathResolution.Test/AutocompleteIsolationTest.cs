@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Graph;
@@ -11,6 +10,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PathResolution.Test;
 
@@ -46,7 +46,7 @@ public class AutocompleteIsolationTest : MonolithMeshTestBase
             .TakeUntil(e => e.count >= 1)
             .ToList()
             .Timeout(TimeSpan.FromSeconds(10))
-            .ToTask();
+            .Await();
 
         output.WriteLine($"=== reactive Autocomplete('Systemorph/Marketing','Email') ===");
         foreach (var e in emissions)

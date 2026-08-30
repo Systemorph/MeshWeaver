@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.Loader;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -12,6 +11,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -241,7 +241,7 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
                     : node)
                 .FirstAsync()
                 .Timeout(30.Seconds())
-                .ToTask();
+                .Await();
 
             var settled = await WhenCompiled(TypePath,
                 d => d.CompilationStatus == CompilationStatus.Ok, lastSucceeded);
@@ -284,7 +284,7 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
             .Where(warm => warm.Count == 0)
             .FirstAsync()
             .Timeout(30.Seconds(), Observable.Return(stillWarm))
-            .ToTask();
+            .Await();
 
         FullyCollect();
         var live = LiveContexts();
@@ -619,7 +619,7 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
 
         var instanceStream = Mesh.GetWorkspace().GetMeshNodeStream(instancePath);
         using var activation = instanceStream.Subscribe(_ => { });
-        await instanceStream.Where(n => n is not null).Take(1).Timeout(60.Seconds()).ToTask();
+        await instanceStream.Where(n => n is not null).Take(1).Timeout(60.Seconds()).Await();
         Output.WriteLine($"instance hub activated — live contexts: {LiveContexts()}");
 
         for (var i = 1; i <= Recompiles; i++)
@@ -638,7 +638,7 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
                     : node)
                 .FirstAsync()
                 .Timeout(30.Seconds())
-                .ToTask();
+                .Await();
 
             var settled = await WhenCompiled(TypePath,
                 d => d.CompilationStatus == CompilationStatus.Ok, lastSucceeded);
@@ -674,5 +674,5 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
             .Select(d => d!)
             .Take(1)
             .Timeout(120.Seconds())
-            .ToTask();
+            .Await();
 }

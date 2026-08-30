@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
@@ -30,7 +29,7 @@ public class UnhandledMessageReportsFailureTest(ITestOutputHelper output) : HubT
         var host = GetHost();
         var ex = await Assert.ThrowsAsync<DeliveryFailureException>(() =>
             host.Observe(new UnhandledRequest(), o => o.WithTarget(CreateHostAddress()))
-                .Timeout(TimeSpan.FromSeconds(10)).FirstAsync().ToTask());
+                .Timeout(TimeSpan.FromSeconds(10)).FirstAsync().Await());
 
         ex.Failure.ErrorType.Should().Be(ErrorType.NotFound,
             "an unhandled IRequest<T> must come back as DeliveryFailure{NotFound}, never a silent drop");

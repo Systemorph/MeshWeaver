@@ -7,7 +7,6 @@ using System.Diagnostics;
 using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -19,6 +18,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -145,7 +145,7 @@ public class NodeTypeModelProbeTest(ITestOutputHelper output) : MonolithMeshTest
                 a.StartsWith("$model-probe", StringComparison.Ordinal) && ProbeStillLive(a)))
             .FirstAsync()
             .Timeout(10.Seconds())
-            .ToTask();
+            .Await();
 
         var probeHubs = counter.Created.Keys
             .Where(a => a.StartsWith("$model-probe", StringComparison.Ordinal)).ToArray();

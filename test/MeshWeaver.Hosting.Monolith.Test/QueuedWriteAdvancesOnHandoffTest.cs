@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -10,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -72,14 +72,14 @@ public class QueuedWriteAdvancesOnHandoffTest(ITestOutputHelper output) : Monoli
         var workspace = Mesh.GetWorkspace();
         var warm = await workspace.GetMeshNodeStream(path)
             .Where(n => n is not null)
-            .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(30.Seconds()).Await(ct);
         warm.Name.Should().Be("initial");
 
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
             .Where(n => n is not null && n!.Name == "initial")
-            .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(30.Seconds()).Await(ct);
 
         var nodeHub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
         nodeHub.Should().NotBeNull("the owner per-node hub must be live before its merge turn is parked");
@@ -115,7 +115,7 @@ public class QueuedWriteAdvancesOnHandoffTest(ITestOutputHelper output) : Monoli
             var registry = Mesh.ServiceProvider.GetRequiredService<LatePatchResponseRegistry>();
             await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
                 .Where(_ => registry.ArmedCount > 0)
-                .FirstAsync().Timeout(30.Seconds()).ToTask(ct);
+                .FirstAsync().Timeout(30.Seconds()).Await(ct);
             Output.WriteLine("[write 1] patch dispatched to the owner (whose merge is parked)");
 
             // WRITE 2 — the successor. Subscribing is what enqueues it. Pre-#2346 the slot is
@@ -158,12 +158,12 @@ public class QueuedWriteAdvancesOnHandoffTest(ITestOutputHelper output) : Monoli
                                 && n.Description == "successor-also-wrote-this")
                     .FirstAsync()
                     .Timeout(45.Seconds())
-                    .ToTask(ct);
+                    .Await(ct);
             }
             catch (TimeoutException ex)
             {
                 var stored = await storage.Read(path, Mesh.JsonSerializerOptions)
-                    .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+                    .FirstAsync().Timeout(10.Seconds()).Await(ct);
                 throw new TimeoutException(
                     $"The successor's write never landed whole. STORE-DUMP name='{stored?.Name ?? "(absent)"}' "
                     + $"description='{stored?.Description ?? "(null)"}' "

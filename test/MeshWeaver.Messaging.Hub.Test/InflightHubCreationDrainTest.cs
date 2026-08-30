@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -49,7 +48,7 @@ public class InflightHubCreationDrainTest(ITestOutputHelper output) : HubTestBas
         constructionEntered.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue(
             "the hosted-hub construction must have started before disposal begins");
 
-        var disposalCompleted = client.DisposalCompleted.Take(1).ToTask();
+        var disposalCompleted = client.DisposalCompleted.Take(1).Await();
         client.Dispose();
 
         // Negative wait (sanctioned "confirm nothing happened" shape): disposal must NOT
@@ -69,7 +68,7 @@ public class InflightHubCreationDrainTest(ITestOutputHelper output) : HubTestBas
         // zombie outside the disposal snapshot.
         var lateHub = await creation.WaitAsync(TimeSpan.FromSeconds(10));
         lateHub.Should().NotBeNull("the in-flight creation was started before disposal and must be finished, not refused");
-        await lateHub!.DisposalCompleted.Take(1).ToTask().WaitAsync(TimeSpan.FromSeconds(10));
+        await lateHub!.DisposalCompleted.Take(1).Await().WaitAsync(TimeSpan.FromSeconds(10));
     }
 
     [Fact]

@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
+using MeshWeaver.Fixture;
 
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Graph.Configuration;
@@ -62,7 +62,7 @@ public class InstanceKeyUnavailableNotUnknownTest(ITestOutputHelper output) : Mo
     public async Task AnUnreadableIndex_IsUnavailable_NotUnknownKey()
     {
         var outcome = await Authenticator(_ => Observable.Return(Unavailable()))
-            .AuthenticateOutcome($"Bearer {Key}").FirstAsync().ToTask();
+            .AuthenticateOutcome($"Bearer {Key}").FirstAsync().Await();
 
         outcome.IsUnavailable.Should().BeTrue(
             "a read that reached no verdict establishes NOTHING about the presented key");
@@ -86,9 +86,9 @@ public class InstanceKeyUnavailableNotUnknownTest(ITestOutputHelper output) : Mo
             return Observable.Return(Unavailable());
         });
 
-        await authenticator.AuthenticateOutcome($"Bearer {Key}").FirstAsync().ToTask();
+        await authenticator.AuthenticateOutcome($"Bearer {Key}").FirstAsync().Await();
         var firstRoundAttempts = attempts;
-        await authenticator.AuthenticateOutcome($"Bearer {Key}").FirstAsync().ToTask();
+        await authenticator.AuthenticateOutcome($"Bearer {Key}").FirstAsync().Await();
 
         attempts.Should().BeGreaterThan(firstRoundAttempts,
             "the second call must RE-READ the mesh: a fault is not a fact, and remembering it is "
@@ -110,12 +110,12 @@ public class InstanceKeyUnavailableNotUnknownTest(ITestOutputHelper output) : Mo
             return Observable.Return(Absent());
         });
 
-        var first = await authenticator.AuthenticateOutcome($"Bearer {Key}").FirstAsync().ToTask();
+        var first = await authenticator.AuthenticateOutcome($"Bearer {Key}").FirstAsync().Await();
         first.IsUnavailable.Should().BeFalse("an absent index IS an answer: this key is unknown");
         first.Instance.Should().BeNull();
 
         var after = attempts;
-        var second = await authenticator.AuthenticateOutcome($"Bearer {Key}").FirstAsync().ToTask();
+        var second = await authenticator.AuthenticateOutcome($"Bearer {Key}").FirstAsync().Await();
         second.IsUnavailable.Should().BeFalse();
         attempts.Should().Be(after, "a definitive negative is cached — briefly, but cached");
     }
@@ -166,7 +166,7 @@ public class InstanceKeyUnavailableNotUnknownTest(ITestOutputHelper output) : Mo
             });
         }, seen);
 
-        var outcome = await authenticator.AuthenticateOutcome($"Bearer {Key}").FirstAsync().ToTask();
+        var outcome = await authenticator.AuthenticateOutcome($"Bearer {Key}").FirstAsync().Await();
 
         seen.Should().Contain(grantPath, "all three legs must actually be read");
         if (grantStalls)

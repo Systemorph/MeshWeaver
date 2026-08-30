@@ -1,11 +1,11 @@
 using System;
 using System.Net.Http;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh.Threading;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -26,7 +26,7 @@ public sealed class OpenGraphPreviewServiceTest : IAsyncLifetime
         new(() => pools.Get(IoPoolNames.Http), () => http, allowLoopback);
 
     private static Task<OpenGraphPreview> Await(IObservable<OpenGraphPreview> preview) =>
-        preview.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask();
+        preview.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
 
     [Fact]
     public async Task Get_SameUrlTwice_FetchesOnceAndReplays()

@@ -2,7 +2,6 @@ using System;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
@@ -68,7 +67,7 @@ public class SyncHubGoneStreamDroppedTest(ITestOutputHelper output) : HubTestBas
             .Select(Notification.CreateOnNext)
             .Take(1).Timeout(TimeSpan.FromSeconds(1))
             .Catch((TimeoutException _) => Observable.Return(Notification.CreateOnCompleted<DataChangedEvent>()))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         outcome.Kind.Should().Be(NotificationKind.OnCompleted,
             "a genuinely-gone stream's message must be dropped after the grace, not buffered and replayed later");

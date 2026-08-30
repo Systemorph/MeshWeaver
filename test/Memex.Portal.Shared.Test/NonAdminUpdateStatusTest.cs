@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
 using MeshWeaver.Data;
@@ -12,6 +11,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshWeaver.Hosting.SelfUpdate;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -78,7 +78,7 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
             })
             .FirstAsync()
             .Timeout(ReadBudget)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>
@@ -110,7 +110,7 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
         Mesh.GetEffectivePermissions(UpdatePolicyNodeType.NodePath, userId)
             .FirstAsync()
             .Timeout(ReadBudget)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
     /// <summary>Reads the policy node the way any consumer would, capturing whichever way it fails.</summary>
     private async Task<(MeshNode? Node, Exception? Error)> TryReadPolicyNode()
@@ -121,7 +121,7 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
                 .Where(n => n is not null)
                 .FirstAsync()
                 .Timeout(ReadBudget)
-                .ToTask(TestContext.Current.CancellationToken);
+                .Await(TestContext.Current.CancellationToken);
             return (node, null);
         }
         catch (Exception ex)
@@ -189,7 +189,7 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
         var status = await PlatformUpdateStatus.Observe(Mesh, RunningVersion)
             .FirstAsync()
             .Timeout(ReadBudget)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         status.Availability.Should().Be(PlatformUpdateAvailability.UpdateAvailable);
         status.LatestVersion.Should().Be(NewerTag);
@@ -209,7 +209,7 @@ public class NonAdminUpdateStatusTest(ITestOutputHelper output) : MonolithMeshTe
         var status = await PlatformUpdateStatus.Observe(Mesh, RunningVersion)
             .FirstAsync()
             .Timeout(ReadBudget)
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         status.Should().Be(PlatformUpdateStatus.Unknown);
     }

@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -9,6 +8,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -111,11 +111,11 @@ public class TypedContentUpdateTest(ITestOutputHelper output) : MonolithMeshTest
                 var c = node.Content as MarkdownContent ?? new MarkdownContent { Content = "" };
                 return node with { Content = c with { Content = "# edited" } };
             })
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var after = await workspace.GetMeshNodeStream(path)
             .Where(n => n.ContentAs<MarkdownContent>(options)?.Content == "# edited")
-            .FirstAsync().Timeout(10.Seconds()).ToTask();
+            .FirstAsync().Timeout(10.Seconds()).Await();
 
         after.ContentAs<MarkdownContent>(options)!.PrerenderedHtml.Should().Be("<h1>real</h1>",
             "the read seam resolved the content from the node's own NodeType, so `as T` returned a "
@@ -138,11 +138,11 @@ public class TypedContentUpdateTest(ITestOutputHelper output) : MonolithMeshTest
 
         await workspace.GetMeshNodeStream(path)
             .Update<MarkdownContent>(c => c with { Content = "# edited" })
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var after = await workspace.GetMeshNodeStream(path)
             .Where(n => n.ContentAs<MarkdownContent>(options)?.Content == "# edited")
-            .FirstAsync().Timeout(10.Seconds()).ToTask();
+            .FirstAsync().Timeout(10.Seconds()).Await();
 
         after.ContentAs<MarkdownContent>(options)!.PrerenderedHtml.Should().Be("<h1>real</h1>",
             "Update<TContent> read the unresolvable JSON AS MarkdownContent, so the untouched "
@@ -165,11 +165,11 @@ public class TypedContentUpdateTest(ITestOutputHelper output) : MonolithMeshTest
 
         await workspace.GetMeshNodeStream(path)
             .Update<MarkdownContent>(c => c with { Content = "# edited" })
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var after = await workspace.GetMeshNodeStream(path)
             .Where(n => n.ContentAs<MarkdownContent>(options)?.Content == "# edited")
-            .FirstAsync().Timeout(10.Seconds()).ToTask();
+            .FirstAsync().Timeout(10.Seconds()).Await();
 
         var content = after.ContentAs<MarkdownContent>(options)!;
         content.Content.Should().Be("# edited");
@@ -196,7 +196,7 @@ public class TypedContentUpdateTest(ITestOutputHelper output) : MonolithMeshTest
 
         var act = () => workspace.GetMeshNodeStream(path)
             .Update<MarkdownContent>(c => c with { Content = "# edited" })
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var ex = await act.Should().ThrowAsync<MeshNodeStreamException>(
             "a write whose content cannot be read as the named type must fail loudly, never write "
@@ -205,7 +205,7 @@ public class TypedContentUpdateTest(ITestOutputHelper output) : MonolithMeshTest
         ex.Which.Error.Path.Should().Be(path);
 
         // …and the node is untouched: the refusal happened BEFORE any write.
-        var after = await workspace.GetMeshNodeStream(path).FirstAsync().Timeout(10.Seconds()).ToTask();
+        var after = await workspace.GetMeshNodeStream(path).FirstAsync().Timeout(10.Seconds()).Await();
         after.ContentAs<Comment>(options)!.Text.Should().Be("not markdown content",
             "the refused write must not have replaced the real content");
     }
@@ -227,7 +227,7 @@ public class TypedContentUpdateTest(ITestOutputHelper output) : MonolithMeshTest
         var foreign = Mesh.GetWorkspace();
         var act = () => foreign.GetMeshNodeStream(path)
             .Update<MarkdownContent>(c => c with { Content = "# edited" })
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         var ex = await act.Should().ThrowAsync<MeshNodeStreamException>(
             "the refusal must survive the cache's serial queue and the remote write path");
@@ -252,13 +252,13 @@ public class TypedContentUpdateTest(ITestOutputHelper output) : MonolithMeshTest
                 sawNull = content is null;
                 return node with { Content = new MarkdownContent { Content = "# created" } };
             })
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         sawNull.Should().BeTrue("null must mean ABSENT — the one case a caller may initialise");
 
         var after = await workspace.GetMeshNodeStream(path)
             .Where(n => n.ContentAs<MarkdownContent>(options) is not null)
-            .FirstAsync().Timeout(10.Seconds()).ToTask();
+            .FirstAsync().Timeout(10.Seconds()).Await();
         after.ContentAs<MarkdownContent>(options)!.Content.Should().Be("# created");
     }
 }

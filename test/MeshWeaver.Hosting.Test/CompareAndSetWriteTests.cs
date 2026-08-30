@@ -3,7 +3,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence;
@@ -11,6 +10,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -54,13 +54,13 @@ public class CompareAndSetWriteTests
             Task.Run(() => store
                 .WriteIfVersion(Node(version: 1, name: $"claimant-{i}"), expectedVersion: 0, JsonOptions)
                 .FirstAsync()
-                .ToTask())));
+                .Await())));
 
         outcomes.Count(o => o is true).Should().Be(1,
             "an insert-only compare-and-set is how a claim becomes exclusive; two winners is #1424");
         outcomes.Count(o => o is false).Should().Be(7, "every loser must be TOLD it lost");
 
-        var stored = await store.Read("Test/claim", JsonOptions).FirstAsync().ToTask();
+        var stored = await store.Read("Test/claim", JsonOptions).FirstAsync().Await();
         stored!.Name.Should().StartWith("claimant-");
     }
 
@@ -73,17 +73,17 @@ public class CompareAndSetWriteTests
     public async Task ConcurrentSuccessions_ExactlyOneWins()
     {
         var store = BuildStore();
-        (await store.WriteIfVersion(Node(1, "holder"), 0, JsonOptions).FirstAsync().ToTask())
+        (await store.WriteIfVersion(Node(1, "holder"), 0, JsonOptions).FirstAsync().Await())
             .Should().Be(true);
 
         var outcomes = await Task.WhenAll(Enumerable.Range(0, 8).Select(i =>
             Task.Run(() => store
                 .WriteIfVersion(Node(version: 2, name: $"successor-{i}"), expectedVersion: 1, JsonOptions)
                 .FirstAsync()
-                .ToTask())));
+                .Await())));
 
         outcomes.Count(o => o is true).Should().Be(1);
-        var stored = await store.Read("Test/claim", JsonOptions).FirstAsync().ToTask();
+        var stored = await store.Read("Test/claim", JsonOptions).FirstAsync().Await();
         stored!.Name.Should().StartWith("successor-");
         stored.Version.Should().Be(2);
     }
@@ -93,13 +93,13 @@ public class CompareAndSetWriteTests
     public async Task WrongExpectedVersion_IsRefused_AndLeavesTheRow()
     {
         var store = BuildStore();
-        await store.WriteIfVersion(Node(1, "holder"), 0, JsonOptions).FirstAsync().ToTask();
+        await store.WriteIfVersion(Node(1, "holder"), 0, JsonOptions).FirstAsync().Await();
 
         (await store.WriteIfVersion(Node(9, "impostor"), expectedVersion: 7, JsonOptions)
-            .FirstAsync().ToTask())
+            .FirstAsync().Await())
             .Should().Be(false);
 
-        var stored = await store.Read("Test/claim", JsonOptions).FirstAsync().ToTask();
+        var stored = await store.Read("Test/claim", JsonOptions).FirstAsync().Await();
         stored!.Name.Should().Be("holder");
         stored.Version.Should().Be(1);
     }
@@ -116,14 +116,14 @@ public class CompareAndSetWriteTests
     public async Task ExpectingAVersion_DoesNotResurrectADeletedRow()
     {
         var store = BuildStore();
-        await store.WriteIfVersion(Node(1, "holder"), 0, JsonOptions).FirstAsync().ToTask();
-        (await store.DeleteIfExists("Test/claim").FirstAsync().ToTask()).Should().Be(true);
+        await store.WriteIfVersion(Node(1, "holder"), 0, JsonOptions).FirstAsync().Await();
+        (await store.DeleteIfExists("Test/claim").FirstAsync().Await()).Should().Be(true);
 
         (await store.WriteIfVersion(Node(2, "zombie"), expectedVersion: 1, JsonOptions)
-            .FirstAsync().ToTask())
+            .FirstAsync().Await())
             .Should().Be(false, "an absent row does not carry the expected version");
 
-        (await store.Read("Test/claim", JsonOptions).FirstAsync().ToTask())
+        (await store.Read("Test/claim", JsonOptions).FirstAsync().Await())
             .Should().BeNull("the refused write must not have re-created the row");
     }
 }

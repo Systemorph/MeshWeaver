@@ -1,10 +1,10 @@
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.PluginTester;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginTester.Test;
 
@@ -95,7 +95,7 @@ public class AreaProbeTest
         var frames = FrameStream(NotFound, GreenTable);
 
         var verdict = await AreaProbe.ClassifyTestsFrames(frames, TimeSpan.FromSeconds(5))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         Assert.Equal(CheckOutcome.Passed, verdict.Outcome);
         Assert.Equal("2/2 passed", verdict.Detail);
@@ -112,7 +112,7 @@ public class AreaProbeTest
         var frames = Observable.Return(NotFound).Concat(Observable.Never<JsonElement>());
 
         var verdict = await AreaProbe.ClassifyTestsFrames(frames, TimeSpan.FromMilliseconds(300))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         Assert.Equal(CheckOutcome.Failed, verdict.Outcome);
         Assert.Contains("never became available", verdict.Detail);
@@ -131,7 +131,7 @@ public class AreaProbeTest
         var frames = FrameStream(MenuChromeOnly, GreenTable);
 
         var verdict = await AreaProbe.ClassifyTestsFrames(frames, TimeSpan.FromSeconds(5))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         Assert.Equal(CheckOutcome.Passed, verdict.Outcome);
         Assert.Equal("2/2 passed", verdict.Detail);
@@ -144,7 +144,7 @@ public class AreaProbeTest
         var frames = Observable.Return(RedTable).Concat(Observable.Never<JsonElement>());
 
         var verdict = await AreaProbe.ClassifyTestsFrames(frames, TimeSpan.FromSeconds(5))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         Assert.Equal(CheckOutcome.Failed, verdict.Outcome);
         Assert.Contains("Second_Fails", verdict.Detail);
@@ -156,7 +156,7 @@ public class AreaProbeTest
     {
         var verdict = await AreaProbe.ClassifyTestsFrames(
                 Observable.Never<JsonElement>(), TimeSpan.FromMilliseconds(300))
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         Assert.Equal(CheckOutcome.Failed, verdict.Outcome);
         Assert.Contains("no verdict", verdict.Detail);

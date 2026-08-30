@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -9,6 +8,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Security.Test;
 
@@ -57,7 +57,7 @@ public class HubCredentialReadAccessTest(ITestOutputHelper output) : MonolithMes
             });
 
             var perms = await Mesh.GetEffectivePermissions(scope, hubAddress)
-                .FirstAsync().Timeout(15.Seconds()).ToTask(TestContext.Current.CancellationToken);
+                .FirstAsync().Timeout(15.Seconds()).Await(TestContext.Current.CancellationToken);
 
             perms.HasFlag(Permission.Read).Should().Be(expectRead,
                 $"hub '{hubAddress}' reading scope '{scope}' should{(expectRead ? "" : " NOT")} have Read");
@@ -85,7 +85,7 @@ public class HubCredentialReadAccessTest(ITestOutputHelper output) : MonolithMes
             });
 
             var perms = await Mesh.GetEffectivePermissions("acme/space", "acme/space/child")
-                .FirstAsync().Timeout(15.Seconds()).ToTask(TestContext.Current.CancellationToken);
+                .FirstAsync().Timeout(15.Seconds()).Await(TestContext.Current.CancellationToken);
 
             perms.HasFlag(Permission.Read).Should().BeFalse(
                 "only IsHub credentials get the ancestor-read shortcut, not a user with a path-shaped id");

@@ -1,6 +1,5 @@
 using System;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -9,6 +8,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -58,14 +58,14 @@ public class DisposalPendingSaveFlushTest(ITestOutputHelper output) : MonolithMe
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
             .Where(n => n is not null)
-            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(10.Seconds()).Await(ct);
 
         // The update — canonical own-node stream.Update, the same primitive a cross-hub
         // PatchDataRequest commits through. Await the ack emission (the write is applied).
         var marker = $"updated-{Guid.NewGuid():N}"[..16];
         await workspace.GetMeshNodeStream()
             .Update(n => n with { Name = marker })
-            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(10.Seconds()).Await(ct);
 
         // Confirm the own stream carries the write. The persistence sampler subscribed to
         // this same stream at hub init — emissions fan out to subscribers in subscription
@@ -73,7 +73,7 @@ public class DisposalPendingSaveFlushTest(ITestOutputHelper output) : MonolithMe
         // and is now holding the save in its 200 ms Sample buffer.
         await workspace.GetMeshNodeStream()
             .Where(n => n is not null && n.Name == marker)
-            .FirstAsync().Timeout(10.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(10.Seconds()).Await(ct);
 
         // Dispose the per-node hub IMMEDIATELY — inside the sample window. This is the
         // idle-recycle / owner-teardown path: the pending debounced save must not be
@@ -86,7 +86,7 @@ public class DisposalPendingSaveFlushTest(ITestOutputHelper output) : MonolithMe
         var persisted = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
             .Where(n => n is not null && n.Name == marker)
-            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(15.Seconds()).Await(ct);
 
         persisted!.Name.Should().Be(marker,
             "a write that was applied and acknowledged before hub disposal must survive the "

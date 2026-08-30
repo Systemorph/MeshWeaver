@@ -1,9 +1,9 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.AI;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.ContentCollections.Indexing.Graph.Test;
 
@@ -23,7 +23,7 @@ public class ChatClientSummarizerTest
         var summarizer = new ChatClientSummarizer(chat, registry);
 
         var summary = await summarizer.Summarize("Quarterly pension report body text.", "report.pdf")
-            .FirstAsync().ToTask();
+            .FirstAsync().Await();
 
         summary.Should().Be("MODEL SUMMARY");
         chat.LastPrompt.Should().NotBeNull();
@@ -56,7 +56,7 @@ public class ChatClientSummarizerTest
         var chat = new RecordingChatClient("ok", onInvoke: () => { entered.TrySetResult(); return gate.Task; });
         var summarizer = new ChatClientSummarizer(chat, registry);
 
-        var resultTask = summarizer.Summarize("text", "f.txt").FirstAsync().ToTask();
+        var resultTask = summarizer.Summarize("text", "f.txt").FirstAsync().Await();
 
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         httpPool.CurrentInFlight.Should().Be(1, "the summarize call holds exactly one Http pool slot while running");

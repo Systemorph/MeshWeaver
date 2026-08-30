@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence;
@@ -13,6 +12,7 @@ using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -81,7 +81,7 @@ public class RoutingGrainTurnIsolationTest(ITestOutputHelper output)
                 .StartWith(0L)
                 .Where(_ => resolver!.StallsEntered > 0)
                 .FirstAsync()
-                .ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token);
+                .Await(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token);
 
             Output.WriteLine("stall is in flight — probing the silo's routing");
 
@@ -93,7 +93,7 @@ public class RoutingGrainTurnIsolationTest(ITestOutputHelper output)
             var response = await client
                 .Observe(new PingRequest(), o => o.WithTarget(new Address(partitionRoot)))
                 .FirstAsync()
-                .ToTask(new CancellationTokenSource(ProbeBudget).Token);
+                .Await(new CancellationTokenSource(ProbeBudget).Token);
 
             sw.Stop();
 

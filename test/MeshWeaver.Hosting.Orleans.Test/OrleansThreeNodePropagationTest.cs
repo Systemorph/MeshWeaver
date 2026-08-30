@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
@@ -81,7 +80,7 @@ public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : Orleans
                     NodeType = "Markdown",
                 }),
                 o => o.WithTarget(new Address("TestUser")))
-            .FirstAsync().ToTask(ct);
+            .FirstAsync().Await(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error ?? "");
         Output.WriteLine($"[test] CreateNode succeeded: {pathA}");
 

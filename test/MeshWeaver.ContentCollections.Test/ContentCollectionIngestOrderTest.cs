@@ -3,7 +3,6 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
@@ -64,7 +63,7 @@ public class ContentCollectionIngestOrderTest(ITestOutputHelper output) : HubTes
             },
             provider,
             GetHost());
-        await collection.Initialize().FirstAsync().ToTask(ct);
+        await collection.Initialize().FirstAsync().Await(ct);
 
         // 1. The watcher's Created event, delivered while the file is still 0 bytes — the FIRST
         //    ingest triggered for this path. Its read is intercepted (empty content) and HELD.
@@ -75,7 +74,7 @@ public class ContentCollectionIngestOrderTest(ITestOutputHelper output) : HubTes
         // 2. The write completes and SaveFile's own read-your-writes ingest reads the COMPLETE
         //    file — a strictly LATER trigger, so its content must be the one that survives.
         using (var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(RealContent)))
-            await collection.SaveFile("/sub", "hello.md", stream).ToTask(ct);
+            await collection.SaveFile("/sub", "hello.md", stream).Await(ct);
 
         var complete = await collection.GetMarkdown("sub/hello.md")
             .Should().Within(30.Seconds())
@@ -142,7 +141,7 @@ public class ContentCollectionIngestOrderTest(ITestOutputHelper output) : HubTes
             if (Interlocked.Increment(ref reads) == 1)
             {
                 arrived.OnNext(Unit.Default);
-                await gate.ToTask(ct);
+                await gate.Await(ct);
                 // The file existed but carried no bytes yet — exactly what a read racing
                 // FileStream(FileMode.Create) ahead of CopyToAsync observes.
                 return (new MemoryStream(), path, DateTime.UtcNow);

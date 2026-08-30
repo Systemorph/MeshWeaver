@@ -3,7 +3,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -14,6 +13,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -194,7 +194,7 @@ public class PatchWriteRouteCollapseTest(ITestOutputHelper output) : MonolithMes
             .Timeout(5.Seconds())
             .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>())
             .FirstOrDefaultAsync()
-            .ToTask();
+            .Await();
         Output.WriteLine(duplicate is null
             ? "[route 2] no duplicate write of the patched state — the persistence routes are collapsed"
             : $"[route 2] duplicate write of the patched state at version={duplicate.Version} HELD");

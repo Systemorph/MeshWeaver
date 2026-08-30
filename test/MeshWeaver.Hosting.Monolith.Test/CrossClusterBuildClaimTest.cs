@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -19,6 +18,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -75,13 +75,13 @@ public class CrossClusterBuildClaimTest(ITestOutputHelper output) : MonolithMesh
         // Cluster A is the test-base mesh. Materialize the build root and wait until it is DURABLE —
         // the arbiters decide against the row, so the row has to be there before either claims.
         var clusterA = Mesh;
-        await clusterA.EnsureBuildNode().FirstAsync().ToTask();
+        await clusterA.EnsureBuildNode().FirstAsync().Await();
         await Observable.Interval(TimeSpan.FromMilliseconds(50))
             .StartWith(0L)
             .Where(_ => _rows.ContainsKey(BuildNodeType.RootPath))
             .FirstAsync()
             .Timeout(GrantBudget)
-            .ToTask();
+            .Await();
 
         using var clusterB = BuildSecondCluster();
 
@@ -92,8 +92,8 @@ public class CrossClusterBuildClaimTest(ITestOutputHelper output) : MonolithMesh
         // Both candidates register at the same moment. Which cluster wins is not determined — that
         // exactly ONE does is the contract.
         await Task.WhenAll(
-            clusterA.RequestBuildClaim(holderA, fingerprint).FirstAsync().ToTask(),
-            clusterB.Hub.RequestBuildClaim(holderB, fingerprint).FirstAsync().ToTask());
+            clusterA.RequestBuildClaim(holderA, fingerprint).FirstAsync().Await(),
+            clusterB.Hub.RequestBuildClaim(holderB, fingerprint).FirstAsync().Await());
 
         // Each cluster watches for ITS OWN grant. The winner emits; the loser runs out the budget and
         // yields null. Running both to completion is the point — a test that stopped at the first
@@ -103,7 +103,7 @@ public class CrossClusterBuildClaimTest(ITestOutputHelper output) : MonolithMesh
                 WatchOwnGrant(clusterA, holderA, "A"),
                 WatchOwnGrant(clusterB.Hub, holderB, "B"))
             .ToList()
-            .ToTask();
+            .Await();
 
         var winners = grants.Where(g => g is not null).Select(g => g!).ToList();
         winners.Should().HaveCount(1,

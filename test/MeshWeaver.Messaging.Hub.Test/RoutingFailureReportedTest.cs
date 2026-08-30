@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -162,7 +161,7 @@ public class RoutingFailureReportedTest(ITestOutputHelper output) : HubTestBase(
         // the client answers ITSELF therefore cannot complete until that queued turn has drained.
         await Hub.Observe<Ack>(new BarrierRequest(), o => o.WithTarget(Hub.Address))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         Volatile.Read(ref deliveryFailuresSeen).Should().Be(1,
             "the failing site already answered the sender; a second NACK on this path multiplies "
@@ -174,7 +173,7 @@ public class RoutingFailureReportedTest(ITestOutputHelper output) : HubTestBase(
         var response = Hub
             .Observe<Ack>(request, o => o.WithTarget(ServerAddress))
             .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+            .Await(TestContext.Current.CancellationToken);
 
         var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
         Output.WriteLine($"{request.GetType().Name}: errorType={failure.Failure?.ErrorType} message={failure.Failure?.Message}");

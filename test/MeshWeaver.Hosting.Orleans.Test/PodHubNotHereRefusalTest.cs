@@ -3,13 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -78,7 +78,7 @@ public class PodHubNotHereRefusalTest
                 fallBackToStream: () => { published++; return Observable.Return(Unit.Default); },
                 postFailureToSender: (m, t, u) => nacks.Add(new Nack(m, t, u)),
                 logger: new RecordingLogger())
-            .ToTask();
+            .Await();
 
         published.Should().Be(0,
             "the stream publish is the leg #2320/#2322/#2406 live on — it must be UNREACHABLE for a "
@@ -113,7 +113,7 @@ public class PodHubNotHereRefusalTest
                 fallBackToStream: () => { published++; return Observable.Return(Unit.Default); },
                 postFailureToSender: (m, t, u) => nacks.Add(new Nack(m, t, u)),
                 logger: new RecordingLogger())
-            .ToTask();
+            .Await();
 
         published.Should().Be(1,
             "an Orleans client cannot host a grain, so a directed call can never reach it — refusing "
@@ -159,7 +159,7 @@ public class PodHubNotHereRefusalTest
             .Materialize()
             .ToList()
             .Timeout(TimeSpan.FromSeconds(5))
-            .ToTask();
+            .Await();
 
         notifications.Select(n => n.Kind).Should().Equal(NotificationKind.OnNext, NotificationKind.OnCompleted);
     }
@@ -184,7 +184,7 @@ public class PodHubNotHereRefusalTest
                     fallBackToStream: () => throw new InvalidOperationException("must not publish"),
                     postFailureToSender: (m, t, u) => nacks.Add(new Nack(m, t, u)),
                     logger: logger, refusalLog: refusalLog)
-                .ToTask();
+                .Await();
 
         nacks.Should().HaveCount(100, "the window bounds the LOG, never the answer");
         nacks.Should().OnlyContain(n => n.Type == ErrorType.ShuttingDown && n.TargetUnserved);
