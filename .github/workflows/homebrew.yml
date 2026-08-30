@@ -230,6 +230,7 @@ jobs:
       # re-run of the same commit finds the release and reuses it — the tarball is reproducible
       # (`gzip -n`), so the asset already there carries the same sha256 the formula pins.
       - name: Release the tarball on the tap
+        id: release
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           VERSION: ${{ steps.ver.outputs.version }}
@@ -249,18 +250,19 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/roundtrip.tar.gz" "$url"
           [ "$(sha256sum "$RUNNER_TEMP/roundtrip.tar.gz" | awk '{print $1}')" = "${{ steps.tar.outputs.sha }}" ] \
             || { echo "::error::the released asset's sha256 differs from the tarball just built"; exit 1; }
-          echo "url=$url" >> "$GITHUB_ENV"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Commit the rendered formula to the tap
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           VERSION: ${{ steps.ver.outputs.version }}
           SHA256: ${{ steps.tar.outputs.sha }}
+          URL: ${{ steps.release.outputs.url }}
         run: |
           set -euo pipefail
           git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" "$RUNNER_TEMP/tap"
           mkdir -p "$RUNNER_TEMP/tap/Formula"
-          deploy/homebrew/scripts/render-formula.sh "$VERSION" "$url" "$SHA256" \
+          deploy/homebrew/scripts/render-formula.sh "$VERSION" "$URL" "$SHA256" \
             > "$RUNNER_TEMP/tap/Formula/memex-local.rb"
           cd "$RUNNER_TEMP/tap"
           git config user.email "ci@meshweaver.cloud"
