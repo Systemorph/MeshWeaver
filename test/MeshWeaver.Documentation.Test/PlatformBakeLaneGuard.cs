@@ -356,6 +356,7 @@ public class PlatformBakeLaneGuard
             Path.Combine(root, "deploy", "helm", "values.yaml"),
             Path.Combine(root, "deploy", "aks", "values.aks.yaml"),
             Path.Combine(root, "deploy", "homebrew", "share", "values.local.defaults.yaml"),
+            Path.Combine(root, "deploy", "homebrew", "share", "values.local.self-registry.yaml"),
         };
 
         var missing = valuesFiles
@@ -466,6 +467,10 @@ public class PlatformBakeLaneGuard
         Path.Combine(root, "deploy", "aks", "values.aks.yaml"),
         Path.Combine(root, "deploy", "aks", "scripts", "values.deploy.example.yaml"),
         Path.Combine(root, "deploy", "homebrew", "share", "values.local.defaults.yaml"),
+        // The self-registry MODE layer memex-local passes when it serves plugins from a checkout —
+        // the one file that still blanks Modules__Required__0..4 (MeshWeaver#2417), so the
+        // contiguity and ceiling rules below must see it.
+        Path.Combine(root, "deploy", "homebrew", "share", "values.local.self-registry.yaml"),
         Path.Combine(root, "deploy", "homebrew", "share", "values.local.yaml"),
     ];
 
@@ -698,6 +703,7 @@ public class PlatformBakeLaneGuard
                 Path.Combine(root, "deploy", "helm", "values.yaml"),
                 Path.Combine(root, "deploy", "aks", "values.aks.yaml"),
                 Path.Combine(root, "deploy", "homebrew", "share", "values.local.defaults.yaml"),
+                Path.Combine(root, "deploy", "homebrew", "share", "values.local.self-registry.yaml"),
             }
             .Where(File.Exists)
             .Select(f => (file: Path.GetFileName(f), lines: File.ReadAllLines(f)
