@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Reactive;
-using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Threading;
 
@@ -73,11 +75,34 @@ public interface IIoPool
     /// <para>The leaf must emit at least one value (a single-item call, or a multi-item
     /// paginated <c>GetAll…</c> reduced with <c>.ToList()</c>/<c>.Any()</c> at the call
     /// site so the single emitted value is the whole result). This is the sanctioned
-    /// reactive-SDK counterpart to <see cref="InvokeStream{T}"/>; the <c>.ToTask()</c>
-    /// bridge lives here, in the pool — never at the call site.</para>
+    /// reactive-SDK counterpart to <see cref="InvokeStream{T}"/>; the wait lives here,
+    /// in the pool — never at the call site.</para>
+    ///
+    /// <para>🚨 <b>The wait is <see cref="ReactiveCompletion.ObserveCompletion{T}"/>, never Rx's
+    /// own observable-to-<see cref="Task"/> bridge</b> (maintainer, 2026-08-30: <i>"no ToTask
+    /// ever"</i> — this pool used to be the one sanctioned exception, and is no longer). Rx's
+    /// bridge completes its <see cref="TaskCompletionSource{TResult}"/> from inside the pipeline
+    /// without <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/>, so the pool's
+    /// own continuation — the code that RELEASES THE SLOT — resumed inline on whatever thread the
+    /// SDK leaf signalled from, still inside Rx's trampoline. In a pool that is the worst place
+    /// for it: the slot release is what unblocks the next queued operation.
+    /// <c>ObserveCompletion</c> queues that continuation instead, and keeps its error arm attached
+    /// so a leaf faulting after the wait settled is reported rather than orphaned.</para>
+    ///
+    /// <para><c>LastAsync()</c> is the faithful equivalent of the previous bridge's semantics:
+    /// the leaf's FINAL value, emitted once it completes, and an <c>InvalidOperationException</c>
+    /// if it emitted nothing at all.</para>
     /// </summary>
     IObservable<T> InvokeObservable<T>(Func<CancellationToken, IObservable<T>> source)
-        => Invoke(ct => source(ct).ToTask(ct));
+        // Invoke<T> explicitly: inference off the lambda would pick up ObserveCompletion's
+        // nullable T? and hand back an IObservable<T?>.
+        => Invoke<T>(ct => source(ct)
+            .LastAsync()
+            .ObserveCompletion(
+                ex => Trace.TraceError(
+                    "IIoPool.InvokeObservable: the I/O leaf faulted AFTER the wait settled — "
+                    + "reported, not orphaned: {0}: {1}", ex.GetType().Name, ex.Message),
+                ct)!);
 
     /// <summary>
     /// Runs the SUBSCRIBE of a long-lived reactive leaf — a <c>MeshQuery</c> change-feed subscription —

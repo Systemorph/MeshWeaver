@@ -330,9 +330,14 @@ public sealed class PluginBundleClient
             {
                 // A distribution hiccup must not fail the install/reconcile that asked — the module
                 // simply stays as it is until the next boot or a manual re-install.
+                // The cause rides IN the message: the attached exception lives on separate log
+                // lines that single-line pipelines (Loki greps) never pair with this one, and
+                // "landing failed" with no reason made a stuck production module a night-long
+                // dig (Plugins#959).
                 _logger?.LogWarning(ex,
-                    "Module '{Module}' of {Plugin}: landing failed — the module is unchanged",
-                    moduleName, pluginId);
+                    "Module '{Module}' of {Plugin}: landing failed — the module is unchanged. "
+                    + "Cause: {Cause}",
+                    moduleName, pluginId, ex.Message);
                 return Observable.Return(0);
             });
     }

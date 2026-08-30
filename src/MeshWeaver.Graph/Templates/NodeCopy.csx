@@ -8,7 +8,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using MeshWeaver.Data;
@@ -37,12 +36,15 @@ Log.LogInformation(
 
 var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
+// 🚨 ObserveCompletion, never Rx's own observable-to-Task bridge (maintainer, 2026-08-30:
+// "no ToTask ever"). This script runs INSIDE the portal; Rx's bridge would resume the rest of
+// it inline on whichever hub thread signalled the last copied node.
 var count = await NodeCopyHelper
     .CopyNodeTree(meshService, meshService, Mesh, sourcePath, targetNamespace, force)
     .FirstAsync()
-    // ObserveCompletion, never .ToTask(): the bridge resumes this script inline on the
-    // signalling thread, inside Rx's trampoline (forbidden since 2026-08-30).
-    .ObserveCompletion(ex => Log.LogError(ex, "Copy faulted after the wait settled"), Ct);
+    .ObserveCompletion(
+        ex => Log.LogWarning(ex, "Node copy faulted AFTER the wait settled — reported, not orphaned"),
+        Ct);
 
 Log.LogInformation("Copy complete: {Count} node(s)", count);
 

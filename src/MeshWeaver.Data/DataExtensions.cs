@@ -2090,9 +2090,22 @@ public static class DataExtensions
             // no IsWindingDown gate: there is no healthy-hub case in which it is a lie. Rethrow so
             // the terminal is decided in exactly one place — the error arm — and the CAS keeps it a
             // single answer.
-            .Catch<GetDataResponse, Exception>(ex => HubDisposingException.IsHubDisposal(ex)
-                ? Observable.Throw<GetDataResponse>(ex)
-                : Observable.Return(new GetDataResponse(null, 0) { Error = ex.Message }))
+            // 🚨 A DISPOSED CONTAINER is a teardown fact too, and answering it as data is the same
+            // defect this Catch's own comment describes — one cause down. Measured 2026-08-30
+            // (flake-repro, 40 iterations on the 4-vCPU runner): the fault behind
+            // SilentReadNackTest's bulk-only failure is
+            //   TargetInvocationException → ObjectDisposedException: "Instances cannot be resolved
+            //   and nested lifetimes cannot be created from this LifetimeScope …"
+            // i.e. the hub's Autofac scope closed underneath an in-flight read. It is NOT a
+            // HubDisposingException — a scope closed under a live delivery announces nothing — so
+            // it fell to the value arm, fabricated a GetDataResponse{Error}, CLAIMED THE ONCE-ONLY
+            // ANSWER SLOT and left the caller with "this node does not exist" for a node that
+            // exists and an address that reactivates. Exactly #1362/#1470's shape, reached by a
+            // different cause. Rethrow it so the ONE terminal decision stays in the error arm.
+            .Catch<GetDataResponse, Exception>(ex =>
+                HubDisposingException.IsHubDisposal(ex) || HubDisposingException.IsDisposedContainer(ex)
+                    ? Observable.Throw<GetDataResponse>(ex)
+                    : Observable.Return(new GetDataResponse(null, 0) { Error = DescribeReadFault(ex) }))
             .Subscribe(
                 response =>
                 {
@@ -2111,12 +2124,22 @@ public static class DataExtensions
                     // TargetInvocationException whose own message is the useless "Exception has
                     // been thrown by the target of an invocation" — the exact string the CI red
                     // reported, which says nothing about what happened.
-                    var cause = FindHubDisposal(ex) ?? ex;
+                    // Name the ROOT cause, not the wrapper — and cover BOTH teardown shapes now
+                    // that a disposed container reaches this arm: the hub announced its disposal
+                    // (HubDisposingException), or its DI scope was closed underneath the read.
+                    var cause = FindHubDisposal(ex) ?? InnermostCause(ex);
+                    // 🚨 "shutting down" IS CONTRACT — do not reword it out.
+                    // MeshNodeStreamCache.IsTransientOwnerFailure classifies on that marker, and a
+                    // consumer that does not see it TEARS DOWN instead of riding the recycle out.
+                    // Measured the hard way: an earlier draft of this very change said "is going
+                    // away" and the rate run came back 10/100 with every remaining failure being
+                    // that missing marker — a product regression, not merely a red assertion.
+                    // Both causes are named, but the marker stays.
                     NackSilentRead(hub, request,
                         "the read faulted because the owning hub is shutting down — its hosted-hub "
-                        + "creation is frozen, so the data stream for this reference could not be "
-                        + $"created ({cause.GetType().Name}: {cause.Message}). Retry against the "
-                        + "fresh activation.");
+                        + "creation is frozen or its service scope has been closed, so the data "
+                        + $"stream for this reference could not be created ({cause.GetType().Name}: "
+                        + $"{cause.Message}). Retry against the fresh activation.");
                 },
                 () =>
                 {
@@ -2151,6 +2174,35 @@ public static class DataExtensions
                     + "shutting down and never produced a value. Retry against the fresh activation.");
         }));
         return request.Processed();
+    }
+
+    /// <summary>
+    /// The error text a NON-disposal read fault is answered with — the ROOT cause, not the wrapper.
+    ///
+    /// <para>🚨 The reflective Reduce hands this path a <see cref="System.Reflection.TargetInvocationException"/>
+    /// whose own message is the useless <c>"Exception has been thrown by the target of an
+    /// invocation."</c> — and answering THAT is how a read failure reaches a caller, a log and a CI
+    /// failure block naming nothing at all. The error arm three lines below already unwraps for
+    /// exactly this reason ("Name the ROOT cause, not the wrapper"); this arm did not, so every
+    /// non-disposal fault was reported anonymously. `SilentReadNackTest`'s bulk-only failure has
+    /// been arriving with precisely that string, which is why the exception behind it is still
+    /// unidentified (#2727).</para>
+    /// </summary>
+    /// <summary>The innermost cause of <paramref name="exception"/> — bounded and cycle-tolerant.</summary>
+    private static Exception InnermostCause(Exception exception)
+    {
+        var root = exception;
+        for (var i = 0; i < 32 && root.InnerException is { } inner && !ReferenceEquals(inner, root); i++)
+            root = inner;
+        return root;
+    }
+
+    internal static string DescribeReadFault(Exception exception)
+    {
+        var root = InnermostCause(exception);
+        return ReferenceEquals(root, exception)
+            ? $"{exception.GetType().Name}: {exception.Message}"
+            : $"{exception.GetType().Name}: {exception.Message} (cause: {root.GetType().Name}: {root.Message})";
     }
 
     /// <summary>
