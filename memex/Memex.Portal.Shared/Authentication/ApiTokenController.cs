@@ -88,8 +88,12 @@ public class ApiTokenController(IServiceProvider serviceProvider) : ControllerBa
         // No await: pull IObservable up to the controller's return type. The single bridge to Task
         // happens at .ObserveCompletion(…, ct) — never Rx's .ToTask(), which resumes the awaiter
         // INLINE on the signalling thread (a mesh hub's action block here) and is forbidden since
-        // 2026-08-30. The request's cancellation token is passed so a client disconnect tears down
-        // the wait instead of orphaning it.
+        // 2026-08-30. The request's cancellation token is passed so a client disconnect stops the
+        // WAIT. 🚨 It does not dispose the subscription — ObserveCompletion deliberately keeps its
+        // error arm attached so a late fault is reported rather than lost, which means the mesh
+        // work continues to completion after an abort. That is the right trade for a token
+        // creation (the token is either created or not; abandoning it half-way would be worse),
+        // but it is NOT teardown, and saying so here would be a promise the code does not keep.
         var lateFaultLogger = LateFaultLogger;
         return tokenService.CreateToken(userId, userName, userEmail, label, expiresAt)
             .Select(creation => (IActionResult)Ok(new CreateTokenResponse
