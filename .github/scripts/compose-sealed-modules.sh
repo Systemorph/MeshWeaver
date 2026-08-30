@@ -54,10 +54,13 @@ mkdir -p "$out"
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
 # ── one upstream's sealed module set (an index), or a RED reason ──────────────────────────────
-# Prints the listed bundle names, one per line. Exit 1 with ::error when the upstream has no seal
-# for this identity or the seal predates module sealing — both are stop conditions, not misses.
-sealed_modules_of() { # <source>
-  local src="$1"
+# Writes the listed bundle names, one per line, into <list-file>. Exit 1 with ::error when the
+# upstream has no seal for this identity or the seal predates module sealing — both are stop
+# conditions, not misses. 🚨 The list goes to a FILE, never stdout: the first version returned it
+# on stdout and the caller captured it, so every ::error this function printed vanished into the
+# list file and a red gate showed nothing but "exit code 1" (Manufacturing run 33283588300).
+sealed_modules_of() { # <source> <list-file>
+  local src="$1" list="$2"
   case "$src" in */*|*..*|"") echo "::error::upstream '$src' is not a bare source name"; return 1 ;; esac
   if [ -n "$registry_url" ]; then
     local base="${registry_url%/}/api/plugins/bundles/prebuilt/$identity/$src"
@@ -76,7 +79,7 @@ sealed_modules_of() { # <source>
     esac
     jq -e '.modules | type == "array"' "$work/$src.modules.json" > /dev/null 2>&1 \
       || { echo "::error::$base/modules answered 200 but not a module-set index (starts: $(head -c 80 "$work/$src.modules.json" | tr -d '\n\r')…)"; return 1; }
-    jq -r '.modules[]' "$work/$src.modules.json"
+    jq -r '.modules[]' "$work/$src.modules.json" > "$list"
   else
     local account="${storage_target%%/*}" rest="${storage_target#*/}"
     local share="${rest%%/*}" base=""
@@ -92,7 +95,7 @@ sealed_modules_of() { # <source>
       echo "::error::upstream '$src' is sealed under $account/$share/$dir but carries no modules/_index — the publication predates module sealing; republish '$src' under a core that carries MeshWeaver#2707."
       return 1
     fi
-    grep -v '^[[:space:]]*$' "$work/$src.modules.index" || true
+    grep -v '^[[:space:]]*$' "$work/$src.modules.index" > "$list" || true
   fi
 }
 
@@ -116,7 +119,7 @@ fetch_module() { # <source> <bundle-name> <dest>
 # Read every upstream's module set ONCE, in the order given; the first seal listing a package wins.
 # A seal that cannot be read stops the run — see sealed_modules_of.
 for src in $upstreams; do
-  sealed_modules_of "$src" > "$work/$src.list"
+  sealed_modules_of "$src" "$work/$src.list"
   echo "upstream '$src' sealed $(grep -c '[^[:space:]]' "$work/$src.list" || true) module bundle(s) for identity $identity"
 done
 
