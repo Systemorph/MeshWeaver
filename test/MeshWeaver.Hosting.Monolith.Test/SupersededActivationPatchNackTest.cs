@@ -114,6 +114,82 @@ public class SupersededActivationPatchNackTest(ITestOutputHelper output) : Monol
     }
 
     /// <summary>
+    /// #648 pin 3 — the PARTIAL refusal (#2463), and the one that hid the longest.
+    ///
+    /// <para>Pin 1 covers a patch where EVERY key is refused, which the no-change backstop
+    /// catches because the node is byte-identical afterwards. A patch that refuses SOME keys and
+    /// applies others slips past that check: the node really did change, so
+    /// <c>DeepEquals(preMerge, current)</c> is false and the owner acked SUCCESS while part of the
+    /// caller's write was on the floor.</para>
+    ///
+    /// <para>That is harder to see than pin 1, because every "did it commit?" question answers
+    /// yes. It is #2463: RolePlay/Scenery compiled fine, the mesh phase patched four
+    /// compile-outcome fields, MergeGuard refused all four as stale/reordered while another field
+    /// in the same patch landed — so the write was acked Success, <c>IsDirty</c> never converged,
+    /// and the gate read a status that had never been written and called it a compile failure. A
+    /// false RED on the required check, from a write that reported itself applied.</para>
+    ///
+    /// <para>Fail-without: <c>Success = true</c> and the refused field silently absent.
+    /// Pass-with: Conflict, AND the non-conflicting field is still kept — a partial refusal must
+    /// not throw away the half that was valid.</para>
+    /// </summary>
+    [Fact(Timeout = 55_000)]
+    public async Task PartiallyRefusedThreeWayMerge_IsNackedConflict_AndKeepsWhatDidNotConflict()
+    {
+        var id = $"partial-refuse-{Guid.NewGuid():N}";
+        var path = $"{TestPartition}/{id}";
+
+        await NodeFactory.CreateNode(new MeshNode(id, TestPartition)
+        {
+            Name = "created", NodeType = "Markdown", State = MeshNodeState.Active
+        }).Should().Within(30.Seconds()).Emit();
+        await ReadNode(path).Should().Within(30.Seconds()).Match(n => n is { Name: "created" });
+
+        // Advance ONLY Name through the owner, so the writer's base for Name is stale while its
+        // base for Description is still current. That asymmetry is the whole point.
+        var client = GetClient(c => c.AddData());
+        await client.GetWorkspace().GetMeshNodeStream(path)
+            .Update(n => n with { Name = "live-truth" })
+            .Should().Within(30.Seconds()).Emit();
+        await ReadNode(path).Should().Within(30.Seconds()).Match(n => n is { Name: "live-truth" });
+
+        var descriptionKey = JsonOptions.PropertyNamingPolicy?.ConvertName(nameof(MeshNode.Description))
+            ?? nameof(MeshNode.Description);
+        var owner = await ResolveOwner(path);
+        var patch = new PatchDataRequest(
+            new MeshNodeReference(),
+            new RawJson($"{{\"{NameKey}\":\"stale-mirror-write\",\"{descriptionKey}\":\"landed\"}}"))
+        {
+            // Base carries the PRE-advance Name (stale ⇒ refused) and the untouched Description
+            // (current ⇒ applies). One patch, two fates.
+            BaseValues = new RawJson($"{{\"{NameKey}\":\"created\"}}")
+        };
+
+        var response = await AwaitResponseAsync(patch, o => o.WithTarget(owner));
+        var patchResponse = response.Message;
+        Output.WriteLine(
+            $"[response] success={patchResponse.Success} code={patchResponse.NodeError?.Code} "
+            + $"error={patchResponse.Error}");
+
+        patchResponse.Success.Should().BeFalse(
+            "part of the caller's write was refused, so the write did not fully land — acking "
+            + "Success is the #648 acked-write-loss in its partial form, and the caller stops "
+            + "retrying a field that never converged (#2463's IsDirty that never settles)");
+        patchResponse.NodeError.Should().NotBeNull();
+        patchResponse.NodeError!.Code.Should().Be(MeshNodeErrorCode.Conflict,
+            "Conflict is the retried, provably-safe code: the caller re-reads and re-applies, and "
+            + "the half that already landed re-diffs to a no-op");
+
+        var final = await ReadNode(path).Should().Within(30.Seconds()).Emit();
+        final!.Name.Should().Be("live-truth",
+            "the refused key keeps the newer live value — that is the merge's verdict");
+        final.Description.Should().Be("landed",
+            "🚨 a partial refusal must NOT discard the half that did not conflict: those fields "
+            + "were written against a current base and are valid. Rolling them back would turn a "
+            + "reportable conflict into real data loss.");
+    }
+
+    /// <summary>
     /// #648 pin 2 — single-writer activation invariant. The patch is posted right after the
     /// owner's <c>Dispose()</c>: the DisposeRequest is queued ahead of it in the same inbox,
     /// so the handler sees a hub past Started. Fail-without: the quiescing activation merges
