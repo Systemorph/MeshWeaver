@@ -314,7 +314,11 @@ public class IoPoolTest
         const int cap = 3;
         const int total = 20;
         using var pool = new IoPool(cap);
-        var release = new TaskCompletionSource();
+        // 🚨 AsyncSubject + Await(), never a TaskCompletionSource (MeshWeaver#2809). The TCS here
+        // carried NO RunContinuationsAsynchronously, so a single SetResult() resumed all `cap`
+        // parked leaves INLINE on the test thread — the inline-resumption defect
+        // ObservableToTaskBridgeGuard exists for. ObservableAwait.Await() sets that flag itself.
+        var release = new AsyncSubject<Unit>();
         var current = 0;
         var max = 0;
         var maxLock = new object();
@@ -323,24 +327,36 @@ public class IoPoolTest
         {
             var c = Interlocked.Increment(ref current);
             lock (maxLock) { if (c > max) max = c; }
-            await release.Task;          // hold the slot until the test releases
+            await release.Await();       // hold the slot until the test releases
             Interlocked.Decrement(ref current);
             return c;
         }).Await();
 
         var tasks = Enumerable.Range(0, total).Select(_ => Run()).ToArray();
 
-        // Exactly `cap` bodies should be admitted concurrently; the 4th's
-        // WaitAsync cannot return until a slot frees.
-        SpinWait.SpinUntil(() => Volatile.Read(ref current) == cap, Timeout5)
-            .Should().BeTrue("the pool should admit exactly the cap concurrently");
-        pool.CurrentInFlight.Should().Be(cap);
+        try
+        {
+            // Exactly `cap` bodies should be admitted concurrently; the 4th's
+            // WaitAsync cannot return until a slot frees.
+            SpinWait.SpinUntil(() => Volatile.Read(ref current) == cap, Timeout5)
+                .Should().BeTrue("the pool should admit exactly the cap concurrently");
+            pool.CurrentInFlight.Should().Be(cap);
 
-        release.SetResult();
-        await Task.WhenAll(tasks);
+            release.OnNext(Unit.Default);
+            release.OnCompleted();
+            await Task.WhenAll(tasks);
 
-        max.Should().Be(cap, "in-flight concurrency must never exceed the configured cap");
-        pool.CurrentInFlight.Should().Be(0);
+            max.Should().Be(cap, "in-flight concurrency must never exceed the configured cap");
+            pool.CurrentInFlight.Should().Be(0);
+        }
+        finally
+        {
+            // 🚨 The release belongs in a finally: an assertion that throws above would otherwise
+            // leave all 20 pooled leaves parked on a signal that never arrives, and the test host
+            // would hang rather than report the assertion. Completing twice is a no-op.
+            release.OnNext(Unit.Default);
+            release.OnCompleted();
+        }
     }
 
     [Fact]
@@ -464,7 +480,11 @@ public class IoPoolTest
         var asyncEntered = new AsyncSubject<Unit>();
         var blockingEntered = new AsyncSubject<Unit>();
         var release = 0;
-        var asyncGate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Same rule as above (MeshWeaver#2809): the sanctioned bridge, not a hand-rolled gate. No
+        // cancellation token on the Await — this test's premise is that the async leaf is STILL in
+        // flight when the blocking join runs, so a ct-aware wait that unwound on the drain's cancel
+        // would weaken exactly what it measures.
+        var asyncGate = new AsyncSubject<int>();
 
         try
         {
@@ -473,7 +493,7 @@ public class IoPoolTest
             {
                 asyncEntered.OnNext(Unit.Default);
                 asyncEntered.OnCompleted();
-                return asyncGate.Task;
+                return asyncGate.Await();
             }).Subscribe(_ => { }, _ => { });
             await asyncEntered.Should().Within(Timeout5).Emit();
 
@@ -494,7 +514,8 @@ public class IoPoolTest
                 + "the blocking join believe the pool is idle");
 
             Volatile.Write(ref release, 1);
-            asyncGate.TrySetResult(0);
+            asyncGate.OnNext(0);
+            asyncGate.OnCompleted();
 
             // Assert the VALUE, not just that it returned: both leaves unwound inside the budget, so a
             // non-zero residual would mean the join reported a survivor that had already finished — the
@@ -507,7 +528,8 @@ public class IoPoolTest
         finally
         {
             Volatile.Write(ref release, 1);
-            asyncGate.TrySetResult(0);
+            asyncGate.OnNext(0);
+            asyncGate.OnCompleted();
         }
     }
 
