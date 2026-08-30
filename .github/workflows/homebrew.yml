@@ -222,8 +222,9 @@ jobs:
           set -euo pipefail
           tar="$RUNNER_TEMP/memex-local-${{ steps.ver.outputs.version }}.tar.gz"
           deploy/homebrew/scripts/make-tarball.sh "${{ steps.ver.outputs.version }}" "$tar"
+          sha="$(sha256sum "$tar" | awk '{print $1}')"
           echo "path=$tar" >> "$GITHUB_OUTPUT"
-          echo "sha=$(sha256sum "$tar" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       # One release per version on the TAP repository, the tarball as its asset. Idempotent: a
       # re-run of the same commit finds the release and reuses it — the tarball is reproducible
