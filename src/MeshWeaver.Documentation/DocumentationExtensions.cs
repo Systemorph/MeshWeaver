@@ -148,7 +148,16 @@ public static class DocumentationExtensions
                     Update = false,
                     Delete = false,
                     Comment = true,
-                    Thread = true
+                    Thread = true,
+                    // The documentation is WORLD-readable — it GitSyncs from the public
+                    // MeshWeaver repository, so an anonymous reader learns nothing that is not
+                    // already on github.com, and everything downstream of anonymous read keys off
+                    // this one bit: the SEO head (SeoResolver gates through AnonymousGate, so
+                    // without it a shared /Doc/… link unfurls in Teams/Slack/LinkedIn as a bare
+                    // URL), the /api/og share card, the sitemap, and search indexing. The
+                    // Public→Viewer grant below stays: PublicRead grants Read only, while
+                    // signed-in users keep the Viewer role's comment/thread surface.
+                    PublicRead = true
                 }
             },
             new MeshNode($"{WellKnownUsers.Public}_Access",
