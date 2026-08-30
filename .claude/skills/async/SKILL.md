@@ -62,7 +62,34 @@ workspace.GetMeshNodeStream(path)
     .Subscribe(n => { /* use n */ }, ex => logger.LogWarning(ex, "read failed for {Path}", path));
 ```
 
-Tests are the *only* place `await …FirstAsync().ToTask()` is acceptable.
+### 🚨🚨🚨 ABSOLUTE: `.ToTask()` is FORBIDDEN — everywhere, tests included
+
+**Maintainer, 2026-08-30: "no ToTask ever."** There is no test exemption, no "one-line adapter"
+exemption, no helper that may hide one. Earlier revisions of this page, `AGENTS.md` and
+[/testing](../testing/SKILL.md) said tests were the sanctioned edge; that is retracted.
+
+**Why the test edge was never safe either** — and this repo measured it: a `Task` completed from
+inside an Rx pipeline (exactly what `FirstAsync().ToTask()`, an `AsyncSubject` or a
+`TaskCompletionSource` resolved on an `OnNext` does) resumes its awaiter **inline, on the
+signalling thread, still inside Rx's trampoline** (`Producer.SubscribeRaw`). Everything the
+continuation then does inherits that flag — a 558-frame stack in the reproduction shows it
+escaping the pipeline entirely. So a bridge written "only in a test" changes how the code under
+test runs, and a green test proves the wrong thing.
+
+**What to write instead**
+
+```csharp
+// ✅ await the observable DIRECTLY (Rx's own awaiter), bounded so a hang is a failure
+await hub.DisposalCompleted.FirstOrDefaultAsync().Timeout(TimeSpan.FromSeconds(30));
+
+// ✅ or stay reactive and assert on the stream
+await stream.Where(x => x is not null).FirstAsync().Timeout(30.Seconds());
+```
+
+**The one place it may work — and usually still should not:** inside an **activity**, where the
+work is already off the hub turn and nothing mesh-side runs after the await. Even there, prefer the
+reactive composition; reach for a bridge only when an external API forces a `Task` on you, and say
+in a comment why the reactive shape was impossible.
 
 ### Rule 1a — A `Task`-returning override you must implement: subscribe, return `Task.CompletedTask`
 
@@ -155,9 +182,9 @@ named `pg:{adapter}` and capped at **1** so the gate *is* the single Npgsql conn
 - **Public surface returns `IObservable<T>`, never `Task<T>`.** A `Task`-returning method that does
   IO is the smell; rewrite it to return `IObservable<T>` and bridge the leaf through `IIoPool`
   internally.
-- **MCP/SDK surface adapters**: a one-line
-  `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ToTask();` is the only place `Task`
-  appears at the boundary — and even there the body is reactive.
+- **MCP/SDK surface adapters** must not bridge either: an external signature that demands a
+  `Task` is the ONLY reason to have one, and the body still stays reactive — see the ABSOLUTE rule
+  above, which admits no `.ToTask()` anywhere.
 
 Full reference:
 [ControlledIoPooling.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ControlledIoPooling.md).
@@ -246,7 +273,7 @@ never subscribed — grep the `MeshWeaver.Mesh.RequireSubscribe` channel after a
 
 ## Checklist before committing any hub/UI/agent write
 
-- [ ] No `async`/`await`/`Task<T>`/`.ToTask()`/`.Result`/`.Wait()`/`.GetAwaiter()`/`Observable.FromAsync` outside a test or `IIoPool` internals.
+- [ ] No `async`/`await`/`Task<T>`/`.Result`/`.Wait()`/`.GetAwaiter()`/`Observable.FromAsync` outside `IIoPool` internals — and **no `.ToTask()` at all, tests included** (see the ABSOLUTE rule above).
 - [ ] Genuinely-async leaf goes through `IIoPool`, returns `IObservable<T>`.
 - [ ] Every write is `.Subscribe(onNext, **onError**)` — error arm present and either surfaces or logs at a graceful boundary (never an empty swallow that lets a retry loop — see [/storm](../storm/SKILL.md)).
 - [ ] If the write is in a `.Subscribe`/IIoPool/`Observable.Create`/reactive hop, the AccessContext is re-established (`SwitchAccessContext(user)` or `ImpersonateAsSystem()`) at the call site.

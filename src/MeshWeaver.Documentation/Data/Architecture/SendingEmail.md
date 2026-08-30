@@ -74,7 +74,7 @@ public sealed class Inviter(IEmailSender email) { /* email.SendEmail(...).Subscr
 ```
 
 Do **not** `await`/`.ToTask()` it inside hub-reachable code — keep the chain reactive
-(see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)). Tests may bridge with `.FirstAsync().ToTask()`.
+(see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls)). 🚨 Tests do NOT bridge either (2026-08-30): they await the observable through the fixture's `Await(ct)` wrapper — see [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls). The old sentence read `.FirstAsync().ToTask()`.
 
 ---
 
