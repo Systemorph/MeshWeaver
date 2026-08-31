@@ -229,7 +229,7 @@ jobs:
       - name: Mint a read token for the content repository
         id: content-token
         if: inputs.content-repository != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.content-app-id }}
           private-key: ${{ secrets.content-app-private-key }}
@@ -332,7 +332,7 @@ jobs:
       - name: Mint a read token for the content repository
         id: content-token
         if: inputs.content-repository != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.content-app-id }}
           private-key: ${{ secrets.content-app-private-key }}
@@ -381,7 +381,7 @@ jobs:
       - name: Restore the platform image's assemblies from cache
         if: inputs.platform-image-digest != ''
         id: platform-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/platform-refs
           key: platform-refs-${{ inputs.platform-image-digest }}
@@ -688,14 +688,14 @@ jobs:
       # Absent receipts are the finding, so a download that matches nothing must NOT fail here —
       # it must reach the verifier, which says which module is missing. That is the whole point.
       - name: Collect the receipts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           pattern: module-pack-receipt-*
           merge-multiple: true
           path: ${{ runner.temp }}/receipts
       - name: Collect the built markers
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           pattern: module-built-*

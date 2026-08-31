@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -85,7 +86,7 @@ public sealed class RegistryPackageSource : IPackageSource
             using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
-                throw new InvalidOperationException(
+                throw new RegistryResponseException(resp.StatusCode,
                     $"Registry catalog list failed ({(int)resp.StatusCode}): {json}");
             var parsed = JsonSerializer.Deserialize<ListResponse>(json, Json);
             return (IReadOnlyList<PackageManifest>)(parsed?.Packages ?? []);
@@ -111,7 +112,7 @@ public sealed class RegistryPackageSource : IPackageSource
             using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
-                throw new InvalidOperationException(
+                throw new RegistryResponseException(resp.StatusCode,
                     $"Registry file fetch for '{package.Id}' failed ({(int)resp.StatusCode}): {json}");
             var parsed = JsonSerializer.Deserialize<FilesResponse>(json, Json);
             var files = (IReadOnlyList<PackageFile>)(parsed?.Files ?? []);
@@ -140,4 +141,47 @@ public static class PluginRegistryPayloads
     /// <summary>Serializes the fetch-files response: <c>{ files: [PackageFile…] }</c>.</summary>
     public static string Files(IReadOnlyList<PackageFile> files) =>
         JsonSerializer.Serialize(new { files }, Json);
+}
+
+/// <summary>
+/// A non-success answer from the registry, carrying the HTTP status so a caller can branch on
+/// <b>refused</b> versus <b>temporarily unavailable</b> without matching on the message text —
+/// the same shape, and for the same reason, as
+/// <see cref="InstanceRegistrationException"/>.
+///
+/// <para>🚨 <b>Why the status has to survive as data.</b> Every non-2xx used to collapse into a
+/// bare <see cref="InvalidOperationException"/> whose only record of the status was the text of
+/// its message. <see cref="RegistryUpdateReconciler"/> reasonably reads that type as "a definite
+/// HTTP answer (401/403/404) — asking again in two seconds cannot change it" and skips its retry.
+/// A <c>503 Instance-key resolution is temporarily unavailable — retry shortly</c> arrived as the
+/// very same type, so the one condition the boot retry exists for was the one condition it
+/// declined to retry, and a transient registry blip stranded package reconciliation for the whole
+/// life of the pod (Systemorph/MeshWeaver#2836). Deriving from <see cref="InvalidOperationException"/>
+/// keeps every existing <c>catch</c> behaving as before; the added property is what lets the
+/// policy stop conflating the two.</para>
+/// </summary>
+public sealed class RegistryResponseException(HttpStatusCode statusCode, string message)
+    : InvalidOperationException(message)
+{
+    /// <summary>The HTTP status the registry answered with.</summary>
+    public HttpStatusCode StatusCode { get; } = statusCode;
+
+    /// <summary>
+    /// Whether <paramref name="statusCode"/> describes a condition that may clear on its own, so
+    /// re-asking is worthwhile: any 5xx (the server failed to serve a request it accepts —
+    /// including the 503 of #2836), plus 408 and 429, where the server explicitly invites a
+    /// retry. This is the conventional transient-HTTP set (the same one Polly's
+    /// <c>HandleTransientHttpError</c> uses), chosen so the boundary is a published convention
+    /// rather than a judgement call re-litigated at each call site.
+    ///
+    /// <para>Everything else — 401, 403, 404, 409 — is a decision the registry has already made
+    /// and will make identically on the next attempt; retrying it only delays the log line that
+    /// names it.</para>
+    /// </summary>
+    public static bool IsTransient(HttpStatusCode statusCode) =>
+        (int)statusCode >= 500
+        || statusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests;
+
+    /// <summary>Whether this particular answer is worth re-asking — see <see cref="IsTransient"/>.</summary>
+    public bool IsTransientFailure => IsTransient(StatusCode);
 }

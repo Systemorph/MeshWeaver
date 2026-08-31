@@ -28,13 +28,46 @@ two properties that make a partial or missing release impossible rather than mer
 
 `.github/scripts/check-image-set.sh` **is** the definition of that set. It is asked by two jobs —
 `gate` on the reconcile path, `verify-images` after a publish — and lives in one file precisely so
-those two can never disagree. It asserts the **architectures**, not just tag existence: an image
+those two can never disagree. Both now pass the same, once-resolved plugins sha (see
+[The set is keyed on a PAIR of commits](#the-set-is-keyed-on-a-pair-of-commits-not-on-cores-alone)). It asserts the **architectures**, not just tag existence: an image
 index that lost a leg still resolves for one architecture, and a swallowed cancellation in
 `Microsoft.NET.Build.Containers` is exactly how a leg goes missing while its job reports success.
 
 A partial set is worse than no set: the self-updater sees a new `memex-portal-ai` version and rolls
 the portal onto it, while the migration image or the bake certification for that commit does not
 exist. That is how a portal increment the bake gate never certified reached production.
+
+### The set is keyed on a PAIR of commits, not on core's alone
+
+🚨 **The portal HOSTS live in `MeshWeaver.Plugins`**, so core's HEAD does not, by itself, say what is
+in a portal image. A merge in that repo which edits a file shipping *in* the image — an
+`appsettings.json`, a `.csproj` — changes what the image ought to contain while core's sha stands
+still. Keyed on core alone the reconciler asked "does HEAD have a complete set?", answered *yes*, and
+did nothing; the fix had **no producer that would ever rebuild it**. Not hypothetical: Plugins#814
+fixed fresh-install engine activation at 14:54Z and the newest image predated it (#2622).
+
+So `promote` phase A stamps a **pair tag** alongside the sha tag:
+
+```
+memex-portal-ai:<core-short>-p<plugins-short>
+```
+
+and `check-image-set.sh` takes the plugins sha as an optional second argument. Given one, the pair
+tag is part of "the set" — so a plugins-only host merge makes the set *incomplete* on core's next
+reconcile tick and the reconciler heals it **on its own**, instead of waiting for an unrelated core
+merge or for a human to remember `rebuild`. Given no second argument it behaves exactly as before,
+so every other caller is unaffected.
+
+🚨 **The plugins sha is resolved ONCE, by `gate`, and threaded** to `promote` and `verify-images` as
+a job output. This is a correctness condition, not tidiness. A run takes ~20 minutes; if
+`verify-images` re-resolved, a plugins merge landing inside that window would make it look for
+`…-pB` on an image the run correctly built from `A`, and a **successful publish would go red**. Cry
+wolf, and the ledger becomes noise. Resolving once means the identity is minted by the run that owns
+it — the same discipline as the staging tag — and the next reconcile tick re-resolves and correctly
+finds the set stale, which is the desired behaviour at the right moment.
+
+The `rebuild` input (#2825) remains as the operator escape hatch; it is no longer the only way this
+case is noticed.
 
 ## Property 1 — all-or-nothing publication
 
@@ -210,6 +243,7 @@ But the rule underneath is unchanged and applies to every "did it deploy?" quest
 ```bash
 # 1. Does the image exist, for the commit you care about?
 .github/scripts/check-image-set.sh <short-sha>      # the exact assertion CD itself makes
+.github/scripts/check-image-set.sh <short-sha> <plugins-short>   # ...including the pair tag (#2622)
 
 # 2. What is actually in the registry, newest first?
 az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv

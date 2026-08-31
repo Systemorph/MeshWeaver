@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Hosting.Completion;
 using MeshWeaver.Hosting.Persistence.Http;
@@ -821,6 +822,15 @@ public static class PersistenceExtensions
         // 2s caller window already closed (see LatePatchResponseRegistry). Mesh-scoped
         // instance singleton — dies with the mesh.
         services.TryAddSingleton<LatePatchResponseRegistry>();
+        // 🚨 The SAME instance under the seam MeshWeaver.Data can see. The owner side that mints
+        // the OwnerDisposing NACK cannot reference MeshWeaver.Mesh.Contract (Data → Mesh.Contract
+        // → Layout → Data is a cycle), so it resolves ILatePatchVerdictSink from Data.Contract and
+        // hands the verdict straight to the waiting caller (#2778). Registered as a FACTORY over
+        // the concrete singleton, never as a second AddSingleton — two instances would mean the
+        // owner dispatching into a registry nobody armed, which reads exactly like "nobody was
+        // waiting" and would restore the bug in a form no test could see.
+        services.TryAddSingleton<ILatePatchVerdictSink>(sp =>
+            sp.GetRequiredService<LatePatchResponseRegistry>());
         // Post-commit durable-flush hook for the PatchDataRequest handler: chains the
         // owner's ack off the storage write so a cross-hub stream.Update completion
         // guarantees read-after-write (see IPostCommitFlush / StoragePostCommitFlush).

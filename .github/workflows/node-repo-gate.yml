@@ -338,7 +338,7 @@ jobs:
       - name: Mint an installation token for the stage repo
         id: stage-token
         if: inputs.stage-modules != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.stage-repo-app-id }}
           private-key: ${{ secrets.stage-repo-app-private-key }}
@@ -416,13 +416,56 @@ jobs:
           set -euo pipefail
           SEED_DIR="${RUNNER_TEMP:-/tmp}/upstream-seed"
           mkdir -p "$SEED_DIR"
+
+          # 🚨 A 5xx is not an answer — it is the ABSENCE of one, and refusing on it makes every
+          # platform promotion a source of red CI across the fleet (MeshWeaver#2787). Promotion
+          # rolls the portal that SERVES this registry, so the window is STRUCTURAL: the more
+          # reliably promotion works, the more often a dependent repo's gate lands inside it. One
+          # day's three promotions opened it three times, and six repos read this endpoint.
+          #
+          # A DEFINITE answer still refuses immediately and unchanged — 404 (unsealed), 401/403
+          # (no grant) are decisions the registry has already made, and waiting on one only
+          # delays the message that names it. Same distinction, same reason, as MeshWeaver#2836
+          # on the portal side: branch on what the server SAID, never on "the read failed".
+          #
+          # 🚨 This is a retry, NOT a skip-trapdoor. Exhausting the attempts returns the last
+          # status to the caller, which still refuses RED — a registry that is genuinely down
+          # fails the gate exactly as before, roughly three minutes later.
+          #
+          # 🚨 There is a SECOND copy of this function, in .github/scripts/compose-sealed-modules.sh
+          # (same policy, `registry_key` spelled lower-case there). It is duplicated ON PURPOSE
+          # rather than factored into a third file: that script is fetched from core at a pinned
+          # `platform-ref` while this workflow is pinned by the caller's `uses:`, so a shared file
+          # would be a THIRD independently-pinned artefact — the exact skew that once let an old
+          # workflow drive a new script and seal an empty module set. Change one, change both.
+          registry_get() { # <url> <out-file> → echoes the final HTTP status
+            local url="$1" out="$2" code="" attempt=0
+            local -r delays="15 30 60 90"
+            while :; do
+              code=$(curl -sS -o "$out" -w '%{http_code}' \
+                       -H "Authorization: Bearer $REGISTRY_KEY" "$url") || code="000"
+              case "$code" in
+                # Transient: a roll window, a gateway blip, or a connection that never landed
+                # (curl reports 000). Everything else is the registry's decision — return it.
+                408|429|5??|000) ;;
+                *) printf '%s' "$code"; return 0 ;;
+              esac
+              attempt=$((attempt+1))
+              local delay
+              delay=$(printf '%s\n' $delays | sed -n "${attempt}p")
+              [ -n "$delay" ] || { printf '%s' "$code"; return 0; }
+              echo "registry answered $code for $url — transient (a platform roll looks like this);" \
+                   "re-asking in ${delay}s, attempt $((attempt+1))" >&2
+              sleep "$delay"
+            done
+          }
           if [ -n "${REGISTRY_URL:-}" ]; then
             # The REGISTRY serves the sealed publication (MeshWeaver#2487) — HTTPS + instance key,
             # no Azure, works on pull_request. Fails RED on 404 (unsealed) or 401/403 (no grant).
             fetched=0
             for src in $UPSTREAMS; do
               base="${REGISTRY_URL%/}/api/plugins/bundles/prebuilt/$IDENTITY/$src"
-              code=$(curl -sS -o "$SEED_DIR/.index.json" -w '%{http_code}' -H "Authorization: Bearer $REGISTRY_KEY" "$base")
+              code=$(registry_get "$base" "$SEED_DIR/.index.json")
               case "$code" in
                 200) ;;
                 404) echo "::error::upstream '$src' has no SEALED publication on $REGISTRY_URL for identity $IDENTITY. Not compiling it instead."; exit 1 ;;
@@ -441,7 +484,8 @@ jobs:
                 exit 1
               fi
               for name in $(jq -r '.bundles[]' "$SEED_DIR/.index.json"); do
-                curl -sSf -H "Authorization: Bearer $REGISTRY_KEY" -o "$SEED_DIR/$name" "$base/$name" || { echo "::error::could not fetch $name"; exit 1; }
+                bcode=$(registry_get "$base/$name" "$SEED_DIR/$name")
+                [ "$bcode" = 200 ] || { echo "::error::could not fetch $name from $base — registry answered $bcode."; exit 1; }
                 fetched=$((fetched+1))
               done
               rm -f "$SEED_DIR/.index.json"
@@ -490,7 +534,7 @@ jobs:
           sparse-checkout: ${{ inputs.stage-modules }}
       - name: Download this run's module-bundle artifacts
         if: inputs.module-artifacts != ''
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: ${{ inputs.module-artifacts }}
           path: ${{ runner.temp }}/ext-bundles
