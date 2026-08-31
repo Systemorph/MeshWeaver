@@ -84,9 +84,13 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         // never has this skew: with an upstream seed, compose-sealed-modules takes the modules FROM
         // the publication, identity-matched. Same here — the identity is asked of the IMAGE
         // (--print-framework-identity, the gate's own pre-bake step), the seed is fetched before
-        // stage 1, and the requested modules are extracted from the seed's own bundles. Only a
-        // build with NO upstream seed falls back to the package index's latest.
+        // stage 1, and the requested modules come from the publication's SEALED MODULE SET
+        // (`…/prebuilt/{identity}/{source}/modules`, MeshWeaver#2698/#2707). Round 5's lesson: the
+        // seed's own zips are the NODE-REPO content packs — no module bundle is among them, so
+        // scanning them for 'AI'/'Essentials' refuses on every run. Only a build with NO upstream
+        // seed falls back to the package index's latest.
         var seedDir = bake; // the gate consumes one dir: own bake + upstream bundles
+        string? sealedIdentity = null;
         if (options.UpstreamSeed is { Length: > 0 } upstreams)
         {
             var line = await Capture("docker",
@@ -104,6 +108,7 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                 return 8;
             }
             await output.WriteLineAsync($"framework identity: {frameworkIdentity} (from the image)");
+            sealedIdentity = frameworkIdentity;
             var seeded = await FetchUpstreamSeed(
                 options.RegistryUrl!, options.RegistryKey!, upstreams, frameworkIdentity, seedDir, ct);
             if (!seeded) return 8;
@@ -117,8 +122,10 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
         if (options is { RegistryModules.Length: > 0 })
         {
             extDir ??= Path.Combine(Path.GetTempPath(), $"memex-ext-{Environment.ProcessId}");
-            var fetched = options.UpstreamSeed is { Length: > 0 }
-                ? ComposeModulesFromSeed(seedDir, options.RegistryModules!, extDir)
+            var fetched = options.UpstreamSeed is { Length: > 0 } sources && sealedIdentity is { Length: > 0 }
+                ? await ComposeSealedModules(
+                    options.RegistryUrl!, options.RegistryKey!, sources, sealedIdentity,
+                    options.RegistryModules!, extDir, ct)
                 : await FetchRegistryModules(
                     options.RegistryUrl!, options.RegistryKey!, options.RegistryModules!, extDir, ct);
             if (fetched is null) return 7;
@@ -238,44 +245,59 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
                 return null;
             }
 
-            var unpack = Path.Combine(extDir, $"unpack-{pkg}");
-            if (Directory.Exists(unpack)) Directory.Delete(unpack, true);
-            System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, unpack);
-            File.Delete(zipPath);
-
-            var manifest = Path.Combine(unpack, "meshweaver", "manifest.json");
-            string? name = null;
-            if (File.Exists(manifest))
-                using (var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest)))
-                    if (doc.RootElement.TryGetProperty("module", out var m)
-                        && m.TryGetProperty("assemblyName", out var an))
-                        name = an.GetString();
-            var modulesDir = Path.Combine(unpack, "meshweaver", "modules");
-            if (name is not { Length: > 0 })
-            {
-                var dlls = Directory.Exists(modulesDir) ? Directory.GetFiles(modulesDir, "*.dll") : [];
-                if (dlls.Length != 1)
-                {
-                    await error.WriteLineAsync(
-                        $"error: {pkg}: cannot identify the entry assembly (no manifest "
-                        + $"module.assemblyName; meshweaver/modules holds {dlls.Length} dll(s)).");
-                    return null;
-                }
-                name = Path.GetFileNameWithoutExtension(dlls[0]);
-            }
-            if (!File.Exists(Path.Combine(modulesDir, $"{name}.dll")))
-            {
-                await error.WriteLineAsync($"error: {pkg}: meshweaver/modules/{name}.dll is missing from the bundle.");
-                return null;
-            }
-            var target = Path.Combine(extDir, name);
-            if (Directory.Exists(target)) Directory.Delete(target, true);
-            Directory.Move(modulesDir, target);
-            Directory.Delete(unpack, true);
+            var name = await StageModuleBundle(zipPath, extDir, pkg);
+            if (name is null) return null;
             args.Add("--module"); args.Add($"/ext/{name}/{name}.dll");
             await output.WriteLineAsync($"external module composed: {name} ({pkg}@{version})");
         }
         return args;
+    }
+
+    /// <summary>
+    /// Unpacks one module bundle zip into <paramref name="extDir"/> in the tester's layout
+    /// (<c>/ext/&lt;name&gt;/&lt;name&gt;.dll</c>): <c>meshweaver/manifest.json</c>'s
+    /// <c>module.assemblyName</c> names the entry assembly (single-DLL fallback), the whole
+    /// <c>meshweaver/modules/</c> directory moves under the assembly's name. Deletes the zip.
+    /// Returns the assembly name, or null with the failure already reported against
+    /// <paramref name="label"/>.
+    /// </summary>
+    private async Task<string?> StageModuleBundle(string zipPath, string extDir, string label)
+    {
+        var unpack = Path.Combine(extDir, $"unpack-{label}");
+        if (Directory.Exists(unpack)) Directory.Delete(unpack, true);
+        System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, unpack);
+        File.Delete(zipPath);
+
+        var manifest = Path.Combine(unpack, "meshweaver", "manifest.json");
+        string? name = null;
+        if (File.Exists(manifest))
+            using (var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest)))
+                if (doc.RootElement.TryGetProperty("module", out var m)
+                    && m.TryGetProperty("assemblyName", out var an))
+                    name = an.GetString();
+        var modulesDir = Path.Combine(unpack, "meshweaver", "modules");
+        if (name is not { Length: > 0 })
+        {
+            var dlls = Directory.Exists(modulesDir) ? Directory.GetFiles(modulesDir, "*.dll") : [];
+            if (dlls.Length != 1)
+            {
+                await error.WriteLineAsync(
+                    $"error: {label}: cannot identify the entry assembly (no manifest "
+                    + $"module.assemblyName; meshweaver/modules holds {dlls.Length} dll(s)).");
+                return null;
+            }
+            name = Path.GetFileNameWithoutExtension(dlls[0]);
+        }
+        if (!File.Exists(Path.Combine(modulesDir, $"{name}.dll")))
+        {
+            await error.WriteLineAsync($"error: {label}: meshweaver/modules/{name}.dll is missing from the bundle.");
+            return null;
+        }
+        var target = Path.Combine(extDir, name);
+        if (Directory.Exists(target)) Directory.Delete(target, true);
+        Directory.Move(modulesDir, target);
+        Directory.Delete(unpack, true);
+        return name;
     }
 
     private static IEnumerable<string> AllowArgs(string repo, BuildPluginOptions o)
@@ -329,63 +351,119 @@ public sealed class BuildPluginCommand(TextWriter output, TextWriter error)
     }
 
     /// <summary>
-    /// Composes the requested module packages from the SEED's own bundles — identity-matched by
-    /// construction, so the composed module mvids are exactly the ones the publication's types
-    /// were built against. Matching is by bundle manifest (<c>plugin</c> / <c>module.assemblyName</c>)
-    /// with a filename fallback; a requested package absent from the seed is a refusal, never a
-    /// silent skip.
+    /// Composes the requested module packages from the upstream publication's SEALED MODULE SET —
+    /// <c>…/api/plugins/bundles/prebuilt/{identity}/{source}/modules</c> — the client half of the
+    /// contract <c>.github/scripts/compose-sealed-modules.sh</c> speaks for the reusable gate
+    /// (MeshWeaver#2698: the publication is the unit of consistency; #2707 seals the module set
+    /// beside the bundles). The seed's own zips are the node-repo CONTENT packs; no module bundle
+    /// is among them — round 5 proved that by refusing on every run — so module bytes must come
+    /// from the module set the same seal carries, never from the registry's latest index (round
+    /// 4's mvid declines) and never from a scan of the seed. A wanted package matches the bundle
+    /// named <c>{package}.module.nupkg</c> case-insensitively; the first upstream listing it wins.
+    /// Returns the <c>--module</c> args, or null with every failure already reported RED and named.
     /// </summary>
-    private List<string>? ComposeModulesFromSeed(string seedDir, string modules, string extDir)
+    private async Task<List<string>?> ComposeSealedModules(
+        string registryUrl, string key, string upstreamSources, string identity,
+        string modules, string extDir, CancellationToken ct)
     {
         Directory.CreateDirectory(extDir);
         var args = new List<string>();
-        var wanted = modules.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToDictionary(m => m, _ => false, StringComparer.OrdinalIgnoreCase);
-        foreach (var bundle in Directory.EnumerateFiles(seedDir, "*.zip"))
+        using var http = new HttpClient { BaseAddress = new Uri(registryUrl.TrimEnd('/') + "/") };
+        http.DefaultRequestHeaders.Authorization = new("Bearer", key);
+
+        var sources = upstreamSources.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var sealedSets = new List<(string Source, List<string> Bundles)>();
+        foreach (var src in sources)
         {
-            string? plugin = null, name = null;
-            using (var zip = System.IO.Compression.ZipFile.OpenRead(bundle))
+            var url = $"api/plugins/bundles/prebuilt/{identity}/{src}/modules";
+            using var response = await http.GetAsync(url, ct);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                var entry = zip.GetEntry("meshweaver/manifest.json");
-                if (entry is not null)
+                await error.WriteLineAsync(
+                    $"error: upstream '{src}' answers 404 for the module set of identity {identity} — either "
+                    + "it has no SEALED publication for this identity, or its publication predates module "
+                    + $"sealing (no modules/_index). Republish '{src}' under a core that carries "
+                    + "MeshWeaver#2707. Not composing from the registry instead: that is the decline this "
+                    + "exists to end.");
+                return null;
+            }
+            if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+            {
+                await error.WriteLineAsync(
+                    $"error: the registry refused the instance key for '{src}' ({(int)response.StatusCode}) — "
+                    + $"the instance needs a whole-source grant '{src}/*'.");
+                return null;
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                await error.WriteLineAsync(
+                    $"error: registry answered {(int)response.StatusCode} for {url} — refusing.");
+                return null;
+            }
+            List<string> bundles;
+            try
+            {
+                using var doc = await System.Text.Json.JsonDocument.ParseAsync(
+                    await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+                if (!doc.RootElement.TryGetProperty("modules", out var arr)
+                    || arr.ValueKind != System.Text.Json.JsonValueKind.Array)
                 {
-                    using var rd = new StreamReader(entry.Open());
-                    using var doc = System.Text.Json.JsonDocument.Parse(rd.ReadToEnd());
-                    if (doc.RootElement.TryGetProperty("plugin", out var pl)) plugin = pl.GetString();
-                    if (doc.RootElement.TryGetProperty("module", out var m)
-                        && m.TryGetProperty("assemblyName", out var an)) name = an.GetString();
+                    await error.WriteLineAsync(
+                        $"error: {url} answered 200 but not a module-set index — refusing to guess.");
+                    return null;
                 }
+                bundles = arr.EnumerateArray()
+                    .Select(e => e.GetString())
+                    .Where(n => n is { Length: > 0 })
+                    .Select(n => n!)
+                    .ToList();
             }
-            plugin ??= Path.GetFileNameWithoutExtension(bundle).Split('.')[0];
-            var key = wanted.Keys.FirstOrDefault(w => string.Equals(w, plugin, StringComparison.OrdinalIgnoreCase));
-            if (key is null || wanted[key]) continue;
-            var unpack = Path.Combine(extDir, $"unpack-{plugin}");
-            if (Directory.Exists(unpack)) Directory.Delete(unpack, true);
-            System.IO.Compression.ZipFile.ExtractToDirectory(bundle, unpack);
-            var modulesDir = Path.Combine(unpack, "meshweaver", "modules");
-            if (name is not { Length: > 0 })
+            catch (System.Text.Json.JsonException ex)
             {
-                var dlls = Directory.Exists(modulesDir) ? Directory.GetFiles(modulesDir, "*.dll") : [];
-                if (dlls.Length != 1) { Directory.Delete(unpack, true); continue; }
-                name = Path.GetFileNameWithoutExtension(dlls[0]);
+                await error.WriteLineAsync($"error: {url} answered 200 but not JSON: {ex.Message}");
+                return null;
             }
-            if (!File.Exists(Path.Combine(modulesDir, $"{name}.dll"))) { Directory.Delete(unpack, true); continue; }
-            var target = Path.Combine(extDir, name);
-            if (Directory.Exists(target)) Directory.Delete(target, true);
-            Directory.Move(modulesDir, target);
-            Directory.Delete(unpack, true);
-            args.Add("--module"); args.Add($"/ext/{name}/{name}.dll");
-            wanted[key] = true;
-            output.WriteLine($"external module composed from the SEED: {name} ({key})");
+            sealedSets.Add((src, bundles));
+            await output.WriteLineAsync(
+                $"upstream '{src}' sealed {bundles.Count} module bundle(s) for identity {identity}");
         }
-        var missing = wanted.Where(kv => !kv.Value).Select(kv => kv.Key).ToList();
-        if (missing.Count > 0)
+
+        foreach (var pkg in modules.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            error.WriteLine(
-                $"error: requested module package(s) not found in the upstream seed: {string.Join(", ", missing)} "
-                + "— a module composed from anywhere else would carry the wrong mvid and every "
-                + "publication type built against it would be DECLINED.");
-            return null;
+            var wanted = $"{pkg.ToLowerInvariant()}.module.nupkg";
+            var hit = sealedSets
+                .Select(set => (set.Source, Name: set.Bundles.FirstOrDefault(
+                    b => string.Equals(b, wanted, StringComparison.OrdinalIgnoreCase))))
+                .FirstOrDefault(x => x.Name is not null);
+            if (hit.Name is null)
+            {
+                await error.WriteLineAsync(
+                    $"error: no sealed upstream publication ({upstreamSources}) for identity {identity} carries "
+                    + $"module package '{pkg}' (looked for {wanted}). The upstream that owns it must compose it "
+                    + "in its bake (module-artifacts / registry-modules) so its seal carries it; composing it "
+                    + "from anywhere else would carry the wrong mvid and every publication type built against "
+                    + "it would be DECLINED.");
+                return null;
+            }
+            var zipPath = Path.Combine(extDir, hit.Name);
+            try
+            {
+                await using var body = await http.GetStreamAsync(
+                    $"api/plugins/bundles/prebuilt/{identity}/{hit.Source}/modules/{hit.Name}", ct);
+                await using var file = File.Create(zipPath);
+                await body.CopyToAsync(file, ct);
+            }
+            catch (Exception ex)
+            {
+                await error.WriteLineAsync(
+                    $"error: could not fetch sealed module {hit.Name} of '{hit.Source}' for identity {identity}: {ex.Message}");
+                return null;
+            }
+            var name = await StageModuleBundle(zipPath, extDir, pkg);
+            if (name is null) return null;
+            args.Add("--module"); args.Add($"/ext/{name}/{name}.dll");
+            await output.WriteLineAsync(
+                $"external module composed from the SEALED publication of '{hit.Source}': {name} ({pkg}, {hit.Name})");
         }
         return args;
     }
